@@ -53,6 +53,11 @@ def callsite_qname_candidates_spec() -> DatasetSpec:
                 ArrowFieldSpec(name="qname", dtype=pa.string()),
                 ArrowFieldSpec(name="path", dtype=pa.string()),
                 *call_span_bundle().fields,
+                ArrowFieldSpec(name="arg_count", dtype=pa.int32()),
+                ArrowFieldSpec(name="keyword_count", dtype=pa.int32()),
+                ArrowFieldSpec(name="star_arg_count", dtype=pa.int32()),
+                ArrowFieldSpec(name="star_kwarg_count", dtype=pa.int32()),
+                ArrowFieldSpec(name="positional_count", dtype=pa.int32()),
                 ArrowFieldSpec(name="qname_source", dtype=pa.string()),
             ],
         )

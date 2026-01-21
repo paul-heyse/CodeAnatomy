@@ -10,6 +10,23 @@ def test_nested_schema_for_cst_parse_manifest() -> None:
     schema = nested_schema_for("cst_parse_manifest")
     assert schema.names[:2] == ("file_id", "path")
     assert "module_name" in schema.names
+    assert "schema_fingerprint" in schema.names
+
+
+def test_nested_schema_for_cst_refs() -> None:
+    """Ensure nested schema derivation for LibCST references."""
+    schema = nested_schema_for("cst_refs")
+    assert "ref_id" in schema.names
+    assert "ref_kind" in schema.names
+    assert "ref_text" in schema.names
+
+
+def test_nested_schema_for_cst_call_args() -> None:
+    """Ensure nested schema derivation for LibCST call arguments."""
+    schema = nested_schema_for("cst_call_args")
+    assert "call_id" in schema.names
+    assert "arg_index" in schema.names
+    assert "arg_text" in schema.names
 
 
 def test_nested_base_sql_for_scip_documents() -> None:

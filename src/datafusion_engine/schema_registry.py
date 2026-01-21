@@ -171,6 +171,7 @@ CST_PARSE_MANIFEST_T = pa.struct(
         ("libcst_version", pa.string()),
         ("parser_backend", pa.string()),
         ("parsed_python_version", pa.string()),
+        ("schema_fingerprint", pa.string()),
     ]
 )
 
@@ -467,7 +468,19 @@ SYM_SYMBOL_T = pa.struct(
     [
         ("name", pa.string()),
         ("flags", SYM_FLAGS_T),
+        ("namespace_count", pa.int32()),
+        ("namespace_block_ids", pa.list_(pa.int64())),
         ("attrs", ATTRS_T),
+    ]
+)
+
+SYM_FUNCTION_PARTITIONS_T = pa.struct(
+    [
+        ("parameters", pa.list_(pa.string())),
+        ("locals", pa.list_(pa.string())),
+        ("globals", pa.list_(pa.string())),
+        ("nonlocals", pa.list_(pa.string())),
+        ("frees", pa.list_(pa.string())),
     ]
 )
 
@@ -479,6 +492,12 @@ SYM_BLOCK_T = pa.struct(
         ("name", pa.string()),
         ("lineno1", pa.int32()),
         ("span_hint", SPAN_T),
+        ("scope_id", pa.string()),
+        ("scope_local_id", pa.int64()),
+        ("scope_type_value", pa.int32()),
+        ("qualpath", pa.string()),
+        ("function_partitions", SYM_FUNCTION_PARTITIONS_T),
+        ("class_methods", pa.list_(pa.string())),
         ("symbols", pa.list_(SYM_SYMBOL_T)),
         ("attrs", ATTRS_T),
     ]
@@ -620,10 +639,84 @@ SCIP_INDEX_SCHEMA = _schema_with_metadata("scip_index_v1", SCIP_INDEX_SCHEMA)
 SYMTABLE_FILES_SCHEMA = _schema_with_metadata("symtable_files_v1", SYMTABLE_FILES_SCHEMA)
 TREE_SITTER_FILES_SCHEMA = _schema_with_metadata("tree_sitter_files_v1", TREE_SITTER_FILES_SCHEMA)
 
+DATAFUSION_FALLBACKS_SCHEMA = _schema_with_metadata(
+    "datafusion_fallbacks_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("reason", pa.string(), nullable=False),
+            pa.field("error", pa.string(), nullable=False),
+            pa.field("expression_type", pa.string(), nullable=False),
+            pa.field("sql", pa.string(), nullable=False),
+            pa.field("dialect", pa.string(), nullable=False),
+            pa.field("policy_violations", pa.list_(pa.string()), nullable=True),
+            pa.field("sql_policy_name", pa.string(), nullable=True),
+            pa.field("param_mode", pa.string(), nullable=True),
+        ]
+    ),
+)
+
+DATAFUSION_EXPLAINS_SCHEMA = _schema_with_metadata(
+    "datafusion_explains_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("sql", pa.string(), nullable=False),
+            pa.field("explain_rows_artifact_path", pa.string(), nullable=True),
+            pa.field("explain_rows_artifact_format", pa.string(), nullable=True),
+            pa.field("explain_rows_schema_fingerprint", pa.string(), nullable=True),
+            pa.field("explain_analyze", pa.bool_(), nullable=False),
+        ]
+    ),
+)
+
+DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA = _schema_with_metadata(
+    "datafusion_schema_registry_validation_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("schema_name", pa.string(), nullable=False),
+            pa.field("issue_type", pa.string(), nullable=False),
+            pa.field("detail", pa.string(), nullable=True),
+        ]
+    ),
+)
+
+FEATURE_STATE_SCHEMA = _schema_with_metadata(
+    "feature_state_v1",
+    pa.schema(
+        [
+            pa.field("profile_name", pa.string(), nullable=False),
+            pa.field("determinism_tier", pa.string(), nullable=False),
+            pa.field("dynamic_filters_enabled", pa.bool_(), nullable=False),
+            pa.field("spill_enabled", pa.bool_(), nullable=False),
+            pa.field("named_args_supported", pa.bool_(), nullable=False),
+        ]
+    ),
+)
+
+REPO_SNAPSHOT_SCHEMA = _schema_with_metadata(
+    "repo_snapshot_v1",
+    pa.schema(
+        [
+            pa.field("file_id", pa.string()),
+            pa.field("path", pa.string()),
+            pa.field("file_sha256", pa.string()),
+            pa.field("size_bytes", pa.int64()),
+            pa.field("mtime_ns", pa.int64()),
+        ]
+    ),
+)
+
 SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "ast_files_v1": AST_FILES_SCHEMA,
     "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
+    "datafusion_explains_v1": DATAFUSION_EXPLAINS_SCHEMA,
+    "datafusion_fallbacks_v1": DATAFUSION_FALLBACKS_SCHEMA,
+    "datafusion_schema_registry_validation_v1": DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA,
+    "feature_state_v1": FEATURE_STATE_SCHEMA,
     "libcst_files_v1": LIBCST_FILES_SCHEMA,
+    "repo_snapshot_v1": REPO_SNAPSHOT_SCHEMA,
     "scip_index_v1": SCIP_INDEX_SCHEMA,
     "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
     "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
@@ -748,7 +841,7 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "root": "symtable_files_v1",
         "path": "blocks.symbols",
         "role": "derived",
-        "context": {"block_id": "blocks.block_id"},
+        "context": {"block_id": "blocks.block_id", "scope_id": "blocks.scope_id"},
     },
     "symtable_scope_edges": {
         "root": "symtable_files_v1",
@@ -847,6 +940,16 @@ ROOT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "symtable_files_v1": ("file_id", "path"),
     "tree_sitter_files_v1": ("file_id", "path"),
 }
+
+SYMTABLE_VIEW_NAMES: tuple[str, ...] = (
+    "symtable_scopes",
+    "symtable_symbols",
+    "symtable_scope_edges",
+    "symtable_namespace_edges",
+    "symtable_function_partitions",
+    "symtable_class_methods",
+    "symtable_symbol_attrs",
+)
 
 
 def nested_dataset_names() -> tuple[str, ...]:
@@ -1260,6 +1363,28 @@ def validate_nested_types(ctx: SessionContext, name: str) -> None:
     ctx.sql(f"SELECT arrow_typeof(*) AS row_type FROM {name} LIMIT 1").collect()
 
 
+def validate_symtable_views(ctx: SessionContext) -> None:
+    """Validate symtable view schemas using DataFusion introspection."""
+    errors: dict[str, str] = {}
+    for name in SYMTABLE_VIEW_NAMES:
+        try:
+            ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            errors[name] = str(exc)
+    try:
+        ctx.sql(
+            "SELECT arrow_typeof(blocks) AS blocks_type FROM symtable_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(blocks.symbols) AS symbols_type FROM symtable_files_v1 LIMIT 1"
+        ).collect()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["symtable_files_v1"] = str(exc)
+    if errors:
+        msg = f"Symtable view validation failed: {errors}."
+        raise ValueError(msg)
+
+
 def registered_table_names(ctx: SessionContext) -> set[str]:
     """Return registered table names from information_schema.
 
@@ -1371,6 +1496,7 @@ __all__ = [
     "SCHEMA_REGISTRY",
     "SCIP_INDEX_SCHEMA",
     "SYMTABLE_FILES_SCHEMA",
+    "SYMTABLE_VIEW_NAMES",
     "TREE_SITTER_FILES_SCHEMA",
     "datasets_for_path",
     "has_schema",
@@ -1396,4 +1522,5 @@ __all__ = [
     "struct_for_path",
     "validate_nested_types",
     "validate_schema_metadata",
+    "validate_symtable_views",
 ]

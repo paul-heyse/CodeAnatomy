@@ -10,12 +10,7 @@ import pyarrow as pa
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_rows
 from arrowdsl.schema.serialization import schema_fingerprint
-from obs.diagnostics_schemas import (
-    DATAFUSION_EXPLAINS_V1,
-    DATAFUSION_FALLBACKS_V1,
-    DATAFUSION_SCHEMA_REGISTRY_VALIDATION_V1,
-    FEATURE_STATE_V1,
-)
+from datafusion_engine.schema_authority import dataset_schema_from_context
 
 
 def _now_ms() -> int:
@@ -74,7 +69,8 @@ def datafusion_fallbacks_table(events: Sequence[Mapping[str, object]]) -> pa.Tab
         }
         for event in events
     ]
-    return table_from_rows(DATAFUSION_FALLBACKS_V1, rows)
+    schema = dataset_schema_from_context("datafusion_fallbacks_v1")
+    return table_from_rows(schema, rows)
 
 
 def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Table:
@@ -102,7 +98,8 @@ def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Ta
                 "explain_analyze": bool(explain.get("explain_analyze") or False),
             }
         )
-    return table_from_rows(DATAFUSION_EXPLAINS_V1, rows)
+    schema = dataset_schema_from_context("datafusion_explains_v1")
+    return table_from_rows(schema, rows)
 
 
 def datafusion_schema_registry_validation_table(
@@ -140,7 +137,8 @@ def datafusion_schema_registry_validation_table(
                 }
                 for name, detail in type_errors.items()
             )
-    return table_from_rows(DATAFUSION_SCHEMA_REGISTRY_VALIDATION_V1, rows)
+    schema = dataset_schema_from_context("datafusion_schema_registry_validation_v1")
+    return table_from_rows(schema, rows)
 
 
 def _explain_rows_metadata(rows: object) -> tuple[str | None, str | None, str | None]:
@@ -176,7 +174,8 @@ def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
         }
         for event in events
     ]
-    return table_from_rows(FEATURE_STATE_V1, rows)
+    schema = dataset_schema_from_context("feature_state_v1")
+    return table_from_rows(schema, rows)
 
 
 __all__ = [

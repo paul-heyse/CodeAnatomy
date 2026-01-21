@@ -20,11 +20,6 @@ if TYPE_CHECKING:
         table_specs_from_tables,
     )
     from schema_spec.dataset_handle import DatasetHandle
-    from schema_spec.schema_inference import (
-        SchemaHandshakeError,
-        SchemaInferenceHarness,
-        SchemaInferenceResult,
-    )
     from schema_spec.specs import (
         DICT_STRING,
         ENCODING_DICTIONARY,
@@ -111,9 +106,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "FieldBundle": ("schema_spec.specs", "FieldBundle"),
     "NestedFieldSpec": ("schema_spec.specs", "NestedFieldSpec"),
     "SchemaRegistry": ("schema_spec.system", "SchemaRegistry"),
-    "SchemaInferenceHarness": ("schema_spec.schema_inference", "SchemaInferenceHarness"),
-    "SchemaHandshakeError": ("schema_spec.schema_inference", "SchemaHandshakeError"),
-    "SchemaInferenceResult": ("schema_spec.schema_inference", "SchemaInferenceResult"),
     "SchemaSpecTables": ("arrowdsl.spec.tables.schema", "SchemaSpecTables"),
     "SortKeySpec": ("schema_spec.system", "SortKeySpec"),
     "TableSchemaSpec": ("schema_spec.specs", "TableSchemaSpec"),
@@ -202,9 +194,6 @@ __all__ = [
     "DerivedFieldSpec",
     "FieldBundle",
     "NestedFieldSpec",
-    "SchemaHandshakeError",
-    "SchemaInferenceHarness",
-    "SchemaInferenceResult",
     "SchemaRegistry",
     "SchemaSpecTables",
     "SortKeySpec",

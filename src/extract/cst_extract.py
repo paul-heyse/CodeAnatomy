@@ -29,8 +29,10 @@ from libcst.metadata import (
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.ids import stable_id
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.schema.schema import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from datafusion_engine.schema_introspection import find_struct_field_keys
+from datafusion_engine.schema_registry import schema_for
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -58,6 +60,12 @@ type Row = dict[str, object]
 CST_LINE_BASE = 1
 CST_COL_UNIT = "utf32"
 CST_END_EXCLUSIVE = True
+
+
+@cache
+def _libcst_schema_fingerprint() -> str:
+    schema = schema_for("libcst_files_v1")
+    return schema_fingerprint(schema)
 
 
 @dataclass(frozen=True)
@@ -344,6 +352,7 @@ def _manifest_row(
         "libcst_version": getattr(cst, "__version__", None),
         "parser_backend": parser_backend,
         "parsed_python_version": parsed_python_version,
+        "schema_fingerprint": _libcst_schema_fingerprint(),
     }
 
 
@@ -401,7 +410,9 @@ def _resolve_metadata_maps(
         resolved.get(ScopeProvider, {}),
         resolved.get(ParentNodeProvider, {}),
         cast("Mapping[cst.CSTNode, QualifiedNameSet]", resolved.get(QualifiedNameProvider, {})),
-        cast("Mapping[cst.CSTNode, QualifiedNameSet]", resolved.get(FullyQualifiedNameProvider, {})),
+        cast(
+            "Mapping[cst.CSTNode, QualifiedNameSet]", resolved.get(FullyQualifiedNameProvider, {})
+        ),
         resolved.get(TypeInferenceProvider, {}),
     )
 

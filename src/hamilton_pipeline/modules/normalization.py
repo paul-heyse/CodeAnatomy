@@ -16,7 +16,7 @@ from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, RecordBatchReaderLike, TableLike
 from arrowdsl.core.joins import JoinConfig, left_join
-from arrowdsl.schema.build import empty_table, set_or_append_column, table_from_arrays
+from arrowdsl.schema.build import const_array, empty_table, set_or_append_column, table_from_arrays
 from datafusion_engine.compute_ops import (
     and_,
     cast_values,
@@ -27,6 +27,7 @@ from datafusion_engine.compute_ops import (
     fill_null,
     flatten_list_struct_field,
     if_else,
+    invert,
     is_valid,
     list_flatten,
     struct_field,
@@ -40,6 +41,7 @@ from datafusion_engine.query_fragments import (
     bytecode_cfg_edges_sql,
     bytecode_code_units_sql,
     bytecode_instructions_sql,
+    libcst_call_args_sql,
     libcst_callsites_sql,
     libcst_defs_sql,
     libcst_imports_sql,
@@ -109,6 +111,16 @@ DEFAULT_MATERIALIZE_OUTPUTS: tuple[str, ...] = ()
 
 QNAME_DIM_SPEC = qname_dim_spec()
 CALLSITE_QNAME_CANDIDATES_SPEC = callsite_qname_candidates_spec()
+CALLSITE_ARG_SUMMARY_SCHEMA = pa.schema(
+    [
+        ("call_id", pa.string()),
+        ("arg_count", pa.int32()),
+        ("keyword_count", pa.int32()),
+        ("star_arg_count", pa.int32()),
+        ("star_kwarg_count", pa.int32()),
+        ("positional_count", pa.int32()),
+    ]
+)
 
 
 def _string_or_null(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
@@ -177,7 +189,7 @@ def _schema_from_source(
     backend: BaseBackend | None,
     fallback: str,
 ) -> pa.Schema:
-    fallback_schema = infer_schema_or_registry(fallback, [])
+    fallback_schema = infer_schema_or_registry(fallback)
     if source is None:
         return fallback_schema
     if isinstance(source, SqlFragment):
@@ -712,6 +724,75 @@ def _flatten_string_list(table: TableLike | None, column: str) -> ArrayLike:
     return drop_null(_string_or_null(flattened))
 
 
+def _count_mask(values: ArrayLike) -> ArrayLike:
+    mask = fill_null(values, fill_value=False)
+    return cast_values(mask, pa.int32())
+
+
+def _callsite_arg_summary(call_args: TableLike) -> TableLike:
+    if call_args.num_rows == 0 or "call_id" not in call_args.column_names:
+        return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
+    call_ids = _string_or_null(call_args["call_id"])
+    num_rows = len(call_ids)
+    if num_rows == 0:
+        return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
+    if "keyword" in call_args.column_names:
+        keyword_vals = _string_or_null(call_args["keyword"])
+    else:
+        keyword_vals = pa.nulls(num_rows, type=pa.string())
+    is_keyword = fill_null(is_valid(keyword_vals), fill_value=False)
+    if "star" in call_args.column_names:
+        star_vals = _string_or_null(call_args["star"])
+    else:
+        star_vals = pa.nulls(num_rows, type=pa.string())
+    is_star_arg = fill_null(equal(star_vals, pa.scalar("*")), fill_value=False)
+    is_star_kwarg = fill_null(equal(star_vals, pa.scalar("**")), fill_value=False)
+    positional = and_(
+        invert(is_keyword),
+        and_(invert(is_star_arg), invert(is_star_kwarg)),
+    )
+    base = table_from_arrays(
+        CALLSITE_ARG_SUMMARY_SCHEMA,
+        columns={
+            "call_id": call_ids,
+            "arg_count": const_array(num_rows, 1, dtype=pa.int32()),
+            "keyword_count": _count_mask(is_keyword),
+            "star_arg_count": _count_mask(is_star_arg),
+            "star_kwarg_count": _count_mask(is_star_kwarg),
+            "positional_count": _count_mask(positional),
+        },
+        num_rows=num_rows,
+    )
+    valid_mask = fill_null(is_valid(base["call_id"]), fill_value=False)
+    base = base.filter(valid_mask)
+    if base.num_rows == 0:
+        return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
+    grouped = base.group_by(["call_id"]).aggregate(
+        [
+            ("arg_count", "sum"),
+            ("keyword_count", "sum"),
+            ("star_arg_count", "sum"),
+            ("star_kwarg_count", "sum"),
+            ("positional_count", "sum"),
+        ]
+    )
+    if grouped.num_rows == 0:
+        return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
+    summary = table_from_arrays(
+        CALLSITE_ARG_SUMMARY_SCHEMA,
+        columns={
+            "call_id": _string_or_null(grouped["call_id"]),
+            "arg_count": cast_values(grouped["arg_count_sum"], pa.int32()),
+            "keyword_count": cast_values(grouped["keyword_count_sum"], pa.int32()),
+            "star_arg_count": cast_values(grouped["star_arg_count_sum"], pa.int32()),
+            "star_kwarg_count": cast_values(grouped["star_kwarg_count_sum"], pa.int32()),
+            "positional_count": cast_values(grouped["positional_count_sum"], pa.int32()),
+        },
+        num_rows=grouped.num_rows,
+    )
+    return summary
+
+
 def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
     call_ids = _string_or_null(exploded["call_id"])
     qname_struct = exploded["qname_struct"]
@@ -758,7 +839,14 @@ def _callsite_fqn_base_table(exploded: TableLike) -> TableLike:
 def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> TableLike:
     meta_cols = [
         col
-        for col in ("call_id", "path", "call_bstart", "call_bend", "qname_source")
+        for col in (
+            "call_id",
+            "path",
+            "call_bstart",
+            "call_bend",
+            "arg_count",
+            "qname_source",
+        )
         if col in cst_callsites.column_names
     ]
     if len(meta_cols) <= 1:
@@ -782,6 +870,39 @@ def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> Tabl
     merged = coalesce(primary, meta_source)
     joined = set_or_append_column(joined, "qname_source", merged)
     return joined.drop(["qname_source__meta"])
+
+
+def _join_callsite_arg_summary(base: TableLike, summary: TableLike) -> TableLike:
+    if summary.num_rows == 0 or "call_id" not in summary.column_names:
+        return base
+    right_cols = [col for col in summary.column_names if col != "call_id"]
+    joined = left_join(
+        base,
+        summary,
+        config=JoinConfig.on_keys(
+            keys=("call_id",),
+            left_output=tuple(base.column_names),
+            right_output=right_cols,
+            output_suffix_for_right="__args",
+        ),
+    )
+    metrics = (
+        "arg_count",
+        "keyword_count",
+        "star_arg_count",
+        "star_kwarg_count",
+        "positional_count",
+    )
+    for metric in metrics:
+        arg_col = f"{metric}__args"
+        if arg_col not in joined.column_names:
+            continue
+        primary = joined[arg_col]
+        fallback = joined[metric] if metric in joined.column_names else None
+        merged = coalesce(primary, fallback) if fallback is not None else primary
+        joined = set_or_append_column(joined, metric, merged)
+        joined = joined.drop([arg_col])
+    return joined
 
 
 @cache(format="delta")
@@ -818,10 +939,10 @@ def dim_qualified_names(
     if cst_defs is None and normalize_qname_context.libcst_files is not None:
         cst_defs = SqlFragment("cst_defs", libcst_defs_sql())
     if not _requires_output(normalize_qname_context.evidence_plan, "dim_qualified_names"):
-        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
+        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name)
         return empty_table(schema)
     if cst_callsites is None or cst_defs is None:
-        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
+        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name)
         return empty_table(schema)
     cst_callsites_table = _materialize_fragment(backend, cst_callsites)
     cst_defs_table = _materialize_fragment(backend, cst_defs)
@@ -831,7 +952,7 @@ def dim_qualified_names(
     def_fqns = _flatten_string_list(cst_defs_table, "def_fqns")
     combined = pa.chunked_array([callsite_qnames, callsite_fqns, def_qnames, def_fqns])
     if len(combined) == 0:
-        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
+        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name)
         return empty_table(schema)
 
     qname_array = distinct_sorted(combined)
@@ -842,8 +963,7 @@ def dim_qualified_names(
         columns={"qname_id": qname_ids, "qname": qname_array},
         num_rows=len(qname_array),
     )
-    tables = [out] if out.num_rows > 0 else []
-    schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, tables)
+    schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name)
     return align_table_to_schema(out, schema)
 
 
@@ -851,6 +971,7 @@ def dim_qualified_names(
 @tag(layer="normalize", artifact="callsite_qname_candidates", kind="table")
 def callsite_qname_candidates(
     cst_callsites: TableLike | SqlFragment | None = None,
+    cst_call_args: TableLike | SqlFragment | None = None,
     normalize_execution_context: NormalizeExecutionContext | None = None,
     libcst_files: TableLike | RecordBatchReaderLike | None = None,
     *,
@@ -865,6 +986,11 @@ def callsite_qname_candidates(
       - path
       - call_bstart
       - call_bend
+      - arg_count (optional)
+      - keyword_count (optional)
+      - star_arg_count (optional)
+      - star_kwarg_count (optional)
+      - positional_count (optional)
       - qname_source (optional)
 
     Returns
@@ -873,23 +999,25 @@ def callsite_qname_candidates(
         Table of callsite qualified name candidates.
     """
     if not _requires_output(evidence_plan, "callsite_qname_candidates"):
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
         return empty_table(schema)
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
     register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
     if cst_callsites is None and libcst_files is not None:
         cst_callsites = SqlFragment("cst_callsites", libcst_callsites_sql())
+    if cst_call_args is None and libcst_files is not None:
+        cst_call_args = SqlFragment("cst_call_args", libcst_call_args_sql())
     if cst_callsites is None:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
         return empty_table(schema)
     cst_callsites_table = _materialize_fragment(backend, cst_callsites)
     if cst_callsites_table.num_rows == 0:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
         return empty_table(schema)
     has_qnames = "callee_qnames" in cst_callsites_table.column_names
     has_fqns = "callee_fqns" in cst_callsites_table.column_names
     if not has_qnames and not has_fqns:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
         return empty_table(schema)
 
     kernel = resolve_kernel("explode_list", ctx=ctx)
@@ -921,15 +1049,19 @@ def callsite_qname_candidates(
         if joined.num_rows > 0:
             tables.append(joined)
     if not tables:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
         return empty_table(schema)
     joined = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+    if cst_call_args is not None:
+        try:
+            call_args_table = _materialize_fragment(backend, cst_call_args)
+        except ValueError:
+            call_args_table = None
+        if call_args_table is not None:
+            arg_summary = _callsite_arg_summary(call_args_table)
+            joined = _join_callsite_arg_summary(joined, arg_summary)
 
-    tables = [joined] if joined.num_rows > 0 else []
-    schema = infer_schema_or_registry(
-        CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name,
-        tables,
-    )
+    schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
     return align_table_to_schema(joined, schema)
 
 
@@ -972,7 +1104,7 @@ def ast_nodes_norm(
         ast_nodes,
         backend=backend,
     )
-    schema = infer_schema_or_registry("py_ast_nodes_v1", [table])
+    schema = infer_schema_or_registry("py_ast_nodes_v1")
     return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
 
 
@@ -1018,7 +1150,7 @@ def py_bc_instructions_norm(
         py_bc_instructions,
         backend=backend,
     )
-    schema = infer_schema_or_registry("py_bc_instructions_v1", [table])
+    schema = infer_schema_or_registry("py_bc_instructions_v1")
     return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
 
 
@@ -1359,7 +1491,7 @@ def scip_occurrences_norm_bundle(
         scip_occurrences,
         backend=backend,
     )
-    schema = infer_schema_or_registry("scip_occurrences_v1", [occ])
+    schema = infer_schema_or_registry("scip_occurrences_v1")
     occ = align_table_to_schema(occ, schema, opts=SchemaInferOptions(keep_extra_columns=True))
     return {"scip_occurrences_norm": occ, "scip_span_errors": errs}
 

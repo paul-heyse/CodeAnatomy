@@ -27,9 +27,7 @@ from arrowdsl.spec.infra import (
     SORT_KEY_STRUCT,
 )
 from arrowdsl.spec.io import rows_from_table, table_from_rows
-from cpg.spec_tables import EDGE_EMIT_STRUCT
 from datafusion_engine.extract_metadata import ExtractDerivedIdSpec, ExtractOrderingKeySpec
-from extract.spec_tables import DERIVED_ID_STRUCT, ORDERING_KEY_STRUCT
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -81,6 +79,35 @@ HASH_JOIN_STRUCT = pa.struct(
         pa.field("right_output", list_view_type(pa.string()), nullable=True),
         pa.field("output_suffix_for_left", pa.string(), nullable=False),
         pa.field("output_suffix_for_right", pa.string(), nullable=False),
+    ]
+)
+
+DERIVED_ID_STRUCT = pa.struct(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("spec", pa.string(), nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("required", list_view_type(pa.string()), nullable=True),
+    ]
+)
+
+ORDERING_KEY_STRUCT = pa.struct(
+    [
+        pa.field("column", pa.string(), nullable=False),
+        pa.field("order", pa.string(), nullable=False),
+    ]
+)
+
+EDGE_EMIT_STRUCT = pa.struct(
+    [
+        pa.field("edge_kind", pa.string(), nullable=False),
+        pa.field("src_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("dst_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("path_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("bstart_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("bend_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("origin", pa.string(), nullable=False),
+        pa.field("default_resolution_method", pa.string(), nullable=False),
     ]
 )
 

@@ -24,12 +24,15 @@ from arrowdsl.schema.build import const_array, set_or_append_column, table_from_
 from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.schema import empty_table
 from cpg.constants import CpgBuildArtifacts, concat_quality_tables, quality_from_ids
-from cpg.registry import CpgRegistry, default_cpg_registry
-from cpg.spec_tables import node_plan_specs_from_table
+from cpg.spec_registry import node_plan_specs
 from cpg.specs import NodePlanSpec
 from cpg.table_utils import align_table_to_schema, assert_schema_metadata
 from datafusion_engine.query_fragments import SqlFragment
 from datafusion_engine.runtime import AdapterExecutionPolicy
+from datafusion_engine.schema_authority import (
+    dataset_schema_from_context,
+    dataset_spec_from_context,
+)
 from engine.materialize import resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
@@ -170,13 +173,8 @@ def _emit_quality_source(spec: NodePlanSpec) -> str:
     return f"{spec.name}:{spec.table_ref}"
 
 
-def _node_plan_specs(
-    node_spec_table: pa.Table | None,
-    *,
-    registry: CpgRegistry,
-) -> tuple[NodePlanSpec, ...]:
-    table = node_spec_table or registry.node_plan_spec_table
-    return node_plan_specs_from_table(table)
+def _node_plan_specs() -> tuple[NodePlanSpec, ...]:
+    return node_plan_specs()
 
 
 def _resolve_node_build_context(
@@ -185,17 +183,15 @@ def _resolve_node_build_context(
     config: NodeBuildConfig | None,
 ) -> NodeBuildContext:
     resolved = config or NodeBuildConfig()
-    registry = resolved.registry or default_cpg_registry()
     options = resolved.options or NodeBuildOptions()
-    nodes_spec = registry.nodes_spec()
-    nodes_schema = nodes_spec.schema()
+    nodes_spec = dataset_spec_from_context("cpg_nodes_v1")
+    nodes_schema = dataset_schema_from_context("cpg_nodes_v1")
     if resolved.ibis_backend is None:
         msg = "Ibis backend is required for CPG node builds."
         raise ValueError(msg)
     return NodeBuildContext(
         ctx=ctx,
         config=resolved,
-        registry=registry,
         options=options,
         nodes_spec=nodes_spec,
         nodes_schema=nodes_schema,
@@ -255,8 +251,6 @@ class NodeBuildConfig:
 
     inputs: NodeInputTables | None = None
     options: NodeBuildOptions | None = None
-    node_spec_table: pa.Table | None = None
-    registry: CpgRegistry | None = None
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     surface_policy: ExecutionSurfacePolicy | None = None
@@ -268,7 +262,6 @@ class NodeBuildContext:
 
     ctx: ExecutionContext
     config: NodeBuildConfig
-    registry: CpgRegistry
     options: NodeBuildOptions
     nodes_spec: DatasetSpec
     nodes_schema: SchemaLike
@@ -281,8 +274,6 @@ class NodeEmitIbisContext:
     ctx: ExecutionContext
     inputs: NodeInputTables
     options: NodeBuildOptions
-    node_spec_table: pa.Table | None
-    registry: CpgRegistry
     backend: BaseBackend
 
 
@@ -500,7 +491,7 @@ def _node_emitted_plans_ibis(
     )
     emitted: list[tuple[NodePlanSpec, IbisPlan]] = []
     handler = NodeEmitRuleHandler()
-    for spec in _node_plan_specs(context.node_spec_table, registry=context.registry):
+    for spec in _node_plan_specs():
         enabled = getattr(context.options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
@@ -573,8 +564,6 @@ def _build_cpg_nodes_ibis(
         ctx=context.ctx,
         inputs=config.inputs or NodeInputTables(),
         options=context.options,
-        node_spec_table=config.node_spec_table,
-        registry=context.registry,
         backend=backend,
     )
     emitted = _node_emitted_plans_ibis(emit_context)
@@ -650,8 +639,6 @@ def build_cpg_nodes_raw(
             ctx=exec_ctx,
             inputs=build_context.config.inputs or NodeInputTables(),
             options=build_context.options,
-            node_spec_table=build_context.config.node_spec_table,
-            registry=build_context.registry,
             backend=backend,
         )
     )

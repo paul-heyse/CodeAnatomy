@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
-
-import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.schema.schema import SchemaTransform
-from arrowdsl.schema.schema import infer_schema_from_tables as arrowdsl_infer_tables
-from arrowdsl.schema.schema import unify_schemas as arrowdsl_unify_schemas
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for
-from schema_spec.catalog_registry import dataset_spec as catalog_spec
-from schema_spec.schema_inference import SchemaInferenceHarness
 
 
 @dataclass(frozen=True)
@@ -29,74 +23,29 @@ class SchemaInferOptions:
     safe_cast: bool = False  # False is usually what you want for “accept ambiguity” systems.
 
 
-def unify_schemas(
-    schemas: Sequence[SchemaLike], opts: SchemaInferOptions | None = None
-) -> SchemaLike:
-    """Unify schemas across tables or fragments with permissive promotion.
-
-    Notes
-    -----
-      - pa.unify_schemas supports promote_options in modern pyarrow.
-      - we fall back if the runtime pyarrow is older.
-      - metadata is inherited from the first schema in the list.
-
-    Returns
-    -------
-    SchemaLike
-        Unified schema.
-    """
-    opts = opts or SchemaInferOptions()
-    return arrowdsl_unify_schemas(
-        schemas,
-        promote_options=opts.promote_options,
-        prefer_nested=True,
-    )
-
-
-def infer_schema_from_tables(
-    tables: Sequence[TableLike], opts: SchemaInferOptions | None = None
-) -> SchemaLike:
-    """Compute a unified schema for a set of tables.
-
-    Returns
-    -------
-    SchemaLike
-        Unified schema inferred from the input tables.
-    """
-    opts = opts or SchemaInferOptions()
-    present = [t for t in tables if t is not None]
-    return arrowdsl_infer_tables(
-        present,
-        promote_options=opts.promote_options,
-        prefer_nested=True,
-    )
-
-
 def infer_schema_or_registry(
     name: str,
-    tables: Sequence[TableLike],
-    *,
-    opts: SchemaInferOptions | None = None,
 ) -> SchemaLike:
-    """Infer a schema from tables with a registry fallback.
+    """Resolve a schema from the DataFusion SessionContext.
+
+    Parameters
+    ----------
+    name : str
+        Dataset name registered in the SessionContext.
 
     Returns
     -------
     SchemaLike
-        Inferred schema when evidence exists, otherwise registry or empty schema.
+        DataFusion schema for the dataset.
     """
-    present = [table for table in tables if table is not None and table.column_names]
-    if present:
-        inferred = infer_schema_from_tables(present, opts=opts)
-        SchemaInferenceHarness.require_handshake(name, inferred)
-        return inferred
     if is_nested_dataset(name):
         return nested_schema_for(name, allow_derived=True)
+    ctx = DataFusionRuntimeProfile().session_context()
     try:
-        spec = catalog_spec(name)
-    except KeyError:
-        return pa.schema([])
-    return spec.table_spec.to_arrow_schema()
+        return ctx.table(name).schema()
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Dataset schema not registered in DataFusion: {name!r}."
+        raise KeyError(msg) from exc
 
 
 def align_table_to_schema(
@@ -130,25 +79,3 @@ def align_table_to_schema(
     return transform.apply(table)
 
 
-def align_tables_to_unified_schema(
-    tables: Sequence[TableLike],
-    *,
-    opts: SchemaInferOptions | None = None,
-) -> tuple[SchemaLike, list[TableLike]]:
-    """Infer a unified schema and align all tables to it.
-
-    Returns
-    -------
-    tuple[SchemaLike, list[TableLike]]
-        Unified schema and aligned tables.
-    """
-    opts = opts or SchemaInferOptions()
-    schema = unify_schemas([table.schema for table in tables], opts=opts)
-    transform = SchemaTransform(
-        schema=schema,
-        safe_cast=opts.safe_cast,
-        keep_extra_columns=opts.keep_extra_columns,
-        on_error="keep",
-    )
-    aligned = [transform.apply(t) for t in tables]
-    return schema, aligned

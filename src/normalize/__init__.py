@@ -65,24 +65,12 @@ if TYPE_CHECKING:
         resolve_normalize_rules,
         run_normalize,
     )
-    from normalize.schema_infer import (
-        SchemaInferOptions,
-        align_table_to_schema,
-        align_tables_to_unified_schema,
-        infer_schema_from_tables,
-        unify_schemas,
-    )
+    from normalize.schema_infer import SchemaInferOptions, align_table_to_schema
     from normalize.spans import (
         build_repo_text_index,
         normalize_cst_callsites_spans,
         normalize_cst_defs_spans,
         normalize_cst_imports_spans,
-    )
-    from normalize.spec_tables import (
-        CONSTRAINTS_TABLE,
-        CONTRACT_TABLE,
-        FIELD_TABLE,
-        SCHEMA_TABLES,
     )
     from normalize.text_index import FileTextIndex, RepoTextIndex
     from normalize.utils import add_span_id_column, span_id
@@ -90,17 +78,13 @@ if TYPE_CHECKING:
     from relspec.rules.definitions import EvidenceSpec, ExecutionMode
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
-    "CONSTRAINTS_TABLE": ("normalize.spec_tables", "CONSTRAINTS_TABLE"),
-    "CONTRACT_TABLE": ("normalize.spec_tables", "CONTRACT_TABLE"),
     "DEF_USE_EVENT_ID_SPEC": ("normalize.registry_ids", "DEF_USE_EVENT_ID_SPEC"),
     "DIAG_DETAILS_TYPE": ("normalize.registry_fields", "DIAG_DETAILS_TYPE"),
     "DIAG_DETAIL_STRUCT": ("normalize.registry_fields", "DIAG_DETAIL_STRUCT"),
     "DIAG_ID_SPEC": ("normalize.registry_ids", "DIAG_ID_SPEC"),
     "DIAG_TAGS_TYPE": ("normalize.registry_fields", "DIAG_TAGS_TYPE"),
-    "FIELD_TABLE": ("normalize.spec_tables", "FIELD_TABLE"),
     "NORMALIZE_EVIDENCE_NAME": ("normalize.contracts", "NORMALIZE_EVIDENCE_NAME"),
     "REACH_EDGE_ID_SPEC": ("normalize.registry_ids", "REACH_EDGE_ID_SPEC"),
-    "SCHEMA_TABLES": ("normalize.spec_tables", "SCHEMA_TABLES"),
     "TYPE_EXPR_ID_SPEC": ("normalize.registry_ids", "TYPE_EXPR_ID_SPEC"),
     "TYPE_ID_SPEC": ("normalize.registry_ids", "TYPE_ID_SPEC"),
     "AmbiguityPolicy": ("relspec.model", "AmbiguityPolicy"),
@@ -120,10 +104,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "add_scip_occurrence_byte_spans": ("normalize.ibis_api", "add_scip_occurrence_byte_spans"),
     "add_span_id_column": ("normalize.utils", "add_span_id_column"),
     "align_table_to_schema": ("normalize.schema_infer", "align_table_to_schema"),
-    "align_tables_to_unified_schema": (
-        "normalize.schema_infer",
-        "align_tables_to_unified_schema",
-    ),
     "anchor_instructions": ("normalize.ibis_api", "anchor_instructions"),
     "build_cfg_blocks": ("normalize.ibis_api", "build_cfg_blocks"),
     "build_cfg_edges": ("normalize.ibis_api", "build_cfg_edges"),
@@ -148,7 +128,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "field_name": ("normalize.registry_fields", "field_name"),
     "fields": ("normalize.registry_fields", "fields"),
     "hash_spec": ("normalize.registry_ids", "hash_spec"),
-    "infer_schema_from_tables": ("normalize.schema_infer", "infer_schema_from_tables"),
     "normalize_cst_callsites_spans": ("normalize.spans", "normalize_cst_callsites_spans"),
     "normalize_cst_defs_spans": ("normalize.spans", "normalize_cst_defs_spans"),
     "normalize_cst_imports_spans": ("normalize.spans", "normalize_cst_imports_spans"),
@@ -160,7 +139,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "run_normalize": ("normalize.runner", "run_normalize"),
     "run_reaching_defs": ("normalize.ibis_api", "run_reaching_defs"),
     "span_id": ("normalize.utils", "span_id"),
-    "unify_schemas": ("normalize.schema_infer", "unify_schemas"),
 }
 
 
@@ -179,17 +157,13 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "CONSTRAINTS_TABLE",
-    "CONTRACT_TABLE",
     "DEF_USE_EVENT_ID_SPEC",
     "DIAG_DETAILS_TYPE",
     "DIAG_DETAIL_STRUCT",
     "DIAG_ID_SPEC",
     "DIAG_TAGS_TYPE",
-    "FIELD_TABLE",
     "NORMALIZE_EVIDENCE_NAME",
     "REACH_EDGE_ID_SPEC",
-    "SCHEMA_TABLES",
     "TYPE_EXPR_ID_SPEC",
     "TYPE_ID_SPEC",
     "AmbiguityPolicy",
@@ -209,7 +183,6 @@ __all__ = [
     "add_scip_occurrence_byte_spans",
     "add_span_id_column",
     "align_table_to_schema",
-    "align_tables_to_unified_schema",
     "anchor_instructions",
     "build_cfg_blocks",
     "build_cfg_edges",
@@ -233,7 +206,6 @@ __all__ = [
     "field_name",
     "fields",
     "hash_spec",
-    "infer_schema_from_tables",
     "normalize_cst_callsites_spans",
     "normalize_cst_defs_spans",
     "normalize_cst_imports_spans",
@@ -246,5 +218,4 @@ __all__ = [
     "run_normalize",
     "run_reaching_defs",
     "span_id",
-    "unify_schemas",
 ]

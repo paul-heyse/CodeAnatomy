@@ -518,8 +518,12 @@ def symtable_scopes_sql(table: str = "symtable_files_v1") -> str:
       base.file_id AS file_id,
       base.path AS path,
       base.block_id AS table_id,
+      base.scope_id AS scope_id,
+      base.scope_local_id AS scope_local_id,
       base.block_type AS scope_type,
+      base.scope_type_value AS scope_type_value,
       base.name AS scope_name,
+      base.qualpath AS qualpath,
       base.lineno1 AS lineno,
       base.parent_block_id AS parent_table_id
     FROM base
@@ -541,6 +545,7 @@ def symtable_symbols_sql(table: str = "symtable_files_v1") -> str:
       base.file_id AS file_id,
       base.path AS path,
       base.block_id AS table_id,
+      base.scope_id AS scope_id,
       base.name AS symbol_name,
       base.flags['is_referenced'] AS is_referenced,
       base.flags['is_imported'] AS is_imported,
@@ -553,7 +558,9 @@ def symtable_symbols_sql(table: str = "symtable_files_v1") -> str:
       base.flags['is_annotated'] AS is_annotated,
       base.flags['is_free'] AS is_free,
       base.flags['is_assigned'] AS is_assigned,
-      base.flags['is_namespace'] AS is_namespace
+      base.flags['is_namespace'] AS is_namespace,
+      base.namespace_count AS namespace_count,
+      base.namespace_block_ids AS namespace_block_ids
     FROM base
     """
 
@@ -567,14 +574,124 @@ def symtable_scope_edges_sql(table: str = "symtable_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("symtable_scope_edges", table=table)
+    scopes = symtable_scopes_sql(table=table)
+    return f"""
+    WITH base AS ({base}),
+    scopes AS ({scopes})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.parent_block_id AS parent_table_id,
+      base.block_id AS child_table_id,
+      parent.scope_id AS parent_scope_id,
+      child.scope_id AS child_scope_id
+    FROM base
+    LEFT JOIN scopes parent
+      ON parent.table_id = base.parent_block_id
+     AND parent.path = base.path
+    LEFT JOIN scopes child
+      ON child.table_id = base.block_id
+     AND child.path = base.path
+    """
+
+
+def symtable_namespace_edges_sql(table: str = "symtable_files_v1") -> str:
+    """Return SQL for symtable namespace edge rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("symtable_symbols", table=table)
+    scopes = symtable_scopes_sql(table=table)
+    return f"""
+    WITH base AS ({base}),
+    scopes AS ({scopes})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.scope_id AS scope_id,
+      base.name AS symbol_name,
+      child_block_id AS child_table_id,
+      child.scope_id AS child_scope_id,
+      base.namespace_count AS namespace_count
+    FROM base
+    CROSS JOIN unnest(base.namespace_block_ids) AS child_block_id
+    LEFT JOIN scopes child
+      ON child.table_id = child_block_id
+     AND child.path = base.path
+    """
+
+
+def symtable_function_partitions_sql(table: str = "symtable_files_v1") -> str:
+    """Return SQL for symtable function partition rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("symtable_scopes", table=table)
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.parent_block_id AS parent_table_id,
-      base.block_id AS child_table_id
+      base.scope_id AS scope_id,
+      base.scope_name AS scope_name,
+      base.function_partitions['parameters'] AS parameters,
+      base.function_partitions['locals'] AS locals,
+      base.function_partitions['globals'] AS globals,
+      base.function_partitions['nonlocals'] AS nonlocals,
+      base.function_partitions['frees'] AS frees
     FROM base
+    WHERE base.function_partitions IS NOT NULL
+    """
+
+
+def symtable_class_methods_sql(table: str = "symtable_files_v1") -> str:
+    """Return SQL for symtable class method rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("symtable_scopes", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.scope_id AS scope_id,
+      base.scope_name AS scope_name,
+      method_name AS method_name
+    FROM base
+    CROSS JOIN unnest(base.class_methods) AS method_name
+    """
+
+
+def symtable_symbol_attrs_sql(table: str = "symtable_files_v1") -> str:
+    """Return SQL for symtable symbol attribute rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("symtable_symbols", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.scope_id AS scope_id,
+      base.name AS symbol_name,
+      kv['key'] AS attr_key,
+      kv['value'] AS attr_value
+    FROM base
+    CROSS JOIN unnest(map_entries(base.attrs)) AS kv
     """
 
 
@@ -990,6 +1107,10 @@ _FRAGMENT_SQL_BUILDERS: dict[str, FragmentSqlBuilder] = {
     "symtable_scopes": symtable_scopes_sql,
     "symtable_symbols": symtable_symbols_sql,
     "symtable_scope_edges": symtable_scope_edges_sql,
+    "symtable_namespace_edges": symtable_namespace_edges_sql,
+    "symtable_function_partitions": symtable_function_partitions_sql,
+    "symtable_class_methods": symtable_class_methods_sql,
+    "symtable_symbol_attrs": symtable_symbol_attrs_sql,
     "scip_metadata": scip_metadata_sql,
     "scip_documents": scip_documents_sql,
     "scip_occurrences": scip_occurrences_sql,
@@ -1054,8 +1175,12 @@ __all__ = [
     "scip_occurrences_sql",
     "scip_symbol_information_sql",
     "scip_symbol_relationships_sql",
+    "symtable_class_methods_sql",
+    "symtable_function_partitions_sql",
+    "symtable_namespace_edges_sql",
     "symtable_scope_edges_sql",
     "symtable_scopes_sql",
+    "symtable_symbol_attrs_sql",
     "symtable_symbols_sql",
     "tree_sitter_errors_sql",
     "tree_sitter_missing_sql",

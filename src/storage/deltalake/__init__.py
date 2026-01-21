@@ -6,8 +6,6 @@ import importlib
 from typing import TYPE_CHECKING
 
 __all__ = (
-    "REGISTRY_DIAGNOSTIC_SCHEMA",
-    "REGISTRY_TABLE_SPECS",
     "DeltaCdfOptions",
     "DeltaSchemaMode",
     "DeltaSchemaPolicy",
@@ -20,14 +18,8 @@ __all__ = (
     "DeltaWriteResult",
     "DeltaWriteRetryPolicy",
     "EncodingPolicy",
-    "RegistryBuildResult",
-    "RegistryDiagnostic",
-    "RegistryTableSpec",
-    "RegistryWriteOptions",
-    "RegistryWriteResult",
     "StorageOptions",
     "apply_delta_write_policies",
-    "build_registry_tables",
     "cleanup_delta_log",
     "coerce_delta_table",
     "create_delta_checkpoint",
@@ -42,14 +34,11 @@ __all__ = (
     "open_delta_table",
     "read_delta_cdf",
     "read_table_delta",
-    "registry_diagnostic_table",
     "upsert_dataset_partitions_delta",
     "vacuum_delta",
-    "validate_registry",
     "write_dataset_delta",
     "write_finalize_result_delta",
     "write_named_datasets_delta",
-    "write_registry_delta",
     "write_table_delta",
 )
 
@@ -91,22 +80,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "write_finalize_result_delta": ("storage.deltalake.delta", "write_finalize_result_delta"),
     "write_named_datasets_delta": ("storage.deltalake.delta", "write_named_datasets_delta"),
     "write_table_delta": ("storage.deltalake.delta", "write_table_delta"),
-    "REGISTRY_DIAGNOSTIC_SCHEMA": ("storage.deltalake.cpg_registry", "REGISTRY_DIAGNOSTIC_SCHEMA"),
-    "REGISTRY_TABLE_SPECS": ("storage.deltalake.cpg_registry", "REGISTRY_TABLE_SPECS"),
-    "RegistryBuildResult": ("storage.deltalake.cpg_registry", "RegistryBuildResult"),
-    "RegistryDiagnostic": ("storage.deltalake.cpg_registry", "RegistryDiagnostic"),
-    "RegistryTableSpec": ("storage.deltalake.cpg_registry", "RegistryTableSpec"),
-    "RegistryWriteOptions": ("storage.deltalake.cpg_registry", "RegistryWriteOptions"),
-    "RegistryWriteResult": ("storage.deltalake.cpg_registry", "RegistryWriteResult"),
-    "build_registry_tables": ("storage.deltalake.cpg_registry", "build_registry_tables"),
-    "registry_diagnostic_table": ("storage.deltalake.cpg_registry", "registry_diagnostic_table"),
-    "validate_registry": ("storage.deltalake.cpg_registry", "validate_registry"),
-    "write_registry_delta": ("storage.deltalake.cpg_registry", "write_registry_delta"),
 }
 
 if TYPE_CHECKING:
     import storage.deltalake.config as _delta_config
-    import storage.deltalake.cpg_registry as _delta_registry
     import storage.deltalake.delta as _delta_io
 
     DeltaSchemaPolicy = _delta_config.DeltaSchemaPolicy
@@ -143,17 +120,6 @@ if TYPE_CHECKING:
     write_finalize_result_delta = _delta_io.write_finalize_result_delta
     write_named_datasets_delta = _delta_io.write_named_datasets_delta
     write_table_delta = _delta_io.write_table_delta
-    REGISTRY_DIAGNOSTIC_SCHEMA = _delta_registry.REGISTRY_DIAGNOSTIC_SCHEMA
-    REGISTRY_TABLE_SPECS = _delta_registry.REGISTRY_TABLE_SPECS
-    RegistryBuildResult = _delta_registry.RegistryBuildResult
-    RegistryDiagnostic = _delta_registry.RegistryDiagnostic
-    RegistryTableSpec = _delta_registry.RegistryTableSpec
-    RegistryWriteOptions = _delta_registry.RegistryWriteOptions
-    RegistryWriteResult = _delta_registry.RegistryWriteResult
-    build_registry_tables = _delta_registry.build_registry_tables
-    registry_diagnostic_table = _delta_registry.registry_diagnostic_table
-    validate_registry = _delta_registry.validate_registry
-    write_registry_delta = _delta_registry.write_registry_delta
 
 
 def __getattr__(name: str) -> object:

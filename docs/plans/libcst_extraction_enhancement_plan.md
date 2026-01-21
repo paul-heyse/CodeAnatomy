@@ -46,11 +46,14 @@ LIBCST_FILES_SCHEMA = pa.schema(
         ("edges", pa.list_(CST_EDGE_T)),
         ("parse_manifest", pa.list_(CST_PARSE_MANIFEST_T)),
         ("parse_errors", pa.list_(CST_PARSE_ERROR_T)),
-        ("name_refs", pa.list_(CST_NAME_REF_T)),
+    ("refs", pa.list_(CST_REF_T)),
         ("imports", pa.list_(CST_IMPORT_T)),
         ("callsites", pa.list_(CST_CALLSITE_T)),
         ("defs", pa.list_(CST_DEF_T)),
         ("type_exprs", pa.list_(CST_TYPE_EXPR_T)),
+    ("docstrings", pa.list_(CST_DOCSTRING_T)),
+    ("decorators", pa.list_(CST_DECORATOR_T)),
+    ("call_args", pa.list_(CST_CALL_ARG_T)),
         ("attrs", ATTRS_T),
     ]
 )
@@ -62,10 +65,10 @@ LIBCST_FILES_SCHEMA = pa.schema(
 - `src/datafusion_engine/extract_registry.py`
 
 **Implementation checklist**
-- [ ] Keep `LIBCST_FILES_SCHEMA` as the declared contract for LibCST extraction.
-- [ ] Ensure all LibCST extraction tables registered in SessionContext match the
+- [x] Keep `LIBCST_FILES_SCHEMA` as the declared contract for LibCST extraction.
+- [x] Ensure all LibCST extraction tables registered in SessionContext match the
       declared schema (no runtime inference).
-- [ ] Extend `NESTED_DATASET_INDEX` to expose new LibCST outputs as views.
+- [x] Extend `NESTED_DATASET_INDEX` to expose new LibCST outputs as views.
 
 ---
 
@@ -117,16 +120,16 @@ ctx.sql(
 - `src/hamilton_pipeline/modules/normalization.py`
 
 **Implementation checklist**
-- [ ] Configure `SessionConfig` defaults (catalog/schema, `information_schema`,
+- [x] Configure `SessionConfig` defaults (catalog/schema, `information_schema`,
       `show_schema`, view-type knobs) for LibCST registration sessions.
-- [ ] Register nested bundle tables via `register_record_batches` (in-memory)
+- [x] Register nested bundle tables via `register_record_batches` (in-memory)
       or `TableProviderCapsule` for Parquet listing providers.
-- [ ] Register LibCST tables using the declared schema from
+- [x] Register LibCST tables using the declared schema from
       `schema_registry.schema_for("libcst_files_v1")` (no schema inference).
-- [ ] Create SQL views that explode `nodes/edges` using `unnest` and `get_field`.
-- [ ] Wire `datafusion_engine.extract_registry.dataset_schema()` to rely on
+- [x] Create SQL views that explode `nodes/edges` using `unnest` and `get_field`.
+- [x] Wire `datafusion_engine.extract_registry.dataset_schema()` to rely on
       `ctx.table(name).schema()` for canonical schema lookup.
-- [ ] Add an information-schema verification step (`SHOW COLUMNS` or
+- [x] Add an information-schema verification step (`SHOW COLUMNS` or
       `information_schema.columns`) for LibCST views.
 
 ---
@@ -166,18 +169,18 @@ def resolve_fqns(wrapper: MetadataWrapper, node: cst.CSTNode) -> list[str]:
 **Target files**
 - `src/extract/cst_extract.py`
 - `src/datafusion_engine/extract_metadata.py`
-- `src/datafusion_engine/extract_fields.py`
 - `src/datafusion_engine/query_fragments.py`
+- `src/datafusion_engine/schema_registry.py`
 - `src/normalize/ibis_plan_builders.py`
 - `src/normalize/ibis_api.py`
 - `src/hamilton_pipeline/modules/normalization.py`
 
 **Implementation checklist**
-- [ ] Add `compute_fully_qualified_names` + repo root inputs to `CSTExtractOptions`.
-- [ ] Initialize a `FullRepoManager` once per extraction run (cache per repo).
-- [ ] Emit `fqn` lists on `cst_defs` and `cst_callsites` rows.
-- [ ] Expose `fqn` lists in DataFusion views via `unnest` for relational joins.
-- [ ] Prefer FQNs when building `dim_qualified_names` and callsite candidates.
+- [x] Add `compute_fully_qualified_names` + repo root inputs to `CSTExtractOptions`.
+- [x] Initialize a `FullRepoManager` once per extraction run (cache per repo).
+- [x] Emit `fqn` lists on `cst_defs` and `cst_callsites` rows.
+- [x] Expose `fqn` lists in DataFusion views via `unnest` for relational joins.
+- [x] Prefer FQNs when building `dim_qualified_names` and callsite candidates.
 
 ---
 
@@ -208,17 +211,17 @@ def parse_manifest_row(module: cst.Module) -> dict[str, object]:
 
 **Target files**
 - `src/extract/cst_extract.py`
-- `src/datafusion_engine/extract_fields.py`
 - `src/datafusion_engine/extract_metadata.py`
 - `src/datafusion_engine/query_fragments.py`
+- `src/datafusion_engine/schema_registry.py`
 - `src/normalize/catalog.py`
 
 **Implementation checklist**
-- [ ] Extend `cst_parse_manifest` schema with LibCST version + backend fields.
-- [ ] Extend `cst_parse_errors` schema with editor position + context fields.
-- [ ] Emit enriched rows in `_parse_module` / `_manifest_row`.
-- [ ] Update DataFusion SQL fragments to expose new columns.
-- [ ] Surface manifest/error views via SessionContext for diagnostics pipelines.
+- [x] Extend `cst_parse_manifest` schema with LibCST version + backend fields.
+- [x] Extend `cst_parse_errors` schema with editor position + context fields.
+- [x] Emit enriched rows in `_parse_module` / `_manifest_row`.
+- [x] Update DataFusion SQL fragments to expose new columns.
+- [x] Surface manifest/error views via SessionContext for diagnostics pipelines.
 
 ---
 
@@ -251,20 +254,20 @@ def reference_row(node: cst.CSTNode, scope_map, parent_map) -> dict[str, object]
 
 **Target files**
 - `src/extract/cst_extract.py`
-- `src/datafusion_engine/extract_fields.py`
 - `src/datafusion_engine/extract_metadata.py`
 - `src/datafusion_engine/query_fragments.py`
+- `src/datafusion_engine/schema_registry.py`
 - `src/relspec/rules/relationship_specs.py`
 - `src/relspec/cpg/build_nodes.py`
 - `src/relspec/cpg/build_props.py`
 
 **Implementation checklist**
-- [ ] Add `ScopeProvider` + `ParentNodeProvider` to metadata resolution.
-- [ ] Introduce a `cst_refs` dataset (or extend `cst_name_refs`) to capture
+- [x] Add `ScopeProvider` + `ParentNodeProvider` to metadata resolution.
+- [x] Replace `cst_name_refs` with `cst_refs` to capture
       both `Name` and `Attribute` references.
-- [ ] Store scope metadata (scope id/type, ref role, parent kind).
-- [ ] Update relationship rules to prefer `cst_refs` when present.
-- [ ] Expose `cst_refs` via a DataFusion view for downstream joins.
+- [x] Store scope metadata (scope id/type, ref role, parent kind).
+- [x] Update relationship rules to prefer `cst_refs` when present.
+- [x] Expose `cst_refs` via a DataFusion view for downstream joins.
 
 ---
 
@@ -295,17 +298,17 @@ def decorator_rows(node: cst.FunctionDef | cst.ClassDef) -> list[dict[str, objec
 
 **Target files**
 - `src/extract/cst_extract.py`
-- `src/datafusion_engine/extract_fields.py`
 - `src/datafusion_engine/extract_metadata.py`
 - `src/datafusion_engine/query_fragments.py`
+- `src/datafusion_engine/schema_registry.py`
 - `src/normalize/registry_templates.py`
 
 **Implementation checklist**
-- [ ] Add `cst_docstrings` dataset (module/class/function docstrings + spans).
-- [ ] Add `cst_decorators` dataset (owner id + decorator text + spans).
-- [ ] Attach docstring/decorator fields to `cst_defs` rows when present.
-- [ ] Add SQL fragments for `cst_docstrings` and `cst_decorators`.
-- [ ] Register views for docstrings/decorators in SessionContext.
+- [x] Add `cst_docstrings` dataset (module/class/function docstrings + spans).
+- [x] Add `cst_decorators` dataset (owner id + decorator text + spans).
+- [x] Attach docstring/decorator fields to `cst_defs` rows when present.
+- [x] Add SQL fragments for `cst_docstrings` and `cst_decorators`.
+- [x] Register views for docstrings/decorators in SessionContext.
 
 ---
 
@@ -337,16 +340,16 @@ def call_arg_rows(call_id: str, node: cst.Call) -> list[dict[str, object]]:
 
 **Target files**
 - `src/extract/cst_extract.py`
-- `src/datafusion_engine/extract_fields.py`
 - `src/datafusion_engine/extract_metadata.py`
 - `src/datafusion_engine/query_fragments.py`
+- `src/datafusion_engine/schema_registry.py`
 - `src/normalize/ibis_plan_builders.py`
 
 **Implementation checklist**
-- [ ] Add `cst_call_args` dataset (call id + arg shape + spans + value text).
-- [ ] Emit `call_id` consistently for callsite/arg joins.
-- [ ] Expose `cst_call_args` via DataFusion views for arg-level analysis.
-- [ ] Extend callsite normalization to use arg-level metadata when present.
+- [x] Add `cst_call_args` dataset (call id + arg shape + spans + value text).
+- [x] Emit `call_id` consistently for callsite/arg joins.
+- [x] Expose `cst_call_args` via DataFusion views for arg-level analysis.
+- [x] Extend callsite normalization to use arg-level metadata when present.
 
 ---
 
@@ -369,14 +372,14 @@ def inferred_type_map(wrapper):
 **Target files**
 - `src/extract/cst_extract.py`
 - `src/datafusion_engine/extract_templates.py`
-- `src/datafusion_engine/extract_fields.py`
 - `src/datafusion_engine/extract_metadata.py`
+- `src/datafusion_engine/schema_registry.py`
 
 **Implementation checklist**
-- [ ] Add `compute_type_inference` option and gate Pyre wiring.
-- [ ] Emit `inferred_type` fields on `cst_refs` and `cst_callsites` rows.
-- [ ] Add dataset metadata describing inference availability.
-- [ ] Ensure extraction cleanly degrades when Pyre is absent.
+- [x] Add `compute_type_inference` option and gate Pyre wiring.
+- [x] Emit `inferred_type` fields on `cst_refs` and `cst_callsites` rows.
+- [x] Add dataset metadata describing inference availability.
+- [x] Ensure extraction cleanly degrades when Pyre is absent.
 
 ---
 
@@ -408,13 +411,13 @@ ctx.sql("SET datafusion.execution.parquet.schema_force_view_types = false")
 - `src/obs/manifest.py`
 
 **Implementation checklist**
-- [ ] Pin session config defaults for `information_schema`, `show_schema`, and
+- [x] Pin session config defaults for `information_schema`, `show_schema`, and
       view-type coercions.
-- [ ] Route Parquet listing providers through schema IPC to enforce canonical
+- [x] Route Parquet listing providers through schema IPC to enforce canonical
       nested schemas on registration.
-- [ ] Integrate `PhysicalExprAdapterFactory` installation for schema evolution
+- [x] Integrate `PhysicalExprAdapterFactory` installation for schema evolution
       at scan boundaries when available.
-- [ ] Emit schema fingerprints into extraction manifests for drift detection.
+- [x] Emit schema fingerprints into extraction manifests for drift detection.
 
 ---
 
@@ -453,17 +456,18 @@ CST_DOCSTRINGS = ExtractMetadata(
 - `src/relspec/cpg/build_props.py`
 
 **Implementation checklist**
-- [ ] Update `datafusion_engine/schema_registry.py` with declared schema changes
+- [x] Update `datafusion_engine/schema_registry.py` with declared schema changes
       listed below (no derived/inferred LibCST schema).
-- [ ] Extend the extract metadata catalog with new `cst_*` datasets.
-- [ ] Update bundle wiring (`cst_bundle`) to expose new outputs.
-- [ ] Update DataFusion fragment SQL and view specs for new datasets.
-- [ ] Update normalization and relspec inputs to incorporate new columns/tables.
+- [x] Register nested `cst_*` datasets via `NESTED_DATASET_INDEX` + fragment views
+      (no separate extract catalog entries needed).
+- [x] Keep `cst_bundle` scoped to `libcst_files_v1` (nested views are derived).
+- [x] Update DataFusion fragment SQL and view specs for new datasets.
+- [x] Update normalization and relspec inputs to incorporate new columns/tables.
 - [ ] Add/update tests validating schema presence and view outputs.
 
 **Schema updates required for new outputs**
 - **`CST_PARSE_MANIFEST_T`**: add `libcst_version`, `parser_backend`,
-  `parsed_python_version`.
+  `parsed_python_version`, `schema_fingerprint`.
 - **`CST_PARSE_ERROR_T`**: add `editor_line`, `editor_column`, `context`.
 - **`CST_CALLSITE_T`**:
   - add `call_id` for stable joins,
@@ -474,14 +478,14 @@ CST_DOCSTRINGS = ExtractMetadata(
   - add `def_fqns: List<Utf8>`,
   - add `docstring` (nullable) and `decorator_count` (optional).
 - **New nested structs** in `LIBCST_FILES_SCHEMA`:
-  - `CST_REF_T` (scope-aware refs: `ref_kind`, `ref_text`, `scope_type`,
+  - `CST_REF_T` (scope-aware refs: `ref_id`, `ref_kind`, `ref_text`, `scope_type`,
     `scope_name`, `scope_role`, `parent_kind`, `inferred_type`),
   - `CST_DOCSTRING_T` (owner kind/id + docstring + spans),
   - `CST_DECORATOR_T` (owner kind/id + decorator text + spans),
   - `CST_CALL_ARG_T` (call_id + arg_index + keyword + star + arg spans/text).
 - **`LIBCST_FILES_SCHEMA` additions**:
   - add list fields: `refs`, `docstrings`, `decorators`, `call_args`
-    (keep existing `name_refs` for compatibility, but prefer `refs` going forward).
+    (`refs` replaces `name_refs`; compatibility shims removed).
 - **`NESTED_DATASET_INDEX`**:
   - add `cst_refs`, `cst_docstrings`, `cst_decorators`, `cst_call_args` pointing
     to the new list fields in `libcst_files_v1`.

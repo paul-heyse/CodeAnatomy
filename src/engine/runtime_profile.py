@@ -318,7 +318,7 @@ def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfi
         )
         df_profile = replace(
             df_profile,
-            config_policy_name="default",
+            config_policy_name="symtable",
             target_partitions=min(_cpu_count(), 4),
             batch_size=4096,
             capture_explain=False,

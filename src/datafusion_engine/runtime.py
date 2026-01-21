@@ -35,6 +35,7 @@ from datafusion_engine.schema_registry import (
     register_all_schemas,
     schema_names,
     validate_nested_types,
+    validate_symtable_views,
 )
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
@@ -570,6 +571,15 @@ DEFAULT_DF_POLICY = DataFusionConfigPolicy(
     }
 )
 
+SYMTABLE_DF_POLICY = DataFusionConfigPolicy(
+    settings={
+        **DEFAULT_DF_POLICY.settings,
+        "datafusion.execution.collect_statistics": "false",
+        "datafusion.execution.meta_fetch_concurrency": "8",
+        "datafusion.runtime.list_files_cache_ttl": "1m",
+    }
+)
+
 DEV_DF_POLICY = DataFusionConfigPolicy(
     settings={
         "datafusion.execution.collect_statistics": "true",
@@ -610,6 +620,7 @@ DATAFUSION_POLICY_PRESETS: Mapping[str, DataFusionConfigPolicy] = {
     "dev": DEV_DF_POLICY,
     "default": DEFAULT_DF_POLICY,
     "prod": PROD_DF_POLICY,
+    "symtable": SYMTABLE_DF_POLICY,
 }
 
 SCHEMA_HARDENING_PRESETS: Mapping[str, SchemaHardeningProfile] = {
@@ -1348,7 +1359,7 @@ class DataFusionRuntimeProfile:
     local_filesystem_root: str | None = None
     input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
     prepared_statements: tuple[PreparedStatementSpec, ...] = ()
-    config_policy_name: str | None = "default"
+    config_policy_name: str | None = "symtable"
     config_policy: DataFusionConfigPolicy | None = None
     schema_hardening_name: str | None = "schema_hardening"
     schema_hardening: SchemaHardeningProfile | None = None
@@ -1555,6 +1566,7 @@ class DataFusionRuntimeProfile:
             return
         register_all_schemas(ctx)
         _register_dataset_spec_catalog(ctx, runtime_profile=self)
+        validate_symtable_views(ctx)
         self._record_schema_registry_validation(ctx)
         self._record_schema_snapshots(ctx)
 

@@ -21,7 +21,6 @@ from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.execution import ImpactStrategy
 from hamilton_pipeline.pipeline_types import ScipIdentityOverrides, ScipIndexConfig
 from incremental.types import IncrementalConfig
-from storage.deltalake.registry_runner import run_registry_exports
 
 GraphProduct = Literal["cpg"]
 
@@ -118,8 +117,7 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         Typed outputs for the requested graph product.
     """
     repo_root_path = ensure_path(request.repo_root).resolve()
-    registry_output_dir = _resolve_output_dir(repo_root_path, request.output_dir)
-    run_registry_exports(registry_output_dir)
+    _resolve_output_dir(repo_root_path, request.output_dir)
 
     overrides: dict[str, object] = dict(request.overrides or {})
     if request.runtime_profile_name is not None:

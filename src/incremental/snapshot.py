@@ -10,6 +10,7 @@ from deltalake import CommitProperties, DeltaTable
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import column_or_null, table_from_arrays
 from arrowdsl.schema.serialization import schema_fingerprint
+from datafusion_engine.schema_authority import dataset_schema_from_context
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
@@ -37,15 +38,7 @@ def build_repo_snapshot(repo_files: TableLike) -> pa.Table:
         Normalized snapshot table.
     """
     table = cast("pa.Table", repo_files)
-    schema = pa.schema(
-        [
-            pa.field("file_id", pa.string()),
-            pa.field("path", pa.string()),
-            pa.field("file_sha256", pa.string()),
-            pa.field("size_bytes", pa.int64()),
-            pa.field("mtime_ns", pa.int64()),
-        ]
-    )
+    schema = dataset_schema_from_context("repo_snapshot_v1")
     return table_from_arrays(
         schema,
         columns={

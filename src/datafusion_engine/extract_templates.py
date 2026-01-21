@@ -71,6 +71,11 @@ TEMPLATES: dict[str, ExtractorTemplate] = {
                 streaming_safe=True,
                 pipeline_breaker=False,
             ),
+            extra={
+                b"type_inference_provider": b"pyre",
+                b"type_inference_option": b"compute_type_inference",
+                b"type_inference_fields": b"refs.inferred_type,callsites.inferred_type",
+            },
         ),
     ),
     "tree_sitter": ExtractorTemplate(
@@ -231,6 +236,7 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
         extractor_name="symtable",
         defaults={
             "compile_type": "exec",
+            "max_workers": None,
         },
     ),
     "repo_scan": ExtractorConfigSpec(

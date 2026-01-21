@@ -20,7 +20,6 @@ from datafusion_engine.extract_extractors import extractor_spec
 from datafusion_engine.extract_registry import dataset_schema
 from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
 from ibis_engine.param_tables import ParamTableArtifact
-from obs.diagnostics_schemas import DIAGNOSTICS_SCHEMA_VERSION
 from obs.repro import collect_repro_info
 from schema_spec.system import ddl_fingerprint_from_schema
 from sqlglot_tools.optimizer import planner_dag_snapshot
@@ -43,6 +42,8 @@ if TYPE_CHECKING:
 
 
 T = TypeVar("T")
+
+DIAGNOSTICS_SCHEMA_VERSION = "v1"
 
 
 @dataclass(frozen=True)

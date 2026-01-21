@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from datafusion import SessionContext, col, lit
@@ -15,9 +15,11 @@ from datafusion.expr import Expr, SortExpr
 from sqlglot import Expression, exp
 
 from datafusion_engine.registry_bridge import DataFusionCachePolicy, register_dataset_df
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.udf_registry import datafusion_scalar_udf_map
 from ibis_engine.registry import DatasetLocation
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
 @dataclass(frozen=True)

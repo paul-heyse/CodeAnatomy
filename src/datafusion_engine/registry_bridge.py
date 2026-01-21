@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 import pyarrow as pa
@@ -26,7 +26,6 @@ from datafusion_engine.listing_table_provider import (
     TableProviderCapsule,
     parquet_listing_table_provider,
 )
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_registry import SCHEMA_REGISTRY, is_nested_dataset
 from ibis_engine.registry import (
     DatasetLocation,
@@ -43,6 +42,9 @@ from sqlglot_tools.optimizer import (
     sqlglot_surface_policy,
 )
 from storage.deltalake import DeltaCdfOptions, read_delta_cdf
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
 _REGISTERED_OBJECT_STORES: dict[int, set[str]] = {}

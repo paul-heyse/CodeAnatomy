@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 import ibis
-import pyarrow as pa
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
@@ -16,7 +15,6 @@ from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import EncodingSpec, empty_table, encode_table
 from cpg.constants import CpgBuildArtifacts, quality_from_ids
 from cpg.edge_specs import edge_plan_specs_from_table
-from cpg.registry import CpgRegistry, default_cpg_registry
 from cpg.relationship_plans import (
     IbisPlanCatalog,
     IbisPlanSource,
@@ -32,6 +30,10 @@ from cpg.table_utils import (
 )
 from datafusion_engine.query_fragments import SqlFragment
 from datafusion_engine.runtime import AdapterExecutionPolicy
+from datafusion_engine.schema_authority import (
+    dataset_schema_from_context,
+    dataset_spec_from_context,
+)
 from engine.materialize import resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
@@ -39,6 +41,7 @@ from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, s
 from ibis_engine.plan import IbisPlan
 from ibis_engine.scan_io import DatasetSource
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
+from relspec.rules.cache import rule_table_cached
 from relspec.rules.handlers.cpg_emit import EdgeEmitRuleHandler
 from schema_spec.system import DatasetSpec
 
@@ -47,12 +50,8 @@ def _encoding_specs(schema: SchemaLike) -> tuple[EncodingSpec, ...]:
     return tuple(EncodingSpec(column=col) for col in encoding_columns_from_metadata(schema))
 
 
-def _edge_plan_specs(
-    relation_rule_table: pa.Table | None,
-    *,
-    registry: CpgRegistry,
-) -> tuple[EdgePlanSpec, ...]:
-    table = relation_rule_table or registry.relation_rule_table
+def _edge_plan_specs() -> tuple[EdgePlanSpec, ...]:
+    table = rule_table_cached("cpg")
     return edge_plan_specs_from_table(table)
 
 
@@ -79,10 +78,7 @@ def _build_edges_raw_ibis(edge_context: EdgeRelationContext) -> EdgePlanBundle:
     parts: list[IbisPlan] = []
     handler = EdgeEmitRuleHandler()
     include_keys = edge_context.ctx.debug
-    for spec in _edge_plan_specs(
-        edge_context.relation_rule_table,
-        registry=edge_context.registry,
-    ):
+    for spec in _edge_plan_specs():
         enabled = getattr(edge_context.options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
@@ -136,13 +132,6 @@ class EdgeBuildInputs:
 
 
 @dataclass(frozen=True)
-class EdgeSpecOverrides:
-    """Optional spec table overrides for edge construction."""
-
-    relation_rule_table: pa.Table | None = None
-
-
-@dataclass(frozen=True)
 class EdgeRelationContext:
     """Resolved relation plan context for edge compilation."""
 
@@ -150,8 +139,6 @@ class EdgeRelationContext:
     relation_bundle: RelationPlanBundle
     options: EdgeBuildOptions
     edges_schema: SchemaLike
-    relation_rule_table: pa.Table
-    registry: CpgRegistry
 
 
 @dataclass(frozen=True)
@@ -168,8 +155,7 @@ def _edge_relation_context(
     ctx: ExecutionContext,
 ) -> EdgeRelationContext:
     config = _resolve_edge_config(config)
-    registry = config.registry or default_cpg_registry()
-    edges_schema = registry.edges_spec().schema()
+    edges_schema = dataset_schema_from_context("cpg_edges_v1")
     options = config.options or EdgeBuildOptions()
     inputs = config.inputs
     if inputs is None:
@@ -180,8 +166,7 @@ def _edge_relation_context(
         msg = "Ibis backend is required for CPG edge compilation."
         raise ValueError(msg)
     catalog = _edge_catalog(inputs, backend=backend)
-    spec_tables = config.spec_tables or EdgeSpecOverrides()
-    relation_rule_table = spec_tables.relation_rule_table or registry.relation_rule_table
+    relation_rule_table = rule_table_cached("cpg")
     relation_bundle = compile_relation_plans_ibis(
         catalog,
         ctx=ctx,
@@ -199,8 +184,6 @@ def _edge_relation_context(
         relation_bundle=relation_bundle,
         options=options,
         edges_schema=edges_schema,
-        relation_rule_table=relation_rule_table,
-        registry=registry,
     )
 
 
@@ -210,8 +193,6 @@ class EdgeBuildConfig:
 
     inputs: EdgeBuildInputs | None = None
     options: EdgeBuildOptions | None = None
-    spec_tables: EdgeSpecOverrides | None = None
-    registry: CpgRegistry | None = None
     materialize_relation_outputs: bool | None = None
     required_relation_sources: tuple[str, ...] | None = None
     execution_policy: AdapterExecutionPolicy | None = None
@@ -220,20 +201,7 @@ class EdgeBuildConfig:
 
 
 def _resolve_edge_config(config: EdgeBuildConfig | None) -> EdgeBuildConfig:
-    resolved = config or EdgeBuildConfig()
-    if resolved.registry is not None:
-        return resolved
-    return EdgeBuildConfig(
-        inputs=resolved.inputs,
-        options=resolved.options,
-        spec_tables=resolved.spec_tables,
-        registry=default_cpg_registry(),
-        materialize_relation_outputs=resolved.materialize_relation_outputs,
-        required_relation_sources=resolved.required_relation_sources,
-        execution_policy=resolved.execution_policy,
-        ibis_backend=resolved.ibis_backend,
-        surface_policy=resolved.surface_policy,
-    )
+    return config or EdgeBuildConfig()
 
 
 def _resolve_ctx_for_session(
@@ -396,8 +364,7 @@ def build_cpg_edges(
     exec_ctx = _resolve_ctx_for_session(ctx, session)
     config = _merge_edge_config(config, session)
     config = _resolve_edge_config(config)
-    registry = config.registry or default_cpg_registry()
-    edges_spec = registry.edges_spec()
+    edges_spec = dataset_spec_from_context("cpg_edges_v1")
     raw_bundle = build_cpg_edges_raw(
         ctx=exec_ctx,
         session=session,

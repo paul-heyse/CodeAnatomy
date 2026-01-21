@@ -4,29 +4,31 @@ from __future__ import annotations
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_schema
-from cpg.registry_rows import SCHEMA_VERSION as _SCHEMA_VERSION
-from cpg.registry_specs import dataset_contract_spec, dataset_schema, dataset_spec
+from datafusion_engine.schema_authority import (
+    dataset_schema_from_context,
+    dataset_spec_from_context,
+)
 
-CPG_NODES_SPEC = dataset_spec("cpg_nodes_v1")
-CPG_EDGES_SPEC = dataset_spec("cpg_edges_v1")
-CPG_PROPS_SPEC = dataset_spec("cpg_props_v1")
-CPG_PROPS_JSON_SPEC = dataset_spec("cpg_props_json_v1")
-CPG_PROPS_BY_FILE_ID_SPEC = dataset_spec("cpg_props_by_file_id_v1")
-CPG_PROPS_GLOBAL_SPEC = dataset_spec("cpg_props_global_v1")
+CPG_NODES_SPEC = dataset_spec_from_context("cpg_nodes_v1")
+CPG_EDGES_SPEC = dataset_spec_from_context("cpg_edges_v1")
+CPG_PROPS_SPEC = dataset_spec_from_context("cpg_props_v1")
+CPG_PROPS_JSON_SPEC = dataset_spec_from_context("cpg_props_json_v1")
+CPG_PROPS_BY_FILE_ID_SPEC = dataset_spec_from_context("cpg_props_by_file_id_v1")
+CPG_PROPS_GLOBAL_SPEC = dataset_spec_from_context("cpg_props_global_v1")
 
-CPG_NODES_SCHEMA = dataset_schema("cpg_nodes_v1")
-CPG_EDGES_SCHEMA = dataset_schema("cpg_edges_v1")
-CPG_PROPS_SCHEMA = dataset_schema("cpg_props_v1")
-CPG_PROPS_JSON_SCHEMA = dataset_schema("cpg_props_json_v1")
-CPG_PROPS_BY_FILE_ID_SCHEMA = dataset_schema("cpg_props_by_file_id_v1")
-CPG_PROPS_GLOBAL_SCHEMA = dataset_schema("cpg_props_global_v1")
+CPG_NODES_SCHEMA = dataset_schema_from_context("cpg_nodes_v1")
+CPG_EDGES_SCHEMA = dataset_schema_from_context("cpg_edges_v1")
+CPG_PROPS_SCHEMA = dataset_schema_from_context("cpg_props_v1")
+CPG_PROPS_JSON_SCHEMA = dataset_schema_from_context("cpg_props_json_v1")
+CPG_PROPS_BY_FILE_ID_SCHEMA = dataset_schema_from_context("cpg_props_by_file_id_v1")
+CPG_PROPS_GLOBAL_SCHEMA = dataset_schema_from_context("cpg_props_global_v1")
 
-CPG_NODES_CONTRACT_SPEC = dataset_contract_spec("cpg_nodes_v1")
-CPG_EDGES_CONTRACT_SPEC = dataset_contract_spec("cpg_edges_v1")
-CPG_PROPS_CONTRACT_SPEC = dataset_contract_spec("cpg_props_v1")
-CPG_PROPS_JSON_CONTRACT_SPEC = dataset_contract_spec("cpg_props_json_v1")
-CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC = dataset_contract_spec("cpg_props_by_file_id_v1")
-CPG_PROPS_GLOBAL_CONTRACT_SPEC = dataset_contract_spec("cpg_props_global_v1")
+CPG_NODES_CONTRACT_SPEC = CPG_NODES_SPEC.contract_spec_or_default()
+CPG_EDGES_CONTRACT_SPEC = CPG_EDGES_SPEC.contract_spec_or_default()
+CPG_PROPS_CONTRACT_SPEC = CPG_PROPS_SPEC.contract_spec_or_default()
+CPG_PROPS_JSON_CONTRACT_SPEC = CPG_PROPS_JSON_SPEC.contract_spec_or_default()
+CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC = CPG_PROPS_BY_FILE_ID_SPEC.contract_spec_or_default()
+CPG_PROPS_GLOBAL_CONTRACT_SPEC = CPG_PROPS_GLOBAL_SPEC.contract_spec_or_default()
 
 CPG_NODES_CONTRACT = CPG_NODES_CONTRACT_SPEC.to_contract()
 CPG_EDGES_CONTRACT = CPG_EDGES_CONTRACT_SPEC.to_contract()
@@ -34,7 +36,7 @@ CPG_PROPS_CONTRACT = CPG_PROPS_CONTRACT_SPEC.to_contract()
 CPG_PROPS_JSON_CONTRACT = CPG_PROPS_JSON_CONTRACT_SPEC.to_contract()
 CPG_PROPS_BY_FILE_ID_CONTRACT = CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC.to_contract()
 CPG_PROPS_GLOBAL_CONTRACT = CPG_PROPS_GLOBAL_CONTRACT_SPEC.to_contract()
-SCHEMA_VERSION = _SCHEMA_VERSION
+SCHEMA_VERSION = 1
 
 
 def empty_nodes() -> TableLike:

@@ -20,12 +20,15 @@ from cpg.constants import (
     concat_quality_tables,
     quality_from_ids,
 )
-from cpg.registry import CpgRegistry, default_cpg_registry
-from cpg.spec_tables import prop_table_specs_from_table
+from cpg.spec_registry import prop_table_specs
 from cpg.specs import PropFieldSpec, PropTableSpec, filter_fields, resolve_prop_include
 from cpg.table_utils import align_table_to_schema, assert_schema_metadata
 from datafusion_engine.query_fragments import SqlFragment
 from datafusion_engine.runtime import AdapterExecutionPolicy
+from datafusion_engine.schema_authority import (
+    dataset_schema_from_context,
+    dataset_spec_from_context,
+)
 from engine.materialize import resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
@@ -45,13 +48,8 @@ from relspec.rules.handlers.cpg_emit import PropEmitRuleHandler
 from schema_spec.system import DatasetSpec
 
 
-def _prop_table_specs(
-    prop_spec_table: pa.Table | None,
-    *,
-    registry: CpgRegistry,
-) -> tuple[PropTableSpec, ...]:
-    table = prop_spec_table or registry.prop_table_spec_table
-    return prop_table_specs_from_table(table)
+def _prop_table_specs() -> tuple[PropTableSpec, ...]:
+    return prop_table_specs()
 
 
 def _resolve_props_build_context(
@@ -60,20 +58,18 @@ def _resolve_props_build_context(
     config: PropsBuildConfig | None,
 ) -> PropsBuildContext:
     resolved = config or PropsBuildConfig()
-    registry = resolved.registry or default_cpg_registry()
     options = resolved.options or PropsBuildOptions()
     if options.merge_json_props and not options.include_heavy_json_props:
         msg = "merge_json_props requires include_heavy_json_props to be enabled."
         raise ValueError(msg)
-    props_spec = registry.props_spec()
-    props_schema = props_spec.schema()
+    props_spec = dataset_spec_from_context("cpg_props_v1")
+    props_schema = dataset_schema_from_context("cpg_props_v1")
     if resolved.ibis_backend is None:
         msg = "Ibis backend is required for CPG property builds."
         raise ValueError(msg)
     return PropsBuildContext(
         ctx=ctx,
         config=resolved,
-        registry=registry,
         options=options,
         props_spec=props_spec,
         props_schema=props_schema,
@@ -125,8 +121,6 @@ class PropsBuildConfig:
 
     inputs: PropsInputTables | None = None
     options: PropsBuildOptions | None = None
-    prop_spec_table: pa.Table | None = None
-    registry: CpgRegistry | None = None
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     surface_policy: ExecutionSurfacePolicy | None = None
@@ -138,7 +132,6 @@ class PropsBuildContext:
 
     ctx: ExecutionContext
     config: PropsBuildConfig
-    registry: CpgRegistry
     options: PropsBuildOptions
     props_spec: DatasetSpec
     props_schema: pa.Schema
@@ -151,8 +144,6 @@ class PropsEmitIbisContext:
     ctx: ExecutionContext
     inputs: PropsInputTables
     options: PropsBuildOptions
-    prop_spec_table: pa.Table | None
-    registry: CpgRegistry
     backend: BaseBackend
     props_json_schema: pa.Schema
 
@@ -407,13 +398,13 @@ def _prop_emitted_plans_ibis(
     list[tuple[PropTableSpec, list[IbisPlan]]],
     list[tuple[PropTableSpec, list[IbisPlan]]],
 ]:
-    props_spec = context.registry.props_spec()
+    props_spec = context.props_spec
     props_schema = props_spec.schema()
     schema_version = _props_schema_version(props_schema, props_spec)
     catalog = _ibis_prop_tables(context.inputs, ctx=context.ctx, backend=context.backend)
     emitted_fast: list[tuple[PropTableSpec, list[IbisPlan]]] = []
     emitted_json: list[tuple[PropTableSpec, list[IbisPlan]]] = []
-    for spec in _prop_table_specs(context.prop_spec_table, registry=context.registry):
+    for spec in _prop_table_specs():
         if not _should_emit_prop_spec(spec, context.options):
             continue
         plan = catalog.get(spec.table_ref)
@@ -522,14 +513,12 @@ def _build_cpg_props_ibis(
         ctx=context.ctx,
         policy=config.surface_policy or ExecutionSurfacePolicy(),
     )
-    props_json_schema = _props_json_schema(context.registry)
+    props_json_schema = _props_json_schema()
     emitted_fast, emitted_json = _prop_emitted_plans_ibis(
         PropsEmitIbisContext(
             ctx=context.ctx,
             inputs=config.inputs or PropsInputTables(),
             options=context.options,
-            prop_spec_table=config.prop_spec_table,
-            registry=context.registry,
             backend=backend,
             props_json_schema=props_json_schema,
         )
@@ -593,14 +582,12 @@ def _build_cpg_props_raw_ibis(
     if backend is None:
         msg = "Ibis backend is required when building props with Ibis."
         raise ValueError(msg)
-    props_json_schema = _props_json_schema(context.registry)
+    props_json_schema = _props_json_schema()
     emitted_fast, _ = _prop_emitted_plans_ibis(
         PropsEmitIbisContext(
             ctx=context.ctx,
             inputs=context.config.inputs or PropsInputTables(),
             options=context.options,
-            prop_spec_table=context.config.prop_spec_table,
-            registry=context.registry,
             backend=backend,
             props_json_schema=props_json_schema,
         )
@@ -617,11 +604,8 @@ def _props_schema_version(props_schema: pa.Schema, props_spec: DatasetSpec) -> i
     return None
 
 
-def _props_json_schema(registry: CpgRegistry) -> pa.Schema:
-    spec = registry.dataset_specs.get("cpg_props_json_v1")
-    if spec is None:
-        return registry.props_spec().schema()
-    return spec.schema()
+def _props_json_schema() -> pa.Schema:
+    return dataset_schema_from_context("cpg_props_json_v1")
 
 
 def _updated_prop_spec(

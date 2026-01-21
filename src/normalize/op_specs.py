@@ -58,7 +58,7 @@ _EXTRA_OP_SPECS: tuple[NormalizeOpSpec, ...] = (
     ),
     NormalizeOpSpec(
         name="callsite_qname_candidates",
-        inputs=("cst_callsites",),
+        inputs=("cst_callsites", "cst_call_args"),
         outputs=("callsite_qname_candidates",),
     ),
     NormalizeOpSpec(

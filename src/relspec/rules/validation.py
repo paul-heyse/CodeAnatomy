@@ -20,12 +20,12 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.build import iter_rows_from_table
 from datafusion_engine.bridge import sqlglot_to_datafusion
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.extract_bundles import bundle
+from datafusion_engine.extract_pipelines import post_kernels_for_postprocess
 from datafusion_engine.kernel_registry import kernel_capability
 from datafusion_engine.runtime import snapshot_plans
 from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for
 from engine.session import EngineSession
-from extract.registry_bundles import bundle
-from extract.registry_pipelines import post_kernels_for_postprocess
 from ibis_engine.compiler_checkpoint import compile_checkpoint
 from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
 from ibis_engine.lineage import lineage_graph_by_output, required_columns_by_table

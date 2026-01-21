@@ -6,19 +6,19 @@ from collections.abc import Mapping, Sequence
 from functools import cache
 
 from arrowdsl.schema.metadata import extractor_option_defaults_from_metadata
+from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata_specs
+from datafusion_engine.extract_registry import dataset_schema, extractor_defaults
 from extract.evidence_plan import EvidencePlan
-from extract.registry_rows import DATASET_ROWS, DatasetRow
-from extract.registry_specs import dataset_schema, extractor_defaults
 from relspec.rules.options import RuleExecutionOptions
 
 
-def _rows_for_template(template_name: str) -> tuple[DatasetRow, ...]:
-    return tuple(row for row in DATASET_ROWS if row.template == template_name)
+def _rows_for_template(template_name: str) -> tuple[ExtractMetadata, ...]:
+    return tuple(row for row in extract_metadata_specs() if row.template == template_name)
 
 
 @cache
-def _feature_flag_rows(template_name: str) -> Mapping[str, tuple[DatasetRow, ...]]:
-    flags: dict[str, list[DatasetRow]] = {}
+def _feature_flag_rows(template_name: str) -> Mapping[str, tuple[ExtractMetadata, ...]]:
+    flags: dict[str, list[ExtractMetadata]] = {}
     for row in _rows_for_template(template_name):
         if row.feature_flag is None:
             continue
@@ -35,7 +35,7 @@ def _metadata_defaults(template_name: str) -> dict[str, object]:
     return extractor_option_defaults_from_metadata(schema)
 
 
-def plan_requires_row(plan: EvidencePlan, row: DatasetRow) -> bool:
+def plan_requires_row(plan: EvidencePlan, row: ExtractMetadata) -> bool:
     """Return whether the evidence plan requires the dataset row.
 
     Returns

@@ -12,23 +12,22 @@ import pyarrow as pa
 
 from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.interop import ScalarLike, SchemaLike, TableLike
+from arrowdsl.core.interop import ScalarLike, TableLike
 from arrowdsl.core.ordering import Ordering
-from arrowdsl.schema.build import empty_table, rows_to_table
-from extract.evidence_plan import EvidencePlan
-from extract.registry_extractors import (
+from arrowdsl.schema.build import empty_table
+from datafusion_engine.extract_extractors import (
     ExtractorSpec,
     extractor_specs,
     outputs_for_template,
     select_extractors_for_outputs,
 )
-from extract.registry_fields import field_name
-from extract.registry_specs import dataset_query, dataset_schema
-from extract.registry_specs import dataset_row as registry_row
+from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
+from extract.evidence_plan import EvidencePlan
 from extract.schema_ops import ExtractNormalizeOptions, normalize_extract_output
 from extract.spec_helpers import plan_requires_row, rule_execution_options
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.schema_utils import align_table_to_schema
 from relspec.rules.definitions import RuleStage, stage_enabled
 
 if TYPE_CHECKING:
@@ -291,21 +290,23 @@ def empty_ibis_plan(name: str) -> IbisPlan:
 
 
 def ibis_plan_from_rows(
-    _name: str,
+    name: str,
     rows: Iterable[Mapping[str, object]],
-    *,
-    row_schema: SchemaLike,
 ) -> IbisPlan:
-    """Return an Ibis plan for row data.
+    """Return an Ibis plan for row data aligned to the DataFusion schema.
 
     Returns
     -------
     IbisPlan
         Ibis plan backed by a memtable of the provided rows.
+
     """
     row_sequence = rows if isinstance(rows, Sequence) else list(rows)
-    table = rows_to_table(row_sequence, row_schema)
-    expr = ibis.memtable(table)
+    if not row_sequence:
+        return empty_ibis_plan(name)
+    expr = ibis.memtable(row_sequence)
+    schema = dataset_schema(name)
+    expr = align_table_to_schema(expr, schema=schema, keep_extra_columns=True)
     return IbisPlan(expr=expr, ordering=Ordering.unordered())
 
 
@@ -324,7 +325,7 @@ def apply_query_and_project(
     IbisPlan
         Ibis plan with query and evidence projection applied.
     """
-    row = registry_row(name)
+    row = extract_metadata(name)
     if evidence_plan is not None and not plan_requires_row(evidence_plan, row):
         return empty_ibis_plan(name)
     overrides = _options_overrides(normalize.options if normalize else None)
@@ -464,7 +465,7 @@ def _projection_columns(name: str, *, evidence_plan: EvidencePlan | None) -> tup
     if evidence_plan is None:
         return ()
     required = set(evidence_plan.required_columns_for(name))
-    row = registry_row(name)
+    row = extract_metadata(name)
     required.update(row.join_keys)
     required.update(spec.name for spec in row.derived)
     if row.evidence_required_columns:
@@ -477,11 +478,6 @@ def _projection_columns(name: str, *, evidence_plan: EvidencePlan | None) -> tup
     for key in required:
         if key in schema_names:
             resolved.add(key)
-            continue
-        try:
-            resolved.add(field_name(key))
-        except KeyError:
-            continue
     return tuple(field.name for field in schema if field.name in resolved)
 
 

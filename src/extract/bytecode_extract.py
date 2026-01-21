@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.ids import stable_id
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -26,7 +27,6 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
-from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 
@@ -199,9 +199,6 @@ class BytecodeRowBuffers:
     block_rows: list[Row]
     edge_rows: list[Row]
     error_rows: list[Row]
-
-
-BYTECODE_FILES_SCHEMA = dataset_schema("bytecode_files_v1")
 
 
 def _consts_json(values: Sequence[object]) -> str | None:
@@ -910,7 +907,7 @@ def _build_bytecode_file_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
 ) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows("bytecode_files_v1", rows, row_schema=BYTECODE_FILES_SCHEMA)
+    raw_plan = ibis_plan_from_rows("bytecode_files_v1", rows)
     return apply_query_and_project(
         "bytecode_files_v1",
         raw_plan.expr,

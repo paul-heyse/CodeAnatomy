@@ -3,6 +3,8 @@
 use std::any::Any;
 use std::ffi::CString;
 use std::io::Cursor;
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -29,6 +31,13 @@ use datafusion::physical_expr_adapter::{
     PhysicalExprAdapterFactory,
 };
 use datafusion_common::{DataFusionError, Result};
+use datafusion_ffi::table_provider::FFI_TableProvider;
+use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource_parquet::file_format::ParquetFormat;
+use deltalake::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
+use deltalake::{ensure_table_uri, DeltaTableBuilder};
+use tokio::runtime::Runtime;
 use datafusion_expr::{
     ColumnarValue,
     ScalarFunctionArgs,
@@ -45,6 +54,12 @@ use pyo3::types::{PyBytes, PyCapsule};
 const ENC_UTF8: i32 = 1;
 const ENC_UTF16: i32 = 2;
 const ENC_UTF32: i32 = 3;
+
+fn schema_from_ipc(schema_ipc: Vec<u8>) -> PyResult<SchemaRef> {
+    let reader = StreamReader::try_new(Cursor::new(schema_ipc), None)
+        .map_err(|err| PyValueError::new_err(format!("Failed to decode schema IPC: {err}")))?;
+    Ok(reader.schema())
+}
 
 #[derive(Debug)]
 struct FunctionParameter {
@@ -309,6 +324,136 @@ fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<PyObject> {
     let name = CString::new("datafusion_ext.SchemaEvolutionAdapterFactory")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, factory, Some(name))?;
+    Ok(capsule.into_py(py))
+}
+
+#[pyfunction]
+fn parquet_listing_table_provider(
+    py: Python<'_>,
+    path: String,
+    file_extension: String,
+    table_partition_cols: Option<Vec<(String, String)>>,
+    schema_ipc: Option<Vec<u8>>,
+    partition_schema_ipc: Option<Vec<u8>>,
+    parquet_pruning: Option<bool>,
+    skip_metadata: Option<bool>,
+    collect_statistics: Option<bool>,
+) -> PyResult<PyObject> {
+    let schema_ipc = schema_ipc.ok_or_else(|| {
+        PyValueError::new_err("Parquet listing table provider requires schema_ipc.")
+    })?;
+    let schema = schema_from_ipc(schema_ipc)?;
+    let mut format = ParquetFormat::default();
+    if let Some(enable_pruning) = parquet_pruning {
+        format = format.with_enable_pruning(enable_pruning);
+    }
+    if let Some(skip) = skip_metadata {
+        format = format.with_skip_metadata(skip);
+    }
+    let mut options = ListingOptions::new(Arc::new(format)).with_file_extension(file_extension);
+    if let Some(collect) = collect_statistics {
+        options = options.with_collect_stat(collect);
+    }
+    if let Some(schema_ipc) = partition_schema_ipc {
+        let schema = schema_from_ipc(schema_ipc)?;
+        let mut cols = Vec::with_capacity(schema.fields().len());
+        for field in schema.fields() {
+            cols.push((field.name().to_string(), field.data_type().clone()));
+        }
+        options = options.with_table_partition_cols(cols);
+    } else if let Some(table_partition_cols) = table_partition_cols {
+        let mut cols = Vec::with_capacity(table_partition_cols.len());
+        for (name, dtype) in table_partition_cols {
+            let parsed: DataType = DataType::from_str(&dtype).map_err(|err| {
+                PyValueError::new_err(format!(
+                    "Unsupported partition column type {dtype:?}: {err}"
+                ))
+            })?;
+            cols.push((name, parsed));
+        }
+        options = options.with_table_partition_cols(cols);
+    }
+    let table_path = ListingTableUrl::parse(path.as_str()).or_else(|_| {
+        ListingTableUrl::parse(format!("file://{path}").as_str())
+    });
+    let table_path = table_path.map_err(|err| {
+        PyValueError::new_err(format!("Invalid listing table path {path:?}: {err}"))
+    })?;
+    let config = ListingTableConfig::new(table_path)
+        .with_listing_options(options)
+        .with_schema(schema)
+        .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
+    let provider = ListingTable::try_new(config).map_err(|err| {
+        PyRuntimeError::new_err(format!("ListingTable provider build failed: {err}"))
+    })?;
+    let ffi_provider = FFI_TableProvider::new(Arc::new(provider), true, None);
+    let name = CString::new("datafusion_table_provider")
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
+    let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
+    Ok(capsule.into_py(py))
+}
+
+#[pyfunction]
+fn delta_table_provider(
+    py: Python<'_>,
+    table_uri: String,
+    storage_options: Option<Vec<(String, String)>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    file_column_name: Option<String>,
+    enable_parquet_pushdown: Option<bool>,
+    schema_ipc: Option<Vec<u8>>,
+) -> PyResult<PyObject> {
+    let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
+        PyValueError::new_err(format!("Invalid Delta table URI {table_uri:?}: {err}"))
+    })?;
+    let mut builder = DeltaTableBuilder::from_url(table_url).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta table: {err}"))
+    })?;
+    if let Some(options) = storage_options {
+        let options: HashMap<String, String> = options.into_iter().collect();
+        builder = builder.with_storage_options(options);
+    }
+    if let Some(version) = version {
+        builder = builder.with_version(version);
+    }
+    if let Some(timestamp) = timestamp {
+        builder = builder.with_datestring(timestamp).map_err(|err| {
+            PyValueError::new_err(format!("Invalid Delta timestamp: {err}"))
+        })?;
+    }
+    let runtime = Runtime::new().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}"))
+    })?;
+    let table = runtime.block_on(builder.load()).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to load Delta table: {err}"))
+    })?;
+    let snapshot = table.snapshot().map_err(|err| {
+        PyRuntimeError::new_err(format!("Delta table snapshot unavailable: {err}"))
+    })?;
+    let snapshot = snapshot.snapshot().clone();
+    let log_store = table.log_store();
+    let mut scan_builder = DeltaScanConfigBuilder::new();
+    if let Some(name) = file_column_name {
+        scan_builder = scan_builder.with_file_column_name(&name);
+    }
+    if let Some(pushdown) = enable_parquet_pushdown {
+        scan_builder = scan_builder.with_parquet_pushdown(pushdown);
+    }
+    if let Some(schema_ipc) = schema_ipc {
+        let schema = schema_from_ipc(schema_ipc)?;
+        scan_builder = scan_builder.with_schema(schema);
+    }
+    let scan_config = scan_builder.build(&snapshot).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta scan config: {err}"))
+    })?;
+    let provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta table provider: {err}"))
+    })?;
+    let ffi_provider = FFI_TableProvider::new(Arc::new(provider), true, None);
+    let name = CString::new("datafusion_table_provider")
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
+    let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
     Ok(capsule.into_py(py))
 }
 
@@ -733,6 +878,8 @@ impl ScalarUDFImpl for ColToByteUdf {
 fn datafusion_ext(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(install_function_factory, module)?)?;
     module.add_function(wrap_pyfunction!(schema_evolution_adapter_factory, module)?)?;
+    module.add_function(wrap_pyfunction!(parquet_listing_table_provider, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_table_provider, module)?)?;
     module.add_function(wrap_pyfunction!(install_schema_evolution_adapter_factory, module)?)?;
     module.add_function(wrap_pyfunction!(registry_catalog_provider_factory, module)?)?;
     Ok(())

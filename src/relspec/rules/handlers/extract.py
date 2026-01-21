@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import TableLike
-from extract.registry_pipelines import post_kernels_for_postprocess
+from datafusion_engine.extract_pipelines import post_kernels_for_postprocess
 from relspec.rules.compiler import RuleHandler
 from relspec.rules.definitions import ExtractPayload, RuleStage
 

@@ -33,7 +33,6 @@ from datafusion_engine.schema_registry import (
     nested_schema_names,
     nested_view_specs,
     register_all_schemas,
-    register_schema,
     schema_names,
     validate_nested_types,
 )
@@ -672,6 +671,13 @@ def register_view_specs(
         )
 
 
+def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
+    """Register a schema-only table via an empty table provider."""
+    arrays = [pa.array([], type=field.type) for field in schema]
+    table = pa.Table.from_arrays(arrays, schema=schema)
+    ctx.register_table(name, table)
+
+
 def _register_dataset_spec_catalog(
     ctx: SessionContext,
     *,
@@ -685,7 +691,7 @@ def _register_dataset_spec_catalog(
         if is_nested_dataset(spec.name):
             continue
         schema = catalog.dataset_schema_pyarrow(spec.name)
-        register_schema(ctx, spec.name, schema)
+        _register_schema_table(ctx, spec.name, schema)
         for view in spec.resolved_view_specs():
             if view.name in seen_views:
                 continue

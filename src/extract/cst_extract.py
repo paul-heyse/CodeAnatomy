@@ -23,7 +23,10 @@ from libcst.metadata import (
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.structs import flatten_struct_field
+from functools import cache
+
+from datafusion_engine.extract_registry import dataset_schema, normalize_options
+from datafusion_engine.schema_introspection import find_struct_field_keys
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -38,8 +41,6 @@ from extract.helpers import (
     materialize_extract_plan,
     span_dict,
 )
-from extract.registry_fields import QNAME_STRUCT
-from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
 from ibis_engine.plan import IbisPlan
@@ -79,10 +80,13 @@ class CSTExtractResult:
     libcst_files: TableLike
 
 
-_QNAME_FLAT_FIELDS = flatten_struct_field(pa.field("qname", QNAME_STRUCT))
-QNAME_KEYS = tuple(field.name.split(".", 1)[1] for field in _QNAME_FLAT_FIELDS)
+_QNAME_FIELD_NAMES: tuple[str, ...] = ("qnames", "callee_qnames")
 
-LIBCST_FILES_SCHEMA = dataset_schema("libcst_files_v1")
+
+@cache
+def _qname_keys() -> tuple[str, ...]:
+    schema = dataset_schema("libcst_files_v1")
+    return find_struct_field_keys(schema, field_names=_QNAME_FIELD_NAMES)
 
 
 @dataclass(frozen=True)
@@ -507,7 +511,8 @@ class CSTCollector(cst.CSTVisitor):
         if callable(qset):
             qset = qset()
         qualified = sorted(qset, key=lambda q: (q.name, str(q.source)))
-        return [dict(zip(QNAME_KEYS, (q.name, str(q.source)), strict=True)) for q in qualified]
+        keys = _qname_keys()
+        return [dict(zip(keys, (q.name, str(q.source)), strict=True)) for q in qualified]
 
     def _record_type_expr(
         self,
@@ -925,7 +930,7 @@ def _build_cst_file_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
 ) -> IbisPlan:
-    raw = ibis_plan_from_rows("libcst_files_v1", rows, row_schema=LIBCST_FILES_SCHEMA)
+    raw = ibis_plan_from_rows("libcst_files_v1", rows)
     return apply_query_and_project(
         "libcst_files_v1",
         raw.expr,

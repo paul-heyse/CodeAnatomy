@@ -11,6 +11,7 @@ from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import parse_string_tuple
 from arrowdsl.spec.io import rows_from_table, table_from_rows
+from datafusion_engine.extract_metadata import ExtractDerivedIdSpec, ExtractOrderingKeySpec
 
 DERIVED_ID_STRUCT = pa.struct(
     [
@@ -58,24 +59,6 @@ EXTRACT_DATASET_ENCODING = EncodingPolicy(
         EncodingSpec(column="pipeline_name"),
     )
 )
-
-
-@dataclass(frozen=True)
-class ExtractDerivedIdSpec:
-    """Derived identifier specification for extract datasets."""
-
-    name: str
-    spec: str
-    kind: str = "masked_hash"
-    required: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class ExtractOrderingKeySpec:
-    """Ordering key specification for extract datasets."""
-
-    column: str
-    order: str = "ascending"
 
 
 @dataclass(frozen=True)

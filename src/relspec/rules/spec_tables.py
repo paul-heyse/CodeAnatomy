@@ -28,12 +28,8 @@ from arrowdsl.spec.infra import (
 )
 from arrowdsl.spec.io import rows_from_table, table_from_rows
 from cpg.spec_tables import EDGE_EMIT_STRUCT
-from extract.spec_tables import (
-    DERIVED_ID_STRUCT,
-    ORDERING_KEY_STRUCT,
-    ExtractDerivedIdSpec,
-    ExtractOrderingKeySpec,
-)
+from datafusion_engine.extract_metadata import ExtractDerivedIdSpec, ExtractOrderingKeySpec
+from extract.spec_tables import DERIVED_ID_STRUCT, ORDERING_KEY_STRUCT
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,

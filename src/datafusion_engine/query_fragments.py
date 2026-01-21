@@ -90,6 +90,9 @@ def libcst_parse_errors_sql(table: str = "libcst_files_v1") -> str:
       base.message AS message,
       base.raw_line AS raw_line,
       base.raw_column AS raw_column,
+      base.editor_line AS editor_line,
+      base.editor_column AS editor_column,
+      base.context AS context,
       base.line_base AS line_base,
       base.col_unit AS col_unit,
       base.end_exclusive AS end_exclusive
@@ -97,26 +100,32 @@ def libcst_parse_errors_sql(table: str = "libcst_files_v1") -> str:
     """
 
 
-def libcst_name_refs_sql(table: str = "libcst_files_v1") -> str:
-    """Return SQL for LibCST name reference rows.
+def libcst_refs_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST reference rows.
 
     Returns
     -------
     str
         SQL fragment text.
     """
-    base = nested_base_sql("cst_name_refs", table=table)
+    base = nested_base_sql("cst_refs", table=table)
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
       base.file_sha256 AS file_sha256,
-      base.name AS name,
+      base.ref_id AS ref_id,
+      base.ref_kind AS ref_kind,
+      base.ref_text AS ref_text,
       base.expr_ctx AS expr_ctx,
+      base.scope_type AS scope_type,
+      base.scope_name AS scope_name,
+      base.scope_role AS scope_role,
+      base.parent_kind AS parent_kind,
+      base.inferred_type AS inferred_type,
       base.bstart AS bstart,
-      base.bend AS bend,
-      {_hash_expr("cst_name_ref", "base.file_id", "base.bstart", "base.bend")} AS name_ref_id
+      base.bend AS bend
     FROM base
     """
 
@@ -175,6 +184,7 @@ def libcst_callsites_sql(table: str = "libcst_files_v1") -> str:
       base.file_id AS file_id,
       base.path AS path,
       base.file_sha256 AS file_sha256,
+      base.call_id AS call_id,
       base.call_bstart AS call_bstart,
       base.call_bend AS call_bend,
       base.callee_bstart AS callee_bstart,
@@ -184,7 +194,8 @@ def libcst_callsites_sql(table: str = "libcst_files_v1") -> str:
       base.arg_count AS arg_count,
       base.callee_dotted AS callee_dotted,
       base.callee_qnames AS callee_qnames,
-      {_hash_expr("cst_call", "base.file_id", "base.call_bstart", "base.call_bend")} AS call_id,
+      base.callee_fqns AS callee_fqns,
+      base.inferred_type AS inferred_type,
       {_hash_expr("span", "base.file_id", "base.call_bstart", "base.call_bend")} AS span_id
     FROM base
     """
@@ -205,6 +216,7 @@ def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
       base.file_id AS file_id,
       base.path AS path,
       base.file_sha256 AS file_sha256,
+      base.def_id AS def_id,
       base.container_def_kind AS container_def_kind,
       base.container_def_bstart AS container_def_bstart,
       base.container_def_bend AS container_def_bend,
@@ -215,6 +227,9 @@ def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
       base.name_bstart AS name_bstart,
       base.name_bend AS name_bend,
       base.qnames AS qnames,
+      base.def_fqns AS def_fqns,
+      base.docstring AS docstring,
+      base.decorator_count AS decorator_count,
       {
         _hash_expr(
             "cst_def",
@@ -234,6 +249,63 @@ def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
         )
     } AS container_def_id,
       {_hash_expr("span", "base.file_id", "base.def_bstart", "base.def_bend")} AS span_id
+    FROM base
+    """
+
+
+def libcst_docstrings_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST docstring rows."""
+    base = nested_base_sql("cst_docstrings", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.file_sha256 AS file_sha256,
+      base.owner_def_id AS owner_def_id,
+      base.owner_kind AS owner_kind,
+      base.docstring AS docstring,
+      base.bstart AS bstart,
+      base.bend AS bend
+    FROM base
+    """
+
+
+def libcst_decorators_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST decorator rows."""
+    base = nested_base_sql("cst_decorators", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.file_sha256 AS file_sha256,
+      base.owner_def_id AS owner_def_id,
+      base.owner_kind AS owner_kind,
+      base.decorator_text AS decorator_text,
+      base.decorator_index AS decorator_index,
+      base.bstart AS bstart,
+      base.bend AS bend
+    FROM base
+    """
+
+
+def libcst_call_args_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST call argument rows."""
+    base = nested_base_sql("cst_call_args", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.file_sha256 AS file_sha256,
+      base.call_id AS call_id,
+      base.arg_index AS arg_index,
+      base.keyword AS keyword,
+      base.star AS star,
+      base.arg_text AS arg_text,
+      base.bstart AS bstart,
+      base.bend AS bend
     FROM base
     """
 
@@ -901,11 +973,14 @@ type FragmentSqlBuilder = Callable[[], str]
 _FRAGMENT_SQL_BUILDERS: dict[str, FragmentSqlBuilder] = {
     "cst_parse_manifest": libcst_parse_manifest_sql,
     "cst_parse_errors": libcst_parse_errors_sql,
-    "cst_name_refs": libcst_name_refs_sql,
+    "cst_refs": libcst_refs_sql,
     "cst_imports": libcst_imports_sql,
     "cst_callsites": libcst_callsites_sql,
     "cst_defs": libcst_defs_sql,
     "cst_type_exprs": libcst_type_exprs_sql,
+    "cst_docstrings": libcst_docstrings_sql,
+    "cst_decorators": libcst_decorators_sql,
+    "cst_call_args": libcst_call_args_sql,
     "ast_nodes": ast_nodes_sql,
     "ast_edges": ast_edges_sql,
     "ast_errors": ast_errors_sql,
@@ -963,11 +1038,14 @@ __all__ = [
     "bytecode_instructions_sql",
     "fragment_view_specs",
     "libcst_callsites_sql",
+    "libcst_call_args_sql",
+    "libcst_decorators_sql",
     "libcst_defs_sql",
+    "libcst_docstrings_sql",
     "libcst_imports_sql",
-    "libcst_name_refs_sql",
     "libcst_parse_errors_sql",
     "libcst_parse_manifest_sql",
+    "libcst_refs_sql",
     "libcst_type_exprs_sql",
     "scip_diagnostics_sql",
     "scip_documents_sql",

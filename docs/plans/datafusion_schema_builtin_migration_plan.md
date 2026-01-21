@@ -95,7 +95,7 @@ Notes
 ---
 
 ## Scope 3: Scan-boundary schema evolution via PhysicalExprAdapterFactory
-Status: Completed (via Rust installer)
+Status: Completed
 
 ### Target file list
 - `rust/datafusion_ext/src/lib.rs` (ListingTable provider builder + adapter wiring)
@@ -106,17 +106,17 @@ Status: Completed (via Rust installer)
 ```rust
 use std::sync::Arc;
 
-use datafusion::datasource::listing::ListingTableConfig;
+use datafusion_catalog_listing::ListingTableConfig;
 use datafusion::physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 
 let config = ListingTableConfig::new(path)
-    .with_physical_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
+    .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
 ```
 
 ### Implementation checklist
 - [x] Add Rust helper to register the adapter factory (PyO3 installer).
-- [ ] Add Rust helper to build a ListingTable with adapter factory.
-- [ ] Expose the provider via PyCapsule for Python registration.
+- [x] Add Rust helper to build a ListingTable with adapter factory.
+- [x] Expose the provider via PyCapsule for Python registration.
 - [x] Remove Python-side evolution compatibility checks (adapter is authoritative).
 - [x] Ensure Delta and Parquet providers use the same adapter path.
 
@@ -150,18 +150,18 @@ register_registry_catalog(
 ```
 
 ### Implementation checklist
-- [ ] Replace schema-only registration with `TableProvider` registration.
+- [x] Replace schema-only registration with `TableProvider` registration.
 - [x] Use DataFusion `CatalogProvider` to expose dataset registry entries.
 - [ ] Add async lookup for remote metadata when needed (SchemaProvider.table).
 
 Notes
-- Runtime still registers schema-only tables from `dataset_spec_catalog()`; registry
+- Runtime now registers dataset specs via empty `TableProvider` registrations; registry
   catalog provider is used for Ibis-backed registrations.
 
 ---
 
 ## Scope 5: DeltaTableProvider for schema-aware Delta scans
-Status: Partially complete
+Status: Completed
 
 ### Target file list
 - `rust/datafusion_ext/src/lib.rs`
@@ -169,20 +169,21 @@ Status: Partially complete
 
 ### Code pattern
 ```rust
-use deltalake::delta_datafusion::DeltaTableProvider;
+use deltalake::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
 
-let provider = DeltaTableProvider::try_new(delta_table)?;
+let scan_config = DeltaScanConfigBuilder::new().build(&snapshot)?;
+let provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config)?;
 ctx.register_table("my_delta", Arc::new(provider))?;
 ```
 
 ### Implementation checklist
-- [ ] Expose a Rust helper to create DeltaTableProvider for a registry entry.
+- [x] Expose a Rust helper to create DeltaTableProvider for a registry entry.
 - [x] Register Delta tables via provider when available.
 - [x] Use provider schema as the source of truth for fingerprints.
 
 Notes
-- Delta registration now prefers the provider returned by
-  `DeltaTable.__datafusion_table_provider__()`; a Rust helper is still pending.
+- Delta registration now attempts the Rust helper first and falls back to
+  `DeltaTable.__datafusion_table_provider__()` when needed.
 
 ---
 
@@ -250,9 +251,9 @@ Notes
 ## Master implementation checklist
 - [x] Replace fragment schema maps with DF schema inference.
 - [x] Compute schema fingerprints from DF table schema.
-- [~] Use ListingTable + PhysicalExprAdapterFactory for evolution.
+- [x] Use ListingTable + PhysicalExprAdapterFactory for evolution.
 - [~] Register registry tables via CatalogProvider/SchemaProvider.
-- [~] Use DeltaTableProvider for Delta datasets.
+- [x] Use DeltaTableProvider for Delta datasets.
 - [x] Centralize view-type policy using DF configs.
 - [x] Pivot introspection to `information_schema` and `DESCRIBE <query>`.
-- [ ] Update docs/examples to reference DF built-in flows.
+- [x] Update docs/examples to reference DF built-in flows.

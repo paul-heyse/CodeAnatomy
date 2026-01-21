@@ -10,11 +10,11 @@ from typing import Protocol, TypeGuard, get_args, runtime_checkable
 import ibis
 
 from arrowdsl.kernel.registry import KERNEL_REGISTRY, KernelDef
+from datafusion_engine.extract_builders import QueryContext, build_query_spec
+from datafusion_engine.extract_metadata import extract_metadata_specs
+from datafusion_engine.extract_pipelines import post_kernels_for_postprocess
 from engine.function_registry import FunctionRegistry, FunctionSpec, default_function_registry
 from engine.pyarrow_registry import pyarrow_compute_functions
-from extract.registry_builders import QueryContext, build_query_spec
-from extract.registry_pipelines import post_kernels_for_postprocess
-from extract.registry_rows import DATASET_ROWS
 from ibis_engine.expr_compiler import IbisExprRegistry, default_expr_registry
 from ibis_engine.query_compiler import IbisQuerySpec
 from normalize.rule_factories import build_rule_definitions_from_specs
@@ -320,7 +320,7 @@ def _collect_post_kernels(rule: RuleDefinition, demands: RuleDemandIndex) -> Non
 
 def _collect_extract_queries(demands: RuleDemandIndex) -> None:
     ctx = QueryContext()
-    for row in DATASET_ROWS:
+    for row in extract_metadata_specs():
         spec = build_query_spec(row, ctx=ctx)
         _collect_query_spec(spec, row.name, demands)
 

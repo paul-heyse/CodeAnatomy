@@ -12,8 +12,6 @@ import pyarrow as pa
 from cpg.registry_builders import build_dataset_spec as build_cpg_dataset_spec
 from cpg.registry_rows import DATASET_ROWS as CPG_DATASET_ROWS
 from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for, schema_for
-from extract.registry_builders import build_dataset_spec as build_extract_dataset_spec
-from extract.registry_rows import DATASET_ROWS as EXTRACT_DATASET_ROWS
 from incremental.registry_builders import build_dataset_spec as build_incremental_dataset_spec
 from incremental.registry_rows import DATASET_ROWS as INCREMENTAL_DATASET_ROWS
 from normalize.registry_builders import build_dataset_spec as build_normalize_dataset_spec
@@ -200,7 +198,6 @@ def dataset_spec_catalog() -> DatasetSpecCatalog:
         Cached catalog of dataset specs.
     """
     accessors = (
-        _build_registry(EXTRACT_DATASET_ROWS, build_dataset_spec=build_extract_dataset_spec),
         _build_registry(NORMALIZE_DATASET_ROWS, build_dataset_spec=build_normalize_dataset_spec),
         _build_registry(CPG_DATASET_ROWS, build_dataset_spec=build_cpg_dataset_spec),
         _build_registry(

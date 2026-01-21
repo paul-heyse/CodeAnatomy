@@ -3027,6 +3027,24 @@ Python can *consume* Rust-implemented providers via a PyCapsule interface:
 
 This is how you build your own “repo://…/path@rev → provider → schema” system if URL tables aren’t enough.
 
+Repo integration example (CodeAnatomy):
+
+```python
+from datafusion_engine.listing_table_provider import TableProviderCapsule
+
+capsule = datafusion_ext.parquet_listing_table_provider(
+    path=str(dataset_path),
+    file_extension=".parquet",
+    schema_ipc=schema.serialize().to_pybytes(),
+    partition_schema_ipc=None,
+)
+ctx.register_table("my_listing", TableProviderCapsule(capsule))
+```
+
+The same PyCapsule path is used for Delta providers via
+`datafusion_ext.delta_table_provider(...)`, with `TableProviderCapsule` wrapping
+the returned capsule.
+
 ---
 
 ## C) UDTFs / Table Functions generate **TableProviders** (and therefore schemas)

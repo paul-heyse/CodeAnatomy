@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from extract.registry_definitions import extract_rule_definitions
+from datafusion_engine.extract_rules import extract_rule_definitions
 from relspec.extract.registry_bundles import (
     extract_template_diagnostics as extract_template_diagnostics_from_specs,
 )

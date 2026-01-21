@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -21,6 +22,10 @@ from deltalake import DeltaTable
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.serialization import schema_to_dict
 from core_types import ensure_path
+from datafusion_engine.listing_table_provider import (
+    TableProviderCapsule,
+    parquet_listing_table_provider,
+)
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_registry import SCHEMA_REGISTRY, is_nested_dataset
 from ibis_engine.registry import (
@@ -485,10 +490,9 @@ def _should_register_external_table(context: DataFusionRegistrationContext) -> b
 def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
     scan = context.options.scan
     file_extension = scan.file_extension if scan and scan.file_extension else ".parquet"
+    partition_cols = scan.partition_cols if scan and scan.partition_cols else None
     table_partition_cols = (
-        [(col, str(dtype)) for col, dtype in scan.partition_cols]
-        if scan and scan.partition_cols
-        else None
+        [(col, str(dtype)) for col, dtype in partition_cols] if partition_cols else None
     )
     kwargs: dict[str, Any] = {
         "schema": context.options.schema,
@@ -496,8 +500,10 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         "table_partition_cols": table_partition_cols,
     }
     skip_metadata = None
+    file_sort_order = None
     if scan is not None:
-        kwargs["file_sort_order"] = scan.file_sort_order or None
+        file_sort_order = scan.file_sort_order or None
+        kwargs["file_sort_order"] = file_sort_order
         kwargs["parquet_pruning"] = scan.parquet_pruning
         skip_metadata = _effective_skip_metadata(context.location, scan)
         kwargs["skip_metadata"] = skip_metadata
@@ -512,7 +518,22 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
                 value=str(skip_metadata).lower(),
             )
 
+        listing_provider = None
+        if file_sort_order is None:
+            listing_provider = parquet_listing_table_provider(
+                path=str(context.location.path),
+                schema=context.options.schema,
+                file_extension=file_extension,
+                table_partition_cols=partition_cols,
+                parquet_pruning=scan.parquet_pruning if scan is not None else None,
+                skip_metadata=skip_metadata,
+                collect_statistics=scan.collect_statistics if scan is not None else None,
+            )
+
         def _register_listing() -> None:
+            if listing_provider is not None:
+                context.ctx.register_table(context.name, listing_provider)
+                return
             _call_register(
                 context.ctx.register_listing_table,
                 context.name,
@@ -709,7 +730,9 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
     provider = "table"
     delta_provider = None
     if not context.location.files:
-        delta_provider = _delta_table_provider(table, delta_scan=context.options.delta_scan)
+        delta_provider = _delta_rust_table_provider(context, delta_scan=context.options.delta_scan)
+        if delta_provider is None:
+            delta_provider = _delta_table_provider(table, delta_scan=context.options.delta_scan)
     if delta_provider is not None:
         context.ctx.register_table(context.name, delta_provider)
         provider = "table_provider"
@@ -1006,6 +1029,45 @@ def _delta_scan_config(options: DeltaScanOptions | None) -> dict[str, object] | 
     if options.schema is not None:
         config["schema"] = options.schema
     return config or None
+
+
+def _delta_schema_ipc(schema: pa.Schema | None) -> bytes | None:
+    if schema is None:
+        return None
+    buffer = schema.serialize()
+    return buffer.to_pybytes()
+
+
+def _delta_rust_table_provider(
+    context: DataFusionRegistrationContext,
+    *,
+    delta_scan: DeltaScanOptions | None,
+) -> object | None:
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError:  # pragma: no cover - optional dependency
+        return None
+    factory = getattr(module, "delta_table_provider", None)
+    if not callable(factory):
+        return None
+    storage_options = (
+        list(context.location.storage_options.items()) if context.location.storage_options else None
+    )
+    schema_ipc = None
+    if delta_scan is not None and delta_scan.schema is not None:
+        schema_ipc = _delta_schema_ipc(delta_scan.schema)
+    capsule = factory(
+        table_uri=str(context.location.path),
+        storage_options=storage_options,
+        version=context.location.delta_version,
+        timestamp=context.location.delta_timestamp,
+        file_column_name=delta_scan.file_column_name if delta_scan is not None else None,
+        enable_parquet_pushdown=(
+            delta_scan.enable_parquet_pushdown if delta_scan is not None else None
+        ),
+        schema_ipc=schema_ipc,
+    )
+    return TableProviderCapsule(capsule)
 
 
 def _delta_table_provider(

@@ -16,8 +16,8 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.ordering_policy import ordering_keys_for_schema
 from arrowdsl.schema.build import empty_table
+from datafusion_engine.extract_registry import dataset_schema as extract_dataset_schema
 from datafusion_engine.query_fragments import SqlFragment
-from extract.registry_specs import dataset_schema as extract_dataset_schema
 from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
 from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan

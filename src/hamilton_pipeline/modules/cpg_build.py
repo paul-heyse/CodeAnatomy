@@ -18,11 +18,12 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.constants import CpgBuildArtifacts
+from datafusion_engine.extract_ids import repo_file_id_spec
 from datafusion_engine.nested_tables import materialize_sql_fragment, register_nested_table
 from datafusion_engine.query_fragments import (
     SqlFragment,
     libcst_callsites_sql,
-    libcst_name_refs_sql,
+    libcst_refs_sql,
     scip_external_symbol_information_sql,
     scip_symbol_information_sql,
     scip_symbol_relationships_sql,
@@ -33,7 +34,6 @@ from datafusion_engine.query_fragments import (
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
-from extract.registry_ids import repo_file_id_spec
 from hamilton_pipeline.pipeline_types import (
     CpgBaseInputs,
     CpgExtraInputs,
@@ -550,12 +550,12 @@ def relspec_input_dataset_dir(relspec_work_dir: str) -> str:
 
 
 @cache()
-@tag(layer="extract", artifact="cst_name_refs", kind="object")
-def cst_name_refs(
+@tag(layer="extract", artifact="cst_refs", kind="object")
+def cst_refs(
     libcst_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
 ) -> SqlFragment:
-    """Return the CST name refs projection from nested LibCST files.
+    """Return the CST refs projection from nested LibCST files.
 
     Returns
     -------
@@ -567,7 +567,7 @@ def cst_name_refs(
         name="libcst_files_v1",
         table=libcst_files,
     )
-    return SqlFragment("cst_name_refs", libcst_name_refs_sql())
+    return SqlFragment("cst_refs", libcst_refs_sql())
 
 
 @cache()
@@ -722,7 +722,7 @@ def ts_missing(
 
 @tag(layer="relspec", artifact="relspec_cst_inputs", kind="bundle")
 def relspec_cst_inputs(
-    cst_name_refs: TableLike | SqlFragment,
+    cst_refs: TableLike | SqlFragment,
     cst_imports_norm: TableLike | SqlFragment,
     cst_callsites: TableLike | SqlFragment,
     cst_defs_norm: TableLike | SqlFragment,
@@ -735,7 +735,7 @@ def relspec_cst_inputs(
         CST relationship input bundle.
     """
     return CstRelspecInputs(
-        cst_name_refs=cst_name_refs,
+        cst_refs=cst_refs,
         cst_imports_norm=cst_imports_norm,
         cst_callsites=cst_callsites,
         cst_defs_norm=cst_defs_norm,
@@ -880,9 +880,9 @@ def relspec_input_datasets(
     _ = relspec_input_dataset_context.incremental_context
     backend = relspec_input_dataset_context.engine_session.ibis_backend
     datasets = {
-        "cst_name_refs": _require_table(
-            "cst_name_refs",
-            relspec_input_bundles.cst_inputs.cst_name_refs,
+        "cst_refs": _require_table(
+            "cst_refs",
+            relspec_input_bundles.cst_inputs.cst_refs,
             backend=backend,
         ),
         "cst_imports": _require_table(
@@ -1495,7 +1495,7 @@ def relationship_output_tables(
 
 @tag(layer="cpg", artifact="cst_build_inputs", kind="bundle")
 def cst_build_inputs(
-    cst_name_refs: TableLike | DatasetSource | SqlFragment,
+    cst_refs: TableLike | DatasetSource | SqlFragment,
     cst_imports_norm: TableLike | DatasetSource | SqlFragment,
     cst_callsites: TableLike | DatasetSource | SqlFragment,
     cst_defs_norm: TableLike | DatasetSource | SqlFragment,
@@ -1508,7 +1508,7 @@ def cst_build_inputs(
         CST build input bundle.
     """
     return CstBuildInputs(
-        cst_name_refs=cst_name_refs,
+        cst_refs=cst_refs,
         cst_imports_norm=cst_imports_norm,
         cst_callsites=cst_callsites,
         cst_defs_norm=cst_defs_norm,
@@ -1668,7 +1668,7 @@ def cpg_node_inputs(
     """
     return NodeInputTables(
         repo_files=cpg_base_inputs.repo_files,
-        cst_name_refs=cpg_base_inputs.cst_build_inputs.cst_name_refs,
+        cst_refs=cpg_base_inputs.cst_build_inputs.cst_refs,
         cst_imports=cpg_base_inputs.cst_build_inputs.cst_imports_norm,
         cst_callsites=cpg_base_inputs.cst_build_inputs.cst_callsites,
         cst_defs=cpg_base_inputs.cst_build_inputs.cst_defs_norm,
@@ -1732,7 +1732,7 @@ def cpg_props_inputs(
     """
     return PropsInputTables(
         repo_files=cpg_base_inputs.repo_files,
-        cst_name_refs=cpg_base_inputs.cst_build_inputs.cst_name_refs,
+        cst_refs=cpg_base_inputs.cst_build_inputs.cst_refs,
         cst_imports=cpg_base_inputs.cst_build_inputs.cst_imports_norm,
         cst_callsites=cpg_base_inputs.cst_build_inputs.cst_callsites,
         cst_defs=cpg_base_inputs.cst_build_inputs.cst_defs_norm,

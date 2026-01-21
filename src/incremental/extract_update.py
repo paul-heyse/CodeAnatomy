@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
-from extract.registry_bundles import dataset_name_for_output
+from datafusion_engine.extract_bundles import dataset_name_for_output
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
 from storage.deltalake import (

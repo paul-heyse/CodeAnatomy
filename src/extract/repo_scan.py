@@ -14,6 +14,7 @@ from typing import Literal, overload
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from core_types import PathLike, ensure_path
+from datafusion_engine.extract_registry import dataset_query, normalize_options
 from extract.helpers import (
     ExtractMaterializeOptions,
     apply_query_and_project,
@@ -21,7 +22,6 @@ from extract.helpers import (
     ibis_plan_from_rows,
     materialize_extract_plan,
 )
-from extract.registry_specs import dataset_query, dataset_row_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec
@@ -89,9 +89,6 @@ def repo_files_query(repo_id: str | None) -> IbisQuerySpec:
         IbisQuerySpec for repo file projection.
     """
     return dataset_query("repo_files_v1", repo_id=repo_id)
-
-
-REPO_FILES_ROW_SCHEMA = dataset_row_schema("repo_files_v1")
 
 
 def _is_excluded_dir(rel_path: Path, exclude_dirs: Sequence[str]) -> bool:
@@ -314,11 +311,7 @@ def scan_repo_plan(
             if options.max_files is not None and count >= options.max_files:
                 break
 
-    raw_plan = ibis_plan_from_rows(
-        "repo_files_v1",
-        iter_rows(),
-        row_schema=REPO_FILES_ROW_SCHEMA,
-    )
+    raw_plan = ibis_plan_from_rows("repo_files_v1", iter_rows())
     return apply_query_and_project(
         "repo_files_v1",
         raw_plan.expr,

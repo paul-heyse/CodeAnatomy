@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Literal, overload
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.ids import stable_id
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
     ExtractMaterializeOptions,
     SpanSpec,
@@ -24,7 +25,6 @@ from extract.helpers import (
     materialize_extract_plan,
     span_dict,
 )
-from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
 from ibis_engine.plan import IbisPlan
@@ -126,9 +126,6 @@ def _signature_doc_entry(sig_doc: object | None) -> dict[str, object] | None:
         "language": str(language) if language is not None else None,
         "occurrences": _signature_doc_occurrence_rows(sig_doc),
     }
-
-
-SCIP_INDEX_SCHEMA = dataset_schema("scip_index_v1")
 
 
 def _scip_index_command(
@@ -550,7 +547,7 @@ def _build_scip_index_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
 ) -> IbisPlan:
-    raw = ibis_plan_from_rows("scip_index_v1", rows, row_schema=SCIP_INDEX_SCHEMA)
+    raw = ibis_plan_from_rows("scip_index_v1", rows)
     return apply_query_and_project(
         "scip_index_v1",
         raw.expr,

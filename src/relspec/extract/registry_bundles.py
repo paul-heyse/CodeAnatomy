@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from functools import cache
 
-from extract.registry_definitions import extract_rule_definitions as _extract_rule_definitions
-from extract.registry_templates import config as extractor_config
-from extract.registry_templates import expand_dataset_templates
+from datafusion_engine.extract_rules import extract_rule_definitions as _extract_rule_definitions
+from datafusion_engine.extract_templates import config as extractor_config
+from datafusion_engine.extract_templates import expand_dataset_templates
 from relspec.extract.registry_template_specs import DatasetTemplateSpec, dataset_template_specs
 from relspec.rules.decorators import rule_bundle
 from relspec.rules.definitions import RuleDefinition

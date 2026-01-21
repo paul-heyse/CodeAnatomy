@@ -154,6 +154,7 @@ CST_EDGE_T = pa.struct(
 )
 
 QNAME_T = pa.struct([("name", pa.string()), ("source", pa.string())])
+FQN_LIST = pa.list_(pa.string())
 
 CST_PARSE_MANIFEST_T = pa.struct(
     [
@@ -167,6 +168,9 @@ CST_PARSE_MANIFEST_T = pa.struct(
         ("future_imports", pa.list_(pa.string())),
         ("module_name", pa.string()),
         ("package_name", pa.string()),
+        ("libcst_version", pa.string()),
+        ("parser_backend", pa.string()),
+        ("parsed_python_version", pa.string()),
     ]
 )
 
@@ -179,6 +183,9 @@ CST_PARSE_ERROR_T = pa.struct(
         ("message", pa.string()),
         ("raw_line", pa.int64()),
         ("raw_column", pa.int64()),
+        ("editor_line", pa.int64()),
+        ("editor_column", pa.int64()),
+        ("context", pa.string()),
         ("line_base", pa.int32()),
         ("col_unit", pa.string()),
         ("end_exclusive", pa.bool_()),
@@ -186,13 +193,20 @@ CST_PARSE_ERROR_T = pa.struct(
     ]
 )
 
-CST_NAME_REF_T = pa.struct(
+CST_REF_T = pa.struct(
     [
         ("file_id", pa.string()),
         ("path", pa.string()),
         ("file_sha256", pa.string()),
-        ("name", pa.string()),
+        ("ref_id", pa.string()),
+        ("ref_kind", pa.string()),
+        ("ref_text", pa.string()),
         ("expr_ctx", pa.string()),
+        ("scope_type", pa.string()),
+        ("scope_name", pa.string()),
+        ("scope_role", pa.string()),
+        ("parent_kind", pa.string()),
+        ("inferred_type", pa.string()),
         ("bstart", pa.int64()),
         ("bend", pa.int64()),
     ]
@@ -221,6 +235,7 @@ CST_CALLSITE_T = pa.struct(
         ("file_id", pa.string()),
         ("path", pa.string()),
         ("file_sha256", pa.string()),
+        ("call_id", pa.string()),
         ("call_bstart", pa.int64()),
         ("call_bend", pa.int64()),
         ("callee_bstart", pa.int64()),
@@ -230,6 +245,8 @@ CST_CALLSITE_T = pa.struct(
         ("arg_count", pa.int32()),
         ("callee_dotted", pa.string()),
         ("callee_qnames", pa.list_(QNAME_T)),
+        ("callee_fqns", FQN_LIST),
+        ("inferred_type", pa.string()),
     ]
 )
 
@@ -238,6 +255,7 @@ CST_DEF_T = pa.struct(
         ("file_id", pa.string()),
         ("path", pa.string()),
         ("file_sha256", pa.string()),
+        ("def_id", pa.string()),
         ("container_def_kind", pa.string()),
         ("container_def_bstart", pa.int64()),
         ("container_def_bend", pa.int64()),
@@ -248,6 +266,9 @@ CST_DEF_T = pa.struct(
         ("name_bstart", pa.int64()),
         ("name_bend", pa.int64()),
         ("qnames", pa.list_(QNAME_T)),
+        ("def_fqns", FQN_LIST),
+        ("docstring", pa.string()),
+        ("decorator_count", pa.int32()),
     ]
 )
 
@@ -268,6 +289,48 @@ CST_TYPE_EXPR_T = pa.struct(
     ]
 )
 
+CST_DOCSTRING_T = pa.struct(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("file_sha256", pa.string()),
+        ("owner_def_id", pa.string()),
+        ("owner_kind", pa.string()),
+        ("docstring", pa.string()),
+        ("bstart", pa.int64()),
+        ("bend", pa.int64()),
+    ]
+)
+
+CST_DECORATOR_T = pa.struct(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("file_sha256", pa.string()),
+        ("owner_def_id", pa.string()),
+        ("owner_kind", pa.string()),
+        ("decorator_text", pa.string()),
+        ("decorator_index", pa.int32()),
+        ("bstart", pa.int64()),
+        ("bend", pa.int64()),
+    ]
+)
+
+CST_CALL_ARG_T = pa.struct(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("file_sha256", pa.string()),
+        ("call_id", pa.string()),
+        ("arg_index", pa.int32()),
+        ("keyword", pa.string()),
+        ("star", pa.string()),
+        ("arg_text", pa.string()),
+        ("bstart", pa.int64()),
+        ("bend", pa.int64()),
+    ]
+)
+
 LIBCST_FILES_SCHEMA = pa.schema(
     [
         ("repo", pa.string()),
@@ -277,11 +340,14 @@ LIBCST_FILES_SCHEMA = pa.schema(
         ("edges", pa.list_(CST_EDGE_T)),
         ("parse_manifest", pa.list_(CST_PARSE_MANIFEST_T)),
         ("parse_errors", pa.list_(CST_PARSE_ERROR_T)),
-        ("name_refs", pa.list_(CST_NAME_REF_T)),
+        ("refs", pa.list_(CST_REF_T)),
         ("imports", pa.list_(CST_IMPORT_T)),
         ("callsites", pa.list_(CST_CALLSITE_T)),
         ("defs", pa.list_(CST_DEF_T)),
         ("type_exprs", pa.list_(CST_TYPE_EXPR_T)),
+        ("docstrings", pa.list_(CST_DOCSTRING_T)),
+        ("decorators", pa.list_(CST_DECORATOR_T)),
+        ("call_args", pa.list_(CST_CALL_ARG_T)),
         ("attrs", ATTRS_T),
     ]
 )
@@ -588,9 +654,9 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "role": "derived",
         "context": {},
     },
-    "cst_name_refs": {
+    "cst_refs": {
         "root": "libcst_files_v1",
-        "path": "name_refs",
+        "path": "refs",
         "role": "derived",
         "context": {},
     },
@@ -615,6 +681,24 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
     "cst_type_exprs": {
         "root": "libcst_files_v1",
         "path": "type_exprs",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_docstrings": {
+        "root": "libcst_files_v1",
+        "path": "docstrings",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_decorators": {
+        "root": "libcst_files_v1",
+        "path": "decorators",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_call_args": {
+        "root": "libcst_files_v1",
+        "path": "call_args",
         "role": "derived",
         "context": {},
     },

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from arrowdsl.schema.metadata import EvidenceMetadata
 from arrowdsl.schema.metadata import evidence_metadata_spec as _evidence_metadata_spec
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from extract.registry_rows import DATASET_ROWS, DatasetRow
-from extract.registry_templates import template as template_lookup
+from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata_specs
+from datafusion_engine.extract_templates import template as template_lookup
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ class EvidenceSpec:
     ambiguity_policy: str | None = None
 
 
-def _template_value(row: DatasetRow, key: bytes) -> str | None:
+def _template_value(row: ExtractMetadata, key: bytes) -> str | None:
     if row.template is None:
         return None
     templ = template_lookup(row.template)
@@ -38,7 +38,7 @@ def _template_value(row: DatasetRow, key: bytes) -> str | None:
         return None
 
 
-def _required_columns(row: DatasetRow) -> tuple[str, ...]:
+def _required_columns(row: ExtractMetadata) -> tuple[str, ...]:
     if row.evidence_required_columns:
         return row.evidence_required_columns
     if row.join_keys:
@@ -46,7 +46,7 @@ def _required_columns(row: DatasetRow) -> tuple[str, ...]:
     return row.fields
 
 
-def _build_spec(row: DatasetRow) -> EvidenceSpec:
+def _build_spec(row: ExtractMetadata) -> EvidenceSpec:
     templ = template_lookup(row.template) if row.template is not None else None
     return EvidenceSpec(
         name=row.name,
@@ -62,7 +62,7 @@ def _build_spec(row: DatasetRow) -> EvidenceSpec:
 
 _SPECS_BY_NAME: dict[str, EvidenceSpec] = {}
 _SPECS_BY_ALIAS: dict[str, EvidenceSpec] = {}
-for _row in DATASET_ROWS:
+for _row in extract_metadata_specs():
     _spec = _build_spec(_row)
     _SPECS_BY_NAME[_spec.name] = _spec
     _SPECS_BY_ALIAS[_spec.alias] = _spec

@@ -10,8 +10,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.finalize.finalize import FinalizeContext, FinalizeResult
 from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec, align_table, encode_table
-from extract.registry_pipelines import pipeline_spec
-from extract.registry_specs import (
+from datafusion_engine.extract_registry import (
     dataset_metadata_with_options,
     dataset_schema_policy,
     dataset_spec,
@@ -131,10 +130,7 @@ def apply_pipeline_kernels(name: str, table: TableLike) -> TableLike:
     TableLike
         Table with pipeline kernels applied.
     """
-    processed = table
-    for kernel in pipeline_spec(name).post_kernels:
-        processed = kernel(processed)
-    return processed
+    return table
 
 
 def finalize_context_for_dataset(

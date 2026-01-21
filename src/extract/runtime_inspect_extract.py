@@ -15,13 +15,13 @@ from pyarrow import ipc
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract_registry import dataset_query, normalize_options
 from extract.helpers import (
     ExtractMaterializeOptions,
     apply_query_and_project,
     ibis_plan_from_rows,
     materialize_extract_plan,
 )
-from extract.registry_specs import dataset_query, dataset_row_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_projection
@@ -70,12 +70,6 @@ class RuntimeRows:
     sig_rows: list[Row]
     param_rows: list[Row]
     member_rows: list[Row]
-
-
-RT_OBJECTS_ROW_SCHEMA = dataset_row_schema("rt_objects_v1")
-RT_SIGNATURES_ROW_SCHEMA = dataset_row_schema("rt_signatures_v1")
-RT_PARAMS_ROW_SCHEMA = dataset_row_schema("rt_signature_params_v1")
-RT_MEMBERS_ROW_SCHEMA = dataset_row_schema("rt_members_v1")
 
 
 def _inspect_script() -> str:
@@ -512,11 +506,7 @@ def _build_rt_objects(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
 ) -> tuple[IbisPlan, IbisPlan]:
-    raw_plan = ibis_plan_from_rows(
-        "rt_objects_v1",
-        obj_rows,
-        row_schema=RT_OBJECTS_ROW_SCHEMA,
-    )
+    raw_plan = ibis_plan_from_rows("rt_objects_v1", obj_rows)
     raw_table = raw_plan.expr
     with_rt_id = _with_derived_columns(raw_table, dataset="rt_objects_v1")
     rt_keys = with_rt_id.select(with_rt_id["object_key"], with_rt_id["rt_id"])
@@ -538,11 +528,7 @@ def _build_rt_signatures(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
 ) -> tuple[IbisPlan, IbisPlan | None]:
-    raw_plan = ibis_plan_from_rows(
-        "rt_signatures_v1",
-        sig_rows,
-        row_schema=RT_SIGNATURES_ROW_SCHEMA,
-    )
+    raw_plan = ibis_plan_from_rows("rt_signatures_v1", sig_rows)
     sig_table = raw_plan.expr
     if not sig_rows:
         empty_plan = apply_query_and_project(
@@ -585,11 +571,7 @@ def _build_rt_params(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
 ) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "rt_signature_params_v1",
-        param_rows,
-        row_schema=RT_PARAMS_ROW_SCHEMA,
-    )
+    raw_plan = ibis_plan_from_rows("rt_signature_params_v1", param_rows)
     params_table = raw_plan.expr
     if not param_rows or sig_meta_plan is None:
         return apply_query_and_project(
@@ -626,11 +608,7 @@ def _build_rt_members(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
 ) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "rt_members_v1",
-        member_rows,
-        row_schema=RT_MEMBERS_ROW_SCHEMA,
-    )
+    raw_plan = ibis_plan_from_rows("rt_members_v1", member_rows)
     member_table = raw_plan.expr
     if not member_rows:
         return apply_query_and_project(

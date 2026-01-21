@@ -11,7 +11,8 @@ from tree_sitter import Language, Parser
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ids import span_id
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -25,7 +26,6 @@ from extract.helpers import (
     materialize_extract_plan,
     span_dict,
 )
-from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 
@@ -50,9 +50,6 @@ class TreeSitterExtractResult:
     """Extracted tree-sitter tables for nodes and diagnostics."""
 
     tree_sitter_files: TableLike
-
-
-TREE_SITTER_FILES_SCHEMA = dataset_schema("tree_sitter_files_v1")
 
 
 def _parser() -> Parser:
@@ -232,7 +229,6 @@ def extract_ts_plans(
         "tree_sitter_files": _build_ts_plan(
             "tree_sitter_files_v1",
             rows,
-            row_schema=TREE_SITTER_FILES_SCHEMA,
             normalize=normalize,
             evidence_plan=evidence_plan,
         ),
@@ -262,11 +258,10 @@ def _build_ts_plan(
     name: str,
     rows: list[Row],
     *,
-    row_schema: SchemaLike,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
 ) -> IbisPlan:
-    raw = ibis_plan_from_rows(name, rows, row_schema=row_schema)
+    raw = ibis_plan_from_rows(name, rows)
     return apply_query_and_project(
         name,
         raw.expr,

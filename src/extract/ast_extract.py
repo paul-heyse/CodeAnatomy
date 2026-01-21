@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -22,7 +23,6 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
-from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 
@@ -45,8 +45,6 @@ class ASTExtractResult:
 
     ast_files: TableLike
 
-
-AST_FILES_SCHEMA = dataset_schema("ast_files_v1")
 
 AST_LINE_BASE = 1
 AST_COL_UNIT = "utf32"
@@ -322,7 +320,6 @@ def extract_ast_plans(
         "ast_files": _build_ast_plan(
             "ast_files_v1",
             rows,
-            row_schema=AST_FILES_SCHEMA,
             normalize=normalize,
             evidence_plan=evidence_plan,
         ),
@@ -347,11 +344,10 @@ def _build_ast_plan(
     name: str,
     rows: list[dict[str, object]],
     *,
-    row_schema: SchemaLike,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
 ) -> IbisPlan:
-    raw = ibis_plan_from_rows(name, rows, row_schema=row_schema)
+    raw = ibis_plan_from_rows(name, rows)
     return apply_query_and_project(
         name,
         raw.expr,

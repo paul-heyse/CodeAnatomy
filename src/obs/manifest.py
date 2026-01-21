@@ -16,9 +16,9 @@ from arrowdsl.core.metrics import table_summary
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.serialization import dataset_fingerprint, schema_fingerprint
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
+from datafusion_engine.extract_extractors import extractor_spec
+from datafusion_engine.extract_registry import dataset_schema
 from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
-from extract.registry_extractors import extractor_spec
-from extract.registry_specs import dataset_schema
 from ibis_engine.param_tables import ParamTableArtifact
 from obs.diagnostics_schemas import DIAGNOSTICS_SCHEMA_VERSION
 from obs.repro import collect_repro_info

@@ -126,7 +126,7 @@ class RuntimeInspectConfig:
 class CstRelspecInputs:
     """CST inputs required for relationship-spec datasets."""
 
-    cst_name_refs: TableLike | SqlFragment
+    cst_refs: TableLike | SqlFragment
     cst_imports_norm: TableLike | SqlFragment
     cst_callsites: TableLike | SqlFragment
     cst_defs_norm: TableLike | SqlFragment
@@ -160,7 +160,7 @@ class ScipIdentityOverrides:
 class CstBuildInputs:
     """CST inputs required for CPG node/property building."""
 
-    cst_name_refs: TableLike | DatasetSource | SqlFragment
+    cst_refs: TableLike | DatasetSource | SqlFragment
     cst_imports_norm: TableLike | DatasetSource | SqlFragment
     cst_callsites: TableLike | DatasetSource | SqlFragment
     cst_defs_norm: TableLike | DatasetSource | SqlFragment

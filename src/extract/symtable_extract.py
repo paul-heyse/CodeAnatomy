@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -23,7 +24,6 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
-from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 
@@ -94,9 +94,6 @@ class SymtableContext:
             File identity columns for row construction.
         """
         return file_identity_row(self.file_ctx)
-
-
-SYMTABLE_FILES_SCHEMA = dataset_schema("symtable_files_v1")
 
 
 def _scope_type_str(tbl: symtable.SymbolTable) -> str:
@@ -344,7 +341,7 @@ def _build_symtable_file_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
 ) -> IbisPlan:
-    raw = ibis_plan_from_rows("symtable_files_v1", rows, row_schema=SYMTABLE_FILES_SCHEMA)
+    raw = ibis_plan_from_rows("symtable_files_v1", rows)
     return apply_query_and_project(
         "symtable_files_v1",
         raw.expr,

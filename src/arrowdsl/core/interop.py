@@ -440,8 +440,19 @@ def table_from_dataframe_protocol(obj: object) -> TableLike:
     return interchange.from_dataframe(obj)
 
 
-def reader_from_arrow_stream(obj: object) -> RecordBatchReaderLike:
+def reader_from_arrow_stream(
+    obj: object,
+    *,
+    requested_schema: pa.Schema | None = None,
+) -> RecordBatchReaderLike:
     """Return a RecordBatchReader from an Arrow C stream provider.
+
+    Parameters
+    ----------
+    obj
+        Input object exposing the Arrow C stream protocol.
+    requested_schema
+        Optional schema request for providers that support projection or reordering.
 
     Returns
     -------
@@ -459,10 +470,20 @@ def reader_from_arrow_stream(obj: object) -> RecordBatchReaderLike:
     provider alive for the duration of ingestion and do not reuse it after
     conversion.
     """
-    if not hasattr(obj, "__arrow_c_stream__"):
+    stream_provider = getattr(obj, "__arrow_c_stream__", None)
+    if not callable(stream_provider):
         msg = "Object does not expose __arrow_c_stream__."
         raise TypeError(msg)
-    # NOTE: Arrow C stream providers are single-consumption objects.
+    if requested_schema is not None:
+        try:
+            capsule = stream_provider(requested_schema=requested_schema)
+        except TypeError:
+            capsule = stream_provider()
+        importer = getattr(pa.RecordBatchReader, "_import_from_c", None)
+        if not callable(importer):
+            msg = "Requested schema projection requires RecordBatchReader._import_from_c."
+            raise RuntimeError(msg)
+        return importer(capsule)
     return pa.RecordBatchReader.from_stream(obj)
 
 
@@ -538,6 +559,8 @@ def coerce_table_like(
     ----------
     obj
         Input object to coerce.
+    requested_schema
+        Optional schema request for providers that support projection or reordering.
 
     Returns
     -------
@@ -552,7 +575,7 @@ def coerce_table_like(
     if isinstance(obj, (TableLike, RecordBatchReaderLike)):
         return obj
     if hasattr(obj, "__arrow_c_stream__"):
-        return reader_from_arrow_stream(obj)
+        return reader_from_arrow_stream(obj, requested_schema=requested_schema)
     if hasattr(obj, "__arrow_c_array__"):
         return table_from_arrow_c_array(obj, requested_schema=requested_schema)
     if hasattr(obj, "__dataframe__"):

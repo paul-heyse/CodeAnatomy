@@ -371,6 +371,27 @@ Matches your overview’s end-to-end incremental loop semantics. ([Tree-sitter][
 
 ---
 
+### 3.1.1 CodeAnatomy integration: incremental cache + query scoping
+
+CodeAnatomy wires the canonical incremental loop into a small LRU cache so we can reuse trees
+across runs, while keeping all coordinates byte-based and Tree-sitter native.
+
+* `src/extract/tree_sitter_cache.py` implements `TreeSitterCache.parse` keyed by file id/path:
+  it computes a single-span `InputEdit` (prefix/suffix diff), applies `Tree.edit`, and falls back
+  to a full parse when an edit is not derivable.
+* The cache returns `TreeSitterParseResult(tree, changed_ranges, used_incremental)`, so the
+  extractor can scope `QueryCursor` with `set_byte_range` when `incremental=True`.
+
+Minimal usage:
+
+```python
+cache = TreeSitterCache(max_entries=256)
+parse_result = cache.parse(parser=parser, key=file_id, source=source_bytes)
+ranges = parse_result.changed_ranges if options.incremental else ()
+```
+
+---
+
 ### 3.2 Interpreting `changed_ranges`: how to “re-index only what matters”
 
 `changed_ranges` is *not* “text diffs”; it’s “ancestor-path diffs”: outside these ranges, the root→leaf ancestor chain is identical in old/new trees. ([Tree-sitter][1])

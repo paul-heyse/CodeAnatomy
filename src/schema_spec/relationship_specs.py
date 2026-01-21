@@ -9,7 +9,6 @@ from schema_spec.system import (
     ContractCatalogSpec,
     DatasetSpec,
     DedupeSpecSpec,
-    SchemaRegistry,
     SortKeySpec,
     VirtualFieldSpec,
     make_contract_spec,
@@ -86,9 +85,14 @@ def relationship_dataset_specs() -> tuple[DatasetSpec, ...]:
     tuple[DatasetSpec, ...]
         Relationship dataset specs sorted by name.
     """
-    registry = SchemaRegistry()
-    relationship_contract_spec().register_into(registry)
-    return tuple(sorted(registry.dataset_specs.values(), key=lambda spec: spec.name))
+    specs = (
+        rel_name_symbol_spec(),
+        rel_import_symbol_spec(),
+        rel_def_symbol_spec(),
+        rel_callsite_symbol_spec(),
+        rel_callsite_qname_spec(),
+    )
+    return tuple(sorted(specs, key=lambda spec: spec.name))
 
 
 def relationship_contract_spec() -> ContractCatalogSpec:

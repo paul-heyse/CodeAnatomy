@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping, Sequence
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -61,8 +61,24 @@ def register_param_tables_df(
     policy: ParamTablePolicy,
     scope_key: str | None = None,
     signature_cache: MutableMapping[str, str] | None = None,
+    parameters_snapshot: Sequence[Mapping[str, object]] | None = None,
 ) -> dict[str, str]:
     """Register param tables and return logical -> qualified name mapping.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context used for registration.
+    artifacts
+        Param table artifacts to register.
+    policy
+        Policy controlling catalog/schema/prefix naming.
+    scope_key
+        Optional scope key for schema naming.
+    signature_cache
+        Optional mapping of logical names to signatures for cache reuse.
+    parameters_snapshot
+        Optional parameter metadata rows for additional validation.
 
     Returns
     -------
@@ -93,6 +109,12 @@ def register_param_tables_df(
             table_name=table_name,
             expected_schema=artifact.table.schema,
         )
+        if parameters_snapshot is not None:
+            _validate_param_table_parameters(
+                parameters_snapshot,
+                table_name=table_name,
+                expected_schema=artifact.table.schema,
+            )
         mapping[logical_name] = qualified
         if signature_cache is not None:
             signature_cache[logical_name] = artifact.signature
@@ -163,6 +185,47 @@ def _validate_param_table_schema(
             msg = (
                 "Param table type mismatch for "
                 f"{catalog}.{schema}.{table_name}.{name}: expected {expected}, got {actual}."
+            )
+            raise ValueError(msg)
+
+
+def _validate_param_table_parameters(
+    parameters_snapshot: Sequence[Mapping[str, object]],
+    *,
+    table_name: str,
+    expected_schema: pa.Schema,
+) -> None:
+    """Validate param table types against DataFusion parameter metadata.
+
+    Parameters
+    ----------
+    parameters_snapshot
+        Parameter metadata rows from ``information_schema.parameters``.
+    table_name
+        Parameter table name used as a lookup hint.
+    expected_schema
+        Expected Arrow schema for the parameter table.
+
+    Raises
+    ------
+    ValueError
+        Raised when parameter metadata disagrees with expected types.
+    """
+    expected_types = {field.name: str(field.type).lower() for field in expected_schema}
+    for row in parameters_snapshot:
+        param_name = row.get("parameter_name")
+        data_type = row.get("data_type")
+        if param_name is None or data_type is None:
+            continue
+        name = str(param_name)
+        if name not in expected_types:
+            continue
+        expected = expected_types[name]
+        actual = str(data_type).lower()
+        if expected != actual:
+            msg = (
+                "Prepared parameter type mismatch for "
+                f"{table_name}.{name}: expected {expected}, got {actual}."
             )
             raise ValueError(msg)
 

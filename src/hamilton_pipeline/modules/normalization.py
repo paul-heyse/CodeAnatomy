@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache as memoize
 from typing import TYPE_CHECKING, Protocol, cast
 
 import pyarrow as pa
+import pyarrow.compute as pc
 from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.ids import prefixed_hash_id
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, RecordBatchReaderLike, TableLike
+from arrowdsl.core.interop import (
+    ArrayLike,
+    ChunkedArrayLike,
+    RecordBatchReaderLike,
+    TableLike,
+    coerce_table_like,
+)
 from arrowdsl.core.joins import JoinConfig, left_join
 from arrowdsl.schema.build import const_array, empty_table, set_or_append_column, table_from_arrays
 from datafusion_engine.compute_ops import (
@@ -95,12 +104,16 @@ from normalize.spans import (
     normalize_cst_defs_spans,
     normalize_cst_imports_spans,
 )
+from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from relspec.pipeline_policy import PipelinePolicy
 from relspec.registry.rules import RuleRegistry
 from relspec.rules.discovery import discover_bundles
 
 if TYPE_CHECKING:
     from relspec.rules.definitions import RuleDefinition
+
+LOGGER = logging.getLogger(__name__)
+VALID_SCIP_POSITION_ENCODINGS: frozenset[int] = frozenset((ENC_UTF8, ENC_UTF16, ENC_UTF32))
 
 DEFAULT_MATERIALIZE_OUTPUTS: tuple[str, ...] = ()
 
@@ -137,6 +150,93 @@ def _requires_any(plan: EvidencePlan | None, names: Sequence[str]) -> bool:
 def _is_datafusion_backend(backend: BaseBackend) -> bool:
     name = getattr(backend, "name", "")
     return str(name).lower() == "datafusion"
+
+
+def _posenc_value(value: object | None) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        return int(text) if text.isdigit() else None
+    return None
+
+
+def _posenc_stats_from_rows(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    missing = 0
+    invalid = 0
+    total = 0
+    valid_values: set[int] = set()
+    invalid_values: set[str] = set()
+    for row in rows:
+        raw_value = row.get("position_encoding")
+        if raw_value is None and "values" in row:
+            raw_value = row.get("values")
+        raw_count = row.get("doc_count")
+        if raw_count is None and "counts" in row:
+            raw_count = row.get("counts")
+        count = int(raw_count) if raw_count is not None else 0
+        total += count
+        if raw_value is None:
+            missing += count
+            continue
+        value = _posenc_value(raw_value)
+        if value is None:
+            invalid += count
+            invalid_values.add(str(raw_value))
+            continue
+        if value not in VALID_SCIP_POSITION_ENCODINGS:
+            invalid += count
+            invalid_values.add(str(value))
+            continue
+        valid_values.add(value)
+    return {
+        "document_count": total,
+        "missing_position_encoding": missing,
+        "invalid_position_encoding": invalid,
+        "valid_position_encodings": sorted(valid_values),
+        "invalid_position_encoding_values": sorted(invalid_values),
+    }
+
+
+def _scip_position_encoding_stats(
+    scip_documents: TableLike | SqlFragment,
+    *,
+    backend: BaseBackend,
+) -> dict[str, object] | None:
+    if isinstance(scip_documents, SqlFragment):
+        ctx = datafusion_context(backend)
+        if ctx is None:
+            return None
+        query = (
+            "SELECT position_encoding, COUNT(*) AS doc_count "
+            f"FROM ({scip_documents.sql}) docs GROUP BY position_encoding"
+        )
+        table = ctx.sql(query).to_arrow_table()
+        return _posenc_stats_from_rows(table.to_pylist())
+    resolved = coerce_table_like(scip_documents)
+    table = resolved.read_all() if isinstance(resolved, RecordBatchReaderLike) else resolved
+    if not isinstance(table, pa.Table):
+        return None
+    if "position_encoding" not in table.column_names:
+        return None
+    counts = pc.value_counts(table["position_encoding"])
+    rows = counts.to_pylist()
+    return _posenc_stats_from_rows(rows)
+
+
+def _record_scip_position_encoding_stats(
+    ctx: ExecutionContext,
+    stats: Mapping[str, object],
+) -> None:
+    runtime = ctx.runtime.datafusion
+    if runtime is None or runtime.diagnostics_sink is None:
+        return
+    payload = {"event_time_unix_ms": int(time.time() * 1000), **dict(stats)}
+    runtime.diagnostics_sink.record_artifact("scip_position_encoding_v1", payload)
 
 
 def _require_datafusion_backend(backend: BaseBackend) -> None:
@@ -206,7 +306,6 @@ class NormalizeTypeSourceInputs:
     cst_type_exprs: IbisPlanSource | None = None
     scip_symbol_information: IbisPlanSource | None = None
     libcst_files: TableLike | RecordBatchReaderLike | None = None
-    scip_index: TableLike | RecordBatchReaderLike | None = None
 
 
 @dataclass(frozen=True)
@@ -273,7 +372,6 @@ class DiagnosticsTableInputs:
 
     libcst_files: TableLike | RecordBatchReaderLike | None = None
     tree_sitter_files: TableLike | RecordBatchReaderLike | None = None
-    scip_index: TableLike | RecordBatchReaderLike | None = None
 
 
 @dataclass(frozen=True)
@@ -322,7 +420,6 @@ def normalize_type_source_inputs(
     cst_type_exprs: IbisPlanSource | None = None,
     scip_symbol_information: IbisPlanSource | None = None,
     libcst_files: TableLike | RecordBatchReaderLike | None = None,
-    scip_index: TableLike | RecordBatchReaderLike | None = None,
 ) -> NormalizeTypeSourceInputs:
     """Bundle raw inputs for type normalization sources.
 
@@ -335,7 +432,6 @@ def normalize_type_source_inputs(
         cst_type_exprs=cst_type_exprs,
         scip_symbol_information=scip_symbol_information,
         libcst_files=libcst_files,
-        scip_index=scip_index,
     )
 
 
@@ -358,16 +454,11 @@ def normalize_type_sources(
         name="libcst_files_v1",
         table=normalize_type_source_inputs.libcst_files,
     )
-    register_nested_table(
-        backend,
-        name="scip_index_v1",
-        table=normalize_type_source_inputs.scip_index,
-    )
     cst_type_exprs = normalize_type_source_inputs.cst_type_exprs
     scip_symbol_information = normalize_type_source_inputs.scip_symbol_information
     if cst_type_exprs is None and normalize_type_source_inputs.libcst_files is not None:
         cst_type_exprs = SqlFragment("cst_type_exprs", libcst_type_exprs_sql())
-    if scip_symbol_information is None and normalize_type_source_inputs.scip_index is not None:
+    if scip_symbol_information is None and backend is not None:
         scip_symbol_information = SqlFragment(
             "scip_symbol_information",
             scip_symbol_information_sql(),
@@ -1317,7 +1408,6 @@ def diagnostics_fragment_inputs(
 def diagnostics_table_inputs(
     libcst_files: TableLike | RecordBatchReaderLike | None = None,
     tree_sitter_files: TableLike | RecordBatchReaderLike | None = None,
-    scip_index: TableLike | RecordBatchReaderLike | None = None,
 ) -> DiagnosticsTableInputs:
     """Bundle nested table inputs for diagnostics normalization.
 
@@ -1329,7 +1419,6 @@ def diagnostics_table_inputs(
     return DiagnosticsTableInputs(
         libcst_files=libcst_files,
         tree_sitter_files=tree_sitter_files,
-        scip_index=scip_index,
     )
 
 
@@ -1358,11 +1447,6 @@ def diagnostics_sources(
         name="tree_sitter_files_v1",
         table=diagnostics_table_inputs.tree_sitter_files,
     )
-    register_nested_table(
-        backend,
-        name="scip_index_v1",
-        table=diagnostics_table_inputs.scip_index,
-    )
     cst_parse_errors = diagnostics_fragment_inputs.cst_parse_errors
     ts_errors = diagnostics_fragment_inputs.ts_errors
     ts_missing = diagnostics_fragment_inputs.ts_missing
@@ -1374,9 +1458,9 @@ def diagnostics_sources(
         ts_errors = SqlFragment("ts_errors", tree_sitter_errors_sql())
     if ts_missing is None and diagnostics_table_inputs.tree_sitter_files is not None:
         ts_missing = SqlFragment("ts_missing", tree_sitter_missing_sql())
-    if scip_diagnostics is None and diagnostics_table_inputs.scip_index is not None:
+    if scip_diagnostics is None and backend is not None:
         scip_diagnostics = SqlFragment("scip_diagnostics", scip_diagnostics_sql())
-    if scip_documents is None and diagnostics_table_inputs.scip_index is not None:
+    if scip_documents is None and backend is not None:
         scip_documents = SqlFragment("scip_documents", scip_documents_sql())
     return DiagnosticsSources(
         cst_parse_errors=cst_parse_errors,
@@ -1445,7 +1529,6 @@ def scip_occurrences_norm_bundle(
     span_normalize_context: SpanNormalizeContext,
     scip_documents: TableLike | SqlFragment | None = None,
     scip_occurrences: TableLike | SqlFragment | None = None,
-    scip_index: TableLike | RecordBatchReaderLike | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, TableLike]:
     """Convert SCIP occurrences into byte offsets.
@@ -1456,10 +1539,9 @@ def scip_occurrences_norm_bundle(
         Bundle with normalized occurrences and span errors.
     """
     backend = span_normalize_context.ibis_backend
-    register_nested_table(backend, name="scip_index_v1", table=scip_index)
-    if scip_documents is None and scip_index is not None:
+    if scip_documents is None and backend is not None:
         scip_documents = SqlFragment("scip_documents", scip_documents_sql())
-    if scip_occurrences is None and scip_index is not None:
+    if scip_occurrences is None and backend is not None:
         scip_occurrences = SqlFragment("scip_occurrences", scip_occurrences_sql())
     fallback_schema = _schema_from_source(
         scip_occurrences,
@@ -1480,6 +1562,21 @@ def scip_occurrences_norm_bundle(
             "scip_span_errors": span_error_table([]),
         }
     _require_datafusion_backend(backend)
+    stats = _scip_position_encoding_stats(scip_documents, backend=backend)
+    if stats is not None:
+        _record_scip_position_encoding_stats(span_normalize_context.ctx, stats)
+        missing = int(stats.get("missing_position_encoding", 0) or 0)
+        invalid = int(stats.get("invalid_position_encoding", 0) or 0)
+        encodings = stats.get("valid_position_encodings") or []
+        invalid_values = stats.get("invalid_position_encoding_values") or []
+        if missing or invalid or len(encodings) > 1:
+            LOGGER.warning(
+                "SCIP position encoding guard: missing=%d invalid=%d encodings=%s invalid_values=%s",
+                missing,
+                invalid,
+                encodings,
+                invalid_values,
+            )
     occ, errs = add_scip_occurrence_byte_spans_ibis(
         span_normalize_context.file_line_index,
         scip_documents,

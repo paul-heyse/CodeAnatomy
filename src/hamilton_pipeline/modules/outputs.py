@@ -33,6 +33,7 @@ from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.bridge import validate_table_constraints
 from datafusion_engine.registry_bridge import cached_dataset_names, register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.schema_authority import dataset_spec_from_context
 from datafusion_engine.schema_registry import is_nested_dataset
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
@@ -98,7 +99,6 @@ from relspec.rules.diagnostics import rule_diagnostics_from_table
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.spec_tables import rule_definitions_from_table
 from relspec.runtime import RelspecRuntime
-from schema_spec.catalog_registry import dataset_spec as catalog_spec
 from schema_spec.system import DatasetSpec, dataset_spec_from_schema, make_dataset_spec
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 from storage.dataset_sources import (
@@ -265,14 +265,14 @@ def _dataset_spec_for_name(name: str) -> DatasetSpec | None:
     if is_nested_dataset(name):
         return None
     try:
-        return catalog_spec(name)
+        return dataset_spec_from_context(name)
     except KeyError:
         return _dataset_spec_fallback(name)
 
 
 def _dataset_spec_fallback(name: str) -> DatasetSpec | None:
     try:
-        return catalog_spec(f"{name}_v1")
+        return dataset_spec_from_context(f"{name}_v1")
     except KeyError:
         return None
 
@@ -2859,6 +2859,12 @@ def _datafusion_diagnostics_notes(runtime: DataFusionRuntimeProfile) -> JsonDict
             "JsonValue",
             cst_schema_diagnostics,
         )
+    cst_view_plans = artifacts.get("datafusion_cst_view_plans_v1", [])
+    if cst_view_plans:
+        notes["datafusion_cst_view_plans"] = cast("JsonValue", cst_view_plans)
+    cst_dfschema = artifacts.get("datafusion_cst_dfschema_v1", [])
+    if cst_dfschema:
+        notes["datafusion_cst_dfschema"] = cast("JsonValue", cst_dfschema)
     udf_registry = artifacts.get("datafusion_udf_registry_v1", [])
     if udf_registry:
         notes["datafusion_udf_registry"] = cast("JsonValue", udf_registry)

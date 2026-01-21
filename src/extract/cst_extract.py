@@ -32,7 +32,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from datafusion_engine.schema_introspection import find_struct_field_keys
-from datafusion_engine.schema_registry import schema_for
+from datafusion_engine.schema_registry import default_attrs_value, schema_for
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -509,7 +509,7 @@ def _collect_cst_nodes_edges(
                     "kind": f"libcst.{type(node).__name__}",
                     "span": span,
                     "span_ws": span_ws,
-                    "attrs": attrs_map({}),
+                    "attrs": attrs_map(default_attrs_value()),
                 }
             )
         if parent_id is not None:
@@ -520,7 +520,7 @@ def _collect_cst_nodes_edges(
                     "kind": "CHILD",
                     "slot": slot,
                     "idx": idx,
-                    "attrs": attrs_map({}),
+                    "attrs": attrs_map(default_attrs_value()),
                 }
             )
         for child_slot, child_idx, child in _iter_cst_children(node):
@@ -852,7 +852,7 @@ class CSTCollector(cst.CSTVisitor):
                     "def_fqns": def_fqns,
                     "docstring": docstring,
                     "decorator_count": decorator_count,
-                    "attrs": attrs_map({}),
+                    "attrs": attrs_map(default_attrs_value()),
                 }
             )
         self._record_docstring(owner_kind=def_kind, owner_def_id=def_id, node=node)
@@ -951,7 +951,7 @@ class CSTCollector(cst.CSTVisitor):
                     "def_fqns": def_fqns,
                     "docstring": docstring,
                     "decorator_count": decorator_count,
-                    "attrs": attrs_map({}),
+                    "attrs": attrs_map(default_attrs_value()),
                 }
             )
         self._record_docstring(owner_kind=def_kind, owner_def_id=def_id, node=node)
@@ -1014,7 +1014,7 @@ class CSTCollector(cst.CSTVisitor):
                 "inferred_type": inferred_type,
                 "bstart": bstart,
                 "bend": bend,
-                "attrs": attrs_map({}),
+                "attrs": attrs_map(default_attrs_value()),
             }
         )
         return True
@@ -1060,7 +1060,7 @@ class CSTCollector(cst.CSTVisitor):
                 "inferred_type": inferred_type,
                 "bstart": bstart,
                 "bend": bend,
-                "attrs": attrs_map({}),
+                "attrs": attrs_map(default_attrs_value()),
             }
         )
         return True
@@ -1099,7 +1099,7 @@ class CSTCollector(cst.CSTVisitor):
                     "stmt_bend": stmt_bend,
                     "alias_bstart": alias_bstart,
                     "alias_bend": alias_bend,
-                    "attrs": attrs_map({}),
+                    "attrs": attrs_map(default_attrs_value()),
                 }
             )
         return True
@@ -1140,7 +1140,7 @@ class CSTCollector(cst.CSTVisitor):
                     "stmt_bend": stmt_bend,
                     "alias_bstart": alias_bstart,
                     "alias_bend": alias_bend,
-                    "attrs": attrs_map({}),
+                    "attrs": attrs_map(default_attrs_value()),
                 }
             )
             return True
@@ -1168,7 +1168,7 @@ class CSTCollector(cst.CSTVisitor):
                     "stmt_bend": stmt_bend,
                     "alias_bstart": alias_bstart,
                     "alias_bend": alias_bend,
-                    "attrs": attrs_map({}),
+                    "attrs": attrs_map(default_attrs_value()),
                 }
             )
         return True
@@ -1219,7 +1219,7 @@ class CSTCollector(cst.CSTVisitor):
             "callee_qnames": qnames,
             "callee_fqns": callee_fqns,
             "inferred_type": inferred_type,
-            "attrs": attrs_map({}),
+            "attrs": attrs_map(default_attrs_value()),
         }
         return call_id, row
 

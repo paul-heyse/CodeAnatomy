@@ -37,9 +37,6 @@ from datafusion_engine.query_fragments import (
     SqlFragment,
     libcst_callsites_sql,
     libcst_refs_sql,
-    scip_external_symbol_information_sql,
-    scip_symbol_information_sql,
-    scip_symbol_relationships_sql,
     symtable_scope_edges_sql,
     symtable_scopes_sql,
     symtable_symbols_sql,
@@ -598,72 +595,6 @@ def cst_callsites(
         table=libcst_files,
     )
     return SqlFragment("cst_callsites", libcst_callsites_sql())
-
-
-@cache()
-@tag(layer="extract", artifact="scip_symbol_information", kind="object")
-def scip_symbol_information(
-    scip_index: TableLike | RecordBatchReaderLike,
-    engine_session: EngineSession,
-) -> SqlFragment:
-    """Return SCIP symbol info projection from nested SCIP index.
-
-    Returns
-    -------
-    SqlFragment
-        SQL fragment for SCIP symbol information.
-    """
-    register_nested_table(
-        engine_session.ibis_backend,
-        name="scip_index_v1",
-        table=scip_index,
-    )
-    return SqlFragment("scip_symbol_information", scip_symbol_information_sql())
-
-
-@cache()
-@tag(layer="extract", artifact="scip_symbol_relationships", kind="object")
-def scip_symbol_relationships(
-    scip_index: TableLike | RecordBatchReaderLike,
-    engine_session: EngineSession,
-) -> SqlFragment:
-    """Return SCIP symbol relationships projection from nested SCIP index.
-
-    Returns
-    -------
-    SqlFragment
-        SQL fragment for SCIP symbol relationships.
-    """
-    register_nested_table(
-        engine_session.ibis_backend,
-        name="scip_index_v1",
-        table=scip_index,
-    )
-    return SqlFragment("scip_symbol_relationships", scip_symbol_relationships_sql())
-
-
-@cache()
-@tag(layer="extract", artifact="scip_external_symbol_information", kind="object")
-def scip_external_symbol_information(
-    scip_index: TableLike | RecordBatchReaderLike,
-    engine_session: EngineSession,
-) -> SqlFragment:
-    """Return SCIP external symbol info projection from nested SCIP index.
-
-    Returns
-    -------
-    SqlFragment
-        SQL fragment for SCIP external symbol information.
-    """
-    register_nested_table(
-        engine_session.ibis_backend,
-        name="scip_index_v1",
-        table=scip_index,
-    )
-    return SqlFragment(
-        "scip_external_symbol_information",
-        scip_external_symbol_information_sql(),
-    )
 
 
 @cache()

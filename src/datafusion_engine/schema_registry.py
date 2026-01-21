@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import pyarrow as pa
 
@@ -16,6 +17,12 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_VERSION,
 )
 from arrowdsl.schema.metadata import ordering_metadata_spec
+from arrowdsl.schema.semantic_types import (
+    SEMANTIC_TYPE_META,
+    SPAN_TYPE_INFO,
+    byte_span_type,
+    span_type,
+)
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from registry_common.metadata import metadata_list_bytes
 from schema_spec.view_specs import ViewSpec
@@ -23,26 +30,30 @@ from schema_spec.view_specs import ViewSpec
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-POS_T = pa.struct([("line0", pa.int32()), ("col", pa.int32())])
-
-BYTE_SPAN_T = pa.struct([("byte_start", pa.int32()), ("byte_len", pa.int32())])
-
-SPAN_T = pa.struct(
-    [
-        ("start", POS_T),
-        ("end", POS_T),
-        ("end_exclusive", pa.bool_()),
-        ("col_unit", pa.string()),
-        ("byte_span", BYTE_SPAN_T),
-    ]
-)
+BYTE_SPAN_T = byte_span_type()
+SPAN_T = span_type()
 
 ATTRS_T = pa.map_(pa.string(), pa.string())
 _DEFAULT_ATTRS_META: dict[bytes, bytes] = {DEFAULT_VALUE_META: b"{}"}
+_DEFAULT_ATTRS_VALUE: dict[str, str] = cast(
+    "dict[str, str]",
+    json.loads(_DEFAULT_ATTRS_META[DEFAULT_VALUE_META].decode("utf-8")),
+)
 
 
 def _attrs_field(name: str = "attrs") -> pa.Field:
     return pa.field(name, ATTRS_T, metadata=_DEFAULT_ATTRS_META)
+
+
+def default_attrs_value() -> dict[str, str]:
+    """Return the default attrs map from schema metadata.
+
+    Returns
+    -------
+    dict[str, str]
+        Default attrs mapping derived from schema metadata.
+    """
+    return dict(_DEFAULT_ATTRS_VALUE)
 
 
 SCIP_METADATA_SCHEMA = pa.schema(
@@ -543,16 +554,32 @@ TREE_SITTER_FLAGS_T = pa.struct(
         ("has_error", pa.bool_()),
         ("is_error", pa.bool_()),
         ("is_missing", pa.bool_()),
+        ("is_extra", pa.bool_()),
+        ("has_changes", pa.bool_()),
     ]
 )
 
 TREE_SITTER_NODE_T = pa.struct(
     [
         ("node_id", pa.string()),
+        ("node_uid", pa.int64()),
         ("parent_id", pa.string()),
         ("kind", pa.string()),
+        ("kind_id", pa.int32()),
+        ("grammar_id", pa.int32()),
+        ("grammar_name", pa.string()),
         ("span", SPAN_T),
         ("flags", TREE_SITTER_FLAGS_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+TREE_SITTER_EDGE_T = pa.struct(
+    [
+        ("parent_id", pa.string()),
+        ("child_id", pa.string()),
+        ("field_name", pa.string()),
+        ("child_index", pa.int32()),
         ("attrs", ATTRS_T),
     ]
 )
@@ -575,14 +602,100 @@ TREE_SITTER_MISSING_T = pa.struct(
     ]
 )
 
+TREE_SITTER_CAPTURE_T = pa.struct(
+    [
+        ("capture_id", pa.string()),
+        ("query_name", pa.string()),
+        ("capture_name", pa.string()),
+        ("pattern_index", pa.int32()),
+        ("node_id", pa.string()),
+        ("node_kind", pa.string()),
+        ("span", SPAN_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+TREE_SITTER_DEF_T = pa.struct(
+    [
+        ("node_id", pa.string()),
+        ("parent_id", pa.string()),
+        ("kind", pa.string()),
+        ("name", pa.string()),
+        ("span", SPAN_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+TREE_SITTER_CALL_T = pa.struct(
+    [
+        ("node_id", pa.string()),
+        ("parent_id", pa.string()),
+        ("callee_kind", pa.string()),
+        ("callee_text", pa.string()),
+        ("callee_node_id", pa.string()),
+        ("span", SPAN_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+TREE_SITTER_IMPORT_T = pa.struct(
+    [
+        ("node_id", pa.string()),
+        ("parent_id", pa.string()),
+        ("kind", pa.string()),
+        ("module", pa.string()),
+        ("name", pa.string()),
+        ("asname", pa.string()),
+        ("alias_index", pa.int32()),
+        ("level", pa.int32()),
+        ("span", SPAN_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+TREE_SITTER_DOCSTRING_T = pa.struct(
+    [
+        ("owner_node_id", pa.string()),
+        ("owner_kind", pa.string()),
+        ("owner_name", pa.string()),
+        ("doc_node_id", pa.string()),
+        ("docstring", pa.string()),
+        ("source", pa.string()),
+        ("span", SPAN_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+TREE_SITTER_STATS_T = pa.struct(
+    [
+        ("node_count", pa.int32()),
+        ("named_count", pa.int32()),
+        ("error_count", pa.int32()),
+        ("missing_count", pa.int32()),
+        ("parse_ms", pa.int64()),
+        ("parse_timed_out", pa.bool_()),
+        ("incremental_used", pa.bool_()),
+        ("query_match_count", pa.int32()),
+        ("query_capture_count", pa.int32()),
+        ("match_limit_exceeded", pa.bool_()),
+    ]
+)
+
 TREE_SITTER_FILES_SCHEMA = pa.schema(
     [
         ("repo", pa.string()),
         ("path", pa.string()),
         ("file_id", pa.string()),
         ("nodes", pa.list_(TREE_SITTER_NODE_T)),
+        ("edges", pa.list_(TREE_SITTER_EDGE_T)),
         ("errors", pa.list_(TREE_SITTER_ERROR_T)),
         ("missing", pa.list_(TREE_SITTER_MISSING_T)),
+        ("captures", pa.list_(TREE_SITTER_CAPTURE_T)),
+        ("defs", pa.list_(TREE_SITTER_DEF_T)),
+        ("calls", pa.list_(TREE_SITTER_CALL_T)),
+        ("imports", pa.list_(TREE_SITTER_IMPORT_T)),
+        ("docstrings", pa.list_(TREE_SITTER_DOCSTRING_T)),
+        ("stats", TREE_SITTER_STATS_T),
         ("attrs", ATTRS_T),
     ]
 )
@@ -629,6 +742,7 @@ SYMTABLE_SPAN_META: dict[bytes, bytes] = {
     b"line_base": b"0",
     b"col_unit": b"utf32",
     b"end_exclusive": b"true",
+    SEMANTIC_TYPE_META: SPAN_TYPE_INFO.name.encode("utf-8"),
 }
 
 SYM_BLOCK_T = pa.struct(
@@ -665,6 +779,7 @@ BYTECODE_SPAN_META: dict[bytes, bytes] = {
     b"line_base": b"0",
     b"col_unit": b"utf32",
     b"end_exclusive": b"true",
+    SEMANTIC_TYPE_META: SPAN_TYPE_INFO.name.encode("utf-8"),
 }
 
 BYTECODE_LINE_META: dict[bytes, bytes] = {b"line_base": b"1"}
@@ -908,7 +1023,9 @@ LIBCST_FILES_SCHEMA = _schema_with_metadata(
 SCIP_METADATA_SCHEMA = _schema_with_metadata("scip_metadata_v1", SCIP_METADATA_SCHEMA)
 SCIP_INDEX_STATS_SCHEMA = _schema_with_metadata("scip_index_stats_v1", SCIP_INDEX_STATS_SCHEMA)
 SCIP_DOCUMENTS_SCHEMA = _schema_with_metadata("scip_documents_v1", SCIP_DOCUMENTS_SCHEMA)
-SCIP_DOCUMENT_TEXTS_SCHEMA = _schema_with_metadata("scip_document_texts_v1", SCIP_DOCUMENT_TEXTS_SCHEMA)
+SCIP_DOCUMENT_TEXTS_SCHEMA = _schema_with_metadata(
+    "scip_document_texts_v1", SCIP_DOCUMENT_TEXTS_SCHEMA
+)
 SCIP_OCCURRENCES_SCHEMA = _schema_with_metadata("scip_occurrences_v1", SCIP_OCCURRENCES_SCHEMA)
 SCIP_SYMBOL_INFORMATION_SCHEMA = _schema_with_metadata(
     "scip_symbol_information_v1",
@@ -947,7 +1064,22 @@ SYMTABLE_FILES_SCHEMA = _schema_with_metadata(
     SYMTABLE_FILES_SCHEMA,
     extra_metadata=_SYMTABLE_SCHEMA_META,
 )
-TREE_SITTER_FILES_SCHEMA = _schema_with_metadata("tree_sitter_files_v1", TREE_SITTER_FILES_SCHEMA)
+_TREE_SITTER_IDENTITY_FIELDS = ("file_id", "path")
+_TREE_SITTER_ORDERING_META = ordering_metadata_spec(
+    OrderingLevel.EXPLICIT,
+    keys=(("path", "ascending"), ("file_id", "ascending")),
+)
+_TREE_SITTER_CONSTRAINT_META = {
+    REQUIRED_NON_NULL_META: metadata_list_bytes(_TREE_SITTER_IDENTITY_FIELDS),
+    KEY_FIELDS_META: metadata_list_bytes(_TREE_SITTER_IDENTITY_FIELDS),
+}
+_TREE_SITTER_SCHEMA_META = dict(_TREE_SITTER_ORDERING_META.schema_metadata)
+_TREE_SITTER_SCHEMA_META.update(_TREE_SITTER_CONSTRAINT_META)
+TREE_SITTER_FILES_SCHEMA = _schema_with_metadata(
+    "tree_sitter_files_v1",
+    TREE_SITTER_FILES_SCHEMA,
+    extra_metadata=_TREE_SITTER_SCHEMA_META,
+)
 
 DATAFUSION_FALLBACKS_SCHEMA = _schema_with_metadata(
     "datafusion_fallbacks_v1",
@@ -1383,6 +1515,12 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "role": "derived",
         "context": {},
     },
+    "ts_edges": {
+        "root": "tree_sitter_files_v1",
+        "path": "edges",
+        "role": "intrinsic",
+        "context": {},
+    },
     "ts_errors": {
         "root": "tree_sitter_files_v1",
         "path": "errors",
@@ -1393,6 +1531,42 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "root": "tree_sitter_files_v1",
         "path": "missing",
         "role": "derived",
+        "context": {},
+    },
+    "ts_captures": {
+        "root": "tree_sitter_files_v1",
+        "path": "captures",
+        "role": "derived",
+        "context": {},
+    },
+    "ts_defs": {
+        "root": "tree_sitter_files_v1",
+        "path": "defs",
+        "role": "derived",
+        "context": {},
+    },
+    "ts_calls": {
+        "root": "tree_sitter_files_v1",
+        "path": "calls",
+        "role": "derived",
+        "context": {},
+    },
+    "ts_imports": {
+        "root": "tree_sitter_files_v1",
+        "path": "imports",
+        "role": "derived",
+        "context": {},
+    },
+    "ts_docstrings": {
+        "root": "tree_sitter_files_v1",
+        "path": "docstrings",
+        "role": "derived",
+        "context": {},
+    },
+    "ts_stats": {
+        "root": "tree_sitter_files_v1",
+        "path": "stats",
+        "role": "intrinsic",
         "context": {},
     },
     "symtable_scopes": {
@@ -1484,7 +1658,7 @@ ROOT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "bytecode_files_v1": _BYTECODE_IDENTITY_FIELDS,
     "libcst_files_v1": _LIBCST_IDENTITY_FIELDS,
     "symtable_files_v1": _SYMTABLE_IDENTITY_FIELDS,
-    "tree_sitter_files_v1": ("file_id", "path"),
+    "tree_sitter_files_v1": _TREE_SITTER_IDENTITY_FIELDS,
 }
 
 AST_VIEW_NAMES: tuple[str, ...] = (
@@ -1496,6 +1670,23 @@ AST_VIEW_NAMES: tuple[str, ...] = (
     "ast_defs",
     "ast_calls",
     "ast_type_ignores",
+)
+
+TREE_SITTER_VIEW_NAMES: tuple[str, ...] = (
+    "ts_nodes",
+    "ts_edges",
+    "ts_errors",
+    "ts_missing",
+    "ts_captures",
+    "ts_defs",
+    "ts_calls",
+    "ts_imports",
+    "ts_docstrings",
+    "ts_stats",
+    "ts_ast_defs_check",
+    "ts_ast_calls_check",
+    "ts_ast_imports_check",
+    "ts_cst_docstrings_check",
 )
 
 SCIP_VIEW_SCHEMA_MAP: dict[str, str] = {
@@ -1577,6 +1768,7 @@ CST_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "arrow_metadata",
     "arrow_typeof",
     "map_entries",
+    "map_extract",
     "named_struct",
     "unnest",
 )
@@ -1586,9 +1778,34 @@ CST_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "arrow_metadata": 1,
     "arrow_typeof": 1,
     "map_entries": 1,
+    "map_extract": 2,
     "named_struct": 2,
     "unnest": 1,
 }
+
+_STRING_TYPE_TOKENS = frozenset({"char", "string", "text", "utf8", "varchar"})
+_INT_TYPE_TOKENS = frozenset({"int", "integer", "bigint", "smallint", "tinyint", "uint"})
+_LIST_TYPE_TOKENS = frozenset({"array", "list"})
+_MAP_TYPE_TOKENS = frozenset({"map"})
+
+CST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
+    "arrow_cast": (None, _STRING_TYPE_TOKENS),
+    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+    "map_entries": (_MAP_TYPE_TOKENS,),
+    "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
+}
+
+BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
+    "arrow_cast": (None, _STRING_TYPE_TOKENS),
+    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+    "list_extract": (_LIST_TYPE_TOKENS, _INT_TYPE_TOKENS),
+    "map_entries": (_MAP_TYPE_TOKENS,),
+    "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
+    "map_keys": (_MAP_TYPE_TOKENS,),
+    "map_values": (_MAP_TYPE_TOKENS,),
+}
+
+CST_VIEW_REQUIRED_NON_NULL_FIELDS: tuple[str, ...] = ("file_id", "path")
 
 SCIP_REQUIRED_FUNCTIONS: tuple[str, ...] = ()
 
@@ -2039,6 +2256,34 @@ def validate_nested_types(ctx: SessionContext, name: str) -> None:
     ctx.sql(f"SELECT arrow_typeof(*) AS row_type FROM {name} LIMIT 1").collect()
 
 
+def _require_semantic_type(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    column_name: str,
+    expected: str,
+) -> None:
+    rows = (
+        ctx.sql(
+            "SELECT arrow_metadata("
+            f"{column_name}, '{SEMANTIC_TYPE_META.decode('utf-8')}'"
+            f") AS semantic_type FROM {table_name} LIMIT 1"
+        )
+        .to_arrow_table()
+        .to_pylist()
+    )
+    semantic_type = rows[0].get("semantic_type") if rows else None
+    if semantic_type is None:
+        msg = f"Missing semantic type metadata on {table_name}.{column_name}."
+        raise ValueError(msg)
+    if str(semantic_type) != expected:
+        msg = (
+            f"Semantic type mismatch for {table_name}.{column_name}: "
+            f"expected {expected!r}, got {semantic_type!r}."
+        )
+        raise ValueError(msg)
+
+
 def validate_ast_views(ctx: SessionContext) -> None:
     """Validate AST view schemas using DataFusion introspection.
 
@@ -2070,6 +2315,58 @@ def validate_ast_views(ctx: SessionContext) -> None:
         errors["ast_files_v1"] = str(exc)
     if errors:
         msg = f"AST view validation failed: {errors}."
+        raise ValueError(msg)
+
+
+def validate_ts_views(ctx: SessionContext) -> None:
+    """Validate tree-sitter view schemas using DataFusion introspection.
+
+    Raises
+    ------
+    ValueError
+        Raised when view schemas fail validation.
+    """
+    errors: dict[str, str] = {}
+    for name in TREE_SITTER_VIEW_NAMES:
+        try:
+            ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            errors[name] = str(exc)
+    try:
+        ctx.sql(
+            "SELECT arrow_typeof(nodes) AS nodes_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(edges) AS edges_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(errors) AS errors_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(missing) AS missing_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(captures) AS captures_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(defs) AS defs_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(calls) AS calls_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(imports) AS imports_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(docstrings) AS docstrings_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(stats) AS stats_type FROM tree_sitter_files_v1 LIMIT 1"
+        ).collect()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["tree_sitter_files_v1"] = str(exc)
+    if errors:
+        msg = f"Tree-sitter view validation failed: {errors}."
         raise ValueError(msg)
 
 
@@ -2156,9 +2453,7 @@ def validate_scip_views(ctx: SessionContext) -> None:
                 f"WHERE table_name = '{view_name}'"
             ).to_arrow_table()
             actual = {
-                str(row.get("column_name"))
-                for row in rows.to_pylist()
-                if row.get("column_name")
+                str(row.get("column_name")) for row in rows.to_pylist() if row.get("column_name")
             }
             missing = sorted(expected - actual)
             if missing:
@@ -2207,6 +2502,52 @@ def _signature_name(row: Mapping[str, object]) -> str | None:
     return None
 
 
+def _parameter_signatures(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, list[tuple[tuple[str, ...], tuple[str, ...]]]]:
+    signatures: dict[tuple[str, str], list[tuple[int, str, str]]] = {}
+    for row in rows:
+        name = _signature_name(row)
+        if name is None:
+            continue
+        specific = row.get("specific_name")
+        signature_id = specific if isinstance(specific, str) else name.lower()
+        ordinal = row.get("ordinal_position")
+        data_type = row.get("data_type")
+        mode = row.get("parameter_mode")
+        if not isinstance(ordinal, int) or data_type is None or mode is None:
+            continue
+        signatures.setdefault((name.lower(), signature_id), []).append(
+            (ordinal, str(data_type), str(mode))
+        )
+    grouped: dict[str, list[tuple[tuple[str, ...], tuple[str, ...]]]] = {}
+    for (name, _), entries in signatures.items():
+        entries.sort(key=lambda entry: entry[0])
+        types = tuple(dtype for _, dtype, _ in entries)
+        modes = tuple(mode for _, _, mode in entries)
+        grouped.setdefault(name, []).append((types, modes))
+    return grouped
+
+
+def _matches_type(value: str, tokens: frozenset[str]) -> bool:
+    lowered = value.lower()
+    return any(token in lowered for token in tokens)
+
+
+def _signature_matches_hints(
+    types: Sequence[str],
+    hints: Sequence[frozenset[str] | None],
+) -> bool:
+    if len(types) < len(hints):
+        return False
+    for dtype, tokens in zip(types, hints, strict=False):
+        if tokens is None:
+            continue
+        if not _matches_type(dtype, tokens):
+            return False
+    return True
+
+
 def _validate_function_signatures(
     ctx: SessionContext,
     *,
@@ -2226,6 +2567,43 @@ def _validate_function_signatures(
     signature_errors = _signature_errors(required, counts)
     if signature_errors:
         errors["datafusion_function_signatures"] = str(signature_errors)
+
+
+def _validate_function_signature_types(
+    ctx: SessionContext,
+    *,
+    required: Mapping[str, Sequence[frozenset[str] | None]],
+    errors: dict[str, str],
+) -> None:
+    introspector = SchemaIntrospector(ctx)
+    try:
+        rows = introspector.parameters_snapshot()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["datafusion_function_signature_types"] = str(exc)
+        return
+    if not rows:
+        errors["datafusion_function_signature_types"] = (
+            "information_schema.parameters returned no rows."
+        )
+        return
+    signatures = _parameter_signatures(rows)
+    missing_types: list[str] = []
+    mode_mismatches: list[str] = []
+    for name, hints in required.items():
+        entries = signatures.get(name.lower())
+        if not entries:
+            continue
+        if not any(all(mode.lower() == "in" for mode in modes) for _, modes in entries):
+            mode_mismatches.append(name)
+        if hints and not any(_signature_matches_hints(types, hints) for types, _ in entries):
+            missing_types.append(name)
+    details: dict[str, list[str]] = {}
+    if missing_types:
+        details["type_mismatches"] = missing_types
+    if mode_mismatches:
+        details["mode_mismatches"] = mode_mismatches
+    if details:
+        errors["datafusion_function_signature_types"] = str(details)
 
 
 def _parameter_counts(rows: Sequence[Mapping[str, object]]) -> dict[str, int]:
@@ -2287,6 +2665,42 @@ def _invalid_output_names(names: Sequence[str]) -> tuple[str, ...]:
     return tuple(invalid)
 
 
+def _arrow_schema_from_dfschema(schema: object) -> pa.Schema | None:
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    return None
+
+
+def _dfschema_names(schema: object) -> tuple[str, ...]:
+    if isinstance(schema, pa.Schema):
+        arrow_schema = cast("pa.Schema", schema)
+        return tuple(arrow_schema.names)
+    names_attr = getattr(schema, "names", None)
+    if isinstance(names_attr, Sequence) and not isinstance(
+        names_attr,
+        (str, bytes, bytearray),
+    ):
+        return tuple(str(name) for name in names_attr)
+    fields_attr = getattr(schema, "fields", None)
+    if callable(fields_attr):
+        fields = fields_attr()
+        if isinstance(fields, Sequence):
+            return tuple(str(getattr(field, "name", field)) for field in fields)
+    return ()
+
+
+def _dfschema_nullability(schema: object) -> dict[str, bool] | None:
+    arrow_schema = _arrow_schema_from_dfschema(schema)
+    if arrow_schema is None:
+        return None
+    return {field.name: field.nullable for field in arrow_schema}
+
+
 def validate_bytecode_views(ctx: SessionContext) -> None:
     """Validate bytecode view schemas using DataFusion introspection.
 
@@ -2300,6 +2714,11 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
     _validate_function_signatures(
         ctx,
         required=BYTECODE_REQUIRED_FUNCTION_SIGNATURES,
+        errors=errors,
+    )
+    _validate_function_signature_types(
+        ctx,
+        required=BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
         errors=errors,
     )
     for name in BYTECODE_VIEW_NAMES:
@@ -2350,11 +2769,80 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
             "SELECT arrow_typeof(code_objects.dfg_edges) AS dfg_edges_type "
             "FROM bytecode_files_v1 LIMIT 1"
         ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(attr_key) AS attr_key_type "
+            "FROM py_bc_instruction_attr_keys LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(attr_value) AS attr_value_type "
+            "FROM py_bc_instruction_attr_values LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(pos_start_line) AS pos_start_line_type, "
+            "arrow_typeof(pos_start_col) AS pos_start_col_type, "
+            "arrow_typeof(pos_end_line) AS pos_end_line_type, "
+            "arrow_typeof(pos_end_col) AS pos_end_col_type, "
+            "arrow_typeof(col_unit) AS col_unit_type, "
+            "arrow_typeof(end_exclusive) AS end_exclusive_type "
+            "FROM py_bc_instruction_span_fields LIMIT 1"
+        ).collect()
+        _require_semantic_type(
+            ctx,
+            table_name="py_bc_instruction_spans",
+            column_name="span",
+            expected=SPAN_TYPE_INFO.name,
+        )
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["bytecode_files_v1"] = str(exc)
     if errors:
         msg = f"Bytecode view validation failed: {errors}."
         raise ValueError(msg)
+
+
+def _validate_cst_view_dfschema(
+    ctx: SessionContext,
+    *,
+    name: str,
+    errors: dict[str, str],
+) -> None:
+    try:
+        df_schema = ctx.table(name).schema()
+    except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+        errors[f"{name}_dfschema"] = str(exc)
+        return
+    df_names = _dfschema_names(df_schema)
+    df_invalid = _invalid_output_names(df_names)
+    if df_invalid:
+        errors[f"{name}_dfschema_names"] = f"Invalid DFSchema names: {df_invalid}"
+    nullability = _dfschema_nullability(df_schema)
+    if not nullability:
+        return
+    nullable_required = [
+        field for field in CST_VIEW_REQUIRED_NON_NULL_FIELDS if nullability.get(field) is True
+    ]
+    if nullable_required:
+        errors[f"{name}_dfschema_nullability"] = (
+            f"Expected non-nullable fields are nullable: {sorted(nullable_required)}"
+        )
+
+
+def _validate_cst_view_outputs(
+    ctx: SessionContext,
+    *,
+    introspector: SchemaIntrospector,
+    name: str,
+    errors: dict[str, str],
+) -> None:
+    try:
+        rows = introspector.describe_query(f"SELECT * FROM {name}")
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors[name] = str(exc)
+        return
+    columns = _describe_column_names(rows)
+    invalid = _invalid_output_names(columns)
+    if invalid:
+        errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
+    _validate_cst_view_dfschema(ctx, name=name, errors=errors)
 
 
 def validate_cst_views(ctx: SessionContext) -> None:
@@ -2368,17 +2856,19 @@ def validate_cst_views(ctx: SessionContext) -> None:
     errors: dict[str, str] = {}
     _validate_required_functions(ctx, required=CST_REQUIRED_FUNCTIONS, errors=errors)
     _validate_function_signatures(ctx, required=CST_REQUIRED_FUNCTION_SIGNATURES, errors=errors)
+    _validate_function_signature_types(
+        ctx,
+        required=CST_REQUIRED_FUNCTION_SIGNATURE_TYPES,
+        errors=errors,
+    )
     introspector = SchemaIntrospector(ctx)
     for name in CST_VIEW_NAMES:
-        try:
-            rows = introspector.describe_query(f"SELECT * FROM {name}")
-        except (RuntimeError, TypeError, ValueError) as exc:
-            errors[name] = str(exc)
-            continue
-        columns = _describe_column_names(rows)
-        invalid = _invalid_output_names(columns)
-        if invalid:
-            errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
+        _validate_cst_view_outputs(
+            ctx,
+            introspector=introspector,
+            name=name,
+            errors=errors,
+        )
     try:
         ctx.sql("SELECT * FROM cst_schema_diagnostics").collect()
     except (RuntimeError, TypeError, ValueError) as exc:
@@ -2522,7 +3012,9 @@ __all__ = [
     "SYMTABLE_FILES_SCHEMA",
     "SYMTABLE_VIEW_NAMES",
     "TREE_SITTER_FILES_SCHEMA",
+    "TREE_SITTER_VIEW_NAMES",
     "datasets_for_path",
+    "default_attrs_value",
     "has_schema",
     "identity_fields_for",
     "is_intrinsic_nested_dataset",
@@ -2551,4 +3043,5 @@ __all__ = [
     "validate_schema_metadata",
     "validate_scip_views",
     "validate_symtable_views",
+    "validate_ts_views",
 ]

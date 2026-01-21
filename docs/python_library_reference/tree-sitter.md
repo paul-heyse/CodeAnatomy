@@ -321,6 +321,32 @@ This uses the **new** `Parser(Language(...))` and `QueryCursor` APIs and shows t
 
 If you’d like, I can tailor the above into a **scaffold** for your design task—e.g., an incremental, multi‑language analyzer skeleton with query packs, injection support, and a change‑driven pipeline (parsing → scoped queries → diagnostics/index), built around `changed_ranges`, `QueryCursor`, and optional `lookahead_iterator`.
 
+---
+
+## 14) CodeAnatomy tree-sitter extraction integration (project-specific)
+
+**Scope and language**
+- Python-only parsing (extensions `.py`, `.pyi`), with ABI gating against the binding window.
+
+**Span contract**
+- Byte-based spans are authoritative (`col_unit="byte"`), while `start_line0`/`start_col` and
+  `end_line0`/`end_col` are preserved for alignment with other extractors.
+
+**Outputs**
+- `tree_sitter_files_v1` includes:
+  - `nodes` with `node_uid`, `kind_id`, `grammar_id`, `grammar_name`, and flags.
+  - `edges` with `field_name` + `child_index` for reconstruction.
+  - `captures` plus derived `defs`, `calls`, `imports`, `docstrings`.
+  - `stats` with per-file parse/query counters and match-limit telemetry.
+
+**Query packs**
+- A compiled Python query pack provides semantic captures for defs/calls/imports/docstrings.
+- `query_pack_version` and `query_pack_names` are recorded in file attrs.
+
+**Cross-check views**
+- SQL views compare tree-sitter vs AST/CST counts per file (defs/calls/imports/docstrings) to
+  surface extraction drift.
+
 [1]: https://tree-sitter.github.io/?utm_source=chatgpt.com "Tree-sitter: Introduction"
 [2]: https://tree-sitter.github.io/py-tree-sitter/ "py-tree-sitter — py-tree-sitter 0.25.2 documentation"
 [3]: https://pypi.org/project/tree-sitter/?utm_source=chatgpt.com "Python Tree-sitter"

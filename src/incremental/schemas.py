@@ -4,20 +4,18 @@ from __future__ import annotations
 
 from incremental.registry_rows import DATASET_ROWS
 from incremental.registry_specs import dataset_spec
-from schema_spec.system import SchemaRegistry
+from schema_spec.system import DatasetSpec
 
 
-def register_incremental_specs(registry: SchemaRegistry) -> SchemaRegistry:
-    """Register incremental dataset specs into the provided registry.
+def incremental_dataset_specs() -> tuple[DatasetSpec, ...]:
+    """Return incremental dataset specs derived from DataFusion.
 
     Returns
     -------
-    SchemaRegistry
-        Registry with incremental specs added.
+    tuple[object, ...]
+        Dataset specs for incremental datasets.
     """
-    for row in DATASET_ROWS:
-        registry.register_dataset(dataset_spec(row.name))
-    return registry
+    return tuple(dataset_spec(row.name) for row in DATASET_ROWS)
 
 
-__all__ = ["register_incremental_specs"]
+__all__ = ["incremental_dataset_specs"]

@@ -37,9 +37,9 @@ github.com
 
 In summary, scip-python provides an offline index of your Python code’s symbol graph, which can be used with Sourcegraph or other developer tools to enable advanced code navigation and analysis.
 
-Repository note: In this codebase, "scip" is shorthand for the scip-python CLI.
-We do not require a separate scip binary, and any mentions of "scip" commands in
-this guide should be read as "scip-python" in our environment.
+Repository note: In this codebase, scip-python is the required indexer. The optional
+`scip` CLI binary (from Sourcegraph) is only used for `scip print/snapshot/test`
+hooks; when it is not installed those hooks are disabled.
 
 Installation and Prerequisites
 
@@ -102,11 +102,30 @@ CodeIntel integration defaults
 
 CodeIntel standardizes several scip-python behaviors to keep SCIP ingestion deterministic and easy to maintain:
 
-- Project identity: always pass --project-name CodeIntel. Optional --project-version and
-  --project-namespace are configurable via ScipIngestOptions and default to unset (no change).
+- Project identity: project_name is always set; project_version/project_namespace are optional
+  overrides via ScipIndexSettings.
 - Protobuf parsing: index.scip is parsed via generated scip_pb2 bindings; JSON artifacts are not used.
-- DAG codegen: the scip_proto target runs grpc_tools.protoc and publishes scip_pb2.py; the local mirror script is scripts/scip_proto_codegen.sh.
-- Incremental indexing: per-module shards live under build/scip/shards, with core.scip_module_state as the source-of-truth and the shard manifest as a cache artifact.
+- DAG codegen: the scip_proto target runs scripts/scip_proto_codegen.py and publishes scip_pb2.py.
+- Environment manifests: optional env JSON generation via scripts/gen_scip_env.py (or
+  ScipIndexSettings.generate_env_json/env_json_path).
+- Incremental indexing: optional shard reuse via use_incremental_shards/shards_dir/shards_manifest_path.
+- CLI hooks: optional scip print/snapshot/test steps for diagnostics.
+- Extracted tables: scip_metadata includes tool_arguments + project identity; scip_document_symbols
+  preserves per-document symbol attribution; scip_signature_occurrences captures signature docs.
+
+CodeAnatomy extraction outputs (flat tables)
+
+- scip_metadata_v1 (tool + project identity, text_document_encoding)
+- scip_index_stats_v1 (document/occurrence/diagnostic counts + text telemetry)
+- scip_documents_v1 (document_id, path, language, position_encoding)
+- scip_document_texts_v1 (optional document text)
+- scip_occurrences_v1 (ranges + role flags + syntax_kind_name)
+- scip_symbol_information_v1 (symbol metadata + signature_text/signature_language)
+- scip_document_symbols_v1 (per-document symbol attribution)
+- scip_external_symbol_information_v1 (external symbol metadata)
+- scip_symbol_relationships_v1 (reference/implementation/type_definition/definition edges)
+- scip_signature_occurrences_v1 (signature occurrences)
+- scip_diagnostics_v1 (diagnostics attached to occurrences)
 
 Using the index with Sourcegraph: If your goal is to use Sourcegraph’s code intelligence, the next step would be to upload this index to a Sourcegraph instance. Using Sourcegraph’s CLI (src), you can do:
 
@@ -1315,8 +1334,9 @@ DiagnosticTag currently includes `Unnecessary=1`, `Deprecated=2`. ([Docs.rs][12]
 While your focus is symbols/occurrences/diagnostics, **SymbolInformation** is where you get durable metadata for hover/UI/documentation:
 
 * `symbol`: must match the Symbol grammar
-* `documentation`: markdown docs (prefer non-code docs; code signatures should go into `signature_documentation`)
-* `signature_documentation`: a `Document` containing signature text + optional occurrences for hyperlinking
+* `documentation`: markdown docs (CodeAnatomy keeps this as-is)
+* `signature_documentation`: a `Document` containing signature text + optional occurrences; CodeAnatomy
+  flattens this into `signature_text`/`signature_language` plus `scip_signature_occurrences`
 * `display_name`: UI name; symbol string is not a reliable display name (especially local symbols)
 * `kind`: symbol kind (class/method/etc.)—preferred vs inferring from descriptor suffix
 * `relationships`: edges to other symbols (implements/type def/definition override)

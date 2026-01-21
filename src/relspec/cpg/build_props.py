@@ -245,7 +245,20 @@ def _cst_defs_norm_ibis(cst_defs: IbisPlan) -> IbisPlan:
 
 def _scip_role_flags_ibis(scip_occurrences: IbisPlan) -> IbisPlan | None:
     expr = scip_occurrences.expr
-    if "symbol" not in expr.columns or "symbol_roles" not in expr.columns:
+    if "symbol" not in expr.columns:
+        return None
+    flag_names = [flag_name for flag_name, _, _ in ROLE_FLAG_SPECS]
+    if all(name in expr.columns for name in flag_names):
+        projected: dict[str, Value] = {
+            "symbol": expr["symbol"].cast("string"),
+        }
+        for flag_name in flag_names:
+            projected[flag_name] = expr[flag_name].cast("int64")
+        base = expr.select(**projected)
+        aggregates = {name: base[name].max() for name in flag_names}
+        grouped = base.group_by("symbol").aggregate(**aggregates)
+        return IbisPlan(expr=grouped, ordering=Ordering.unordered())
+    if "symbol_roles" not in expr.columns:
         return None
     symbol_roles = cast("IntegerValue", expr["symbol_roles"].cast("int64"))
     projected: dict[str, Value] = {

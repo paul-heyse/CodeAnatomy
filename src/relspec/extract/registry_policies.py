@@ -35,9 +35,7 @@ _TEMPLATE_POLICIES: dict[str, TemplatePolicyRow] = {
     ),
     "scip": TemplatePolicyRow(template="scip", keep_extra_columns=False),
 }
-_POLICY_ROWS: tuple[DatasetPolicyRow, ...] = (
-    DatasetPolicyRow(name="scip_index_v1", keep_extra_columns=False),
-)
+_POLICY_ROWS: tuple[DatasetPolicyRow, ...] = ()
 _POLICY_BY_NAME: dict[str, DatasetPolicyRow] = {row.name: row for row in _POLICY_ROWS}
 
 

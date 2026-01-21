@@ -29,6 +29,7 @@ from arrowdsl.schema.encoding_metadata import (
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 from registry_common.arrow_payloads import payload_hash
 from registry_common.metadata import metadata_list_bytes
+from sqlglot_tools.optimizer import register_datafusion_dialect
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
@@ -353,7 +354,19 @@ class TableSchemaSpec:
             SQLGlot ColumnDef nodes derived from the Ibis schema.
         """
         dialect_name = dialect or "datafusion"
-        return self.to_ibis_schema().to_sqlglot_column_defs(dialect=dialect_name)
+        if dialect_name in {"datafusion", "datafusion_ext"}:
+            register_datafusion_dialect()
+        column_defs = list(self.to_ibis_schema().to_sqlglot_column_defs(dialect=dialect_name))
+        required = set(self.required_non_null) | set(self.key_fields)
+        updated: list[exp.ColumnDef] = []
+        for field, column in zip(self.fields, column_defs, strict=True):
+            if field.name in required or not field.nullable:
+                constraints = list(column.args.get("constraints") or [])
+                constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
+                column = column.copy()
+                column.set("constraints", constraints)
+            updated.append(column)
+        return updated
 
     def ddl_fingerprint(self, *, dialect: str | None = None) -> str:
         """Return a DDL fingerprint derived from SQLGlot column definitions.

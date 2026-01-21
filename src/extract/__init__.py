@@ -8,7 +8,7 @@ Exports:
 - repo scanning -> repo_files table
 - AST extraction -> ast_files
 - CST extraction (LibCST) -> libcst_files
-- SCIP extraction -> scip_index
+- SCIP extraction -> scip tables
 - symtable extraction -> symtable_files
 - bytecode extraction -> bytecode_files
 - tree-sitter extraction -> tree_sitter_files
@@ -48,7 +48,6 @@ if TYPE_CHECKING:
         extract_runtime_tables,
     )
     from extract.scip_extract import (
-        SCIPExtractResult,
         SCIPIndexOptions,
         SCIPParseOptions,
         extract_scip_tables,
@@ -84,7 +83,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "RepoScanOptions": ("extract.repo_scan", "RepoScanOptions"),
     "RuntimeInspectOptions": ("extract.runtime_inspect_extract", "RuntimeInspectOptions"),
     "RuntimeInspectResult": ("extract.runtime_inspect_extract", "RuntimeInspectResult"),
-    "SCIPExtractResult": ("extract.scip_extract", "SCIPExtractResult"),
     "SCIPIndexOptions": ("extract.scip_extract", "SCIPIndexOptions"),
     "SCIPParseOptions": ("extract.scip_extract", "SCIPParseOptions"),
     "ScipIdentity": ("extract.scip_identity", "ScipIdentity"),
@@ -141,7 +139,6 @@ __all__ = (
     "RepoScanOptions",
     "RuntimeInspectOptions",
     "RuntimeInspectResult",
-    "SCIPExtractResult",
     "SCIPIndexOptions",
     "SCIPParseOptions",
     "ScipIdentity",

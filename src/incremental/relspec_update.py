@@ -15,6 +15,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import empty_table
 from datafusion_engine.extract_bundles import dataset_name_for_output
+from datafusion_engine.schema_authority import dataset_spec_from_context
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
@@ -32,7 +33,6 @@ from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_specs import dataset_name_from_alias
 from relspec.engine import PlanResolver
 from relspec.incremental import RelspecIncrementalSpec, incremental_spec
-from schema_spec.catalog_registry import dataset_spec as catalog_spec
 from storage.dataset_sources import (
     DatasetDiscoveryOptions,
     DatasetSourceOptions,
@@ -251,7 +251,7 @@ def _read_state_dataset(
     file_ids: Sequence[str],
 ) -> TableLike:
     try:
-        dataset_spec = catalog_spec(dataset_name)
+        dataset_spec = dataset_spec_from_context(dataset_name)
     except KeyError:
         dataset_spec = None
     schema = dataset_spec.schema() if dataset_spec is not None else None

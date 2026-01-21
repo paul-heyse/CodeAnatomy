@@ -21,7 +21,7 @@ from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from engine.session import EngineSession
 from engine.session_factory import build_engine_session
 from extract.repo_scan import default_repo_scan_options, repo_scan_globs_from_options
-from extract.scip_extract import SCIPParseOptions
+from extract.scip_extract import ScipExtractOptions, SCIPParseOptions
 from hamilton_pipeline.pipeline_types import (
     OutputConfig,
     OutputStoragePolicy,
@@ -460,6 +460,20 @@ def scip_parse_options() -> SCIPParseOptions:
         Parsing options for SCIP index decoding.
     """
     return SCIPParseOptions()
+
+
+@tag(layer="inputs", kind="scalar")
+def scip_extract_options() -> ScipExtractOptions:
+    """Return default extraction options for SCIP tables.
+
+    Override via execute(overrides={"scip_extract_options": ScipExtractOptions(...)}).
+
+    Returns
+    -------
+    ScipExtractOptions
+        Extract options for SCIP table materialization.
+    """
+    return ScipExtractOptions()
 
 
 @tag(layer="inputs", kind="scalar")

@@ -1,6 +1,6 @@
 Yes — you can “stitch” **SCIP + LibCST** in DataFusion **without rewriting either physical dataset** by doing **logical stitching**:
 
-* keep each dataset registered as-is (nested `LIST<STRUCT<…>>` columns),
+* keep each dataset registered as-is (LibCST remains nested; SCIP outputs are already flat),
 * define **views** that *project/explode* the parts you need,
 * define **bridge edges** via joins (file + span),
 * optionally expose the result as either:
@@ -14,7 +14,7 @@ DataFusion supports **CREATE VIEW** (virtual tables) so you’re not materializi
 
 ## 1) The key move: normalize to a *common node/edge shape* at query time
 
-You don’t change your underlying `scip_index` / `libcst_files` schemas — you just *project* them into a common interface.
+You don’t change your underlying `scip_*` / `libcst_files` schemas — you just *project* them into a common interface.
 
 DataFusion has:
 
@@ -25,26 +25,27 @@ DataFusion has:
 
 ---
 
-## 2) Explode each nested dataset into “row views” (no new physical schema)
+## 2) Build row views (no new physical schema)
 
-### 2.1 SCIP occurrences (from `scip_index.documents[*].occurrences[*]`)
+### 2.1 SCIP occurrences (flat table with a span projection)
 
 ```sql
-CREATE OR REPLACE VIEW scip_occurrences AS
+CREATE OR REPLACE VIEW scip_occurrence_spans AS
 SELECT
-  s.index_id,
-  doc['relative_path'] AS path,
-  occ['occ_id']        AS occ_id,      -- recommend you store this in the occurrence struct at ingest
-  occ['symbol']        AS symbol,
-  occ['symbol_roles']  AS symbol_roles,
-  occ['range']         AS span,        -- your normalized span struct
-  occ['attrs']         AS attrs
-FROM scip_index s
-CROSS JOIN unnest(s.documents) AS doc
-CROSS JOIN unnest(doc['occurrences']) AS occ;
+  document_id,
+  path,
+  symbol,
+  symbol_roles,
+  named_struct(
+    'start', named_struct('line0', start_line, 'col', start_char),
+    'end', named_struct('line0', end_line, 'col', end_char),
+    'end_exclusive', end_exclusive,
+    'col_unit', col_unit
+  ) AS span
+FROM scip_occurrences;
 ```
 
-`unnest` expands a list into rows. ([datafusion.apache.org][3])
+SCIP occurrences are already flat in CodeAnatomy; this view just builds a span struct.
 Nested access uses `[...]` field access (supported for nested types). ([datafusion.apache.org][2])
 
 ### 2.2 LibCST nodes (from `libcst_files.nodes[*]`)
@@ -74,11 +75,19 @@ SELECT
   l.file_id,
   -- canonical node ids as STRUCT<ns, id> so they union cleanly
   named_struct('ns','libcst','id', CAST(l.cst_id AS VARCHAR)) AS src,
-  named_struct('ns','scip','id',   CAST(s.occ_id AS VARCHAR)) AS dst,
+  named_struct(
+    'ns','scip',
+    'path', s.path,
+    'symbol', s.symbol,
+    'start_line', s.span['start']['line0'],
+    'start_col', s.span['start']['col'],
+    'end_line', s.span['end']['line0'],
+    'end_col', s.span['end']['col']
+  ) AS dst,
   'CST_SPAN_MATCH_SCIP_OCC' AS kind,
   map(['match'], ['exact_span']) AS attrs
 FROM libcst_nodes l
-JOIN scip_occurrences s
+JOIN scip_occurrence_spans s
   ON l.path = s.path
  AND l.span['start']['line0'] = s.span['start']['line0']
  AND l.span['start']['col']   = s.span['start']['col']
@@ -113,14 +122,22 @@ UNION ALL
 
 SELECT
   CAST(NULL AS BIGINT) AS file_id,  -- or derive file_id from path if you have a file dimension table
-  named_struct('ns','scip','id', CAST(occ_id AS VARCHAR)) AS node_id,
+  named_struct(
+    'ns','scip',
+    'path', path,
+    'symbol', symbol,
+    'start_line', span['start']['line0'],
+    'start_col', span['start']['col'],
+    'end_line', span['end']['line0'],
+    'end_col', span['end']['col']
+  ) AS node_id,
   'scip.Occurrence' AS kind,
   span,
   map(
     ['symbol','roles'],
     [symbol, CAST(symbol_roles AS VARCHAR)]
   ) AS attrs
-FROM scip_occurrences;
+FROM scip_occurrence_spans;
 ```
 
 `UNION ALL` is supported as a set operation. ([datafusion.apache.org][2])

@@ -297,10 +297,18 @@ def validate_sqlglot_columns(
     session = profile.session_context()
     sql_text = sanitize_templated_sql(diagnostics.sql_text_optimized)
     try:
-        SchemaIntrospector(session).describe_query(sql_text)
+        describe_rows = SchemaIntrospector(session).describe_query(sql_text)
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"DataFusion DESCRIBE failed for SQLGlot validation: {exc}"
         raise ValueError(msg) from exc
+    describe_names = _describe_column_names(describe_rows)
+    duplicates = _find_duplicate_names(describe_names)
+    if duplicates:
+        msg = (
+            "DataFusion schema contains ambiguous columns for SQLGlot validation: "
+            f"{sorted(duplicates)}."
+        )
+        raise ValueError(msg)
     return diagnostics
 
 
@@ -844,6 +852,16 @@ def _describe_column_names(rows: Sequence[Mapping[str, object]]) -> tuple[str, .
     return tuple(names)
 
 
+def _find_duplicate_names(names: Sequence[str]) -> set[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for name in names:
+        if name in seen:
+            duplicates.add(name)
+        seen.add(name)
+    return duplicates
+
+
 def _plan_hash_metadata(
     rule_ctx: SqlGlotRuleContext,
     *,
@@ -1255,6 +1273,7 @@ def _datafusion_diagnostics_metadata(
             metadata["df_logical_plan"] = str(plans["logical"])
             metadata["df_optimized_plan"] = str(plans["optimized"])
             metadata["df_physical_plan"] = str(plans["physical"])
+            metadata["dfschema_tree"] = str(df.schema())
             ddls = _table_ddl_payloads(session, table_names=tuple(schema_map))
             metadata.update(ddls)
         except (RuntimeError, TypeError, ValueError) as exc:
@@ -1269,6 +1288,11 @@ def _datafusion_diagnostics_metadata(
         metadata["df_describe"] = _describe_snapshot_payload(describe_rows)
     except (RuntimeError, TypeError, ValueError) as exc:
         metadata["df_describe_error"] = str(exc)
+    try:
+        parameters = SchemaIntrospector(session).parameters_snapshot()
+        metadata["df_parameters"] = _stable_repr(parameters)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        metadata["df_parameters_error"] = str(exc)
     try:
         settings = profile.settings_snapshot(session)
         metadata["df_settings"] = _settings_snapshot_payload(settings)

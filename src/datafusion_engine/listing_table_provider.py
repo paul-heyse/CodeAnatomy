@@ -49,6 +49,8 @@ def parquet_listing_table_provider(
     table_name: str,
     table_definition: str | None,
     table_partition_cols: Sequence[tuple[str, pa.DataType]] | None,
+    file_sort_order: Sequence[str] | None,
+    key_fields: Sequence[str] | None,
     expr_adapter_factory: object | None,
     parquet_pruning: bool | None,
     skip_metadata: bool | None,
@@ -70,6 +72,10 @@ def parquet_listing_table_provider(
         Optional CREATE EXTERNAL TABLE statement.
     table_partition_cols:
         Optional partition columns expressed as (name, dtype) tuples.
+    file_sort_order:
+        Optional file sort order column names for listing metadata.
+    key_fields:
+        Optional key field names to surface as DataFusion constraints.
     expr_adapter_factory:
         Optional physical expression adapter factory capsule.
     parquet_pruning:
@@ -106,6 +112,8 @@ def parquet_listing_table_provider(
         table_definition=table_definition,
         schema_ipc=_schema_ipc_payload(resolved_schema),
         partition_schema_ipc=_schema_ipc_payload(partition_schema),
+        file_sort_order=list(file_sort_order) if file_sort_order else None,
+        key_fields=list(key_fields) if key_fields else None,
         expr_adapter_factory=expr_adapter_factory,
         parquet_pruning=parquet_pruning,
         skip_metadata=skip_metadata,

@@ -26,10 +26,8 @@ from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.system import (
     ContractSpec,
     DatasetSpec,
-    SchemaRegistry,
     make_dataset_spec,
     make_table_spec,
-    register_dataset_spec,
     table_spec_from_schema,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
@@ -241,10 +239,9 @@ def register_dataset(
     *,
     table_spec: TableSchemaSpec | None = None,
     registration: DatasetRegistration | None = None,
-    registry: SchemaRegistry | None = None,
     **table_kwargs: Unpack[TableSpecInputKwargs],
 ) -> DatasetSpec:
-    """Register a dataset spec with the provided schema registry.
+    """Build a dataset spec from the provided inputs.
 
     Returns
     -------
@@ -271,7 +268,7 @@ def register_dataset(
             bundles=tuple(bundles),
             fields=list(fields),
         )
-    spec = make_dataset_spec(
+    return make_dataset_spec(
         table_spec=table_spec,
         query_spec=registration.query_spec,
         contract_spec=registration.contract_spec,
@@ -285,9 +282,6 @@ def register_dataset(
         metadata_spec=registration.metadata_spec,
         validation=registration.validation,
     )
-    if registry is None:
-        return spec
-    return register_dataset_spec(spec, registry=registry)
 
 
 __all__ = [

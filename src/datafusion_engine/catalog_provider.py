@@ -392,6 +392,6 @@ __all__ = [
     "MultiRegistryCatalogProvider",
     "RegistryCatalogProvider",
     "RegistrySchemaProvider",
-    "register_registry_catalogs",
     "register_registry_catalog",
+    "register_registry_catalogs",
 ]

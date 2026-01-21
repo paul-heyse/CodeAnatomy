@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datafusion_engine.schema_registry import nested_base_sql, nested_schema_for
+from datafusion_engine.schema_registry import SCIP_VIEW_SCHEMA_MAP, nested_schema_for, schema_for
 
 
 def test_nested_schema_for_cst_parse_manifest() -> None:
@@ -29,23 +29,24 @@ def test_nested_schema_for_cst_call_args() -> None:
     assert "arg_text" in schema.names
 
 
-def test_nested_base_sql_for_scip_documents() -> None:
-    """Ensure nested base SQL is emitted for SCIP documents."""
-    sql = nested_base_sql("scip_documents")
-    assert "CROSS JOIN unnest" in sql
-    assert "documents" in sql
+def test_scip_metadata_schema_includes_identity_fields() -> None:
+    """Ensure SCIP metadata schemas include identity fields."""
+    schema = schema_for(SCIP_VIEW_SCHEMA_MAP["scip_metadata"])
+    assert "tool_arguments" in schema.names
+    assert "project_name" in schema.names
+    assert "project_version" in schema.names
+    assert "project_namespace" in schema.names
 
 
-def test_nested_base_sql_for_scip_occurrences() -> None:
-    """Ensure nested base SQL handles multi-level paths."""
-    expected_joins = 2
-    sql = nested_base_sql("scip_occurrences")
-    assert sql.count("CROSS JOIN unnest") == expected_joins
-    assert "occurrences" in sql
+def test_scip_occurrences_schema_includes_role_flags() -> None:
+    """Ensure SCIP occurrences include decoded role flags."""
+    schema = schema_for(SCIP_VIEW_SCHEMA_MAP["scip_occurrences"])
+    for name in ("is_definition", "is_import", "is_write", "is_read", "syntax_kind_name"):
+        assert name in schema.names
 
 
-def test_nested_base_sql_for_scip_metadata() -> None:
-    """Ensure nested base SQL handles struct-only paths."""
-    sql = nested_base_sql("scip_metadata")
-    assert "metadata" in sql
-    assert "CROSS JOIN unnest" not in sql
+def test_scip_document_symbols_schema_contains_document_fields() -> None:
+    """Ensure document symbols schemas include document linkage."""
+    schema = schema_for(SCIP_VIEW_SCHEMA_MAP["scip_document_symbols"])
+    assert "document_id" in schema.names
+    assert "symbol" in schema.names

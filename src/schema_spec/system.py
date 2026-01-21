@@ -40,7 +40,6 @@ from arrowdsl.schema.schema import (
     required_field_names,
 )
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
-from arrowdsl.spec.io import read_spec_table
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import (
@@ -172,6 +171,32 @@ class TableSchemaContract:
 
 
 @dataclass(frozen=True)
+class ParquetColumnOptions:
+    """Per-column Parquet scan options."""
+
+    statistics_enabled: tuple[str, ...] = ()
+    bloom_filter_enabled: tuple[str, ...] = ()
+    dictionary_enabled: tuple[str, ...] = ()
+
+    def external_table_options(self) -> dict[str, str]:
+        """Return DataFusion external table options for column settings.
+
+        Returns
+        -------
+        dict[str, str]
+            External table options keyed by option name.
+        """
+        options: dict[str, str] = {}
+        if self.statistics_enabled:
+            options["statistics_enabled"] = ",".join(self.statistics_enabled)
+        if self.bloom_filter_enabled:
+            options["bloom_filter_enabled"] = ",".join(self.bloom_filter_enabled)
+        if self.dictionary_enabled:
+            options["dictionary_enabled"] = ",".join(self.dictionary_enabled)
+        return options
+
+
+@dataclass(frozen=True)
 class DataFusionScanOptions:
     """DataFusion-specific scan configuration."""
 
@@ -191,6 +216,7 @@ class DataFusionScanOptions:
     list_files_cache_ttl: str | None = None
     list_files_cache_limit: str | None = None
     projection_exprs: tuple[str, ...] = ()
+    parquet_column_options: ParquetColumnOptions | None = None
     listing_mutable: bool = False
     unbounded: bool = False
     table_schema_contract: TableSchemaContract | None = None
@@ -1289,6 +1315,40 @@ def dataset_table_constraints(name: str) -> tuple[str, ...]:
     return SchemaIntrospector(ctx).table_constraints(name)
 
 
+def dataset_table_column_defaults(name: str) -> dict[str, object]:
+    """Return DataFusion column default metadata for a dataset.
+
+    Parameters
+    ----------
+    name
+        Dataset name registered in DataFusion.
+
+    Returns
+    -------
+    dict[str, object]
+        Mapping of column names to default expressions.
+    """
+    ctx = DataFusionRuntimeProfile().session_context()
+    return SchemaIntrospector(ctx).table_column_defaults(name)
+
+
+def dataset_table_logical_plan(name: str) -> str | None:
+    """Return DataFusion logical plan text for a dataset.
+
+    Parameters
+    ----------
+    name
+        Dataset name registered in DataFusion.
+
+    Returns
+    -------
+    str | None
+        Logical plan text when available.
+    """
+    ctx = DataFusionRuntimeProfile().session_context()
+    return SchemaIntrospector(ctx).table_logical_plan(name)
+
+
 def dataset_spec_from_dataset(
     name: str,
     dataset: ds.Dataset,
@@ -1345,102 +1405,6 @@ def contract_catalog_spec_from_tables(
     )
 
 
-@dataclass(frozen=True)
-class SchemaRegistry:
-    """Registry for dataset specs."""
-
-    dataset_specs: dict[str, DatasetSpec] = field(default_factory=dict)
-
-    def register_dataset(self, spec: DatasetSpec) -> DatasetSpec:
-        """Register or return an existing dataset spec.
-
-        Returns
-        -------
-        DatasetSpec
-            Registered dataset spec.
-        """
-        existing = self.dataset_specs.get(spec.name)
-        if existing is not None:
-            return existing
-        self.dataset_specs[spec.name] = spec
-        return spec
-
-    def register_dataset_from_dataset(
-        self,
-        name: str,
-        dataset: ds.Dataset,
-        *,
-        version: int | None = None,
-    ) -> DatasetSpec:
-        """Register a dataset spec derived from a dataset schema.
-
-        Returns
-        -------
-        DatasetSpec
-            Registered dataset spec.
-        """
-        return self.register_dataset(dataset_spec_from_dataset(name, dataset, version=version))
-
-    def register_dataset_from_path(
-        self,
-        name: str,
-        path: PathLike,
-        *,
-        options: DatasetOpenSpec | None = None,
-        version: int | None = None,
-    ) -> DatasetSpec:
-        """Register a dataset spec derived from a dataset path.
-
-        Returns
-        -------
-        DatasetSpec
-            Registered dataset spec.
-        """
-        options = options or DatasetOpenSpec()
-        dataset = options.open(path)
-        return self.register_dataset(dataset_spec_from_dataset(name, dataset, version=version))
-
-    def register_from_tables(self, tables: SchemaSpecTables) -> dict[str, DatasetSpec]:
-        """Register dataset specs from schema spec tables.
-
-        Returns
-        -------
-        dict[str, DatasetSpec]
-            Mapping of dataset names to registered specs.
-        """
-        dataset_specs = _dataset_specs_from_tables(
-            tables.field_table,
-            constraints_table=tables.constraints_table,
-            contract_table=tables.contract_table,
-        )
-        for spec in dataset_specs.values():
-            self.register_dataset(spec)
-        return dataset_specs
-
-    def register_from_paths(
-        self,
-        *,
-        field_table: PathLike,
-        constraints_table: PathLike | None = None,
-        contract_table: PathLike | None = None,
-    ) -> dict[str, DatasetSpec]:
-        """Register dataset specs from on-disk spec tables.
-
-        Returns
-        -------
-        dict[str, DatasetSpec]
-            Mapping of dataset names to registered specs.
-        """
-        tables = _schema_spec_tables_class()(
-            field_table=read_spec_table(field_table),
-            constraints_table=read_spec_table(constraints_table)
-            if constraints_table is not None
-            else None,
-            contract_table=read_spec_table(contract_table) if contract_table is not None else None,
-        )
-        return self.register_from_tables(tables)
-
-
 SCHEMA_EVOLUTION_PRESETS: Mapping[str, SchemaEvolutionSpec] = {
     name: SchemaEvolutionSpec(
         allow_missing=True,
@@ -1460,35 +1424,6 @@ def resolve_schema_evolution_spec(name: str) -> SchemaEvolutionSpec:
         Evolution rules for the dataset name.
     """
     return SCHEMA_EVOLUTION_PRESETS.get(name, SchemaEvolutionSpec())
-
-
-def register_dataset_spec(
-    spec: DatasetSpec,
-    *,
-    registry: SchemaRegistry,
-) -> DatasetSpec:
-    """Register a dataset spec into the provided registry.
-
-    Returns
-    -------
-    DatasetSpec
-        Registered dataset specification.
-    """
-    return registry.register_dataset(spec)
-
-
-def prune_nested_dataset_specs(registry: SchemaRegistry) -> SchemaRegistry:
-    """Remove nested dataset specs from a registry.
-
-    Returns
-    -------
-    SchemaRegistry
-        Registry with nested dataset specs removed.
-    """
-    names = [name for name in registry.dataset_specs if is_nested_dataset(name)]
-    for name in names:
-        registry.dataset_specs.pop(name, None)
-    return registry
 
 
 @dataclass(frozen=True)
@@ -1520,20 +1455,6 @@ class ContractCatalogSpec:
         """
         return dict(self.contracts)
 
-    def register_into(self, registry: SchemaRegistry) -> SchemaRegistry:
-        """Register catalog entries into a schema registry.
-
-        Returns
-        -------
-        SchemaRegistry
-            Updated registry with catalog entries.
-        """
-        for contract in self.contracts.values():
-            registry.register_dataset(
-                make_dataset_spec(table_spec=contract.table_schema, contract_spec=contract)
-            )
-        return registry
-
 
 __all__ = [
     "SCHEMA_EVOLUTION_PRESETS",
@@ -1550,8 +1471,9 @@ __all__ = [
     "DeltaScanOptions",
     "DeltaSchemaPolicy",
     "DeltaWritePolicy",
-    "SchemaRegistry",
+    "ParquetColumnOptions",
     "SortKeySpec",
+    "TableSchemaContract",
     "TableSpecConstraints",
     "ValidationPlans",
     "VirtualFieldSpec",
@@ -1560,15 +1482,15 @@ __all__ = [
     "dataset_spec_from_dataset",
     "dataset_spec_from_path",
     "dataset_spec_from_schema",
+    "dataset_table_column_defaults",
     "dataset_table_constraints",
     "dataset_table_definition",
+    "dataset_table_logical_plan",
     "ddl_fingerprint_from_definition",
     "ddl_fingerprint_from_schema",
     "make_contract_spec",
     "make_dataset_spec",
     "make_table_spec",
-    "prune_nested_dataset_specs",
-    "register_dataset_spec",
     "resolve_schema_evolution_spec",
     "schema_evolution_compatible",
     "table_spec_from_schema",

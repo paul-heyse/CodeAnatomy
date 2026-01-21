@@ -349,6 +349,66 @@ def _rewrite_explode_projection(expr: Expression) -> Expression:
     return explode_projection_to_unnest()(expr)
 
 
+def _rewrite_map_access(expr: Expression) -> Expression:
+    def _rewrite(node: Expression) -> Expression:
+        if isinstance(node, exp.Anonymous) and node.name.lower() == "map_extract":
+            args = list(node.expressions)
+            if len(args) == 2:
+                return exp.Anonymous(
+                    this="list_extract",
+                    expressions=[node.copy(), exp.Literal.number(1)],
+                )
+        if isinstance(node, exp.Bracket):
+            base = node.this
+            keys = list(node.expressions)
+            if len(keys) == 1:
+                key = keys[0]
+                if isinstance(key, exp.Literal) and key.is_string:
+                    map_extract = exp.Anonymous(
+                        this="map_extract",
+                        expressions=[base.copy(), key.copy()],
+                    )
+                    return exp.Anonymous(
+                        this="list_extract",
+                        expressions=[map_extract, exp.Literal.number(1)],
+                    )
+        return node
+
+    return expr.transform(_rewrite)
+
+
+def _rewrite_span_named_struct(expr: Expression) -> Expression:
+    def _rewrite(node: Expression) -> Expression:
+        if not isinstance(node, exp.Anonymous) or node.name.lower() != "named_struct":
+            return node
+        parts = list(node.expressions)
+        if len(parts) % 2:
+            return node
+        pairs: list[tuple[str, Expression, Expression]] = []
+        for idx in range(0, len(parts), 2):
+            key_expr = parts[idx]
+            value_expr = parts[idx + 1]
+            if isinstance(key_expr, exp.Literal) and key_expr.is_string:
+                pairs.append((key_expr.this, key_expr, value_expr))
+            else:
+                return node
+        keys = {name for name, _, _ in pairs}
+        if not {"bstart", "bend"}.issubset(keys):
+            return node
+        ordered: list[Expression] = []
+        for key in ("bstart", "bend"):
+            for name, key_expr, value_expr in pairs:
+                if name == key:
+                    ordered.extend([key_expr, value_expr])
+        for name, key_expr, value_expr in pairs:
+            if name in {"bstart", "bend"}:
+                continue
+            ordered.extend([key_expr, value_expr])
+        return exp.Anonymous(this="named_struct", expressions=ordered)
+
+    return expr.transform(_rewrite)
+
+
 def _normalize_table_aliases(expr: Expression) -> Expression:
     def _rewrite(node: Expression) -> Expression:
         if isinstance(node, exp.Table):
@@ -385,6 +445,8 @@ def default_sqlglot_policy() -> SqlGlotPolicy:
             eliminate_qualify,
             move_ctes_to_top_level,
             _rewrite_explode_projection,
+            _rewrite_map_access,
+            _rewrite_span_named_struct,
             unnest_to_explode,
             ensure_bools,
         ),

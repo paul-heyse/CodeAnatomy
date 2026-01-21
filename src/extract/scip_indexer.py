@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -72,6 +74,49 @@ def resolve_scip_paths(
     return ScipIndexPaths(build_dir=build_dir, index_path=index_path.resolve())
 
 
+def scip_environment_payload() -> list[dict[str, object]]:
+    """Return a scip-python environment payload for installed distributions.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Environment payload entries with package names, versions, and files.
+    """
+    env: list[dict[str, object]] = []
+    for dist in metadata.distributions():
+        name = dist.metadata.get("Name") or dist.name
+        files = sorted({str(path) for path in (dist.files or ())})
+        env.append(
+            {
+                "name": str(name),
+                "version": str(dist.version),
+                "files": files,
+            }
+        )
+    env.sort(key=lambda entry: str(entry["name"]).lower())
+    return env
+
+
+def write_scip_environment_json(path: Path) -> Path:
+    """Write a scip-python environment JSON manifest to disk.
+
+    Parameters
+    ----------
+    path:
+        Output path for the environment JSON file.
+
+    Returns
+    -------
+    pathlib.Path
+        Resolved output path.
+    """
+    resolved = path.expanduser().resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    payload = scip_environment_payload()
+    resolved.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return resolved
+
+
 def build_scip_index_options(
     *,
     repo_root: Path,
@@ -96,6 +141,12 @@ def build_scip_index_options(
     """
     paths = resolve_scip_paths(repo_root, config.output_dir, config.index_path_override)
     env_json = Path(config.env_json_path) if config.env_json_path else None
+    extra_args: list[str] = list(config.extra_args)
+    if config.use_incremental_shards:
+        shards_dir = Path(config.shards_dir) if config.shards_dir else paths.build_dir / "shards"
+        extra_args.extend(["--index-shards", str(shards_dir)])
+        if config.shards_manifest_path:
+            extra_args.extend(["--index-shard-manifest", config.shards_manifest_path])
     return SCIPIndexOptions(
         repo_root=repo_root,
         project_name=identity.project_name,
@@ -107,4 +158,5 @@ def build_scip_index_options(
         scip_python_bin=config.scip_python_bin,
         node_max_old_space_mb=config.node_max_old_space_mb,
         timeout_s=config.timeout_s,
+        extra_args=tuple(extra_args),
     )

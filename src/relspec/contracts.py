@@ -12,7 +12,10 @@ from schema_spec.system import (
     Contract,
     DatasetSpec,
     dataset_spec_from_schema,
+    dataset_table_column_defaults,
+    dataset_table_constraints,
     dataset_table_definition,
+    dataset_table_logical_plan,
 )
 
 RELATION_OUTPUT_NAME = "relation_output_v1"
@@ -94,11 +97,47 @@ def relation_output_ddl(*, dialect: str | None = None) -> str:
     return ddl
 
 
+def relation_output_constraints() -> tuple[str, ...]:
+    """Return constraint metadata for the relation output contract.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Constraint expressions when available.
+    """
+    return dataset_table_constraints(RELATION_OUTPUT_NAME)
+
+
+def relation_output_column_defaults() -> dict[str, object]:
+    """Return column default metadata for the relation output contract.
+
+    Returns
+    -------
+    dict[str, object]
+        Column default expressions when available.
+    """
+    return dataset_table_column_defaults(RELATION_OUTPUT_NAME)
+
+
+def relation_output_logical_plan() -> str | None:
+    """Return logical plan metadata for the relation output contract.
+
+    Returns
+    -------
+    str | None
+        Logical plan text when available.
+    """
+    return dataset_table_logical_plan(RELATION_OUTPUT_NAME)
+
+
 __all__ = [
     "RELATION_OUTPUT_NAME",
     "RELATION_OUTPUT_SCHEMA",
+    "relation_output_column_defaults",
+    "relation_output_constraints",
     "relation_output_contract",
     "relation_output_ddl",
+    "relation_output_logical_plan",
     "relation_output_schema",
     "relation_output_spec",
 ]

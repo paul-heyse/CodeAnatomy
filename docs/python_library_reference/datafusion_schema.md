@@ -956,204 +956,61 @@ If you want, I can extend this canonical schema with one more “CPG practicalit
 
 
 
-You’re right: **`index.scip` is not “a table”**—it’s a **protobuf message tree** (`scip.Index`) whose fields include *repeated messages* like `documents`, and each `Document` contains repeated `occurrences` and `symbols`. In Arrow/DataFusion terms, that maps naturally to **nested columns**:
-
-* protobuf `message` → Arrow **`STRUCT<...>`**
-* protobuf `repeated T` → Arrow **`LIST<T>`** (and if `T` is a message, it becomes `LIST<STRUCT<...>>`)
-* “attribute bag / extensible facts” → Arrow **`MAP<K,V>`** (DataFusion has direct map functions) ([GitHub][1])
-
-DataFusion can query these using:
-
-* struct/map field access `col['field']` (implemented via `get_field`) ([GitHub][1])
-* list expansion via `unnest` (and `unnest(struct)` for flattening struct fields) ([datafusion.apache.org][2])
-* map helpers `map_entries`, `map_extract`, `map_keys`, `map_values` ([datafusion.apache.org][3])
-
-Below is a **concrete “how you configure it in DataFusion”** blueprint: **PyArrow nested schemas + DataFusion registration + query patterns** for LibCST, SCIP, symtable, and bytecode.
+You’re right: **`index.scip` is not a table**; it is a protobuf tree. In CodeAnatomy we
+flatten it at extract time into schema-backed tables instead of storing it as a nested
+`LIST<STRUCT>` bundle.
 
 ---
 
-## 1) Common nested types you’ll reuse everywhere
+## 2) SCIP: flattened extraction outputs (current CodeAnatomy state)
 
-This gives you the “CPG-style” anchor (span ABI) and a standard extension bag.
+CodeAnatomy emits versioned, 2D tables and registers views without the `_v1` suffix:
+`scip_metadata`, `scip_documents`, `scip_occurrences`, and so on.
 
-```python
-import pyarrow as pa
+Core tables:
 
-# A canonical position/span type you can use across all extractors
-pos_t = pa.struct([
-    ("line0", pa.int32()),
-    ("col", pa.int32()),  # interpretation depends on col_unit
-])
+* `scip_metadata_v1`: protocol + tool + project identity (tool_arguments, project_name,
+  project_version, project_namespace, project_root, text_document_encoding).
+* `scip_index_stats_v1`: counts (documents, occurrences, diagnostics, symbols,
+  external_symbols, missing_position_encoding_count, document_text_count,
+  document_text_bytes).
+* `scip_documents_v1`: document_id, path, language, position_encoding.
+* `scip_document_texts_v1`: optional document text (when include_document_text is enabled).
+* `scip_occurrences_v1`: flattened occurrences with range + enclosing range fields,
+  decoded role flags, and syntax_kind_name.
+* `scip_symbol_information_v1`: symbol metadata with kind_name + signature_text/language.
+* `scip_document_symbols_v1`: per-document symbol attribution (document_id + path + symbol info).
+* `scip_external_symbol_information_v1`: external symbol metadata.
+* `scip_symbol_relationships_v1`: reference/implementation/type_definition/definition edges.
+* `scip_signature_occurrences_v1`: signature occurrences (UTF-32 col_unit + role flags).
+* `scip_diagnostics_v1`: diagnostics attached to occurrences.
 
-byte_span_t = pa.struct([
-    ("byte_start", pa.int32()),
-    ("byte_len", pa.int32()),
-])
+Range and role notes:
 
-span_t = pa.struct([
-    ("start", pos_t),
-    ("end", pos_t),
-    ("end_exclusive", pa.bool_()),     # keep True for half-open ranges
-    ("col_unit", pa.string()),         # "libcst.column" | "scip.UTF32..." | "py.utf8_byte_offset" etc.
-    ("byte_span", byte_span_t),        # nullable in practice
-])
+* Occurrence ranges are expanded into start_line/start_char/end_line/end_char + range_len,
+  with enclosing range fields prefixed as enc_*.
+* symbol_roles is decoded into boolean flags (is_definition/is_import/is_write/is_read/
+  is_generated/is_test/is_forward_definition).
+* syntax_kind_name and kind_name are pre-decoded enums for analytics.
 
-attrs_t = pa.map_(pa.string(), pa.string())  # flexible key/value facts
-```
-
----
-
-## 2) SCIP: represent `index.scip` as nested Arrow columns (exactly)
-
-From `scip.proto`:
-
-* `Index` has `metadata`, `documents`, `external_symbols` ([GitHub][4])
-* `Document` has `relative_path`, `occurrences`, `symbols`, optional `text`, and `position_encoding` ([GitHub][4])
-* `Occurrence.range` is `repeated int32` of **3 or 4 elements**, half-open `[start,end)` and 0-based; `enclosing_range` uses same encoding ([GitHub][4])
-* `SymbolInformation` has `symbol`, `documentation`, `relationships`, `kind`, plus `display_name` and `enclosing_symbol` ([GitHub][4])
-* `Document.position_encoding` specifies how to interpret “character”, with guidance for Python indexers (UTF32 offsets) ([GitHub][4])
-
-### 2.1 “Index bundle” schema (one row per `index.scip` file)
-
-This is the shape that preserves the *original tree*:
-
-```python
-# --- SCIP nested message types ---
-tool_info_t = pa.struct([
-    ("name", pa.string()),
-    ("version", pa.string()),
-    ("arguments", pa.list_(pa.string())),
-])
-
-metadata_t = pa.struct([
-    ("protocol_version", pa.int32()),
-    ("tool_info", tool_info_t),
-    ("project_root", pa.string()),
-    ("text_document_encoding", pa.int32()),
-])
-
-diagnostic_t = pa.struct([
-    ("severity", pa.int32()),
-    ("code", pa.string()),
-    ("message", pa.string()),
-    ("source", pa.string()),
-    ("tags", pa.list_(pa.int32())),
-])
-
-occurrence_t = pa.struct([
-    # Keep raw proto range for auditability
-    ("range_raw", pa.list_(pa.int32())),
-    ("range", span_t),  # normalized (you compute once when ingesting)
-    ("symbol", pa.string()),
-    ("symbol_roles", pa.int32()),
-    ("override_documentation", pa.list_(pa.string())),
-    ("syntax_kind", pa.int32()),
-    ("diagnostics", pa.list_(diagnostic_t)),
-    ("enclosing_range_raw", pa.list_(pa.int32())),
-    ("enclosing_range", span_t),
-    ("attrs", attrs_t),  # optional: any extra you compute
-])
-
-relationship_t = pa.struct([
-    ("symbol", pa.string()),
-    ("is_reference", pa.bool_()),
-    ("is_implementation", pa.bool_()),
-    ("is_type_definition", pa.bool_()),
-    ("is_definition", pa.bool_()),
-])
-
-symbol_info_t = pa.struct([
-    ("symbol", pa.string()),
-    ("documentation", pa.list_(pa.string())),
-    ("relationships", pa.list_(relationship_t)),
-    ("kind", pa.int32()),
-    ("display_name", pa.string()),
-    ("enclosing_symbol", pa.string()),
-    ("attrs", attrs_t),
-])
-
-document_t = pa.struct([
-    ("relative_path", pa.string()),
-    ("language", pa.string()),
-    ("text", pa.string()),  # optional
-    ("position_encoding", pa.int32()),  # keep raw enum value
-    ("occurrences", pa.list_(occurrence_t)),
-    ("symbols", pa.list_(symbol_info_t)),
-    ("attrs", attrs_t),
-])
-
-scip_index_schema = pa.schema([
-    ("index_id", pa.uint64()),      # your stable id for this index file/snapshot
-    ("metadata", metadata_t),
-    ("documents", pa.list_(document_t)),
-    ("external_symbols", pa.list_(symbol_info_t)),
-])
-```
-
-### 2.2 Register this nested table in DataFusion (Python)
-
-DataFusion can register **PyArrow RecordBatches** as a SQL table via `register_record_batches`. ([datafusion.apache.org][5])
-
-```python
-from datafusion import SessionContext
-
-ctx = SessionContext()
-
-# Build a pyarrow.Table with exactly the schema above (from your parsed scip.Index)
-# rows = [ { "index_id": ..., "metadata": {...}, "documents": [...], "external_symbols": [...] }, ... ]
-table = pa.Table.from_pylist(rows, schema=scip_index_schema)
-
-batches = table.to_batches()
-ctx.register_record_batches("scip_index", [batches])  # one partition containing N batches
-```
-
-`register_record_batches(name, partitions)` expects a list of partitions, each partition is a list of record batches. ([datafusion.apache.org][5])
-
-### 2.3 Querying: nested field access + explosion
-
-**Nested field access** works via bracket syntax (SQL uses `get_field` under the hood). ([GitHub][1])
+Example join:
 
 ```sql
--- metadata is a STRUCT
-select
-  metadata['project_root'] as project_root,
-  metadata['tool_info']['name'] as tool_name
-from scip_index;
+SELECT
+  o.path,
+  o.symbol,
+  o.start_line,
+  o.start_char,
+  o.end_line,
+  o.end_char,
+  o.is_definition,
+  o.syntax_kind_name,
+  d.language,
+  d.position_encoding
+FROM scip_occurrences AS o
+JOIN scip_documents AS d
+  ON d.document_id = o.document_id;
 ```
-
-**Explode documents**: `documents` is `LIST<STRUCT<...>>`, so `unnest(documents)` yields rows of `Document` structs. Unnest conceptually replicates non-nested columns across emitted rows. ([datafusion.apache.org][2])
-
-```sql
-select
-  index_id,
-  doc['relative_path'] as rel_path,
-  doc['language'] as lang
-from (
-  select index_id, unnest(documents) as doc
-  from scip_index
-) t;
-```
-
-**Explode occurrences** (nested list inside a document):
-
-```sql
-select
-  index_id,
-  doc['relative_path'] as rel_path,
-  occ['symbol'] as symbol,
-  occ['range']['start']['line0'] as start_line0,
-  occ['range']['start']['col'] as start_col,
-  occ['range']['col_unit'] as col_unit
-from (
-  select index_id, unnest(documents) as doc
-  from scip_index
-) d,
-(
-  select unnest(d.doc['occurrences']) as occ
-) o;
-```
-
-If you keep `attrs` as a `MAP`, you can expand it with `map_entries` (returns list of `{key,value}` structs) and `unnest`. ([datafusion.apache.org][3])
 
 ---
 
@@ -2156,7 +2013,7 @@ If you build view-like datasets (e.g., `cpg_nodes`/`cpg_edges` views), exposing 
 
 This becomes powerful if you want a registry entry like:
 
-* dataset `cpg_nodes` is defined as a plan over `libcst_files` + `scip_index`
+* dataset `cpg_nodes` is defined as a plan over `libcst_files` + `scip_occurrences`
 * your provider returns that plan so you can introspect and rebuild deterministically
 
 ### 7.4 Column defaults as schema contracts (and why they’re useful even if DF doesn’t enforce them)
@@ -3158,7 +3015,8 @@ Format options can be specified on `CREATE EXTERNAL TABLE` and have documented p
 
 ## Putting this into your CPG workflow (the “OO schema generator” pattern)
 
-For CPG bundles (`libcst_files`, `scip_index`, etc.) with nested `LIST<STRUCT>`:
+For CPG bundles with nested `LIST<STRUCT>` (for example `libcst_files` or `tree_sitter_files`);
+SCIP outputs are already flat tables like `scip_occurrences`:
 
 1. **Ingest/construct in Python**
 
@@ -3829,5 +3687,3 @@ If you want a concrete structure that feels “compiler-like” in Python:
 4. **Escalate to Rust only when needed**
 
    * True optimizer-rule injection / PhysicalExprAdapter customization / provider metadata (defaults/constraints/DDL provenance) are TableProvider-level and belong in Rust, exposed via PyCapsule.
-
-

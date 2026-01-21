@@ -1041,14 +1041,28 @@ def tree_sitter_nodes_sql(table: str = "tree_sitter_files_v1") -> str:
       base.file_id AS file_id,
       base.path AS path,
       base.node_id AS ts_node_id,
+      base.node_uid AS ts_node_uid,
       base.parent_id AS parent_ts_id,
       base.kind AS ts_type,
+      base.kind_id AS ts_kind_id,
+      base.grammar_id AS ts_grammar_id,
+      base.grammar_name AS ts_grammar_name,
+      base.span['start']['line0'] AS start_line,
+      base.span['start']['col'] AS start_col,
+      base.span['end']['line0'] AS end_line,
+      base.span['end']['col'] AS end_col,
+      CAST(0 AS INT) AS line_base,
+      base.span['col_unit'] AS col_unit,
+      base.span['end_exclusive'] AS end_exclusive,
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
       base.flags['is_named'] AS is_named,
       base.flags['has_error'] AS has_error,
       base.flags['is_error'] AS is_error,
-      base.flags['is_missing'] AS is_missing
+      base.flags['is_missing'] AS is_missing,
+      base.flags['is_extra'] AS is_extra,
+      base.flags['has_changes'] AS has_changes,
+      base.attrs AS attrs
     FROM base
     """
 
@@ -1069,9 +1083,17 @@ def tree_sitter_errors_sql(table: str = "tree_sitter_files_v1") -> str:
       base.path AS path,
       base.error_id AS ts_error_id,
       base.node_id AS ts_node_id,
+      base.span['start']['line0'] AS start_line,
+      base.span['start']['col'] AS start_col,
+      base.span['end']['line0'] AS end_line,
+      base.span['end']['col'] AS end_col,
+      CAST(0 AS INT) AS line_base,
+      base.span['col_unit'] AS col_unit,
+      base.span['end_exclusive'] AS end_exclusive,
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
-      CAST(TRUE AS BOOLEAN) AS is_error
+      CAST(TRUE AS BOOLEAN) AS is_error,
+      base.attrs AS attrs
     FROM base
     """
 
@@ -1092,10 +1114,342 @@ def tree_sitter_missing_sql(table: str = "tree_sitter_files_v1") -> str:
       base.path AS path,
       base.missing_id AS ts_missing_id,
       base.node_id AS ts_node_id,
+      base.span['start']['line0'] AS start_line,
+      base.span['start']['col'] AS start_col,
+      base.span['end']['line0'] AS end_line,
+      base.span['end']['col'] AS end_col,
+      CAST(0 AS INT) AS line_base,
+      base.span['col_unit'] AS col_unit,
+      base.span['end_exclusive'] AS end_exclusive,
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
-      CAST(TRUE AS BOOLEAN) AS is_missing
+      CAST(TRUE AS BOOLEAN) AS is_missing,
+      base.attrs AS attrs
     FROM base
+    """
+
+
+def tree_sitter_edges_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter edge rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("ts_edges", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.parent_id AS parent_ts_id,
+      base.child_id AS child_ts_id,
+      base.field_name AS field_name,
+      base.child_index AS child_index,
+      base.attrs AS attrs
+    FROM base
+    """
+
+
+def tree_sitter_captures_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter query capture rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("ts_captures", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.capture_id AS ts_capture_id,
+      base.query_name AS query_name,
+      base.capture_name AS capture_name,
+      base.pattern_index AS pattern_index,
+      base.node_id AS ts_node_id,
+      base.node_kind AS node_kind,
+      base.span['start']['line0'] AS start_line,
+      base.span['start']['col'] AS start_col,
+      base.span['end']['line0'] AS end_line,
+      base.span['end']['col'] AS end_col,
+      CAST(0 AS INT) AS line_base,
+      base.span['col_unit'] AS col_unit,
+      base.span['end_exclusive'] AS end_exclusive,
+      base.span['byte_span']['byte_start'] AS start_byte,
+      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      base.attrs AS attrs
+    FROM base
+    """
+
+
+def tree_sitter_defs_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter definition rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("ts_defs", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.node_id AS ts_node_id,
+      base.parent_id AS parent_ts_id,
+      base.kind AS kind,
+      base.name AS name,
+      base.span['start']['line0'] AS start_line,
+      base.span['start']['col'] AS start_col,
+      base.span['end']['line0'] AS end_line,
+      base.span['end']['col'] AS end_col,
+      CAST(0 AS INT) AS line_base,
+      base.span['col_unit'] AS col_unit,
+      base.span['end_exclusive'] AS end_exclusive,
+      base.span['byte_span']['byte_start'] AS start_byte,
+      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      base.attrs AS attrs
+    FROM base
+    """
+
+
+def tree_sitter_calls_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter call rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("ts_calls", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.node_id AS ts_node_id,
+      base.parent_id AS parent_ts_id,
+      base.callee_kind AS callee_kind,
+      base.callee_text AS callee_text,
+      base.callee_node_id AS callee_node_id,
+      base.span['start']['line0'] AS start_line,
+      base.span['start']['col'] AS start_col,
+      base.span['end']['line0'] AS end_line,
+      base.span['end']['col'] AS end_col,
+      CAST(0 AS INT) AS line_base,
+      base.span['col_unit'] AS col_unit,
+      base.span['end_exclusive'] AS end_exclusive,
+      base.span['byte_span']['byte_start'] AS start_byte,
+      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      base.attrs AS attrs
+    FROM base
+    """
+
+
+def tree_sitter_imports_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter import rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("ts_imports", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.node_id AS ts_node_id,
+      base.parent_id AS parent_ts_id,
+      base.kind AS kind,
+      base.module AS module,
+      base.name AS name,
+      base.asname AS asname,
+      base.alias_index AS alias_index,
+      base.level AS level,
+      base.span['start']['line0'] AS start_line,
+      base.span['start']['col'] AS start_col,
+      base.span['end']['line0'] AS end_line,
+      base.span['end']['col'] AS end_col,
+      CAST(0 AS INT) AS line_base,
+      base.span['col_unit'] AS col_unit,
+      base.span['end_exclusive'] AS end_exclusive,
+      base.span['byte_span']['byte_start'] AS start_byte,
+      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      base.attrs AS attrs
+    FROM base
+    """
+
+
+def tree_sitter_docstrings_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter docstring rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("ts_docstrings", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.owner_node_id AS owner_node_id,
+      base.owner_kind AS owner_kind,
+      base.owner_name AS owner_name,
+      base.doc_node_id AS doc_node_id,
+      base.docstring AS docstring,
+      base.source AS source,
+      base.span['start']['line0'] AS start_line,
+      base.span['start']['col'] AS start_col,
+      base.span['end']['line0'] AS end_line,
+      base.span['end']['col'] AS end_col,
+      CAST(0 AS INT) AS line_base,
+      base.span['col_unit'] AS col_unit,
+      base.span['end_exclusive'] AS end_exclusive,
+      base.span['byte_span']['byte_start'] AS start_byte,
+      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      base.attrs AS attrs
+    FROM base
+    """
+
+
+def tree_sitter_stats_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter stats rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("ts_stats", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.node_count AS node_count,
+      base.named_count AS named_count,
+      base.error_count AS error_count,
+      base.missing_count AS missing_count,
+      base.parse_ms AS parse_ms,
+      base.parse_timed_out AS parse_timed_out,
+      base.incremental_used AS incremental_used,
+      base.query_match_count AS query_match_count,
+      base.query_capture_count AS query_capture_count,
+      base.match_limit_exceeded AS match_limit_exceeded
+    FROM base
+    """
+
+
+def ts_ast_defs_check_sql() -> str:
+    """Return SQL for tree-sitter vs AST def count checks."""
+    return """
+    WITH ts AS (
+      SELECT file_id, path, COUNT(*) AS ts_defs
+      FROM ts_defs
+      GROUP BY file_id, path
+    ),
+    ast AS (
+      SELECT file_id, path, COUNT(*) AS ast_defs
+      FROM ast_defs
+      GROUP BY file_id, path
+    )
+    SELECT
+      COALESCE(ts.file_id, ast.file_id) AS file_id,
+      COALESCE(ts.path, ast.path) AS path,
+      ts.ts_defs AS ts_defs,
+      ast.ast_defs AS ast_defs,
+      (COALESCE(ts.ts_defs, 0) - COALESCE(ast.ast_defs, 0)) AS diff,
+      (COALESCE(ts.ts_defs, 0) != COALESCE(ast.ast_defs, 0)) AS mismatch
+    FROM ts
+    FULL OUTER JOIN ast
+      ON ts.file_id = ast.file_id AND ts.path = ast.path
+    """
+
+
+def ts_ast_calls_check_sql() -> str:
+    """Return SQL for tree-sitter vs AST call count checks."""
+    return """
+    WITH ts AS (
+      SELECT file_id, path, COUNT(*) AS ts_calls
+      FROM ts_calls
+      GROUP BY file_id, path
+    ),
+    ast AS (
+      SELECT file_id, path, COUNT(*) AS ast_calls
+      FROM ast_calls
+      GROUP BY file_id, path
+    )
+    SELECT
+      COALESCE(ts.file_id, ast.file_id) AS file_id,
+      COALESCE(ts.path, ast.path) AS path,
+      ts.ts_calls AS ts_calls,
+      ast.ast_calls AS ast_calls,
+      (COALESCE(ts.ts_calls, 0) - COALESCE(ast.ast_calls, 0)) AS diff,
+      (COALESCE(ts.ts_calls, 0) != COALESCE(ast.ast_calls, 0)) AS mismatch
+    FROM ts
+    FULL OUTER JOIN ast
+      ON ts.file_id = ast.file_id AND ts.path = ast.path
+    """
+
+
+def ts_ast_imports_check_sql() -> str:
+    """Return SQL for tree-sitter vs AST import count checks."""
+    return """
+    WITH ts AS (
+      SELECT file_id, path, COUNT(*) AS ts_imports
+      FROM ts_imports
+      GROUP BY file_id, path
+    ),
+    ast AS (
+      SELECT file_id, path, COUNT(*) AS ast_imports
+      FROM ast_imports
+      GROUP BY file_id, path
+    )
+    SELECT
+      COALESCE(ts.file_id, ast.file_id) AS file_id,
+      COALESCE(ts.path, ast.path) AS path,
+      ts.ts_imports AS ts_imports,
+      ast.ast_imports AS ast_imports,
+      (COALESCE(ts.ts_imports, 0) - COALESCE(ast.ast_imports, 0)) AS diff,
+      (COALESCE(ts.ts_imports, 0) != COALESCE(ast.ast_imports, 0)) AS mismatch
+    FROM ts
+    FULL OUTER JOIN ast
+      ON ts.file_id = ast.file_id AND ts.path = ast.path
+    """
+
+
+def ts_cst_docstrings_check_sql() -> str:
+    """Return SQL for tree-sitter vs CST docstring count checks."""
+    return """
+    WITH ts AS (
+      SELECT file_id, path, COUNT(*) AS ts_docstrings
+      FROM ts_docstrings
+      GROUP BY file_id, path
+    ),
+    cst AS (
+      SELECT file_id, path, COUNT(*) AS cst_docstrings
+      FROM cst_docstrings
+      GROUP BY file_id, path
+    )
+    SELECT
+      COALESCE(ts.file_id, cst.file_id) AS file_id,
+      COALESCE(ts.path, cst.path) AS path,
+      ts.ts_docstrings AS ts_docstrings,
+      cst.cst_docstrings AS cst_docstrings,
+      (COALESCE(ts.ts_docstrings, 0) - COALESCE(cst.cst_docstrings, 0)) AS diff,
+      (COALESCE(ts.ts_docstrings, 0) != COALESCE(cst.cst_docstrings, 0)) AS mismatch
+    FROM ts
+    FULL OUTER JOIN cst
+      ON ts.file_id = cst.file_id AND ts.path = cst.path
     """
 
 
@@ -1673,16 +2027,32 @@ def bytecode_instruction_span_fields_sql(table: str = "py_bc_instruction_spans")
     return f"""
     WITH base AS (
       SELECT * FROM {table}
+    ),
+    expanded AS (
+      SELECT
+        base.file_id AS file_id,
+        base.path AS path,
+        base.code_unit_id AS code_unit_id,
+        base.instr_id AS instr_id,
+        base.instr_index AS instr_index,
+        base.offset AS offset,
+        unnest(base.span)
+      FROM base
     )
     SELECT
-      base.file_id AS file_id,
-      base.path AS path,
-      base.code_unit_id AS code_unit_id,
-      base.instr_id AS instr_id,
-      base.instr_index AS instr_index,
-      base.offset AS offset,
-      unnest(base.span)
-    FROM base
+      expanded.file_id AS file_id,
+      expanded.path AS path,
+      expanded.code_unit_id AS code_unit_id,
+      expanded.instr_id AS instr_id,
+      expanded.instr_index AS instr_index,
+      expanded.offset AS offset,
+      expanded."__unnest_placeholder(base.span).start"['line0'] AS pos_start_line,
+      expanded."__unnest_placeholder(base.span).start"['col'] AS pos_start_col,
+      expanded."__unnest_placeholder(base.span).end"['line0'] AS pos_end_line,
+      expanded."__unnest_placeholder(base.span).end"['col'] AS pos_end_col,
+      expanded."__unnest_placeholder(base.span).col_unit" AS col_unit,
+      expanded."__unnest_placeholder(base.span).end_exclusive" AS end_exclusive
+    FROM expanded
     """
 
 
@@ -2039,8 +2409,19 @@ _FRAGMENT_SQL_BUILDERS: dict[str, FragmentSqlBuilder] = {
     "ast_calls": ast_calls_sql,
     "ast_type_ignores": ast_type_ignores_sql,
     "ts_nodes": tree_sitter_nodes_sql,
+    "ts_edges": tree_sitter_edges_sql,
     "ts_errors": tree_sitter_errors_sql,
     "ts_missing": tree_sitter_missing_sql,
+    "ts_captures": tree_sitter_captures_sql,
+    "ts_defs": tree_sitter_defs_sql,
+    "ts_calls": tree_sitter_calls_sql,
+    "ts_imports": tree_sitter_imports_sql,
+    "ts_docstrings": tree_sitter_docstrings_sql,
+    "ts_stats": tree_sitter_stats_sql,
+    "ts_ast_defs_check": ts_ast_defs_check_sql,
+    "ts_ast_calls_check": ts_ast_calls_check_sql,
+    "ts_ast_imports_check": ts_ast_imports_check_sql,
+    "ts_cst_docstrings_check": ts_cst_docstrings_check_sql,
     "symtable_scopes": symtable_scopes_sql,
     "symtable_symbols": symtable_symbols_sql,
     "symtable_scope_edges": symtable_scope_edges_sql,
@@ -2177,7 +2558,18 @@ __all__ = [
     "symtable_scopes_sql",
     "symtable_symbol_attrs_sql",
     "symtable_symbols_sql",
+    "tree_sitter_calls_sql",
+    "tree_sitter_captures_sql",
+    "tree_sitter_defs_sql",
+    "tree_sitter_docstrings_sql",
+    "tree_sitter_edges_sql",
     "tree_sitter_errors_sql",
+    "tree_sitter_imports_sql",
     "tree_sitter_missing_sql",
     "tree_sitter_nodes_sql",
+    "tree_sitter_stats_sql",
+    "ts_ast_calls_check_sql",
+    "ts_ast_defs_check_sql",
+    "ts_ast_imports_check_sql",
+    "ts_cst_docstrings_check_sql",
 ]

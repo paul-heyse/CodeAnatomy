@@ -521,10 +521,12 @@ fn parquet_listing_table_provider(
     table_partition_cols: Option<Vec<(String, String)>>,
     schema_ipc: Option<Vec<u8>>,
     partition_schema_ipc: Option<Vec<u8>>,
+    expr_adapter_factory: Option<PyObject>,
     parquet_pruning: Option<bool>,
     skip_metadata: Option<bool>,
     collect_statistics: Option<bool>,
 ) -> PyResult<PyObject> {
+    let _ = expr_adapter_factory;
     let schema_ipc = schema_ipc.ok_or_else(|| {
         PyValueError::new_err("Parquet listing table provider requires schema_ipc.")
     })?;
@@ -570,10 +572,17 @@ fn parquet_listing_table_provider(
         .iter()
         .map(|col| col.0.clone())
         .collect();
+    let adapter_factory = if let Some(factory_obj) = expr_adapter_factory {
+        let capsule: &PyCapsule = factory_obj.extract(py)?;
+        let factory: &Arc<dyn PhysicalExprAdapterFactory> = capsule.reference()?;
+        factory.clone()
+    } else {
+        Arc::new(SchemaEvolutionAdapterFactory::default())
+    };
     let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
         .with_schema(schema)
-        .with_expr_adapter_factory(Arc::new(SchemaEvolutionAdapterFactory::default()));
+        .with_expr_adapter_factory(adapter_factory);
     let provider = ListingTable::try_new(config).map_err(|err| {
         PyRuntimeError::new_err(format!("ListingTable provider build failed: {err}"))
     })?;
@@ -662,6 +671,36 @@ fn delta_table_provider(
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
     Ok(capsule.into_py(py))
+}
+
+#[pyfunction]
+fn table_logical_plan(ctx: PyRef<PySessionContext>, table_name: String) -> PyResult<String> {
+    let runtime = Runtime::new().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}"))
+    })?;
+    let df = runtime
+        .block_on(ctx.ctx.table(table_name.as_str()))
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to resolve table {table_name:?}: {err}"
+            ))
+        })?;
+    Ok(format!("{:?}", df.logical_plan()))
+}
+
+#[pyfunction]
+fn table_dfschema_tree(ctx: PyRef<PySessionContext>, table_name: String) -> PyResult<String> {
+    let runtime = Runtime::new().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}"))
+    })?;
+    let df = runtime
+        .block_on(ctx.ctx.table(table_name.as_str()))
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to resolve table {table_name:?}: {err}"
+            ))
+        })?;
+    Ok(df.schema().to_string())
 }
 
 #[pyfunction]
@@ -1087,6 +1126,8 @@ fn datafusion_ext(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(schema_evolution_adapter_factory, module)?)?;
     module.add_function(wrap_pyfunction!(parquet_listing_table_provider, module)?)?;
     module.add_function(wrap_pyfunction!(delta_table_provider, module)?)?;
+    module.add_function(wrap_pyfunction!(table_logical_plan, module)?)?;
+    module.add_function(wrap_pyfunction!(table_dfschema_tree, module)?)?;
     module.add_function(wrap_pyfunction!(install_schema_evolution_adapter_factory, module)?)?;
     module.add_function(wrap_pyfunction!(registry_catalog_provider_factory, module)?)?;
     Ok(())

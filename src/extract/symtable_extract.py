@@ -389,11 +389,13 @@ def _iter_children(tbl: symtable.SymbolTable) -> list[symtable.SymbolTable]:
 
 def _symbol_entry(row: Mapping[str, object]) -> dict[str, object]:
     namespace_block_ids = row.get("namespace_block_ids")
-    block_ids = (
-        [int(value) for value in namespace_block_ids]
-        if isinstance(namespace_block_ids, list)
-        else []
-    )
+    block_ids: list[int]
+    if isinstance(namespace_block_ids, list):
+        block_ids = [int(value) for value in namespace_block_ids]
+    else:
+        block_ids = []
+    namespace_count = row.get("namespace_count")
+    count = int(namespace_count) if isinstance(namespace_count, int) else 0
     scope_id = row.get("scope_id")
     name = row.get("name")
     scope_text = scope_id if isinstance(scope_id, str) else None
@@ -416,7 +418,7 @@ def _symbol_entry(row: Mapping[str, object]) -> dict[str, object]:
             "is_assigned": bool(row.get("is_assigned")),
             "is_namespace": bool(row.get("is_namespace")),
         },
-        "namespace_count": int(row.get("namespace_count") or 0),
+        "namespace_count": count,
         "namespace_block_ids": block_ids,
         "attrs": attrs_map({}),
     }

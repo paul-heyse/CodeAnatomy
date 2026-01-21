@@ -4,25 +4,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from incremental.registry_builders import build_dataset_spec
+from datafusion_engine.schema_authority import (
+    dataset_schema_from_context,
+    dataset_spec_from_context,
+)
 from incremental.registry_rows import DATASET_ROWS, DatasetRow
-from registry_common.dataset_registry import DatasetAccessors, DatasetRegistry
-from schema_spec.catalog_registry import (
-    dataset_contract_spec as catalog_contract_spec,
-)
-from schema_spec.catalog_registry import (
-    dataset_schema as catalog_schema,
-)
-from schema_spec.catalog_registry import (
-    dataset_spec as catalog_spec,
-)
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
     from schema_spec.system import ContractSpec, DatasetSpec
 
-_REGISTRY = DatasetRegistry(rows=DATASET_ROWS, build_dataset_spec=build_dataset_spec)
-_ACCESSORS = DatasetAccessors(_REGISTRY)
+_DATASET_ROWS: dict[str, DatasetRow] = {row.name: row for row in DATASET_ROWS}
 
 
 def dataset_row(name: str) -> DatasetRow:
@@ -33,7 +25,7 @@ def dataset_row(name: str) -> DatasetRow:
     DatasetRow
         Row specification for the dataset.
     """
-    return _ACCESSORS.dataset_row(name)
+    return _DATASET_ROWS[name]
 
 
 def dataset_spec(name: str) -> DatasetSpec:
@@ -44,7 +36,7 @@ def dataset_spec(name: str) -> DatasetSpec:
     DatasetSpec
         Dataset specification for the name.
     """
-    return catalog_spec(name)
+    return dataset_spec_from_context(name)
 
 
 def dataset_schema(name: str) -> SchemaLike:
@@ -55,7 +47,7 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema for the dataset.
     """
-    return catalog_schema(name)
+    return dataset_schema_from_context(name)
 
 
 def dataset_contract_spec(name: str) -> ContractSpec:
@@ -66,7 +58,7 @@ def dataset_contract_spec(name: str) -> ContractSpec:
     ContractSpec
         Contract specification for the dataset.
     """
-    return catalog_contract_spec(name)
+    return dataset_spec_from_context(name).contract_spec_or_default()
 
 
 __all__ = [

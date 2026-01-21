@@ -6,7 +6,8 @@ import importlib
 import logging
 import os
 import subprocess
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
@@ -84,6 +85,17 @@ class SCIPIndexOptions:
     node_max_old_space_mb: int | None = None
     timeout_s: int | None = None
     extra_args: Sequence[str] = ()
+
+
+@dataclass(frozen=True)
+class ScipIndexRunReport:
+    """Run report for scip-python index invocations."""
+
+    command: Sequence[str]
+    returncode: int
+    stdout: str
+    stderr: str
+    duration_s: float
 
 
 @dataclass(frozen=True)
@@ -198,13 +210,19 @@ def _node_options_env(node_max_old_space_mb: int | None) -> dict[str, str] | Non
     return env
 
 
-def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
+def run_scip_python_index(
+    opts: SCIPIndexOptions,
+    *,
+    on_complete: Callable[[ScipIndexRunReport], None] | None = None,
+) -> Path:
     """Run scip-python to produce an index.scip file.
 
     Parameters
     ----------
     opts:
         Index invocation options.
+    on_complete:
+        Optional callback invoked with the run report regardless of exit status.
 
     Returns
     -------
@@ -231,6 +249,7 @@ def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
     cmd = _scip_index_command(opts, out=out, env_json=env_json)
     env = _node_options_env(opts.node_max_old_space_mb)
 
+    start = time.monotonic()
     proc = subprocess.run(
         cmd,
         cwd=str(repo_root),
@@ -240,6 +259,15 @@ def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
         env=env,
         timeout=opts.timeout_s,
     )
+    report = ScipIndexRunReport(
+        command=tuple(cmd),
+        returncode=proc.returncode,
+        stdout=proc.stdout,
+        stderr=proc.stderr,
+        duration_s=time.monotonic() - start,
+    )
+    if on_complete is not None:
+        on_complete(report)
     if proc.returncode != 0:
         msg = f"scip-python failed.\ncmd={cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}\n"
         raise RuntimeError(msg)
@@ -389,9 +417,18 @@ def _index_counts(index: object) -> dict[str, int]:
     occurrences = 0
     diagnostics = 0
     missing_posenc = 0
+    text_count = 0
+    text_bytes = 0
     for doc in docs:
         if getattr(doc, "position_encoding", None) is None:
             missing_posenc += 1
+        text = getattr(doc, "text", None)
+        if text:
+            text_count += 1
+            if isinstance(text, str):
+                text_bytes += len(text.encode("utf-8"))
+            else:
+                text_bytes += len(str(text).encode("utf-8"))
         occs = getattr(doc, "occurrences", [])
         occurrences += len(occs)
         for occ in occs:
@@ -403,6 +440,8 @@ def _index_counts(index: object) -> dict[str, int]:
         "symbol_information": len(getattr(index, "symbol_information", [])),
         "external_symbols": len(getattr(index, "external_symbols", [])),
         "missing_position_encoding": missing_posenc,
+        "document_text_count": text_count,
+        "document_text_bytes": text_bytes,
     }
 
 
@@ -536,7 +575,27 @@ def _index_stats_row(counts: Mapping[str, int], *, index_id: str) -> Row:
         "symbol_count": counts.get("symbol_information", 0),
         "external_symbol_count": counts.get("external_symbols", 0),
         "missing_position_encoding_count": counts.get("missing_position_encoding", 0),
+        "document_text_count": counts.get("document_text_count", 0),
+        "document_text_bytes": counts.get("document_text_bytes", 0),
     }
+
+
+def _record_scip_index_stats(
+    ctx: ExecutionContext | None,
+    *,
+    index_id: str,
+    index_path: Path,
+    counts: Mapping[str, int],
+) -> None:
+    if ctx is None:
+        return
+    runtime = ctx.runtime.datafusion
+    if runtime is None or runtime.diagnostics_sink is None:
+        return
+    payload = _index_stats_row(counts, index_id=index_id)
+    payload["event_time_unix_ms"] = int(time.time() * 1000)
+    payload["index_path"] = str(index_path)
+    runtime.diagnostics_sink.record_artifact("scip_index_stats_v1", payload)
 
 
 def _symbol_info_base(
@@ -773,17 +832,25 @@ def extract_scip_tables(
         if normalized_opts.log_counts or normalized_opts.health_check:
             LOGGER.info(
                 "SCIP index stats: documents=%d occurrences=%d diagnostics=%d symbols=%d "
-                "external_symbols=%d missing_posenc=%d",
+                "external_symbols=%d missing_posenc=%d text_docs=%d text_bytes=%d",
                 counts["documents"],
                 counts["occurrences"],
                 counts["diagnostics"],
                 counts["symbol_information"],
                 counts["external_symbols"],
                 counts["missing_position_encoding"],
+                counts["document_text_count"],
+                counts["document_text_bytes"],
             )
         if normalized_opts.health_check:
             assert_scip_index_health(index)
         index_id = stable_id("scip_index", str(index_path.resolve()))
+        _record_scip_index_stats(
+            exec_ctx,
+            index_id=index_id,
+            index_path=index_path,
+            counts=counts,
+        )
         batcher.append("scip_metadata_v1", _metadata_row(index, index_id=index_id))
         batcher.append("scip_index_stats_v1", _index_stats_row(counts, index_id=index_id))
 

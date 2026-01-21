@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.core.interop import DataTypeLike, SchemaLike
+from arrowdsl.schema.semantic_types import register_semantic_extension_types
 from core_types import JsonDict
 from datafusion_engine.schema_authority import dataset_schema_from_context
 from registry_common.arrow_payloads import payload_hash
@@ -33,6 +34,7 @@ def _dataset_fingerprint_schema() -> pa.Schema:
 
 
 def _resolve_schema(schema: SchemaLike) -> pa.Schema:
+    register_semantic_extension_types()
     if isinstance(schema, pa.Schema):
         return schema
     to_pyarrow = getattr(schema, "to_pyarrow", None)

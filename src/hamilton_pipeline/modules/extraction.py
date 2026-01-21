@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import re
+import subprocess
+import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -40,12 +44,17 @@ from extract.schema_ops import validate_extract_output
 from extract.scip_extract import (
     ScipExtractContext,
     ScipExtractOptions,
+    ScipIndexRunReport,
     SCIPParseOptions,
     extract_scip_tables,
     run_scip_python_index,
 )
 from extract.scip_identity import resolve_scip_identity
-from extract.scip_indexer import build_scip_index_options, ensure_scip_build_dir
+from extract.scip_indexer import (
+    build_scip_index_options,
+    ensure_scip_build_dir,
+    write_scip_environment_json,
+)
 from extract.scip_proto_loader import ensure_scip_pb2
 from extract.spec_helpers import extractor_option_values
 from extract.symtable_extract import SymtableExtractOptions, extract_symtables_table
@@ -68,6 +77,7 @@ SCIP_BUNDLE_OUTPUTS = output_bundle_outputs("scip_bundle")
 BYTECODE_BUNDLE_OUTPUTS = output_bundle_outputs("bytecode_bundle")
 TREE_SITTER_BUNDLE_OUTPUTS = output_bundle_outputs("tree_sitter_bundle")
 RUNTIME_INSPECT_BUNDLE_OUTPUTS = output_bundle_outputs("runtime_inspect_bundle")
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -316,6 +326,116 @@ def _complete_extract_tables(
     return merged
 
 
+_SCIP_SHARD_HITS_RE = re.compile(r"(?:shard|cache)\\s+hits?[:=]\\s*(\\d+)", re.IGNORECASE)
+_SCIP_SHARD_MISSES_RE = re.compile(r"(?:shard|cache)\\s+miss(?:es)?[:=]\\s*(\\d+)", re.IGNORECASE)
+
+
+def _truncate_output(value: str, *, limit: int = 8000) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}...<truncated {len(value) - limit} chars>"
+
+
+def _run_command(
+    cmd: Sequence[str],
+    *,
+    cwd: Path | None,
+    stdout_path: Path | None = None,
+) -> dict[str, object]:
+    start = time.monotonic()
+    payload: dict[str, object] = {"command": list(cmd)}
+    try:
+        if stdout_path is not None:
+            stdout_path.parent.mkdir(parents=True, exist_ok=True)
+            with stdout_path.open("w", encoding="utf-8") as handle:
+                proc = subprocess.run(
+                    list(cmd),
+                    cwd=str(cwd) if cwd is not None else None,
+                    stdout=handle,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+            payload["stdout_path"] = str(stdout_path)
+            payload["stderr"] = _truncate_output(proc.stderr)
+        else:
+            proc = subprocess.run(
+                list(cmd),
+                cwd=str(cwd) if cwd is not None else None,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            payload["stdout"] = _truncate_output(proc.stdout)
+            payload["stderr"] = _truncate_output(proc.stderr)
+        payload["returncode"] = proc.returncode
+    except FileNotFoundError as exc:
+        payload["error"] = str(exc)
+        payload["returncode"] = None
+    payload["duration_s"] = time.monotonic() - start
+    return payload
+
+
+def _parse_scip_shard_counts(output: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    hits = _SCIP_SHARD_HITS_RE.search(output)
+    misses = _SCIP_SHARD_MISSES_RE.search(output)
+    if hits is not None:
+        counts["shard_hits"] = int(hits.group(1))
+    if misses is not None:
+        counts["shard_misses"] = int(misses.group(1))
+    return counts
+
+
+def _scip_index_report_payload(report: ScipIndexRunReport) -> dict[str, object]:
+    payload = {
+        "command": list(report.command),
+        "returncode": report.returncode,
+        "duration_s": report.duration_s,
+        "stdout": _truncate_output(report.stdout),
+        "stderr": _truncate_output(report.stderr),
+    }
+    combined = "\n".join((report.stdout, report.stderr))
+    payload.update(_parse_scip_shard_counts(combined))
+    return payload
+
+
+def _record_scip_tooling(ctx: ExecutionContext, payload: Mapping[str, object]) -> None:
+    runtime = ctx.runtime.datafusion
+    if runtime is None or runtime.diagnostics_sink is None:
+        return
+    runtime.diagnostics_sink.record_artifact("scip_tooling_v1", payload)
+
+
+def _ensure_command_success(label: str, payload: Mapping[str, object]) -> None:
+    error = payload.get("error")
+    returncode = payload.get("returncode")
+    if error:
+        msg = f"{label} failed: {error}"
+        raise RuntimeError(msg)
+    if isinstance(returncode, int) and returncode != 0:
+        msg = f"{label} failed with exit code {returncode}"
+        raise RuntimeError(msg)
+
+
+def _resolve_optional_path(repo_root: Path, value: str | None, *, default: Path) -> Path:
+    path = Path(value) if value else default
+    return path if path.is_absolute() else repo_root / path
+
+
+def _scip_tooling_payload(
+    stage: str,
+    payload: Mapping[str, object],
+    *,
+    index_path: Path | None = None,
+) -> dict[str, object]:
+    merged: dict[str, object] = {"stage": stage}
+    if index_path is not None:
+        merged["index_path"] = str(index_path)
+    merged.update(dict(payload))
+    return merged
+
+
 def _options_for_template[T](
     template_name: str,
     *,
@@ -459,6 +579,7 @@ def ast_bundle(
 def scip_bundle(
     scip_index_path: str | None,
     repo_root: str,
+    scip_extract_options: ScipExtractOptions,
     scip_parse_options: SCIPParseOptions,
     extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
@@ -474,16 +595,18 @@ def scip_bundle(
     evidence_plan = extract_execution_context.evidence_plan
     if not template_outputs(evidence_plan, "scip"):
         return _empty_bundle(SCIP_BUNDLE_OUTPUTS)
+    options = replace(
+        scip_extract_options,
+        parse_opts=scip_parse_options,
+        evidence_plan=evidence_plan,
+    )
     tables = extract_scip_tables(
         context=ScipExtractContext(
             scip_index_path=scip_index_path,
             repo_root=repo_root,
             ctx=extract_execution_context.ctx,
         ),
-        options=ScipExtractOptions(
-            parse_opts=scip_parse_options,
-            evidence_plan=evidence_plan,
-        ),
+        options=options,
     )
     return dict(
         _apply_extract_post_kernels(
@@ -529,7 +652,6 @@ def scip_index_path(
     str | None
         Path to index.scip or None when indexing is disabled.
     """
-    _ = ctx
     _ = cache_salt
     if not template_outputs(evidence_plan, "scip"):
         return None
@@ -548,6 +670,15 @@ def scip_index_path(
     if not config.enabled:
         return None
 
+    if config.generate_env_json:
+        env_json_path = (
+            Path(config.env_json_path) if config.env_json_path else build_dir / "env.json"
+        )
+        if not env_json_path.is_absolute():
+            env_json_path = repo_root_path / env_json_path
+        generated = write_scip_environment_json(env_json_path)
+        config = replace(config, env_json_path=str(generated))
+
     identity = resolve_scip_identity(
         repo_root_path,
         project_name_override=overrides.project_name_override,
@@ -560,7 +691,73 @@ def scip_index_path(
         config=config,
     )
     ensure_scip_pb2(repo_root=repo_root_path, build_dir=build_dir)
-    return str(run_scip_python_index(opts))
+
+    def _on_complete(run_report: ScipIndexRunReport) -> None:
+        payload = _scip_index_report_payload(run_report)
+        _record_scip_tooling(ctx, _scip_tooling_payload("scip_python_index", payload))
+
+    index_path = run_scip_python_index(opts, on_complete=_on_complete)
+    index_path = index_path.resolve()
+
+    version_payload = _run_command([config.scip_python_bin, "--version"], cwd=repo_root_path)
+    _record_scip_tooling(ctx, _scip_tooling_payload("scip_python_version", version_payload))
+
+    cli_requested = config.run_scip_print or config.run_scip_snapshot or config.run_scip_test
+    if cli_requested:
+        cli_version = _run_command([config.scip_cli_bin, "--version"], cwd=repo_root_path)
+        _record_scip_tooling(ctx, _scip_tooling_payload("scip_cli_version", cli_version))
+
+    if config.run_scip_print:
+        print_path = _resolve_optional_path(
+            repo_root_path,
+            config.scip_print_path,
+            default=build_dir / "index.print.json",
+        )
+        payload = _run_command(
+            [config.scip_cli_bin, "print", "--json", str(index_path)],
+            cwd=repo_root_path,
+            stdout_path=print_path,
+        )
+        _record_scip_tooling(
+            ctx,
+            _scip_tooling_payload("scip_print", payload, index_path=index_path),
+        )
+        _ensure_command_success("scip print", payload)
+
+    if config.run_scip_snapshot:
+        snapshot_dir = _resolve_optional_path(
+            repo_root_path,
+            config.scip_snapshot_dir,
+            default=build_dir / "snapshots",
+        )
+        payload = _run_command(
+            [
+                config.scip_cli_bin,
+                "snapshot",
+                "--comment-syntax",
+                config.scip_snapshot_comment_syntax,
+                str(index_path),
+                "--output",
+                str(snapshot_dir),
+            ],
+            cwd=repo_root_path,
+        )
+        _record_scip_tooling(
+            ctx,
+            _scip_tooling_payload("scip_snapshot", payload, index_path=index_path),
+        )
+        _ensure_command_success("scip snapshot", payload)
+
+    if config.run_scip_test:
+        cmd = [config.scip_cli_bin, "test", *config.scip_test_args, str(index_path)]
+        payload = _run_command(cmd, cwd=repo_root_path)
+        _record_scip_tooling(
+            ctx,
+            _scip_tooling_payload("scip_test", payload, index_path=index_path),
+        )
+        _ensure_command_success("scip test", payload)
+
+    return str(index_path)
 
 
 @cache(format="delta")

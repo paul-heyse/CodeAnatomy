@@ -414,16 +414,21 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
             {
                 "symbol": "symbol",
                 "display_name": "display_name",
-                "symbol_kind": "kind",
+                "symbol_kind": "kind_name",
                 "enclosing_symbol": "enclosing_symbol",
                 "documentation": PropFieldSpec(
                     prop_key="documentation",
                     source_col="documentation",
                     include_if_id=INCLUDE_HEAVY_JSON,
                 ),
-                "signature_documentation": PropFieldSpec(
-                    prop_key="signature_documentation",
-                    source_col="signature_documentation",
+                "signature_text": PropFieldSpec(
+                    prop_key="signature_text",
+                    source_col="signature_text",
+                    include_if_id=INCLUDE_HEAVY_JSON,
+                ),
+                "signature_language": PropFieldSpec(
+                    prop_key="signature_language",
+                    source_col="signature_language",
                     include_if_id=INCLUDE_HEAVY_JSON,
                 ),
             },
@@ -441,16 +446,21 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
             {
                 "symbol": "symbol",
                 "display_name": "display_name",
-                "symbol_kind": "kind",
+                "symbol_kind": "kind_name",
                 "enclosing_symbol": "enclosing_symbol",
                 "documentation": PropFieldSpec(
                     prop_key="documentation",
                     source_col="documentation",
                     include_if_id=INCLUDE_HEAVY_JSON,
                 ),
-                "signature_documentation": PropFieldSpec(
-                    prop_key="signature_documentation",
-                    source_col="signature_documentation",
+                "signature_text": PropFieldSpec(
+                    prop_key="signature_text",
+                    source_col="signature_text",
+                    include_if_id=INCLUDE_HEAVY_JSON,
+                ),
+                "signature_language": PropFieldSpec(
+                    prop_key="signature_language",
+                    source_col="signature_language",
                     include_if_id=INCLUDE_HEAVY_JSON,
                 ),
             },
@@ -468,8 +478,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
             NodeKind.TS_NODE,
             {
                 "ts_type": "ts_type",
+                "ts_kind_id": "ts_kind_id",
+                "ts_grammar_id": "ts_grammar_id",
+                "ts_grammar_name": "ts_grammar_name",
+                "ts_node_uid": "ts_node_uid",
                 "is_named": "is_named",
                 "has_error": "has_error",
+                "is_error": "is_error",
+                "is_missing": "is_missing",
+                "is_extra": "is_extra",
+                "has_changes": "has_changes",
             },
         ),
         path_cols=("path",),

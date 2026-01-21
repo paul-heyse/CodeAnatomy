@@ -1,6 +1,7 @@
 """Relspec registries for datasets, contracts, and rules."""
 
-from relspec.registry.datasets import ContractCatalog, DatasetCatalog, DatasetLocation
+from ibis_engine.registry import DatasetCatalog, DatasetLocation
+from relspec.contract_catalog import ContractCatalog
 from relspec.registry.rules import (
     RuleAdapter,
     RuleRegistry,

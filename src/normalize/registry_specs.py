@@ -8,18 +8,13 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from datafusion_engine.schema_authority import (
+    dataset_schema_from_context,
+    dataset_spec_from_context,
+)
 from ibis_engine.query_compiler import IbisQuerySpec
 from normalize.registry_builders import build_input_schema
 from normalize.registry_rows import DATASET_ROWS, DatasetRow
-from schema_spec.catalog_registry import (
-    dataset_contract_spec as catalog_contract_spec,
-)
-from schema_spec.catalog_registry import (
-    dataset_schema as catalog_schema,
-)
-from schema_spec.catalog_registry import (
-    dataset_spec as catalog_spec,
-)
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec
 
@@ -134,7 +129,7 @@ def dataset_spec(name: str) -> DatasetSpec:
     DatasetSpec
         Registered dataset spec.
     """
-    return catalog_spec(name)
+    return dataset_spec_from_context(name)
 
 
 def dataset_specs() -> Iterable[DatasetSpec]:
@@ -145,7 +140,7 @@ def dataset_specs() -> Iterable[DatasetSpec]:
     Iterable[DatasetSpec]
         Dataset specifications.
     """
-    return (catalog_spec(row.name) for row in DATASET_ROWS)
+    return (dataset_spec_from_context(row.name) for row in DATASET_ROWS)
 
 
 def dataset_table_spec(name: str) -> TableSchemaSpec:
@@ -166,17 +161,8 @@ def dataset_contract(name: str) -> ContractSpec:
     -------
     ContractSpec
         Contract specification for the dataset.
-
-    Raises
-    ------
-    ValueError
-        Raised when the dataset does not define a contract spec.
     """
-    contract = catalog_contract_spec(name)
-    if contract is None:
-        msg = f"Dataset {name!r} does not define a contract spec."
-        raise ValueError(msg)
-    return contract
+    return dataset_spec_from_context(name).contract_spec_or_default()
 
 
 def dataset_contract_schema(name: str) -> SchemaLike:
@@ -209,7 +195,7 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Dataset schema with metadata.
     """
-    return catalog_schema(name)
+    return dataset_schema_from_context(name)
 
 
 def dataset_metadata_spec(name: str) -> SchemaMetadataSpec:

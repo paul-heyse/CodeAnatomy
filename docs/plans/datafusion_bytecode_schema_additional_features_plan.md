@@ -39,7 +39,7 @@ FROM base;
 ---
 
 ## Scope 2: Attr key coverage diagnostics (`map_keys` / `map_values`)
-Status: Partially Complete
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/query_fragments.py`
@@ -60,7 +60,7 @@ FROM base;
 ### Implementation checklist
 - [x] Add `py_bc_instruction_attr_keys` view for key coverage.
 - [x] Add `py_bc_instruction_attr_values` view for value sampling.
-- [ ] Validate view schemas with `arrow_typeof` in `validate_bytecode_views`.
+- [x] Validate view schemas with `arrow_typeof` in `validate_bytecode_views`.
 
 ---
 
@@ -206,7 +206,7 @@ DataFusionScanOptions(
 ---
 
 ## Scope 9: Optional span/line “wide” views via `unnest(struct)`
-Status: Partially Complete
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/query_fragments.py`
@@ -224,7 +224,7 @@ FROM base;
 
 ### Implementation checklist
 - [x] Add a derived view that expands `span` structs to columns.
-- [ ] Use placeholder access (`__unnest_placeholder(...)`) to select fields.
+- [x] Use placeholder access (`__unnest_placeholder(...)`) to select fields.
 - [x] Validate view schemas alongside existing bytecode views.
 
 ---

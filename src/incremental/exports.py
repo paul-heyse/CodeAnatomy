@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import cast
 
+import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
@@ -18,7 +20,7 @@ from incremental.registry_specs import dataset_schema
 def build_exported_defs_index(
     cst_defs_norm: TableLike,
     *,
-    backend: BaseBackend,
+    backend: BaseBackend | None = None,
     rel_def_symbol: TableLike | None = None,
 ) -> pa.Table:
     """Build the exported definitions index for top-level defs.
@@ -28,13 +30,17 @@ def build_exported_defs_index(
     pa.Table
         Exported definitions table with qname and optional symbol bindings.
     """
+    if backend is None:
+        backend = ibis.datafusion.connect()
+    backend = cast("BaseBackend", backend)
     _require_datafusion_backend(backend)
     schema = dataset_schema("dim_exported_defs_v1")
     plan = source_to_ibis(
         cst_defs_norm,
         options=SourceToIbisOptions(backend=backend, name="cst_defs_norm"),
     )
-    if "qnames" not in plan.expr.schema().names:
+    schema_names = cast("Sequence[str]", plan.expr.schema().names)
+    if "qnames" not in schema_names:
         return _empty_exported_defs(schema)
     if rel_def_symbol is not None:
         source_to_ibis(
@@ -44,7 +50,7 @@ def build_exported_defs_index(
     result = _build_exported_defs_base(
         backend,
         has_rel_def_symbol=rel_def_symbol is not None,
-        has_container_def_id="container_def_id" in plan.expr.schema().names,
+        has_container_def_id="container_def_id" in schema_names,
     )
     return align_table(result, schema=schema, safe_cast=True)
 

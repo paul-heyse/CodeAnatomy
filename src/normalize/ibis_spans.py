@@ -10,7 +10,7 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
 from arrowdsl.core.interop import TableLike
-from datafusion_engine.query_fragments import SqlFragment
+from datafusion_engine.nested_tables import ViewReference
 from ibis_engine.builtin_udfs import col_to_byte
 from ibis_engine.ids import masked_stable_id_expr
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
@@ -18,7 +18,7 @@ from normalize.ibis_exprs import position_encoding_norm_expr
 from normalize.span_pipeline import span_error_table
 from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32
 
-SpanSource = TableLike | Table | SqlFragment
+SpanSource = TableLike | Table | ViewReference
 
 
 def add_ast_byte_spans_ibis(
@@ -428,8 +428,8 @@ def _line_index_view(line_index: Table, *, prefix: str) -> Table:
 
 
 def _table_expr(source: SpanSource, *, backend: BaseBackend, name: str) -> Table:
-    if isinstance(source, SqlFragment):
-        return _sql_fragment_expr(backend, source)
+    if isinstance(source, ViewReference):
+        return _view_reference_expr(backend, source)
     if isinstance(source, Table):
         return source
     view_name = None if _is_datafusion_backend(backend) else name
@@ -442,12 +442,8 @@ def _is_datafusion_backend(backend: BaseBackend) -> bool:
     return str(name).lower() == "datafusion"
 
 
-def _sql_fragment_expr(backend: BaseBackend, fragment: SqlFragment) -> Table:
-    sql_method = getattr(backend, "sql", None)
-    if not callable(sql_method):
-        msg = "Ibis backend does not support raw SQL fragments."
-        raise TypeError(msg)
-    return cast("Table", sql_method(fragment.sql))
+def _view_reference_expr(backend: BaseBackend, fragment: ViewReference) -> Table:
+    return backend.table(fragment.name)
 
 
 @dataclass(frozen=True)

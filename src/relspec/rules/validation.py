@@ -357,9 +357,6 @@ class SqlGlotRuleContext:
 
     rule: RuleDefinition
     source: _RuleSqlGlotSource
-    schema_map: Mapping[str, Mapping[str, str]] | None
-    union_schema: pa.Schema | None
-    schema_ddl: str | None
     plan_signature: str | None
 
 
@@ -572,7 +569,7 @@ def _prepare_sqlglot_rule_context(
     input_names = _rule_input_names(rule)
     if not input_names:
         return None, ()
-    schema_map, union_schema, missing_inputs = _schema_map_for_inputs(
+    missing_inputs = _missing_inputs_for_inputs(
         input_names,
         schema_context=context.schema_context,
     )
@@ -584,7 +581,6 @@ def _prepare_sqlglot_rule_context(
             missing_inputs=missing_inputs,
         )
         return None, (diagnostic,)
-    schema_ddl = None
     source = _rule_sqlglot_source(
         rule,
         backend=context.backend,
@@ -609,9 +605,6 @@ def _prepare_sqlglot_rule_context(
         SqlGlotRuleContext(
             rule=rule,
             source=source,
-            schema_map=schema_map or None,
-            union_schema=union_schema,
-            schema_ddl=schema_ddl,
             plan_signature=plan_signature,
         ),
         (),
@@ -640,10 +633,7 @@ def _compile_rule_sqlglot(
     SqlGlotDiagnostics | RuleDiagnostic
         Diagnostics or a failure diagnostic.
     """
-    options = SqlGlotDiagnosticsOptions(
-        schema_map=rule_ctx.schema_map,
-        normalize=normalize,
-    )
+    options = SqlGlotDiagnosticsOptions(normalize=normalize)
     try:
         return sqlglot_diagnostics(
             rule_ctx.source.expr,
@@ -700,7 +690,6 @@ def _build_rule_diagnostics(
     )
     extra_metadata = _datafusion_diagnostics_metadata(
         sql=optimized.optimized.sql(unsupported_level=ErrorLevel.RAISE),
-        schema_map=rule_ctx.schema_map,
         ctx=context.ctx,
     )
     describe_error = extra_metadata.get("df_describe_error")
@@ -724,7 +713,7 @@ def _build_rule_diagnostics(
             options=SqlGlotMetadataDiagnosticOptions(
                 rule_name=rule_ctx.rule.name,
                 plan_signature=rule_ctx.source.plan_signature,
-                schema_ddl=rule_ctx.schema_ddl,
+                schema_ddl=None,
                 extra_metadata=metadata,
             ),
         )
@@ -761,7 +750,6 @@ def _required_columns_metadata(
         required = required_columns_by_table(
             rule_ctx.source.expr,
             backend=context.backend,
-            schema_map=rule_ctx.schema_map,
         )
     except (TypeError, ValueError):
         return metadata
@@ -871,7 +859,6 @@ def _plan_hash_metadata(
         checkpoint = compile_checkpoint(
             rule_ctx.source.expr,
             backend=context.backend,
-            schema_map=rule_ctx.schema_map,
         )
     except (TypeError, ValueError):
         return None
@@ -887,7 +874,6 @@ def _lineage_graph_metadata(
         lineage = lineage_graph_by_output(
             rule_ctx.source.expr,
             backend=context.backend,
-            schema_map=rule_ctx.schema_map,
         )
     except (TypeError, ValueError):
         return None
@@ -1038,7 +1024,6 @@ def _rule_ir_metadata(
         checkpoint = compile_checkpoint(
             rule_ctx.source.expr,
             backend=context.backend,
-            schema_map=rule_ctx.schema_map,
             dialect="datafusion",
         )
     except (TypeError, ValueError):
@@ -1092,7 +1077,7 @@ def rule_dependency_reports(
         input_names = _rule_input_names(rule)
         if not input_names:
             continue
-        schema_map, _union_schema, missing_inputs = _schema_map_for_inputs(
+        missing_inputs = _missing_inputs_for_inputs(
             input_names,
             schema_context=context.schema_context,
         )
@@ -1112,10 +1097,7 @@ def rule_dependency_reports(
             optimized = sqlglot_diagnostics(
                 source.expr,
                 backend=context.backend,
-                options=SqlGlotDiagnosticsOptions(
-                    schema_map=schema_map or None,
-                    normalize=True,
-                ),
+                options=SqlGlotDiagnosticsOptions(normalize=True),
             )
         except (TypeError, ValueError):
             continue
@@ -1232,7 +1214,6 @@ def _kernel_names_for_rule(rule: RelationshipRule) -> tuple[str, ...]:
 def _datafusion_diagnostics_metadata(
     *,
     sql: str,
-    schema_map: Mapping[str, Mapping[str, str]] | None,
     ctx: ExecutionContext,
 ) -> dict[str, str]:
     """Collect DataFusion diagnostics metadata for SQL.
@@ -1241,8 +1222,6 @@ def _datafusion_diagnostics_metadata(
     ----------
     sql
         SQL string to compile.
-    schema_map
-        Optional schema map for table registration.
     ctx
         Execution context containing DataFusion runtime profile.
 
@@ -1263,123 +1242,78 @@ def _datafusion_diagnostics_metadata(
     if not ctx.debug:
         return metadata
     session = profile.session_context()
-    if schema_map:
-        try:
-            _register_schema_tables(session, schema_map)
-            options = profile.compile_options(options=DataFusionCompileOptions())
-            expr = parse_sql_strict(sanitized_sql, dialect=options.dialect)
-            df = sqlglot_to_datafusion(expr, ctx=session, options=options)
-            plans = snapshot_plans(df)
-            metadata["df_logical_plan"] = str(plans["logical"])
-            metadata["df_optimized_plan"] = str(plans["optimized"])
-            metadata["df_physical_plan"] = str(plans["physical"])
-            metadata["dfschema_tree"] = str(df.schema())
-            ddls = _table_ddl_payloads(session, table_names=tuple(schema_map))
-            metadata.update(ddls)
-        except (RuntimeError, TypeError, ValueError) as exc:
-            metadata["df_plan_error"] = str(exc)
-    try:
-        explain_rows = session.sql(f"EXPLAIN {sanitized_sql}").to_arrow_table().to_pylist()
-        metadata["df_explain"] = _stable_repr(explain_rows)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        metadata["df_explain_error"] = str(exc)
-    try:
-        describe_rows = SchemaIntrospector(session).describe_query(sanitized_sql)
-        metadata["df_describe"] = _describe_snapshot_payload(describe_rows)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        metadata["df_describe_error"] = str(exc)
-    try:
-        parameters = SchemaIntrospector(session).parameters_snapshot()
-        metadata["df_parameters"] = _stable_repr(parameters)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        metadata["df_parameters_error"] = str(exc)
-    try:
-        settings = profile.settings_snapshot(session)
-        metadata["df_settings"] = _settings_snapshot_payload(settings)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        metadata["df_settings_error"] = str(exc)
-    try:
-        substrait = Serde.serialize_bytes(sanitized_sql, session)
-        metadata["substrait_plan_b64"] = base64.b64encode(substrait).decode("ascii")
-    except (RuntimeError, TypeError, ValueError) as exc:
-        metadata["substrait_error"] = str(exc)
+    metadata.update(
+        _datafusion_debug_metadata(
+            session=session,
+            sanitized_sql=sanitized_sql,
+            profile=profile,
+        )
+    )
     return metadata
 
 
-def _register_schema_tables(
-    session: SessionContext,
-    schema_map: Mapping[str, Mapping[str, str]],
-) -> None:
-    """Register empty tables in a DataFusion session for schemas.
-
-    Parameters
-    ----------
-    session
-        DataFusion session context.
-    schema_map
-        Mapping of table name to column name/type strings.
-    """
-    for name, columns in schema_map.items():
-        if not columns:
-            continue
-        arrays = {
-            col: pa.array([], type=pa.type_for_alias(dtype)) for col, dtype in columns.items()
-        }
-        session.register_table(name, pa.table(arrays))
-
-
-def _table_ddl_payloads(
-    session: SessionContext,
+def _datafusion_debug_metadata(
     *,
-    table_names: Sequence[str],
+    session: SessionContext,
+    sanitized_sql: str,
+    profile: DataFusionRuntimeProfile,
 ) -> dict[str, str]:
-    """Collect SHOW CREATE TABLE payloads for tables when available.
-
-    Parameters
-    ----------
-    session
-        DataFusion session context.
-    table_names
-        Table names to describe.
-
-    Returns
-    -------
-    dict[str, str]
-        Mapping of metadata keys to DDL payloads.
-    """
-    payloads: dict[str, str] = {}
-    for name in table_names:
-        ddl = _table_ddl_payload(session, name=name)
-        if ddl is not None:
-            payloads[f"df_table_ddl:{name}"] = ddl
-    return payloads
-
-
-def _table_ddl_payload(session: SessionContext, *, name: str) -> str | None:
-    """Return a CREATE TABLE statement when supported.
-
-    Parameters
-    ----------
-    session
-        DataFusion session context.
-    name
-        Table name to describe.
-
-    Returns
-    -------
-    str | None
-        DDL statement when available.
-    """
+    metadata: dict[str, str] = {}
     try:
-        rows = session.sql(f"SHOW CREATE TABLE {name}").to_arrow_table().to_pylist()
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    if not rows:
-        return None
-    first = rows[0]
-    if isinstance(first, Mapping) and len(first) == 1:
-        return str(next(iter(first.values())))
-    return _stable_repr(rows)
+        options = profile.compile_options(options=DataFusionCompileOptions())
+        expr = parse_sql_strict(sanitized_sql, dialect=options.dialect)
+        df = sqlglot_to_datafusion(expr, ctx=session, options=options)
+        plans = snapshot_plans(df)
+        metadata["df_logical_plan"] = str(plans["logical"])
+        metadata["df_optimized_plan"] = str(plans["optimized"])
+        metadata["df_physical_plan"] = str(plans["physical"])
+        metadata["dfschema_tree"] = str(df.schema())
+    except (RuntimeError, TypeError, ValueError) as exc:
+        metadata["df_plan_error"] = str(exc)
+    _try_add_metadata(
+        metadata,
+        key="df_explain",
+        build=lambda: _stable_repr(
+            session.sql(f"EXPLAIN {sanitized_sql}").to_arrow_table().to_pylist()
+        ),
+    )
+    _try_add_metadata(
+        metadata,
+        key="df_describe",
+        build=lambda: _describe_snapshot_payload(
+            SchemaIntrospector(session).describe_query(sanitized_sql)
+        ),
+    )
+    _try_add_metadata(
+        metadata,
+        key="df_parameters",
+        build=lambda: _stable_repr(SchemaIntrospector(session).parameters_snapshot()),
+    )
+    _try_add_metadata(
+        metadata,
+        key="df_settings",
+        build=lambda: _settings_snapshot_payload(profile.settings_snapshot(session)),
+    )
+    _try_add_metadata(
+        metadata,
+        key="substrait_plan_b64",
+        build=lambda: base64.b64encode(Serde.serialize_bytes(sanitized_sql, session)).decode(
+            "ascii"
+        ),
+    )
+    return metadata
+
+
+def _try_add_metadata(
+    metadata: dict[str, str],
+    *,
+    key: str,
+    build: Callable[[], str],
+) -> None:
+    try:
+        metadata[key] = build()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        metadata[f"{key}_error"] = str(exc)
 
 
 def _json_payload(payload: Mapping[str, object]) -> str:
@@ -1593,12 +1527,12 @@ def _rule_input_names(rule: RuleDefinition) -> tuple[str, ...]:
     return ()
 
 
-def _schema_map_for_inputs(
+def _missing_inputs_for_inputs(
     inputs: Sequence[str],
     *,
     schema_context: RelspecSchemaContext,
-) -> tuple[dict[str, dict[str, str]], pa.Schema | None, tuple[str, ...]]:
-    """Build a schema map and union schema for input datasets.
+) -> tuple[str, ...]:
+    """Return missing dataset names for SQLGlot diagnostics.
 
     Parameters
     ----------
@@ -1609,26 +1543,12 @@ def _schema_map_for_inputs(
 
     Returns
     -------
-    tuple[dict[str, dict[str, str]], pa.Schema | None, tuple[str, ...]]
-        Schema map, union schema, and missing input names.
+    tuple[str, ...]
+        Missing input dataset names.
     """
-    fields: list[pa.Field] = []
-    seen: set[str] = set()
-    schema_map: dict[str, dict[str, str]] = {}
-    missing: list[str] = []
-    for name in dict.fromkeys(inputs):
-        schema = schema_context.dataset_schema(name)
-        if schema is None:
-            missing.append(name)
-            continue
-        schema_map[name] = {field.name: str(field.type) for field in schema}
-        for field in schema:
-            if field.name in seen:
-                continue
-            seen.add(field.name)
-            fields.append(field)
-    union_schema = pa.schema(fields) if fields else None
-    return schema_map, union_schema, tuple(missing)
+    return tuple(
+        name for name in dict.fromkeys(inputs) if schema_context.dataset_schema(name) is None
+    )
 
 
 def _schema_for_dataset(

@@ -26,6 +26,7 @@ from arrowdsl.schema.encoding_metadata import (
     ENCODING_META,
     dict_field_metadata,
 )
+from arrowdsl.schema.metadata import schema_constraints_from_metadata, schema_identity_from_metadata
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 from registry_common.arrow_payloads import payload_hash
 from registry_common.metadata import metadata_list_bytes
@@ -85,6 +86,35 @@ def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
         Encoded metadata mapping.
     """
     return {str(k).encode("utf-8"): str(v).encode("utf-8") for k, v in metadata.items()}
+
+
+def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
+    """Decode Arrow metadata into a string-keyed mapping.
+
+    Returns
+    -------
+    dict[str, str]
+        Decoded metadata mapping with string keys and values.
+    """
+    if not metadata:
+        return {}
+    return {
+        key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
+        for key, value in metadata.items()
+    }
+
+
+def _encoding_hint_from_field(
+    field_meta: Mapping[str, str],
+    *,
+    dtype: DataTypeLike,
+) -> Literal["dictionary"] | None:
+    hint = field_meta.get(ENCODING_META)
+    if hint == ENCODING_DICTIONARY:
+        return ENCODING_DICTIONARY
+    if pa.types.is_dictionary(_ensure_arrow_dtype(dtype)):
+        return ENCODING_DICTIONARY
+    return None
 
 
 def _ensure_arrow_dtype(dtype: DataTypeLike) -> pa.DataType:
@@ -276,6 +306,55 @@ class TableSchemaSpec:
     required_non_null: tuple[str, ...] = ()
     key_fields: tuple[str, ...] = ()
 
+    @classmethod
+    def from_schema(
+        cls,
+        name: str,
+        schema: SchemaLike,
+        *,
+        version: int | None = None,
+    ) -> TableSchemaSpec:
+        """Create a table schema spec from an Arrow schema.
+
+        Parameters
+        ----------
+        name
+            Dataset name to use when schema metadata omits one.
+        schema
+            Arrow schema to convert.
+        version
+            Optional version override for schema metadata.
+
+        Returns
+        -------
+        TableSchemaSpec
+            Table schema specification derived from the Arrow schema.
+        """
+        fields: list[ArrowFieldSpec] = []
+        for schema_field in schema:
+            meta = _decode_metadata(schema_field.metadata)
+            encoding = _encoding_hint_from_field(meta, dtype=schema_field.type)
+            fields.append(
+                ArrowFieldSpec(
+                    name=schema_field.name,
+                    dtype=schema_field.type,
+                    nullable=schema_field.nullable,
+                    metadata=meta,
+                    encoding=encoding,
+                )
+            )
+        meta_name, meta_version = schema_identity_from_metadata(schema.metadata)
+        required_non_null, key_fields = schema_constraints_from_metadata(schema.metadata)
+        resolved_name = meta_name or name
+        resolved_version = version if version is not None else meta_version
+        return cls(
+            name=resolved_name,
+            version=resolved_version,
+            fields=fields,
+            required_non_null=required_non_null,
+            key_fields=key_fields,
+        )
+
     def __post_init__(self) -> None:
         """Validate the table schema specification.
 
@@ -359,13 +438,15 @@ class TableSchemaSpec:
         column_defs = list(self.to_ibis_schema().to_sqlglot_column_defs(dialect=dialect_name))
         required = set(self.required_non_null) | set(self.key_fields)
         updated: list[exp.ColumnDef] = []
-        for field, column in zip(self.fields, column_defs, strict=True):
-            if field.name in required or not field.nullable:
-                constraints = list(column.args.get("constraints") or [])
+        for field_spec, column_def in zip(self.fields, column_defs, strict=True):
+            if field_spec.name in required or not field_spec.nullable:
+                constraints = list(column_def.args.get("constraints") or [])
                 constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
-                column = column.copy()
-                column.set("constraints", constraints)
-            updated.append(column)
+                updated_column = column_def.copy()
+                updated_column.set("constraints", constraints)
+            else:
+                updated_column = column_def
+            updated.append(updated_column)
         return updated
 
     def ddl_fingerprint(self, *, dialect: str | None = None) -> str:

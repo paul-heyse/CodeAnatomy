@@ -28,7 +28,7 @@ from cpg.table_utils import (
     assert_schema_metadata,
     encoding_columns_from_metadata,
 )
-from datafusion_engine.query_fragments import SqlFragment
+from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from datafusion_engine.schema_authority import (
     dataset_schema_from_context,
@@ -125,20 +125,20 @@ class EdgeBuildOptions:
 class EdgeBuildInputs:
     """Input tables for edge construction."""
 
-    relationship_outputs: Mapping[str, TableLike | DatasetSource | SqlFragment] | None = None
-    scip_symbol_relationships: TableLike | DatasetSource | SqlFragment | None = None
-    diagnostics_norm: TableLike | DatasetSource | SqlFragment | None = None
-    repo_files: TableLike | DatasetSource | SqlFragment | None = None
-    type_exprs_norm: TableLike | DatasetSource | SqlFragment | None = None
-    rt_signatures: TableLike | DatasetSource | SqlFragment | None = None
-    rt_signature_params: TableLike | DatasetSource | SqlFragment | None = None
-    rt_members: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_scope_edges: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_bindings: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_def_sites: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_use_sites: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_binding_resolutions: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_type_param_edges: TableLike | DatasetSource | SqlFragment | None = None
+    relationship_outputs: Mapping[str, TableLike | DatasetSource | ViewReference] | None = None
+    scip_symbol_relationships: TableLike | DatasetSource | ViewReference | None = None
+    diagnostics_norm: TableLike | DatasetSource | ViewReference | None = None
+    repo_files: TableLike | DatasetSource | ViewReference | None = None
+    type_exprs_norm: TableLike | DatasetSource | ViewReference | None = None
+    rt_signatures: TableLike | DatasetSource | ViewReference | None = None
+    rt_signature_params: TableLike | DatasetSource | ViewReference | None = None
+    rt_members: TableLike | DatasetSource | ViewReference | None = None
+    symtable_scope_edges: TableLike | DatasetSource | ViewReference | None = None
+    symtable_bindings: TableLike | DatasetSource | ViewReference | None = None
+    symtable_def_sites: TableLike | DatasetSource | ViewReference | None = None
+    symtable_use_sites: TableLike | DatasetSource | ViewReference | None = None
+    symtable_binding_resolutions: TableLike | DatasetSource | ViewReference | None = None
+    symtable_type_param_edges: TableLike | DatasetSource | ViewReference | None = None
 
 
 @dataclass(frozen=True)

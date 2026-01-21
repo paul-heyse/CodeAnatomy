@@ -33,9 +33,6 @@ def test_rule_ir_metadata_contains_decompile_and_sql() -> None:
     rule_ctx = SqlGlotRuleContext(
         rule=rule,
         source=source,
-        schema_map=None,
-        union_schema=None,
-        schema_ddl=None,
         plan_signature=None,
     )
     schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
@@ -72,9 +69,6 @@ def test_rule_ir_metadata_is_stable() -> None:
     rule_ctx = SqlGlotRuleContext(
         rule=rule,
         source=source,
-        schema_map=None,
-        union_schema=None,
-        schema_ddl=None,
         plan_signature=None,
     )
     schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())

@@ -25,30 +25,20 @@ def position_encoding_norm_expr(value: Value) -> Value:
     text = value.cast("string")
     normalized = text.strip().upper()
     as_int = normalized.try_cast("int32")
-    valid_int = as_int.isin([ENC_UTF8, ENC_UTF16, ENC_UTF32])
-    return (
-        ibis.case()
-        .when(
-            value.isnull(),
-            default,
-        )
-        .when(
-            valid_int,
-            as_int,
-        )
-        .when(
-            normalized.contains("UTF8"),
+    valid_int = as_int.isin(
+        [
             ibis.literal(ENC_UTF8, type="int32"),
-        )
-        .when(
-            normalized.contains("UTF16"),
             ibis.literal(ENC_UTF16, type="int32"),
-        )
-        .when(
-            normalized.contains("UTF32"),
             ibis.literal(ENC_UTF32, type="int32"),
-        )
-        .else_(default)
+        ]
+    )
+    return ibis.cases(
+        (value.isnull(), default),
+        (valid_int, as_int),
+        (normalized.contains("UTF8"), ibis.literal(ENC_UTF8, type="int32")),
+        (normalized.contains("UTF16"), ibis.literal(ENC_UTF16, type="int32")),
+        (normalized.contains("UTF32"), ibis.literal(ENC_UTF32, type="int32")),
+        else_=default,
     )
 
 

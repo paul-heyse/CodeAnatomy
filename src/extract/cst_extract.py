@@ -1205,7 +1205,7 @@ class CSTCollector(cst.CSTVisitor):
             call_bstart,
             call_bend,
         )
-        row = {
+        row: dict[str, object] = {
             **self._identity,
             "call_id": call_id,
             "call_bstart": call_bstart,
@@ -1307,7 +1307,8 @@ def _build_repo_manager(
             rel_paths.add(rel_path)
     if not rel_paths:
         return None
-    manager = FullRepoManager(options.repo_root, rel_paths, providers)
+    rel_paths_str = sorted(str(path) for path in rel_paths)
+    manager = FullRepoManager(options.repo_root, rel_paths_str, providers)
     manager.resolve_cache()
     return manager
 

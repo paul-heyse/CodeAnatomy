@@ -8,8 +8,6 @@ from dataclasses import dataclass
 import pyarrow as pa
 from datafusion import SessionContext
 
-from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
-
 _TABLE_DEFINITION_OVERRIDES: dict[int, dict[str, str]] = {}
 
 
@@ -62,38 +60,6 @@ def _rows_for_query(ctx: SessionContext, query: str) -> list[dict[str, object]]:
     """
     table = ctx.sql(query).to_arrow_table()
     return [dict(row) for row in table.to_pylist()]
-
-
-def _defaults_from_schema(schema: pa.Schema) -> dict[str, object]:
-    defaults: dict[str, object] = {}
-
-    def _walk_field(field: pa.Field, *, prefix: str) -> None:
-        path = f"{prefix}.{field.name}" if prefix else field.name
-        metadata = field.metadata or {}
-        default = metadata.get(DEFAULT_VALUE_META)
-        if default is not None:
-            defaults[path] = default.decode("utf-8", errors="replace")
-        _walk_dtype(field.type, prefix=path)
-
-    def _walk_dtype(dtype: pa.DataType, *, prefix: str) -> None:
-        if pa.types.is_struct(dtype):
-            for child in dtype:
-                _walk_field(child, prefix=prefix)
-            return
-        if (
-            pa.types.is_list(dtype)
-            or pa.types.is_large_list(dtype)
-            or pa.types.is_list_view(dtype)
-            or pa.types.is_large_list_view(dtype)
-        ):
-            _walk_dtype(dtype.value_type, prefix=prefix)
-            return
-        if pa.types.is_map(dtype):
-            _walk_dtype(dtype.item_type, prefix=prefix)
-
-    for field in schema:
-        _walk_field(field, prefix="")
-    return defaults
 
 
 @dataclass(frozen=True)
@@ -242,27 +208,7 @@ class SchemaIntrospector:
             if name is None or default is None:
                 continue
             defaults[str(name)] = default
-        if defaults:
-            return defaults
-        schema = self._arrow_schema_for_table(table_name)
-        if schema is None:
-            return defaults
-        return _defaults_from_schema(schema)
-
-    def _arrow_schema_for_table(self, table_name: str) -> pa.Schema | None:
-        try:
-            df = self.ctx.table(table_name)
-        except (KeyError, RuntimeError, TypeError, ValueError):
-            return None
-        schema = df.schema()
-        if isinstance(schema, pa.Schema):
-            return schema
-        to_arrow = getattr(schema, "to_arrow", None)
-        if callable(to_arrow):
-            resolved = to_arrow()
-            if isinstance(resolved, pa.Schema):
-                return resolved
-        return None
+        return defaults
 
     def table_logical_plan(self, table_name: str) -> str | None:
         """Return a logical plan description for a table when available.

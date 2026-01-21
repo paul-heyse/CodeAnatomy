@@ -9,7 +9,15 @@ from typing import cast
 import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
-from ibis.expr.types import ArrayValue, BooleanValue, NumericValue, Table, Value
+from ibis.expr.types import (
+    ArrayValue,
+    BooleanValue,
+    NumericValue,
+    StringValue,
+    StructValue,
+    Table,
+    Value,
+)
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
@@ -17,7 +25,7 @@ from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.ordering_policy import ordering_keys_for_schema
 from arrowdsl.schema.build import empty_table
 from datafusion_engine.extract_registry import dataset_schema as extract_dataset_schema
-from datafusion_engine.query_fragments import SqlFragment
+from datafusion_engine.nested_tables import ViewReference
 from ibis_engine.builtin_udfs import col_to_byte
 from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
@@ -56,7 +64,7 @@ _DEF_USE_OPS: tuple[str, ...] = ("IMPORT_NAME", "IMPORT_FROM")
 _DEF_USE_PREFIXES: tuple[str, ...] = ("STORE_", "DELETE_")
 _USE_PREFIXES: tuple[str, ...] = ("LOAD_",)
 
-IbisPlanSource = IbisPlan | Table | TableLike | SqlFragment
+IbisPlanSource = IbisPlan | Table | TableLike | ViewReference
 
 
 @dataclass
@@ -91,8 +99,8 @@ class IbisPlanCatalog:
             return ibis.memtable(empty)
         if isinstance(source, IbisPlan):
             return source.expr
-        if isinstance(source, SqlFragment):
-            expr = _sql_fragment_expr(self.backend, source)
+        if isinstance(source, ViewReference):
+            expr = _view_reference_expr(self.backend, source)
             self.tables[name] = expr
             return expr
         if isinstance(source, Table):
@@ -174,12 +182,8 @@ def type_exprs_plan_ibis(
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
 
 
-def _sql_fragment_expr(backend: BaseBackend, fragment: SqlFragment) -> Table:
-    sql_method = getattr(backend, "sql", None)
-    if not callable(sql_method):
-        msg = "Ibis backend does not support raw SQL fragments."
-        raise TypeError(msg)
-    return cast("Table", sql_method(fragment.sql))
+def _view_reference_expr(backend: BaseBackend, fragment: ViewReference) -> Table:
+    return backend.table(fragment.name)
 
 
 def type_nodes_plan_ibis(
@@ -718,67 +722,8 @@ def _symtable_bytecode_diag_expr(scopes: Table, code_units: Table, line_index: T
     ibis.expr.types.Table
         Diagnostics rows for symtable/bytecode consistency checks.
     """
-    function_scopes = scopes.filter(scopes.scope_type == ibis.literal("FUNCTION"))
-    code_qualpath = ibis.coalesce(code_units.co_qualname, code_units.qualpath)
-    joined = function_scopes.join(
-        code_units,
-        [
-            function_scopes.file_id == code_units.file_id,
-            function_scopes.qualpath == code_qualpath,
-        ],
-        how="left",
-    )
-    line_view = _line_index_view(line_index, prefix="sym")
-    joined = joined.join(
-        line_view,
-        [joined.file_id == line_view.sym_file_id, joined.lineno == line_view.sym_line_no],
-        how="left",
-    )
-    bstart = joined.sym_line_start_byte.cast("int64")
-    bend = ibis.coalesce(
-        joined.sym_line_end_byte.cast("int64"),
-        bstart + joined.sym_line_text.length().cast("int64"),
-    )
-    empty_list = ibis.literal([], type=pa.list_(pa.string()))
-    sym_params = ibis.coalesce(joined.function_partitions.parameters, empty_list)
-    sym_frees = ibis.coalesce(joined.function_partitions.frees, empty_list)
-    bc_freevars = ibis.coalesce(joined.freevars, empty_list)
-    sym_param_count = cast("ArrayValue", sym_params).length()
-    argcount = cast(
-        "NumericValue",
-        ibis.coalesce(joined.argcount, ibis.literal(0)).cast("int64"),
-    )
-    posonly = cast(
-        "NumericValue", ibis.coalesce(joined.posonlyargcount, ibis.literal(0)).cast("int64")
-    )
-    kwonly = cast(
-        "NumericValue",
-        ibis.coalesce(joined.kwonlyargcount, ibis.literal(0)).cast("int64"),
-    )
-    has_varargs = ibis.coalesce(joined.flags_detail.has_varargs, ibis.literal(False))
-    has_varkeywords = ibis.coalesce(joined.flags_detail.has_varkeywords, ibis.literal(False))
-    var_extra = cast(
-        "NumericValue",
-        ibis.ifelse(has_varargs, ibis.literal(1), ibis.literal(0)).cast("int64"),
-    ) + cast(
-        "NumericValue",
-        ibis.ifelse(has_varkeywords, ibis.literal(1), ibis.literal(0)).cast("int64"),
-    )
-    bc_param_count = argcount + posonly + kwonly + var_extra
-    param_mismatch = sym_param_count != bc_param_count
-    freevars_mismatch = sym_frees != bc_freevars
-    base = joined.select(
-        file_id=joined.file_id,
-        path=joined.path,
-        bstart=bstart,
-        bend=bend,
-        scope_id=joined.scope_id,
-        code_unit_id=joined.code_unit_id,
-        sym_param_count=sym_param_count,
-        bc_param_count=bc_param_count,
-        sym_free_count=cast("ArrayValue", sym_frees).length(),
-        bc_free_count=cast("ArrayValue", bc_freevars).length(),
-    )
+    joined = _symtable_bytecode_join(scopes, code_units=code_units, line_index=line_index)
+    base, param_mismatch, freevars_mismatch = _symtable_bytecode_base(joined)
     param_message = ibis.concat(
         ibis.literal("symtable param count mismatch: symtable="),
         base.sym_param_count.cast("string"),
@@ -799,38 +744,147 @@ def _symtable_bytecode_diag_expr(scopes: Table, code_units: Table, line_index: T
         ibis.literal(" code_unit_id="),
         base.code_unit_id.cast("string"),
     )
-    param_diag = base.select(
-        file_id=base.file_id,
-        path=base.path,
-        bstart=base.bstart,
-        bend=base.bend,
-        severity=ibis.literal("WARNING"),
+    param_diag = _symtable_diag_row(
+        base,
         message=param_message,
-        diag_source=ibis.literal("symtable_bytecode"),
-        code=ibis.literal("SYM_BC_PARAM_COUNT_MISMATCH"),
-        details=ibis_null_literal(DIAG_DETAILS_TYPE),
-        line_base=ibis.literal(1),
-        col_unit=ibis.literal("utf32"),
-        end_exclusive=ibis.literal(True),
+        code="SYM_BC_PARAM_COUNT_MISMATCH",
     ).filter(param_mismatch & base.code_unit_id.notnull())
-    free_diag = base.select(
-        file_id=base.file_id,
-        path=base.path,
-        bstart=base.bstart,
-        bend=base.bend,
-        severity=ibis.literal("WARNING"),
+    free_diag = _symtable_diag_row(
+        base,
         message=free_message,
-        diag_source=ibis.literal("symtable_bytecode"),
-        code=ibis.literal("SYM_BC_FREEVARS_MISMATCH"),
-        details=ibis_null_literal(DIAG_DETAILS_TYPE),
-        line_base=ibis.literal(1),
-        col_unit=ibis.literal("utf32"),
-        end_exclusive=ibis.literal(True),
+        code="SYM_BC_FREEVARS_MISMATCH",
     ).filter(freevars_mismatch & base.code_unit_id.notnull())
     combined = param_diag.union(free_diag, distinct=False)
     return combined.filter(
         combined.bstart.notnull() & combined.bend.notnull() & combined.path.notnull()
     )
+
+
+def _symtable_bytecode_join(
+    scopes: Table,
+    *,
+    code_units: Table,
+    line_index: Table,
+) -> Table:
+    function_scopes = scopes.filter(scopes.scope_type == ibis.literal("FUNCTION"))
+    code_qualpath = ibis.coalesce(code_units.co_qualname, code_units.qualpath)
+    joined = function_scopes.join(
+        code_units,
+        [
+            function_scopes.file_id == code_units.file_id,
+            function_scopes.qualpath == code_qualpath,
+        ],
+        how="left",
+    )
+    line_view = _line_index_view(line_index, prefix="sym")
+    return joined.join(
+        line_view,
+        [joined.file_id == line_view.sym_file_id, joined.lineno == line_view.sym_line_no],
+        how="left",
+    )
+
+
+def _symtable_bytecode_base(
+    joined: Table,
+) -> tuple[Table, BooleanValue, BooleanValue]:
+    bstart = joined.sym_line_start_byte.cast("int64")
+    sym_line_text = cast("StringValue", joined.sym_line_text)
+    bend = ibis.coalesce(
+        joined.sym_line_end_byte.cast("int64"),
+        bstart + sym_line_text.length().cast("int64"),
+    )
+    sym_param_count, bc_param_count = _symtable_param_counts(joined)
+    _sym_frees, _bc_freevars, sym_free_count, bc_free_count, freevars_mismatch = (
+        _symtable_freevar_counts(joined)
+    )
+    param_mismatch = sym_param_count != bc_param_count
+    base = joined.select(
+        file_id=joined.file_id,
+        path=joined.path,
+        bstart=bstart,
+        bend=bend,
+        scope_id=joined.scope_id,
+        code_unit_id=joined.code_unit_id,
+        sym_param_count=sym_param_count,
+        bc_param_count=bc_param_count,
+        sym_free_count=sym_free_count,
+        bc_free_count=bc_free_count,
+    )
+    return base, param_mismatch, freevars_mismatch
+
+
+def _symtable_param_counts(
+    joined: Table,
+) -> tuple[NumericValue, NumericValue]:
+    empty_list = _empty_string_list()
+    function_partitions = cast("StructValue", joined.function_partitions)
+    sym_params = ibis.coalesce(
+        function_partitions["parameters"],
+        empty_list,
+    )
+    sym_param_count = cast("ArrayValue", sym_params).length()
+    argcount = _coalesce_int64(joined.argcount)
+    posonly = _coalesce_int64(joined.posonlyargcount)
+    kwonly = _coalesce_int64(joined.kwonlyargcount)
+    flags_detail = cast("StructValue", joined.flags_detail)
+    has_varargs = ibis.coalesce(
+        flags_detail["has_varargs"],
+        ibis.literal(value=False),
+    )
+    has_varkeywords = ibis.coalesce(
+        flags_detail["has_varkeywords"],
+        ibis.literal(value=False),
+    )
+    var_extra = cast(
+        "NumericValue",
+        ibis.ifelse(has_varargs, ibis.literal(value=1), ibis.literal(value=0)).cast("int64"),
+    ) + cast(
+        "NumericValue",
+        ibis.ifelse(has_varkeywords, ibis.literal(value=1), ibis.literal(value=0)).cast("int64"),
+    )
+    bc_param_count = argcount + posonly + kwonly + var_extra
+    return sym_param_count, bc_param_count
+
+
+def _symtable_freevar_counts(
+    joined: Table,
+) -> tuple[Value, Value, NumericValue, NumericValue, BooleanValue]:
+    empty_list = _empty_string_list()
+    function_partitions = cast("StructValue", joined.function_partitions)
+    sym_frees = ibis.coalesce(
+        function_partitions["frees"],
+        empty_list,
+    )
+    bc_freevars = ibis.coalesce(joined.freevars, empty_list)
+    sym_free_count = cast("ArrayValue", sym_frees).length()
+    bc_free_count = cast("ArrayValue", bc_freevars).length()
+    freevars_mismatch = sym_frees != bc_freevars
+    return sym_frees, bc_freevars, sym_free_count, bc_free_count, freevars_mismatch
+
+
+def _symtable_diag_row(base: Table, *, message: StringValue, code: str) -> Table:
+    return base.select(
+        file_id=base.file_id,
+        path=base.path,
+        bstart=base.bstart,
+        bend=base.bend,
+        severity=ibis.literal("WARNING"),
+        message=message,
+        diag_source=ibis.literal("symtable_bytecode"),
+        code=ibis.literal(code),
+        details=ibis_null_literal(DIAG_DETAILS_TYPE),
+        line_base=ibis.literal(1),
+        col_unit=ibis.literal("utf32"),
+        end_exclusive=ibis.literal(value=True),
+    )
+
+
+def _empty_string_list() -> Value:
+    return ibis.literal([], type=pa.list_(pa.string()))
+
+
+def _coalesce_int64(value: Value) -> NumericValue:
+    return cast("NumericValue", ibis.coalesce(value, ibis.literal(value=0)).cast("int64"))
 
 
 def _scip_diag_context(diags: Table, docs: Table, line_index: Table) -> _ScipDiagContext:

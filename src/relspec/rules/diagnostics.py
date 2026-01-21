@@ -9,15 +9,10 @@ from typing import Literal
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import SchemaLike
 from arrowdsl.spec.io import rows_from_table, table_from_rows
 from datafusion_engine.kernel_registry import KernelCapability
 from relspec.rules.definitions import RuleDomain
-from sqlglot_tools.bridge import (
-    SqlGlotDiagnostics,
-    SqlGlotRelationDiff,
-    missing_schema_columns,
-)
+from sqlglot_tools.bridge import SqlGlotDiagnostics, SqlGlotRelationDiff
 from sqlglot_tools.optimizer import (
     default_sqlglot_policy,
     plan_fingerprint,
@@ -70,17 +65,6 @@ class RuleDiagnostic:
             "message": self.message,
             "metadata": dict(self.metadata) or None,
         }
-
-
-@dataclass(frozen=True)
-class MissingColumnsDiagnosticOptions:
-    """Optional metadata for missing-column diagnostics."""
-
-    template: str | None = None
-    rule_name: str | None = None
-    severity: RuleDiagnosticSeverity = "error"
-    plan_signature: str | None = None
-    schema_ddl: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,40 +122,6 @@ def rule_diagnostics_from_table(table: pa.Table) -> tuple[RuleDiagnostic, ...]:
             metadata=_metadata_from_row(row.get("metadata")),
         )
         for row in rows_from_table(table)
-    )
-
-
-def sqlglot_missing_columns_diagnostic(
-    diagnostics: SqlGlotDiagnostics,
-    *,
-    domain: RuleDomain,
-    schema: SchemaLike,
-    options: MissingColumnsDiagnosticOptions | None = None,
-) -> RuleDiagnostic | None:
-    """Return a diagnostic when SQLGlot references missing columns.
-
-    Returns
-    -------
-    RuleDiagnostic | None
-        Diagnostic describing missing columns, or ``None`` when none are missing.
-    """
-    missing = missing_schema_columns(diagnostics.columns, schema=schema.names)
-    if not missing:
-        return None
-    options = options or MissingColumnsDiagnosticOptions()
-    metadata = {"missing_columns": ",".join(missing)}
-    if diagnostics.tables:
-        metadata["tables"] = ",".join(diagnostics.tables)
-    if options.schema_ddl:
-        metadata["schema_ddl"] = options.schema_ddl
-    return RuleDiagnostic(
-        domain=domain,
-        template=options.template,
-        rule_name=options.rule_name,
-        severity=options.severity,
-        message="SQLGlot references columns not present in the schema.",
-        plan_signature=options.plan_signature,
-        metadata=metadata,
     )
 
 
@@ -453,7 +403,6 @@ def _parse_severity(value: object | None) -> RuleDiagnosticSeverity:
 __all__ = [
     "RULE_DIAGNOSTIC_SCHEMA",
     "KernelLaneDiagnosticOptions",
-    "MissingColumnsDiagnosticOptions",
     "RuleDiagnostic",
     "RuleDiagnosticSeverity",
     "SqlGlotMetadataDiagnosticOptions",
@@ -461,6 +410,5 @@ __all__ = [
     "rule_diagnostic_table",
     "rule_diagnostics_from_table",
     "sqlglot_metadata_diagnostic",
-    "sqlglot_missing_columns_diagnostic",
     "substrait_plan_bytes",
 ]

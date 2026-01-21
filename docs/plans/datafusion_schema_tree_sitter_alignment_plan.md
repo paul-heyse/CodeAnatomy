@@ -86,7 +86,7 @@ def _validate_span_semantic_type(ctx: SessionContext, *, table: str, column: str
 ---
 
 ## Scope 3: Schema-aware diagnostics and plan schema capture
-Status: In progress
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/runtime.py`
@@ -107,12 +107,12 @@ diagnostics_sink.record_artifact("datafusion_tree_sitter_plan_schema_v1", payloa
 - [x] Enable `datafusion.explain.show_schema` in runtime profile defaults.
 - [x] Capture `display_indent_schema()` for `ts_*` views in diagnostics.
 - [x] Record `information_schema.df_settings` to track schema-affecting config.
-- [ ] Use collected SQL parser spans in error artifacts when available.
+- [x] Use collected SQL parser spans in error artifacts when available.
 
 ---
 
 ## Scope 4: Canonical schema override at registration (reduce drift)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/registry_bridge.py`
@@ -132,15 +132,15 @@ df = ctx.register_listing_table(
 ```
 
 ### Implementation checklist
-- [ ] Pass canonical schema overrides for registered extract datasets.
-- [ ] Default `skip_metadata=True` for Parquet sources that embed conflicting metadata.
-- [ ] Apply `file_sort_order` and partition columns from schema metadata.
+- [x] Pass canonical schema overrides for registered extract datasets.
+- [x] Default `skip_metadata=True` for Parquet sources that embed conflicting metadata.
+- [x] Apply `file_sort_order` and partition columns from schema metadata.
 - [ ] Remove bespoke schema alignment fixes in view SQL once overrides are stable.
 
 ---
 
 ## Scope 5: Schema evolution adapters at scan boundary (Rust-backed)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `rust/` (new adapter module)
@@ -154,9 +154,9 @@ let rewritten = adapter.rewrite(physical_expr)?;
 ```
 
 ### Implementation checklist
-- [ ] Implement a `PhysicalExprAdapter` policy for missing columns in old files.
-- [ ] Fill new fields with defaults (or NULL) at scan time, not in SQL views.
-- [ ] Wire adapter factory into file scans for Parquet/listing tables.
+- [x] Implement a `PhysicalExprAdapter` policy for missing columns in old files.
+- [x] Fill new fields with defaults (or NULL) at scan time, not in SQL views.
+- [x] Wire adapter factory into file scans for Parquet/listing tables.
 - [ ] Document schema evolution rules per dataset (strict, additive, cast).
 
 ---
@@ -185,7 +185,7 @@ FROM ts_nodes
 ---
 
 ## Scope 7: Metadata caches, ordering hints, and adaptive execution
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/runtime.py`
@@ -203,15 +203,15 @@ config = (
 ```
 
 ### Implementation checklist
-- [ ] Enable metadata/statistics/list-files caches in the runtime profile.
-- [ ] Record cache settings and cache metrics in diagnostics.
-- [ ] Use `WITH ORDER` or `file_sort_order` for stable ordering contracts.
-- [ ] Enable dynamic filters and TopK pushdown for tree-sitter cross-check queries.
+- [x] Enable metadata/statistics/list-files caches in the runtime profile.
+- [x] Record cache settings and cache metrics in diagnostics.
+- [x] Use `WITH ORDER` or `file_sort_order` for stable ordering contracts.
+- [x] Enable dynamic filters and TopK pushdown for tree-sitter cross-check queries.
 
 ---
 
 ## Scope 8: Delta-backed schema contracts for extracts (optional)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/registry_bridge.py`
@@ -225,15 +225,15 @@ schema = dt.schema().to_pyarrow()
 ```
 
 ### Implementation checklist
-- [ ] Register DeltaTable providers when extracts are stored in Delta.
-- [ ] Compare Delta log schema vs DataFusion schema fingerprints.
-- [ ] Enforce schema-on-write for extract materializations.
-- [ ] Use version/time-travel selectors for reproducible schema diagnostics.
+- [x] Register DeltaTable providers when extracts are stored in Delta.
+- [x] Compare Delta log schema vs DataFusion schema fingerprints.
+- [x] Enforce schema-on-write for extract materializations.
+- [x] Use version/time-travel selectors for reproducible schema diagnostics.
 
 ---
 
 ## Scope 9: Cleanup and bespoke deprecations
-Status: Planned
+Status: In progress
 
 ### Target file list
 - `src/datafusion_engine/schema_registry.py`

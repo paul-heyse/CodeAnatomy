@@ -531,7 +531,7 @@ def _normalize_span_expr(column: str) -> Expr:
     is_numeric = f.regexp_like(text, lit(_SPAN_NUMERIC_REGEX))
     normalized = text.cast(pa.int64())
     default_value = lit(None).cast(pa.int64())
-    return f.case(lit(value=True)).when(is_numeric, normalized).otherwise(default_value).end()
+    return f.case(lit(value=True)).when(is_numeric, normalized).otherwise(default_value)
 
 
 def _interval_order_exprs(

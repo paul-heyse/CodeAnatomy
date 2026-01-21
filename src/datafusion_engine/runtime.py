@@ -766,7 +766,15 @@ def _table_dfschema_tree(ctx: SessionContext, *, name: str) -> str:
 
 
 def _sql_parser_dialect(profile: DataFusionRuntimeProfile) -> str:
-    resolved = profile._resolved_schema_hardening()
+    if profile.schema_hardening is not None:
+        resolved = profile.schema_hardening
+    elif profile.schema_hardening_name is None:
+        resolved = None
+    else:
+        resolved = SCHEMA_HARDENING_PRESETS.get(
+            profile.schema_hardening_name,
+            SCHEMA_HARDENING_PRESETS["schema_hardening"],
+        )
     if resolved is not None and resolved.parser_dialect:
         return resolved.parser_dialect
     return "datafusion"

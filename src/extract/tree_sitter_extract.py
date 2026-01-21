@@ -18,6 +18,7 @@ from tree_sitter import (
     Parser,
     QueryCursor,
     Range,
+    TreeCursor,
 )
 
 from arrowdsl.core.execution_context import ExecutionContext
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 type Row = dict[str, object]
 
 PY_LANGUAGE = Language(tree_sitter_python.language())
+SEMVER_PARTS = 3
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,165 @@ class _ImportInfo:
     level: int | None
 
 
+@dataclass(frozen=True)
+class _QueryContext:
+    root: Node
+    data: bytes
+    file_ctx: FileContext
+    options: TreeSitterExtractOptions
+    query_pack: TreeSitterQueryPack
+    ranges: Sequence[Range]
+
+
+@dataclass
+class _QueryCollector:
+    file_ctx: FileContext
+    data: bytes
+    options: TreeSitterExtractOptions
+    captures: list[Row] = field(default_factory=list)
+    defs: list[Row] = field(default_factory=list)
+    calls: list[Row] = field(default_factory=list)
+    imports: list[Row] = field(default_factory=list)
+    docstrings: list[Row] = field(default_factory=list)
+    stats: _QueryStats = field(default_factory=_QueryStats)
+    import_alias_index: dict[str, int] = field(default_factory=dict)
+
+    def record_match(
+        self,
+        *,
+        query_name: str,
+        pattern_index: int,
+        capture_map: Mapping[str, object],
+    ) -> None:
+        self.stats.match_count += 1
+        if self.options.include_captures:
+            self._record_captures(query_name, pattern_index, capture_map)
+        if query_name == "defs" and self.options.include_defs:
+            self._record_defs(capture_map)
+        if query_name == "calls" and self.options.include_calls:
+            self._record_calls(capture_map)
+        if query_name == "imports" and self.options.include_imports:
+            self._record_imports(capture_map)
+        if query_name == "docstrings" and self.options.include_docstrings:
+            self._record_docstrings(capture_map)
+
+    def _record_captures(
+        self,
+        query_name: str,
+        pattern_index: int,
+        capture_map: Mapping[str, object],
+    ) -> None:
+        for capture_name, capture_value in capture_map.items():
+            for node in _query_capture_nodes(capture_value):
+                self.captures.append(
+                    _capture_entry(
+                        node,
+                        file_ctx=self.file_ctx,
+                        data=self.data,
+                        options=self.options,
+                        info=_CaptureInfo(
+                            query_name=query_name,
+                            capture_name=capture_name,
+                            pattern_index=pattern_index,
+                        ),
+                    )
+                )
+                self.stats.capture_count += 1
+
+    def _record_defs(self, capture_map: Mapping[str, object]) -> None:
+        def_node = _first_capture_node(capture_map.get("def.node"))
+        name_node = _first_capture_node(capture_map.get("def.name"))
+        if def_node is None:
+            return
+        name_text = None
+        if name_node is not None:
+            name_text = _node_text_value(name_node, data=self.data, options=self.options)
+        self.defs.append(_def_row(def_node, file_ctx=self.file_ctx, name=name_text))
+
+    def _record_calls(self, capture_map: Mapping[str, object]) -> None:
+        call_node = _first_capture_node(capture_map.get("call.node"))
+        callee_node = _first_capture_node(
+            capture_map.get("call.name") or capture_map.get("call.attr")
+        )
+        if call_node is None or callee_node is None:
+            return
+        self.calls.append(
+            _call_row(
+                call_node,
+                file_ctx=self.file_ctx,
+                callee=callee_node,
+                data=self.data,
+                options=self.options,
+            )
+        )
+
+    def _record_imports(self, capture_map: Mapping[str, object]) -> None:
+        import_node = _first_capture_node(capture_map.get("import.node"))
+        if import_node is None:
+            return
+        module_node = _first_capture_node(capture_map.get("import.module"))
+        from_node = _first_capture_node(capture_map.get("import.from"))
+        relative_node = _first_capture_node(capture_map.get("import.relative"))
+        name_node = _first_capture_node(capture_map.get("import.name"))
+        alias_node = _first_capture_node(capture_map.get("import.alias"))
+        kind, module, level = _resolve_import_module(
+            module_node=module_node,
+            from_node=from_node,
+            relative_node=relative_node,
+            data=self.data,
+            options=self.options,
+        )
+        name = _node_text_value(name_node, data=self.data, options=self.options)
+        asname = _node_text_value(alias_node, data=self.data, options=self.options)
+        alias_key = _node_id(self.file_ctx, import_node)
+        alias_index = self.import_alias_index.get(alias_key, 0)
+        self.import_alias_index[alias_key] = alias_index + 1
+        if kind == "Import":
+            info = _ImportInfo(
+                kind=kind,
+                module=None,
+                name=module or name,
+                asname=asname,
+                alias_index=alias_index,
+                level=None,
+            )
+        else:
+            info = _ImportInfo(
+                kind=kind,
+                module=module,
+                name=name,
+                asname=asname,
+                alias_index=alias_index,
+                level=level,
+            )
+        self.imports.append(_import_row(import_node, file_ctx=self.file_ctx, info=info))
+
+    def _record_docstrings(self, capture_map: Mapping[str, object]) -> None:
+        owner_node = _first_capture_node(capture_map.get("doc.owner"))
+        doc_node = _first_capture_node(capture_map.get("doc.string"))
+        if owner_node is None or doc_node is None:
+            return
+        self.docstrings.append(
+            _docstring_row(
+                owner=owner_node,
+                doc_node=doc_node,
+                file_ctx=self.file_ctx,
+                data=self.data,
+                options=self.options,
+            )
+        )
+
+    def build(self) -> _QueryRows:
+        return _QueryRows(
+            captures=self.captures,
+            defs=self.defs,
+            calls=self.calls,
+            imports=self.imports,
+            docstrings=self.docstrings,
+            stats=self.stats,
+        )
+
+
 def _assert_language_abi(lang: Language) -> None:
     if not (MIN_COMPATIBLE_LANGUAGE_VERSION <= lang.abi_version <= LANGUAGE_VERSION):
         msg = f"Tree-sitter ABI mismatch: {lang.abi_version}"
@@ -139,9 +300,12 @@ def _assert_language_abi(lang: Language) -> None:
 
 def _parser(options: TreeSitterExtractOptions) -> Parser:
     _assert_language_abi(PY_LANGUAGE)
-    if options.parser_timeout_micros is None:
-        return Parser(PY_LANGUAGE)
-    return Parser(PY_LANGUAGE, timeout_micros=int(options.parser_timeout_micros))
+    parser = Parser(PY_LANGUAGE)
+    if options.parser_timeout_micros is not None:
+        set_timeout = getattr(parser, "set_timeout_micros", None)
+        if callable(set_timeout):
+            set_timeout(int(options.parser_timeout_micros))
+    return parser
 
 
 @cache
@@ -215,6 +379,66 @@ def _node_text(
         text_bytes = text_bytes[:max_bytes]
         truncated = True
     return text_bytes.decode("utf-8", errors="replace"), truncated
+
+
+def _node_text_value(
+    node: Node | None,
+    *,
+    data: bytes,
+    options: TreeSitterExtractOptions,
+    allow_non_leaf: bool = True,
+) -> str | None:
+    if node is None:
+        return None
+    text, _ = _node_text(
+        node,
+        data=data,
+        max_bytes=options.max_text_bytes,
+        allow_non_leaf=allow_non_leaf,
+    )
+    return text
+
+
+def _resolve_import_module(
+    *,
+    module_node: Node | None,
+    from_node: Node | None,
+    relative_node: Node | None,
+    data: bytes,
+    options: TreeSitterExtractOptions,
+) -> tuple[str, str | None, int | None]:
+    kind = "Import"
+    module = None
+    level = None
+    if from_node is not None:
+        kind = "ImportFrom"
+        module = _node_text_value(
+            from_node,
+            data=data,
+            options=options,
+            allow_non_leaf=True,
+        )
+        level = 0
+    if relative_node is not None:
+        kind = "ImportFrom"
+        rel_text = _node_text_value(
+            relative_node,
+            data=data,
+            options=options,
+            allow_non_leaf=True,
+        )
+        if rel_text is not None:
+            dot_count = len(rel_text) - len(rel_text.lstrip("."))
+            level = dot_count
+            module = rel_text[dot_count:] or None
+    if module_node is not None and kind == "Import":
+        module = _node_text_value(
+            module_node,
+            data=data,
+            options=options,
+            allow_non_leaf=True,
+        )
+    return kind, module, level
 
 
 def _node_entry(
@@ -444,25 +668,36 @@ def _iter_nodes(root: Node) -> Iterator[tuple[Node, Node | None, str | None, int
     child_indices: list[int] = []
     while True:
         node = cursor.node
+        if node is None:
+            return
         parent = node.parent
         child_index = child_indices[-1] if child_indices else None
         yield node, parent, cursor.field_name, child_index
-        if cursor.goto_first_child():
-            child_indices.append(0)
-            continue
+        if not _advance_cursor(cursor, child_indices):
+            return
+
+
+def _advance_cursor(cursor: TreeCursor, child_indices: list[int]) -> bool:
+    if cursor.goto_first_child():
+        child_indices.append(0)
+        return True
+    if cursor.goto_next_sibling():
+        if child_indices:
+            child_indices[-1] += 1
+        return True
+    return _ascend_to_next_sibling(cursor, child_indices)
+
+
+def _ascend_to_next_sibling(cursor: TreeCursor, child_indices: list[int]) -> bool:
+    while True:
+        if not cursor.goto_parent():
+            return False
+        if child_indices:
+            child_indices.pop()
         if cursor.goto_next_sibling():
             if child_indices:
                 child_indices[-1] += 1
-            continue
-        while True:
-            if not cursor.goto_parent():
-                return
-            if child_indices:
-                child_indices.pop()
-            if cursor.goto_next_sibling():
-                if child_indices:
-                    child_indices[-1] += 1
-                break
+            return True
 
 
 def _query_capture_nodes(value: object) -> list[Node]:
@@ -481,8 +716,7 @@ def _first_capture_node(value: object) -> Node | None:
 def _match_key(pattern_index: int, captures: Mapping[str, object]) -> tuple[int, tuple[int, ...]]:
     ids: list[int] = []
     for name in sorted(captures):
-        for node in _query_capture_nodes(captures[name]):
-            ids.append(int(node.id))
+        ids.extend(int(node.id) for node in _query_capture_nodes(captures[name]))
     return pattern_index, tuple(ids)
 
 
@@ -506,184 +740,34 @@ def _iter_query_matches(
             yield pattern_index, captures
 
 
-def _collect_queries(
-    *,
-    root: Node,
-    data: bytes,
-    file_ctx: FileContext,
-    options: TreeSitterExtractOptions,
-    query_pack: TreeSitterQueryPack,
-    ranges: Sequence[Range],
-) -> _QueryRows:
-    captures: list[Row] = []
-    defs: list[Row] = []
-    calls: list[Row] = []
-    imports: list[Row] = []
-    docstrings: list[Row] = []
-    stats = _QueryStats()
-    import_alias_index: dict[str, int] = {}
-    for query_name, query in query_pack.queries.items():
+def _collect_queries(context: _QueryContext) -> _QueryRows:
+    collector = _QueryCollector(
+        file_ctx=context.file_ctx,
+        data=context.data,
+        options=context.options,
+    )
+    for query_name, query in context.query_pack.queries.items():
         cursor = QueryCursor(
             query,
-            match_limit=options.query_match_limit,
-            timeout_micros=options.query_timeout_micros,
+            match_limit=context.options.query_match_limit,
         )
+        if context.options.query_timeout_micros is not None:
+            set_timeout = getattr(cursor, "set_timeout_micros", None)
+            if callable(set_timeout):
+                set_timeout(int(context.options.query_timeout_micros))
         for pattern_index, capture_map in _iter_query_matches(
             cursor,
-            root=root,
-            ranges=ranges,
+            root=context.root,
+            ranges=context.ranges,
         ):
-            stats.match_count += 1
-            if options.include_captures:
-                for capture_name, capture_value in capture_map.items():
-                    for node in _query_capture_nodes(capture_value):
-                        captures.append(
-                            _capture_entry(
-                                node,
-                                file_ctx=file_ctx,
-                                data=data,
-                                options=options,
-                                query_name=query_name,
-                                capture_name=capture_name,
-                                pattern_index=pattern_index,
-                            )
-                        )
-                        stats.capture_count += 1
-            if query_name == "defs" and options.include_defs:
-                def_node = _first_capture_node(capture_map.get("def.node"))
-                name_node = _first_capture_node(capture_map.get("def.name"))
-                if def_node is not None:
-                    name_text = None
-                    if name_node is not None:
-                        name_text, _ = _node_text(
-                            name_node,
-                            data=data,
-                            max_bytes=options.max_text_bytes,
-                        )
-                    defs.append(_def_row(def_node, file_ctx=file_ctx, name=name_text))
-            if query_name == "calls" and options.include_calls:
-                call_node = _first_capture_node(capture_map.get("call.node"))
-                callee_node = _first_capture_node(
-                    capture_map.get("call.name") or capture_map.get("call.attr")
-                )
-                if call_node is not None and callee_node is not None:
-                    calls.append(
-                        _call_row(
-                            call_node,
-                            file_ctx=file_ctx,
-                            callee=callee_node,
-                            data=data,
-                            options=options,
-                        )
-                    )
-            if query_name == "imports" and options.include_imports:
-                import_node = _first_capture_node(capture_map.get("import.node"))
-                if import_node is None:
-                    continue
-                module_node = _first_capture_node(capture_map.get("import.module"))
-                from_node = _first_capture_node(capture_map.get("import.from"))
-                relative_node = _first_capture_node(capture_map.get("import.relative"))
-                name_node = _first_capture_node(capture_map.get("import.name"))
-                alias_node = _first_capture_node(capture_map.get("import.alias"))
-                module = None
-                level = None
-                kind = "Import"
-                if from_node is not None:
-                    kind = "ImportFrom"
-                    module, _ = _node_text(
-                        from_node,
-                        data=data,
-                        max_bytes=options.max_text_bytes,
-                        allow_non_leaf=True,
-                    )
-                    level = 0
-                if relative_node is not None:
-                    kind = "ImportFrom"
-                    rel_text, _ = _node_text(
-                        relative_node,
-                        data=data,
-                        max_bytes=options.max_text_bytes,
-                        allow_non_leaf=True,
-                    )
-                    if rel_text is not None:
-                        dot_count = len(rel_text) - len(rel_text.lstrip("."))
-                        level = dot_count
-                        module = rel_text[dot_count:] or None
-                if module_node is not None and kind == "Import":
-                    module, _ = _node_text(
-                        module_node,
-                        data=data,
-                        max_bytes=options.max_text_bytes,
-                        allow_non_leaf=True,
-                    )
-                name = None
-                asname = None
-                if name_node is not None:
-                    name, _ = _node_text(
-                        name_node,
-                        data=data,
-                        max_bytes=options.max_text_bytes,
-                        allow_non_leaf=True,
-                    )
-                if alias_node is not None:
-                    asname, _ = _node_text(
-                        alias_node,
-                        data=data,
-                        max_bytes=options.max_text_bytes,
-                        allow_non_leaf=True,
-                    )
-                alias_key = _node_id(file_ctx, import_node)
-                alias_index = import_alias_index.get(alias_key, 0)
-                import_alias_index[alias_key] = alias_index + 1
-                if kind == "Import":
-                    imports.append(
-                        _import_row(
-                            import_node,
-                            file_ctx=file_ctx,
-                            kind=kind,
-                            module=None,
-                            name=module or name,
-                            asname=asname,
-                            alias_index=alias_index,
-                            level=None,
-                        )
-                    )
-                else:
-                    imports.append(
-                        _import_row(
-                            import_node,
-                            file_ctx=file_ctx,
-                            kind=kind,
-                            module=module,
-                            name=name,
-                            asname=asname,
-                            alias_index=alias_index,
-                            level=level,
-                        )
-                    )
-            if query_name == "docstrings" and options.include_docstrings:
-                owner_node = _first_capture_node(capture_map.get("doc.owner"))
-                doc_node = _first_capture_node(capture_map.get("doc.string"))
-                if owner_node is not None and doc_node is not None:
-                    docstrings.append(
-                        _docstring_row(
-                            owner=owner_node,
-                            doc_node=doc_node,
-                            file_ctx=file_ctx,
-                            data=data,
-                            options=options,
-                        )
-                    )
+            collector.record_match(
+                query_name=query_name,
+                pattern_index=pattern_index,
+                capture_map=capture_map,
+            )
         if cursor.did_exceed_match_limit:
-            stats.match_limit_exceeded = True
-    return _QueryRows(
-        captures=captures,
-        defs=defs,
-        calls=calls,
-        imports=imports,
-        docstrings=docstrings,
-        stats=stats,
-    )
+            collector.stats.match_limit_exceeded = True
+    return collector.build()
 
 
 def extract_ts(
@@ -855,36 +939,109 @@ def _extract_ts_file_row(
     )
     tree = parse_result.tree if parse_result is not None else None
     if tree is None:
-        attrs = _file_attrs(
+        return _empty_ts_file_row(
             file_ctx=file_ctx,
+            options=options,
             query_pack=query_pack,
             parse_stats=parse_stats,
-            node_stats=_NodeStats(),
+        )
+    root = tree.root_node
+    node_rows, edge_rows, error_rows, missing_rows, node_stats = _collect_node_rows(
+        root,
+        file_ctx=file_ctx,
+        data=data,
+        options=options,
+    )
+    query_rows = None
+    query_ranges = parse_result.changed_ranges if options.incremental else ()
+    if query_pack is not None:
+        query_rows = _collect_queries(
+            _QueryContext(
+                root=root,
+                data=data,
+                file_ctx=file_ctx,
+                options=options,
+                query_pack=query_pack,
+                ranges=query_ranges,
+            )
+        )
+    attrs = _file_attrs(
+        file_ctx=file_ctx,
+        query_pack=query_pack,
+        parse_stats=parse_stats,
+        node_stats=node_stats,
+        query_stats=query_rows.stats if query_rows is not None else None,
+    )
+    return {
+        "repo": options.repo_id,
+        "path": file_ctx.path,
+        "file_id": file_ctx.file_id,
+        "nodes": node_rows if options.include_nodes else [],
+        "edges": edge_rows if options.include_edges else [],
+        "errors": error_rows if options.include_errors else [],
+        "missing": missing_rows if options.include_missing else [],
+        "captures": query_rows.captures if query_rows and options.include_captures else [],
+        "defs": query_rows.defs if query_rows and options.include_defs else [],
+        "calls": query_rows.calls if query_rows and options.include_calls else [],
+        "imports": query_rows.imports if query_rows and options.include_imports else [],
+        "docstrings": query_rows.docstrings if query_rows and options.include_docstrings else [],
+        "stats": _stats_row(
+            node_stats=node_stats,
+            parse_stats=parse_stats,
+            query_stats=query_rows.stats if query_rows is not None else None,
+        )
+        if options.include_stats
+        else None,
+        "attrs": attrs_map(attrs),
+    }
+
+
+def _empty_ts_file_row(
+    *,
+    file_ctx: FileContext,
+    options: TreeSitterExtractOptions,
+    query_pack: TreeSitterQueryPack | None,
+    parse_stats: _ParseStats,
+) -> Row:
+    node_stats = _NodeStats()
+    attrs = _file_attrs(
+        file_ctx=file_ctx,
+        query_pack=query_pack,
+        parse_stats=parse_stats,
+        node_stats=node_stats,
+        query_stats=None,
+    )
+    return {
+        "repo": options.repo_id,
+        "path": file_ctx.path,
+        "file_id": file_ctx.file_id,
+        "nodes": [],
+        "edges": [],
+        "errors": [],
+        "missing": [],
+        "captures": [],
+        "defs": [],
+        "calls": [],
+        "imports": [],
+        "docstrings": [],
+        "stats": _stats_row(
+            node_stats=node_stats,
+            parse_stats=parse_stats,
             query_stats=None,
         )
-        return {
-            "repo": options.repo_id,
-            "path": file_ctx.path,
-            "file_id": file_ctx.file_id,
-            "nodes": [],
-            "edges": [],
-            "errors": [],
-            "missing": [],
-            "captures": [],
-            "defs": [],
-            "calls": [],
-            "imports": [],
-            "docstrings": [],
-            "stats": _stats_row(
-                node_stats=_NodeStats(),
-                parse_stats=parse_stats,
-                query_stats=None,
-            )
-            if options.include_stats
-            else None,
-            "attrs": attrs_map(attrs),
-        }
-    root = tree.root_node
+        if options.include_stats
+        else None,
+        "attrs": attrs_map(attrs),
+    }
+
+
+def _collect_node_rows(
+    root: Node,
+    *,
+    file_ctx: FileContext,
+    data: bytes,
+    options: TreeSitterExtractOptions,
+) -> tuple[list[Row], list[Row], list[Row], list[Row], _NodeStats]:
     node_rows: list[Row] = []
     edge_rows: list[Row] = []
     error_rows: list[Row] = []
@@ -922,46 +1079,7 @@ def _extract_ts_file_row(
             error_rows.append(_error_entry(node, file_ctx=file_ctx))
         if options.include_missing and node.is_missing:
             missing_rows.append(_missing_entry(node, file_ctx=file_ctx))
-    query_rows = None
-    query_ranges = parse_result.changed_ranges if options.incremental else ()
-    if query_pack is not None:
-        query_rows = _collect_queries(
-            root=root,
-            data=data,
-            file_ctx=file_ctx,
-            options=options,
-            query_pack=query_pack,
-            ranges=query_ranges,
-        )
-    attrs = _file_attrs(
-        file_ctx=file_ctx,
-        query_pack=query_pack,
-        parse_stats=parse_stats,
-        node_stats=node_stats,
-        query_stats=query_rows.stats if query_rows is not None else None,
-    )
-    return {
-        "repo": options.repo_id,
-        "path": file_ctx.path,
-        "file_id": file_ctx.file_id,
-        "nodes": node_rows if options.include_nodes else [],
-        "edges": edge_rows if options.include_edges else [],
-        "errors": error_rows if options.include_errors else [],
-        "missing": missing_rows if options.include_missing else [],
-        "captures": query_rows.captures if query_rows and options.include_captures else [],
-        "defs": query_rows.defs if query_rows and options.include_defs else [],
-        "calls": query_rows.calls if query_rows and options.include_calls else [],
-        "imports": query_rows.imports if query_rows and options.include_imports else [],
-        "docstrings": query_rows.docstrings if query_rows and options.include_docstrings else [],
-        "stats": _stats_row(
-            node_stats=node_stats,
-            parse_stats=parse_stats,
-            query_stats=query_rows.stats if query_rows is not None else None,
-        )
-        if options.include_stats
-        else None,
-        "attrs": attrs_map(attrs),
-    }
+    return node_rows, edge_rows, error_rows, missing_rows, node_stats
 
 
 def _file_attrs(
@@ -995,7 +1113,7 @@ def _file_attrs(
 
 
 def _semantic_version(version: object) -> str | None:
-    if isinstance(version, tuple) and len(version) == 3:
+    if isinstance(version, tuple) and len(version) == SEMVER_PARTS:
         major, minor, patch = version
         if all(isinstance(part, int) for part in (major, minor, patch)):
             return f"{major}.{minor}.{patch}"

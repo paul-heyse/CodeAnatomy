@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import symtable
 from collections import defaultdict
-from dataclasses import dataclass
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -450,70 +449,14 @@ def _symtable_file_row(
     )
     if not scope_rows and not symbol_rows and not scope_edge_rows:
         return None
-    parent_map: dict[int, int] = {}
-    for edge in scope_edge_rows:
-        parent_id = edge.get("parent_table_id")
-        child_id = edge.get("child_table_id")
-        if isinstance(parent_id, int) and isinstance(child_id, int):
-            parent_map[child_id] = parent_id
-    symbols_by_scope: dict[int, list[dict[str, object]]] = {}
-    for symbol in symbol_rows:
-        scope_id = symbol.get("scope_table_id")
-        if not isinstance(scope_id, int):
-            continue
-        symbols_by_scope.setdefault(scope_id, []).append(_symbol_entry(symbol))
-
-    blocks: list[dict[str, object]] = []
-    for scope in scope_rows:
-        table_id = scope.get("table_id")
-        if not isinstance(table_id, int):
-            continue
-        lineno = scope.get("lineno")
-        lineno_int = int(lineno) if isinstance(lineno, int) and lineno > 0 else None
-        line0 = lineno_int - 1 if lineno_int is not None else None
-        span_hint = (
-            span_dict(
-                SpanSpec(
-                    start_line0=line0,
-                    start_col=None,
-                    end_line0=None,
-                    end_col=None,
-                    end_exclusive=True,
-                    col_unit="utf32",
-                )
-            )
-            if line0 is not None
-            else None
-        )
-        blocks.append(
-            {
-                "block_id": table_id,
-                "parent_block_id": parent_map.get(table_id),
-                "block_type": scope.get("scope_type"),
-                "is_meta_scope": _is_meta_scope(
-                    scope.get("scope_type") if isinstance(scope.get("scope_type"), str) else None
-                ),
-                "name": scope.get("scope_name"),
-                "lineno1": lineno_int,
-                "span_hint": span_hint,
-                "scope_id": scope.get("scope_id"),
-                "scope_local_id": scope.get("scope_local_id"),
-                "scope_type_value": scope.get("scope_type_value"),
-                "qualpath": scope.get("qualpath"),
-                "function_partitions": scope.get("function_partitions"),
-                "class_methods": scope.get("class_methods"),
-                "symbols": symbols_by_scope.get(table_id, []),
-                "attrs": attrs_map(
-                    {
-                        "compile_type": options.compile_type,
-                        "scope_role": scope.get("scope_role"),
-                        "is_nested": scope.get("is_nested"),
-                        "is_optimized": scope.get("is_optimized"),
-                        "has_children": scope.get("has_children"),
-                    }
-                ),
-            }
-        )
+    parent_map = _build_parent_map(scope_edge_rows)
+    symbols_by_scope = _symbols_by_scope(symbol_rows)
+    blocks = _build_scope_blocks(
+        scope_rows,
+        parent_map=parent_map,
+        symbols_by_scope=symbols_by_scope,
+        options=options,
+    )
 
     return {
         "repo": options.repo_id,
@@ -529,28 +472,130 @@ def _symtable_file_row(
     }
 
 
+def _build_parent_map(scope_edge_rows: Iterable[Mapping[str, object]]) -> dict[int, int]:
+    parent_map: dict[int, int] = {}
+    for edge in scope_edge_rows:
+        parent_id = edge.get("parent_table_id")
+        child_id = edge.get("child_table_id")
+        if isinstance(parent_id, int) and isinstance(child_id, int):
+            parent_map[child_id] = parent_id
+    return parent_map
+
+
+def _symbols_by_scope(
+    symbol_rows: Iterable[Mapping[str, object]],
+) -> dict[int, list[dict[str, object]]]:
+    mapping: dict[int, list[dict[str, object]]] = {}
+    for symbol in symbol_rows:
+        scope_id = symbol.get("scope_table_id")
+        if not isinstance(scope_id, int):
+            continue
+        mapping.setdefault(scope_id, []).append(_symbol_entry(symbol))
+    return mapping
+
+
+def _build_scope_blocks(
+    scope_rows: Iterable[Mapping[str, object]],
+    *,
+    parent_map: Mapping[int, int],
+    symbols_by_scope: Mapping[int, list[dict[str, object]]],
+    options: SymtableExtractOptions,
+) -> list[dict[str, object]]:
+    blocks: list[dict[str, object]] = []
+    for scope in scope_rows:
+        table_id = scope.get("table_id")
+        if not isinstance(table_id, int):
+            continue
+        block, _scope_type = _scope_block_payload(
+            scope,
+            table_id=table_id,
+            parent_map=parent_map,
+            symbols_by_scope=symbols_by_scope,
+            options=options,
+        )
+        blocks.append(block)
+    return blocks
+
+
+def _scope_block_payload(
+    scope: Mapping[str, object],
+    *,
+    table_id: int,
+    parent_map: Mapping[int, int],
+    symbols_by_scope: Mapping[int, list[dict[str, object]]],
+    options: SymtableExtractOptions,
+) -> tuple[dict[str, object], str | None]:
+    lineno = scope.get("lineno")
+    lineno_int = int(lineno) if isinstance(lineno, int) and lineno > 0 else None
+    line0 = lineno_int - 1 if lineno_int is not None else None
+    span_hint = _span_hint_from_line(line0)
+    scope_type_value = scope.get("scope_type")
+    scope_type = scope_type_value if isinstance(scope_type_value, str) else None
+    return (
+        {
+            "block_id": table_id,
+            "parent_block_id": parent_map.get(table_id),
+            "block_type": scope_type,
+            "is_meta_scope": _is_meta_scope(scope_type),
+            "name": scope.get("scope_name"),
+            "lineno1": lineno_int,
+            "span_hint": span_hint,
+            "scope_id": scope.get("scope_id"),
+            "scope_local_id": scope.get("scope_local_id"),
+            "scope_type_value": scope.get("scope_type_value"),
+            "qualpath": scope.get("qualpath"),
+            "function_partitions": scope.get("function_partitions"),
+            "class_methods": scope.get("class_methods"),
+            "symbols": symbols_by_scope.get(table_id, []),
+            "attrs": attrs_map(
+                {
+                    "compile_type": options.compile_type,
+                    "scope_role": scope.get("scope_role"),
+                    "is_nested": scope.get("is_nested"),
+                    "is_optimized": scope.get("is_optimized"),
+                    "has_children": scope.get("has_children"),
+                }
+            ),
+        },
+        scope_type,
+    )
+
+
+def _span_hint_from_line(line0: int | None) -> dict[str, object] | None:
+    if line0 is None:
+        return None
+    return span_dict(
+        SpanSpec(
+            start_line0=line0,
+            start_col=None,
+            end_line0=None,
+            end_col=None,
+            end_exclusive=True,
+            col_unit="utf32",
+        )
+    )
+
+
 def _collect_symtable_file_rows(
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None,
     *,
     options: SymtableExtractOptions,
 ) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
     contexts = list(iter_contexts(repo_files, file_contexts))
     max_workers = _effective_max_workers(options)
     if max_workers <= 1:
-        for file_ctx in contexts:
-            row = _symtable_file_row(file_ctx, options=options)
-            if row is not None:
-                rows.append(row)
-        return rows
+        return [
+            row
+            for file_ctx in contexts
+            if (row := _symtable_file_row(file_ctx, options=options)) is not None
+        ]
 
     def _extract_row(file_ctx: FileContext) -> dict[str, object] | None:
         return _symtable_file_row(file_ctx, options=options)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        rows = [row for row in executor.map(_extract_row, contexts) if row is not None]
-    return rows
+        return [row for row in executor.map(_extract_row, contexts) if row is not None]
 
 
 def _build_symtable_file_plan(

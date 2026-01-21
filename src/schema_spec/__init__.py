@@ -77,7 +77,6 @@ if TYPE_CHECKING:
         make_table_spec,
         resolve_schema_evolution_spec,
         schema_evolution_compatible,
-        table_spec_from_schema,
         validate_arrow_table,
     )
     from schema_spec.view_specs import ViewSchemaMismatchError, ViewSpec
@@ -156,7 +155,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "span_bundle": ("schema_spec.specs", "span_bundle"),
     "TableSchemaContract": ("schema_spec.system", "TableSchemaContract"),
     "table_constraints_table": ("arrowdsl.spec.tables.schema", "table_constraints_table"),
-    "table_spec_from_schema": ("schema_spec.system", "table_spec_from_schema"),
     "table_specs_from_tables": ("arrowdsl.spec.tables.schema", "table_specs_from_tables"),
     "validate_arrow_table": ("schema_spec.system", "validate_arrow_table"),
 }
@@ -244,7 +242,6 @@ __all__ = [
     "scip_range_bundle",
     "span_bundle",
     "table_constraints_table",
-    "table_spec_from_schema",
     "table_specs_from_tables",
     "validate_arrow_table",
 ]

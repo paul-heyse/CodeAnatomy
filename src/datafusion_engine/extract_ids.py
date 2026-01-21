@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
-import pyarrow as pa
-
-from arrowdsl.core.ids import HashSpec, prefixed_hash_id
+from arrowdsl.core.ids import HashSpec
 from arrowdsl.core.ids_registry import hash_spec_factory
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
-from arrowdsl.schema.build import set_or_append_column
 
 _HASH_SPECS: Mapping[str, HashSpec] = {
     "span_id": hash_spec_factory(
@@ -215,130 +211,4 @@ def hash_spec(name: str, *, repo_id: str | None = None) -> HashSpec:
     return _HASH_SPECS[name]
 
 
-def _prefixed_hash(prefix: str, arrays: Sequence[ArrayLike | ChunkedArrayLike]) -> ArrayLike:
-    return prefixed_hash_id(arrays, prefix=prefix)
-
-
-def _set_column(
-    table: TableLike,
-    name: str,
-    values: ArrayLike | ChunkedArrayLike,
-) -> TableLike:
-    return set_or_append_column(table, name, values)
-
-
-def _with_document_ids(table: TableLike, *, path_col: str = "path") -> TableLike:
-    if table.num_rows == 0 or path_col not in table.column_names:
-        return table
-    ids = _prefixed_hash("scip_doc", [table[path_col]])
-    return _set_column(table, "document_id", ids)
-
-
-def add_scip_document_ids(table: TableLike, *, path_col: str = "path") -> TableLike:
-    """Add document_id values derived from a path column.
-
-    Returns
-    -------
-    TableLike
-        Table with document_id values.
-    """
-    return _with_document_ids(table, path_col=path_col)
-
-
-def add_scip_occurrence_ids(table: TableLike) -> TableLike:
-    """Add occurrence_id values derived from document/span columns.
-
-    Returns
-    -------
-    TableLike
-        Table with occurrence_id values.
-    """
-    if table.num_rows == 0:
-        return table
-    occ_index = pa.array(range(table.num_rows), type=pa.int64())
-    ids = _prefixed_hash(
-        "scip_occ",
-        [
-            table["document_id"],
-            occ_index,
-            table["start_line"],
-            table["start_char"],
-            table["end_line"],
-            table["end_char"],
-        ],
-    )
-    return _set_column(table, "occurrence_id", ids)
-
-
-def add_scip_diagnostic_ids(table: TableLike) -> TableLike:
-    """Add diagnostic_id values derived from document/span columns.
-
-    Returns
-    -------
-    TableLike
-        Table with diagnostic_id values.
-    """
-    if table.num_rows == 0:
-        return table
-    diag_index = pa.array(range(table.num_rows), type=pa.int64())
-    ids = _prefixed_hash(
-        "scip_diag",
-        [
-            table["document_id"],
-            diag_index,
-            table["start_line"],
-            table["start_char"],
-            table["end_line"],
-            table["end_char"],
-        ],
-    )
-    return _set_column(table, "diagnostic_id", ids)
-
-
-def add_scip_symbol_ids(table: TableLike, *, prefix: str) -> TableLike:
-    """Add symbol_info_id values for symbol tables.
-
-    Returns
-    -------
-    TableLike
-        Table with symbol_info_id values.
-    """
-    if table.num_rows == 0:
-        return table
-    ids = _prefixed_hash(prefix, [table["symbol"]])
-    return _set_column(table, "symbol_info_id", ids)
-
-
-def add_scip_relationship_ids(table: TableLike) -> TableLike:
-    """Add relationship_id values for symbol relationship tables.
-
-    Returns
-    -------
-    TableLike
-        Table with relationship_id values.
-    """
-    if table.num_rows == 0:
-        return table
-    ids = _prefixed_hash(
-        "scip_rel",
-        [
-            table["symbol"],
-            table["related_symbol"],
-            table["is_reference"],
-            table["is_implementation"],
-            table["is_type_definition"],
-            table["is_definition"],
-        ],
-    )
-    return _set_column(table, "relationship_id", ids)
-
-
-__all__ = [
-    "add_scip_diagnostic_ids",
-    "add_scip_document_ids",
-    "add_scip_occurrence_ids",
-    "add_scip_relationship_ids",
-    "add_scip_symbol_ids",
-    "hash_spec",
-    "repo_file_id_spec",
-]
+__all__ = ["hash_spec", "repo_file_id_spec"]

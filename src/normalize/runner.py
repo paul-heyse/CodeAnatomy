@@ -19,8 +19,7 @@ from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult
 from arrowdsl.schema.metadata import encoding_policy_from_schema, merge_metadata_specs
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from datafusion_engine.nested_tables import materialize_sql_fragment
-from datafusion_engine.query_fragments import SqlFragment
+from datafusion_engine.nested_tables import ViewReference, materialize_view_reference
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
@@ -477,8 +476,8 @@ def _resolve_rule_plan_ibis(
         if isinstance(source, DatasetSource):
             msg = f"DatasetSource {rule.inputs[0]!r} must be materialized for normalize."
             raise TypeError(msg)
-        if isinstance(source, SqlFragment):
-            source = materialize_sql_fragment(backend, source)
+        if isinstance(source, ViewReference):
+            source = materialize_view_reference(backend, source)
         return source_to_ibis(
             source,
             options=SourceToIbisOptions(

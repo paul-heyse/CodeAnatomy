@@ -49,14 +49,14 @@ BYTE_SPAN_TYPE_INFO = SemanticTypeInfo(
 
 class _SemanticExtensionType(pa.ExtensionType):
     def __init__(self, info: SemanticTypeInfo) -> None:
-        super().__init__(info.storage_type, info.extension_name)
         self._info = info
+        super().__init__(info.storage_type, info.extension_name)
 
-    def _arrow_ext_serialize(self) -> bytes:
+    def arrow_ext_serialize(self) -> bytes:
         return self._info.name.encode("utf-8")
 
     @classmethod
-    def _arrow_ext_deserialize(
+    def arrow_ext_deserialize(
         cls,
         _storage_type: pa.DataType,
         serialized: bytes,
@@ -70,17 +70,22 @@ class _SemanticExtensionType(pa.ExtensionType):
         raise ValueError(msg)
 
 
-_SemanticExtensionType.__arrow_ext_serialize__ = _SemanticExtensionType._arrow_ext_serialize
+_SemanticExtensionType.__arrow_ext_serialize__ = _SemanticExtensionType.arrow_ext_serialize
 _SemanticExtensionType.__arrow_ext_deserialize__ = classmethod(
-    _SemanticExtensionType._arrow_ext_deserialize
+    _SemanticExtensionType.arrow_ext_deserialize
 )
 
 
 def register_semantic_extension_types() -> None:
     """Register semantic extension types with pyarrow."""
     for info in (SPAN_TYPE_INFO, BYTE_SPAN_TYPE_INFO):
-        with contextlib.suppress(ValueError):
+        with contextlib.suppress(ValueError, pa.ArrowKeyError):
             pa.register_extension_type(_SemanticExtensionType(info))
+
+
+def _extension_type(info: SemanticTypeInfo) -> pa.DataType:
+    register_semantic_extension_types()
+    return _SemanticExtensionType(info)
 
 
 def span_type() -> pa.DataType:
@@ -91,8 +96,7 @@ def span_type() -> pa.DataType:
     pyarrow.DataType
         Extension data type for spans.
     """
-    register_semantic_extension_types()
-    return pa.extension_type(SPAN_TYPE_INFO.extension_name)
+    return _extension_type(SPAN_TYPE_INFO)
 
 
 def byte_span_type() -> pa.DataType:
@@ -103,8 +107,7 @@ def byte_span_type() -> pa.DataType:
     pyarrow.DataType
         Extension data type for byte spans.
     """
-    register_semantic_extension_types()
-    return pa.extension_type(BYTE_SPAN_TYPE_INFO.extension_name)
+    return _extension_type(BYTE_SPAN_TYPE_INFO)
 
 
 __all__ = [

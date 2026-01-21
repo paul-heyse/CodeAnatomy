@@ -45,12 +45,11 @@ END AS position_encoding
 - `src/normalize/ibis_spans.py`
 
 **Implementation checklist**
-- [ ] Replace `normalize_span` UDF usage with built-in SQL/Expr expressions.
-- [ ] Replace `cpg_score` UDF usage with `CAST`.
-- [ ] Replace `position_encoding_norm` UDF usage with built-in case expressions.
-- [ ] Replace `valid_mask` UDF usage with built-ins if `list_has`/`array_has` exists; otherwise
-      keep UDF and mark it as required in validation.
-- [ ] Remove superseded UDF registrations and update any rewrite tags.
+- [x] Replace `normalize_span` UDF usage with built-in SQL/Expr expressions.
+- [x] Replace `cpg_score` UDF usage with `CAST`.
+- [x] Replace `position_encoding_norm` UDF usage with built-in case expressions.
+- [x] Remove `valid_mask` UDF (no remaining call sites; built-in replacement not needed).
+- [x] Remove superseded UDF registrations and update any rewrite tags.
 
 ---
 
@@ -74,10 +73,13 @@ array_flatten(get_field(col, 'name')) AS flattened_names
 - `src/datafusion_engine/compute_ops.py`
 
 **Implementation checklist**
-- [ ] Replace Python set/sort paths with `array_distinct` + `array_sort` (or list equivalents).
-- [ ] Replace list flatten + field extraction loops with `array_flatten` + `get_field`.
-- [ ] Keep `compute_ops` as fallback only for non-DataFusion backends.
-- [ ] Add function-availability checks via `SHOW FUNCTIONS` when needed.
+- [x] Replace Python set/sort paths in normalize qname dim with DataFusion/Ibis list ops.
+- [x] Replace list flatten + field extraction loops in incremental exports with SQL `unnest`
+      + `get_field`.
+- [x] Replace remaining PyArrow list ops in `arrowdsl/finalize/finalize.py` with
+      DataFusion/Ibis aggregation (`array_agg` + `named_struct`) or list-array primitives.
+- [x] Keep `compute_ops` list helpers only for non-DataFusion backends after finalize migration.
+- [x] Add function-availability checks for list/array built-ins via `information_schema`.
 
 ---
 
@@ -101,9 +103,9 @@ stable_id('edge', concat_ws(':', edge_kind, src, dst)) AS edge_id
 - `src/cpg/symtable_sql.py`
 
 **Implementation checklist**
-- [ ] Remove Python hashing in extract paths and compute IDs via DataFusion UDFs.
-- [ ] Standardize string joining via `concat_ws`.
-- [ ] Ensure IDs are computed at scan or view boundaries, not post-materialization.
+- [x] Remove Python hashing in extract paths and compute IDs via DataFusion UDFs.
+- [x] Standardize string joining via `concat_ws`.
+- [x] Ensure IDs are computed at scan or view boundaries, not post-materialization.
 
 ---
 
@@ -126,9 +128,9 @@ bstart = col_to_byte(col("line_text"), col("col"), col_unit)
 - `src/datafusion_engine/udf_registry.py`
 
 **Implementation checklist**
-- [ ] Convert Python span loops to DataFusion expressions where DataFusion backend is required.
-- [ ] Use `col_to_byte` and built-in string ops for byte conversion.
-- [ ] Remove legacy Python-only span normalization paths or gate them behind non-DF backends.
+- [x] Convert Python span loops to DataFusion expressions where DataFusion backend is required.
+- [x] Use `col_to_byte` and built-in string ops for byte conversion.
+- [x] Remove legacy Python-only span normalization paths or gate them behind non-DF backends.
 
 ---
 
@@ -150,9 +152,12 @@ if "regexp_like" not in available:
 - `tests/unit/test_datafusion_schema_registry.py`
 
 **Implementation checklist**
-- [ ] Maintain required built-in + UDF inventories per pipeline stage.
-- [ ] Use `SHOW FUNCTIONS` / `information_schema` to gate built-in usage.
-- [ ] Add validation tests for required built-ins and UDF registrations.
+- [x] Maintain required built-in + UDF inventories per pipeline stage (AST/CST/TS/bytecode).
+- [x] Add validation tests for required CST built-ins and UDF registrations.
+- [x] Gate optional AST views on `SHOW FUNCTIONS` and DataFusion version.
+- [x] Extend function inventories to symtable-specific built-ins (concat/hash/unnest) and
+      enforce via validation.
+- [x] Add function-availability checks for list/array built-ins used by finalize pipelines.
 
 ---
 
@@ -163,8 +168,6 @@ Remove these functions/modules once the conversions land and all call sites migr
 - `src/datafusion_engine/udf_registry.py`
   - `_normalize_span`, `_cpg_score`, `_position_encoding_norm`, `_valid_mask`
   - associated `DataFusionUdfSpec` entries and UDF registrations in `_SCALAR_UDF_SPECS`
-- `src/datafusion_engine/kernels.py`
-  - `_normalize_span_expr` (once all span normalization uses built-in expressions)
 - `src/ibis_engine/builtin_udfs.py`
   - `cpg_score`, `position_encoding_norm`, `valid_mask` (built-in expr replacements)
 - `src/normalize/spans.py`
@@ -173,6 +176,15 @@ Remove these functions/modules once the conversions land and all call sites migr
 - `src/datafusion_engine/compute_ops.py`
   - `distinct_sorted` and any list/array helpers replaced by DataFusion list/array
     built-ins (e.g., `array_distinct`, `array_sort`, `array_flatten`)
+
+**Progress**
+- `udf_registry` removals completed for the listed UDFs.
+- `normalize/spans.py` removed; span normalization is DataFusion/Ibis-first.
+- `compute_ops.flatten_list_struct_field` removed and list helpers migrated off finalize.
+- `arrowdsl/finalize/finalize.py` now aggregates error detail lists via DataFusion
+  (`array_agg` + `named_struct`) when available, with list-array fallbacks.
+- `compute_ops.list_flatten` and `compute_ops.list_value_length` removed after finalize
+  migration.
 
 **Modules that can be removed entirely (conditional)**
 - None immediately; these modules remain as fallbacks for non-DataFusion backends.

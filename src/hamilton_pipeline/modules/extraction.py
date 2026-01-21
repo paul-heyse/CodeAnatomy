@@ -388,7 +388,7 @@ def _parse_scip_shard_counts(output: str) -> dict[str, int]:
 
 
 def _scip_index_report_payload(report: ScipIndexRunReport) -> dict[str, object]:
-    payload = {
+    payload: dict[str, object] = {
         "command": list(report.command),
         "returncode": report.returncode,
         "duration_s": report.duration_s,
@@ -659,26 +659,71 @@ def scip_index_path(
     config = scip_index_inputs.scip_index_config
     overrides = scip_index_inputs.scip_identity_overrides
     build_dir = ensure_scip_build_dir(repo_root_path, config.output_dir)
-    if config.index_path_override:
-        ensure_scip_pb2(repo_root=repo_root_path, build_dir=build_dir)
-        override = Path(config.index_path_override)
-        override_path = override if override.is_absolute() else repo_root_path / override
-        target = build_dir / "index.scip"
-        if override_path.resolve() != target.resolve():
-            target.write_bytes(override_path.read_bytes())
-        return str(target)
+    override_path = _resolve_scip_index_override(
+        repo_root_path=repo_root_path,
+        build_dir=build_dir,
+        config=config,
+    )
+    if override_path is not None:
+        return str(override_path)
     if not config.enabled:
         return None
 
-    if config.generate_env_json:
-        env_json_path = (
-            Path(config.env_json_path) if config.env_json_path else build_dir / "env.json"
-        )
-        if not env_json_path.is_absolute():
-            env_json_path = repo_root_path / env_json_path
-        generated = write_scip_environment_json(env_json_path)
-        config = replace(config, env_json_path=str(generated))
+    config = _prepare_scip_config(
+        config=config,
+        repo_root_path=repo_root_path,
+        build_dir=build_dir,
+    )
+    index_path = _run_scip_index(
+        repo_root_path=repo_root_path,
+        build_dir=build_dir,
+        config=config,
+        overrides=overrides,
+        ctx=ctx,
+    )
+    return str(index_path)
 
+
+def _resolve_scip_index_override(
+    *,
+    repo_root_path: Path,
+    build_dir: Path,
+    config: ScipIndexConfig,
+) -> Path | None:
+    if not config.index_path_override:
+        return None
+    ensure_scip_pb2(repo_root=repo_root_path, build_dir=build_dir)
+    override = Path(config.index_path_override)
+    override_path = override if override.is_absolute() else repo_root_path / override
+    target = build_dir / "index.scip"
+    if override_path.resolve() != target.resolve():
+        target.write_bytes(override_path.read_bytes())
+    return target
+
+
+def _prepare_scip_config(
+    *,
+    config: ScipIndexConfig,
+    repo_root_path: Path,
+    build_dir: Path,
+) -> ScipIndexConfig:
+    if not config.generate_env_json:
+        return config
+    env_json_path = Path(config.env_json_path) if config.env_json_path else build_dir / "env.json"
+    if not env_json_path.is_absolute():
+        env_json_path = repo_root_path / env_json_path
+    generated = write_scip_environment_json(env_json_path)
+    return replace(config, env_json_path=str(generated))
+
+
+def _run_scip_index(
+    *,
+    repo_root_path: Path,
+    build_dir: Path,
+    config: ScipIndexConfig,
+    overrides: ScipIdentityOverrides,
+    ctx: ExecutionContext,
+) -> Path:
     identity = resolve_scip_identity(
         repo_root_path,
         project_name_override=overrides.project_name_override,
@@ -696,68 +741,132 @@ def scip_index_path(
         payload = _scip_index_report_payload(run_report)
         _record_scip_tooling(ctx, _scip_tooling_payload("scip_python_index", payload))
 
-    index_path = run_scip_python_index(opts, on_complete=_on_complete)
-    index_path = index_path.resolve()
+    index_path = run_scip_python_index(opts, on_complete=_on_complete).resolve()
+    _record_scip_tooling(
+        ctx,
+        _scip_tooling_payload(
+            "scip_python_version",
+            _run_command([config.scip_python_bin, "--version"], cwd=repo_root_path),
+        ),
+    )
+    _run_scip_cli_steps(
+        ctx=ctx,
+        repo_root_path=repo_root_path,
+        build_dir=build_dir,
+        config=config,
+        index_path=index_path,
+    )
+    return index_path
 
-    version_payload = _run_command([config.scip_python_bin, "--version"], cwd=repo_root_path)
-    _record_scip_tooling(ctx, _scip_tooling_payload("scip_python_version", version_payload))
 
-    cli_requested = config.run_scip_print or config.run_scip_snapshot or config.run_scip_test
-    if cli_requested:
-        cli_version = _run_command([config.scip_cli_bin, "--version"], cwd=repo_root_path)
-        _record_scip_tooling(ctx, _scip_tooling_payload("scip_cli_version", cli_version))
-
+def _run_scip_cli_steps(
+    *,
+    ctx: ExecutionContext,
+    repo_root_path: Path,
+    build_dir: Path,
+    config: ScipIndexConfig,
+    index_path: Path,
+) -> None:
+    if not (config.run_scip_print or config.run_scip_snapshot or config.run_scip_test):
+        return
+    cli_version = _run_command([config.scip_cli_bin, "--version"], cwd=repo_root_path)
+    _record_scip_tooling(ctx, _scip_tooling_payload("scip_cli_version", cli_version))
     if config.run_scip_print:
-        print_path = _resolve_optional_path(
-            repo_root_path,
-            config.scip_print_path,
-            default=build_dir / "index.print.json",
+        _run_scip_print(
+            ctx=ctx,
+            repo_root_path=repo_root_path,
+            build_dir=build_dir,
+            config=config,
+            index_path=index_path,
         )
-        payload = _run_command(
-            [config.scip_cli_bin, "print", "--json", str(index_path)],
-            cwd=repo_root_path,
-            stdout_path=print_path,
-        )
-        _record_scip_tooling(
-            ctx,
-            _scip_tooling_payload("scip_print", payload, index_path=index_path),
-        )
-        _ensure_command_success("scip print", payload)
-
     if config.run_scip_snapshot:
-        snapshot_dir = _resolve_optional_path(
-            repo_root_path,
-            config.scip_snapshot_dir,
-            default=build_dir / "snapshots",
+        _run_scip_snapshot(
+            ctx=ctx,
+            repo_root_path=repo_root_path,
+            build_dir=build_dir,
+            config=config,
+            index_path=index_path,
         )
-        payload = _run_command(
-            [
-                config.scip_cli_bin,
-                "snapshot",
-                "--comment-syntax",
-                config.scip_snapshot_comment_syntax,
-                str(index_path),
-                "--output",
-                str(snapshot_dir),
-            ],
-            cwd=repo_root_path,
-        )
-        _record_scip_tooling(
-            ctx,
-            _scip_tooling_payload("scip_snapshot", payload, index_path=index_path),
-        )
-        _ensure_command_success("scip snapshot", payload)
-
     if config.run_scip_test:
-        cmd = [config.scip_cli_bin, "test", *config.scip_test_args, str(index_path)]
-        payload = _run_command(cmd, cwd=repo_root_path)
-        _record_scip_tooling(
-            ctx,
-            _scip_tooling_payload("scip_test", payload, index_path=index_path),
+        _run_scip_test(
+            ctx=ctx,
+            repo_root_path=repo_root_path,
+            config=config,
+            index_path=index_path,
         )
-        _ensure_command_success("scip test", payload)
 
-    return str(index_path)
+
+def _run_scip_print(
+    *,
+    ctx: ExecutionContext,
+    repo_root_path: Path,
+    build_dir: Path,
+    config: ScipIndexConfig,
+    index_path: Path,
+) -> None:
+    print_path = _resolve_optional_path(
+        repo_root_path,
+        config.scip_print_path,
+        default=build_dir / "index.print.json",
+    )
+    payload = _run_command(
+        [config.scip_cli_bin, "print", "--json", str(index_path)],
+        cwd=repo_root_path,
+        stdout_path=print_path,
+    )
+    _record_scip_tooling(
+        ctx,
+        _scip_tooling_payload("scip_print", payload, index_path=index_path),
+    )
+    _ensure_command_success("scip print", payload)
+
+
+def _run_scip_snapshot(
+    *,
+    ctx: ExecutionContext,
+    repo_root_path: Path,
+    build_dir: Path,
+    config: ScipIndexConfig,
+    index_path: Path,
+) -> None:
+    snapshot_dir = _resolve_optional_path(
+        repo_root_path,
+        config.scip_snapshot_dir,
+        default=build_dir / "snapshots",
+    )
+    payload = _run_command(
+        [
+            config.scip_cli_bin,
+            "snapshot",
+            "--comment-syntax",
+            config.scip_snapshot_comment_syntax,
+            str(index_path),
+            "--output",
+            str(snapshot_dir),
+        ],
+        cwd=repo_root_path,
+    )
+    _record_scip_tooling(
+        ctx,
+        _scip_tooling_payload("scip_snapshot", payload, index_path=index_path),
+    )
+    _ensure_command_success("scip snapshot", payload)
+
+
+def _run_scip_test(
+    *,
+    ctx: ExecutionContext,
+    repo_root_path: Path,
+    config: ScipIndexConfig,
+    index_path: Path,
+) -> None:
+    cmd = [config.scip_cli_bin, "test", *config.scip_test_args, str(index_path)]
+    payload = _run_command(cmd, cwd=repo_root_path)
+    _record_scip_tooling(
+        ctx,
+        _scip_tooling_payload("scip_test", payload, index_path=index_path),
+    )
+    _ensure_command_success("scip test", payload)
 
 
 @cache(format="delta")

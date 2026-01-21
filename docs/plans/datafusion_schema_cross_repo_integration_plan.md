@@ -289,21 +289,21 @@ fully wired and all call sites are migrated.
 - ✅ `relspec/registry/datasets.py` (dataset/contract catalog assembly from spec tables).
 
 ### Scope 1–2: TableSchema + schema adapters
-- ⏳ Runtime DDL synthesis in `schema_spec/system.py` (`table_spec_from_schema`,
-  `ddl_fingerprint_from_schema`) for registration paths.
+- ⏳ Runtime DDL synthesis in `schema_spec/system.py` (`table_spec_from_schema`)
+  for registration paths.
 - ✅ Registry‑side schema handshake helpers that depend on Python‑derived DDL.
 
 ### Scope 3: DFSchema invariants
-- ⏳ SQLGlot-only missing-column checks and union schema builders in
-  `relspec/rules/validation.py` when DFSchema/EXPLAIN coverage is complete.
+- ⏳ SQLGlot-only missing-column checks in `relspec/rules/validation.py` when
+  DFSchema/EXPLAIN coverage is complete.
 
 ### Scope 4: TableProvider metadata
-- ⏳ Python defaults/constraints fallbacks in `relspec/contracts.py` and
+- ✅ Python defaults/constraints fallbacks in `relspec/contracts.py` and
   `schema_spec/system.py` once provider metadata is authoritative.
 
 ### Scope 5: Typed parameters
-- ⏳ Python param schema enforcement in `ibis_engine/param_tables.py` once DataFusion
-  typed parameters and prepared statements are the only validation path.
+- ✅ Python param schema enforcement in `datafusion_engine/param_tables.py` once
+  DataFusion typed parameters and prepared statements are the only validation path.
 
 ### Scope 7–9: Metadata, projection, rewrites
 - ⏳ Bespoke attribute/span extraction SQL fragments in

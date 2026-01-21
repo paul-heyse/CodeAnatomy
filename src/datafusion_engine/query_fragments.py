@@ -3,20 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 
 from datafusion import SessionContext
 
 from datafusion_engine.schema_registry import nested_base_sql, schema_for
 from schema_spec.view_specs import ViewSpec, view_spec_from_sql
-
-
-@dataclass(frozen=True)
-class SqlFragment:
-    """Named SQL fragment for on-demand nested table projections."""
-
-    name: str
-    sql: str
 
 
 def _map_value(map_name: str, key: str) -> str:
@@ -2959,7 +2950,6 @@ def fragment_view_specs(
 
 
 __all__ = [
-    "SqlFragment",
     "ast_call_attrs_sql",
     "ast_calls_sql",
     "ast_def_attrs_sql",

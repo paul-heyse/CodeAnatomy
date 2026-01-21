@@ -27,6 +27,13 @@ class TreeSitterQueryPack:
     sources: Mapping[str, str]
 
     def metadata(self) -> dict[str, str]:
+        """Return query pack metadata for diagnostics.
+
+        Returns
+        -------
+        dict[str, str]
+            Metadata fields describing the compiled query pack.
+        """
         names = ",".join(sorted(self.queries))
         return {
             "query_pack_version": self.version,
@@ -93,7 +100,13 @@ _PY_QUERY_SPECS: tuple[QuerySpec, ...] = (
 
 
 def compile_query_pack(language: Language) -> TreeSitterQueryPack:
-    """Compile and validate the Python query pack."""
+    """Compile and validate the Python query pack.
+
+    Returns
+    -------
+    TreeSitterQueryPack
+        Compiled query pack and metadata.
+    """
     sources: dict[str, str] = {}
     queries: dict[str, Query] = {}
     for spec in _PY_QUERY_SPECS:
@@ -119,7 +132,7 @@ def _pack_version(sources: Mapping[str, str]) -> str:
 
 
 def _lint_query(spec: QuerySpec, query: Query) -> None:
-    for idx in range(query.pattern_count):
+    for idx in range(query.pattern_count()):
         if not query.is_pattern_rooted(idx):
             msg = f"Query {spec.name!r} pattern[{idx}] is not rooted."
             raise ValueError(msg)

@@ -335,6 +335,7 @@ DEFAULT_GENERATOR_KWARGS: GeneratorInitKwargs = {
     "comments": False,
     "unsupported_level": DEFAULT_UNSUPPORTED_LEVEL,
 }
+MAP_EXTRACT_ARG_COUNT = 2
 
 
 def _rewrite_full_outer_join(expr: Expression) -> Expression:
@@ -353,7 +354,7 @@ def _rewrite_map_access(expr: Expression) -> Expression:
     def _rewrite(node: Expression) -> Expression:
         if isinstance(node, exp.Anonymous) and node.name.lower() == "map_extract":
             args = list(node.expressions)
-            if len(args) == 2:
+            if len(args) == MAP_EXTRACT_ARG_COUNT:
                 return exp.Anonymous(
                     this="list_extract",
                     expressions=[node.copy(), exp.Literal.number(1)],
@@ -382,31 +383,52 @@ def _rewrite_span_named_struct(expr: Expression) -> Expression:
         if not isinstance(node, exp.Anonymous) or node.name.lower() != "named_struct":
             return node
         parts = list(node.expressions)
-        if len(parts) % 2:
+        ordered = _span_struct_order(parts)
+        if ordered is None:
             return node
-        pairs: list[tuple[str, Expression, Expression]] = []
-        for idx in range(0, len(parts), 2):
-            key_expr = parts[idx]
-            value_expr = parts[idx + 1]
-            if isinstance(key_expr, exp.Literal) and key_expr.is_string:
-                pairs.append((key_expr.this, key_expr, value_expr))
-            else:
-                return node
-        keys = {name for name, _, _ in pairs}
-        if not {"bstart", "bend"}.issubset(keys):
-            return node
-        ordered: list[Expression] = []
-        for key in ("bstart", "bend"):
-            for name, key_expr, value_expr in pairs:
-                if name == key:
-                    ordered.extend([key_expr, value_expr])
-        for name, key_expr, value_expr in pairs:
-            if name in {"bstart", "bend"}:
-                continue
-            ordered.extend([key_expr, value_expr])
         return exp.Anonymous(this="named_struct", expressions=ordered)
 
     return expr.transform(_rewrite)
+
+
+def _span_struct_order(parts: Sequence[Expression]) -> list[Expression] | None:
+    if len(parts) % 2:
+        return None
+    pairs = _span_struct_pairs(parts)
+    if pairs is None:
+        return None
+    keys = {name for name, _, _ in pairs}
+    if not {"bstart", "bend"}.issubset(keys):
+        return None
+    return _span_struct_ordered_pairs(pairs)
+
+
+def _span_struct_pairs(
+    parts: Sequence[Expression],
+) -> list[tuple[str, Expression, Expression]] | None:
+    pairs: list[tuple[str, Expression, Expression]] = []
+    for idx in range(0, len(parts), 2):
+        key_expr = parts[idx]
+        value_expr = parts[idx + 1]
+        if not isinstance(key_expr, exp.Literal) or not key_expr.is_string:
+            return None
+        pairs.append((key_expr.this, key_expr, value_expr))
+    return pairs
+
+
+def _span_struct_ordered_pairs(
+    pairs: Sequence[tuple[str, Expression, Expression]],
+) -> list[Expression]:
+    ordered: list[Expression] = []
+    for key in ("bstart", "bend"):
+        for name, key_expr, value_expr in pairs:
+            if name == key:
+                ordered.extend([key_expr, value_expr])
+    for name, key_expr, value_expr in pairs:
+        if name in {"bstart", "bend"}:
+            continue
+        ordered.extend([key_expr, value_expr])
+    return ordered
 
 
 def _normalize_table_aliases(expr: Expression) -> Expression:

@@ -18,7 +18,7 @@ from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table
-from datafusion_engine.query_fragments import SqlFragment
+from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.materialize import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
@@ -97,7 +97,7 @@ class RelationPlanCompileOptions:
     policy_registry: PolicyRegistry = field(default_factory=PolicyRegistry)
 
 
-IbisPlanSource = IbisPlan | Table | TableLike | DatasetSource | SqlFragment
+IbisPlanSource = IbisPlan | Table | TableLike | DatasetSource | ViewReference
 
 
 def _plan_executor_factory(
@@ -161,8 +161,8 @@ class IbisPlanCatalog:
             return None
         if isinstance(source, IbisPlan):
             return source
-        if isinstance(source, SqlFragment):
-            expr = _sql_fragment_expr(self.backend, source)
+        if isinstance(source, ViewReference):
+            expr = _view_reference_expr(self.backend, source)
             plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
             self.tables[name] = plan
             return plan
@@ -208,12 +208,8 @@ class CatalogIbisResolver:
         return None
 
 
-def _sql_fragment_expr(backend: BaseBackend, fragment: SqlFragment) -> Table:
-    sql_method = getattr(backend, "sql", None)
-    if not callable(sql_method):
-        msg = "Ibis backend does not support raw SQL fragments."
-        raise TypeError(msg)
-    return cast("Table", sql_method(fragment.sql))
+def _view_reference_expr(backend: BaseBackend, fragment: ViewReference) -> Table:
+    return backend.table(fragment.name)
 
 
 @dataclass(frozen=True)

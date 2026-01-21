@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections.abc import Mapping, Sequence
 
@@ -9,8 +11,7 @@ import pyarrow as pa
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_rows
-from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.schema_authority import dataset_schema_from_context
+from datafusion_engine.schema_registry import schema_for
 
 
 def _now_ms() -> int:
@@ -69,7 +70,7 @@ def datafusion_fallbacks_table(events: Sequence[Mapping[str, object]]) -> pa.Tab
         }
         for event in events
     ]
-    schema = dataset_schema_from_context("datafusion_fallbacks_v1")
+    schema = schema_for("datafusion_fallbacks_v1")
     return table_from_rows(schema, rows)
 
 
@@ -98,7 +99,7 @@ def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Ta
                 "explain_analyze": bool(explain.get("explain_analyze") or False),
             }
         )
-    schema = dataset_schema_from_context("datafusion_explains_v1")
+    schema = schema_for("datafusion_explains_v1")
     return table_from_rows(schema, rows)
 
 
@@ -137,13 +138,35 @@ def datafusion_schema_registry_validation_table(
                 }
                 for name, detail in type_errors.items()
             )
-    schema = dataset_schema_from_context("datafusion_schema_registry_validation_v1")
+        view_errors = record.get("view_errors")
+        if isinstance(view_errors, Mapping):
+            rows.extend(
+                {
+                    "event_time_unix_ms": event_time,
+                    "schema_name": str(name),
+                    "issue_type": "view_error",
+                    "detail": str(detail),
+                }
+                for name, detail in view_errors.items()
+            )
+        parse_errors = record.get("sql_parse_errors")
+        if isinstance(parse_errors, Mapping):
+            rows.extend(
+                {
+                    "event_time_unix_ms": event_time,
+                    "schema_name": str(name),
+                    "issue_type": "sql_parse_error",
+                    "detail": json.dumps(detail, ensure_ascii=True, default=str),
+                }
+                for name, detail in parse_errors.items()
+            )
+    schema = schema_for("datafusion_schema_registry_validation_v1")
     return table_from_rows(schema, rows)
 
 
 def _explain_rows_metadata(rows: object) -> tuple[str | None, str | None, str | None]:
     if isinstance(rows, (RecordBatchReaderLike, TableLike)):
-        return None, "ipc_file", schema_fingerprint(rows.schema)
+        return None, "ipc_file", _schema_fingerprint(rows.schema)
     if isinstance(rows, Mapping):
         artifact_path = rows.get("artifact_path")
         artifact_format = rows.get("artifact_format")
@@ -154,6 +177,11 @@ def _explain_rows_metadata(rows: object) -> tuple[str | None, str | None, str | 
             str(schema_fp) if schema_fp is not None else None,
         )
     return None, None, None
+
+
+def _schema_fingerprint(schema: pa.Schema) -> str:
+    payload = schema.serialize()
+    return hashlib.sha256(payload.to_pybytes()).hexdigest()
 
 
 def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
@@ -174,7 +202,7 @@ def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
         }
         for event in events
     ]
-    schema = dataset_schema_from_context("feature_state_v1")
+    schema = schema_for("feature_state_v1")
     return table_from_rows(schema, rows)
 
 

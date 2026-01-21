@@ -42,7 +42,7 @@ from schema_spec.system import (
     dataset_table_ddl_fingerprint,
     dataset_table_definition,
 )
-from sqlglot_tools.optimizer import planner_dag_snapshot
+from sqlglot_tools.optimizer import planner_dag_snapshot, register_datafusion_dialect
 from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 
 if TYPE_CHECKING:
@@ -941,7 +941,13 @@ def _contract_schema_asts(contracts: ContractCatalog) -> JsonDict:
     -------
     JsonDict
         Mapping of contract names to SQLGlot column definitions.
+
+    Raises
+    ------
+    ValueError
+        Raised when schema DDL is missing or cannot be parsed.
     """
+    register_datafusion_dialect()
     payload: JsonDict = {}
     for name in contracts.names():
         ddl = dataset_table_definition(name)

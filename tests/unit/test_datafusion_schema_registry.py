@@ -8,16 +8,15 @@ from datafusion import SessionContext
 from arrowdsl.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
 from datafusion_engine.schema_registry import (
     AST_VIEW_NAMES,
-    CST_REQUIRED_FUNCTION_SIGNATURES,
-    CST_REQUIRED_FUNCTIONS,
-    _validate_function_signatures,
-    _validate_required_functions,
     nested_view_specs,
     register_all_schemas,
     register_schema,
     schema_for,
     schema_names,
     validate_ast_views,
+    validate_required_bytecode_functions,
+    validate_required_cst_functions,
+    validate_required_symtable_functions,
 )
 from datafusion_engine.udf_registry import register_datafusion_udfs
 from registry_common.metadata import metadata_list_bytes
@@ -64,10 +63,21 @@ def test_required_functions_present() -> None:
     """Validate required CST function inventory and signatures."""
     ctx = SessionContext()
     register_datafusion_udfs(ctx)
-    errors: dict[str, str] = {}
-    _validate_required_functions(ctx, required=CST_REQUIRED_FUNCTIONS, errors=errors)
-    _validate_function_signatures(ctx, required=CST_REQUIRED_FUNCTION_SIGNATURES, errors=errors)
-    assert not errors
+    validate_required_cst_functions(ctx)
+
+
+def test_required_symtable_functions_present() -> None:
+    """Validate required symtable function inventory and signatures."""
+    ctx = SessionContext()
+    register_datafusion_udfs(ctx)
+    validate_required_symtable_functions(ctx)
+
+
+def test_required_bytecode_functions_present() -> None:
+    """Validate required bytecode function inventory and signatures."""
+    ctx = SessionContext()
+    register_datafusion_udfs(ctx)
+    validate_required_bytecode_functions(ctx)
 
 
 def test_validate_ast_views_smoke() -> None:

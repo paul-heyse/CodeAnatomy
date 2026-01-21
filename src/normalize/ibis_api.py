@@ -333,6 +333,17 @@ def add_scip_occurrence_byte_spans(
 ) -> tuple[TableLike, TableLike]:
     """Add byte spans to SCIP occurrences using line index joins.
 
+    Parameters
+    ----------
+    file_line_index
+        Line index table with per-line byte offsets.
+    scip_documents
+        SCIP documents input table or plan.
+    scip_occurrences
+        SCIP occurrences input table or plan.
+    backend
+        Ibis backend used for execution.
+
     Returns
     -------
     tuple[TableLike, TableLike]
@@ -355,6 +366,15 @@ def normalize_cst_callsites_spans(
 ) -> TableLike:
     """Ensure callsites expose canonical bstart/bend aliases.
 
+    Parameters
+    ----------
+    py_cst_callsites
+        CST callsite rows or a plan to materialize them.
+    backend
+        Ibis backend used for execution.
+    primary
+        Which span to treat as canonical.
+
     Returns
     -------
     TableLike
@@ -376,6 +396,15 @@ def normalize_cst_imports_spans(
 ) -> TableLike:
     """Ensure imports expose canonical bstart/bend aliases.
 
+    Parameters
+    ----------
+    py_cst_imports
+        CST imports rows or a plan to materialize them.
+    backend
+        Ibis backend used for execution.
+    primary
+        Which span to treat as canonical.
+
     Returns
     -------
     TableLike
@@ -396,6 +425,15 @@ def normalize_cst_defs_spans(
     primary: Literal["name", "def"] = "name",
 ) -> TableLike:
     """Ensure defs expose canonical bstart/bend aliases.
+
+    Parameters
+    ----------
+    py_cst_defs
+        CST definition rows or a plan to materialize them.
+    backend
+        Ibis backend used for execution.
+    primary
+        Which span to treat as canonical.
 
     Returns
     -------

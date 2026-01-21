@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -21,10 +22,11 @@ from deltalake import DeltaTable
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.schema.metadata import ordering_from_schema
+from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import ensure_path
 from datafusion_engine.listing_table_provider import (
+    ParquetListingTableConfig,
     TableProviderCapsule,
     parquet_listing_table_provider,
 )
@@ -40,7 +42,6 @@ from ibis_engine.registry import (
     resolve_dataset_schema,
     resolve_delta_scan_options,
 )
-from schema_spec.specs import ExternalTableConfigOverrides
 from schema_spec.system import (
     DataFusionScanOptions,
     DeltaScanOptions,
@@ -90,6 +91,11 @@ _SYMTABLE_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
 _BYTECODE_EXTERNAL_TABLE_NAME = "bytecode_files_v1"
 _BYTECODE_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
 _BYTECODE_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
+_TREE_SITTER_EXTERNAL_TABLE_NAME = "tree_sitter_files_v1"
+_TREE_SITTER_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
+_TREE_SITTER_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
+
+logger = logging.getLogger(__name__)
 
 try:
     from datafusion.input.base import BaseInputSource as _BaseInputSource
@@ -264,6 +270,85 @@ class DataFusionRegistrationContext:
 
 
 @dataclass(frozen=True)
+class _ScanDefaults:
+    partition_fields: tuple[str, ...]
+    file_sort_order: tuple[str, ...]
+    infer_partitions: bool
+    cache_ttl: str
+    listing_mutable: bool
+    projection_exprs: tuple[str, ...]
+    parquet_column_options: ParquetColumnOptions | None
+    collect_statistics: bool = False
+
+
+_DEFAULT_SCAN_CONFIGS: dict[str, _ScanDefaults] = {
+    _CST_EXTERNAL_TABLE_NAME: _ScanDefaults(
+        partition_fields=_CST_PARTITION_FIELDS,
+        file_sort_order=_CST_FILE_SORT_ORDER,
+        infer_partitions=True,
+        cache_ttl="2m",
+        listing_mutable=True,
+        projection_exprs=_CST_PROJECTION_EXPRS,
+        parquet_column_options=_CST_PARQUET_COLUMN_OPTIONS,
+    ),
+    _AST_EXTERNAL_TABLE_NAME: _ScanDefaults(
+        partition_fields=_AST_PARTITION_FIELDS,
+        file_sort_order=_AST_FILE_SORT_ORDER,
+        infer_partitions=True,
+        cache_ttl="2m",
+        listing_mutable=False,
+        projection_exprs=(),
+        parquet_column_options=None,
+    ),
+    _BYTECODE_EXTERNAL_TABLE_NAME: _ScanDefaults(
+        partition_fields=_BYTECODE_PARTITION_FIELDS,
+        file_sort_order=_BYTECODE_FILE_SORT_ORDER,
+        infer_partitions=True,
+        cache_ttl="5m",
+        listing_mutable=False,
+        projection_exprs=(),
+        parquet_column_options=None,
+    ),
+    _TREE_SITTER_EXTERNAL_TABLE_NAME: _ScanDefaults(
+        partition_fields=_TREE_SITTER_PARTITION_FIELDS,
+        file_sort_order=_TREE_SITTER_FILE_SORT_ORDER,
+        infer_partitions=False,
+        cache_ttl="1m",
+        listing_mutable=False,
+        projection_exprs=(),
+        parquet_column_options=None,
+        collect_statistics=True,
+    ),
+    _SYMTABLE_EXTERNAL_TABLE_NAME: _ScanDefaults(
+        partition_fields=_SYMTABLE_PARTITION_FIELDS,
+        file_sort_order=_SYMTABLE_FILE_SORT_ORDER,
+        infer_partitions=False,
+        cache_ttl="1m",
+        listing_mutable=False,
+        projection_exprs=(),
+        parquet_column_options=None,
+    ),
+}
+
+
+@dataclass(frozen=True)
+class _ListingTableArtifactDetails:
+    scan: DataFusionScanOptions | None
+    file_extension: str
+    table_partition_cols: Sequence[tuple[str, str]] | None
+    skip_metadata: bool | None
+    table_schema_contract: TableSchemaContract | None
+    expr_adapter_factory: object | None
+
+
+_SIMPLE_REGISTRATION_METHODS: dict[str, str] = {
+    "csv": "register_csv",
+    "json": "register_json",
+    "avro": "register_avro",
+}
+
+
+@dataclass(frozen=True)
 class DeltaTableArtifactSnapshot:
     """Schema snapshot for Delta table registration artifacts."""
 
@@ -303,74 +388,41 @@ def _default_scan_options_for_dataset(
     DataFusionScanOptions | None
         Default scan options when the dataset is supported.
     """
-    if name not in {
-        _AST_EXTERNAL_TABLE_NAME,
-        _CST_EXTERNAL_TABLE_NAME,
-        _SYMTABLE_EXTERNAL_TABLE_NAME,
-        _BYTECODE_EXTERNAL_TABLE_NAME,
-    }:
+    defaults = _DEFAULT_SCAN_CONFIGS.get(name)
+    if defaults is None:
         return None
     schema = SCHEMA_REGISTRY.get(name)
     if schema is None:
         return None
     partition_cols: list[tuple[str, pa.DataType]] = []
-    if name == _CST_EXTERNAL_TABLE_NAME:
-        partition_fields = _CST_PARTITION_FIELDS
-        file_sort_order = _CST_FILE_SORT_ORDER
-        infer_partitions = True
-        cache_ttl = "2m"
-        listing_mutable = True
-        projection_exprs = _CST_PROJECTION_EXPRS
-        parquet_column_options = _CST_PARQUET_COLUMN_OPTIONS
-    elif name == _AST_EXTERNAL_TABLE_NAME:
-        partition_fields = _AST_PARTITION_FIELDS
-        file_sort_order = _AST_FILE_SORT_ORDER
-        infer_partitions = True
-        cache_ttl = "2m"
-        listing_mutable = False
-        projection_exprs = ()
-        parquet_column_options = None
-    elif name == _BYTECODE_EXTERNAL_TABLE_NAME:
-        partition_fields = _BYTECODE_PARTITION_FIELDS
-        file_sort_order = _BYTECODE_FILE_SORT_ORDER
-        infer_partitions = True
-        cache_ttl = "5m"
-        listing_mutable = False
-        projection_exprs = ()
-        parquet_column_options = None
-    else:
-        # Symtable defaults are snapshot-style (stable listing) with explicit partitions.
-        partition_fields = _SYMTABLE_PARTITION_FIELDS
-        file_sort_order = _SYMTABLE_FILE_SORT_ORDER
-        infer_partitions = False
-        cache_ttl = "1m"
-        listing_mutable = False
-        projection_exprs = ()
-        parquet_column_options = None
-    for field_name in partition_fields:
+    for field_name in defaults.partition_fields:
         dtype = _schema_field_type(name, field_name)
         if dtype is not None:
             partition_cols.append((field_name, dtype))
-    file_sort_order = tuple(field for field in file_sort_order if field in schema.names)
+    file_sort_order = tuple(field for field in defaults.file_sort_order if field in schema.names)
     return DataFusionScanOptions(
         partition_cols=tuple(partition_cols),
         file_sort_order=file_sort_order,
         file_extension=".parquet",
         parquet_pruning=True,
         skip_metadata=True,
-        collect_statistics=False,
-        listing_table_factory_infer_partitions=infer_partitions,
+        collect_statistics=defaults.collect_statistics,
+        listing_table_factory_infer_partitions=defaults.infer_partitions,
         list_files_cache_limit=str(64 * 1024 * 1024),
-        list_files_cache_ttl=cache_ttl,
-        projection_exprs=projection_exprs,
-        parquet_column_options=parquet_column_options,
-        listing_mutable=listing_mutable,
+        list_files_cache_ttl=defaults.cache_ttl,
+        projection_exprs=defaults.projection_exprs,
+        parquet_column_options=defaults.parquet_column_options,
+        listing_mutable=defaults.listing_mutable,
         unbounded=location.format != "delta",
     )
 
 
 def _default_delta_scan_options_for_dataset(name: str) -> DeltaScanOptions | None:
-    if name not in {_AST_EXTERNAL_TABLE_NAME, _CST_EXTERNAL_TABLE_NAME}:
+    if name not in {
+        _AST_EXTERNAL_TABLE_NAME,
+        _CST_EXTERNAL_TABLE_NAME,
+        _TREE_SITTER_EXTERNAL_TABLE_NAME,
+    }:
         return None
     schema = SCHEMA_REGISTRY.get(name)
     if schema is None:
@@ -492,69 +544,6 @@ def _table_key_fields(context: DataFusionRegistrationContext) -> tuple[str, ...]
     return key_fields
 
 
-def _partitioned_by(location: DatasetLocation) -> tuple[str, ...] | None:
-    scan = resolve_datafusion_scan_options(location)
-    if scan is None or not scan.partition_cols:
-        return None
-    return tuple(col for col, _ in scan.partition_cols)
-
-
-def _file_sort_order(location: DatasetLocation) -> tuple[str, ...] | None:
-    scan = resolve_datafusion_scan_options(location)
-    if scan is not None and scan.file_sort_order:
-        return tuple(scan.file_sort_order)
-    spec = location.dataset_spec
-    if spec is not None and spec.contract_spec is not None and spec.contract_spec.canonical_sort:
-        return tuple(key.column for key in spec.contract_spec.canonical_sort)
-    schema = resolve_dataset_schema(location)
-    if schema is None:
-        return None
-    ordering = ordering_from_schema(schema)
-    if ordering.keys:
-        return tuple(key[0] for key in ordering.keys)
-    return None
-
-
-def _merge_external_table_options(
-    *options: Mapping[str, object] | None,
-) -> dict[str, object]:
-    merged: dict[str, object] = {}
-    for mapping in options:
-        if not mapping:
-            continue
-        merged.update({key: value for key, value in mapping.items() if value is not None})
-    return merged
-
-
-def _scan_external_table_options(
-    scan: DataFusionScanOptions | None,
-) -> Mapping[str, object] | None:
-    if scan is None:
-        return None
-    options: dict[str, object] = {"skip_metadata": scan.skip_metadata}
-    if scan.schema_force_view_types is not None:
-        options["schema_force_view_types"] = scan.schema_force_view_types
-    if scan.skip_arrow_metadata is not None:
-        options["skip_arrow_metadata"] = scan.skip_arrow_metadata
-    if scan.binary_as_string is not None:
-        options["binary_as_string"] = scan.binary_as_string
-    if scan.parquet_column_options is not None:
-        options.update(scan.parquet_column_options.external_table_options())
-    return options
-
-
-def _external_table_options(
-    read_options: Mapping[str, object],
-) -> tuple[Mapping[str, object], str | None]:
-    options = dict(read_options)
-    compression = None
-    for key in ("compression", "compression_type"):
-        if key in options:
-            compression = str(options.pop(key))
-            break
-    return options, compression
-
-
 def datafusion_external_table_sql(
     *,
     name: str,
@@ -570,44 +559,8 @@ def datafusion_external_table_sql(
     str | None
         External table DDL when available, otherwise ``None``.
     """
-    if location.format == "delta":
-        return None
-    if name not in {
-        _AST_EXTERNAL_TABLE_NAME,
-        _CST_EXTERNAL_TABLE_NAME,
-        _SYMTABLE_EXTERNAL_TABLE_NAME,
-        _BYTECODE_EXTERNAL_TABLE_NAME,
-    }:
-        return None
-    table_spec = _resolve_table_spec(location)
-    if table_spec is None:
-        return None
-    scan = resolve_datafusion_scan_options(location)
-    read_options, compression = _external_table_options(location.read_options)
-    scan_options = _merge_external_table_options(
-        _scan_external_table_options(scan),
-        options_override,
-    )
-    merged_options = _merge_external_table_options(
-        runtime_profile.external_table_options if runtime_profile else None,
-        read_options,
-        scan_options,
-    )
-    overrides = ExternalTableConfigOverrides(
-        table_name=name,
-        dialect=dialect,
-        options=merged_options or None,
-        partitioned_by=_partitioned_by(location),
-        file_sort_order=_file_sort_order(location),
-        compression=compression,
-        unbounded=scan.unbounded if scan is not None else None,
-    )
-    config = table_spec.external_table_config(
-        location=str(location.path),
-        file_format=location.format,
-        overrides=overrides,
-    )
-    return table_spec.to_create_external_table_sql(config)
+    _ = dialect, options_override, runtime_profile, name, location
+    return None
 
 
 def register_dataset_df(
@@ -625,11 +578,25 @@ def register_dataset_df(
     datafusion.dataframe.DataFrame
         DataFusion DataFrame for the registered dataset.
 
-    Raises
-    ------
-    ValueError
-        Raised when the dataset format is unsupported.
     """
+    context = _build_registration_context(
+        ctx,
+        name=name,
+        location=location,
+        cache_policy=cache_policy,
+        runtime_profile=runtime_profile,
+    )
+    return _register_dataset_with_context(context)
+
+
+def _build_registration_context(
+    ctx: SessionContext,
+    *,
+    name: str,
+    location: DatasetLocation,
+    cache_policy: DataFusionCachePolicy | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DataFusionRegistrationContext:
     location = _apply_scan_defaults(name, location)
     _register_object_store(ctx, location)
     if runtime_profile is not None:
@@ -639,10 +606,19 @@ def register_dataset_df(
             schema=runtime_profile.default_schema,
         )
     options = resolve_registry_options(location)
+    if options.schema is None:
+        canonical = SCHEMA_REGISTRY.get(name)
+        if canonical is not None:
+            options = replace(options, schema=canonical)
     options = _apply_runtime_scan_hardening(options, runtime_profile=runtime_profile)
     cache = _resolve_cache_policy(
         options,
         cache_policy=cache_policy,
+        runtime_profile=runtime_profile,
+    )
+    external_table_sql = datafusion_external_table_sql(
+        name=name,
+        location=location,
         runtime_profile=runtime_profile,
     )
     context = DataFusionRegistrationContext(
@@ -651,35 +627,29 @@ def register_dataset_df(
         location=location,
         options=options,
         cache=cache,
-        external_table_sql=datafusion_external_table_sql(
-            name=name,
-            location=location,
-            runtime_profile=runtime_profile,
-            options_override=_scan_external_table_options(options.scan),
-        ),
+        external_table_sql=external_table_sql,
         runtime_profile=runtime_profile,
     )
-    if context.external_table_sql is not None:
-        record_table_definition_override(ctx, name=name, ddl=context.external_table_sql)
-    scan = options.scan
+    if external_table_sql is not None:
+        record_table_definition_override(ctx, name=name, ddl=external_table_sql)
+    return context
+
+
+def _register_dataset_with_context(context: DataFusionRegistrationContext) -> DataFrame:
+    scan = context.options.scan
     if (scan is not None and scan.unbounded) or _should_register_external_table(context):
-        df = _register_external_table(context)
-    elif location.format == "delta":
-        df = _register_delta(context)
-    elif options.provider == "dataset":
-        df = _register_dataset_provider(context)
-    elif location.format == "parquet":
-        df = _register_parquet(context)
-    elif location.format == "csv":
-        df = _register_simple(context, method="register_csv")
-    elif location.format == "json":
-        df = _register_simple(context, method="register_json")
-    elif location.format == "avro":
-        df = _register_simple(context, method="register_avro")
-    else:
-        msg = f"Unsupported DataFusion dataset format: {location.format!r}."
-        raise ValueError(msg)
-    return df
+        return _register_external_table(context)
+    if context.location.format == "delta":
+        return _register_delta(context)
+    if context.options.provider == "dataset":
+        return _register_dataset_provider(context)
+    if context.location.format == "parquet":
+        return _register_parquet(context)
+    method = _SIMPLE_REGISTRATION_METHODS.get(context.location.format)
+    if method is not None:
+        return _register_simple(context, method=method)
+    msg = f"Unsupported DataFusion dataset format: {context.location.format!r}."
+    raise ValueError(msg)
 
 
 def _should_register_external_table(context: DataFusionRegistrationContext) -> bool:
@@ -736,18 +706,20 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         )
         key_fields = _table_key_fields(context)
         listing_provider = parquet_listing_table_provider(
-            path=str(context.location.path),
-            schema=context.options.schema,
-            file_extension=file_extension,
-            table_name=context.name,
-            table_definition=context.external_table_sql,
-            table_partition_cols=partition_cols,
-            file_sort_order=file_sort_order,
-            key_fields=key_fields,
-            expr_adapter_factory=expr_adapter_factory,
-            parquet_pruning=scan.parquet_pruning if scan is not None else None,
-            skip_metadata=skip_metadata,
-            collect_statistics=scan.collect_statistics if scan is not None else None,
+            ParquetListingTableConfig(
+                path=str(context.location.path),
+                schema=context.options.schema,
+                file_extension=file_extension,
+                table_name=context.name,
+                table_definition=context.external_table_sql,
+                table_partition_cols=partition_cols,
+                file_sort_order=file_sort_order,
+                key_fields=key_fields,
+                expr_adapter_factory=expr_adapter_factory,
+                parquet_pruning=scan.parquet_pruning if scan is not None else None,
+                skip_metadata=skip_metadata,
+                collect_statistics=scan.collect_statistics if scan is not None else None,
+            )
         )
 
         def _register_listing() -> None:
@@ -789,12 +761,14 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         )
         _record_listing_table_artifact(
             context,
-            scan=scan,
-            file_extension=file_extension,
-            table_partition_cols=table_partition_cols,
-            skip_metadata=skip_metadata,
-            table_schema_contract=table_schema_contract,
-            expr_adapter_factory=expr_adapter_factory,
+            details=_ListingTableArtifactDetails(
+                scan=scan,
+                file_extension=file_extension,
+                table_partition_cols=table_partition_cols,
+                skip_metadata=skip_metadata,
+                table_schema_contract=table_schema_contract,
+                expr_adapter_factory=expr_adapter_factory,
+            ),
         )
     else:
         _apply_scan_settings(context.ctx, scan=scan)
@@ -851,12 +825,14 @@ def _register_external_table(
     )
     _record_listing_table_artifact(
         context,
-        scan=scan,
-        file_extension=file_extension,
-        table_partition_cols=table_partition_cols,
-        skip_metadata=skip_metadata,
-        table_schema_contract=table_schema_contract,
-        expr_adapter_factory=expr_adapter_factory,
+        details=_ListingTableArtifactDetails(
+            scan=scan,
+            file_extension=file_extension,
+            table_partition_cols=table_partition_cols,
+            skip_metadata=skip_metadata,
+            table_schema_contract=table_schema_contract,
+            expr_adapter_factory=expr_adapter_factory,
+        ),
     )
     return _maybe_cache(context, df)
 
@@ -967,6 +943,39 @@ def _record_table_provider_artifact(
     runtime_profile.diagnostics_sink.record_artifact("datafusion_table_providers_v1", payload)
 
 
+def _enforce_tree_sitter_delta_schema_contract(
+    context: DataFusionRegistrationContext,
+    *,
+    expected_schema: pa.Schema | None,
+    delta_schema: pa.Schema,
+    provider_schema: pa.Schema,
+) -> None:
+    if context.name != _TREE_SITTER_EXTERNAL_TABLE_NAME or expected_schema is None:
+        return
+    expected_fingerprint = schema_fingerprint(expected_schema.remove_metadata())
+    delta_fingerprint = schema_fingerprint(delta_schema.remove_metadata())
+    provider_fingerprint = schema_fingerprint(provider_schema.remove_metadata())
+    if expected_fingerprint == delta_fingerprint and expected_fingerprint == provider_fingerprint:
+        return
+    adapter_enabled = (
+        context.runtime_profile is not None
+        and context.runtime_profile.enable_schema_evolution_adapter
+    )
+    if adapter_enabled:
+        logger.warning(
+            "Tree-sitter delta schema mismatch: expected %s, delta %s, provider %s",
+            expected_fingerprint,
+            delta_fingerprint,
+            provider_fingerprint,
+        )
+        return
+    msg = (
+        "Tree-sitter delta schema mismatch: expected "
+        f"{expected_fingerprint}, delta {delta_fingerprint}, provider {provider_fingerprint}."
+    )
+    raise ValueError(msg)
+
+
 def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
     table = DeltaTable(
         context.location.path,
@@ -1057,18 +1066,19 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
         provider_schema=provider_schema,
     )
     _record_delta_table_artifact(context, snapshot=snapshot)
+    _enforce_tree_sitter_delta_schema_contract(
+        context,
+        expected_schema=expected_schema,
+        delta_schema=delta_schema,
+        provider_schema=provider_schema,
+    )
     return _maybe_cache(context, df)
 
 
 def _record_listing_table_artifact(
     context: DataFusionRegistrationContext,
     *,
-    scan: DataFusionScanOptions | None,
-    file_extension: str,
-    table_partition_cols: Sequence[tuple[str, str]] | None,
-    skip_metadata: bool | None,
-    table_schema_contract: TableSchemaContract | None,
-    expr_adapter_factory: object | None,
+    details: _ListingTableArtifactDetails,
 ) -> None:
     profile = context.runtime_profile
     if profile is None or profile.diagnostics_sink is None:
@@ -1082,13 +1092,13 @@ def _record_listing_table_artifact(
         schema_to_dict(context.options.schema) if context.options.schema is not None else None
     )
     column_options = (
-        scan.parquet_column_options.external_table_options()
-        if scan is not None and scan.parquet_column_options is not None
+        details.scan.parquet_column_options.external_table_options()
+        if details.scan is not None and details.scan.parquet_column_options is not None
         else None
     )
     table_schema_snapshot = _table_schema_snapshot(
         schema=context.options.schema,
-        partition_cols=table_partition_cols,
+        partition_cols=details.table_partition_cols,
     )
     ordering_keys: list[list[str]] | None = None
     ordering_matches_scan: bool | None = None
@@ -1096,50 +1106,68 @@ def _record_listing_table_artifact(
         ordering = ordering_from_schema(context.options.schema)
         if ordering.keys:
             ordering_keys = [list(key) for key in ordering.keys]
-            if scan is not None and scan.file_sort_order:
+            if details.scan is not None and details.scan.file_sort_order:
                 expected = [key[0] for key in ordering.keys]
-                ordering_matches_scan = list(scan.file_sort_order) == expected
+                ordering_matches_scan = list(details.scan.file_sort_order) == expected
     payload: dict[str, object] = {
         "name": context.name,
         "path": str(context.location.path),
         "format": context.location.format,
         "provider": "listing",
-        "file_extension": file_extension,
+        "file_extension": details.file_extension,
         "partition_cols": [
-            {"name": col, "dtype": dtype} for col, dtype in (table_partition_cols or ())
+            {"name": col, "dtype": dtype} for col, dtype in (details.table_partition_cols or ())
         ],
-        "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
+        "file_sort_order": (
+            list(details.scan.file_sort_order) if details.scan is not None else None
+        ),
         "ordering_keys": ordering_keys,
         "ordering_matches_scan": ordering_matches_scan,
-        "parquet_pruning": scan.parquet_pruning if scan is not None else None,
-        "skip_metadata": skip_metadata,
-        "skip_arrow_metadata": scan.skip_arrow_metadata if scan is not None else None,
-        "binary_as_string": scan.binary_as_string if scan is not None else None,
-        "schema_force_view_types": scan.schema_force_view_types if scan is not None else None,
-        "collect_statistics": scan.collect_statistics if scan is not None else None,
-        "meta_fetch_concurrency": scan.meta_fetch_concurrency if scan is not None else None,
+        "parquet_pruning": details.scan.parquet_pruning if details.scan is not None else None,
+        "skip_metadata": details.skip_metadata,
+        "skip_arrow_metadata": (
+            details.scan.skip_arrow_metadata if details.scan is not None else None
+        ),
+        "binary_as_string": (details.scan.binary_as_string if details.scan is not None else None),
+        "schema_force_view_types": (
+            details.scan.schema_force_view_types if details.scan is not None else None
+        ),
+        "collect_statistics": (
+            details.scan.collect_statistics if details.scan is not None else None
+        ),
+        "meta_fetch_concurrency": (
+            details.scan.meta_fetch_concurrency if details.scan is not None else None
+        ),
         "parquet_column_options": column_options,
-        "list_files_cache_limit": scan.list_files_cache_limit if scan is not None else None,
-        "list_files_cache_ttl": scan.list_files_cache_ttl if scan is not None else None,
+        "list_files_cache_limit": (
+            details.scan.list_files_cache_limit if details.scan is not None else None
+        ),
+        "list_files_cache_ttl": (
+            details.scan.list_files_cache_ttl if details.scan is not None else None
+        ),
         "listing_table_factory_infer_partitions": (
-            scan.listing_table_factory_infer_partitions if scan is not None else None
+            details.scan.listing_table_factory_infer_partitions
+            if details.scan is not None
+            else None
         ),
         "listing_table_ignore_subdirectory": (
-            scan.listing_table_ignore_subdirectory if scan is not None else None
+            details.scan.listing_table_ignore_subdirectory if details.scan is not None else None
         ),
-        "projection_exprs": list(scan.projection_exprs) if scan is not None else None,
-        "listing_mutable": scan.listing_mutable if scan is not None else None,
-        "unbounded": scan.unbounded if scan is not None else None,
+        "projection_exprs": (
+            list(details.scan.projection_exprs) if details.scan is not None else None
+        ),
+        "listing_mutable": details.scan.listing_mutable if details.scan is not None else None,
+        "unbounded": details.scan.unbounded if details.scan is not None else None,
         "schema": schema_payload,
         "table_schema_snapshot": table_schema_snapshot,
-        "table_schema_contract": _table_schema_contract_payload(table_schema_contract),
-        "expr_adapter_factory": _adapter_factory_payload(expr_adapter_factory),
+        "table_schema_contract": _table_schema_contract_payload(details.table_schema_contract),
+        "expr_adapter_factory": _adapter_factory_payload(details.expr_adapter_factory),
         "read_options": dict(context.options.read_options),
     }
     payload["partition_schema_validation"] = _partition_schema_validation(
         context.ctx,
         table_name=context.name,
-        expected_partition_cols=table_partition_cols,
+        expected_partition_cols=details.table_partition_cols,
         enable_information_schema=profile.enable_information_schema,
     )
     payload.update(provenance)
@@ -1524,6 +1552,82 @@ def _arrow_schema_from_dataframe(
     return None
 
 
+def _partition_column_rows(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+) -> tuple[list[dict[str, object]] | None, str | None]:
+    try:
+        table = ctx.sql(
+            "SELECT column_name, data_type, ordinal_position "
+            "FROM information_schema.columns "
+            f"WHERE table_name = '{table_name}' "
+            "ORDER BY ordinal_position"
+        ).to_arrow_table()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return None, str(exc)
+    return table.to_pylist(), None
+
+
+def _partition_columns_from_rows(
+    rows: Sequence[Mapping[str, object]],
+) -> tuple[list[str], dict[str, str]]:
+    actual_order: list[str] = []
+    actual_types: dict[str, str] = {}
+    for row in rows:
+        name = row.get("column_name")
+        if name is None:
+            continue
+        name_text = str(name)
+        actual_order.append(name_text)
+        data_type = row.get("data_type")
+        if data_type is not None:
+            actual_types[name_text] = str(data_type)
+    return actual_order, actual_types
+
+
+def _partition_type_mismatches(
+    expected_types: Mapping[str, str],
+    actual_types: Mapping[str, str],
+    expected_names: Sequence[str],
+) -> list[dict[str, str]]:
+    mismatches: list[dict[str, str]] = []
+    for name in expected_names:
+        expected_type = expected_types.get(name)
+        actual_type = actual_types.get(name)
+        if expected_type is None or actual_type is None:
+            continue
+        if expected_type.lower() != actual_type.lower():
+            mismatches.append(
+                {
+                    "name": name,
+                    "expected": expected_type,
+                    "actual": actual_type,
+                }
+            )
+    return mismatches
+
+
+def _table_schema_partition_snapshot(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    expected_types: Mapping[str, str],
+    expected_names: Sequence[str],
+) -> tuple[dict[str, str], list[str], list[dict[str, str]]]:
+    table_schema = _arrow_schema_from_dataframe(ctx, table_name=table_name)
+    if table_schema is None:
+        return {}, [], []
+    table_schema_types = {field.name: str(field.type) for field in table_schema}
+    missing = [name for name in expected_names if name not in table_schema_types]
+    mismatches = _partition_type_mismatches(
+        expected_types,
+        table_schema_types,
+        expected_names,
+    )
+    return table_schema_types, missing, mismatches
+
+
 def _partition_schema_validation(
     ctx: SessionContext,
     *,
@@ -1537,67 +1641,32 @@ def _partition_schema_validation(
         return None
     expected_names = [name for name, _ in expected_partition_cols]
     expected_types = {name: str(dtype) for name, dtype in expected_partition_cols}
-    try:
-        table = ctx.sql(
-            "SELECT column_name, data_type, ordinal_position "
-            "FROM information_schema.columns "
-            f"WHERE table_name = '{table_name}' "
-            "ORDER BY ordinal_position"
-        ).to_arrow_table()
-    except (RuntimeError, TypeError, ValueError) as exc:
+    rows, error = _partition_column_rows(ctx, table_name=table_name)
+    if error is not None:
         return {
             "expected_partition_cols": expected_names,
-            "error": str(exc),
+            "error": error,
         }
-    rows = table.to_pylist()
-    actual_order: list[str] = []
-    actual_types: dict[str, str] = {}
-    for row in rows:
-        name = row.get("column_name")
-        if name is None:
-            continue
-        name_text = str(name)
-        actual_order.append(name_text)
-        data_type = row.get("data_type")
-        if data_type is not None:
-            actual_types[name_text] = str(data_type)
+    if rows is None:
+        return {
+            "expected_partition_cols": expected_names,
+            "error": "Partition schema query returned no rows.",
+        }
+    actual_order, actual_types = _partition_columns_from_rows(rows)
     actual_partition_cols = [name for name in actual_order if name in expected_types]
     missing = [name for name in expected_names if name not in actual_types]
     order_matches = actual_partition_cols == expected_names if actual_partition_cols else None
-    type_mismatches: list[dict[str, str]] = []
-    for name in expected_names:
-        expected_type = expected_types.get(name)
-        actual_type = actual_types.get(name)
-        if expected_type is None or actual_type is None:
-            continue
-        if expected_type.lower() != actual_type.lower():
-            type_mismatches.append(
-                {
-                    "name": name,
-                    "expected": expected_type,
-                    "actual": actual_type,
-                }
-            )
-    table_schema = _arrow_schema_from_dataframe(ctx, table_name=table_name)
-    table_schema_types: dict[str, str] = {}
-    table_missing: list[str] = []
-    table_type_mismatches: list[dict[str, str]] = []
-    if table_schema is not None:
-        table_schema_types = {field.name: str(field.type) for field in table_schema}
-        table_missing = [name for name in expected_names if name not in table_schema_types]
-        for name in expected_names:
-            expected_type = expected_types.get(name)
-            table_type = table_schema_types.get(name)
-            if expected_type is None or table_type is None:
-                continue
-            if expected_type.lower() != table_type.lower():
-                table_type_mismatches.append(
-                    {
-                        "name": name,
-                        "expected": expected_type,
-                        "actual": table_type,
-                    }
-                )
+    type_mismatches = _partition_type_mismatches(
+        expected_types,
+        actual_types,
+        expected_names,
+    )
+    table_schema_types, table_missing, table_type_mismatches = _table_schema_partition_snapshot(
+        ctx,
+        table_name=table_name,
+        expected_types=expected_types,
+        expected_names=expected_names,
+    )
     return {
         "expected_partition_cols": expected_names,
         "actual_partition_cols": actual_partition_cols,

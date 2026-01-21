@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Protocol, cast
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
-from datafusion_engine.query_fragments import SqlFragment
 from datafusion_engine.schema_registry import has_schema, schema_for
 from ibis_engine.registry import datafusion_context
+
+
+@dataclass(frozen=True)
+class ViewReference:
+    """Reference a DataFusion-registered view by name."""
+
+    name: str
 
 
 class _DatafusionQuery(Protocol):
@@ -53,11 +60,11 @@ def register_nested_table(
     df_ctx.register_record_batches(name, [resolved_table.to_batches()])
 
 
-def materialize_sql_fragment(
+def materialize_view_reference(
     backend: BaseBackend | None,
-    fragment: SqlFragment,
+    view: ViewReference,
 ) -> pa.Table:
-    """Materialize a SQL fragment into a pyarrow table via DataFusion.
+    """Materialize a DataFusion view into a pyarrow table.
 
     Returns
     -------
@@ -70,15 +77,15 @@ def materialize_sql_fragment(
         Raised when an Ibis or DataFusion backend is unavailable.
     """
     if backend is None:
-        msg = f"SQL fragment {fragment.name!r} requires an Ibis backend."
+        msg = f"View {view.name!r} requires an Ibis backend."
         raise ValueError(msg)
     ctx = datafusion_context(backend)
     if ctx is None:
-        msg = f"SQL fragment {fragment.name!r} requires a DataFusion backend."
+        msg = f"View {view.name!r} requires a DataFusion backend."
         raise ValueError(msg)
     df_ctx = cast("_DatafusionContext", ctx)
-    batches = df_ctx.sql(fragment.sql).collect()
+    batches = df_ctx.sql(f"SELECT * FROM {view.name}").collect()
     return pa.Table.from_batches(batches)
 
 
-__all__ = ["materialize_sql_fragment", "register_nested_table"]
+__all__ = ["ViewReference", "materialize_view_reference", "register_nested_table"]

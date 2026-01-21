@@ -37,6 +37,11 @@ def infer_schema_or_registry(
     -------
     SchemaLike
         DataFusion schema for the dataset.
+
+    Raises
+    ------
+    KeyError
+        Raised when the dataset schema is not registered in DataFusion.
     """
     if is_nested_dataset(name):
         return nested_schema_for(name, allow_derived=True)

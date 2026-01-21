@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, cast, overload
 
-import pyarrow as pa
 import pyarrow.compute as _pc
 
 from arrowdsl.core.interop import ComputeModule
@@ -366,28 +365,6 @@ def list_parent_indices(values: ArrayInput) -> ArrayLike:
     return pc.list_parent_indices(values)
 
 
-def list_flatten(values: ArrayInput) -> ArrayLike:
-    """Flatten list arrays.
-
-    Returns
-    -------
-    object
-        Flattened list values.
-    """
-    return pc.list_flatten(values)
-
-
-def list_value_length(values: ArrayInput) -> ArrayLike:
-    """Return lengths of list values.
-
-    Returns
-    -------
-    object
-        List length values.
-    """
-    return pc.list_value_length(values)
-
-
 def value_counts(values: ArrayInput) -> ArrayLike:
     """Return value counts for array-like inputs.
 
@@ -503,37 +480,6 @@ def function_options_type() -> type[object] | None:
     return getattr(pc, "FunctionOptions", None)
 
 
-def flatten_list_struct_field(
-    table: TableLike,
-    *,
-    list_col: str,
-    field: str,
-) -> ArrayLike:
-    """Flatten a list<struct> column and return a field array.
-
-    Returns
-    -------
-    ArrayLike
-        Flattened field values.
-
-    Raises
-    ------
-    TypeError
-        Raised when the list column does not contain struct values.
-    """
-    column = table[list_col]
-    if isinstance(column, pa.ChunkedArray):
-        column = column.combine_chunks()
-    values = getattr(column, "values", None)
-    if values is None:
-        msg = f"Column {list_col!r} does not expose list values."
-        raise TypeError(msg)
-    if not isinstance(values, pa.StructArray):
-        msg = f"Column {list_col!r} does not contain struct values."
-        raise TypeError(msg)
-    return values.field(field)
-
-
 __all__ = [
     "SortOptions",
     "and_",
@@ -549,7 +495,6 @@ __all__ = [
     "equal",
     "field",
     "filter_values",
-    "flatten_list_struct_field",
     "function_options_type",
     "greater",
     "if_else",
@@ -557,10 +502,8 @@ __all__ = [
     "is_in",
     "is_null",
     "is_valid",
-    "list_flatten",
     "list_functions",
     "list_parent_indices",
-    "list_value_length",
     "not_equal",
     "or_",
     "pc",

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache as memoize
 from typing import TYPE_CHECKING, Protocol, cast
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 import ibis
 import pyarrow as pa
 import pyarrow.compute as pc
+from datafusion import SessionContext
 from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
@@ -39,26 +41,10 @@ from datafusion_engine.compute_ops import (
     struct_field,
 )
 from datafusion_engine.kernel_registry import resolve_kernel
-from datafusion_engine.nested_tables import materialize_sql_fragment, register_nested_table
-from datafusion_engine.query_fragments import (
-    SqlFragment,
-    ast_nodes_sql,
-    bytecode_blocks_sql,
-    bytecode_cfg_edges_sql,
-    bytecode_code_units_sql,
-    bytecode_instructions_sql,
-    libcst_call_args_sql,
-    libcst_callsites_sql,
-    libcst_defs_sql,
-    libcst_imports_sql,
-    libcst_parse_errors_sql,
-    libcst_type_exprs_sql,
-    scip_diagnostics_sql,
-    scip_documents_sql,
-    scip_occurrences_sql,
-    scip_symbol_information_sql,
-    tree_sitter_errors_sql,
-    tree_sitter_missing_sql,
+from datafusion_engine.nested_tables import (
+    ViewReference,
+    materialize_view_reference,
+    register_nested_table,
 )
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from extract.evidence_plan import EvidencePlan
@@ -173,7 +159,7 @@ def _posenc_stats_from_rows(rows: Sequence[Mapping[str, object]]) -> dict[str, o
         raw_count = row.get("doc_count")
         if raw_count is None and "counts" in row:
             raw_count = row.get("counts")
-        count = int(raw_count) if raw_count is not None else 0
+        count = _coerce_int(raw_count)
         total += count
         if raw_value is None:
             missing += count
@@ -197,18 +183,31 @@ def _posenc_stats_from_rows(rows: Sequence[Mapping[str, object]]) -> dict[str, o
     }
 
 
+def _coerce_int(value: object | None) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return int(value)
+    return 0
+
+
 def _scip_position_encoding_stats(
-    scip_documents: TableLike | SqlFragment,
+    scip_documents: TableLike | ViewReference,
     *,
     backend: BaseBackend,
 ) -> dict[str, object] | None:
-    if isinstance(scip_documents, SqlFragment):
+    if isinstance(scip_documents, ViewReference):
         ctx = datafusion_context(backend)
-        if ctx is None:
+        if not isinstance(ctx, SessionContext):
             return None
         query = (
             "SELECT position_encoding, COUNT(*) AS doc_count "
-            f"FROM ({scip_documents.sql}) docs GROUP BY position_encoding"
+            f"FROM {scip_documents.name} GROUP BY position_encoding"
         )
         table = ctx.sql(query).to_arrow_table()
         return _posenc_stats_from_rows(table.to_pylist())
@@ -218,7 +217,7 @@ def _scip_position_encoding_stats(
         return None
     if "position_encoding" not in table.column_names:
         return None
-    counts = pc.value_counts(table["position_encoding"])
+    counts = pc.call_function("value_counts", [table["position_encoding"]])
     rows = counts.to_pylist()
     return _posenc_stats_from_rows(rows)
 
@@ -243,25 +242,21 @@ def _require_datafusion_backend(backend: BaseBackend) -> None:
 
 def _materialize_fragment(
     backend: BaseBackend | None,
-    source: TableLike | SqlFragment,
+    source: TableLike | ViewReference,
 ) -> TableLike:
-    if not isinstance(source, SqlFragment):
+    if not isinstance(source, ViewReference):
         return source
-    return materialize_sql_fragment(backend, source)
+    return materialize_view_reference(backend, source)
 
 
 def _ibis_table_from_source(
     backend: BaseBackend,
-    source: TableLike | SqlFragment,
+    source: TableLike | ViewReference,
     *,
     name: str,
 ) -> Table:
-    if isinstance(source, SqlFragment):
-        sql_method = getattr(backend, "sql", None)
-        if not callable(sql_method):
-            msg = "Ibis backend does not support raw SQL fragments."
-            raise TypeError(msg)
-        return cast("Table", sql_method(source.sql))
+    if isinstance(source, ViewReference):
+        return backend.table(source.name)
     plan = source_to_ibis(source, options=SourceToIbisOptions(backend=backend, name=name))
     return plan.expr
 
@@ -275,7 +270,7 @@ class _DatafusionContext(Protocol):
 
 
 def _schema_from_fragment(
-    fragment: SqlFragment,
+    fragment: ViewReference,
     *,
     backend: BaseBackend | None,
 ) -> object | None:
@@ -284,13 +279,13 @@ def _schema_from_fragment(
     ctx = datafusion_context(backend)
     if ctx is None:
         return None
-    fragment_sql = f"SELECT * FROM ({fragment.sql}) AS fragment LIMIT 0"
+    fragment_sql = f"SELECT * FROM {fragment.name} LIMIT 0"
     df_ctx = cast("_DatafusionContext", ctx)
     return df_ctx.sql(fragment_sql).schema()
 
 
 def _schema_from_source(
-    source: TableLike | SqlFragment | None,
+    source: TableLike | ViewReference | None,
     *,
     backend: BaseBackend | None,
     fallback: str,
@@ -298,7 +293,7 @@ def _schema_from_source(
     fallback_schema = infer_schema_or_registry(fallback)
     if source is None:
         return fallback_schema
-    if isinstance(source, SqlFragment):
+    if isinstance(source, ViewReference):
         schema = _schema_from_fragment(source, backend=backend)
     else:
         schema = source.schema
@@ -363,6 +358,15 @@ class NormalizeQnameContext:
     libcst_files: TableLike | RecordBatchReaderLike | None
     ctx: ExecutionContext
     evidence_plan: EvidencePlan | None
+
+
+@dataclass(frozen=True)
+class CallsiteQnameSources:
+    """Bundle inputs for callsite qualified name candidates."""
+
+    cst_callsites: TableLike | ViewReference | None = None
+    cst_call_args: TableLike | ViewReference | None = None
+    libcst_files: TableLike | RecordBatchReaderLike | None = None
 
 
 @dataclass(frozen=True)
@@ -466,12 +470,9 @@ def normalize_type_sources(
     cst_type_exprs = normalize_type_source_inputs.cst_type_exprs
     scip_symbol_information = normalize_type_source_inputs.scip_symbol_information
     if cst_type_exprs is None and normalize_type_source_inputs.libcst_files is not None:
-        cst_type_exprs = SqlFragment("cst_type_exprs", libcst_type_exprs_sql())
+        cst_type_exprs = ViewReference("cst_type_exprs")
     if scip_symbol_information is None and backend is not None:
-        scip_symbol_information = SqlFragment(
-            "scip_symbol_information",
-            scip_symbol_information_sql(),
-        )
+        scip_symbol_information = ViewReference("scip_symbol_information")
     return NormalizeTypeSources(
         cst_type_exprs=cst_type_exprs,
         scip_symbol_information=scip_symbol_information,
@@ -528,13 +529,13 @@ def normalize_bytecode_sources(
     py_bc_instructions = normalize_bytecode_source_inputs.py_bc_instructions
     bytecode_files = normalize_bytecode_source_inputs.bytecode_files
     if py_bc_blocks is None and bytecode_files is not None:
-        py_bc_blocks = SqlFragment("py_bc_blocks", bytecode_blocks_sql())
+        py_bc_blocks = ViewReference("py_bc_blocks")
     if py_bc_cfg_edges is None and bytecode_files is not None:
-        py_bc_cfg_edges = SqlFragment("py_bc_cfg_edges", bytecode_cfg_edges_sql())
+        py_bc_cfg_edges = ViewReference("py_bc_cfg_edges")
     if py_bc_code_units is None and bytecode_files is not None:
-        py_bc_code_units = SqlFragment("py_bc_code_units", bytecode_code_units_sql())
+        py_bc_code_units = ViewReference("py_bc_code_units")
     if py_bc_instructions is None and bytecode_files is not None:
-        py_bc_instructions = SqlFragment("py_bc_instructions", bytecode_instructions_sql())
+        py_bc_instructions = ViewReference("py_bc_instructions")
     return NormalizeBytecodeSources(
         py_bc_blocks=py_bc_blocks,
         py_bc_cfg_edges=py_bc_cfg_edges,
@@ -855,7 +856,7 @@ def _callsite_arg_summary(call_args: TableLike) -> TableLike:
     )
     if grouped.num_rows == 0:
         return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
-    summary = table_from_arrays(
+    return table_from_arrays(
         CALLSITE_ARG_SUMMARY_SCHEMA,
         columns={
             "call_id": _string_or_null(grouped["call_id"]),
@@ -867,7 +868,6 @@ def _callsite_arg_summary(call_args: TableLike) -> TableLike:
         },
         num_rows=grouped.num_rows,
     )
-    return summary
 
 
 def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
@@ -986,8 +986,8 @@ def _join_callsite_arg_summary(base: TableLike, summary: TableLike) -> TableLike
 @tag(layer="normalize", artifact="dim_qualified_names", kind="table")
 def dim_qualified_names(
     normalize_qname_context: NormalizeQnameContext,
-    cst_callsites: TableLike | SqlFragment | None = None,
-    cst_defs: TableLike | SqlFragment | None = None,
+    cst_callsites: TableLike | ViewReference | None = None,
+    cst_defs: TableLike | ViewReference | None = None,
 ) -> TableLike:
     """Build a dimension table of qualified names from CST extraction.
 
@@ -999,6 +999,11 @@ def dim_qualified_names(
     -------
     TableLike
         Qualified name dimension table.
+
+    Raises
+    ------
+    ValueError
+        Raised when an Ibis backend is required but unavailable.
     """
     _ = normalize_qname_context.ctx
     backend = (
@@ -1011,48 +1016,29 @@ def dim_qualified_names(
         name="libcst_files_v1",
         table=normalize_qname_context.libcst_files,
     )
-    if cst_callsites is None and normalize_qname_context.libcst_files is not None:
-        cst_callsites = SqlFragment("cst_callsites", libcst_callsites_sql())
-    if cst_defs is None and normalize_qname_context.libcst_files is not None:
-        cst_defs = SqlFragment("cst_defs", libcst_defs_sql())
+    cst_callsites, cst_defs = _resolve_cst_sources(
+        cst_callsites,
+        cst_defs,
+        libcst_files=normalize_qname_context.libcst_files,
+    )
     if not _requires_output(normalize_qname_context.evidence_plan, "dim_qualified_names"):
         schema = infer_schema_or_registry(QNAME_DIM_NAME)
         return empty_table(schema)
     if cst_callsites is None or cst_defs is None:
         schema = infer_schema_or_registry(QNAME_DIM_NAME)
         return empty_table(schema)
+    if backend is None:
+        msg = "Qualified name normalization requires an Ibis backend."
+        raise ValueError(msg)
     _require_datafusion_backend(backend)
-
-    def _struct_qnames(table: Table, *, list_col: str, field: str) -> Table | None:
-        if list_col not in table.schema().names:
-            return None
-        unnested = table.unnest(list_col)
-        struct_col = unnested[list_col]
-        return unnested.select(qname=struct_col[field])
-
-    def _scalar_qnames(table: Table, *, list_col: str) -> Table | None:
-        if list_col not in table.schema().names:
-            return None
-        unnested = table.unnest(list_col)
-        return unnested.select(qname=unnested[list_col])
 
     callsites_expr = _ibis_table_from_source(backend, cst_callsites, name="cst_callsites")
     defs_expr = _ibis_table_from_source(backend, cst_defs, name="cst_defs")
-    sources: list[Table] = []
-    for table in (
-        _struct_qnames(callsites_expr, list_col="callee_qnames", field="name"),
-        _scalar_qnames(callsites_expr, list_col="callee_fqns"),
-        _struct_qnames(defs_expr, list_col="qnames", field="name"),
-        _scalar_qnames(defs_expr, list_col="def_fqns"),
-    ):
-        if table is not None:
-            sources.append(table)
+    sources = _qname_sources(callsites_expr, defs_expr)
     if not sources:
         schema = infer_schema_or_registry(QNAME_DIM_NAME)
         return empty_table(schema)
-    combined = sources[0]
-    for table in sources[1:]:
-        combined = combined.union(table, distinct=False)
+    combined = _union_tables(sources)
     combined = combined.filter(combined.qname.notnull())
     distinct_qnames = combined.distinct()
     qname_id = prefixed_hash64(ibis.literal("qname"), distinct_qnames.qname.cast("string"))
@@ -1061,13 +1047,78 @@ def dim_qualified_names(
     return align_table_to_schema(result.to_pyarrow(), schema)
 
 
+def _resolve_cst_sources(
+    cst_callsites: TableLike | ViewReference | None,
+    cst_defs: TableLike | ViewReference | None,
+    *,
+    libcst_files: TableLike | RecordBatchReaderLike | None,
+) -> tuple[TableLike | ViewReference | None, TableLike | ViewReference | None]:
+    if libcst_files is None:
+        return cst_callsites, cst_defs
+    resolved_callsites = cst_callsites or ViewReference("cst_callsites")
+    resolved_defs = cst_defs or ViewReference("cst_defs")
+    return resolved_callsites, resolved_defs
+
+
+def _struct_qnames(table: Table, *, list_col: str, field: str) -> Table | None:
+    if list_col not in table.columns:
+        return None
+    unnested = table.unnest(list_col)
+    struct_col = unnested[list_col]
+    return unnested.select(qname=struct_col[field])
+
+
+def _scalar_qnames(table: Table, *, list_col: str) -> Table | None:
+    if list_col not in table.columns:
+        return None
+    unnested = table.unnest(list_col)
+    return unnested.select(qname=unnested[list_col])
+
+
+def _qname_sources(callsites_expr: Table, defs_expr: Table) -> list[Table]:
+    return [
+        table
+        for table in (
+            _struct_qnames(callsites_expr, list_col="callee_qnames", field="name"),
+            _scalar_qnames(callsites_expr, list_col="callee_fqns"),
+            _struct_qnames(defs_expr, list_col="qnames", field="name"),
+            _scalar_qnames(defs_expr, list_col="def_fqns"),
+        )
+        if table is not None
+    ]
+
+
+def _union_tables(tables: Sequence[Table]) -> Table:
+    combined = tables[0]
+    for table in tables[1:]:
+        combined = combined.union(table, distinct=False)
+    return combined
+
+
+def callsite_qname_sources(
+    cst_callsites: TableLike | ViewReference | None = None,
+    cst_call_args: TableLike | ViewReference | None = None,
+    libcst_files: TableLike | RecordBatchReaderLike | None = None,
+) -> CallsiteQnameSources:
+    """Bundle callsite qualified name source inputs.
+
+    Returns
+    -------
+    CallsiteQnameSources
+        Bundled callsite inputs for candidate generation.
+    """
+    return CallsiteQnameSources(
+        cst_callsites=cst_callsites,
+        cst_call_args=cst_call_args,
+        libcst_files=libcst_files,
+    )
+
+
 @cache(format="delta")
 @tag(layer="normalize", artifact="callsite_qname_candidates", kind="table")
 def callsite_qname_candidates(
-    cst_callsites: TableLike | SqlFragment | None = None,
-    cst_call_args: TableLike | SqlFragment | None = None,
+    sources: CallsiteQnameSources,
     normalize_execution_context: NormalizeExecutionContext | None = None,
-    libcst_files: TableLike | RecordBatchReaderLike | None = None,
     *,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
@@ -1096,11 +1147,8 @@ def callsite_qname_candidates(
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
-    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
-    if cst_callsites is None and libcst_files is not None:
-        cst_callsites = SqlFragment("cst_callsites", libcst_callsites_sql())
-    if cst_call_args is None and libcst_files is not None:
-        cst_call_args = SqlFragment("cst_call_args", libcst_call_args_sql())
+    cst_callsites, cst_call_args = _resolve_callsite_sources(sources)
+    register_nested_table(backend, name="libcst_files_v1", table=sources.libcst_files)
     if cst_callsites is None:
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
@@ -1108,62 +1156,109 @@ def callsite_qname_candidates(
     if cst_callsites_table.num_rows == 0:
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
-    has_qnames = "callee_qnames" in cst_callsites_table.column_names
-    has_fqns = "callee_fqns" in cst_callsites_table.column_names
-    if not has_qnames and not has_fqns:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
-        return empty_table(schema)
-
-    kernel = resolve_kernel("explode_list", ctx=ctx)
-    tables: list[TableLike] = []
-    if has_qnames:
-        spec = ExplodeSpec(
-            parent_keys=("call_id",),
-            list_col="callee_qnames",
-            value_col="qname_struct",
-            idx_col=None,
-            keep_empty=True,
-        )
-        exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
-        base = _callsite_qname_base_table(exploded)
-        joined = _join_callsite_qname_meta(base, cst_callsites_table)
-        if joined.num_rows > 0:
-            tables.append(joined)
-    if has_fqns:
-        spec = ExplodeSpec(
-            parent_keys=("call_id",),
-            list_col="callee_fqns",
-            value_col="fqn_value",
-            idx_col=None,
-            keep_empty=True,
-        )
-        exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
-        base = _callsite_fqn_base_table(exploded)
-        joined = _join_callsite_qname_meta(base, cst_callsites_table)
-        if joined.num_rows > 0:
-            tables.append(joined)
+    tables = _callsite_candidate_tables(cst_callsites_table, ctx=ctx)
     if not tables:
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
-    joined = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
-    if cst_call_args is not None:
-        try:
-            call_args_table = _materialize_fragment(backend, cst_call_args)
-        except ValueError:
-            call_args_table = None
-        if call_args_table is not None:
-            arg_summary = _callsite_arg_summary(call_args_table)
-            joined = _join_callsite_arg_summary(joined, arg_summary)
+    joined = _concat_tables(tables)
+    joined = _maybe_join_call_args(joined, backend=backend, cst_call_args=cst_call_args)
 
     schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
     return align_table_to_schema(joined, schema)
+
+
+def _resolve_callsite_sources(
+    sources: CallsiteQnameSources,
+) -> tuple[TableLike | ViewReference | None, TableLike | ViewReference | None]:
+    cst_callsites = sources.cst_callsites
+    cst_call_args = sources.cst_call_args
+    if cst_callsites is None and sources.libcst_files is not None:
+        cst_callsites = ViewReference("cst_callsites")
+    if cst_call_args is None and sources.libcst_files is not None:
+        cst_call_args = ViewReference("cst_call_args")
+    return cst_callsites, cst_call_args
+
+
+def _callsite_candidate_tables(
+    cst_callsites_table: TableLike,
+    *,
+    ctx: ExecutionContext,
+) -> list[TableLike]:
+    if not isinstance(cst_callsites_table, pa.Table):
+        return []
+    table = cast("pa.Table", cst_callsites_table)
+    has_qnames = "callee_qnames" in table.column_names
+    has_fqns = "callee_fqns" in table.column_names
+    if not has_qnames and not has_fqns:
+        return []
+    kernel = resolve_kernel("explode_list", ctx=ctx)
+    tables: list[TableLike] = []
+    if has_qnames:
+        tables.extend(_callsite_qname_tables(kernel, table))
+    if has_fqns:
+        tables.extend(_callsite_fqn_tables(kernel, table))
+    return tables
+
+
+def _callsite_qname_tables(
+    kernel: Callable[..., TableLike],
+    cst_callsites_table: TableLike,
+) -> list[TableLike]:
+    spec = ExplodeSpec(
+        parent_keys=("call_id",),
+        list_col="callee_qnames",
+        value_col="qname_struct",
+        idx_col=None,
+        keep_empty=True,
+    )
+    exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
+    base = _callsite_qname_base_table(exploded)
+    joined = _join_callsite_qname_meta(base, cst_callsites_table)
+    return [joined] if joined.num_rows > 0 else []
+
+
+def _callsite_fqn_tables(
+    kernel: Callable[..., TableLike],
+    cst_callsites_table: TableLike,
+) -> list[TableLike]:
+    spec = ExplodeSpec(
+        parent_keys=("call_id",),
+        list_col="callee_fqns",
+        value_col="fqn_value",
+        idx_col=None,
+        keep_empty=True,
+    )
+    exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
+    base = _callsite_fqn_base_table(exploded)
+    joined = _join_callsite_qname_meta(base, cst_callsites_table)
+    return [joined] if joined.num_rows > 0 else []
+
+
+def _concat_tables(tables: Sequence[TableLike]) -> TableLike:
+    return pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+
+
+def _maybe_join_call_args(
+    joined: TableLike,
+    *,
+    backend: BaseBackend | None,
+    cst_call_args: TableLike | ViewReference | None,
+) -> TableLike:
+    if cst_call_args is None:
+        return joined
+    try:
+        call_args_table = _materialize_fragment(backend, cst_call_args)
+    except ValueError:
+        return joined
+    arg_summary = _callsite_arg_summary(call_args_table)
+    return _join_callsite_arg_summary(joined, arg_summary)
 
 
 @cache(format="delta")
 @tag(layer="normalize", artifact="ast_nodes_norm", kind="table")
 def ast_nodes_norm(
     span_normalize_context: SpanNormalizeContext,
-    ast_nodes: TableLike | SqlFragment | None = None,
+    ast_nodes: TableLike | ViewReference | None = None,
     ast_files: TableLike | RecordBatchReaderLike | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
@@ -1177,7 +1272,7 @@ def ast_nodes_norm(
     backend = span_normalize_context.ibis_backend
     register_nested_table(backend, name="ast_files_v1", table=ast_files)
     if ast_nodes is None and ast_files is not None:
-        ast_nodes = SqlFragment("ast_nodes", ast_nodes_sql())
+        ast_nodes = ViewReference("ast_nodes")
     if not _requires_output(evidence_plan, "ast_nodes_norm"):
         schema = _schema_from_source(
             ast_nodes,
@@ -1206,7 +1301,7 @@ def ast_nodes_norm(
 @tag(layer="normalize", artifact="py_bc_instructions_norm", kind="table")
 def py_bc_instructions_norm(
     span_normalize_context: SpanNormalizeContext,
-    py_bc_instructions: TableLike | SqlFragment | None = None,
+    py_bc_instructions: TableLike | ViewReference | None = None,
     bytecode_files: TableLike | RecordBatchReaderLike | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
@@ -1220,10 +1315,7 @@ def py_bc_instructions_norm(
     backend = span_normalize_context.ibis_backend
     register_nested_table(backend, name="bytecode_files_v1", table=bytecode_files)
     if py_bc_instructions is None and bytecode_files is not None:
-        py_bc_instructions = SqlFragment(
-            "py_bc_instructions",
-            bytecode_instructions_sql(),
-        )
+        py_bc_instructions = ViewReference("py_bc_instructions")
     if not _requires_output(evidence_plan, "py_bc_instructions_norm"):
         schema = _schema_from_source(
             py_bc_instructions,
@@ -1461,15 +1553,15 @@ def diagnostics_sources(
     scip_diagnostics = diagnostics_fragment_inputs.scip_diagnostics
     scip_documents = diagnostics_fragment_inputs.scip_documents
     if cst_parse_errors is None and diagnostics_table_inputs.libcst_files is not None:
-        cst_parse_errors = SqlFragment("cst_parse_errors", libcst_parse_errors_sql())
+        cst_parse_errors = ViewReference("cst_parse_errors")
     if ts_errors is None and diagnostics_table_inputs.tree_sitter_files is not None:
-        ts_errors = SqlFragment("ts_errors", tree_sitter_errors_sql())
+        ts_errors = ViewReference("ts_errors")
     if ts_missing is None and diagnostics_table_inputs.tree_sitter_files is not None:
-        ts_missing = SqlFragment("ts_missing", tree_sitter_missing_sql())
+        ts_missing = ViewReference("ts_missing")
     if scip_diagnostics is None and backend is not None:
-        scip_diagnostics = SqlFragment("scip_diagnostics", scip_diagnostics_sql())
+        scip_diagnostics = ViewReference("scip_diagnostics")
     if scip_documents is None and backend is not None:
-        scip_documents = SqlFragment("scip_documents", scip_documents_sql())
+        scip_documents = ViewReference("scip_documents")
     return DiagnosticsSources(
         cst_parse_errors=cst_parse_errors,
         ts_errors=ts_errors,
@@ -1512,8 +1604,8 @@ def diagnostics_norm(
 @tag(layer="normalize", artifact="scip_occurrences_norm_bundle", kind="bundle")
 def scip_occurrences_norm_bundle(
     span_normalize_context: SpanNormalizeContext,
-    scip_documents: TableLike | SqlFragment | None = None,
-    scip_occurrences: TableLike | SqlFragment | None = None,
+    scip_documents: TableLike | ViewReference | None = None,
+    scip_occurrences: TableLike | ViewReference | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, TableLike]:
     """Convert SCIP occurrences into byte offsets.
@@ -1525,9 +1617,9 @@ def scip_occurrences_norm_bundle(
     """
     backend = span_normalize_context.ibis_backend
     if scip_documents is None and backend is not None:
-        scip_documents = SqlFragment("scip_documents", scip_documents_sql())
+        scip_documents = ViewReference("scip_documents")
     if scip_occurrences is None and backend is not None:
-        scip_occurrences = SqlFragment("scip_occurrences", scip_occurrences_sql())
+        scip_occurrences = ViewReference("scip_occurrences")
     fallback_schema = _schema_from_source(
         scip_occurrences,
         backend=backend,
@@ -1550,10 +1642,10 @@ def scip_occurrences_norm_bundle(
     stats = _scip_position_encoding_stats(scip_documents, backend=backend)
     if stats is not None:
         _record_scip_position_encoding_stats(span_normalize_context.ctx, stats)
-        missing = int(stats.get("missing_position_encoding", 0) or 0)
-        invalid = int(stats.get("invalid_position_encoding", 0) or 0)
-        encodings = stats.get("valid_position_encodings") or []
-        invalid_values = stats.get("invalid_position_encoding_values") or []
+        missing = _coerce_int(stats.get("missing_position_encoding"))
+        invalid = _coerce_int(stats.get("invalid_position_encoding"))
+        encodings = _stats_list(stats, "valid_position_encodings")
+        invalid_values = _stats_list(stats, "invalid_position_encoding_values")
         if missing or invalid or len(encodings) > 1:
             LOGGER.warning(
                 "SCIP position encoding guard: missing=%d invalid=%d encodings=%s invalid_values=%s",
@@ -1573,10 +1665,17 @@ def scip_occurrences_norm_bundle(
     return {"scip_occurrences_norm": occ, "scip_span_errors": errs}
 
 
+def _stats_list(stats: Mapping[str, object], key: str) -> list[str]:
+    value = stats.get(key)
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []
+
+
 @cache(format="delta")
 @tag(layer="normalize", artifact="cst_imports_norm", kind="table")
 def cst_imports_norm(
-    cst_imports: TableLike | SqlFragment | None = None,
+    cst_imports: TableLike | ViewReference | None = None,
     normalize_execution_context: NormalizeExecutionContext | None = None,
     libcst_files: TableLike | RecordBatchReaderLike | None = None,
     *,
@@ -1589,12 +1688,17 @@ def cst_imports_norm(
     -------
     TableLike
         Normalized CST imports table.
+
+    Raises
+    ------
+    ValueError
+        Raised when no Ibis backend is available for normalization.
     """
     _ = ctx
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
     register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
     if cst_imports is None and libcst_files is not None:
-        cst_imports = SqlFragment("cst_imports", libcst_imports_sql())
+        cst_imports = ViewReference("cst_imports")
     if cst_imports is None:
         return empty_table(dataset_schema(dataset_name_from_alias("cst_imports_norm")))
     if not _requires_any(evidence_plan, ("cst_imports_norm", "cst_imports")):
@@ -1614,7 +1718,7 @@ def cst_imports_norm(
 @cache(format="delta")
 @tag(layer="normalize", artifact="cst_defs_norm", kind="table")
 def cst_defs_norm(
-    cst_defs: TableLike | SqlFragment | None = None,
+    cst_defs: TableLike | ViewReference | None = None,
     normalize_execution_context: NormalizeExecutionContext | None = None,
     libcst_files: TableLike | RecordBatchReaderLike | None = None,
     *,
@@ -1627,12 +1731,17 @@ def cst_defs_norm(
     -------
     TableLike
         Normalized CST definitions table.
+
+    Raises
+    ------
+    ValueError
+        Raised when no Ibis backend is available for normalization.
     """
     _ = ctx
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
     register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
     if cst_defs is None and libcst_files is not None:
-        cst_defs = SqlFragment("cst_defs", libcst_defs_sql())
+        cst_defs = ViewReference("cst_defs")
     if cst_defs is None:
         return empty_table(dataset_schema(dataset_name_from_alias("cst_defs_norm")))
     if not _requires_any(evidence_plan, ("cst_defs_norm", "cst_defs")):

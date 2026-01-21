@@ -12,7 +12,6 @@ import ibis
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
-import pyarrow.types as patypes
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, Table
 
@@ -26,8 +25,6 @@ from arrowdsl.schema.metadata import (
     merge_metadata_specs,
     metadata_spec_from_schema,
     ordering_metadata_spec,
-    schema_constraints_from_metadata,
-    schema_identity_from_metadata,
 )
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import (
@@ -54,8 +51,6 @@ from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from ibis_engine.scan_io import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
 from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.specs import (
-    ENCODING_DICTIONARY,
-    ENCODING_META,
     ArrowFieldSpec,
     DerivedFieldSpec,
     ExternalTableConfig,
@@ -1017,6 +1012,22 @@ def make_table_spec(
     )
 
 
+def table_spec_from_schema(
+    name: str,
+    schema: SchemaLike,
+    *,
+    version: int | None = None,
+) -> TableSchemaSpec:
+    """Create a TableSchemaSpec from an Arrow schema.
+
+    Returns
+    -------
+    TableSchemaSpec
+        Table schema specification derived from the Arrow schema.
+    """
+    return TableSchemaSpec.from_schema(name, schema, version=version)
+
+
 def make_contract_spec(
     *,
     table_spec: TableSchemaSpec,
@@ -1121,7 +1132,11 @@ def _table_spec_from_contract(contract: Contract) -> TableSchemaSpec:
     """
     if contract.schema_spec is not None:
         return contract.schema_spec
-    table_spec = table_spec_from_schema(contract.name, contract.schema, version=contract.version)
+    table_spec = TableSchemaSpec.from_schema(
+        contract.name,
+        contract.schema,
+        version=contract.version,
+    )
     if not contract.required_non_null and not contract.key_fields:
         return table_spec
     return replace(
@@ -1160,67 +1175,6 @@ def dataset_spec_from_contract(contract: Contract) -> DatasetSpec:
         table_spec=table_spec,
         contract_spec=contract_spec,
         delta_constraints=delta_constraints,
-    )
-
-
-def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
-    if not metadata:
-        return {}
-    return {
-        key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
-        for key, value in metadata.items()
-    }
-
-
-def _encoding_hint_from_field(
-    field_meta: Mapping[str, str],
-    *,
-    dtype: DataTypeLike,
-) -> Literal["dictionary"] | None:
-    hint = field_meta.get(ENCODING_META)
-    if hint == ENCODING_DICTIONARY:
-        return ENCODING_DICTIONARY
-    if patypes.is_dictionary(dtype):
-        return ENCODING_DICTIONARY
-    return None
-
-
-def table_spec_from_schema(
-    name: str,
-    schema: SchemaLike,
-    *,
-    version: int | None = None,
-) -> TableSchemaSpec:
-    """Create a TableSchemaSpec from a pyarrow.Schema.
-
-    Returns
-    -------
-    TableSchemaSpec
-        Table schema specification.
-    """
-    fields = []
-    for schema_field in schema:
-        meta = _decode_metadata(schema_field.metadata)
-        encoding = _encoding_hint_from_field(meta, dtype=schema_field.type)
-        fields.append(
-            ArrowFieldSpec(
-                name=schema_field.name,
-                dtype=schema_field.type,
-                nullable=schema_field.nullable,
-                metadata=meta,
-                encoding=encoding,
-            )
-        )
-    meta_name, meta_version = schema_identity_from_metadata(schema.metadata)
-    required_non_null, key_fields = schema_constraints_from_metadata(schema.metadata)
-    resolved_name = meta_name or name
-    resolved_version = version if version is not None else meta_version
-    return TableSchemaSpec(
-        name=resolved_name,
-        version=resolved_version,
-        fields=fields,
-        required_non_null=required_non_null,
-        key_fields=key_fields,
     )
 
 
@@ -1272,7 +1226,7 @@ def dataset_spec_from_schema(
     DatasetSpec
         Dataset spec derived from the schema.
     """
-    table_spec = table_spec_from_schema(name, schema, version=version)
+    table_spec = TableSchemaSpec.from_schema(name, schema, version=version)
     metadata_spec = metadata_spec_from_schema(schema)
     evolution_spec = resolve_schema_evolution_spec(name)
     return make_dataset_spec(

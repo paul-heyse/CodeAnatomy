@@ -296,7 +296,7 @@ CST_REF_T = pa.struct(
         pa.field("file_id", pa.string(), nullable=False),
         pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        pa.field("ref_id", pa.string(), nullable=False),
+        pa.field("ref_id", pa.string(), nullable=True),
         ("ref_kind", pa.string()),
         ("ref_text", pa.string()),
         ("expr_ctx", pa.string()),
@@ -335,7 +335,7 @@ CST_CALLSITE_T = pa.struct(
         pa.field("file_id", pa.string(), nullable=False),
         pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        pa.field("call_id", pa.string(), nullable=False),
+        pa.field("call_id", pa.string(), nullable=True),
         ("call_bstart", pa.int64()),
         ("call_bend", pa.int64()),
         ("callee_bstart", pa.int64()),
@@ -356,7 +356,7 @@ CST_DEF_T = pa.struct(
         pa.field("file_id", pa.string(), nullable=False),
         pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        pa.field("def_id", pa.string(), nullable=False),
+        pa.field("def_id", pa.string(), nullable=True),
         ("container_def_kind", pa.string()),
         ("container_def_bstart", pa.int64()),
         ("container_def_bend", pa.int64()),
@@ -396,8 +396,10 @@ CST_DOCSTRING_T = pa.struct(
         pa.field("file_id", pa.string(), nullable=False),
         pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        pa.field("owner_def_id", pa.string(), nullable=False),
+        pa.field("owner_def_id", pa.string(), nullable=True),
         ("owner_kind", pa.string()),
+        ("owner_def_bstart", pa.int64()),
+        ("owner_def_bend", pa.int64()),
         ("docstring", pa.string()),
         ("bstart", pa.int64()),
         ("bend", pa.int64()),
@@ -409,8 +411,10 @@ CST_DECORATOR_T = pa.struct(
         pa.field("file_id", pa.string(), nullable=False),
         pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        pa.field("owner_def_id", pa.string(), nullable=False),
+        pa.field("owner_def_id", pa.string(), nullable=True),
         ("owner_kind", pa.string()),
+        ("owner_def_bstart", pa.int64()),
+        ("owner_def_bend", pa.int64()),
         ("decorator_text", pa.string()),
         ("decorator_index", pa.int32()),
         ("bstart", pa.int64()),
@@ -423,7 +427,9 @@ CST_CALL_ARG_T = pa.struct(
         pa.field("file_id", pa.string(), nullable=False),
         pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        pa.field("call_id", pa.string(), nullable=False),
+        pa.field("call_id", pa.string(), nullable=True),
+        ("call_bstart", pa.int64()),
+        ("call_bend", pa.int64()),
         ("arg_index", pa.int32()),
         ("keyword", pa.string()),
         ("star", pa.string()),
@@ -953,7 +959,7 @@ BYTECODE_FLAGS_T = pa.struct(
 
 BYTECODE_CODE_OBJ_T = pa.struct(
     [
-        pa.field("code_id", pa.string(), nullable=False),
+        pa.field("code_id", pa.string(), nullable=True),
         pa.field("qualname", pa.string(), nullable=False),
         pa.field("co_qualname", pa.string()),
         pa.field("co_filename", pa.string()),
@@ -1646,20 +1652,30 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "root": "bytecode_files_v1",
         "path": "code_objects.line_table",
         "role": "derived",
-        "context": {"code_id": "code_objects.code_id"},
+        "context": {
+            "code_unit_qualpath": "code_objects.qualname",
+            "code_unit_name": "code_objects.name",
+            "code_unit_firstlineno": "code_objects.firstlineno1",
+        },
     },
     "py_bc_instructions": {
         "root": "bytecode_files_v1",
         "path": "code_objects.instructions",
         "role": "derived",
-        "context": {"code_id": "code_objects.code_id"},
+        "context": {
+            "code_unit_qualpath": "code_objects.qualname",
+            "code_unit_name": "code_objects.name",
+            "code_unit_firstlineno": "code_objects.firstlineno1",
+        },
     },
     "py_bc_cache_entries": {
         "root": "bytecode_files_v1",
         "path": "code_objects.instructions.cache_info",
         "role": "derived",
         "context": {
-            "code_id": "code_objects.code_id",
+            "code_unit_qualpath": "code_objects.qualname",
+            "code_unit_name": "code_objects.name",
+            "code_unit_firstlineno": "code_objects.firstlineno1",
             "instr_index": "code_objects.instructions.instr_index",
             "offset": "code_objects.instructions.offset",
         },
@@ -1668,31 +1684,51 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "root": "bytecode_files_v1",
         "path": "code_objects.consts",
         "role": "derived",
-        "context": {"code_id": "code_objects.code_id"},
+        "context": {
+            "code_unit_qualpath": "code_objects.qualname",
+            "code_unit_name": "code_objects.name",
+            "code_unit_firstlineno": "code_objects.firstlineno1",
+        },
     },
     "py_bc_blocks": {
         "root": "bytecode_files_v1",
         "path": "code_objects.blocks",
         "role": "derived",
-        "context": {"code_id": "code_objects.code_id"},
+        "context": {
+            "code_unit_qualpath": "code_objects.qualname",
+            "code_unit_name": "code_objects.name",
+            "code_unit_firstlineno": "code_objects.firstlineno1",
+        },
     },
     "py_bc_cfg_edges": {
         "root": "bytecode_files_v1",
         "path": "code_objects.cfg_edges",
         "role": "derived",
-        "context": {"code_id": "code_objects.code_id"},
+        "context": {
+            "code_unit_qualpath": "code_objects.qualname",
+            "code_unit_name": "code_objects.name",
+            "code_unit_firstlineno": "code_objects.firstlineno1",
+        },
     },
     "py_bc_dfg_edges": {
         "root": "bytecode_files_v1",
         "path": "code_objects.dfg_edges",
         "role": "derived",
-        "context": {"code_id": "code_objects.code_id"},
+        "context": {
+            "code_unit_qualpath": "code_objects.qualname",
+            "code_unit_name": "code_objects.name",
+            "code_unit_firstlineno": "code_objects.firstlineno1",
+        },
     },
     "bytecode_exception_table": {
         "root": "bytecode_files_v1",
         "path": "code_objects.exception_table",
         "role": "derived",
-        "context": {"code_id": "code_objects.code_id"},
+        "context": {
+            "code_unit_qualpath": "code_objects.qualname",
+            "code_unit_name": "code_objects.name",
+            "code_unit_firstlineno": "code_objects.firstlineno1",
+        },
     },
     "bytecode_errors": {
         "root": "bytecode_files_v1",
@@ -2063,12 +2099,14 @@ BYTECODE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "arrow_cast",
     "arrow_metadata",
     "arrow_typeof",
+    "concat_ws",
     "map_entries",
     "map_extract",
     "map_keys",
     "map_values",
     "list_extract",
     "named_struct",
+    "prefixed_hash64",
     "unnest",
 )
 
@@ -2082,6 +2120,7 @@ BYTECODE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "map_keys": 1,
     "map_values": 1,
     "named_struct": 2,
+    "prefixed_hash64": 2,
     "unnest": 1,
 }
 
@@ -2089,9 +2128,11 @@ CST_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "arrow_cast",
     "arrow_metadata",
     "arrow_typeof",
+    "concat_ws",
     "map_entries",
     "map_extract",
     "named_struct",
+    "prefixed_hash64",
     "unnest",
 )
 
@@ -2102,6 +2143,24 @@ CST_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "map_entries": 1,
     "map_extract": 2,
     "named_struct": 2,
+    "prefixed_hash64": 2,
+    "unnest": 1,
+}
+
+SYMTABLE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
+    "arrow_metadata",
+    "arrow_typeof",
+    "concat_ws",
+    "map_entries",
+    "prefixed_hash64",
+    "unnest",
+)
+
+SYMTABLE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
+    "arrow_metadata": 1,
+    "arrow_typeof": 1,
+    "map_entries": 1,
+    "prefixed_hash64": 2,
     "unnest": 1,
 }
 
@@ -2170,6 +2229,11 @@ CST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ..
     "arrow_metadata": (None, _STRING_TYPE_TOKENS),
     "map_entries": (_MAP_TYPE_TOKENS,),
     "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
+}
+
+SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
+    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+    "map_entries": (_MAP_TYPE_TOKENS,),
 }
 
 BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
@@ -2822,6 +2886,17 @@ def validate_symtable_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
+    _validate_required_functions(ctx, required=SYMTABLE_REQUIRED_FUNCTIONS, errors=errors)
+    _validate_function_signatures(
+        ctx,
+        required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURES,
+        errors=errors,
+    )
+    _validate_function_signature_types(
+        ctx,
+        required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
+        errors=errors,
+    )
     for name in SYMTABLE_VIEW_NAMES:
         try:
             ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
@@ -3483,7 +3558,11 @@ def validate_cst_views(ctx: SessionContext) -> None:
     """
     errors: dict[str, str] = {}
     _validate_required_functions(ctx, required=CST_REQUIRED_FUNCTIONS, errors=errors)
-    _validate_function_signatures(ctx, required=CST_REQUIRED_FUNCTION_SIGNATURES, errors=errors)
+    _validate_function_signatures(
+        ctx,
+        required=CST_REQUIRED_FUNCTION_SIGNATURES,
+        errors=errors,
+    )
     _validate_function_signature_types(
         ctx,
         required=CST_REQUIRED_FUNCTION_SIGNATURE_TYPES,
@@ -3503,6 +3582,72 @@ def validate_cst_views(ctx: SessionContext) -> None:
         errors["cst_schema_diagnostics"] = str(exc)
     if errors:
         msg = f"CST view validation failed: {errors}."
+        raise ValueError(msg)
+
+
+def validate_required_cst_functions(ctx: SessionContext) -> None:
+    """Validate required CST functions and signatures.
+
+    Raises
+    ------
+    ValueError
+        Raised when required functions or signatures are missing.
+    """
+    errors: dict[str, str] = {}
+    _validate_required_functions(ctx, required=CST_REQUIRED_FUNCTIONS, errors=errors)
+    _validate_function_signatures(ctx, required=CST_REQUIRED_FUNCTION_SIGNATURES, errors=errors)
+    if errors:
+        msg = f"Required CST functions validation failed: {errors}."
+        raise ValueError(msg)
+
+
+def validate_required_symtable_functions(ctx: SessionContext) -> None:
+    """Validate required symtable functions and signatures.
+
+    Raises
+    ------
+    ValueError
+        Raised when required functions or signatures are missing.
+    """
+    errors: dict[str, str] = {}
+    _validate_required_functions(ctx, required=SYMTABLE_REQUIRED_FUNCTIONS, errors=errors)
+    _validate_function_signatures(
+        ctx,
+        required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURES,
+        errors=errors,
+    )
+    _validate_function_signature_types(
+        ctx,
+        required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
+        errors=errors,
+    )
+    if errors:
+        msg = f"Required symtable functions validation failed: {errors}."
+        raise ValueError(msg)
+
+
+def validate_required_bytecode_functions(ctx: SessionContext) -> None:
+    """Validate required bytecode functions and signatures.
+
+    Raises
+    ------
+    ValueError
+        Raised when required functions or signatures are missing.
+    """
+    errors: dict[str, str] = {}
+    _validate_required_functions(ctx, required=BYTECODE_REQUIRED_FUNCTIONS, errors=errors)
+    _validate_function_signatures(
+        ctx,
+        required=BYTECODE_REQUIRED_FUNCTION_SIGNATURES,
+        errors=errors,
+    )
+    _validate_function_signature_types(
+        ctx,
+        required=BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
+        errors=errors,
+    )
+    if errors:
+        msg = f"Required bytecode functions validation failed: {errors}."
         raise ValueError(msg)
 
 
@@ -3669,6 +3814,9 @@ __all__ = [
     "validate_bytecode_views",
     "validate_cst_views",
     "validate_nested_types",
+    "validate_required_bytecode_functions",
+    "validate_required_cst_functions",
+    "validate_required_symtable_functions",
     "validate_schema_metadata",
     "validate_scip_views",
     "validate_symtable_views",

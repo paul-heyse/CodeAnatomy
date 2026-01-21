@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Sequence
+import uuid
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
+from datafusion import SessionContext, col
+from datafusion import functions as f
 
 from arrowdsl.core.array_iter import iter_array_values
 from arrowdsl.core.execution_context import ExecutionContext
@@ -42,29 +45,17 @@ from datafusion_engine.compute_ops import (
     fill_null,
     invert,
     is_null,
-    list_flatten,
-    list_value_length,
     or_,
     value_counts,
 )
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
+from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
     from arrowdsl.schema.policy import SchemaPolicy
-    from schema_spec.specs import TableSchemaSpec
 
 
 type InvariantFn = Callable[[TableLike], tuple[ArrayLike, str]]
-
-
-class _TableSpecFromSchema(Protocol):
-    def __call__(
-        self,
-        name: str,
-        schema: SchemaLike,
-        *,
-        version: int | None = None,
-    ) -> TableSchemaSpec: ...
 
 
 class _ValidateArrowTable(Protocol):
@@ -83,9 +74,7 @@ def _table_spec_from_schema(
     *,
     version: int | None = None,
 ) -> TableSchemaSpec:
-    module = importlib.import_module("schema_spec.system")
-    table_spec_fn = cast("_TableSpecFromSchema", module.table_spec_from_schema)
-    return table_spec_fn(name, schema, version=version)
+    return TableSchemaSpec.from_schema(name, schema, version=version)
 
 
 def _validate_arrow_table(
@@ -352,14 +341,14 @@ def _required_non_null_results(
         Invariant results for required non-null checks.
     """
     results: list[InvariantResult] = []
-    for col in cols:
-        mask = fill_null(is_null(table[col]), fill_value=False)
+    for column_name in cols:
+        mask = fill_null(is_null(table[column_name]), fill_value=False)
         results.append(
             InvariantResult(
                 mask=mask,
                 code="REQUIRED_NON_NULL",
-                message=f"{col} is required.",
-                column=col,
+                message=f"{column_name} is required.",
+                column=column_name,
                 severity="ERROR",
                 source="required_non_null",
             )
@@ -537,25 +526,59 @@ def _row_id_for_errors(
 def _aggregate_error_detail_lists(
     errors: TableLike,
     *,
+    ctx: ExecutionContext,
     group_cols: Sequence[str],
     detail_field_names: Sequence[str],
 ) -> TableLike:
-    aggregates = [(name, "list") for name in detail_field_names]
     group_table = errors.select(list(group_cols) + list(detail_field_names))
     group_table, dict_cols = _decode_dictionary_columns(group_table)
-    aggregated = group_table.group_by(list(group_cols), use_threads=True).aggregate(aggregates)
+    df_ctx = _datafusion_context(ctx)
+    aggregated_table: pa.Table | None = None
+    if df_ctx is not None and _supports_error_detail_aggregation(df_ctx):
+        try:
+            aggregated_table = _aggregate_error_detail_lists_df(
+                df_ctx,
+                group_table,
+                group_cols=group_cols,
+                detail_field_names=detail_field_names,
+            )
+        except (RuntimeError, TypeError, ValueError):
+            aggregated_table = None
+    if aggregated_table is None:
+        aggregated_table = _aggregate_error_detail_lists_arrow(
+            group_table,
+            group_cols=group_cols,
+            detail_field_names=detail_field_names,
+        )
+    if aggregated_table is None:
+        msg = "Failed to aggregate error details."
+        raise RuntimeError(msg)
+    if dict_cols:
+        aggregated_table = _reencode_dictionary_columns(aggregated_table, dict_cols)
+    return cast("TableLike", aggregated_table)
+
+
+def _aggregate_error_detail_lists_arrow(
+    group_table: pa.Table,
+    *,
+    group_cols: Sequence[str],
+    detail_field_names: Sequence[str],
+) -> pa.Table:
+    aggregates = [(name, "list") for name in detail_field_names]
+    aggregated = cast(
+        "pa.Table",
+        group_table.group_by(list(group_cols), use_threads=True).aggregate(aggregates),
+    )
     list_columns = {name: aggregated[f"{name}_list"] for name in detail_field_names}
     error_detail = _build_error_detail_from_lists(list_columns)
     list_cols = [f"{name}_list" for name in detail_field_names]
-    aggregated = aggregated.append_column("error_detail", error_detail).drop(list_cols)
-    if dict_cols:
-        aggregated = _reencode_dictionary_columns(aggregated, dict_cols)
-    return aggregated
+    return aggregated.append_column("error_detail", error_detail).drop(list_cols)
 
 
 def _aggregate_error_details(
     errors: TableLike,
     *,
+    ctx: ExecutionContext,
     contract: Contract,
     schema: SchemaLike,
     provenance_cols: Sequence[str],
@@ -575,21 +598,21 @@ def _aggregate_error_details(
     detail_field_names = [name for name, _ in ERROR_DETAIL_FIELDS]
     return _aggregate_error_detail_lists(
         errors,
+        ctx=ctx,
         group_cols=group_cols,
         detail_field_names=detail_field_names,
     )
 
 
 def _build_error_detail_from_lists(
-    list_columns: dict[str, ArrayLike | ChunkedArrayLike],
+    list_columns: Mapping[str, ArrayLike | ChunkedArrayLike],
 ) -> ArrayLike:
     first = _combine_list_array(next(iter(list_columns.values())))
     offsets = _list_offsets(first)
     struct_fields: dict[str, ArrayLike] = {}
     for name, list_col in list_columns.items():
         list_array = _combine_list_array(list_col)
-        values = list_flatten(list_array)
-        struct_fields[name] = values
+        struct_fields[name] = _list_values(list_array)
     detail_struct = build_struct(struct_fields, struct_type=ERROR_DETAIL_STRUCT)
     return _build_list_from_offsets(offsets, detail_struct, template=first)
 
@@ -627,7 +650,11 @@ def _is_list_like_type(dtype: DataTypeLike) -> bool:
 def _list_view_to_list_array(
     values: pa.ListViewArray | pa.LargeListViewArray,
 ) -> ListArrayLike:
-    lengths = list_value_length(values)
+    lengths_method = getattr(values, "value_lengths", None)
+    if not callable(lengths_method):
+        msg = "List view arrays must expose value_lengths to build offsets."
+        raise TypeError(msg)
+    lengths = cast("ArrayLike", lengths_method())
     lengths = fill_null(lengths, fill_value=0)
     if isinstance(values, pa.LargeListViewArray):
         if lengths.type != pa.int64():
@@ -637,7 +664,7 @@ def _list_view_to_list_array(
     offsets = cumulative_sum(lengths)
     zero = pa.array([0], type=offsets.type)
     offsets = pa.concat_arrays([zero, offsets])
-    flat = list_flatten(values)
+    flat = _list_values(values)
     mask = is_null(values)
     if isinstance(values, pa.LargeListViewArray):
         return cast("ListArrayLike", pa.LargeListArray.from_arrays(offsets, flat, mask=mask))
@@ -668,6 +695,59 @@ def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> ListArrayLike:
                 return cast("ListArrayLike", casted)
     msg = "Expected list array for error detail aggregation."
     raise TypeError(msg)
+
+
+def _list_values(values: ListArrayLike) -> ArrayLike:
+    resolved = getattr(values, "values", None)
+    if resolved is None:
+        msg = "Expected list arrays to expose flattened values."
+        raise TypeError(msg)
+    return cast("ArrayLike", resolved)
+
+
+def _datafusion_context(ctx: ExecutionContext) -> SessionContext | None:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return None
+    try:
+        return profile.session_context()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _supports_error_detail_aggregation(ctx: SessionContext) -> bool:
+    try:
+        rows = ctx.sql("SELECT routine_name FROM information_schema.routines").to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return False
+    names = {
+        str(row.get("routine_name")).lower()
+        for row in rows.to_pylist()
+        if row.get("routine_name") is not None
+    }
+    return "array_agg" in names and "named_struct" in names
+
+
+def _aggregate_error_detail_lists_df(
+    ctx: SessionContext,
+    table: pa.Table,
+    *,
+    group_cols: Sequence[str],
+    detail_field_names: Sequence[str],
+) -> pa.Table:
+    table_name = f"_finalize_errors_{uuid.uuid4().hex}"
+    ctx.register_table(table_name, ctx.from_arrow(table))
+    try:
+        struct_expr = f.named_struct([(name, col(name)) for name in detail_field_names])
+        aggregated = ctx.table(table_name).aggregate(
+            group_by=list(group_cols),
+            aggs=[f.array_agg(struct_expr).alias("error_detail")],
+        )
+        return aggregated.to_arrow_table()
+    finally:
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            deregister(table_name)
 
 
 def _decode_dictionary_columns(
@@ -812,6 +892,7 @@ def finalize(
     raw_errors = _build_error_table(aligned, results, error_spec=options.error_spec)
     errors = _aggregate_error_details(
         raw_errors,
+        ctx=ctx,
         contract=contract,
         schema=schema,
         provenance_cols=provenance_cols,

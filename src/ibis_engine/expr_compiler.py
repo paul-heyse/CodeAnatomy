@@ -121,12 +121,6 @@ def _binary_join_element_wise_expr(*values: Value) -> Value:
         msg = "binary_join_element_wise requires at least two inputs."
         raise ValueError(msg)
     *parts, sep = values
-    if all(part.type().is_string() for part in parts) and sep.type().is_string():
-        joined = ops.StringJoin(
-            arg=tuple(cast("StringValue", part) for part in parts),
-            sep=cast("StringValue", sep),
-        )
-        return joined.to_expr()
     result = cast("StringValue", parts[0])
     separator = cast("StringValue", sep)
     for part in parts[1:]:

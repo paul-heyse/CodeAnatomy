@@ -23,17 +23,12 @@ from arrowdsl.spec.scalar_union import SCALAR_UNION_FIELDS, SCALAR_UNION_TYPE
 from arrowdsl.spec.tables.base import SpecTableCodec
 from datafusion_engine.compute_ops import scalar
 from ibis_engine.query_compiler import IbisQuerySpec
-from schema_spec.system import (
-    ContractSpec,
-    DatasetSpec,
-    make_dataset_spec,
-    make_table_spec,
-    table_spec_from_schema,
-)
+from schema_spec.specs import TableSchemaSpec
+from schema_spec.system import ContractSpec, DatasetSpec, make_dataset_spec, make_table_spec
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
-    from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle, TableSchemaSpec
+    from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle
 
 
 def _or_exprs(exprs: Sequence[ComputeExpression]) -> ComputeExpression:
@@ -108,7 +103,7 @@ class SpecTableSpec:
         TableSchemaSpec
             Table schema spec for validation.
         """
-        spec = table_spec_from_schema(self.name, self.schema)
+        spec = TableSchemaSpec.from_schema(self.name, self.schema)
         return spec.with_constraints(
             required_non_null=self.required_non_null,
             key_fields=self.key_fields,

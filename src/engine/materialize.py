@@ -6,7 +6,7 @@ import contextlib
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
@@ -252,32 +252,40 @@ def _deregister_table(ctx: SessionContext, *, name: str) -> None:
             deregister(name)
 
 
+@dataclass(frozen=True)
+class _AstWriteRecord:
+    mode: str
+    path: str
+    file_format: str
+    rows: int | None
+    write_policy: DataFusionWritePolicy | None
+    parquet_payload: Mapping[str, object] | None
+    delta_result: DeltaWriteResult | None
+
+
 def _record_ast_write(
     runtime_profile: DataFusionRuntimeProfile,
     *,
-    mode: str,
-    path: str,
-    file_format: str,
-    rows: int | None,
-    write_policy: DataFusionWritePolicy | None,
-    parquet_payload: Mapping[str, object] | None,
-    delta_result: DeltaWriteResult | None,
+    record: _AstWriteRecord,
 ) -> None:
     sink = runtime_profile.diagnostics_sink
     if sink is None:
         return
+    parquet_options: dict[str, object] | None = None
+    if record.parquet_payload is not None:
+        options_value = record.parquet_payload.get("parquet_options")
+        if isinstance(options_value, Mapping):
+            parquet_options = dict(options_value)
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset": "ast_files_v1",
-        "mode": mode,
-        "path": path,
-        "format": file_format,
-        "rows": rows,
-        "write_policy": write_policy.payload() if write_policy is not None else None,
-        "parquet_options": (
-            dict(parquet_payload.get("parquet_options", {})) if parquet_payload else None
-        ),
-        "delta_version": delta_result.version if delta_result is not None else None,
+        "mode": record.mode,
+        "path": record.path,
+        "format": record.file_format,
+        "rows": record.rows,
+        "write_policy": record.write_policy.payload() if record.write_policy is not None else None,
+        "parquet_options": parquet_options,
+        "delta_version": record.delta_result.version if record.delta_result is not None else None,
     }
     sink.record_artifact("datafusion_ast_output_writes_v1", payload)
 
@@ -313,13 +321,15 @@ def _write_ast_external(
     rows = int(table.num_rows) if isinstance(table, pa.Table) else None
     _record_ast_write(
         runtime_profile,
-        mode="copy",
-        path=str(path),
-        file_format=file_format,
-        rows=rows,
-        write_policy=policy,
-        parquet_payload=payload,
-        delta_result=None,
+        record=_AstWriteRecord(
+            mode="copy",
+            path=str(path),
+            file_format=file_format,
+            rows=rows,
+            write_policy=policy,
+            parquet_payload=payload,
+            delta_result=None,
+        ),
     )
 
 
@@ -363,24 +373,28 @@ def _write_ast_delta(
         )
         _record_ast_write(
             runtime_profile,
-            mode="delta_write",
+            record=_AstWriteRecord(
+                mode="delta_write",
+                path=str(path),
+                file_format="delta",
+                rows=rows,
+                write_policy=None,
+                parquet_payload=None,
+                delta_result=fallback,
+            ),
+        )
+        return
+    _record_ast_write(
+        runtime_profile,
+        record=_AstWriteRecord(
+            mode="insert",
             path=str(path),
             file_format="delta",
             rows=rows,
             write_policy=None,
             parquet_payload=None,
-            delta_result=fallback,
-        )
-        return
-    _record_ast_write(
-        runtime_profile,
-        mode="insert",
-        path=str(path),
-        file_format="delta",
-        rows=rows,
-        write_policy=None,
-        parquet_payload=None,
-        delta_result=datafusion_result,
+            delta_result=datafusion_result,
+        ),
     )
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
+from datafusion import SessionContext
 from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value as IbisValue
@@ -21,6 +22,7 @@ from arrowdsl.core.interop import (
     coerce_table_like,
 )
 from arrowdsl.core.scan_telemetry import ScanTelemetry
+from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.constants import CpgBuildArtifacts
 from cpg.symtable_resolution import build_binding_resolution_table
@@ -32,17 +34,10 @@ from cpg.symtable_sql import (
     symtable_use_sites_sql,
 )
 from datafusion_engine.extract_ids import repo_file_id_spec
-from datafusion_engine.nested_tables import materialize_sql_fragment, register_nested_table
-from datafusion_engine.query_fragments import (
-    SqlFragment,
-    libcst_callsites_sql,
-    libcst_refs_sql,
-    symtable_scope_edges_sql,
-    symtable_scopes_sql,
-    symtable_symbols_sql,
-    tree_sitter_errors_sql,
-    tree_sitter_missing_sql,
-    tree_sitter_nodes_sql,
+from datafusion_engine.nested_tables import (
+    ViewReference,
+    materialize_view_reference,
+    register_nested_table,
 )
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from datafusion_engine.schema_authority import dataset_spec_from_context
@@ -75,6 +70,7 @@ from ibis_engine.param_tables import (
 )
 from ibis_engine.params_bridge import IbisParamRegistry, registry_from_specs, specs_from_rel_ops
 from ibis_engine.plan import IbisPlan
+from ibis_engine.registry import datafusion_context
 from ibis_engine.scan_io import DatasetSource
 from incremental.publish import (
     publish_cpg_edges,
@@ -131,13 +127,10 @@ from relspec.validate import validate_registry
 from schema_spec.relationship_specs import (
     relationship_contract_spec as build_relationship_contract_spec,
 )
-from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
     ContractCatalogSpec,
     DataFusionScanOptions,
     DatasetSpec,
-    make_dataset_spec,
-    table_spec_from_schema,
 )
 from sqlglot_tools.bridge import IbisCompilerBackend
 from storage.deltalake import (
@@ -315,14 +308,20 @@ def relationship_execution_inputs(
 def _datafusion_scan_options(
     name: str,
     *,
-    table_spec: TableSchemaSpec | None,
+    schema: SchemaLike | None,
     dataset_spec: DatasetSpec | None,
 ) -> DataFusionScanOptions:
     if dataset_spec is not None and dataset_spec.datafusion_scan is not None:
         return dataset_spec.datafusion_scan
     file_sort_order: tuple[str, ...] = ()
-    if table_spec is not None and table_spec.key_fields:
-        file_sort_order = tuple(table_spec.key_fields)
+    if dataset_spec is not None:
+        ordering = dataset_spec.ordering()
+        if ordering.keys:
+            file_sort_order = tuple(key[0] for key in ordering.keys)
+    elif schema is not None:
+        ordering = ordering_from_schema(schema)
+        if ordering.keys:
+            file_sort_order = tuple(key[0] for key in ordering.keys)
     return DataFusionScanOptions(
         file_extension=".parquet",
         parquet_pruning=True,
@@ -550,6 +549,35 @@ def relspec_input_dataset_dir(relspec_work_dir: str) -> str:
     return str(dataset_dir)
 
 
+def _register_view_reference(
+    backend: BaseBackend | None,
+    *,
+    name: str,
+    sql: str,
+) -> ViewReference:
+    """Register a view SQL statement and return its reference.
+
+    Returns
+    -------
+    ViewReference
+        Reference to the registered view.
+
+    Raises
+    ------
+    TypeError
+        Raised when the backend is missing or unsupported.
+    """
+    if backend is None:
+        msg = f"View {name!r} requires an Ibis backend."
+        raise TypeError(msg)
+    ctx = datafusion_context(backend)
+    if not isinstance(ctx, SessionContext):
+        msg = f"View {name!r} requires a DataFusion backend."
+        raise TypeError(msg)
+    ctx.sql(f"CREATE OR REPLACE VIEW {name} AS {sql}").collect()
+    return ViewReference(name)
+
+
 # -----------------------------
 # Nested table fragments
 # -----------------------------
@@ -560,20 +588,20 @@ def relspec_input_dataset_dir(relspec_work_dir: str) -> str:
 def cst_refs(
     libcst_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return the CST refs projection from nested LibCST files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for CST name references.
+    ViewReference
+        View reference for CST name references.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="libcst_files_v1",
         table=libcst_files,
     )
-    return SqlFragment("cst_refs", libcst_refs_sql())
+    return ViewReference("cst_refs")
 
 
 @cache()
@@ -581,20 +609,20 @@ def cst_refs(
 def cst_callsites(
     libcst_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return the CST callsites projection from nested LibCST files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for CST callsites.
+    ViewReference
+        View reference for CST callsites.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="libcst_files_v1",
         table=libcst_files,
     )
-    return SqlFragment("cst_callsites", libcst_callsites_sql())
+    return ViewReference("cst_callsites")
 
 
 @cache()
@@ -602,20 +630,20 @@ def cst_callsites(
 def ts_nodes(
     tree_sitter_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return tree-sitter node projection from nested tree-sitter files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for tree-sitter nodes.
+    ViewReference
+        View reference for tree-sitter nodes.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="tree_sitter_files_v1",
         table=tree_sitter_files,
     )
-    return SqlFragment("ts_nodes", tree_sitter_nodes_sql())
+    return ViewReference("ts_nodes")
 
 
 @cache()
@@ -623,20 +651,20 @@ def ts_nodes(
 def ts_errors(
     tree_sitter_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return tree-sitter error projection from nested tree-sitter files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for tree-sitter errors.
+    ViewReference
+        View reference for tree-sitter errors.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="tree_sitter_files_v1",
         table=tree_sitter_files,
     )
-    return SqlFragment("ts_errors", tree_sitter_errors_sql())
+    return ViewReference("ts_errors")
 
 
 @cache()
@@ -644,20 +672,20 @@ def ts_errors(
 def ts_missing(
     tree_sitter_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return tree-sitter missing projection from nested tree-sitter files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for tree-sitter missing nodes.
+    ViewReference
+        View reference for tree-sitter missing nodes.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="tree_sitter_files_v1",
         table=tree_sitter_files,
     )
-    return SqlFragment("ts_missing", tree_sitter_missing_sql())
+    return ViewReference("ts_missing")
 
 
 @cache()
@@ -665,20 +693,20 @@ def ts_missing(
 def symtable_scopes(
     symtables: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return symtable scope rows from nested symtable files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for symtable scopes.
+    ViewReference
+        View reference for symtable scopes.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="symtable_files_v1",
         table=symtables,
     )
-    return SqlFragment("symtable_scopes", symtable_scopes_sql())
+    return ViewReference("symtable_scopes")
 
 
 @cache()
@@ -686,20 +714,20 @@ def symtable_scopes(
 def symtable_symbols(
     symtables: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return symtable symbol rows from nested symtable files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for symtable symbols.
+    ViewReference
+        View reference for symtable symbols.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="symtable_files_v1",
         table=symtables,
     )
-    return SqlFragment("symtable_symbols", symtable_symbols_sql())
+    return ViewReference("symtable_symbols")
 
 
 @cache()
@@ -707,20 +735,20 @@ def symtable_symbols(
 def symtable_scope_edges(
     symtables: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return symtable scope edges from nested symtable files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for symtable scope edges.
+    ViewReference
+        View reference for symtable scope edges.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="symtable_files_v1",
         table=symtables,
     )
-    return SqlFragment("symtable_scope_edges", symtable_scope_edges_sql())
+    return ViewReference("symtable_scope_edges")
 
 
 @cache()
@@ -728,20 +756,24 @@ def symtable_scope_edges(
 def symtable_bindings(
     symtables: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return symtable binding rows from nested symtable files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for symtable bindings.
+    ViewReference
+        View reference for symtable bindings.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="symtable_files_v1",
         table=symtables,
     )
-    return SqlFragment("symtable_bindings", symtable_bindings_sql())
+    return _register_view_reference(
+        engine_session.ibis_backend,
+        name="symtable_bindings",
+        sql=symtable_bindings_sql(),
+    )
 
 
 @cache()
@@ -750,13 +782,13 @@ def symtable_def_sites(
     symtables: TableLike | RecordBatchReaderLike,
     libcst_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return symtable definition sites from nested symtable files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for symtable definition sites.
+    ViewReference
+        View reference for symtable definition sites.
     """
     register_nested_table(
         engine_session.ibis_backend,
@@ -768,7 +800,11 @@ def symtable_def_sites(
         name="libcst_files_v1",
         table=libcst_files,
     )
-    return SqlFragment("symtable_def_sites", symtable_def_sites_sql())
+    return _register_view_reference(
+        engine_session.ibis_backend,
+        name="symtable_def_sites",
+        sql=symtable_def_sites_sql(),
+    )
 
 
 @cache()
@@ -777,13 +813,13 @@ def symtable_use_sites(
     symtables: TableLike | RecordBatchReaderLike,
     libcst_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return symtable use sites from nested symtable files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for symtable use sites.
+    ViewReference
+        View reference for symtable use sites.
     """
     register_nested_table(
         engine_session.ibis_backend,
@@ -795,7 +831,11 @@ def symtable_use_sites(
         name="libcst_files_v1",
         table=libcst_files,
     )
-    return SqlFragment("symtable_use_sites", symtable_use_sites_sql())
+    return _register_view_reference(
+        engine_session.ibis_backend,
+        name="symtable_use_sites",
+        sql=symtable_use_sites_sql(),
+    )
 
 
 @cache()
@@ -803,20 +843,24 @@ def symtable_use_sites(
 def symtable_type_params(
     symtables: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return symtable type parameters from nested symtable files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for symtable type parameters.
+    ViewReference
+        View reference for symtable type parameters.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="symtable_files_v1",
         table=symtables,
     )
-    return SqlFragment("symtable_type_params", symtable_type_params_sql())
+    return _register_view_reference(
+        engine_session.ibis_backend,
+        name="symtable_type_params",
+        sql=symtable_type_params_sql(),
+    )
 
 
 @cache()
@@ -824,28 +868,32 @@ def symtable_type_params(
 def symtable_type_param_edges(
     symtables: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
-) -> SqlFragment:
+) -> ViewReference:
     """Return symtable type parameter edges from nested symtable files.
 
     Returns
     -------
-    SqlFragment
-        SQL fragment for symtable type-parameter edges.
+    ViewReference
+        View reference for symtable type-parameter edges.
     """
     register_nested_table(
         engine_session.ibis_backend,
         name="symtable_files_v1",
         table=symtables,
     )
-    return SqlFragment("symtable_type_param_edges", symtable_type_param_edges_sql())
+    return _register_view_reference(
+        engine_session.ibis_backend,
+        name="symtable_type_param_edges",
+        sql=symtable_type_param_edges_sql(),
+    )
 
 
 @tag(layer="relspec", artifact="relspec_cst_inputs", kind="bundle")
 def relspec_cst_inputs(
-    cst_refs: TableLike | SqlFragment,
-    cst_imports_norm: TableLike | SqlFragment,
-    cst_callsites: TableLike | SqlFragment,
-    cst_defs_norm: TableLike | SqlFragment,
+    cst_refs: TableLike | ViewReference,
+    cst_imports_norm: TableLike | ViewReference,
+    cst_callsites: TableLike | ViewReference,
+    cst_defs_norm: TableLike | ViewReference,
 ) -> CstRelspecInputs:
     """Bundle CST tables needed for relationship inputs.
 
@@ -968,15 +1016,15 @@ def relspec_input_dataset_context(
 
 def _require_table(
     name: str,
-    value: TableLike | DatasetSource | SqlFragment,
+    value: TableLike | DatasetSource | ViewReference,
     *,
     backend: BaseBackend,
 ) -> TableLike:
     if isinstance(value, DatasetSource):
         msg = f"Relspec input {name!r} must be a table, not a dataset source."
         raise TypeError(msg)
-    if isinstance(value, SqlFragment):
-        return materialize_sql_fragment(backend, value)
+    if isinstance(value, ViewReference):
+        return materialize_view_reference(backend, value)
     return value
 
 
@@ -1136,21 +1184,18 @@ def persist_relspec_input_datasets(
     out: dict[str, DatasetLocation] = {}
     for name, result in results.items():
         table = relspec_input_datasets.get(name)
-        table_spec = table_spec_from_schema(name, table.schema) if table is not None else None
+        table_schema = table.schema if table is not None else None
         dataset_spec = _catalog_spec_for(name)
-        if dataset_spec is None and table_spec is not None:
-            dataset_spec = make_dataset_spec(table_spec=table_spec)
         out[name] = DatasetLocation(
             path=result.path,
             format="delta",
             partitioning="hive",
             filesystem=None,
             files=None,
-            table_spec=table_spec,
             dataset_spec=dataset_spec,
             datafusion_scan=_datafusion_scan_options(
                 name,
-                table_spec=table_spec,
+                schema=table_schema,
                 dataset_spec=dataset_spec,
             ),
             datafusion_provider=None,
@@ -1615,10 +1660,10 @@ def relationship_output_tables(
 
 @tag(layer="cpg", artifact="cst_build_inputs", kind="bundle")
 def cst_build_inputs(
-    cst_refs: TableLike | DatasetSource | SqlFragment,
-    cst_imports_norm: TableLike | DatasetSource | SqlFragment,
-    cst_callsites: TableLike | DatasetSource | SqlFragment,
-    cst_defs_norm: TableLike | DatasetSource | SqlFragment,
+    cst_refs: TableLike | DatasetSource | ViewReference,
+    cst_imports_norm: TableLike | DatasetSource | ViewReference,
+    cst_callsites: TableLike | DatasetSource | ViewReference,
+    cst_defs_norm: TableLike | DatasetSource | ViewReference,
 ) -> CstBuildInputs:
     """Bundle CST inputs for CPG builds.
 
@@ -1637,10 +1682,10 @@ def cst_build_inputs(
 
 @tag(layer="cpg", artifact="scip_build_inputs", kind="bundle")
 def scip_build_inputs(
-    scip_symbol_information: TableLike | DatasetSource | SqlFragment,
-    scip_occurrences_norm: TableLike | DatasetSource | SqlFragment,
-    scip_symbol_relationships: TableLike | DatasetSource | SqlFragment,
-    scip_external_symbol_information: TableLike | DatasetSource | SqlFragment,
+    scip_symbol_information: TableLike | DatasetSource | ViewReference,
+    scip_occurrences_norm: TableLike | DatasetSource | ViewReference,
+    scip_symbol_relationships: TableLike | DatasetSource | ViewReference,
+    scip_external_symbol_information: TableLike | DatasetSource | ViewReference,
 ) -> ScipBuildInputs:
     """Bundle SCIP inputs for CPG builds.
 
@@ -1661,28 +1706,28 @@ def scip_build_inputs(
 class SymtableCoreInputs:
     """Core symtable inputs for relationship builds."""
 
-    symtable_scopes: TableLike | DatasetSource | SqlFragment
-    symtable_symbols: TableLike | DatasetSource | SqlFragment
-    symtable_scope_edges: TableLike | DatasetSource | SqlFragment
-    symtable_bindings: TableLike | DatasetSource | SqlFragment
+    symtable_scopes: TableLike | DatasetSource | ViewReference
+    symtable_symbols: TableLike | DatasetSource | ViewReference
+    symtable_scope_edges: TableLike | DatasetSource | ViewReference
+    symtable_bindings: TableLike | DatasetSource | ViewReference
 
 
 @dataclass(frozen=True)
 class SymtableSiteInputs:
     """Symtable site inputs for relationship builds."""
 
-    symtable_def_sites: TableLike | DatasetSource | SqlFragment
-    symtable_use_sites: TableLike | DatasetSource | SqlFragment
-    symtable_type_params: TableLike | DatasetSource | SqlFragment
-    symtable_type_param_edges: TableLike | DatasetSource | SqlFragment
+    symtable_def_sites: TableLike | DatasetSource | ViewReference
+    symtable_use_sites: TableLike | DatasetSource | ViewReference
+    symtable_type_params: TableLike | DatasetSource | ViewReference
+    symtable_type_param_edges: TableLike | DatasetSource | ViewReference
 
 
 @tag(layer="cpg", artifact="symtable_core_inputs", kind="bundle")
 def symtable_core_inputs(
-    symtable_scopes: TableLike | DatasetSource | SqlFragment,
-    symtable_symbols: TableLike | DatasetSource | SqlFragment,
-    symtable_scope_edges: TableLike | DatasetSource | SqlFragment,
-    symtable_bindings: TableLike | DatasetSource | SqlFragment,
+    symtable_scopes: TableLike | DatasetSource | ViewReference,
+    symtable_symbols: TableLike | DatasetSource | ViewReference,
+    symtable_scope_edges: TableLike | DatasetSource | ViewReference,
+    symtable_bindings: TableLike | DatasetSource | ViewReference,
 ) -> SymtableCoreInputs:
     """Bundle core symtable inputs for CPG builds.
 
@@ -1701,10 +1746,10 @@ def symtable_core_inputs(
 
 @tag(layer="cpg", artifact="symtable_site_inputs", kind="bundle")
 def symtable_site_inputs(
-    symtable_def_sites: TableLike | DatasetSource | SqlFragment,
-    symtable_use_sites: TableLike | DatasetSource | SqlFragment,
-    symtable_type_params: TableLike | DatasetSource | SqlFragment,
-    symtable_type_param_edges: TableLike | DatasetSource | SqlFragment,
+    symtable_def_sites: TableLike | DatasetSource | ViewReference,
+    symtable_use_sites: TableLike | DatasetSource | ViewReference,
+    symtable_type_params: TableLike | DatasetSource | ViewReference,
+    symtable_type_param_edges: TableLike | DatasetSource | ViewReference,
 ) -> SymtableSiteInputs:
     """Bundle symtable site inputs for CPG builds.
 
@@ -1747,8 +1792,8 @@ def symtable_build_inputs(
 
 @tag(layer="cpg", artifact="cpg_base_inputs", kind="bundle")
 def cpg_base_inputs(
-    repo_files: TableLike | DatasetSource | SqlFragment,
-    dim_qualified_names: TableLike | DatasetSource | SqlFragment,
+    repo_files: TableLike | DatasetSource | ViewReference,
+    dim_qualified_names: TableLike | DatasetSource | ViewReference,
     cst_build_inputs: CstBuildInputs,
     scip_build_inputs: ScipBuildInputs,
     symtable_build_inputs: SymtableBuildInputs,
@@ -1771,9 +1816,9 @@ def cpg_base_inputs(
 
 @tag(layer="cpg", artifact="tree_sitter_inputs", kind="bundle")
 def tree_sitter_inputs(
-    ts_nodes: TableLike | DatasetSource | SqlFragment,
-    ts_errors: TableLike | DatasetSource | SqlFragment,
-    ts_missing: TableLike | DatasetSource | SqlFragment,
+    ts_nodes: TableLike | DatasetSource | ViewReference,
+    ts_errors: TableLike | DatasetSource | ViewReference,
+    ts_missing: TableLike | DatasetSource | ViewReference,
 ) -> TreeSitterInputs:
     """Bundle tree-sitter inputs for CPG construction.
 
@@ -1787,8 +1832,8 @@ def tree_sitter_inputs(
 
 @tag(layer="cpg", artifact="type_inputs", kind="bundle")
 def type_inputs(
-    type_exprs_norm: TableLike | DatasetSource | SqlFragment,
-    types_norm: TableLike | DatasetSource | SqlFragment,
+    type_exprs_norm: TableLike | DatasetSource | ViewReference,
+    types_norm: TableLike | DatasetSource | ViewReference,
 ) -> TypeInputs:
     """Bundle type inputs for CPG construction.
 
@@ -1802,7 +1847,7 @@ def type_inputs(
 
 @tag(layer="cpg", artifact="diagnostics_inputs", kind="bundle")
 def diagnostics_inputs(
-    diagnostics_norm: TableLike | DatasetSource | SqlFragment,
+    diagnostics_norm: TableLike | DatasetSource | ViewReference,
 ) -> DiagnosticsInputs:
     """Bundle diagnostics inputs for CPG construction.
 
@@ -1816,10 +1861,10 @@ def diagnostics_inputs(
 
 @tag(layer="cpg", artifact="runtime_inputs", kind="bundle")
 def runtime_inputs(
-    rt_objects: TableLike | DatasetSource | SqlFragment,
-    rt_signatures: TableLike | DatasetSource | SqlFragment,
-    rt_signature_params: TableLike | DatasetSource | SqlFragment,
-    rt_members: TableLike | DatasetSource | SqlFragment,
+    rt_objects: TableLike | DatasetSource | ViewReference,
+    rt_signatures: TableLike | DatasetSource | ViewReference,
+    rt_signature_params: TableLike | DatasetSource | ViewReference,
+    rt_members: TableLike | DatasetSource | ViewReference,
 ) -> RuntimeInputs:
     """Bundle runtime inspection inputs for CPG construction.
 
@@ -1895,12 +1940,12 @@ def symtable_binding_resolutions(
 
 
 def _materialize_symtable_source(
-    source: TableLike | DatasetSource | SqlFragment,
+    source: TableLike | DatasetSource | ViewReference,
     *,
     backend: BaseBackend | None,
 ) -> TableLike:
-    if isinstance(source, SqlFragment):
-        return materialize_sql_fragment(backend, source)
+    if isinstance(source, ViewReference):
+        return materialize_view_reference(backend, source)
     coerced = coerce_table_like(source)
     if isinstance(coerced, RecordBatchReaderLike):
         return coerced.read_all()

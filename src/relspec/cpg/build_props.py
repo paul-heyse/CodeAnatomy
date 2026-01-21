@@ -23,7 +23,7 @@ from cpg.constants import (
 from cpg.spec_registry import prop_table_specs
 from cpg.specs import PropFieldSpec, PropTableSpec, filter_fields, resolve_prop_include
 from cpg.table_utils import align_table_to_schema, assert_schema_metadata
-from datafusion_engine.query_fragments import SqlFragment
+from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from datafusion_engine.schema_authority import (
     dataset_schema_from_context,
@@ -145,6 +145,7 @@ class PropsEmitIbisContext:
     inputs: PropsInputTables
     options: PropsBuildOptions
     backend: BaseBackend
+    props_spec: DatasetSpec
     props_json_schema: pa.Schema
 
 
@@ -160,32 +161,32 @@ class IbisMaterializeContext:
 class PropsInputTables:
     """Bundle of input tables for property extraction."""
 
-    repo_files: TableLike | DatasetSource | SqlFragment | None = None
-    cst_refs: TableLike | DatasetSource | SqlFragment | None = None
-    cst_imports: TableLike | DatasetSource | SqlFragment | None = None
-    cst_callsites: TableLike | DatasetSource | SqlFragment | None = None
-    cst_defs: TableLike | DatasetSource | SqlFragment | None = None
-    dim_qualified_names: TableLike | DatasetSource | SqlFragment | None = None
-    scip_symbol_information: TableLike | DatasetSource | SqlFragment | None = None
-    scip_occurrences: TableLike | DatasetSource | SqlFragment | None = None
-    scip_external_symbol_information: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_scopes: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_symbols: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_bindings: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_def_sites: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_use_sites: TableLike | DatasetSource | SqlFragment | None = None
-    symtable_type_params: TableLike | DatasetSource | SqlFragment | None = None
-    ts_nodes: TableLike | DatasetSource | SqlFragment | None = None
-    ts_errors: TableLike | DatasetSource | SqlFragment | None = None
-    ts_missing: TableLike | DatasetSource | SqlFragment | None = None
-    type_exprs_norm: TableLike | DatasetSource | SqlFragment | None = None
-    types_norm: TableLike | DatasetSource | SqlFragment | None = None
-    diagnostics_norm: TableLike | DatasetSource | SqlFragment | None = None
-    rt_objects: TableLike | DatasetSource | SqlFragment | None = None
-    rt_signatures: TableLike | DatasetSource | SqlFragment | None = None
-    rt_signature_params: TableLike | DatasetSource | SqlFragment | None = None
-    rt_members: TableLike | DatasetSource | SqlFragment | None = None
-    cpg_edges: TableLike | DatasetSource | SqlFragment | None = None
+    repo_files: TableLike | DatasetSource | ViewReference | None = None
+    cst_refs: TableLike | DatasetSource | ViewReference | None = None
+    cst_imports: TableLike | DatasetSource | ViewReference | None = None
+    cst_callsites: TableLike | DatasetSource | ViewReference | None = None
+    cst_defs: TableLike | DatasetSource | ViewReference | None = None
+    dim_qualified_names: TableLike | DatasetSource | ViewReference | None = None
+    scip_symbol_information: TableLike | DatasetSource | ViewReference | None = None
+    scip_occurrences: TableLike | DatasetSource | ViewReference | None = None
+    scip_external_symbol_information: TableLike | DatasetSource | ViewReference | None = None
+    symtable_scopes: TableLike | DatasetSource | ViewReference | None = None
+    symtable_symbols: TableLike | DatasetSource | ViewReference | None = None
+    symtable_bindings: TableLike | DatasetSource | ViewReference | None = None
+    symtable_def_sites: TableLike | DatasetSource | ViewReference | None = None
+    symtable_use_sites: TableLike | DatasetSource | ViewReference | None = None
+    symtable_type_params: TableLike | DatasetSource | ViewReference | None = None
+    ts_nodes: TableLike | DatasetSource | ViewReference | None = None
+    ts_errors: TableLike | DatasetSource | ViewReference | None = None
+    ts_missing: TableLike | DatasetSource | ViewReference | None = None
+    type_exprs_norm: TableLike | DatasetSource | ViewReference | None = None
+    types_norm: TableLike | DatasetSource | ViewReference | None = None
+    diagnostics_norm: TableLike | DatasetSource | ViewReference | None = None
+    rt_objects: TableLike | DatasetSource | ViewReference | None = None
+    rt_signatures: TableLike | DatasetSource | ViewReference | None = None
+    rt_signature_params: TableLike | DatasetSource | ViewReference | None = None
+    rt_members: TableLike | DatasetSource | ViewReference | None = None
+    cpg_edges: TableLike | DatasetSource | ViewReference | None = None
 
 
 def _materialize_reader(value: TableLike | RecordBatchReaderLike) -> TableLike:
@@ -195,14 +196,14 @@ def _materialize_reader(value: TableLike | RecordBatchReaderLike) -> TableLike:
 
 
 def _source_to_ibis_plan(
-    source: TableLike | DatasetSource | SqlFragment,
+    source: TableLike | DatasetSource | ViewReference,
     *,
     _ctx: ExecutionContext,
     backend: BaseBackend,
     name: str,
 ) -> IbisPlan:
-    if isinstance(source, SqlFragment):
-        expr = _sql_fragment_expr(backend, fragment=source)
+    if isinstance(source, ViewReference):
+        expr = _view_reference_expr(backend, fragment=source)
         return IbisPlan(expr=expr, ordering=Ordering.unordered())
     if isinstance(source, DatasetSource):
         msg = f"DatasetSource {name!r} must be materialized before CPG property builds."
@@ -219,12 +220,8 @@ def _source_to_ibis_plan(
     )
 
 
-def _sql_fragment_expr(backend: BaseBackend, *, fragment: SqlFragment) -> Table:
-    sql_method = getattr(backend, "sql", None)
-    if not callable(sql_method):
-        msg = "Ibis backend does not support raw SQL fragments."
-        raise TypeError(msg)
-    return cast("Table", sql_method(fragment.sql))
+def _view_reference_expr(backend: BaseBackend, *, fragment: ViewReference) -> Table:
+    return backend.table(fragment.name)
 
 
 def _cst_defs_norm_ibis(cst_defs: IbisPlan) -> IbisPlan:
@@ -545,6 +542,7 @@ def _build_cpg_props_ibis(
             inputs=config.inputs or PropsInputTables(),
             options=context.options,
             backend=backend,
+            props_spec=context.props_spec,
             props_json_schema=props_json_schema,
         )
     )
@@ -614,6 +612,7 @@ def _build_cpg_props_raw_ibis(
             inputs=context.config.inputs or PropsInputTables(),
             options=context.options,
             backend=backend,
+            props_spec=context.props_spec,
             props_json_schema=props_json_schema,
         )
     )

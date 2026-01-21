@@ -15,7 +15,7 @@ class TableProviderCapsule:
 
     capsule: object
 
-    def _datafusion_table_provider(self) -> object:
+    def datafusion_table_provider(self) -> object:
         """Return the wrapped provider capsule.
 
         Returns
@@ -26,7 +26,12 @@ class TableProviderCapsule:
         return self.capsule
 
 
-TableProviderCapsule.__datafusion_table_provider__ = TableProviderCapsule._datafusion_table_provider
+_TABLE_PROVIDER_ATTR = "__datafusion_table_provider__"
+setattr(
+    TableProviderCapsule,
+    _TABLE_PROVIDER_ATTR,
+    TableProviderCapsule.datafusion_table_provider,
+)
 
 
 @dataclass(frozen=True)

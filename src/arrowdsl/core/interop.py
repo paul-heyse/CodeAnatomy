@@ -485,8 +485,8 @@ def reader_from_arrow_stream(
         if not callable(importer):
             msg = "Requested schema projection requires RecordBatchReader._import_from_c."
             raise RuntimeError(msg)
-        return importer(capsule)
-    return pa.RecordBatchReader.from_stream(obj)
+        return cast("RecordBatchReaderLike", importer(capsule))
+    return cast("RecordBatchReaderLike", pa.RecordBatchReader.from_stream(obj))
 
 
 def table_from_arrow_c_array(

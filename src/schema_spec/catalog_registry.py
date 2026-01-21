@@ -2,59 +2,30 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from functools import cache
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from cpg.registry_builders import build_dataset_spec as build_cpg_dataset_spec
-from cpg.registry_rows import DATASET_ROWS as CPG_DATASET_ROWS
-from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for, schema_for
-from incremental.registry_builders import build_dataset_spec as build_incremental_dataset_spec
-from incremental.registry_rows import DATASET_ROWS as INCREMENTAL_DATASET_ROWS
-from normalize.registry_builders import build_dataset_spec as build_normalize_dataset_spec
-from normalize.registry_rows import DATASET_ROWS as NORMALIZE_DATASET_ROWS
-from registry_common.dataset_registry import DatasetAccessors, DatasetRegistry, NamedRow
-from relspec.contracts import relation_output_spec
-from schema_spec.normalize_derived_specs import normalize_derived_specs
-from schema_spec.relationship_specs import relationship_dataset_specs
+from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.schema_authority import (
+    dataset_schema_from_context,
+    dataset_spec_from_context,
+)
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from schema_spec.system import ContractSpec, DatasetSpec, SchemaRegistry
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
 
 
-def _build_registry[RowT: NamedRow](
-    rows: Sequence[RowT],
-    *,
-    build_dataset_spec: Callable[[RowT], DatasetSpec],
-) -> DatasetAccessors[RowT]:
-    """Create cached accessors from dataset rows and spec builder.
-
-    Parameters
-    ----------
-    rows
-        Dataset registry rows used to build specs.
-    build_dataset_spec
-        Callable that converts a registry row into a dataset spec.
-
-    Returns
-    -------
-    DatasetAccessors[RowT]
-        Dataset accessors for the provided rows.
-    """
-    registry = DatasetRegistry(rows=tuple(rows), build_dataset_spec=build_dataset_spec)
-    return DatasetAccessors(registry)
-
-
 @dataclass(frozen=True)
 class DatasetSpecCatalog:
     """Central catalog for dataset specs across domains."""
 
-    accessors: tuple[DatasetAccessors[NamedRow], ...]
-    extra_specs: tuple[DatasetSpec, ...] = ()
+    specs: tuple[DatasetSpec, ...]
     _specs_by_name: Mapping[str, DatasetSpec] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -66,13 +37,7 @@ class DatasetSpecCatalog:
             Raised when duplicate dataset spec names are detected.
         """
         specs: dict[str, DatasetSpec] = {}
-        for accessor in self.accessors:
-            for spec in accessor.dataset_specs():
-                if spec.name in specs:
-                    msg = f"Duplicate dataset spec name: {spec.name!r}."
-                    raise ValueError(msg)
-                specs[spec.name] = spec
-        for spec in self.extra_specs:
+        for spec in self.specs:
             if spec.name in specs:
                 msg = f"Duplicate dataset spec name: {spec.name!r}."
                 raise ValueError(msg)
@@ -151,12 +116,7 @@ class DatasetSpecCatalog:
         SchemaLike
             Dataset schema resolved from nested or canonical sources.
         """
-        if is_nested_dataset(name):
-            return nested_schema_for(name, allow_derived=True)
-        try:
-            return schema_for(name)
-        except KeyError:
-            return self.dataset_spec(name).schema()
+        return dataset_schema_from_context(name)
 
     def dataset_schema_pyarrow(self, name: str) -> pa.Schema:
         """Return a pyarrow schema for a dataset name.
@@ -197,20 +157,32 @@ def dataset_spec_catalog() -> DatasetSpecCatalog:
     DatasetSpecCatalog
         Cached catalog of dataset specs.
     """
-    accessors = (
-        _build_registry(NORMALIZE_DATASET_ROWS, build_dataset_spec=build_normalize_dataset_spec),
-        _build_registry(CPG_DATASET_ROWS, build_dataset_spec=build_cpg_dataset_spec),
-        _build_registry(
-            INCREMENTAL_DATASET_ROWS, build_dataset_spec=build_incremental_dataset_spec
-        ),
-    )
-    extra_specs = (
-        *normalize_derived_specs(),
-        *relationship_dataset_specs(),
-        relation_output_spec(),
-    )
-    typed_accessors = cast("tuple[DatasetAccessors[NamedRow], ...]", accessors)
-    return DatasetSpecCatalog(accessors=typed_accessors, extra_specs=extra_specs)
+    return DatasetSpecCatalog(specs=dataset_specs())
+
+
+def _dataset_names_from_context() -> tuple[str, ...]:
+    ctx = DataFusionRuntimeProfile().session_context()
+    introspector = SchemaIntrospector(ctx)
+    names: set[str] = set()
+    for row in introspector.tables_snapshot():
+        table_name = row.get("table_name")
+        table_schema = row.get("table_schema")
+        if table_schema == "information_schema":
+            continue
+        if isinstance(table_name, str):
+            names.add(table_name)
+    return tuple(sorted(names))
+
+
+def _default_contract_spec(spec: DatasetSpec) -> ContractSpec:
+    return ContractSpec(name=spec.name, table_schema=spec.table_spec)
+
+
+def _dataset_spec_with_contract(name: str) -> DatasetSpec:
+    spec = dataset_spec_from_context(name)
+    if spec.contract_spec is not None:
+        return spec
+    return replace(spec, contract_spec=_default_contract_spec(spec))
 
 
 def dataset_spec(name: str) -> DatasetSpec:
@@ -226,7 +198,7 @@ def dataset_spec(name: str) -> DatasetSpec:
     DatasetSpec
         Dataset spec for the provided name.
     """
-    return dataset_spec_catalog().dataset_spec(name)
+    return _dataset_spec_with_contract(name)
 
 
 def dataset_specs() -> tuple[DatasetSpec, ...]:
@@ -237,7 +209,7 @@ def dataset_specs() -> tuple[DatasetSpec, ...]:
     tuple[DatasetSpec, ...]
         Dataset specs sorted by name.
     """
-    return dataset_spec_catalog().dataset_specs()
+    return tuple(_dataset_spec_with_contract(name) for name in dataset_names())
 
 
 def dataset_schema(name: str) -> SchemaLike:
@@ -253,7 +225,7 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Resolved dataset schema.
     """
-    return dataset_spec_catalog().dataset_schema(name)
+    return dataset_schema_from_context(name)
 
 
 def dataset_contract_spec(name: str) -> ContractSpec:
@@ -269,7 +241,7 @@ def dataset_contract_spec(name: str) -> ContractSpec:
     ContractSpec
         Contract spec for the dataset.
     """
-    return dataset_spec_catalog().dataset_contract_spec(name)
+    return dataset_spec(name).contract_spec or _default_contract_spec(dataset_spec(name))
 
 
 def dataset_names() -> tuple[str, ...]:
@@ -280,7 +252,7 @@ def dataset_names() -> tuple[str, ...]:
     tuple[str, ...]
         Dataset names sorted by name.
     """
-    return dataset_spec_catalog().dataset_names()
+    return _dataset_names_from_context()
 
 
 def schema_registry() -> SchemaRegistry:

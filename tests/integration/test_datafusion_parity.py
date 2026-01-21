@@ -10,7 +10,8 @@ import pytest
 
 from arrowdsl.core.execution_context import execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from cpg.registry_specs import dataset_contract_spec
+from arrowdsl.schema.metadata import ordering_from_schema
+from datafusion_engine.schema_authority import dataset_schema_from_context
 from hamilton_pipeline import build_driver
 from hamilton_pipeline.pipeline_types import ScipIndexConfig
 from tests.utils import table_digest
@@ -75,8 +76,8 @@ def _run_pipeline(
 
 def _canonical_sort_keys(output_name: str) -> Sequence[tuple[str, str]]:
     dataset_name = _CPG_DATASETS[output_name]
-    contract = dataset_contract_spec(dataset_name)
-    return tuple((key.column, key.order) for key in contract.canonical_sort)
+    ordering = ordering_from_schema(dataset_schema_from_context(dataset_name))
+    return ordering.keys
 
 
 def _fixture_repo_root() -> Path:

@@ -20,6 +20,7 @@ from datafusion.dataframe import DataFrame
 from deltalake import DeltaTable
 
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.serialization import schema_to_dict
 from core_types import ensure_path
 from datafusion_engine.listing_table_provider import (
@@ -35,7 +36,11 @@ from ibis_engine.registry import (
     resolve_delta_scan_options,
 )
 from schema_spec.specs import ExternalTableConfig, TableSchemaSpec
-from schema_spec.system import DataFusionScanOptions, DeltaScanOptions, ddl_fingerprint_from_schema
+from schema_spec.system import (
+    DataFusionScanOptions,
+    DeltaScanOptions,
+    ddl_fingerprint_from_schema,
+)
 from sqlglot_tools.optimizer import (
     SqlGlotSurface,
     register_datafusion_dialect,
@@ -52,6 +57,9 @@ _CACHED_DATASETS: dict[int, set[str]] = {}
 _REGISTERED_CATALOGS: dict[int, set[str]] = {}
 _REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
 _INPUT_PLUGIN_PREFIXES = ("artifact://", "dataset://", "repo://")
+_CST_EXTERNAL_TABLE_NAME = "libcst_files_v1"
+_CST_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
+_CST_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
 
 try:
     from datafusion.input.base import BaseInputSource as _BaseInputSource
@@ -225,6 +233,54 @@ class DataFusionRegistrationContext:
     runtime_profile: DataFusionRuntimeProfile | None = None
 
 
+def _schema_field_type(dataset: str, field: str) -> pa.DataType | None:
+    schema = SCHEMA_REGISTRY.get(dataset)
+    if schema is None:
+        return None
+    if field not in schema.names:
+        return None
+    return schema.field(field).type
+
+
+def _default_scan_options_for_dataset(
+    name: str,
+    location: DatasetLocation,
+) -> DataFusionScanOptions | None:
+    if name != _CST_EXTERNAL_TABLE_NAME:
+        return None
+    schema = SCHEMA_REGISTRY.get(name)
+    if schema is None:
+        return None
+    partition_cols: list[tuple[str, pa.DataType]] = []
+    for field_name in _CST_PARTITION_FIELDS:
+        dtype = _schema_field_type(name, field_name)
+        if dtype is not None:
+            partition_cols.append((field_name, dtype))
+    file_sort_order = tuple(
+        field for field in _CST_FILE_SORT_ORDER if field in schema.names
+    )
+    return DataFusionScanOptions(
+        partition_cols=tuple(partition_cols),
+        file_sort_order=file_sort_order,
+        file_extension=".parquet",
+        parquet_pruning=True,
+        skip_metadata=True,
+        collect_statistics=False,
+        listing_table_factory_infer_partitions=True,
+        listing_mutable=True,
+        unbounded=location.format != "delta",
+    )
+
+
+def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocation:
+    if location.datafusion_scan is not None:
+        return location
+    defaults = _default_scan_options_for_dataset(name, location)
+    if defaults is None:
+        return location
+    return replace(location, datafusion_scan=defaults)
+
+
 def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOptions:
     """Resolve DataFusion registration hints for a dataset location.
 
@@ -293,6 +349,9 @@ def datafusion_external_table_sql(
     if location.format == "delta":
         return None
     table_spec = _resolve_table_spec(location)
+    schema = SCHEMA_REGISTRY.get(name)
+    if table_spec is None and schema is not None:
+        table_spec = table_spec_from_schema(name, schema)
     if table_spec is None:
         return None
     scan = resolve_datafusion_scan_options(location)
@@ -434,6 +493,7 @@ def register_dataset_df(
     ValueError
         Raised when the dataset format is unsupported.
     """
+    location = _apply_scan_defaults(name, location)
     _register_object_store(ctx, location)
     if runtime_profile is not None:
         _ensure_catalog_schema(
@@ -818,6 +878,15 @@ def _record_listing_table_artifact(
     schema_payload = (
         schema_to_dict(context.options.schema) if context.options.schema is not None else None
     )
+    ordering_keys: list[list[str]] | None = None
+    ordering_matches_scan: bool | None = None
+    if context.options.schema is not None:
+        ordering = ordering_from_schema(context.options.schema)
+        if ordering.keys:
+            ordering_keys = [list(key) for key in ordering.keys]
+            if scan is not None and scan.file_sort_order:
+                expected = [key[0] for key in ordering.keys]
+                ordering_matches_scan = list(scan.file_sort_order) == expected
     payload: dict[str, object] = {
         "name": context.name,
         "path": str(context.location.path),
@@ -828,6 +897,8 @@ def _record_listing_table_artifact(
             {"name": col, "dtype": dtype} for col, dtype in (table_partition_cols or ())
         ],
         "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
+        "ordering_keys": ordering_keys,
+        "ordering_matches_scan": ordering_matches_scan,
         "parquet_pruning": scan.parquet_pruning if scan is not None else None,
         "skip_metadata": skip_metadata,
         "skip_arrow_metadata": scan.skip_arrow_metadata if scan is not None else None,

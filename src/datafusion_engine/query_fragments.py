@@ -254,7 +254,13 @@ def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
 
 
 def libcst_docstrings_sql(table: str = "libcst_files_v1") -> str:
-    """Return SQL for LibCST docstring rows."""
+    """Return SQL for LibCST docstring rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     base = nested_base_sql("cst_docstrings", table=table)
     return f"""
     WITH base AS ({base})
@@ -272,7 +278,13 @@ def libcst_docstrings_sql(table: str = "libcst_files_v1") -> str:
 
 
 def libcst_decorators_sql(table: str = "libcst_files_v1") -> str:
-    """Return SQL for LibCST decorator rows."""
+    """Return SQL for LibCST decorator rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     base = nested_base_sql("cst_decorators", table=table)
     return f"""
     WITH base AS ({base})
@@ -291,7 +303,13 @@ def libcst_decorators_sql(table: str = "libcst_files_v1") -> str:
 
 
 def libcst_call_args_sql(table: str = "libcst_files_v1") -> str:
-    """Return SQL for LibCST call argument rows."""
+    """Return SQL for LibCST call argument rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     base = nested_base_sql("cst_call_args", table=table)
     return f"""
     WITH base AS ({base})
@@ -884,6 +902,8 @@ def bytecode_code_units_sql(table: str = "bytecode_files_v1") -> str:
       base.path AS path,
       base.code_id AS code_unit_id,
       base.qualname AS qualpath,
+      base.co_qualname AS co_qualname,
+      base.co_filename AS co_filename,
       base.name AS co_name,
       base.firstlineno1 AS firstlineno,
       base.argcount AS argcount,
@@ -891,12 +911,14 @@ def bytecode_code_units_sql(table: str = "bytecode_files_v1") -> str:
       base.kwonlyargcount AS kwonlyargcount,
       base.nlocals AS nlocals,
       base.flags AS flags,
+      base.flags_detail AS flags_detail,
       base.stacksize AS stacksize,
       base.code_len AS code_len,
       base.varnames AS varnames,
       base.freevars AS freevars,
       base.cellvars AS cellvars,
-      base.names AS names
+      base.names AS names,
+      base.consts_json AS consts_json
     FROM base
     """
 
@@ -910,45 +932,46 @@ def bytecode_instructions_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_instructions", table=table)
-    attrs_struct = _named_struct(
-        (
-            ("instr_index", _map_cast("base.attrs", "instr_index", "INT")),
-            ("argval_str", _map_value("base.attrs", "argval_str")),
-            ("starts_line", _map_cast("base.attrs", "starts_line", "INT")),
-        )
-    )
-    instr_index = "decorated.attrs_struct['instr_index']"
-    offset = "decorated.offset"
+    stack_depth_before = _map_cast("base.attrs", "stack_depth_before", "INT")
+    stack_depth_after = _map_cast("base.attrs", "stack_depth_after", "INT")
+    instr_index = "base.instr_index"
+    offset = "base.offset"
     return f"""
-    WITH base AS ({base}),
-    decorated AS (
-      SELECT
-        base.*,
-        {attrs_struct} AS attrs_struct
-      FROM base
-    )
+    WITH base AS ({base})
     SELECT
-      decorated.file_id AS file_id,
-      decorated.path AS path,
-      decorated.code_id AS code_unit_id,
+      base.file_id AS file_id,
+      base.path AS path,
+      base.code_id AS code_unit_id,
       {instr_index} AS instr_index,
       {offset} AS offset,
-      decorated.opname AS opname,
-      decorated.opcode AS opcode,
-      decorated.arg AS arg,
-      decorated.argrepr AS argrepr,
-      decorated.is_jump_target AS is_jump_target,
-      decorated.jump_target AS jump_target_offset,
-      decorated.span['start']['line0'] AS pos_start_line,
-      decorated.span['end']['line0'] AS pos_end_line,
-      decorated.span['start']['col'] AS pos_start_col,
-      decorated.span['end']['col'] AS pos_end_col,
-      decorated.span['col_unit'] AS col_unit,
-      decorated.span['end_exclusive'] AS end_exclusive,
-      decorated.attrs_struct['argval_str'] AS argval_str,
-      decorated.attrs_struct['starts_line'] AS starts_line,
-      {_hash_expr("bc_instr", "decorated.code_id", instr_index, offset)} AS instr_id
-    FROM decorated
+      base.start_offset AS start_offset,
+      base.end_offset AS end_offset,
+      base.opname AS opname,
+      base.baseopname AS baseopname,
+      base.opcode AS opcode,
+      base.baseopcode AS baseopcode,
+      base.arg AS arg,
+      base.oparg AS oparg,
+      base.argval_kind AS argval_kind,
+      base.argval_int AS argval_int,
+      base.argval_str AS argval_str,
+      base.argrepr AS argrepr,
+      base.line_number AS line_number,
+      base.starts_line AS starts_line,
+      base.label AS label,
+      base.is_jump_target AS is_jump_target,
+      base.jump_target AS jump_target_offset,
+      base.cache_info AS cache_info,
+      base.span['start']['line0'] AS pos_start_line,
+      base.span['end']['line0'] AS pos_end_line,
+      base.span['start']['col'] AS pos_start_col,
+      base.span['end']['col'] AS pos_end_col,
+      base.span['col_unit'] AS col_unit,
+      base.span['end_exclusive'] AS end_exclusive,
+      {stack_depth_before} AS stack_depth_before,
+      {stack_depth_after} AS stack_depth_after,
+      {_hash_expr("bc_instr", "base.code_id", instr_index, offset)} AS instr_id
+    FROM base
     """
 
 
@@ -991,6 +1014,29 @@ def bytecode_exception_table_sql(table: str = "bytecode_files_v1") -> str:
     """
 
 
+def bytecode_line_table_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode line table rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("py_bc_line_table", table=table)
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.code_id AS code_unit_id,
+      base.offset AS offset,
+      base.line1 AS line1,
+      base.line0 AS line0,
+      CAST(1 AS INT) AS line_base
+    FROM base
+    """
+
+
 def bytecode_blocks_sql(table: str = "bytecode_files_v1") -> str:
     """Return SQL for bytecode basic block rows.
 
@@ -1016,6 +1062,31 @@ def bytecode_blocks_sql(table: str = "bytecode_files_v1") -> str:
     """
 
 
+def bytecode_dfg_edges_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode DFG edge rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("py_bc_dfg_edges", table=table)
+    src_index = "base.src_instr_index"
+    dst_index = "base.dst_instr_index"
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.code_id AS code_unit_id,
+      {src_index} AS src_instr_index,
+      {dst_index} AS dst_instr_index,
+      base.kind AS kind,
+      {_hash_expr("bc_dfg", "base.code_id", src_index, dst_index, "base.kind")} AS edge_id
+    FROM base
+    """
+
+
 def bytecode_cfg_edges_sql(table: str = "bytecode_files_v1") -> str:
     """Return SQL for bytecode CFG edge rows.
 
@@ -1032,6 +1103,8 @@ def bytecode_cfg_edges_sql(table: str = "bytecode_files_v1") -> str:
     cond_index = "base.cond_instr_index"
     cond_offset = "base.cond_instr_offset"
     exc_index = "base.exc_index"
+    jump_kind = _map_value("base.attrs", "jump_kind")
+    jump_label = _map_cast("base.attrs", "jump_label", "INT")
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1044,6 +1117,8 @@ def bytecode_cfg_edges_sql(table: str = "bytecode_files_v1") -> str:
       {dst_end} AS dst_block_end,
       base.kind AS kind,
       base.edge_key AS edge_key,
+      {jump_kind} AS jump_kind,
+      {jump_label} AS jump_label,
       {cond_index} AS cond_instr_index,
       {cond_offset} AS cond_instr_offset,
       {exc_index} AS exc_index,
@@ -1074,13 +1149,17 @@ def bytecode_errors_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("bytecode_errors", table=table)
+    error_stage = _map_value("base.attrs", "error_stage")
+    code_id = _map_value("base.attrs", "code_id")
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
       base.error_type AS error_type,
-      base.message AS message
+      base.message AS message,
+      {error_stage} AS error_stage,
+      {code_id} AS code_id
     FROM base
     """
 
@@ -1119,9 +1198,11 @@ _FRAGMENT_SQL_BUILDERS: dict[str, FragmentSqlBuilder] = {
     "scip_symbol_relationships": scip_symbol_relationships_sql,
     "scip_diagnostics": scip_diagnostics_sql,
     "py_bc_code_units": bytecode_code_units_sql,
+    "py_bc_line_table": bytecode_line_table_sql,
     "py_bc_instructions": bytecode_instructions_sql,
     "bytecode_exception_table": bytecode_exception_table_sql,
     "py_bc_blocks": bytecode_blocks_sql,
+    "py_bc_dfg_edges": bytecode_dfg_edges_sql,
     "py_bc_cfg_edges": bytecode_cfg_edges_sql,
     "bytecode_errors": bytecode_errors_sql,
 }
@@ -1154,9 +1235,11 @@ __all__ = [
     "bytecode_blocks_sql",
     "bytecode_cfg_edges_sql",
     "bytecode_code_units_sql",
+    "bytecode_dfg_edges_sql",
     "bytecode_errors_sql",
     "bytecode_exception_table_sql",
     "bytecode_instructions_sql",
+    "bytecode_line_table_sql",
     "fragment_view_specs",
     "libcst_call_args_sql",
     "libcst_callsites_sql",

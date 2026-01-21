@@ -513,15 +513,36 @@ SYMTABLE_FILES_SCHEMA = pa.schema(
     ]
 )
 
+BYTECODE_CACHE_ENTRY_T = pa.struct(
+    [
+        ("name", pa.string()),
+        ("size", pa.int32()),
+        ("data_hex", pa.string()),
+    ]
+)
+
 BYTECODE_INSTR_T = pa.struct(
     [
+        ("instr_index", pa.int32()),
         ("offset", pa.int32()),
+        ("start_offset", pa.int32()),
+        ("end_offset", pa.int32()),
         ("opname", pa.string()),
+        ("baseopname", pa.string()),
         ("opcode", pa.int32()),
+        ("baseopcode", pa.int32()),
         ("arg", pa.int32()),
+        ("oparg", pa.int32()),
+        ("argval_kind", pa.string()),
+        ("argval_int", pa.int64()),
+        ("argval_str", pa.string()),
         ("argrepr", pa.string()),
+        ("line_number", pa.int32()),
+        ("starts_line", pa.int32()),
+        ("label", pa.int32()),
         ("is_jump_target", pa.bool_()),
         ("jump_target", pa.int32()),
+        ("cache_info", pa.list_(BYTECODE_CACHE_ENTRY_T)),
         ("span", SPAN_T),
         ("attrs", ATTRS_T),
     ]
@@ -571,10 +592,45 @@ BYTECODE_ERROR_T = pa.struct(
     ]
 )
 
+BYTECODE_LINE_T = pa.struct(
+    [
+        ("offset", pa.int32()),
+        ("line1", pa.int32()),
+        ("line0", pa.int32()),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+BYTECODE_DFG_EDGE_T = pa.struct(
+    [
+        ("src_instr_index", pa.int32()),
+        ("dst_instr_index", pa.int32()),
+        ("kind", pa.string()),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+BYTECODE_FLAGS_T = pa.struct(
+    [
+        ("is_optimized", pa.bool_()),
+        ("is_newlocals", pa.bool_()),
+        ("has_varargs", pa.bool_()),
+        ("has_varkeywords", pa.bool_()),
+        ("is_nested", pa.bool_()),
+        ("is_generator", pa.bool_()),
+        ("is_nofree", pa.bool_()),
+        ("is_coroutine", pa.bool_()),
+        ("is_iterable_coroutine", pa.bool_()),
+        ("is_async_generator", pa.bool_()),
+    ]
+)
+
 BYTECODE_CODE_OBJ_T = pa.struct(
     [
         ("code_id", pa.string()),
         ("qualname", pa.string()),
+        ("co_qualname", pa.string()),
+        ("co_filename", pa.string()),
         ("name", pa.string()),
         ("firstlineno1", pa.int32()),
         ("argcount", pa.int32()),
@@ -582,6 +638,7 @@ BYTECODE_CODE_OBJ_T = pa.struct(
         ("kwonlyargcount", pa.int32()),
         ("nlocals", pa.int32()),
         ("flags", pa.int32()),
+        ("flags_detail", BYTECODE_FLAGS_T),
         ("stacksize", pa.int32()),
         ("code_len", pa.int32()),
         ("varnames", pa.list_(pa.string())),
@@ -589,10 +646,12 @@ BYTECODE_CODE_OBJ_T = pa.struct(
         ("cellvars", pa.list_(pa.string())),
         ("names", pa.list_(pa.string())),
         ("consts_json", pa.string()),
+        ("line_table", pa.list_(BYTECODE_LINE_T)),
         ("instructions", pa.list_(BYTECODE_INSTR_T)),
         ("exception_table", pa.list_(BYTECODE_EXCEPTION_T)),
         ("blocks", pa.list_(BYTECODE_BLOCK_T)),
         ("cfg_edges", pa.list_(BYTECODE_CFG_EDGE_T)),
+        ("dfg_edges", pa.list_(BYTECODE_DFG_EDGE_T)),
         ("attrs", ATTRS_T),
     ]
 )
@@ -708,12 +767,43 @@ REPO_SNAPSHOT_SCHEMA = _schema_with_metadata(
     ),
 )
 
+DIM_QUALIFIED_NAMES_SCHEMA = _schema_with_metadata(
+    "dim_qualified_names_v1",
+    pa.schema(
+        [
+            pa.field("qname_id", pa.string()),
+            pa.field("qname", pa.string()),
+        ]
+    ),
+)
+
+CALLSITE_QNAME_CANDIDATES_SCHEMA = _schema_with_metadata(
+    "callsite_qname_candidates_v1",
+    pa.schema(
+        [
+            pa.field("call_id", pa.string()),
+            pa.field("qname", pa.string()),
+            pa.field("path", pa.string()),
+            pa.field("call_bstart", pa.int64()),
+            pa.field("call_bend", pa.int64()),
+            pa.field("arg_count", pa.int32()),
+            pa.field("keyword_count", pa.int32()),
+            pa.field("star_arg_count", pa.int32()),
+            pa.field("star_kwarg_count", pa.int32()),
+            pa.field("positional_count", pa.int32()),
+            pa.field("qname_source", pa.string()),
+        ]
+    ),
+)
+
 SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "ast_files_v1": AST_FILES_SCHEMA,
     "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
+    "callsite_qname_candidates_v1": CALLSITE_QNAME_CANDIDATES_SCHEMA,
     "datafusion_explains_v1": DATAFUSION_EXPLAINS_SCHEMA,
     "datafusion_fallbacks_v1": DATAFUSION_FALLBACKS_SCHEMA,
     "datafusion_schema_registry_validation_v1": DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA,
+    "dim_qualified_names_v1": DIM_QUALIFIED_NAMES_SCHEMA,
     "feature_state_v1": FEATURE_STATE_SCHEMA,
     "libcst_files_v1": LIBCST_FILES_SCHEMA,
     "repo_snapshot_v1": REPO_SNAPSHOT_SCHEMA,
@@ -900,6 +990,12 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "role": "derived",
         "context": {},
     },
+    "py_bc_line_table": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects.line_table",
+        "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
+    },
     "py_bc_instructions": {
         "root": "bytecode_files_v1",
         "path": "code_objects.instructions",
@@ -915,6 +1011,12 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
     "py_bc_cfg_edges": {
         "root": "bytecode_files_v1",
         "path": "code_objects.cfg_edges",
+        "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
+    },
+    "py_bc_dfg_edges": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects.dfg_edges",
         "role": "derived",
         "context": {"code_id": "code_objects.code_id"},
     },
@@ -949,6 +1051,17 @@ SYMTABLE_VIEW_NAMES: tuple[str, ...] = (
     "symtable_function_partitions",
     "symtable_class_methods",
     "symtable_symbol_attrs",
+)
+
+BYTECODE_VIEW_NAMES: tuple[str, ...] = (
+    "py_bc_code_units",
+    "py_bc_line_table",
+    "py_bc_instructions",
+    "bytecode_exception_table",
+    "py_bc_blocks",
+    "py_bc_dfg_edges",
+    "py_bc_cfg_edges",
+    "bytecode_errors",
 )
 
 
@@ -1364,7 +1477,13 @@ def validate_nested_types(ctx: SessionContext, name: str) -> None:
 
 
 def validate_symtable_views(ctx: SessionContext) -> None:
-    """Validate symtable view schemas using DataFusion introspection."""
+    """Validate symtable view schemas using DataFusion introspection.
+
+    Raises
+    ------
+    ValueError
+        Raised when view schemas fail validation.
+    """
     errors: dict[str, str] = {}
     for name in SYMTABLE_VIEW_NAMES:
         try:
@@ -1382,6 +1501,44 @@ def validate_symtable_views(ctx: SessionContext) -> None:
         errors["symtable_files_v1"] = str(exc)
     if errors:
         msg = f"Symtable view validation failed: {errors}."
+        raise ValueError(msg)
+
+
+def validate_bytecode_views(ctx: SessionContext) -> None:
+    """Validate bytecode view schemas using DataFusion introspection.
+
+    Raises
+    ------
+    ValueError
+        Raised when view schemas fail validation.
+    """
+    errors: dict[str, str] = {}
+    for name in BYTECODE_VIEW_NAMES:
+        try:
+            ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            errors[name] = str(exc)
+    try:
+        ctx.sql(
+            "SELECT arrow_typeof(code_objects) AS code_objects_type "
+            "FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(code_objects.instructions) AS instr_type "
+            "FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(code_objects.line_table) AS line_table_type "
+            "FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(code_objects.dfg_edges) AS dfg_edges_type "
+            "FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["bytecode_files_v1"] = str(exc)
+    if errors:
+        msg = f"Bytecode view validation failed: {errors}."
         raise ValueError(msg)
 
 
@@ -1491,6 +1648,7 @@ def register_all_schemas(ctx: SessionContext) -> None:
 __all__ = [
     "AST_FILES_SCHEMA",
     "BYTECODE_FILES_SCHEMA",
+    "BYTECODE_VIEW_NAMES",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
     "SCHEMA_REGISTRY",
@@ -1520,6 +1678,7 @@ __all__ = [
     "schema_names",
     "schema_registry",
     "struct_for_path",
+    "validate_bytecode_views",
     "validate_nested_types",
     "validate_schema_metadata",
     "validate_symtable_views",

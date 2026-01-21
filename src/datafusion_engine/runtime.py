@@ -28,19 +28,18 @@ from datafusion_engine.function_factory import function_factory_payloads, instal
 from datafusion_engine.query_fragments import fragment_view_specs
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import (
-    is_nested_dataset,
     missing_schema_names,
     nested_schema_names,
     nested_view_specs,
     register_all_schemas,
     schema_names,
+    validate_bytecode_views,
     validate_nested_types,
     validate_symtable_views,
 )
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
 from registry_common.arrow_payloads import payload_hash
-from schema_spec.catalog_registry import dataset_spec_catalog
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.view_specs import ViewSpec
 
@@ -689,49 +688,6 @@ def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) ->
     ctx.register_table(name, table)
 
 
-def _register_dataset_spec_catalog(
-    ctx: SessionContext,
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> None:
-    """Register dataset specs and view specs on the session context."""
-    catalog = dataset_spec_catalog()
-    view_specs: list[ViewSpec] = []
-    seen_views: set[str] = set()
-    for spec in catalog.dataset_specs():
-        if is_nested_dataset(spec.name):
-            continue
-        schema = catalog.dataset_schema_pyarrow(spec.name)
-        _register_schema_table(ctx, spec.name, schema)
-        for view in spec.resolved_view_specs():
-            if view.name in seen_views:
-                continue
-            view_specs.append(view)
-            seen_views.add(view.name)
-    if view_specs:
-        register_view_specs(
-            ctx,
-            views=tuple(view_specs),
-            runtime_profile=runtime_profile,
-            validate=True,
-        )
-    fragment_views = tuple(view for view in fragment_view_specs(ctx) if view.name not in seen_views)
-    if fragment_views:
-        register_view_specs(
-            ctx,
-            views=fragment_views,
-            runtime_profile=runtime_profile,
-            validate=True,
-        )
-        seen_views.update(view.name for view in fragment_views)
-    nested_views = tuple(view for view in nested_view_specs() if view.name not in seen_views)
-    if nested_views:
-        register_view_specs(
-            ctx,
-            views=nested_views,
-            runtime_profile=runtime_profile,
-            validate=True,
-        )
 
 
 def _apply_config_int(
@@ -762,6 +718,19 @@ def _apply_optional_int_config(
     return _apply_config_int(config, method=method, key=key, value=int(value))
 
 
+def _apply_catalog_autoload(
+    config: SessionConfig,
+    *,
+    location: str | None,
+    file_format: str | None,
+) -> SessionConfig:
+    if location is not None:
+        config = config.set("datafusion.catalog.location", location)
+    if file_format is not None:
+        config = config.set("datafusion.catalog.format", file_format)
+    return config
+
+
 def _apply_config_policy(
     config: SessionConfig,
     policy: DataFusionConfigPolicy | None,
@@ -777,6 +746,19 @@ def _apply_settings_overrides(
 ) -> SessionConfig:
     for key, value in overrides.items():
         config = config.set(key, str(value))
+    return config
+
+
+def _apply_catalog_autoload(
+    config: SessionConfig,
+    *,
+    location: str | None,
+    file_format: str | None,
+) -> SessionConfig:
+    if location is not None:
+        config = config.set("datafusion.catalog.location", location)
+    if file_format is not None:
+        config = config.set("datafusion.catalog.format", file_format)
     return config
 
 
@@ -1315,6 +1297,8 @@ class DataFusionRuntimeProfile:
     memory_limit_bytes: int | None = None
     default_catalog: str = "codeintel"
     default_schema: str = "public"
+    catalog_auto_load_location: str | None = None
+    catalog_auto_load_format: str | None = None
     enable_information_schema: bool = True
     enable_url_table: bool = False  # Dev-only convenience for file-path queries.
     cache_enabled: bool = False
@@ -1404,6 +1388,11 @@ class DataFusionRuntimeProfile:
             method="with_batch_size",
             key="datafusion.execution.batch_size",
             value=self.batch_size,
+        )
+        config = _apply_catalog_autoload(
+            config,
+            location=self.catalog_auto_load_location,
+            file_format=self.catalog_auto_load_format,
         )
         config = _apply_config_policy(config, self._resolved_config_policy())
         config = _apply_schema_hardening(config, self._resolved_schema_hardening())
@@ -1517,7 +1506,6 @@ class DataFusionRuntimeProfile:
         if not self.enable_information_schema:
             return
         expected_names = set(schema_names())
-        expected_names.update(dataset_spec_catalog().dataset_names())
         missing = missing_schema_names(ctx, expected=tuple(sorted(expected_names)))
         type_errors: dict[str, str] = {}
         for name in nested_schema_names():
@@ -1565,8 +1553,24 @@ class DataFusionRuntimeProfile:
         if not self.enable_schema_registry:
             return
         register_all_schemas(ctx)
-        _register_dataset_spec_catalog(ctx, runtime_profile=self)
+        fragment_views = fragment_view_specs(ctx)
+        if fragment_views:
+            register_view_specs(
+                ctx,
+                views=fragment_views,
+                runtime_profile=self,
+                validate=True,
+            )
+        nested_views = nested_view_specs()
+        if nested_views:
+            register_view_specs(
+                ctx,
+                views=nested_views,
+                runtime_profile=self,
+                validate=True,
+            )
         validate_symtable_views(ctx)
+        validate_bytecode_views(ctx)
         self._record_schema_registry_validation(ctx)
         self._record_schema_snapshots(ctx)
 
@@ -2072,6 +2076,10 @@ class DataFusionRuntimeProfile:
             payload.update(resolved_schema_hardening.settings())
         if self.settings_overrides:
             payload.update({str(key): str(value) for key, value in self.settings_overrides.items()})
+        if self.catalog_auto_load_location is not None:
+            payload["datafusion.catalog.location"] = self.catalog_auto_load_location
+        if self.catalog_auto_load_format is not None:
+            payload["datafusion.catalog.format"] = self.catalog_auto_load_format
         payload.update(self.feature_gates.settings())
         if self.join_policy is not None:
             payload.update(self.join_policy.settings())
@@ -2110,6 +2118,8 @@ class DataFusionRuntimeProfile:
             "memory_limit_bytes": self.memory_limit_bytes,
             "default_catalog": self.default_catalog,
             "default_schema": self.default_schema,
+            "catalog_auto_load_location": self.catalog_auto_load_location,
+            "catalog_auto_load_format": self.catalog_auto_load_format,
             "enable_information_schema": self.enable_information_schema,
             "enable_url_table": self.enable_url_table,
             "cache_enabled": self.cache_enabled,

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import dis
+import importlib.util
+import inspect
 import json
+import sys
 import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -33,12 +37,15 @@ from ibis_engine.plan import IbisPlan
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
 
-type RowValue = str | int | bool | list[str] | None
+type RowValue = str | int | bool | list[str] | list[dict[str, object]] | None
 type Row = dict[str, RowValue]
 
 BC_LINE_BASE = 1
 BC_COL_UNIT = "utf32"
 BC_END_EXCLUSIVE = True
+CACHE_ENTRY_FIELDS = 3
+PYTHON_VERSION = sys.version.split()[0]
+PYTHON_MAGIC = importlib.util.MAGIC_NUMBER.hex()
 
 
 @dataclass(frozen=True)
@@ -146,6 +153,7 @@ class CodeUnitContext:
 
     code_unit_key: CodeUnitKey
     file_ctx: BytecodeFileContext
+    code: pytypes.CodeType
     instruction_data: InstructionData
     exc_entries: Sequence[object]
     code_len: int
@@ -164,6 +172,8 @@ class CfgEdgeSpec:
     cond_instr_index: int | None
     cond_instr_offset: int | None
     exc_index: int | None
+    jump_label: int | None
+    jump_kind: str | None
 
 
 @dataclass(frozen=True)
@@ -198,7 +208,40 @@ class BytecodeRowBuffers:
     exception_rows: list[Row]
     block_rows: list[Row]
     edge_rows: list[Row]
+    line_rows: list[Row]
+    dfg_edge_rows: list[Row]
     error_rows: list[Row]
+
+
+@dataclass(frozen=True)
+class DfgValueRef:
+    """Stack value reference for DFG scaffolding."""
+
+    instr_index: int
+    instr_offset: int
+
+
+@dataclass(frozen=True)
+class DfgState:
+    """DFG scaffolding state for one code unit."""
+
+    unit_ctx: CodeUnitContext
+    stack: list[DfgValueRef]
+    dfg_rows: list[Row]
+    error_rows: list[Row]
+    code_id: str
+
+
+@dataclass(frozen=True)
+class CodeUnitGroups:
+    """Grouped buffer rows keyed by code-unit identity."""
+
+    instructions_by_key: dict[tuple[str, str, int], list[Row]]
+    exceptions_by_key: dict[tuple[str, str, int], list[Row]]
+    blocks_by_key: dict[tuple[str, str, int], list[Row]]
+    edges_by_key: dict[tuple[str, str, int], list[Row]]
+    line_table_by_key: dict[tuple[str, str, int], list[Row]]
+    dfg_edges_by_key: dict[tuple[str, str, int], list[Row]]
 
 
 def _consts_json(values: Sequence[object]) -> str | None:
@@ -229,13 +272,26 @@ def _instruction_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
     end_line0 = int(end_line) - line_base_int if isinstance(end_line, int) else None
     col_unit = str(row.get("col_unit")) if row.get("col_unit") is not None else BC_COL_UNIT
     return {
+        "instr_index": row.get("instr_index"),
         "offset": row.get("offset"),
+        "start_offset": row.get("start_offset"),
+        "end_offset": row.get("end_offset"),
         "opname": row.get("opname"),
+        "baseopname": row.get("baseopname"),
         "opcode": row.get("opcode"),
+        "baseopcode": row.get("baseopcode"),
         "arg": row.get("arg"),
+        "oparg": row.get("oparg"),
+        "argval_kind": row.get("argval_kind"),
+        "argval_int": row.get("argval_int"),
+        "argval_str": row.get("argval_str"),
         "argrepr": row.get("argrepr"),
+        "line_number": row.get("line_number"),
+        "starts_line": row.get("starts_line"),
+        "label": row.get("label"),
         "is_jump_target": row.get("is_jump_target"),
-        "jump_target": row.get("jump_target_offset"),
+        "jump_target": row.get("jump_target"),
+        "cache_info": row.get("cache_info") or [],
         "span": span_dict(
             SpanSpec(
                 start_line0=start_line0,
@@ -248,9 +304,8 @@ def _instruction_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
         ),
         "attrs": attrs_map(
             {
-                "argval_str": row.get("argval_str"),
-                "starts_line": row.get("starts_line"),
-                "instr_index": row.get("instr_index"),
+                "stack_depth_before": row.get("stack_depth_before"),
+                "stack_depth_after": row.get("stack_depth_after"),
             }
         ),
     }
@@ -260,6 +315,84 @@ def _string_list(value: object | None) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value]
     return []
+
+
+def _cache_info_rows(cache_info: object | None) -> list[dict[str, object]]:
+    if not isinstance(cache_info, (list, tuple)):
+        return []
+    rows: list[dict[str, object]] = []
+    for entry in cache_info:
+        if not isinstance(entry, tuple) or len(entry) < CACHE_ENTRY_FIELDS:
+            continue
+        name, size, data = entry[0], entry[1], entry[2]
+        data_hex: str | None
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            data_hex = bytes(data).hex()
+        elif data is None:
+            data_hex = None
+        else:
+            data_hex = str(data)
+        rows.append(
+            {
+                "name": str(name),
+                "size": int(size) if isinstance(size, int) else None,
+                "data_hex": data_hex,
+            }
+        )
+    return rows
+
+
+def _argval_kind(ins: dis.Instruction) -> str | None:
+    kind = None
+    if ins.opcode in dis.hasconst:
+        kind = "const"
+    elif ins.opcode in dis.hasname:
+        kind = "name"
+    elif ins.opcode in dis.haslocal:
+        kind = "local"
+    elif ins.opcode in dis.hasfree:
+        kind = "free"
+    elif ins.opcode in dis.hascompare:
+        kind = "compare"
+    elif ins.opcode in dis.hasjump:
+        kind = "jump"
+    return kind
+
+
+def _argval_fields(ins: dis.Instruction) -> tuple[str | None, int | None, str | None]:
+    argval = ins.argval
+    argval_kind = _argval_kind(ins)
+    argval_int: int | None = None
+    argval_str: str | None = None
+    if isinstance(argval, bool):
+        argval_int = int(argval)
+    elif isinstance(argval, int):
+        argval_int = argval
+    elif isinstance(argval, str):
+        argval_str = argval
+    elif argval is not None:
+        argval_str = str(argval)
+    return argval_kind, argval_int, argval_str
+
+
+def _co_flag_enabled(flags: int, name: str) -> bool:
+    value = getattr(inspect, name, 0)
+    return bool(flags & value)
+
+
+def _flags_detail(flags: int) -> dict[str, bool]:
+    return {
+        "is_optimized": _co_flag_enabled(flags, "CO_OPTIMIZED"),
+        "is_newlocals": _co_flag_enabled(flags, "CO_NEWLOCALS"),
+        "has_varargs": _co_flag_enabled(flags, "CO_VARARGS"),
+        "has_varkeywords": _co_flag_enabled(flags, "CO_VARKEYWORDS"),
+        "is_nested": _co_flag_enabled(flags, "CO_NESTED"),
+        "is_generator": _co_flag_enabled(flags, "CO_GENERATOR"),
+        "is_nofree": _co_flag_enabled(flags, "CO_NOFREE"),
+        "is_coroutine": _co_flag_enabled(flags, "CO_COROUTINE"),
+        "is_iterable_coroutine": _co_flag_enabled(flags, "CO_ITERABLE_COROUTINE"),
+        "is_async_generator": _co_flag_enabled(flags, "CO_ASYNC_GENERATOR"),
+    }
 
 
 def _exception_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
@@ -294,6 +427,29 @@ def _cfg_edge_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
         "cond_instr_index": row.get("cond_instr_index"),
         "cond_instr_offset": row.get("cond_instr_offset"),
         "exc_index": row.get("exc_index"),
+        "attrs": attrs_map(
+            {
+                "jump_label": row.get("jump_label"),
+                "jump_kind": row.get("jump_kind"),
+            }
+        ),
+    }
+
+
+def _line_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
+    return {
+        "offset": row.get("offset"),
+        "line1": row.get("line1"),
+        "line0": row.get("line0"),
+        "attrs": attrs_map({}),
+    }
+
+
+def _dfg_edge_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
+    return {
+        "src_instr_index": row.get("src_instr_index"),
+        "dst_instr_index": row.get("dst_instr_index"),
+        "kind": row.get("kind"),
         "attrs": attrs_map({}),
     }
 
@@ -302,8 +458,32 @@ def _error_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
     return {
         "error_type": row.get("error_type"),
         "message": row.get("message"),
-        "attrs": attrs_map({}),
+        "attrs": attrs_map(
+            {
+                "error_stage": row.get("error_stage"),
+                "code_id": row.get("code_id"),
+            }
+        ),
     }
+
+
+def _append_error_row(
+    ctx: BytecodeFileContext,
+    error_rows: list[Row],
+    *,
+    exc: Exception,
+    stage: str,
+    code_id: str | None = None,
+) -> None:
+    error_rows.append(
+        {
+            **ctx.identity_row(),
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "error_stage": stage,
+            "code_id": code_id,
+        }
+    )
 
 
 def _context_from_file_ctx(
@@ -340,6 +520,7 @@ def _compile_text(
                 **ctx.identity_row(),
                 "error_type": type(exc).__name__,
                 "message": str(exc),
+                "error_stage": "compile",
             },
         )
     return top, None
@@ -375,6 +556,8 @@ def _assign_code_units(
             {
                 **ctx.identity_row(),
                 "qualpath": qual,
+                "co_qualname": getattr(co, "co_qualname", None),
+                "co_filename": getattr(co, "co_filename", None),
                 "co_name": co.co_name,
                 "firstlineno": int(co.co_firstlineno or 0),
                 "parent_qualpath": parent_key.qualpath if parent_key is not None else None,
@@ -409,20 +592,6 @@ def _exception_entries(co: pytypes.CodeType) -> Sequence[object]:
     return list(getattr(bc, "exception_entries", ()))
 
 
-def _build_code_unit_context(
-    co: pytypes.CodeType,
-    ctx: BytecodeFileContext,
-    code_unit_key: CodeUnitKey,
-) -> CodeUnitContext:
-    return CodeUnitContext(
-        code_unit_key=code_unit_key,
-        file_ctx=ctx,
-        instruction_data=_instruction_data(co, ctx.options),
-        exc_entries=_exception_entries(co),
-        code_len=len(co.co_code),
-    )
-
-
 def _code_unit_key_columns(unit_ctx: CodeUnitContext) -> dict[str, RowValue]:
     key = unit_ctx.code_unit_key
     return {
@@ -430,6 +599,10 @@ def _code_unit_key_columns(unit_ctx: CodeUnitContext) -> dict[str, RowValue]:
         "co_name": key.co_name,
         "firstlineno": key.firstlineno,
     }
+
+
+def _code_unit_id_from_key(key: CodeUnitKey) -> str:
+    return stable_id("code", key.qualpath, key.co_name, str(key.firstlineno))
 
 
 def _append_exception_rows(unit_ctx: CodeUnitContext, exc_rows: list[Row]) -> None:
@@ -449,17 +622,136 @@ def _append_exception_rows(unit_ctx: CodeUnitContext, exc_rows: list[Row]) -> No
         )
 
 
-def _append_instruction_rows(unit_ctx: CodeUnitContext, ins_rows: list[Row]) -> None:
+def _position_fields(ins: dis.Instruction) -> dict[str, RowValue]:
+    pos = getattr(ins, "positions", None)
+    pos_start_line = getattr(pos, "lineno", None) if pos else None
+    pos_end_line = getattr(pos, "end_lineno", None) if pos else None
+    pos_start_col = getattr(pos, "col_offset", None) if pos else None
+    pos_end_col = getattr(pos, "end_col_offset", None) if pos else None
+    return {
+        "pos_start_line": int(pos_start_line) if pos_start_line is not None else None,
+        "pos_end_line": int(pos_end_line) if pos_end_line is not None else None,
+        "pos_start_col": int(pos_start_col) if pos_start_col is not None else None,
+        "pos_end_col": int(pos_end_col) if pos_end_col is not None else None,
+        "line_base": BC_LINE_BASE,
+        "col_unit": BC_COL_UNIT,
+        "end_exclusive": BC_END_EXCLUSIVE,
+    }
+
+
+def _instruction_core_fields(ins: dis.Instruction) -> dict[str, RowValue]:
+    baseopname = getattr(ins, "baseopname", ins.opname)
+    baseopcode = getattr(ins, "baseopcode", ins.opcode)
+    oparg = getattr(ins, "oparg", ins.arg)
+    line_number = getattr(ins, "line_number", None)
+    label = getattr(ins, "label", None)
+    start_offset = getattr(ins, "start_offset", ins.offset)
+    end_offset = getattr(ins, "end_offset", ins.offset)
+    cache_info = _cache_info_rows(getattr(ins, "cache_info", None))
+    argval_kind, argval_int, argval_str = _argval_fields(ins)
+    return {
+        "start_offset": int(start_offset) if isinstance(start_offset, int) else None,
+        "end_offset": int(end_offset) if isinstance(end_offset, int) else None,
+        "baseopname": baseopname,
+        "baseopcode": int(baseopcode) if isinstance(baseopcode, int) else None,
+        "oparg": int(oparg) if isinstance(oparg, int) else None,
+        "argval_kind": argval_kind,
+        "argval_int": argval_int,
+        "argval_str": argval_str,
+        "line_number": int(line_number) if line_number is not None else None,
+        "label": int(label) if isinstance(label, int) else None,
+        "cache_info": cache_info,
+    }
+
+
+def _stack_effect_delta(ins: dis.Instruction, state: DfgState) -> int:
+    arg = int(ins.arg) if ins.arg is not None else 0
+    try:
+        return dis.stack_effect(ins.opcode, arg, jump=None)
+    except ValueError as exc:
+        _append_error_row(
+            state.unit_ctx.file_ctx,
+            state.error_rows,
+            exc=exc,
+            stage="stack_effect",
+            code_id=state.code_id,
+        )
+    return 0
+
+
+def _apply_stack_effect(
+    *,
+    state: DfgState,
+    idx: int,
+    ins: dis.Instruction,
+) -> tuple[int, int]:
+    identity = state.unit_ctx.file_ctx.identity_row()
+    stack_depth_before = len(state.stack)
+    delta = _stack_effect_delta(ins, state)
+    stack_depth_after = stack_depth_before + delta
+    if stack_depth_after < 0:
+        _append_error_row(
+            state.unit_ctx.file_ctx,
+            state.error_rows,
+            exc=ValueError("Stack depth underflow."),
+            stage="stack_effect",
+            code_id=state.code_id,
+        )
+        stack_depth_after = 0
+
+    pop_count = max(0, -delta)
+    if pop_count > len(state.stack):
+        _append_error_row(
+            state.unit_ctx.file_ctx,
+            state.error_rows,
+            exc=ValueError("Stack underflow while building DFG."),
+            stage="stack_effect",
+            code_id=state.code_id,
+        )
+    for _ in range(pop_count):
+        if not state.stack:
+            break
+        producer = state.stack.pop()
+        state.dfg_rows.append(
+            {
+                **identity,
+                **_code_unit_key_columns(state.unit_ctx),
+                "src_instr_index": producer.instr_index,
+                "dst_instr_index": int(idx),
+                "kind": "USE_STACK",
+            }
+        )
+    if delta > 0:
+        for _ in range(delta):
+            state.stack.append(DfgValueRef(instr_index=int(idx), instr_offset=int(ins.offset)))
+    return stack_depth_before, stack_depth_after
+
+
+def _append_instruction_rows(
+    unit_ctx: CodeUnitContext,
+    ins_rows: list[Row],
+    dfg_rows: list[Row],
+    error_rows: list[Row],
+) -> None:
     identity = unit_ctx.file_ctx.identity_row()
+    code_id = _code_unit_id_from_key(unit_ctx.code_unit_key)
+    state = DfgState(
+        unit_ctx=unit_ctx,
+        stack=[],
+        dfg_rows=dfg_rows,
+        error_rows=error_rows,
+        code_id=code_id,
+    )
+
     for idx, ins in enumerate(unit_ctx.instruction_data.instructions):
         jt = _jump_target(ins)
-        pos = getattr(ins, "positions", None)
-
-        pos_start_line = getattr(pos, "lineno", None) if pos else None
-        pos_end_line = getattr(pos, "end_lineno", None) if pos else None
-        pos_start_col = getattr(pos, "col_offset", None) if pos else None
-        pos_end_col = getattr(pos, "end_col_offset", None) if pos else None
-
+        core_fields = _instruction_core_fields(ins)
+        pos_fields = _position_fields(ins)
+        stack_depth_before, stack_depth_after = _apply_stack_effect(
+            state=state,
+            idx=idx,
+            ins=ins,
+        )
         ins_rows.append(
             {
                 **identity,
@@ -469,24 +761,56 @@ def _append_instruction_rows(unit_ctx: CodeUnitContext, ins_rows: list[Row]) -> 
                 "opname": ins.opname,
                 "opcode": int(ins.opcode),
                 "arg": int(ins.arg) if ins.arg is not None else None,
-                "argval_str": str(ins.argval) if ins.argval is not None else None,
                 "argrepr": ins.argrepr,
-                "is_jump_target": bool(ins.is_jump_target),
-                "jump_target_offset": int(jt) if jt is not None else None,
                 "starts_line": int(ins.starts_line) if ins.starts_line is not None else None,
-                "pos_start_line": int(pos_start_line) if pos_start_line is not None else None,
-                "pos_end_line": int(pos_end_line) if pos_end_line is not None else None,
-                "pos_start_col": int(pos_start_col) if pos_start_col is not None else None,
-                "pos_end_col": int(pos_end_col) if pos_end_col is not None else None,
-                "line_base": BC_LINE_BASE,
-                "col_unit": BC_COL_UNIT,
-                "end_exclusive": BC_END_EXCLUSIVE,
+                "is_jump_target": bool(ins.is_jump_target),
+                "jump_target": int(jt) if jt is not None else None,
+                "stack_depth_before": stack_depth_before,
+                "stack_depth_after": stack_depth_after,
+                **core_fields,
+                **pos_fields,
+            }
+        )
+
+
+def _append_line_table_rows(
+    unit_ctx: CodeUnitContext,
+    line_rows: list[Row],
+    error_rows: list[Row],
+) -> None:
+    identity = unit_ctx.file_ctx.identity_row()
+    code_id = _code_unit_id_from_key(unit_ctx.code_unit_key)
+    try:
+        line_pairs = dis.findlinestarts(unit_ctx.code)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        _append_error_row(
+            unit_ctx.file_ctx,
+            error_rows,
+            exc=exc,
+            stage="line_table",
+            code_id=code_id,
+        )
+        return
+    for offset, lineno in line_pairs:
+        if lineno is None:
+            line1: int | None = None
+            line0: int | None = None
+        else:
+            line1 = int(lineno)
+            line0 = line1 - 1
+        line_rows.append(
+            {
+                **identity,
+                **_code_unit_key_columns(unit_ctx),
+                "offset": int(offset),
+                "line1": line1,
+                "line0": line0,
             }
         )
 
 
 def _is_block_terminator(ins: dis.Instruction, terminator_opnames: Sequence[str]) -> bool:
-    return ins.opname in terminator_opnames or _is_unconditional_jump(ins.opname)
+    return ins.opname in terminator_opnames or _is_unconditional_jump(ins)
 
 
 def _next_instruction_offset(
@@ -505,6 +829,8 @@ def _next_instruction_offset(
 
 def _boundary_offsets(unit_ctx: CodeUnitContext, ins_offsets: set[int]) -> list[int]:
     boundaries: set[int] = {0, unit_ctx.code_len}
+    with contextlib.suppress(TypeError, ValueError):
+        boundaries.update(int(label) for label in dis.findlabels(unit_ctx.code))
     instructions = unit_ctx.instruction_data.instructions
     for ins in instructions:
         jt = _jump_target(ins)
@@ -578,6 +904,8 @@ def _append_cfg_edge(unit_ctx: CodeUnitContext, spec: CfgEdgeSpec, edge_rows: li
             "cond_instr_index": spec.cond_instr_index,
             "cond_instr_offset": spec.cond_instr_offset,
             "exc_index": spec.exc_index,
+            "jump_label": spec.jump_label,
+            "jump_kind": spec.jump_kind,
         }
     )
 
@@ -590,7 +918,10 @@ def _append_jump_edges(ctx: _CfgEdgeContext, block: _BlockEdgeContext) -> bool:
     if dst_block is None:
         return False
     dst_start, dst_end = dst_block
-    kind = "jump" if _is_unconditional_jump(block.last.opname) else "branch"
+    kind = "jump" if _is_unconditional_jump(block.last) else "branch"
+    jump_kind = "unconditional" if kind == "jump" else "conditional"
+    label = getattr(block.last, "label", None)
+    jump_label = int(label) if isinstance(label, int) else None
     _append_cfg_edge(
         ctx.unit_ctx,
         CfgEdgeSpec(
@@ -603,6 +934,8 @@ def _append_jump_edges(ctx: _CfgEdgeContext, block: _BlockEdgeContext) -> bool:
             cond_instr_index=block.last_index if kind == "branch" else None,
             cond_instr_offset=int(block.last.offset) if kind == "branch" else None,
             exc_index=None,
+            jump_label=jump_label,
+            jump_kind=jump_kind,
         ),
         ctx.edge_rows,
     )
@@ -624,6 +957,8 @@ def _append_jump_edges(ctx: _CfgEdgeContext, block: _BlockEdgeContext) -> bool:
             cond_instr_index=block.last_index,
             cond_instr_offset=int(block.last.offset),
             exc_index=None,
+            jump_label=None,
+            jump_kind=None,
         ),
         ctx.edge_rows,
     )
@@ -647,6 +982,8 @@ def _append_fallthrough_edge(ctx: _CfgEdgeContext, block: _BlockEdgeContext) -> 
             cond_instr_index=None,
             cond_instr_offset=None,
             exc_index=None,
+            jump_label=None,
+            jump_kind=None,
         ),
         ctx.edge_rows,
     )
@@ -731,6 +1068,8 @@ def _append_exception_edges(
                     cond_instr_index=None,
                     cond_instr_offset=None,
                     exc_index=int(k),
+                    jump_label=None,
+                    jump_kind=None,
                 ),
                 edge_rows,
             )
@@ -761,9 +1100,45 @@ def _extract_code_unit_rows(
         key = code_unit_keys.get(id(co))
         if key is None:
             continue
-        unit_ctx = _build_code_unit_context(co, ctx, key)
+        code_id = _code_unit_id_from_key(key)
+        try:
+            instruction_data = _instruction_data(co, ctx.options)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            _append_error_row(
+                ctx,
+                buffers.error_rows,
+                exc=exc,
+                stage="disassembly",
+                code_id=code_id,
+            )
+            instruction_data = InstructionData(instructions=[], index_by_offset={})
+        try:
+            exc_entries = _exception_entries(co)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            _append_error_row(
+                ctx,
+                buffers.error_rows,
+                exc=exc,
+                stage="exception_table",
+                code_id=code_id,
+            )
+            exc_entries: list[object] = []
+        unit_ctx = CodeUnitContext(
+            code_unit_key=key,
+            file_ctx=ctx,
+            code=co,
+            instruction_data=instruction_data,
+            exc_entries=exc_entries,
+            code_len=len(co.co_code),
+        )
         _append_exception_rows(unit_ctx, buffers.exception_rows)
-        _append_instruction_rows(unit_ctx, buffers.instruction_rows)
+        _append_instruction_rows(
+            unit_ctx,
+            buffers.instruction_rows,
+            buffers.dfg_edge_rows,
+            buffers.error_rows,
+        )
+        _append_line_table_rows(unit_ctx, buffers.line_rows, buffers.error_rows)
         if include_cfg:
             _append_cfg_rows(unit_ctx, buffers.block_rows, buffers.edge_rows)
 
@@ -776,11 +1151,24 @@ def _sorted_rows(rows: Sequence[Row], *, key: str) -> list[Row]:
     return sorted(rows, key=_key)
 
 
-def _code_objects_from_buffers(buffers: BytecodeRowBuffers) -> list[dict[str, object]]:
+def _sorted_rows_by(rows: Sequence[Row], *, keys: Sequence[str]) -> list[Row]:
+    def _key(row: Row) -> tuple[int, ...]:
+        parts: list[int] = []
+        for field in keys:
+            value = row.get(field)
+            parts.append(int(value) if isinstance(value, int) else 0)
+        return tuple(parts)
+
+    return sorted(rows, key=_key)
+
+
+def _group_code_unit_buffers(buffers: BytecodeRowBuffers) -> CodeUnitGroups:
     instructions_by_key: dict[tuple[str, str, int], list[Row]] = {}
     exceptions_by_key: dict[tuple[str, str, int], list[Row]] = {}
     blocks_by_key: dict[tuple[str, str, int], list[Row]] = {}
     edges_by_key: dict[tuple[str, str, int], list[Row]] = {}
+    line_table_by_key: dict[tuple[str, str, int], list[Row]] = {}
+    dfg_edges_by_key: dict[tuple[str, str, int], list[Row]] = {}
 
     for row in buffers.instruction_rows:
         instructions_by_key.setdefault(_code_unit_key(row), []).append(row)
@@ -790,64 +1178,99 @@ def _code_objects_from_buffers(buffers: BytecodeRowBuffers) -> list[dict[str, ob
         blocks_by_key.setdefault(_code_unit_key(row), []).append(row)
     for row in buffers.edge_rows:
         edges_by_key.setdefault(_code_unit_key(row), []).append(row)
+    for row in buffers.line_rows:
+        line_table_by_key.setdefault(_code_unit_key(row), []).append(row)
+    for row in buffers.dfg_edge_rows:
+        dfg_edges_by_key.setdefault(_code_unit_key(row), []).append(row)
 
-    code_objects: list[dict[str, object]] = []
-    for row in buffers.code_unit_rows:
-        qualpath = row.get("qualpath")
-        co_name = row.get("co_name")
-        firstlineno = row.get("firstlineno")
-        code_id = stable_id(
-            "code",
-            str(qualpath) if qualpath is not None else None,
-            str(co_name) if co_name is not None else None,
-            str(firstlineno) if firstlineno is not None else None,
+    return CodeUnitGroups(
+        instructions_by_key=instructions_by_key,
+        exceptions_by_key=exceptions_by_key,
+        blocks_by_key=blocks_by_key,
+        edges_by_key=edges_by_key,
+        line_table_by_key=line_table_by_key,
+        dfg_edges_by_key=dfg_edges_by_key,
+    )
+
+
+def _code_object_entry(row: Row, groups: CodeUnitGroups) -> dict[str, object]:
+    qualpath = row.get("qualpath")
+    co_qualname = row.get("co_qualname")
+    co_filename = row.get("co_filename")
+    co_name = row.get("co_name")
+    firstlineno = row.get("firstlineno")
+    code_id = stable_id(
+        "code",
+        str(qualpath) if qualpath is not None else None,
+        str(co_name) if co_name is not None else None,
+        str(firstlineno) if firstlineno is not None else None,
+    )
+    key = _code_unit_key(row)
+    instructions = [
+        _instruction_entry(item)
+        for item in _sorted_rows(groups.instructions_by_key.get(key, []), key="instr_index")
+    ]
+    exceptions = [
+        _exception_entry(item)
+        for item in _sorted_rows(groups.exceptions_by_key.get(key, []), key="exc_index")
+    ]
+    blocks = [
+        _block_entry(item)
+        for item in _sorted_rows(groups.blocks_by_key.get(key, []), key="start_offset")
+    ]
+    edges = [_cfg_edge_entry(item) for item in groups.edges_by_key.get(key, [])]
+    line_table = [
+        _line_entry(item)
+        for item in _sorted_rows(groups.line_table_by_key.get(key, []), key="offset")
+    ]
+    dfg_edges = [
+        _dfg_edge_entry(item)
+        for item in _sorted_rows_by(
+            groups.dfg_edges_by_key.get(key, []),
+            keys=("src_instr_index", "dst_instr_index"),
         )
-        key = _code_unit_key(row)
-        instructions = [
-            _instruction_entry(item)
-            for item in _sorted_rows(instructions_by_key.get(key, []), key="instr_index")
-        ]
-        exceptions = [
-            _exception_entry(item)
-            for item in _sorted_rows(exceptions_by_key.get(key, []), key="exc_index")
-        ]
-        blocks = [
-            _block_entry(item)
-            for item in _sorted_rows(blocks_by_key.get(key, []), key="start_offset")
-        ]
-        edges = [_cfg_edge_entry(item) for item in edges_by_key.get(key, [])]
-        code_objects.append(
+    ]
+    flags = row.get("flags")
+    flags_int = int(flags) if isinstance(flags, int) else 0
+    return {
+        "code_id": code_id,
+        "qualname": qualpath,
+        "co_qualname": co_qualname,
+        "co_filename": co_filename,
+        "name": co_name,
+        "firstlineno1": firstlineno,
+        "argcount": row.get("argcount"),
+        "posonlyargcount": row.get("posonlyargcount"),
+        "kwonlyargcount": row.get("kwonlyargcount"),
+        "nlocals": row.get("nlocals"),
+        "flags": flags_int,
+        "flags_detail": _flags_detail(flags_int),
+        "stacksize": row.get("stacksize"),
+        "code_len": row.get("code_len"),
+        "varnames": _string_list(row.get("varnames")),
+        "freevars": _string_list(row.get("freevars")),
+        "cellvars": _string_list(row.get("cellvars")),
+        "names": _string_list(row.get("names")),
+        "consts_json": row.get("consts_json"),
+        "line_table": line_table,
+        "instructions": instructions,
+        "exception_table": exceptions,
+        "blocks": blocks,
+        "cfg_edges": edges,
+        "dfg_edges": dfg_edges,
+        "attrs": attrs_map(
             {
-                "code_id": code_id,
-                "qualname": qualpath,
-                "name": co_name,
-                "firstlineno1": firstlineno,
-                "argcount": row.get("argcount"),
-                "posonlyargcount": row.get("posonlyargcount"),
-                "kwonlyargcount": row.get("kwonlyargcount"),
-                "nlocals": row.get("nlocals"),
-                "flags": row.get("flags"),
-                "stacksize": row.get("stacksize"),
-                "code_len": row.get("code_len"),
-                "varnames": _string_list(row.get("varnames")),
-                "freevars": _string_list(row.get("freevars")),
-                "cellvars": _string_list(row.get("cellvars")),
-                "names": _string_list(row.get("names")),
-                "consts_json": row.get("consts_json"),
-                "instructions": instructions,
-                "exception_table": exceptions,
-                "blocks": blocks,
-                "cfg_edges": edges,
-                "attrs": attrs_map(
-                    {
-                        "parent_qualpath": row.get("parent_qualpath"),
-                        "parent_co_name": row.get("parent_co_name"),
-                        "parent_firstlineno": row.get("parent_firstlineno"),
-                    }
-                ),
+                "parent_qualpath": row.get("parent_qualpath"),
+                "parent_co_name": row.get("parent_co_name"),
+                "parent_firstlineno": row.get("parent_firstlineno"),
             }
-        )
-    return code_objects
+        ),
+    }
+
+
+def _code_objects_from_buffers(buffers: BytecodeRowBuffers) -> list[dict[str, object]]:
+    groups = _group_code_unit_buffers(buffers)
+    return [_code_object_entry(row, groups) for row in buffers.code_unit_rows]
 
 
 def _bytecode_file_row(
@@ -867,6 +1290,8 @@ def _bytecode_file_row(
         exception_rows=[],
         block_rows=[],
         edge_rows=[],
+        line_rows=[],
+        dfg_edge_rows=[],
         error_rows=[],
     )
     top, err = _compile_text(text, bc_ctx)
@@ -883,7 +1308,17 @@ def _bytecode_file_row(
         "file_id": file_ctx.file_id,
         "code_objects": code_objects,
         "errors": errors,
-        "attrs": attrs_map({"file_sha256": file_ctx.file_sha256}),
+        "attrs": attrs_map(
+            {
+                "file_sha256": file_ctx.file_sha256,
+                "python_version": PYTHON_VERSION,
+                "python_magic": PYTHON_MAGIC,
+                "optimize": options.optimize,
+                "dont_inherit": options.dont_inherit,
+                "adaptive": options.adaptive,
+                "include_cfg": options.include_cfg_derivations,
+            }
+        ),
     }
 
 
@@ -924,16 +1359,20 @@ def _jump_target(ins: dis.Instruction) -> int | None:
     jt = getattr(ins, "jump_target_offset", None)
     if isinstance(jt, int):
         return jt
+    if ins.opcode in dis.hasjump and isinstance(ins.argval, int):
+        return int(ins.argval)
     if (ins.opcode in dis.hasjabs or ins.opcode in dis.hasjrel) and isinstance(ins.argval, int):
         return int(ins.argval)
     return None
 
 
-def _is_unconditional_jump(opname: str) -> bool:
-    if not opname.startswith("JUMP"):
+def _is_unconditional_jump(ins: dis.Instruction) -> bool:
+    if ins.opcode not in dis.hasjump:
+        return False
+    if not ins.opname.startswith("JUMP"):
         return False
     # heuristic: "IF" jumps are conditional, FOR_ITER is conditional-ish
-    return ("IF" not in opname) and (opname != "FOR_ITER")
+    return ("IF" not in ins.opname) and (ins.opname != "FOR_ITER")
 
 
 def _iter_code_objects(

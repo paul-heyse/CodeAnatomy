@@ -98,10 +98,6 @@ from normalize.spans import (
 from relspec.pipeline_policy import PipelinePolicy
 from relspec.registry.rules import RuleRegistry
 from relspec.rules.discovery import discover_bundles
-from schema_spec.normalize_derived_specs import (
-    callsite_qname_candidates_spec,
-    qname_dim_spec,
-)
 
 if TYPE_CHECKING:
     from relspec.rules.definitions import RuleDefinition
@@ -109,8 +105,8 @@ if TYPE_CHECKING:
 SCHEMA_VERSION = 1
 DEFAULT_MATERIALIZE_OUTPUTS: tuple[str, ...] = ()
 
-QNAME_DIM_SPEC = qname_dim_spec()
-CALLSITE_QNAME_CANDIDATES_SPEC = callsite_qname_candidates_spec()
+QNAME_DIM_NAME = "dim_qualified_names_v1"
+CALLSITE_QNAME_CANDIDATES_NAME = "callsite_qname_candidates_v1"
 CALLSITE_ARG_SUMMARY_SCHEMA = pa.schema(
     [
         ("call_id", pa.string()),
@@ -939,10 +935,10 @@ def dim_qualified_names(
     if cst_defs is None and normalize_qname_context.libcst_files is not None:
         cst_defs = SqlFragment("cst_defs", libcst_defs_sql())
     if not _requires_output(normalize_qname_context.evidence_plan, "dim_qualified_names"):
-        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name)
+        schema = infer_schema_or_registry(QNAME_DIM_NAME)
         return empty_table(schema)
     if cst_callsites is None or cst_defs is None:
-        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name)
+        schema = infer_schema_or_registry(QNAME_DIM_NAME)
         return empty_table(schema)
     cst_callsites_table = _materialize_fragment(backend, cst_callsites)
     cst_defs_table = _materialize_fragment(backend, cst_defs)
@@ -952,7 +948,7 @@ def dim_qualified_names(
     def_fqns = _flatten_string_list(cst_defs_table, "def_fqns")
     combined = pa.chunked_array([callsite_qnames, callsite_fqns, def_qnames, def_fqns])
     if len(combined) == 0:
-        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name)
+        schema = infer_schema_or_registry(QNAME_DIM_NAME)
         return empty_table(schema)
 
     qname_array = distinct_sorted(combined)
@@ -963,7 +959,7 @@ def dim_qualified_names(
         columns={"qname_id": qname_ids, "qname": qname_array},
         num_rows=len(qname_array),
     )
-    schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name)
+    schema = infer_schema_or_registry(QNAME_DIM_NAME)
     return align_table_to_schema(out, schema)
 
 
@@ -999,7 +995,7 @@ def callsite_qname_candidates(
         Table of callsite qualified name candidates.
     """
     if not _requires_output(evidence_plan, "callsite_qname_candidates"):
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
     register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
@@ -1008,16 +1004,16 @@ def callsite_qname_candidates(
     if cst_call_args is None and libcst_files is not None:
         cst_call_args = SqlFragment("cst_call_args", libcst_call_args_sql())
     if cst_callsites is None:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     cst_callsites_table = _materialize_fragment(backend, cst_callsites)
     if cst_callsites_table.num_rows == 0:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     has_qnames = "callee_qnames" in cst_callsites_table.column_names
     has_fqns = "callee_fqns" in cst_callsites_table.column_names
     if not has_qnames and not has_fqns:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
 
     kernel = resolve_kernel("explode_list", ctx=ctx)
@@ -1049,7 +1045,7 @@ def callsite_qname_candidates(
         if joined.num_rows > 0:
             tables.append(joined)
     if not tables:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     joined = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
     if cst_call_args is not None:
@@ -1061,7 +1057,7 @@ def callsite_qname_candidates(
             arg_summary = _callsite_arg_summary(call_args_table)
             joined = _join_callsite_arg_summary(joined, arg_summary)
 
-    schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name)
+    schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
     return align_table_to_schema(joined, schema)
 
 

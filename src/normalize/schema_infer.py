@@ -77,5 +77,3 @@ def align_table_to_schema(
         on_error="keep",
     )
     return transform.apply(table)
-
-

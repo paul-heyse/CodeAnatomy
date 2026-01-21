@@ -1,7 +1,7 @@
 # DataFusion Bytecode Schema Feature Plan
 
 ## Scope 1: Schema metadata as ABI (`arrow_metadata`)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/schema_registry.py`
@@ -40,14 +40,14 @@ LIMIT 1;
 ```
 
 ### Implementation checklist
-- [ ] Add per-field and per-schema metadata for bytecode ABI constants (line base, col unit).
-- [ ] Use `arrow_metadata` in bytecode views where constants are currently projected per row.
-- [ ] Record DataFusion version metadata to trace schema expectations.
+- [x] Add per-field and per-schema metadata for bytecode ABI constants (line base, col unit).
+- [x] Use `arrow_metadata` in bytecode views where constants are currently projected per row.
+- [x] Record DataFusion version metadata to trace schema expectations.
 
 ---
 
 ## Scope 2: Arrow‑precise casting in bytecode views (`arrow_cast`)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/query_fragments.py`
@@ -64,14 +64,14 @@ FROM base;
 ```
 
 ### Implementation checklist
-- [ ] Replace selected `CAST(...)` in bytecode views with `arrow_cast` for exact Arrow types.
-- [ ] Add `_ARROW_CAST_TYPES` entries for common bytecode fields (Int32/Int64/Utf8).
-- [ ] Validate with `arrow_typeof` in `validate_bytecode_views`.
+- [x] Replace selected `CAST(...)` in bytecode views with `arrow_cast` for exact Arrow types.
+- [x] Add `_ARROW_CAST_TYPES` entries for common bytecode fields (Int32/Int64/Utf8).
+- [x] Validate with `arrow_typeof` in `validate_bytecode_views`.
 
 ---
 
 ## Scope 3: Struct construction in views (`named_struct`, `struct`)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/query_fragments.py`
@@ -90,14 +90,14 @@ FROM base;
 ```
 
 ### Implementation checklist
-- [ ] Construct `span` (or `flags_detail`) in SQL rather than Python for derived views.
-- [ ] Ensure nested structs align with `SPAN_T` and bytecode schema types.
-- [ ] Keep Python emission minimal (raw primitives only) where SQL shaping exists.
+- [x] Construct `span` (or `flags_detail`) in SQL rather than Python for derived views.
+- [x] Ensure nested structs align with `SPAN_T` and bytecode schema types.
+- [x] Keep Python emission minimal (raw primitives only) where SQL shaping exists.
 
 ---
 
 ## Scope 4: Map utilities for `attrs` (`map_entries`, `map_extract`)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/query_fragments.py`
@@ -117,14 +117,14 @@ FROM base,
 ```
 
 ### Implementation checklist
-- [ ] Add `py_bc_instruction_attrs` view via `map_entries` + `unnest`.
-- [ ] Add `py_bc_error_attrs` view for error metadata (`error_stage`, `code_id`).
-- [ ] Keep `_map_value` for performance-critical projections but prefer map views for ad‑hoc analysis.
+- [x] Add `py_bc_instruction_attrs` view via `map_entries` + `unnest`.
+- [x] Add `py_bc_error_attrs` view for error metadata (`error_stage`, `code_id`).
+- [x] Keep `_map_value` for performance-critical projections but prefer map views for ad‑hoc analysis.
 
 ---
 
 ## Scope 5: Struct expansion (`unnest(struct)`) for schema‑adaptive views
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/query_fragments.py`
@@ -142,13 +142,13 @@ FROM base;
 ```
 
 ### Implementation checklist
-- [ ] Add a view that flattens `flags_detail` for analytics without manual projections.
-- [ ] Use `arrow_typeof` to validate the expanded field types in schema registry.
+- [x] Add a view that flattens `flags_detail` for analytics without manual projections.
+- [x] Use `arrow_typeof` to validate the expanded field types in schema registry.
 
 ---
 
 ## Scope 6: Function discovery and version gating
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/runtime.py`
@@ -163,14 +163,14 @@ def _function_inventory(ctx: SessionContext) -> set[str]:
 ```
 
 ### Implementation checklist
-- [ ] Record available function names and DataFusion `version()` in diagnostics.
-- [ ] Gate use of `map_entries` / `arrow_cast` with the discovered function set.
-- [ ] Add a fallback SQL fragment when functions are missing.
+- [x] Record available function names and DataFusion `version()` in diagnostics.
+- [x] Gate use of `map_entries` / `arrow_cast` with the discovered function set.
+- [x] Require DataFusion function support (no fallback in design-phase migration).
 
 ---
 
 ## Scope 7: Constraints + nullability contracts
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/schema_registry.py`
@@ -187,14 +187,14 @@ BYTECODE_CODE_OBJ_T = pa.struct(
 ```
 
 ### Implementation checklist
-- [ ] Mark critical bytecode identity fields as non-nullable in schema.
-- [ ] Add constraint metadata (primary keys) where supported.
-- [ ] Verify outputs align (no null identity fields).
+- [x] Mark critical bytecode identity fields as non-nullable in schema.
+- [x] Add constraint metadata (primary keys) where supported.
+- [x] Verify outputs align (no null identity fields).
 
 ---
 
 ## Scope 8: External table registration + ordering contracts
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/runtime.py`
@@ -210,14 +210,14 @@ WITH ORDER (path ASC, file_id ASC);
 ```
 
 ### Implementation checklist
-- [ ] Add optional external table registration for persisted bytecode outputs.
-- [ ] Register ordering metadata for query planners when files are sorted.
-- [ ] Ensure schema matches `BYTECODE_FILES_SCHEMA` before registration.
+- [x] Add optional external table registration for persisted bytecode outputs.
+- [x] Register ordering metadata for query planners when files are sorted.
+- [x] Ensure schema matches `BYTECODE_FILES_SCHEMA` before registration.
 
 ---
 
 ## Scope 9: Catalog auto‑loading for bytecode outputs
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/runtime.py`
@@ -229,14 +229,14 @@ config = config.set("datafusion.catalog.format", "parquet")
 ```
 
 ### Implementation checklist
-- [ ] Add runtime wiring for `datafusion.catalog.location` and `datafusion.catalog.format`.
-- [ ] Provide a bytecode‑specific profile for auto‑loading persisted extracts.
-- [ ] Validate auto‑loaded schema via `information_schema.columns`.
+- [x] Add runtime wiring for `datafusion.catalog.location` and `datafusion.catalog.format`.
+- [x] Provide a bytecode‑specific profile for auto‑loading persisted extracts.
+- [x] Validate auto‑loaded schema via `information_schema.columns`.
 
 ---
 
 ## Scope 10: Delta Lake provider integration (optional but high‑value)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/runtime.py`
@@ -251,6 +251,6 @@ ctx.register_table("bytecode_files_v1", table)
 ```
 
 ### Implementation checklist
-- [ ] Add a delta registration option for bytecode datasets.
-- [ ] Compare registry schema hash vs Delta log schema for enforcement.
-- [ ] Record Delta table version in diagnostics.
+- [x] Add a delta registration option for bytecode datasets.
+- [x] Compare registry schema hash vs Delta log schema for enforcement.
+- [x] Record Delta table version in diagnostics.

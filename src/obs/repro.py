@@ -38,7 +38,11 @@ from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport
 from relspec.registry import ContractCatalog, DatasetLocation
 from relspec.rules.diagnostics import rule_diagnostics_from_table
-from schema_spec.system import ddl_fingerprint_from_schema, table_spec_from_schema
+from schema_spec.system import (
+    dataset_table_definition,
+    ddl_fingerprint_from_schema,
+    table_spec_from_schema,
+)
 from sqlglot_tools.optimizer import planner_dag_snapshot
 from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 
@@ -915,12 +919,19 @@ def _contract_schema_ddls(contracts: ContractCatalog) -> JsonDict:
     -------
     JsonDict
         Mapping of contract names to CREATE TABLE statements.
+
+    Raises
+    ------
+    ValueError
+        Raised when DataFusion cannot provide a CREATE TABLE statement.
     """
     payload: JsonDict = {}
     for name in contracts.names():
-        contract = contracts.get(name)
-        spec = table_spec_from_schema(name, contract.schema)
-        payload[name] = spec.to_create_table_sql(dialect="datafusion")
+        ddl = dataset_table_definition(name)
+        if ddl is None:
+            msg = f"Contract DDL missing from DataFusion for {name!r}."
+            raise ValueError(msg)
+        payload[name] = ddl
     return payload
 
 

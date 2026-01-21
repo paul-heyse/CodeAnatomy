@@ -8,14 +8,14 @@ from functools import cache
 
 import pyarrow as pa
 
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_authority import dataset_schema_from_context
 from ibis_engine.param_tables import ParamTableSpec
 from normalize.op_specs import normalize_op_specs
 from normalize.registry_specs import dataset_name_from_alias
 from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.definitions import RelationshipPayload, RuleDefinition
-from schema_spec.catalog_registry import schema_registry as central_schema_registry
-from schema_spec.system import SchemaRegistry
+from relspec.schema_context import RelspecSchemaContext
 
 _FILE_ID_COLUMNS: tuple[str, ...] = ("edge_owner_file_id", "file_id")
 
@@ -103,15 +103,15 @@ class RelspecIncrementalSpec:
 def build_incremental_spec(
     rules: Sequence[RuleDefinition],
     *,
-    registry: SchemaRegistry,
+    schema_context: RelspecSchemaContext,
     file_id_param_name: str = "file_ids",
 ) -> RelspecIncrementalSpec:
-    """Build the incremental spec from rule definitions and schema registry.
+    """Build the incremental spec from rule definitions and DataFusion schemas.
 
     Returns
     -------
     RelspecIncrementalSpec
-        Incremental metadata derived from the registry.
+        Incremental metadata derived from DataFusion schemas.
     """
     normalize_rules = tuple(rule for rule in rules if rule.domain == "normalize")
     alias_overrides = _normalize_alias_overrides(normalize_rules)
@@ -120,7 +120,7 @@ def build_incremental_spec(
     scoped_input_names = tuple(sorted(input_datasets | set(relation_contracts)))
     file_id_columns = _file_id_columns_for_datasets(
         scoped_input_names,
-        registry=registry,
+        schema_context=schema_context,
     )
     scoped = {name for name in input_datasets if name in file_id_columns}
     scoped_datasets = frozenset(scoped or input_datasets)
@@ -140,10 +140,11 @@ def incremental_spec() -> RelspecIncrementalSpec:
     Returns
     -------
     RelspecIncrementalSpec
-        Cached incremental spec derived from the registry.
+        Cached incremental spec derived from DataFusion schemas.
     """
     rules = rule_definitions_cached()
-    return build_incremental_spec(rules, registry=central_schema_registry())
+    schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
+    return build_incremental_spec(rules, schema_context=schema_context)
 
 
 def _relationship_input_datasets(rules: Sequence[RuleDefinition]) -> set[str]:
@@ -213,21 +214,24 @@ def _resolve_normalize_alias(name: str) -> str | None:
 def _file_id_columns_for_datasets(
     datasets: Iterable[str],
     *,
-    registry: SchemaRegistry,
+    schema_context: RelspecSchemaContext,
 ) -> Mapping[str, str]:
     mapping: dict[str, str] = {}
     for name in datasets:
-        column = _file_id_column_from_schema(_dataset_schema_for_name(name, registry=registry))
+        column = _file_id_column_from_schema(
+            _dataset_schema_for_name(name, schema_context=schema_context)
+        )
         if column is not None:
             mapping[name] = column
     return mapping
 
 
-def _dataset_schema_for_name(name: str, *, registry: SchemaRegistry) -> pa.Schema | None:
-    spec = registry.dataset_specs.get(name)
-    if spec is not None:
-        return spec.schema()
-    return None
+def _dataset_schema_for_name(
+    name: str,
+    *,
+    schema_context: RelspecSchemaContext,
+) -> pa.Schema | None:
+    return schema_context.dataset_schema(name)
 
 
 def _file_id_column_from_schema(schema: pa.Schema | None) -> str | None:

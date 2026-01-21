@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from datafusion_engine.query_fragments import (
-    symtable_scopes_sql,
     symtable_scope_edges_sql,
+    symtable_scopes_sql,
     symtable_symbols_sql,
 )
 
@@ -133,12 +133,14 @@ def symtable_def_sites_sql(table: str = "symtable_files_v1") -> str:
         ELSE 'cst_def_span'
       END AS anchor_reason,
       defs.def_id AS ambiguity_group_id,
-      {_hash_expr(
-        "py_def_site",
-        "bindings.binding_id",
-        "COALESCE(defs.name_bstart, defs.def_bstart)",
-        "COALESCE(defs.name_bend, defs.def_bend)",
-    )} AS def_site_id
+      {
+        _hash_expr(
+            "py_def_site",
+            "bindings.binding_id",
+            "COALESCE(defs.name_bstart, defs.def_bstart)",
+            "COALESCE(defs.name_bend, defs.def_bend)",
+        )
+    } AS def_site_id
     FROM bindings
     JOIN defs
       ON defs.path = bindings.path
@@ -181,12 +183,14 @@ def symtable_use_sites_sql(table: str = "symtable_files_v1") -> str:
       CAST(0.85 AS FLOAT) AS anchor_confidence,
       'cst_ref' AS anchor_reason,
       refs.ref_id AS ambiguity_group_id,
-      {_hash_expr(
-        "py_use_site",
-        "bindings.binding_id",
-        "refs.bstart",
-        "refs.bend",
-    )} AS use_site_id
+      {
+        _hash_expr(
+            "py_use_site",
+            "bindings.binding_id",
+            "refs.bstart",
+            "refs.bend",
+        )
+    } AS use_site_id
     FROM bindings
     JOIN refs
       ON refs.path = bindings.path

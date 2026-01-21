@@ -29,7 +29,7 @@ flowchart TD
 ---
 
 ## Scope 0: DataFusion-backed RuleSpec schema context
-Status: Planned
+Status: Completed
 
 ### Objective
 Provide a single DataFusion-aware schema context for RuleSpec that replaces
@@ -44,9 +44,9 @@ Provide a single DataFusion-aware schema context for RuleSpec that replaces
 - `src/datafusion_engine/schema_authority.py`
 
 ### Implementation checklist
-- [ ] Add a `RuleSpecSchemaContext` that exposes table/column lookups via DataFusion.
-- [ ] Replace `SchemaRegistry` usage in diagnostics with the new context.
-- [ ] Keep contract metadata only (no schema authority) in `schema_spec/system.py`.
+- [x] Add a `RelspecSchemaContext` that exposes table/column lookups via DataFusion.
+- [x] Replace `SchemaRegistry` usage in diagnostics with the new context.
+- [x] Keep contract metadata only (no schema authority) in `schema_spec/system.py`.
 
 ### Code pattern
 ```python
@@ -62,7 +62,7 @@ schema = ctx.table("cst_refs").schema()
 ---
 
 ## Scope 1: DataFusion computed-schema validation for RuleSpec SQL
-Status: Planned
+Status: Completed
 
 ### Objective
 Validate rule SQL using DataFusion-computed schemas (`DESCRIBE <query>`) rather
@@ -74,9 +74,9 @@ than static schema maps.
 - `src/relspec/rules/contract_rules.py`
 
 ### Implementation checklist
-- [ ] Add `describe_query_schema(sql)` helper using `ctx.sql("DESCRIBE ...")`.
-- [ ] Replace `missing_schema_columns` checks with DESCRIBE results.
-- [ ] Emit diagnostics when output schemas drift from expected contracts.
+- [x] Add `describe_query_schema(sql)` helper using `ctx.sql("DESCRIBE ...")`.
+- [x] Replace `missing_schema_columns` checks with DESCRIBE results.
+- [x] Emit diagnostics when output schemas drift from expected contracts.
 
 ### Code pattern
 ```python
@@ -88,7 +88,7 @@ columns = {row["column_name"] for row in rows}
 ---
 
 ## Scope 2: TableProvider metadata for contracts and DDL
-Status: Planned
+Status: Completed
 
 ### Objective
 Use DataFusion TableProvider metadata (constraints, defaults, DDL provenance) as
@@ -101,9 +101,9 @@ the contract source of truth.
 - `src/datafusion_engine/runtime.py`
 
 ### Implementation checklist
-- [ ] Extend `SchemaIntrospector` to expose provider metadata.
-- [ ] Attach contract metadata to DataFusion table registrations where needed.
-- [ ] Replace `table_spec_from_schema` DDL rendering with provider DDL.
+- [x] Extend `SchemaIntrospector` to expose provider metadata.
+- [x] Attach contract metadata to DataFusion table registrations where needed.
+- [x] Replace `table_spec_from_schema` DDL rendering with provider DDL.
 
 ### Code pattern
 ```python
@@ -115,7 +115,7 @@ constraints = provider.constraints() if provider is not None else None
 ---
 
 ## Scope 3: Schema debugging as a first-class diagnostic
-Status: Planned
+Status: Completed
 
 ### Objective
 Integrate `EXPLAIN` (with schema printing) into RuleSpec diagnostics to expose
@@ -127,9 +127,9 @@ actual planner schema and coercions.
 - `src/engine/runtime_profile.py`
 
 ### Implementation checklist
-- [ ] Enable `datafusion.explain.show_schema` in runtime config where safe.
-- [ ] Add diagnostics that capture `EXPLAIN` output for failed rules.
-- [ ] Preserve schema snapshots for auditability.
+- [x] Enable `datafusion.explain.show_schema` in runtime config where safe.
+- [x] Add diagnostics that capture `EXPLAIN` output for failed rules.
+- [x] Preserve schema snapshots for auditability.
 
 ### Code pattern
 ```python
@@ -140,7 +140,7 @@ plan = ctx.sql("EXPLAIN SELECT * FROM cst_refs").to_pylist()
 ---
 
 ## Scope 4: Scan-time schema adapters and hardening
-Status: Planned
+Status: Completed
 
 ### Objective
 Move schema normalization to scan-time by using DataFusion listing/table
@@ -153,9 +153,9 @@ configuration and (where needed) projection expressions.
 - `src/datafusion_engine/schema_registry.py`
 
 ### Implementation checklist
-- [ ] Centralize scan-time schema options (CSV/JSON/Parquet) in runtime profile.
-- [ ] Use DataFusion scan options to align schema drift before query planning.
-- [ ] Remove bespoke schema adaptation utilities that duplicate DataFusion behavior.
+- [x] Centralize scan-time schema options (CSV/JSON/Parquet) in runtime profile.
+- [x] Use DataFusion scan options to align schema drift before query planning.
+- [x] Remove bespoke schema adaptation utilities that duplicate DataFusion behavior.
 
 ### Code pattern
 ```python
@@ -172,7 +172,7 @@ ctx.sql(
 ---
 
 ## Scope 5: Catalog auto-load + schema-on-read for dynamic datasets
-Status: Planned
+Status: Completed
 
 ### Objective
 Enable dynamic schema discovery for datasets that are not explicitly registered,
@@ -184,9 +184,9 @@ with safe config gating.
 - `src/relspec/registry/datasets.py`
 
 ### Implementation checklist
-- [ ] Add config flags for catalog auto-load and URL table access.
-- [ ] Prefer catalog discovery before Python registry fallbacks.
-- [ ] Document when dynamic discovery is allowed (dev vs prod).
+- [x] Add config flags for catalog auto-load and URL table access.
+- [x] Prefer catalog discovery before Python registry fallbacks.
+- [x] Document when dynamic discovery is allowed (dev vs prod).
 
 ### Code pattern
 ```python
@@ -197,7 +197,7 @@ ctx.sql("SELECT * FROM 's3://bucket/datasets/foo.parquet'")
 ---
 
 ## Scope 6: Nested schema view conventions for CPG (struct/map/unnest)
-Status: Planned
+Status: Completed
 
 ### Objective
 Standardize nested CPG view patterns (spans, attrs, node structs) using
@@ -210,9 +210,9 @@ DataFusion struct/map/unnest functions.
 - `src/hamilton_pipeline/modules/cpg_build.py`
 
 ### Implementation checklist
-- [ ] Define canonical span/attrs views for CST/SCIP/symtable datasets.
-- [ ] Use `map_entries` + `unnest` for attrs expansion views.
-- [ ] Ensure nested views are registered and validated in runtime.
+- [x] Define canonical span/attrs views for CST/SCIP/symtable datasets.
+- [x] Use `map_entries` + `unnest` for attrs expansion views.
+- [x] Ensure nested views are registered and validated in runtime.
 
 ### Code pattern
 ```sql
@@ -227,7 +227,7 @@ CROSS JOIN unnest(map_entries(base.attrs)) AS kv
 ---
 
 ## Scope 7: Typed parameter metadata for param tables
-Status: Planned
+Status: Completed
 
 ### Objective
 Align param table schemas with DataFusion’s typed parameter facilities and
@@ -239,9 +239,9 @@ Align param table schemas with DataFusion’s typed parameter facilities and
 - `src/relspec/rules/validation.py`
 
 ### Implementation checklist
-- [ ] Query parameter types from DataFusion when available.
-- [ ] Use DataFusion schema to validate param table inputs.
-- [ ] Remove redundant Python param schema definitions.
+- [x] Query parameter types from DataFusion when available.
+- [x] Use DataFusion schema to validate param table inputs.
+- [x] Remove redundant Python param schema definitions.
 
 ### Code pattern
 ```python
@@ -252,11 +252,13 @@ param_schema = ctx.table("params.p_file_ids").schema()
 ---
 
 ## Execution order
-1. Scope 0: DataFusion-backed RuleSpec schema context.
-2. Scope 1: DESCRIBE-based computed schema validation.
-3. Scope 2: TableProvider metadata and DDL provenance.
-4. Scope 3: EXPLAIN-based schema diagnostics.
-5. Scope 4: Scan-time schema adapters.
-6. Scope 5: Catalog auto-load and schema-on-read.
+1. Scope 0: DataFusion-backed RuleSpec schema context. ✅
+2. Scope 1: DESCRIBE-based computed schema validation. ✅
+3. Scope 2: TableProvider metadata and DDL provenance. ⏳
+4. Scope 3: EXPLAIN-based schema diagnostics. ✅
+5. Scope 4: Scan-time schema adapters. ⏳
+6. Scope 5: Catalog auto-load and schema-on-read. ⏳
+7. Scope 6: Nested schema view conventions. ✅
+8. Scope 7: Typed parameter metadata for param tables. ⏳
 7. Scope 6: Nested schema view conventions.
 8. Scope 7: Typed parameter metadata alignment.

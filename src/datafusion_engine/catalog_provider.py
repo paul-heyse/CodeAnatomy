@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
@@ -249,6 +250,82 @@ class RegistryCatalogProvider(CatalogProvider):
         return {self.schema_name} if self._schema_provider is not None else set()
 
 
+@dataclass
+class MultiRegistryCatalogProvider(CatalogProvider):
+    """Catalog provider that exposes multiple registry-backed schemas."""
+
+    catalogs: Mapping[str, DatasetCatalog]
+    default_schema: str = "public"
+
+    def __post_init__(self) -> None:
+        """Initialize schema providers for registered catalogs."""
+        self._schema_providers: dict[str, SchemaProvider] = {
+            name: RegistrySchemaProvider(catalog, schema_name=name)
+            for name, catalog in self.catalogs.items()
+        }
+        self._external_schemas: dict[str, SchemaProvider | SchemaProviderExportable | Schema] = {}
+
+    def register_schema(
+        self,
+        name: str,
+        schema: SchemaProvider | SchemaProviderExportable | Schema,
+    ) -> None:
+        """Register a schema provider on the catalog.
+
+        Parameters
+        ----------
+        name:
+            Schema name to register.
+        schema:
+            Schema provider or schema instance to expose.
+        """
+        self._external_schemas[name] = schema
+
+    def deregister_schema(self, name: str, cascade: object) -> None:
+        """Deregister a schema provider from the catalog.
+
+        Parameters
+        ----------
+        name:
+            Schema name to deregister.
+        cascade:
+            Cascade behavior flag from the caller.
+        """
+        _ = cascade
+        self._external_schemas.pop(name, None)
+
+    def schema(self, name: str) -> Schema | None:
+        """Return the schema provider for the catalog.
+
+        Parameters
+        ----------
+        name:
+            Schema name to resolve.
+
+        Returns
+        -------
+        datafusion.catalog.Schema | None
+            Resolved schema provider when available.
+        """
+        registered = self._external_schemas.get(name)
+        if registered is not None:
+            return cast("Schema", registered)
+        provider = self._schema_providers.get(name)
+        if provider is None:
+            return None
+        return cast("Schema", provider)
+
+    def schema_names(self) -> set[str]:
+        """Return available schema names.
+
+        Returns
+        -------
+        set[str]
+            Schema names exposed by the provider.
+        """
+        return set(self._schema_providers) | set(self._external_schemas)
+
+
 def register_registry_catalog(
     ctx: SessionContext,
     *,
@@ -280,9 +357,41 @@ def register_registry_catalog(
     return provider
 
 
+def register_registry_catalogs(
+    ctx: SessionContext,
+    *,
+    catalogs: Mapping[str, DatasetCatalog],
+    catalog_name: str = "codeintel",
+    default_schema: str = "public",
+) -> MultiRegistryCatalogProvider:
+    """Register multiple registry catalogs on a SessionContext.
+
+    Parameters
+    ----------
+    ctx:
+        DataFusion session context used for catalog registration.
+    catalogs:
+        Mapping of schema names to dataset catalogs.
+    catalog_name:
+        Catalog name to register in DataFusion.
+    default_schema:
+        Default schema name for diagnostics and policy defaults.
+
+    Returns
+    -------
+    MultiRegistryCatalogProvider
+        Registered catalog provider.
+    """
+    provider = MultiRegistryCatalogProvider(catalogs=catalogs, default_schema=default_schema)
+    ctx.register_catalog_provider(catalog_name, provider)
+    return provider
+
+
 __all__ = [
     "DATASET_HANDLE_PREFIXES",
+    "MultiRegistryCatalogProvider",
     "RegistryCatalogProvider",
     "RegistrySchemaProvider",
+    "register_registry_catalogs",
     "register_registry_catalog",
 ]

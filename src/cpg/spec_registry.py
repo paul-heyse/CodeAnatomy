@@ -240,6 +240,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "scope_id": "scope_id",
                 "scope_type": "scope_type",
                 "scope_name": "scope_name",
+                "function_partitions": PropFieldSpec(
+                    prop_key="function_partitions",
+                    source_col="function_partitions",
+                    include_if_id=INCLUDE_HEAVY_JSON,
+                ),
+                "class_methods": PropFieldSpec(
+                    prop_key="class_methods",
+                    source_col="class_methods",
+                    include_if_id=INCLUDE_HEAVY_JSON,
+                ),
                 "lineno": "lineno",
                 "is_meta_scope": "is_meta_scope",
                 "path": "path",
@@ -259,6 +269,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
             {
                 "scope_id": "scope_id",
                 "name": "symbol_name",
+                "namespace_count": "namespace_count",
+                "namespace_block_ids": PropFieldSpec(
+                    prop_key="namespace_block_ids",
+                    source_col="namespace_block_ids",
+                    include_if_id=INCLUDE_HEAVY_JSON,
+                ),
                 "is_local": "is_local",
                 "is_global": "is_global",
                 "is_nonlocal": "is_nonlocal",

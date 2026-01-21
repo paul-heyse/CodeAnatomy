@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import logging
 import os
@@ -17,7 +18,9 @@ from datafusion.dataframe import DataFrame
 from datafusion.object_store import LocalFileSystem
 
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.serialization import schema_fingerprint
+from datafusion_engine.catalog_provider import register_registry_catalogs
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -28,6 +31,7 @@ from datafusion_engine.compile_options import (
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
 from datafusion_engine.query_fragments import fragment_view_specs
+from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import (
     missing_schema_names,
@@ -36,6 +40,7 @@ from datafusion_engine.schema_registry import (
     register_all_schemas,
     schema_for,
     schema_names,
+    validate_ast_views,
     validate_bytecode_views,
     validate_cst_views,
     validate_nested_types,
@@ -43,8 +48,10 @@ from datafusion_engine.schema_registry import (
 )
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
+from ibis_engine.registry import DatasetCatalog, DatasetLocation
 from registry_common.arrow_payloads import payload_hash
 from schema_spec.policies import DataFusionWritePolicy
+from schema_spec.system import DataFusionScanOptions, DeltaScanOptions, table_spec_from_schema
 from schema_spec.view_specs import ViewSpec
 
 if TYPE_CHECKING:
@@ -594,7 +601,15 @@ SYMTABLE_DF_POLICY = DataFusionConfigPolicy(
         **DEFAULT_DF_POLICY.settings,
         "datafusion.execution.collect_statistics": "false",
         "datafusion.execution.meta_fetch_concurrency": "8",
+        "datafusion.runtime.list_files_cache_limit": str(64 * MIB),
         "datafusion.runtime.list_files_cache_ttl": "1m",
+        "datafusion.execution.listing_table_factory_infer_partitions": "false",
+        "datafusion.explain.show_schema": "true",
+        "datafusion.format.types_info": "true",
+        "datafusion.execution.time_zone": "UTC",
+        "datafusion.sql_parser.map_string_types_to_utf8view": "false",
+        "datafusion.execution.parquet.schema_force_view_types": "false",
+        "datafusion.optimizer.expand_views_at_output": "false",
     }
 )
 
@@ -706,8 +721,6 @@ def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) ->
     arrays = [pa.array([], type=field.type) for field in schema]
     table = pa.Table.from_arrays(arrays, schema=schema)
     ctx.register_table(name, table)
-
-
 
 
 def _apply_config_int(
@@ -954,6 +967,70 @@ def _information_schema_routines(ctx: SessionContext) -> list[dict[str, object]]
         payload.setdefault("source", "information_schema")
         rows.append(payload)
     return rows
+
+
+def _information_schema_parameters(ctx: SessionContext) -> list[dict[str, object]]:
+    try:
+        table = ctx.sql("SELECT * FROM information_schema.parameters").to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return []
+    rows: list[dict[str, object]] = []
+    for row in table.to_pylist():
+        payload = dict(row)
+        if "routine_name" in payload and "function_name" not in payload:
+            payload["function_name"] = payload["routine_name"]
+        payload.setdefault("source", "information_schema")
+        rows.append(payload)
+    return rows
+
+
+def _datafusion_version(ctx: SessionContext) -> str | None:
+    try:
+        table = ctx.sql("SELECT version() AS version").to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if "version" not in table.column_names or table.num_rows < 1:
+        return None
+    values = table["version"].to_pylist()
+    value = values[0] if values else None
+    return str(value) if value is not None else None
+
+
+def _default_value_entries(schema: pa.Schema) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+
+    def _walk_field(field: pa.Field, *, prefix: str) -> None:
+        path = f"{prefix}.{field.name}" if prefix else field.name
+        meta = field.metadata or {}
+        default_value = meta.get(DEFAULT_VALUE_META)
+        if default_value is not None:
+            entries.append(
+                {
+                    "path": path,
+                    "default_value": default_value.decode("utf-8", errors="replace"),
+                }
+            )
+        _walk_dtype(field.type, prefix=path)
+
+    def _walk_dtype(dtype: pa.DataType, *, prefix: str) -> None:
+        if pa.types.is_struct(dtype):
+            for child in dtype:
+                _walk_field(child, prefix=prefix)
+            return
+        if (
+            pa.types.is_list(dtype)
+            or pa.types.is_large_list(dtype)
+            or pa.types.is_list_view(dtype)
+            or pa.types.is_large_list_view(dtype)
+        ):
+            _walk_dtype(dtype.value_type, prefix=prefix)
+            return
+        if pa.types.is_map(dtype):
+            _walk_dtype(dtype.item_type, prefix=prefix)
+
+    for schema_field in schema:
+        _walk_field(schema_field, prefix="")
+    return entries
 
 
 def _datafusion_write_policy_payload(
@@ -1304,8 +1381,31 @@ class DataFusionRuntimeProfile:
     memory_limit_bytes: int | None = None
     default_catalog: str = "codeintel"
     default_schema: str = "public"
+    registry_catalogs: Mapping[str, DatasetCatalog] = field(default_factory=dict)
+    registry_catalog_name: str | None = None
     catalog_auto_load_location: str | None = None
     catalog_auto_load_format: str | None = None
+    bytecode_catalog_location: str | None = None
+    bytecode_catalog_format: str | None = None
+    bytecode_external_location: str | None = None
+    bytecode_external_format: str = "parquet"
+    bytecode_external_provider: Literal["dataset", "listing", "parquet"] | None = None
+    bytecode_external_ordering: tuple[str, ...] = ("path", "file_id")
+    bytecode_external_partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
+    bytecode_external_unbounded: bool = False
+    bytecode_external_schema_force_view_types: bool | None = True
+    bytecode_external_skip_arrow_metadata: bool | None = False
+    bytecode_external_listing_table_factory_infer_partitions: bool | None = True
+    bytecode_external_listing_table_ignore_subdirectory: bool | None = False
+    bytecode_external_collect_statistics: bool | None = False
+    bytecode_external_meta_fetch_concurrency: int | None = 64
+    bytecode_external_list_files_cache_ttl: str | None = "5m"
+    bytecode_external_list_files_cache_limit: str | None = "10000"
+    bytecode_delta_location: str | None = None
+    bytecode_delta_version: int | None = None
+    bytecode_delta_timestamp: str | None = None
+    bytecode_delta_constraints: tuple[str, ...] = ()
+    bytecode_delta_scan: DeltaScanOptions | None = None
     enable_information_schema: bool = True
     enable_url_table: bool = False  # Dev-only convenience for file-path queries.
     cache_enabled: bool = False
@@ -1319,7 +1419,7 @@ class DataFusionRuntimeProfile:
     expr_planner_names: tuple[str, ...] = ()
     expr_planner_hook: Callable[[SessionContext], None] | None = None
     physical_expr_adapter_factory: object | None = None
-    enable_schema_evolution_adapter: bool = False
+    enable_schema_evolution_adapter: bool = True
     enable_udfs: bool = True
     enable_delta_plan_codecs: bool = False
     delta_plan_codec_physical: str = "delta_physical"
@@ -1396,10 +1496,11 @@ class DataFusionRuntimeProfile:
             key="datafusion.execution.batch_size",
             value=self.batch_size,
         )
+        catalog_location, catalog_format = self._effective_catalog_autoload()
         config = _apply_catalog_autoload(
             config,
-            location=self.catalog_auto_load_location,
-            file_format=self.catalog_auto_load_format,
+            location=catalog_location,
+            file_format=catalog_format,
         )
         config = _apply_config_policy(config, self._resolved_config_policy())
         config = _apply_schema_hardening(config, self._resolved_schema_hardening())
@@ -1407,6 +1508,11 @@ class DataFusionRuntimeProfile:
         config = _apply_feature_settings(config, self.feature_gates)
         config = _apply_join_settings(config, self.join_policy)
         return _apply_explain_analyze_level(config, self.explain_analyze_level)
+
+    def _effective_catalog_autoload(self) -> tuple[str | None, str | None]:
+        if self.bytecode_catalog_location is not None or self.bytecode_catalog_format is not None:
+            return self.bytecode_catalog_location, self.bytecode_catalog_format
+        return self.catalog_auto_load_location, self.catalog_auto_load_format
 
     def runtime_env_builder(self) -> RuntimeEnvBuilder:
         """Return a RuntimeEnvBuilder configured from the profile.
@@ -1468,6 +1574,7 @@ class DataFusionRuntimeProfile:
         ctx = self._apply_url_table(ctx)
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
+        self._install_registry_catalogs(ctx)
         self._install_schema_registry(ctx)
         self._install_udfs(ctx)
         self._prepare_statements(ctx)
@@ -1500,6 +1607,21 @@ class DataFusionRuntimeProfile:
         for plugin in self.input_plugins:
             plugin(ctx)
 
+    def _install_registry_catalogs(self, ctx: SessionContext) -> None:
+        """Install registry-backed catalog providers on the session context."""
+        if not self.registry_catalogs:
+            return
+        catalog_name = self.registry_catalog_name or self.default_catalog
+        register_registry_catalogs(
+            ctx,
+            catalogs=self.registry_catalogs,
+            catalog_name=catalog_name,
+            default_schema=self.default_schema,
+        )
+        set_default = getattr(ctx, "set_default_catalog_and_schema", None)
+        if callable(set_default) and catalog_name != self.default_catalog:
+            set_default(catalog_name, self.default_schema)
+
     def _install_udfs(self, ctx: SessionContext) -> None:
         """Install registered UDFs on the session context."""
         if not self.enable_udfs:
@@ -1507,7 +1629,12 @@ class DataFusionRuntimeProfile:
         snapshot = register_datafusion_udfs(ctx)
         self._record_udf_snapshot(snapshot)
 
-    def _record_schema_registry_validation(self, ctx: SessionContext) -> None:
+    def _record_schema_registry_validation(
+        self,
+        ctx: SessionContext,
+        *,
+        view_errors: Mapping[str, str] | None = None,
+    ) -> None:
         if self.diagnostics_sink is None:
             return
         if not self.enable_information_schema:
@@ -1520,7 +1647,7 @@ class DataFusionRuntimeProfile:
                 validate_nested_types(ctx, name)
             except (RuntimeError, TypeError, ValueError) as exc:
                 type_errors[name] = str(exc)
-        if not missing and not type_errors:
+        if not missing and not type_errors and not view_errors:
             return
         self.diagnostics_sink.record_artifact(
             "datafusion_schema_registry_validation_v1",
@@ -1528,6 +1655,7 @@ class DataFusionRuntimeProfile:
                 "event_time_unix_ms": int(time.time() * 1000),
                 "missing": list(missing),
                 "type_errors": type_errors,
+                "view_errors": dict(view_errors) if view_errors else None,
             },
         )
 
@@ -1536,13 +1664,16 @@ class DataFusionRuntimeProfile:
             return
         if not self.enable_information_schema:
             return
-        if self.catalog_auto_load_location is None and self.catalog_auto_load_format is None:
+        catalog_location, catalog_format = self._effective_catalog_autoload()
+        if catalog_location is None and catalog_format is None:
             return
         introspector = self.schema_introspector(ctx)
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
-            "catalog_auto_load_location": self.catalog_auto_load_location,
-            "catalog_auto_load_format": self.catalog_auto_load_format,
+            "catalog_auto_load_location": catalog_location,
+            "catalog_auto_load_format": catalog_format,
+            "bytecode_catalog_location": self.bytecode_catalog_location,
+            "bytecode_catalog_format": self.bytecode_catalog_format,
         }
         try:
             tables = [
@@ -1554,6 +1685,136 @@ class DataFusionRuntimeProfile:
         except (RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
         self.diagnostics_sink.record_artifact("datafusion_catalog_autoload_v1", payload)
+
+    def _bytecode_dataset_location(self) -> DatasetLocation | None:
+        if self.bytecode_external_location and self.bytecode_delta_location:
+            msg = "Bytecode dataset config cannot set both external and delta locations."
+            raise ValueError(msg)
+        if self.bytecode_delta_location:
+            expected_schema = schema_for("bytecode_files_v1")
+            delta_scan = self.bytecode_delta_scan
+            if delta_scan is None:
+                delta_scan = DeltaScanOptions(schema=expected_schema)
+            elif delta_scan.schema is None:
+                delta_scan = replace(delta_scan, schema=expected_schema)
+            return DatasetLocation(
+                path=self.bytecode_delta_location,
+                format="delta",
+                delta_version=self.bytecode_delta_version,
+                delta_timestamp=self.bytecode_delta_timestamp,
+                delta_constraints=self.bytecode_delta_constraints,
+                delta_scan=delta_scan,
+            )
+        if self.bytecode_external_location:
+            if self.bytecode_external_format == "delta":
+                msg = "Bytecode external format must not be 'delta'."
+                raise ValueError(msg)
+            expected_schema = schema_for("bytecode_files_v1")
+            scan = DataFusionScanOptions(
+                partition_cols=self.bytecode_external_partition_cols,
+                file_sort_order=self.bytecode_external_ordering,
+                unbounded=self.bytecode_external_unbounded,
+                schema_force_view_types=self.bytecode_external_schema_force_view_types,
+                skip_arrow_metadata=self.bytecode_external_skip_arrow_metadata,
+                listing_table_factory_infer_partitions=(
+                    self.bytecode_external_listing_table_factory_infer_partitions
+                ),
+                listing_table_ignore_subdirectory=(
+                    self.bytecode_external_listing_table_ignore_subdirectory
+                ),
+                collect_statistics=self.bytecode_external_collect_statistics,
+                meta_fetch_concurrency=self.bytecode_external_meta_fetch_concurrency,
+                list_files_cache_ttl=self.bytecode_external_list_files_cache_ttl,
+                list_files_cache_limit=self.bytecode_external_list_files_cache_limit,
+            )
+            return DatasetLocation(
+                path=self.bytecode_external_location,
+                format=self.bytecode_external_format,
+                datafusion_provider=self.bytecode_external_provider,
+                datafusion_scan=scan,
+                table_spec=table_spec_from_schema("bytecode_files_v1", expected_schema),
+            )
+        return None
+
+    def _register_bytecode_dataset(self, ctx: SessionContext) -> None:
+        location = self._bytecode_dataset_location()
+        if location is None:
+            return
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                deregister("bytecode_files_v1")
+        df = register_dataset_df(
+            ctx,
+            name="bytecode_files_v1",
+            location=location,
+            runtime_profile=self,
+        )
+        expected = schema_for("bytecode_files_v1").remove_metadata()
+        actual = df.schema().remove_metadata()
+        expected_fingerprint = schema_fingerprint(expected)
+        actual_fingerprint = schema_fingerprint(actual)
+        if actual_fingerprint != expected_fingerprint:
+            msg = (
+                "Bytecode dataset schema mismatch: expected "
+                f"{expected_fingerprint}, observed {actual_fingerprint}."
+            )
+            raise ValueError(msg)
+        self._record_bytecode_registration(location=location)
+
+    def _record_bytecode_registration(self, *, location: DatasetLocation) -> None:
+        if self.diagnostics_sink is None:
+            return
+        scan = location.datafusion_scan
+        payload = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "name": "bytecode_files_v1",
+            "location": str(location.path),
+            "format": location.format,
+            "datafusion_provider": location.datafusion_provider,
+            "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
+            "partition_cols": [
+                {"name": name, "dtype": str(dtype)}
+                for name, dtype in (scan.partition_cols if scan is not None else ())
+            ],
+            "schema_force_view_types": scan.schema_force_view_types if scan is not None else None,
+            "skip_arrow_metadata": scan.skip_arrow_metadata if scan is not None else None,
+            "listing_table_factory_infer_partitions": (
+                scan.listing_table_factory_infer_partitions if scan is not None else None
+            ),
+            "listing_table_ignore_subdirectory": (
+                scan.listing_table_ignore_subdirectory if scan is not None else None
+            ),
+            "collect_statistics": scan.collect_statistics if scan is not None else None,
+            "meta_fetch_concurrency": scan.meta_fetch_concurrency if scan is not None else None,
+            "list_files_cache_limit": scan.list_files_cache_limit if scan is not None else None,
+            "list_files_cache_ttl": scan.list_files_cache_ttl if scan is not None else None,
+            "unbounded": scan.unbounded if scan is not None else None,
+            "delta_version": location.delta_version,
+            "delta_timestamp": location.delta_timestamp,
+            "delta_constraints": list(location.delta_constraints),
+        }
+        self.diagnostics_sink.record_artifact("datafusion_bytecode_dataset_v1", payload)
+
+    def _validate_bytecode_catalog_autoload(self, ctx: SessionContext) -> None:
+        catalog_location, catalog_format = self._effective_catalog_autoload()
+        if catalog_location is None and catalog_format is None:
+            return
+        try:
+            ctx.table("bytecode_files_v1")
+        except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Bytecode catalog autoload failed: {exc}."
+            raise ValueError(msg) from exc
+        if not self.enable_information_schema:
+            return
+        try:
+            ctx.sql(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'bytecode_files_v1' LIMIT 1"
+            ).collect()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Bytecode catalog column introspection failed: {exc}."
+            raise ValueError(msg) from exc
 
     def _record_cst_schema_diagnostics(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -1567,10 +1828,41 @@ class DataFusionRuntimeProfile:
             rows = table.to_pylist()
             schema = schema_for("libcst_files_v1")
             payload["schema_fingerprint"] = schema_fingerprint(schema)
+            default_entries = _default_value_entries(schema)
+            payload["default_values"] = default_entries or None
             payload["diagnostics"] = rows[0] if rows else None
+            introspector = SchemaIntrospector(ctx)
+            payload["table_definition"] = introspector.table_definition("libcst_files_v1")
+            payload["table_constraints"] = (
+                list(introspector.table_constraints("libcst_files_v1")) or None
+            )
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
         self.diagnostics_sink.record_artifact("datafusion_cst_schema_diagnostics_v1", payload)
+
+    def _record_bytecode_metadata(self, ctx: SessionContext) -> None:
+        if self.diagnostics_sink is None:
+            return
+        if not self.enable_information_schema:
+            return
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "dataset": "bytecode_files_v1",
+        }
+        try:
+            table = ctx.sql("SELECT * FROM py_bc_metadata").to_arrow_table()
+            rows = table.to_pylist()
+            schema = schema_for("bytecode_files_v1")
+            payload["schema_fingerprint"] = schema_fingerprint(schema)
+            payload["metadata"] = rows[0] if rows else None
+            introspector = SchemaIntrospector(ctx)
+            payload["table_definition"] = introspector.table_definition("bytecode_files_v1")
+            payload["table_constraints"] = (
+                list(introspector.table_constraints("bytecode_files_v1")) or None
+            )
+        except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+            payload["error"] = str(exc)
+        self.diagnostics_sink.record_artifact("datafusion_bytecode_metadata_v1", payload)
 
     def _record_schema_snapshots(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -1584,11 +1876,21 @@ class DataFusionRuntimeProfile:
         try:
             payload.update(
                 {
+                    "catalogs": introspector.catalogs_snapshot(),
+                    "schemata": introspector.schemata_snapshot(),
                     "tables": introspector.tables_snapshot(),
                     "columns": introspector.columns_snapshot(),
+                    "routines": introspector.routines_snapshot(),
+                    "parameters": introspector.parameters_snapshot(),
                     "settings": introspector.settings_snapshot(),
+                    "functions": self.function_catalog_snapshot(
+                        ctx, include_routines=self.enable_information_schema
+                    ),
                 }
             )
+            version = _datafusion_version(ctx)
+            if version is not None:
+                payload["datafusion_version"] = version
         except (RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
         self.diagnostics_sink.record_artifact(
@@ -1597,11 +1899,22 @@ class DataFusionRuntimeProfile:
         )
 
     def _install_schema_registry(self, ctx: SessionContext) -> None:
-        """Register canonical nested schemas on the session context."""
+        """Register canonical nested schemas on the session context.
+
+        Raises
+        ------
+        ValueError
+            Raised when schema registration or validation fails.
+        """
         if not self.enable_schema_registry:
             return
         self._record_catalog_autoload_snapshot(ctx)
         register_all_schemas(ctx)
+        bytecode_registration = (
+            self.bytecode_external_location is not None or self.bytecode_delta_location is not None
+        )
+        if bytecode_registration:
+            self._register_bytecode_dataset(ctx)
         fragment_views = fragment_view_specs(ctx)
         fragment_names = {view.name for view in fragment_views}
         if fragment_views:
@@ -1621,11 +1934,31 @@ class DataFusionRuntimeProfile:
                 runtime_profile=self,
                 validate=True,
             )
+        if not bytecode_registration and (
+            self.bytecode_catalog_location is not None or self.bytecode_catalog_format is not None
+        ):
+            deregister = getattr(ctx, "deregister_table", None)
+            if callable(deregister):
+                with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                    deregister("bytecode_files_v1")
+            self._validate_bytecode_catalog_autoload(ctx)
         self._record_cst_schema_diagnostics(ctx)
-        validate_cst_views(ctx)
-        validate_symtable_views(ctx)
-        validate_bytecode_views(ctx)
-        self._record_schema_registry_validation(ctx)
+        self._record_bytecode_metadata(ctx)
+        view_errors: dict[str, str] = {}
+        for label, validator in (
+            ("ast_views", validate_ast_views),
+            ("cst_views", validate_cst_views),
+            ("symtable_views", validate_symtable_views),
+            ("bytecode_views", validate_bytecode_views),
+        ):
+            try:
+                validator(ctx)
+            except (RuntimeError, TypeError, ValueError) as exc:
+                view_errors[label] = str(exc)
+        self._record_schema_registry_validation(ctx, view_errors=view_errors or None)
+        if view_errors:
+            msg = f"Schema view validation failed: {view_errors}."
+            raise ValueError(msg)
         self._record_schema_snapshots(ctx)
 
     def _prepare_statements(self, ctx: SessionContext) -> None:
@@ -2111,6 +2444,7 @@ class DataFusionRuntimeProfile:
         rows = table.to_pylist()
         if include_routines:
             rows.extend(_information_schema_routines(ctx))
+            rows.extend(_information_schema_parameters(ctx))
         return sorted(rows, key=_function_catalog_sort_key)
 
     def settings_payload(self) -> dict[str, str]:
@@ -2130,10 +2464,11 @@ class DataFusionRuntimeProfile:
             payload.update(resolved_schema_hardening.settings())
         if self.settings_overrides:
             payload.update({str(key): str(value) for key, value in self.settings_overrides.items()})
-        if self.catalog_auto_load_location is not None:
-            payload["datafusion.catalog.location"] = self.catalog_auto_load_location
-        if self.catalog_auto_load_format is not None:
-            payload["datafusion.catalog.format"] = self.catalog_auto_load_format
+        catalog_location, catalog_format = self._effective_catalog_autoload()
+        if catalog_location is not None:
+            payload["datafusion.catalog.location"] = catalog_location
+        if catalog_format is not None:
+            payload["datafusion.catalog.format"] = catalog_format
         payload.update(self.feature_gates.settings())
         if self.join_policy is not None:
             payload.update(self.join_policy.settings())
@@ -2164,6 +2499,10 @@ class DataFusionRuntimeProfile:
             Runtime settings serialized for telemetry/diagnostics.
         """
         resolved_policy = self._resolved_config_policy()
+        bytecode_partitions = [
+            {"name": name, "dtype": str(dtype)}
+            for name, dtype in self.bytecode_external_partition_cols
+        ]
         return {
             "target_partitions": self.target_partitions,
             "batch_size": self.batch_size,
@@ -2174,6 +2513,35 @@ class DataFusionRuntimeProfile:
             "default_schema": self.default_schema,
             "catalog_auto_load_location": self.catalog_auto_load_location,
             "catalog_auto_load_format": self.catalog_auto_load_format,
+            "bytecode_catalog_location": self.bytecode_catalog_location,
+            "bytecode_catalog_format": self.bytecode_catalog_format,
+            "bytecode_external_location": self.bytecode_external_location,
+            "bytecode_external_format": self.bytecode_external_format,
+            "bytecode_external_provider": self.bytecode_external_provider,
+            "bytecode_external_ordering": list(self.bytecode_external_ordering),
+            "bytecode_external_partitions": bytecode_partitions or None,
+            "bytecode_external_unbounded": self.bytecode_external_unbounded,
+            "bytecode_external_schema_force_view_types": (
+                self.bytecode_external_schema_force_view_types
+            ),
+            "bytecode_external_skip_arrow_metadata": self.bytecode_external_skip_arrow_metadata,
+            "bytecode_external_listing_table_factory_infer_partitions": (
+                self.bytecode_external_listing_table_factory_infer_partitions
+            ),
+            "bytecode_external_listing_table_ignore_subdirectory": (
+                self.bytecode_external_listing_table_ignore_subdirectory
+            ),
+            "bytecode_external_collect_statistics": self.bytecode_external_collect_statistics,
+            "bytecode_external_meta_fetch_concurrency": self.bytecode_external_meta_fetch_concurrency,
+            "bytecode_external_list_files_cache_ttl": self.bytecode_external_list_files_cache_ttl,
+            "bytecode_external_list_files_cache_limit": (
+                self.bytecode_external_list_files_cache_limit
+            ),
+            "bytecode_delta_location": self.bytecode_delta_location,
+            "bytecode_delta_version": self.bytecode_delta_version,
+            "bytecode_delta_timestamp": self.bytecode_delta_timestamp,
+            "bytecode_delta_constraints": list(self.bytecode_delta_constraints),
+            "bytecode_delta_scan": bool(self.bytecode_delta_scan),
             "enable_information_schema": self.enable_information_schema,
             "enable_url_table": self.enable_url_table,
             "cache_enabled": self.cache_enabled,

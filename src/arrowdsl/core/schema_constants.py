@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+DEFAULT_VALUE_META = b"default_value"
 KEY_FIELDS_META = b"key_fields"
 REQUIRED_NON_NULL_META = b"required_non_null"
 SCHEMA_META_NAME = b"schema_name"
@@ -22,6 +23,7 @@ PROVENANCE_SOURCE_FIELDS: dict[str, str] = {
 }
 
 __all__ = [
+    "DEFAULT_VALUE_META",
     "KEY_FIELDS_META",
     "PROVENANCE_COLS",
     "PROVENANCE_SOURCE_FIELDS",

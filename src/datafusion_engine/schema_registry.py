@@ -8,8 +8,16 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 import pyarrow as pa
 
 from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.core.schema_constants import SCHEMA_META_NAME, SCHEMA_META_VERSION
+from arrowdsl.core.schema_constants import (
+    DEFAULT_VALUE_META,
+    KEY_FIELDS_META,
+    REQUIRED_NON_NULL_META,
+    SCHEMA_META_NAME,
+    SCHEMA_META_VERSION,
+)
 from arrowdsl.schema.metadata import ordering_metadata_spec
+from datafusion_engine.schema_introspection import SchemaIntrospector
+from registry_common.metadata import metadata_list_bytes
 from schema_spec.view_specs import ViewSpec
 
 if TYPE_CHECKING:
@@ -30,68 +38,87 @@ SPAN_T = pa.struct(
 )
 
 ATTRS_T = pa.map_(pa.string(), pa.string())
+_DEFAULT_ATTRS_META: dict[bytes, bytes] = {DEFAULT_VALUE_META: b"{}"}
 
-TOOL_INFO_T = pa.struct(
-    [
-        ("name", pa.string()),
-        ("version", pa.string()),
-        ("arguments", pa.list_(pa.string())),
-    ]
-)
 
-SCIP_METADATA_T = pa.struct(
+def _attrs_field(name: str = "attrs") -> pa.Field:
+    return pa.field(name, ATTRS_T, metadata=_DEFAULT_ATTRS_META)
+
+
+SCIP_METADATA_SCHEMA = pa.schema(
     [
+        ("index_id", pa.string()),
         ("protocol_version", pa.int32()),
-        ("tool_info", TOOL_INFO_T),
+        ("tool_name", pa.string()),
+        ("tool_version", pa.string()),
+        ("tool_arguments", pa.list_(pa.string())),
         ("project_root", pa.string()),
         ("text_document_encoding", pa.int32()),
+        ("project_name", pa.string()),
+        ("project_version", pa.string()),
+        ("project_namespace", pa.string()),
     ]
 )
 
-SCIP_DIAGNOSTIC_T = pa.struct(
+SCIP_INDEX_STATS_SCHEMA = pa.schema(
     [
-        ("severity", pa.int32()),
-        ("code", pa.string()),
-        ("message", pa.string()),
-        ("source", pa.string()),
-        ("tags", pa.list_(pa.int32())),
+        ("index_id", pa.string()),
+        ("document_count", pa.int64()),
+        ("occurrence_count", pa.int64()),
+        ("diagnostic_count", pa.int64()),
+        ("symbol_count", pa.int64()),
+        ("external_symbol_count", pa.int64()),
+        ("missing_position_encoding_count", pa.int64()),
+        ("document_text_count", pa.int64()),
+        ("document_text_bytes", pa.int64()),
     ]
 )
 
-SCIP_SIGNATURE_OCCURRENCE_T = pa.struct(
+SCIP_DOCUMENTS_SCHEMA = pa.schema(
     [
-        ("symbol", pa.string()),
-        ("symbol_roles", pa.int32()),
-        ("range", pa.list_(pa.int32())),
-    ]
-)
-
-SCIP_SIGNATURE_DOCUMENTATION_T = pa.struct(
-    [
-        ("text", pa.string()),
+        ("index_id", pa.string()),
+        ("document_id", pa.string()),
+        ("path", pa.string()),
         ("language", pa.string()),
-        ("occurrences", pa.list_(SCIP_SIGNATURE_OCCURRENCE_T)),
+        ("position_encoding", pa.int32()),
     ]
 )
 
-SCIP_OCCURRENCE_T = pa.struct(
+SCIP_DOCUMENT_TEXTS_SCHEMA = pa.schema(
     [
-        ("range_raw", pa.list_(pa.int32())),
-        ("range", SPAN_T),
-        ("symbol", pa.string()),
-        ("symbol_roles", pa.int32()),
-        ("override_documentation", pa.list_(pa.string())),
-        ("syntax_kind", pa.int32()),
-        ("diagnostics", pa.list_(SCIP_DIAGNOSTIC_T)),
-        ("enclosing_range_raw", pa.list_(pa.int32())),
-        ("enclosing_range", SPAN_T),
-        ("attrs", ATTRS_T),
+        ("document_id", pa.string()),
+        ("path", pa.string()),
+        ("text", pa.string()),
     ]
 )
 
-SCIP_RELATIONSHIP_T = pa.struct(
+SCIP_SYMBOL_INFO_FIELDS: tuple[pa.Field, ...] = (
+    pa.field("symbol", pa.string()),
+    pa.field("display_name", pa.string()),
+    pa.field("kind", pa.int32()),
+    pa.field("kind_name", pa.string()),
+    pa.field("enclosing_symbol", pa.string()),
+    pa.field("documentation", pa.list_(pa.string())),
+    pa.field("signature_text", pa.string()),
+    pa.field("signature_language", pa.string()),
+)
+
+SCIP_SYMBOL_INFORMATION_SCHEMA = pa.schema(SCIP_SYMBOL_INFO_FIELDS)
+
+SCIP_DOCUMENT_SYMBOLS_SCHEMA = pa.schema(
+    [
+        ("document_id", pa.string()),
+        ("path", pa.string()),
+        *SCIP_SYMBOL_INFO_FIELDS,
+    ]
+)
+
+SCIP_EXTERNAL_SYMBOL_INFORMATION_SCHEMA = pa.schema(SCIP_SYMBOL_INFO_FIELDS)
+
+SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = pa.schema(
     [
         ("symbol", pa.string()),
+        ("related_symbol", pa.string()),
         ("is_reference", pa.bool_()),
         ("is_implementation", pa.bool_()),
         ("is_type_definition", pa.bool_()),
@@ -99,59 +126,103 @@ SCIP_RELATIONSHIP_T = pa.struct(
     ]
 )
 
-SCIP_SYMBOL_INFO_T = pa.struct(
+SCIP_SIGNATURE_OCCURRENCES_SCHEMA = pa.schema(
     [
+        ("parent_symbol", pa.string()),
         ("symbol", pa.string()),
-        ("documentation", pa.list_(pa.string())),
-        ("signature_documentation", SCIP_SIGNATURE_DOCUMENTATION_T),
-        ("relationships", pa.list_(SCIP_RELATIONSHIP_T)),
-        ("kind", pa.int32()),
-        ("display_name", pa.string()),
-        ("enclosing_symbol", pa.string()),
-        ("attrs", ATTRS_T),
+        ("symbol_roles", pa.int32()),
+        ("syntax_kind", pa.int32()),
+        ("syntax_kind_name", pa.string()),
+        ("range_raw", pa.list_(pa.int32())),
+        ("start_line", pa.int32()),
+        ("start_char", pa.int32()),
+        ("end_line", pa.int32()),
+        ("end_char", pa.int32()),
+        ("range_len", pa.int32()),
+        ("line_base", pa.int32()),
+        ("col_unit", pa.string()),
+        ("end_exclusive", pa.bool_()),
+        ("is_definition", pa.bool_()),
+        ("is_import", pa.bool_()),
+        ("is_write", pa.bool_()),
+        ("is_read", pa.bool_()),
+        ("is_generated", pa.bool_()),
+        ("is_test", pa.bool_()),
+        ("is_forward_definition", pa.bool_()),
     ]
 )
 
-SCIP_DOCUMENT_T = pa.struct(
+SCIP_OCCURRENCES_SCHEMA = pa.schema(
     [
-        ("relative_path", pa.string()),
-        ("language", pa.string()),
-        ("text", pa.string()),
-        ("position_encoding", pa.int32()),
-        ("occurrences", pa.list_(SCIP_OCCURRENCE_T)),
-        ("symbols", pa.list_(SCIP_SYMBOL_INFO_T)),
-        ("attrs", ATTRS_T),
+        ("document_id", pa.string()),
+        ("path", pa.string()),
+        ("symbol", pa.string()),
+        ("symbol_roles", pa.int32()),
+        ("syntax_kind", pa.int32()),
+        ("syntax_kind_name", pa.string()),
+        ("override_documentation", pa.list_(pa.string())),
+        ("range_raw", pa.list_(pa.int32())),
+        ("enclosing_range_raw", pa.list_(pa.int32())),
+        ("start_line", pa.int32()),
+        ("start_char", pa.int32()),
+        ("end_line", pa.int32()),
+        ("end_char", pa.int32()),
+        ("range_len", pa.int32()),
+        ("enc_start_line", pa.int32()),
+        ("enc_start_char", pa.int32()),
+        ("enc_end_line", pa.int32()),
+        ("enc_end_char", pa.int32()),
+        ("enc_range_len", pa.int32()),
+        ("line_base", pa.int32()),
+        ("col_unit", pa.string()),
+        ("end_exclusive", pa.bool_()),
+        ("is_definition", pa.bool_()),
+        ("is_import", pa.bool_()),
+        ("is_write", pa.bool_()),
+        ("is_read", pa.bool_()),
+        ("is_generated", pa.bool_()),
+        ("is_test", pa.bool_()),
+        ("is_forward_definition", pa.bool_()),
     ]
 )
 
-SCIP_INDEX_SCHEMA = pa.schema(
+SCIP_DIAGNOSTICS_SCHEMA = pa.schema(
     [
-        ("index_id", pa.string()),
-        ("metadata", SCIP_METADATA_T),
-        ("documents", pa.list_(SCIP_DOCUMENT_T)),
-        ("symbols", pa.list_(SCIP_SYMBOL_INFO_T)),
-        ("external_symbols", pa.list_(SCIP_SYMBOL_INFO_T)),
+        ("document_id", pa.string()),
+        ("path", pa.string()),
+        ("severity", pa.int32()),
+        ("code", pa.string()),
+        ("message", pa.string()),
+        ("source", pa.string()),
+        ("tags", pa.list_(pa.int32())),
+        ("start_line", pa.int32()),
+        ("start_char", pa.int32()),
+        ("end_line", pa.int32()),
+        ("end_char", pa.int32()),
+        ("line_base", pa.int32()),
+        ("col_unit", pa.string()),
+        ("end_exclusive", pa.bool_()),
     ]
 )
 
 CST_NODE_T = pa.struct(
     [
-        ("cst_id", pa.int64()),
+        pa.field("cst_id", pa.int64(), nullable=False),
         ("kind", pa.string()),
         ("span", SPAN_T),
         ("span_ws", SPAN_T),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
 )
 
 CST_EDGE_T = pa.struct(
     [
-        ("src", pa.int64()),
-        ("dst", pa.int64()),
+        pa.field("src", pa.int64(), nullable=False),
+        pa.field("dst", pa.int64(), nullable=False),
         ("kind", pa.string()),
         ("slot", pa.string()),
         ("idx", pa.int32()),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
 )
 
@@ -160,8 +231,8 @@ FQN_LIST = pa.list_(pa.string())
 
 CST_PARSE_MANIFEST_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
         ("encoding", pa.string()),
         ("default_indent", pa.string()),
@@ -179,8 +250,8 @@ CST_PARSE_MANIFEST_T = pa.struct(
 
 CST_PARSE_ERROR_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
         ("error_type", pa.string()),
         ("message", pa.string()),
@@ -192,16 +263,16 @@ CST_PARSE_ERROR_T = pa.struct(
         ("line_base", pa.int32()),
         ("col_unit", pa.string()),
         ("end_exclusive", pa.bool_()),
-        ("meta", ATTRS_T),
+        _attrs_field("meta"),
     ]
 )
 
 CST_REF_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        ("ref_id", pa.string()),
+        pa.field("ref_id", pa.string(), nullable=False),
         ("ref_kind", pa.string()),
         ("ref_text", pa.string()),
         ("expr_ctx", pa.string()),
@@ -212,14 +283,14 @@ CST_REF_T = pa.struct(
         ("inferred_type", pa.string()),
         ("bstart", pa.int64()),
         ("bend", pa.int64()),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
 )
 
 CST_IMPORT_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
         ("kind", pa.string()),
         ("module", pa.string()),
@@ -231,16 +302,16 @@ CST_IMPORT_T = pa.struct(
         ("stmt_bend", pa.int64()),
         ("alias_bstart", pa.int64()),
         ("alias_bend", pa.int64()),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
 )
 
 CST_CALLSITE_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        ("call_id", pa.string()),
+        pa.field("call_id", pa.string(), nullable=False),
         ("call_bstart", pa.int64()),
         ("call_bend", pa.int64()),
         ("callee_bstart", pa.int64()),
@@ -252,16 +323,16 @@ CST_CALLSITE_T = pa.struct(
         ("callee_qnames", pa.list_(QNAME_T)),
         ("callee_fqns", FQN_LIST),
         ("inferred_type", pa.string()),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
 )
 
 CST_DEF_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        ("def_id", pa.string()),
+        pa.field("def_id", pa.string(), nullable=False),
         ("container_def_kind", pa.string()),
         ("container_def_bstart", pa.int64()),
         ("container_def_bend", pa.int64()),
@@ -275,14 +346,14 @@ CST_DEF_T = pa.struct(
         ("def_fqns", FQN_LIST),
         ("docstring", pa.string()),
         ("decorator_count", pa.int32()),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
 )
 
 CST_TYPE_EXPR_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
         ("owner_def_kind", pa.string()),
         ("owner_def_bstart", pa.int64()),
@@ -298,10 +369,10 @@ CST_TYPE_EXPR_T = pa.struct(
 
 CST_DOCSTRING_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        ("owner_def_id", pa.string()),
+        pa.field("owner_def_id", pa.string(), nullable=False),
         ("owner_kind", pa.string()),
         ("docstring", pa.string()),
         ("bstart", pa.int64()),
@@ -311,10 +382,10 @@ CST_DOCSTRING_T = pa.struct(
 
 CST_DECORATOR_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        ("owner_def_id", pa.string()),
+        pa.field("owner_def_id", pa.string(), nullable=False),
         ("owner_kind", pa.string()),
         ("decorator_text", pa.string()),
         ("decorator_index", pa.int32()),
@@ -325,10 +396,10 @@ CST_DECORATOR_T = pa.struct(
 
 CST_CALL_ARG_T = pa.struct(
     [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
         ("file_sha256", pa.string()),
-        ("call_id", pa.string()),
+        pa.field("call_id", pa.string(), nullable=False),
         ("arg_index", pa.int32()),
         ("keyword", pa.string()),
         ("star", pa.string()),
@@ -341,8 +412,8 @@ CST_CALL_ARG_T = pa.struct(
 LIBCST_FILES_SCHEMA = pa.schema(
     [
         ("repo", pa.string()),
-        ("path", pa.string()),
-        ("file_id", pa.string()),
+        pa.field("path", pa.string(), nullable=False),
+        pa.field("file_id", pa.string(), nullable=False),
         ("nodes", pa.list_(CST_NODE_T)),
         ("edges", pa.list_(CST_EDGE_T)),
         ("parse_manifest", pa.list_(CST_PARSE_MANIFEST_T)),
@@ -355,7 +426,7 @@ LIBCST_FILES_SCHEMA = pa.schema(
         ("docstrings", pa.list_(CST_DOCSTRING_T)),
         ("decorators", pa.list_(CST_DECORATOR_T)),
         ("call_args", pa.list_(CST_CALL_ARG_T)),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
 )
 
@@ -391,6 +462,64 @@ AST_ERROR_T = pa.struct(
     ]
 )
 
+AST_DOCSTRING_T = pa.struct(
+    [
+        ("owner_ast_id", pa.int32()),
+        ("owner_kind", pa.string()),
+        ("owner_name", pa.string()),
+        ("docstring", pa.string()),
+        ("span", SPAN_T),
+        ("source", pa.string()),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+AST_IMPORT_T = pa.struct(
+    [
+        ("ast_id", pa.int32()),
+        ("parent_ast_id", pa.int32()),
+        ("kind", pa.string()),
+        ("module", pa.string()),
+        ("name", pa.string()),
+        ("asname", pa.string()),
+        ("alias_index", pa.int32()),
+        ("level", pa.int32()),
+        ("span", SPAN_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+AST_DEF_T = pa.struct(
+    [
+        ("ast_id", pa.int32()),
+        ("parent_ast_id", pa.int32()),
+        ("kind", pa.string()),
+        ("name", pa.string()),
+        ("span", SPAN_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+AST_CALL_T = pa.struct(
+    [
+        ("ast_id", pa.int32()),
+        ("parent_ast_id", pa.int32()),
+        ("func_kind", pa.string()),
+        ("func_name", pa.string()),
+        ("span", SPAN_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
+AST_TYPE_IGNORE_T = pa.struct(
+    [
+        ("ast_id", pa.int32()),
+        ("tag", pa.string()),
+        ("span", SPAN_T),
+        ("attrs", ATTRS_T),
+    ]
+)
+
 AST_FILES_SCHEMA = pa.schema(
     [
         ("repo", pa.string()),
@@ -399,6 +528,11 @@ AST_FILES_SCHEMA = pa.schema(
         ("nodes", pa.list_(AST_NODE_T)),
         ("edges", pa.list_(AST_EDGE_T)),
         ("errors", pa.list_(AST_ERROR_T)),
+        ("docstrings", pa.list_(AST_DOCSTRING_T)),
+        ("imports", pa.list_(AST_IMPORT_T)),
+        ("defs", pa.list_(AST_DEF_T)),
+        ("calls", pa.list_(AST_CALL_T)),
+        ("type_ignores", pa.list_(AST_TYPE_IGNORE_T)),
         ("attrs", ATTRS_T),
     ]
 )
@@ -473,10 +607,11 @@ SYM_FLAGS_T = pa.struct(
 SYM_SYMBOL_T = pa.struct(
     [
         ("name", pa.string()),
+        ("sym_symbol_id", pa.string()),
         ("flags", SYM_FLAGS_T),
         ("namespace_count", pa.int32()),
         ("namespace_block_ids", pa.list_(pa.int64())),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
 )
 
@@ -490,14 +625,21 @@ SYM_FUNCTION_PARTITIONS_T = pa.struct(
     ]
 )
 
+SYMTABLE_SPAN_META: dict[bytes, bytes] = {
+    b"line_base": b"0",
+    b"col_unit": b"utf32",
+    b"end_exclusive": b"true",
+}
+
 SYM_BLOCK_T = pa.struct(
     [
         ("block_id", pa.int64()),
         ("parent_block_id", pa.int64()),
         ("block_type", pa.string()),
+        ("is_meta_scope", pa.bool_()),
         ("name", pa.string()),
         ("lineno1", pa.int32()),
-        ("span_hint", SPAN_T),
+        pa.field("span_hint", SPAN_T, metadata=SYMTABLE_SPAN_META),
         ("scope_id", pa.string()),
         ("scope_local_id", pa.int64()),
         ("scope_type_value", pa.int32()),
@@ -505,7 +647,7 @@ SYM_BLOCK_T = pa.struct(
         ("function_partitions", SYM_FUNCTION_PARTITIONS_T),
         ("class_methods", pa.list_(pa.string())),
         ("symbols", pa.list_(SYM_SYMBOL_T)),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
 )
 
@@ -515,169 +657,198 @@ SYMTABLE_FILES_SCHEMA = pa.schema(
         ("path", pa.string()),
         ("file_id", pa.string()),
         ("blocks", pa.list_(SYM_BLOCK_T)),
-        ("attrs", ATTRS_T),
+        _attrs_field(),
     ]
+)
+
+BYTECODE_SPAN_META: dict[bytes, bytes] = {
+    b"line_base": b"0",
+    b"col_unit": b"utf32",
+    b"end_exclusive": b"true",
+}
+
+BYTECODE_LINE_META: dict[bytes, bytes] = {b"line_base": b"1"}
+
+_BYTECODE_IDENTITY_FIELDS: tuple[str, ...] = ("file_id", "path")
+_BYTECODE_ORDERING_META = ordering_metadata_spec(
+    OrderingLevel.EXPLICIT,
+    keys=(("path", "ascending"), ("file_id", "ascending")),
+)
+_BYTECODE_CONSTRAINT_META = {
+    REQUIRED_NON_NULL_META: metadata_list_bytes(_BYTECODE_IDENTITY_FIELDS),
+    KEY_FIELDS_META: metadata_list_bytes(_BYTECODE_IDENTITY_FIELDS),
+}
+
+BYTECODE_SCHEMA_META: dict[bytes, bytes] = dict(_BYTECODE_ORDERING_META.schema_metadata)
+BYTECODE_SCHEMA_META.update(_BYTECODE_CONSTRAINT_META)
+BYTECODE_SCHEMA_META.update(
+    {
+        b"bytecode_abi_version": b"1",
+        b"bytecode_span_line_base": BYTECODE_SPAN_META[b"line_base"],
+        b"bytecode_span_col_unit": BYTECODE_SPAN_META[b"col_unit"],
+        b"bytecode_span_end_exclusive": BYTECODE_SPAN_META[b"end_exclusive"],
+    }
 )
 
 BYTECODE_CACHE_ENTRY_T = pa.struct(
     [
-        ("name", pa.string()),
-        ("size", pa.int32()),
-        ("data_hex", pa.string()),
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("size", pa.int32()),
+        pa.field("data_hex", pa.string()),
     ]
 )
 
 BYTECODE_CONST_T = pa.struct(
     [
-        ("const_index", pa.int32()),
-        ("const_repr", pa.string()),
+        pa.field("const_index", pa.int32(), nullable=False),
+        pa.field("const_repr", pa.string(), nullable=False),
     ]
 )
 
 BYTECODE_INSTR_T = pa.struct(
     [
-        ("instr_index", pa.int32()),
-        ("offset", pa.int32()),
-        ("start_offset", pa.int32()),
-        ("end_offset", pa.int32()),
-        ("opname", pa.string()),
-        ("baseopname", pa.string()),
-        ("opcode", pa.int32()),
-        ("baseopcode", pa.int32()),
-        ("arg", pa.int32()),
-        ("oparg", pa.int32()),
-        ("argval_kind", pa.string()),
-        ("argval_int", pa.int64()),
-        ("argval_str", pa.string()),
-        ("argrepr", pa.string()),
-        ("line_number", pa.int32()),
-        ("starts_line", pa.int32()),
-        ("label", pa.int32()),
-        ("is_jump_target", pa.bool_()),
-        ("jump_target", pa.int32()),
-        ("cache_info", pa.list_(BYTECODE_CACHE_ENTRY_T)),
-        ("span", SPAN_T),
-        ("attrs", ATTRS_T),
+        pa.field("instr_index", pa.int32(), nullable=False),
+        pa.field("offset", pa.int32(), nullable=False),
+        pa.field("start_offset", pa.int32()),
+        pa.field("end_offset", pa.int32()),
+        pa.field("opname", pa.string(), nullable=False),
+        pa.field("baseopname", pa.string()),
+        pa.field("opcode", pa.int32(), nullable=False),
+        pa.field("baseopcode", pa.int32()),
+        pa.field("arg", pa.int32()),
+        pa.field("oparg", pa.int32()),
+        pa.field("argval_kind", pa.string()),
+        pa.field("argval_int", pa.int64()),
+        pa.field("argval_str", pa.string()),
+        pa.field("argrepr", pa.string()),
+        pa.field("line_number", pa.int32()),
+        pa.field("starts_line", pa.int32()),
+        pa.field("label", pa.int32()),
+        pa.field("is_jump_target", pa.bool_()),
+        pa.field("jump_target", pa.int32()),
+        pa.field("cache_info", pa.list_(BYTECODE_CACHE_ENTRY_T)),
+        pa.field("span", SPAN_T, metadata=BYTECODE_SPAN_META),
+        pa.field("attrs", ATTRS_T),
     ]
 )
 
 BYTECODE_EXCEPTION_T = pa.struct(
     [
-        ("exc_index", pa.int32()),
-        ("start_offset", pa.int32()),
-        ("end_offset", pa.int32()),
-        ("target_offset", pa.int32()),
-        ("depth", pa.int32()),
-        ("lasti", pa.bool_()),
-        ("attrs", ATTRS_T),
+        pa.field("exc_index", pa.int32(), nullable=False),
+        pa.field("start_offset", pa.int32()),
+        pa.field("end_offset", pa.int32()),
+        pa.field("target_offset", pa.int32()),
+        pa.field("depth", pa.int32()),
+        pa.field("lasti", pa.bool_()),
+        pa.field("attrs", ATTRS_T),
     ]
 )
 
 BYTECODE_BLOCK_T = pa.struct(
     [
-        ("start_offset", pa.int32()),
-        ("end_offset", pa.int32()),
-        ("kind", pa.string()),
-        ("attrs", ATTRS_T),
+        pa.field("start_offset", pa.int32(), nullable=False),
+        pa.field("end_offset", pa.int32(), nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("attrs", ATTRS_T),
     ]
 )
 
 BYTECODE_CFG_EDGE_T = pa.struct(
     [
-        ("src_block_start", pa.int32()),
-        ("src_block_end", pa.int32()),
-        ("dst_block_start", pa.int32()),
-        ("dst_block_end", pa.int32()),
-        ("kind", pa.string()),
-        ("edge_key", pa.string()),
-        ("cond_instr_index", pa.int32()),
-        ("cond_instr_offset", pa.int32()),
-        ("exc_index", pa.int32()),
-        ("attrs", ATTRS_T),
+        pa.field("src_block_start", pa.int32(), nullable=False),
+        pa.field("src_block_end", pa.int32(), nullable=False),
+        pa.field("dst_block_start", pa.int32(), nullable=False),
+        pa.field("dst_block_end", pa.int32(), nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("edge_key", pa.string(), nullable=False),
+        pa.field("cond_instr_index", pa.int32()),
+        pa.field("cond_instr_offset", pa.int32()),
+        pa.field("exc_index", pa.int32()),
+        pa.field("attrs", ATTRS_T),
     ]
 )
 
 BYTECODE_ERROR_T = pa.struct(
     [
-        ("error_type", pa.string()),
-        ("message", pa.string()),
-        ("attrs", ATTRS_T),
+        pa.field("error_type", pa.string(), nullable=False),
+        pa.field("message", pa.string(), nullable=False),
+        pa.field("attrs", ATTRS_T),
     ]
 )
 
 BYTECODE_LINE_T = pa.struct(
     [
-        ("offset", pa.int32()),
-        ("line1", pa.int32()),
-        ("line0", pa.int32()),
-        ("attrs", ATTRS_T),
+        pa.field("offset", pa.int32(), nullable=False),
+        pa.field("line1", pa.int32(), metadata=BYTECODE_LINE_META),
+        pa.field("line0", pa.int32()),
+        pa.field("attrs", ATTRS_T),
     ]
 )
 
 BYTECODE_DFG_EDGE_T = pa.struct(
     [
-        ("src_instr_index", pa.int32()),
-        ("dst_instr_index", pa.int32()),
-        ("kind", pa.string()),
-        ("attrs", ATTRS_T),
+        pa.field("src_instr_index", pa.int32(), nullable=False),
+        pa.field("dst_instr_index", pa.int32(), nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("attrs", ATTRS_T),
     ]
 )
 
 BYTECODE_FLAGS_T = pa.struct(
     [
-        ("is_optimized", pa.bool_()),
-        ("is_newlocals", pa.bool_()),
-        ("has_varargs", pa.bool_()),
-        ("has_varkeywords", pa.bool_()),
-        ("is_nested", pa.bool_()),
-        ("is_generator", pa.bool_()),
-        ("is_nofree", pa.bool_()),
-        ("is_coroutine", pa.bool_()),
-        ("is_iterable_coroutine", pa.bool_()),
-        ("is_async_generator", pa.bool_()),
+        pa.field("is_optimized", pa.bool_()),
+        pa.field("is_newlocals", pa.bool_()),
+        pa.field("has_varargs", pa.bool_()),
+        pa.field("has_varkeywords", pa.bool_()),
+        pa.field("is_nested", pa.bool_()),
+        pa.field("is_generator", pa.bool_()),
+        pa.field("is_nofree", pa.bool_()),
+        pa.field("is_coroutine", pa.bool_()),
+        pa.field("is_iterable_coroutine", pa.bool_()),
+        pa.field("is_async_generator", pa.bool_()),
     ]
 )
 
 BYTECODE_CODE_OBJ_T = pa.struct(
     [
-        ("code_id", pa.string()),
-        ("qualname", pa.string()),
-        ("co_qualname", pa.string()),
-        ("co_filename", pa.string()),
-        ("name", pa.string()),
-        ("firstlineno1", pa.int32()),
-        ("argcount", pa.int32()),
-        ("posonlyargcount", pa.int32()),
-        ("kwonlyargcount", pa.int32()),
-        ("nlocals", pa.int32()),
-        ("flags", pa.int32()),
-        ("flags_detail", BYTECODE_FLAGS_T),
-        ("stacksize", pa.int32()),
-        ("code_len", pa.int32()),
-        ("varnames", pa.list_(pa.string())),
-        ("freevars", pa.list_(pa.string())),
-        ("cellvars", pa.list_(pa.string())),
-        ("names", pa.list_(pa.string())),
-        ("consts", pa.list_(BYTECODE_CONST_T)),
-        ("consts_json", pa.string()),
-        ("line_table", pa.list_(BYTECODE_LINE_T)),
-        ("instructions", pa.list_(BYTECODE_INSTR_T)),
-        ("exception_table", pa.list_(BYTECODE_EXCEPTION_T)),
-        ("blocks", pa.list_(BYTECODE_BLOCK_T)),
-        ("cfg_edges", pa.list_(BYTECODE_CFG_EDGE_T)),
-        ("dfg_edges", pa.list_(BYTECODE_DFG_EDGE_T)),
-        ("attrs", ATTRS_T),
+        pa.field("code_id", pa.string(), nullable=False),
+        pa.field("qualname", pa.string(), nullable=False),
+        pa.field("co_qualname", pa.string()),
+        pa.field("co_filename", pa.string()),
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("firstlineno1", pa.int32(), nullable=False),
+        pa.field("argcount", pa.int32()),
+        pa.field("posonlyargcount", pa.int32()),
+        pa.field("kwonlyargcount", pa.int32()),
+        pa.field("nlocals", pa.int32()),
+        pa.field("flags", pa.int32()),
+        pa.field("flags_detail", BYTECODE_FLAGS_T),
+        pa.field("stacksize", pa.int32()),
+        pa.field("code_len", pa.int32()),
+        pa.field("varnames", pa.list_(pa.string())),
+        pa.field("freevars", pa.list_(pa.string())),
+        pa.field("cellvars", pa.list_(pa.string())),
+        pa.field("names", pa.list_(pa.string())),
+        pa.field("consts", pa.list_(BYTECODE_CONST_T)),
+        pa.field("consts_json", pa.string()),
+        pa.field("line_table", pa.list_(BYTECODE_LINE_T), metadata=BYTECODE_LINE_META),
+        pa.field("instructions", pa.list_(BYTECODE_INSTR_T), metadata=BYTECODE_SPAN_META),
+        pa.field("exception_table", pa.list_(BYTECODE_EXCEPTION_T)),
+        pa.field("blocks", pa.list_(BYTECODE_BLOCK_T)),
+        pa.field("cfg_edges", pa.list_(BYTECODE_CFG_EDGE_T)),
+        pa.field("dfg_edges", pa.list_(BYTECODE_DFG_EDGE_T)),
+        pa.field("attrs", ATTRS_T),
     ]
 )
 
 BYTECODE_FILES_SCHEMA = pa.schema(
     [
-        ("repo", pa.string()),
-        ("path", pa.string()),
-        ("file_id", pa.string()),
-        ("code_objects", pa.list_(BYTECODE_CODE_OBJ_T)),
-        ("errors", pa.list_(BYTECODE_ERROR_T)),
-        ("attrs", ATTRS_T),
+        pa.field("repo", pa.string()),
+        pa.field("path", pa.string(), nullable=False),
+        pa.field("file_id", pa.string(), nullable=False),
+        pa.field("code_objects", pa.list_(BYTECODE_CODE_OBJ_T)),
+        pa.field("errors", pa.list_(BYTECODE_ERROR_T)),
+        pa.field("attrs", ATTRS_T),
     ]
 )
 
@@ -713,18 +884,69 @@ def _schema_with_metadata(
 
 
 AST_FILES_SCHEMA = _schema_with_metadata("ast_files_v1", AST_FILES_SCHEMA)
-BYTECODE_FILES_SCHEMA = _schema_with_metadata("bytecode_files_v1", BYTECODE_FILES_SCHEMA)
+BYTECODE_FILES_SCHEMA = _schema_with_metadata(
+    "bytecode_files_v1",
+    BYTECODE_FILES_SCHEMA,
+    extra_metadata=BYTECODE_SCHEMA_META,
+)
 _LIBCST_ORDERING_META = ordering_metadata_spec(
     OrderingLevel.EXPLICIT,
     keys=(("path", "ascending"), ("file_id", "ascending")),
 )
+_LIBCST_IDENTITY_FIELDS = ("file_id", "path")
+_LIBCST_CONSTRAINT_META = {
+    REQUIRED_NON_NULL_META: metadata_list_bytes(_LIBCST_IDENTITY_FIELDS),
+    KEY_FIELDS_META: metadata_list_bytes(_LIBCST_IDENTITY_FIELDS),
+}
+_LIBCST_SCHEMA_META = dict(_LIBCST_ORDERING_META.schema_metadata)
+_LIBCST_SCHEMA_META.update(_LIBCST_CONSTRAINT_META)
 LIBCST_FILES_SCHEMA = _schema_with_metadata(
     "libcst_files_v1",
     LIBCST_FILES_SCHEMA,
-    extra_metadata=_LIBCST_ORDERING_META.schema_metadata,
+    extra_metadata=_LIBCST_SCHEMA_META,
 )
-SCIP_INDEX_SCHEMA = _schema_with_metadata("scip_index_v1", SCIP_INDEX_SCHEMA)
-SYMTABLE_FILES_SCHEMA = _schema_with_metadata("symtable_files_v1", SYMTABLE_FILES_SCHEMA)
+SCIP_METADATA_SCHEMA = _schema_with_metadata("scip_metadata_v1", SCIP_METADATA_SCHEMA)
+SCIP_INDEX_STATS_SCHEMA = _schema_with_metadata("scip_index_stats_v1", SCIP_INDEX_STATS_SCHEMA)
+SCIP_DOCUMENTS_SCHEMA = _schema_with_metadata("scip_documents_v1", SCIP_DOCUMENTS_SCHEMA)
+SCIP_DOCUMENT_TEXTS_SCHEMA = _schema_with_metadata("scip_document_texts_v1", SCIP_DOCUMENT_TEXTS_SCHEMA)
+SCIP_OCCURRENCES_SCHEMA = _schema_with_metadata("scip_occurrences_v1", SCIP_OCCURRENCES_SCHEMA)
+SCIP_SYMBOL_INFORMATION_SCHEMA = _schema_with_metadata(
+    "scip_symbol_information_v1",
+    SCIP_SYMBOL_INFORMATION_SCHEMA,
+)
+SCIP_DOCUMENT_SYMBOLS_SCHEMA = _schema_with_metadata(
+    "scip_document_symbols_v1",
+    SCIP_DOCUMENT_SYMBOLS_SCHEMA,
+)
+SCIP_EXTERNAL_SYMBOL_INFORMATION_SCHEMA = _schema_with_metadata(
+    "scip_external_symbol_information_v1",
+    SCIP_EXTERNAL_SYMBOL_INFORMATION_SCHEMA,
+)
+SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = _schema_with_metadata(
+    "scip_symbol_relationships_v1",
+    SCIP_SYMBOL_RELATIONSHIPS_SCHEMA,
+)
+SCIP_SIGNATURE_OCCURRENCES_SCHEMA = _schema_with_metadata(
+    "scip_signature_occurrences_v1",
+    SCIP_SIGNATURE_OCCURRENCES_SCHEMA,
+)
+SCIP_DIAGNOSTICS_SCHEMA = _schema_with_metadata("scip_diagnostics_v1", SCIP_DIAGNOSTICS_SCHEMA)
+_SYMTABLE_IDENTITY_FIELDS = ("file_id", "path")
+_SYMTABLE_ORDERING_META = ordering_metadata_spec(
+    OrderingLevel.EXPLICIT,
+    keys=(("path", "ascending"), ("file_id", "ascending")),
+)
+_SYMTABLE_CONSTRAINT_META = {
+    REQUIRED_NON_NULL_META: metadata_list_bytes(_SYMTABLE_IDENTITY_FIELDS),
+    KEY_FIELDS_META: metadata_list_bytes(_SYMTABLE_IDENTITY_FIELDS),
+}
+_SYMTABLE_SCHEMA_META = dict(_SYMTABLE_ORDERING_META.schema_metadata)
+_SYMTABLE_SCHEMA_META.update(_SYMTABLE_CONSTRAINT_META)
+SYMTABLE_FILES_SCHEMA = _schema_with_metadata(
+    "symtable_files_v1",
+    SYMTABLE_FILES_SCHEMA,
+    extra_metadata=_SYMTABLE_SCHEMA_META,
+)
 TREE_SITTER_FILES_SCHEMA = _schema_with_metadata("tree_sitter_files_v1", TREE_SITTER_FILES_SCHEMA)
 
 DATAFUSION_FALLBACKS_SCHEMA = _schema_with_metadata(
@@ -1019,7 +1241,17 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "relation_output_v1": RELATION_OUTPUT_SCHEMA,
     "repo_snapshot_v1": REPO_SNAPSHOT_SCHEMA,
     "scalar_param_signature_v1": SCALAR_PARAM_SIGNATURE_SCHEMA,
-    "scip_index_v1": SCIP_INDEX_SCHEMA,
+    "scip_metadata_v1": SCIP_METADATA_SCHEMA,
+    "scip_index_stats_v1": SCIP_INDEX_STATS_SCHEMA,
+    "scip_documents_v1": SCIP_DOCUMENTS_SCHEMA,
+    "scip_document_texts_v1": SCIP_DOCUMENT_TEXTS_SCHEMA,
+    "scip_occurrences_v1": SCIP_OCCURRENCES_SCHEMA,
+    "scip_symbol_information_v1": SCIP_SYMBOL_INFORMATION_SCHEMA,
+    "scip_document_symbols_v1": SCIP_DOCUMENT_SYMBOLS_SCHEMA,
+    "scip_external_symbol_information_v1": SCIP_EXTERNAL_SYMBOL_INFORMATION_SCHEMA,
+    "scip_symbol_relationships_v1": SCIP_SYMBOL_RELATIONSHIPS_SCHEMA,
+    "scip_signature_occurrences_v1": SCIP_SIGNATURE_OCCURRENCES_SCHEMA,
+    "scip_diagnostics_v1": SCIP_DIAGNOSTICS_SCHEMA,
     "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
     "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
 }
@@ -1115,6 +1347,36 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "role": "derived",
         "context": {},
     },
+    "ast_docstrings": {
+        "root": "ast_files_v1",
+        "path": "docstrings",
+        "role": "derived",
+        "context": {},
+    },
+    "ast_imports": {
+        "root": "ast_files_v1",
+        "path": "imports",
+        "role": "derived",
+        "context": {},
+    },
+    "ast_defs": {
+        "root": "ast_files_v1",
+        "path": "defs",
+        "role": "derived",
+        "context": {},
+    },
+    "ast_calls": {
+        "root": "ast_files_v1",
+        "path": "calls",
+        "role": "derived",
+        "context": {},
+    },
+    "ast_type_ignores": {
+        "root": "ast_files_v1",
+        "path": "type_ignores",
+        "role": "derived",
+        "context": {},
+    },
     "ts_nodes": {
         "root": "tree_sitter_files_v1",
         "path": "nodes",
@@ -1150,51 +1412,6 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "path": "blocks",
         "role": "derived",
         "context": {},
-    },
-    "scip_metadata": {
-        "root": "scip_index_v1",
-        "path": "metadata",
-        "role": "derived",
-        "context": {},
-    },
-    "scip_documents": {
-        "root": "scip_index_v1",
-        "path": "documents",
-        "role": "derived",
-        "context": {},
-    },
-    "scip_occurrences": {
-        "root": "scip_index_v1",
-        "path": "documents.occurrences",
-        "role": "derived",
-        "context": {"relative_path": "documents.relative_path"},
-    },
-    "scip_symbol_information": {
-        "root": "scip_index_v1",
-        "path": "symbols",
-        "role": "derived",
-        "context": {},
-    },
-    "scip_external_symbol_information": {
-        "root": "scip_index_v1",
-        "path": "external_symbols",
-        "role": "derived",
-        "context": {},
-    },
-    "scip_symbol_relationships": {
-        "root": "scip_index_v1",
-        "path": "symbols.relationships",
-        "role": "derived",
-        "context": {"parent_symbol": "symbols.symbol"},
-    },
-    "scip_diagnostics": {
-        "root": "scip_index_v1",
-        "path": "documents.occurrences.diagnostics",
-        "role": "derived",
-        "context": {
-            "relative_path": "documents.relative_path",
-            "occ_range": "documents.occurrences.range",
-        },
     },
     "py_bc_code_units": {
         "root": "bytecode_files_v1",
@@ -1264,12 +1481,38 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
 
 ROOT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "ast_files_v1": ("file_id", "path"),
-    "bytecode_files_v1": ("file_id", "path"),
-    "libcst_files_v1": ("file_id", "path"),
-    "scip_index_v1": ("index_id",),
-    "symtable_files_v1": ("file_id", "path"),
+    "bytecode_files_v1": _BYTECODE_IDENTITY_FIELDS,
+    "libcst_files_v1": _LIBCST_IDENTITY_FIELDS,
+    "symtable_files_v1": _SYMTABLE_IDENTITY_FIELDS,
     "tree_sitter_files_v1": ("file_id", "path"),
 }
+
+AST_VIEW_NAMES: tuple[str, ...] = (
+    "ast_nodes",
+    "ast_edges",
+    "ast_errors",
+    "ast_docstrings",
+    "ast_imports",
+    "ast_defs",
+    "ast_calls",
+    "ast_type_ignores",
+)
+
+SCIP_VIEW_SCHEMA_MAP: dict[str, str] = {
+    "scip_metadata": "scip_metadata_v1",
+    "scip_index_stats": "scip_index_stats_v1",
+    "scip_documents": "scip_documents_v1",
+    "scip_document_texts": "scip_document_texts_v1",
+    "scip_occurrences": "scip_occurrences_v1",
+    "scip_symbol_information": "scip_symbol_information_v1",
+    "scip_document_symbols": "scip_document_symbols_v1",
+    "scip_external_symbol_information": "scip_external_symbol_information_v1",
+    "scip_symbol_relationships": "scip_symbol_relationships_v1",
+    "scip_signature_occurrences": "scip_signature_occurrences_v1",
+    "scip_diagnostics": "scip_diagnostics_v1",
+}
+
+SCIP_VIEW_NAMES: tuple[str, ...] = tuple(SCIP_VIEW_SCHEMA_MAP)
 
 SYMTABLE_VIEW_NAMES: tuple[str, ...] = (
     "symtable_scopes",
@@ -1283,16 +1526,71 @@ SYMTABLE_VIEW_NAMES: tuple[str, ...] = (
 
 BYTECODE_VIEW_NAMES: tuple[str, ...] = (
     "py_bc_code_units",
+    "py_bc_consts",
     "py_bc_line_table",
     "py_bc_instructions",
+    "py_bc_instruction_attrs",
+    "py_bc_instruction_attr_keys",
+    "py_bc_instruction_attr_values",
+    "py_bc_instruction_spans",
+    "py_bc_instruction_span_fields",
     "py_bc_cache_entries",
-    "py_bc_consts",
+    "py_bc_metadata",
     "bytecode_exception_table",
+    "py_bc_cfg_edge_attrs",
     "py_bc_blocks",
     "py_bc_dfg_edges",
+    "py_bc_flags_detail",
     "py_bc_cfg_edges",
+    "py_bc_error_attrs",
     "bytecode_errors",
 )
+
+BYTECODE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
+    "arrow_cast",
+    "arrow_metadata",
+    "arrow_typeof",
+    "map_entries",
+    "map_extract",
+    "map_keys",
+    "map_values",
+    "list_extract",
+    "named_struct",
+    "unnest",
+)
+
+BYTECODE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
+    "arrow_cast": 2,
+    "arrow_metadata": 1,
+    "arrow_typeof": 1,
+    "list_extract": 2,
+    "map_entries": 1,
+    "map_extract": 2,
+    "map_keys": 1,
+    "map_values": 1,
+    "named_struct": 2,
+    "unnest": 1,
+}
+
+CST_REQUIRED_FUNCTIONS: tuple[str, ...] = (
+    "arrow_cast",
+    "arrow_metadata",
+    "arrow_typeof",
+    "map_entries",
+    "named_struct",
+    "unnest",
+)
+
+CST_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
+    "arrow_cast": 2,
+    "arrow_metadata": 1,
+    "arrow_typeof": 1,
+    "map_entries": 1,
+    "named_struct": 2,
+    "unnest": 1,
+}
+
+SCIP_REQUIRED_FUNCTIONS: tuple[str, ...] = ()
 
 CST_VIEW_NAMES: tuple[str, ...] = (
     "cst_parse_manifest",
@@ -1313,6 +1611,12 @@ CST_VIEW_NAMES: tuple[str, ...] = (
     "cst_imports_attrs",
     "cst_nodes_attrs",
     "cst_edges_attrs",
+    "cst_refs_attr_origin",
+    "cst_defs_attr_origin",
+    "cst_callsites_attr_origin",
+    "cst_imports_attr_origin",
+    "cst_nodes_attr_origin",
+    "cst_edges_attr_origin",
     "cst_ref_spans",
     "cst_callsite_spans",
     "cst_def_spans",
@@ -1617,15 +1921,16 @@ def _resolve_nested_path(
         if _is_list_type(dtype):
             list_expr = f"{current_expr}.{step}" if current_is_root else f"{current_expr}['{step}']"
             alias = f"n{idx}"
-            from_clause += f"\nCROSS JOIN unnest({list_expr}) AS {alias}"
-            current_expr = alias
+            item_alias = f"{alias}_item"
+            from_clause += f"\nCROSS JOIN unnest({list_expr}) AS {alias}({item_alias})"
+            current_expr = f"{alias}.{item_alias}"
             current_is_root = False
             value_type = dtype.value_type
             if not pa.types.is_struct(value_type):
                 msg = f"Nested path {path!r} does not resolve to a struct at {step!r}."
                 raise TypeError(msg)
             current_struct = value_type
-            prefix_exprs[prefix] = alias
+            prefix_exprs[prefix] = current_expr
             continue
         if not pa.types.is_struct(dtype):
             msg = f"Nested path {path!r} does not resolve to a struct at {step!r}."
@@ -1734,6 +2039,40 @@ def validate_nested_types(ctx: SessionContext, name: str) -> None:
     ctx.sql(f"SELECT arrow_typeof(*) AS row_type FROM {name} LIMIT 1").collect()
 
 
+def validate_ast_views(ctx: SessionContext) -> None:
+    """Validate AST view schemas using DataFusion introspection.
+
+    Raises
+    ------
+    ValueError
+        Raised when view schemas fail validation.
+    """
+    errors: dict[str, str] = {}
+    for name in AST_VIEW_NAMES:
+        try:
+            ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            errors[name] = str(exc)
+    try:
+        ctx.sql("SELECT arrow_typeof(nodes) AS nodes_type FROM ast_files_v1 LIMIT 1").collect()
+        ctx.sql("SELECT arrow_typeof(edges) AS edges_type FROM ast_files_v1 LIMIT 1").collect()
+        ctx.sql("SELECT arrow_typeof(errors) AS errors_type FROM ast_files_v1 LIMIT 1").collect()
+        ctx.sql(
+            "SELECT arrow_typeof(docstrings) AS docstrings_type FROM ast_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql("SELECT arrow_typeof(imports) AS imports_type FROM ast_files_v1 LIMIT 1").collect()
+        ctx.sql("SELECT arrow_typeof(defs) AS defs_type FROM ast_files_v1 LIMIT 1").collect()
+        ctx.sql("SELECT arrow_typeof(calls) AS calls_type FROM ast_files_v1 LIMIT 1").collect()
+        ctx.sql(
+            "SELECT arrow_typeof(type_ignores) AS type_ignores_type FROM ast_files_v1 LIMIT 1"
+        ).collect()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["ast_files_v1"] = str(exc)
+    if errors:
+        msg = f"AST view validation failed: {errors}."
+        raise ValueError(msg)
+
+
 def validate_symtable_views(ctx: SessionContext) -> None:
     """Validate symtable view schemas using DataFusion introspection.
 
@@ -1748,6 +2087,20 @@ def validate_symtable_views(ctx: SessionContext) -> None:
             ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
         except (RuntimeError, TypeError, ValueError) as exc:
             errors[name] = str(exc)
+    for name in SYMTABLE_VIEW_NAMES:
+        try:
+            expected = set(schema_for(name).names)
+            rows = ctx.sql(
+                f"SELECT column_name FROM information_schema.columns WHERE table_name = '{name}'"
+            ).to_arrow_table()
+            actual = {
+                str(row.get("column_name")) for row in rows.to_pylist() if row.get("column_name")
+            }
+            missing = sorted(expected - actual)
+            if missing:
+                errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
+        except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+            errors[f"{name}_information_schema"] = str(exc)
     try:
         ctx.sql(
             "SELECT arrow_typeof(blocks) AS blocks_type FROM symtable_files_v1 LIMIT 1"
@@ -1755,11 +2108,183 @@ def validate_symtable_views(ctx: SessionContext) -> None:
         ctx.sql(
             "SELECT arrow_typeof(blocks.symbols) AS symbols_type FROM symtable_files_v1 LIMIT 1"
         ).collect()
+        ctx.sql(
+            "SELECT arrow_metadata(blocks.span_hint, 'line_base') AS span_line_base "
+            "FROM symtable_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_metadata(blocks.span_hint, 'col_unit') AS span_col_unit "
+            "FROM symtable_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_metadata(blocks.span_hint, 'end_exclusive') AS span_end_exclusive "
+            "FROM symtable_files_v1 LIMIT 1"
+        ).collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["symtable_files_v1"] = str(exc)
     if errors:
         msg = f"Symtable view validation failed: {errors}."
         raise ValueError(msg)
+
+
+def validate_scip_views(ctx: SessionContext) -> None:
+    """Validate SCIP view schemas using DataFusion introspection.
+
+    Raises
+    ------
+    ValueError
+        Raised when view schemas fail validation.
+    """
+    errors: dict[str, str] = {}
+    _validate_required_functions(ctx, required=SCIP_REQUIRED_FUNCTIONS, errors=errors)
+    introspector = SchemaIntrospector(ctx)
+    for view_name in SCIP_VIEW_NAMES:
+        try:
+            rows = introspector.describe_query(f"SELECT * FROM {view_name}")
+        except (RuntimeError, TypeError, ValueError) as exc:
+            errors[view_name] = str(exc)
+            continue
+        columns = _describe_column_names(rows)
+        invalid = _invalid_output_names(columns)
+        if invalid:
+            errors[f"{view_name}_invalid_columns"] = f"Invalid column names: {invalid}."
+    for view_name, schema_name in SCIP_VIEW_SCHEMA_MAP.items():
+        try:
+            expected = set(schema_for(schema_name).names)
+            rows = ctx.sql(
+                "SELECT column_name FROM information_schema.columns "
+                f"WHERE table_name = '{view_name}'"
+            ).to_arrow_table()
+            actual = {
+                str(row.get("column_name"))
+                for row in rows.to_pylist()
+                if row.get("column_name")
+            }
+            missing = sorted(expected - actual)
+            if missing:
+                errors[f"{view_name}_information_schema"] = f"Missing columns: {missing}."
+        except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+            errors[f"{view_name}_information_schema"] = str(exc)
+    if errors:
+        msg = f"SCIP view validation failed: {errors}."
+        raise ValueError(msg)
+
+
+def _function_names(ctx: SessionContext) -> set[str]:
+    try:
+        table = ctx.sql("SHOW FUNCTIONS").to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return set()
+    names: set[str] = set()
+    for row in table.to_pylist():
+        for key in ("function_name", "name"):
+            value = row.get(key)
+            if isinstance(value, str):
+                names.add(value)
+    return names
+
+
+def _validate_required_functions(
+    ctx: SessionContext,
+    *,
+    required: Sequence[str],
+    errors: dict[str, str],
+) -> None:
+    available = {name.lower() for name in _function_names(ctx)}
+    if not available:
+        errors["datafusion_functions"] = "SHOW FUNCTIONS returned no entries."
+        return
+    missing = sorted(name for name in required if name.lower() not in available)
+    if missing:
+        errors["datafusion_functions"] = f"Missing required functions: {missing}."
+
+
+def _signature_name(row: Mapping[str, object]) -> str | None:
+    for key in ("specific_name", "routine_name", "function_name", "name"):
+        value = row.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _validate_function_signatures(
+    ctx: SessionContext,
+    *,
+    required: Mapping[str, int],
+    errors: dict[str, str],
+) -> None:
+    introspector = SchemaIntrospector(ctx)
+    try:
+        rows = introspector.parameters_snapshot()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["datafusion_function_signatures"] = str(exc)
+        return
+    if not rows:
+        errors["datafusion_function_signatures"] = "information_schema.parameters returned no rows."
+        return
+    counts = _parameter_counts(rows)
+    signature_errors = _signature_errors(required, counts)
+    if signature_errors:
+        errors["datafusion_function_signatures"] = str(signature_errors)
+
+
+def _parameter_counts(rows: Sequence[Mapping[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        name = _signature_name(row)
+        if name is None:
+            continue
+        normalized = name.lower()
+        counts[normalized] = counts.get(normalized, 0) + 1
+    return counts
+
+
+def _signature_errors(
+    required: Mapping[str, int],
+    counts: Mapping[str, int],
+) -> dict[str, list[str]]:
+    missing = [name for name in required if name.lower() not in counts]
+    mismatched = _mismatched_signatures(required, counts)
+    details: dict[str, list[str]] = {}
+    if missing:
+        details["missing"] = missing
+    if mismatched:
+        details["mismatched"] = mismatched
+    return details
+
+
+def _mismatched_signatures(
+    required: Mapping[str, int],
+    counts: Mapping[str, int],
+) -> list[str]:
+    mismatched: list[str] = []
+    for name, min_args in required.items():
+        count = counts.get(name.lower())
+        if count is not None and count < min_args:
+            mismatched.append(f"{name} ({count} < {min_args})")
+    return mismatched
+
+
+def _describe_column_names(rows: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    names: list[str] = []
+    for row in rows:
+        for key in ("column_name", "name", "column"):
+            value = row.get(key)
+            if value is not None:
+                names.append(str(value))
+                break
+    return tuple(names)
+
+
+def _invalid_output_names(names: Sequence[str]) -> tuple[str, ...]:
+    invalid = []
+    for name in names:
+        if not name:
+            invalid.append(name)
+            continue
+        if any(token in name for token in (".", "(", ")", "{", "}", " ")):
+            invalid.append(name)
+    return tuple(invalid)
 
 
 def validate_bytecode_views(ctx: SessionContext) -> None:
@@ -1771,6 +2296,12 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
+    _validate_required_functions(ctx, required=BYTECODE_REQUIRED_FUNCTIONS, errors=errors)
+    _validate_function_signatures(
+        ctx,
+        required=BYTECODE_REQUIRED_FUNCTION_SIGNATURES,
+        errors=errors,
+    )
     for name in BYTECODE_VIEW_NAMES:
         try:
             ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
@@ -1778,12 +2309,23 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
             errors[name] = str(exc)
     try:
         ctx.sql(
-            "SELECT arrow_typeof(code_objects) AS code_objects_type "
-            "FROM bytecode_files_v1 LIMIT 1"
+            "SELECT arrow_typeof(code_objects) AS code_objects_type FROM bytecode_files_v1 LIMIT 1"
         ).collect()
         ctx.sql(
             "SELECT arrow_typeof(code_objects.instructions) AS instr_type "
             "FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_metadata(code_objects.instructions, 'line_base') "
+            "AS instr_line_base_meta FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_metadata(code_objects.instructions, 'col_unit') "
+            "AS instr_col_unit_meta FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_metadata(code_objects.instructions, 'end_exclusive') "
+            "AS instr_end_exclusive_meta FROM bytecode_files_v1 LIMIT 1"
         ).collect()
         ctx.sql(
             "SELECT arrow_typeof(code_objects.instructions.cache_info) AS cache_info_type "
@@ -1794,8 +2336,15 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
             "FROM bytecode_files_v1 LIMIT 1"
         ).collect()
         ctx.sql(
-            "SELECT arrow_typeof(code_objects.consts) AS consts_type "
+            "SELECT arrow_metadata(code_objects.line_table, 'line_base') "
+            "AS line_table_meta FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(code_objects.flags_detail) AS flags_detail_type "
             "FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(code_objects.consts) AS consts_type FROM bytecode_files_v1 LIMIT 1"
         ).collect()
         ctx.sql(
             "SELECT arrow_typeof(code_objects.dfg_edges) AS dfg_edges_type "
@@ -1817,11 +2366,19 @@ def validate_cst_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
+    _validate_required_functions(ctx, required=CST_REQUIRED_FUNCTIONS, errors=errors)
+    _validate_function_signatures(ctx, required=CST_REQUIRED_FUNCTION_SIGNATURES, errors=errors)
+    introspector = SchemaIntrospector(ctx)
     for name in CST_VIEW_NAMES:
         try:
-            ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
+            rows = introspector.describe_query(f"SELECT * FROM {name}")
         except (RuntimeError, TypeError, ValueError) as exc:
             errors[name] = str(exc)
+            continue
+        columns = _describe_column_names(rows)
+        invalid = _invalid_output_names(columns)
+        if invalid:
+            errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
     try:
         ctx.sql("SELECT * FROM cst_schema_diagnostics").collect()
     except (RuntimeError, TypeError, ValueError) as exc:
@@ -1942,13 +2499,26 @@ def register_all_schemas(ctx: SessionContext) -> None:
 
 __all__ = [
     "AST_FILES_SCHEMA",
+    "AST_VIEW_NAMES",
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
     "CST_VIEW_NAMES",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
     "SCHEMA_REGISTRY",
-    "SCIP_INDEX_SCHEMA",
+    "SCIP_DIAGNOSTICS_SCHEMA",
+    "SCIP_DOCUMENTS_SCHEMA",
+    "SCIP_DOCUMENT_SYMBOLS_SCHEMA",
+    "SCIP_DOCUMENT_TEXTS_SCHEMA",
+    "SCIP_EXTERNAL_SYMBOL_INFORMATION_SCHEMA",
+    "SCIP_INDEX_STATS_SCHEMA",
+    "SCIP_METADATA_SCHEMA",
+    "SCIP_OCCURRENCES_SCHEMA",
+    "SCIP_SIGNATURE_OCCURRENCES_SCHEMA",
+    "SCIP_SYMBOL_INFORMATION_SCHEMA",
+    "SCIP_SYMBOL_RELATIONSHIPS_SCHEMA",
+    "SCIP_VIEW_NAMES",
+    "SCIP_VIEW_SCHEMA_MAP",
     "SYMTABLE_FILES_SCHEMA",
     "SYMTABLE_VIEW_NAMES",
     "TREE_SITTER_FILES_SCHEMA",
@@ -1974,9 +2544,11 @@ __all__ = [
     "schema_names",
     "schema_registry",
     "struct_for_path",
+    "validate_ast_views",
     "validate_bytecode_views",
     "validate_cst_views",
     "validate_nested_types",
     "validate_schema_metadata",
+    "validate_scip_views",
     "validate_symtable_views",
 ]

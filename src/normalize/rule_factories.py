@@ -241,8 +241,10 @@ def build_diagnostics_rules(
                 inputs=(
                     "cst_parse_errors",
                     "file_line_index",
+                    "symtable_scopes",
                     "ts_errors",
                     "ts_missing",
+                    "py_bc_code_units",
                     "scip_diagnostics",
                     "scip_documents",
                 ),

@@ -45,8 +45,6 @@ type Row = dict[str, RowValue]
 type BytecodeCacheKey = tuple[str, str, int, bool, bool, bool, tuple[str, ...]]
 
 BC_LINE_BASE = 1
-BC_COL_UNIT = "utf32"
-BC_END_EXCLUSIVE = True
 CACHE_ENTRY_FIELDS = 3
 PYTHON_VERSION = sys.version.split()[0]
 PYTHON_MAGIC = importlib.util.MAGIC_NUMBER.hex()
@@ -280,15 +278,12 @@ def _code_unit_key(row: Mapping[str, RowValue]) -> tuple[str, str, int]:
 
 
 def _instruction_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
-    line_base = row.get("line_base")
-    line_base_int = int(line_base) if isinstance(line_base, int) else BC_LINE_BASE
     start_line = row.get("pos_start_line")
     end_line = row.get("pos_end_line")
     start_col = row.get("pos_start_col")
     end_col = row.get("pos_end_col")
-    start_line0 = int(start_line) - line_base_int if isinstance(start_line, int) else None
-    end_line0 = int(end_line) - line_base_int if isinstance(end_line, int) else None
-    col_unit = str(row.get("col_unit")) if row.get("col_unit") is not None else BC_COL_UNIT
+    start_line0 = int(start_line) - BC_LINE_BASE if isinstance(start_line, int) else None
+    end_line0 = int(end_line) - BC_LINE_BASE if isinstance(end_line, int) else None
     return {
         "instr_index": row.get("instr_index"),
         "offset": row.get("offset"),
@@ -316,8 +311,8 @@ def _instruction_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
                 start_col=int(start_col) if isinstance(start_col, int) else None,
                 end_line0=end_line0,
                 end_col=int(end_col) if isinstance(end_col, int) else None,
-                end_exclusive=bool(row.get("end_exclusive", BC_END_EXCLUSIVE)),
-                col_unit=col_unit,
+                end_exclusive=None,
+                col_unit=None,
             )
         ),
         "attrs": attrs_map(
@@ -760,9 +755,6 @@ def _position_fields(ins: dis.Instruction) -> dict[str, RowValue]:
         "pos_end_line": int(pos_end_line) if pos_end_line is not None else None,
         "pos_start_col": int(pos_start_col) if pos_start_col is not None else None,
         "pos_end_col": int(pos_end_col) if pos_end_col is not None else None,
-        "line_base": BC_LINE_BASE,
-        "col_unit": BC_COL_UNIT,
-        "end_exclusive": BC_END_EXCLUSIVE,
     }
 
 

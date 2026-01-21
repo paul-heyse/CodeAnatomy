@@ -49,6 +49,7 @@ from datafusion_engine.compile_options import (
     resolve_sql_policy,
 )
 from datafusion_engine.df_builder import TranslationError, df_from_sqlglot
+from datafusion_engine.schema_registry import has_schema, schema_for
 from engine.plan_cache import PlanCacheEntry, PlanCacheKey
 from ibis_engine.params_bridge import datafusion_param_bindings
 from ibis_engine.plan import IbisPlan
@@ -1699,7 +1700,8 @@ def datafusion_from_arrow(
     if _is_row_mapping_sequence(value):
         rows = cast("Sequence[Mapping[str, object]]", value)
         value = table_from_row_dicts(rows)
-    table = coerce_table_like(value)
+    requested_schema = schema_for(name) if has_schema(name) else None
+    table = coerce_table_like(value, requested_schema=requested_schema)
     from_arrow = getattr(ctx, "from_arrow", None)
     if callable(from_arrow) and batch_size is None:
         try:

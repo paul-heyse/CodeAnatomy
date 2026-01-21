@@ -15,6 +15,7 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
+from datafusion_engine.schema_authority import dataset_schema_from_context
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.expr_compiler import align_set_op_tables, union_tables
 from ibis_engine.plan import IbisPlan
@@ -26,7 +27,6 @@ from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
 from relspec.model import RelationshipRule
 from relspec.rules.definitions import EvidenceSpec as RuleEvidenceSpec
 from relspec.rules.evidence import EvidenceCatalog
-from schema_spec.catalog_registry import dataset_spec as catalog_spec
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
@@ -449,14 +449,12 @@ def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
         Schema for the rule output when available.
     """
     if rule.contract_name:
-        try:
-            dataset_spec = catalog_spec(rule.contract_name)
-        except KeyError:
-            dataset_spec = None
-        if dataset_spec is not None:
-            return dataset_spec.schema()
         if rule.contract_name == RELATION_OUTPUT_NAME:
             return relation_output_schema()
+        try:
+            return dataset_schema_from_context(rule.contract_name)
+        except KeyError:
+            return None
     return None
 
 

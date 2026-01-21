@@ -50,3 +50,9 @@ def test_runtime_profile_hash_changes_with_ibis_options() -> None:
     )
     snapshot_modified = runtime_profile_snapshot(modified)
     assert snapshot_base.profile_hash != snapshot_modified.profile_hash
+
+
+def test_schema_evolution_adapter_enabled_by_default() -> None:
+    """Enable schema evolution adapter in the default profile."""
+    profile = DataFusionRuntimeProfile()
+    assert profile.enable_schema_evolution_adapter is True

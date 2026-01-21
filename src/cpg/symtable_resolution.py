@@ -195,16 +195,10 @@ def _resolve_candidates(
     if resolution_kind in {"NONLOCAL", "FREE"}:
         candidates = _walk_parent_chain(scope_id, scope_parent)
         matches = [
-            candidate
-            for candidate in candidates
-            if name in declared_bindings.get(candidate, {})
+            candidate for candidate in candidates if name in declared_bindings.get(candidate, {})
         ]
         if resolution_kind == "NONLOCAL":
-            return [
-                candidate
-                for candidate in matches
-                if scope_type.get(candidate) != "MODULE"
-            ]
+            return [candidate for candidate in matches if scope_type.get(candidate) != "MODULE"]
         module_scope = module_scope_by_path.get(path)
         if module_scope and name in declared_bindings.get(module_scope, {}):
             if module_scope not in matches:

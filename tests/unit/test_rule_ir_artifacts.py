@@ -5,6 +5,7 @@ from __future__ import annotations
 import ibis
 
 from arrowdsl.core.execution_context import execution_context_factory
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.param_tables import ParamTablePolicy
 from relspec.rules.definitions import RuleDefinition
 from relspec.rules.validation import (
@@ -13,7 +14,7 @@ from relspec.rules.validation import (
     SqlGlotRuleContext,
     rule_ir_metadata,
 )
-from schema_spec.catalog_registry import schema_registry
+from relspec.schema_context import RelspecSchemaContext
 
 
 def test_rule_ir_metadata_contains_decompile_and_sql() -> None:
@@ -37,9 +38,10 @@ def test_rule_ir_metadata_contains_decompile_and_sql() -> None:
         schema_ddl=None,
         plan_signature=None,
     )
+    schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
     diagnostics_ctx = SqlGlotDiagnosticsContext(
         backend=backend,
-        registry=schema_registry(),
+        schema_context=schema_context,
         ctx=ctx,
         param_specs={},
         param_policy=ParamTablePolicy(),
@@ -75,9 +77,10 @@ def test_rule_ir_metadata_is_stable() -> None:
         schema_ddl=None,
         plan_signature=None,
     )
+    schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
     diagnostics_ctx = SqlGlotDiagnosticsContext(
         backend=backend,
-        registry=schema_registry(),
+        schema_context=schema_context,
         ctx=ctx,
         param_specs={},
         param_policy=ParamTablePolicy(),

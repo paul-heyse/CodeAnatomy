@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass, replace
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
@@ -13,6 +14,9 @@ from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_
 from engine.function_registry import default_function_registry
 from registry_common.arrow_payloads import payload_hash
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
 def _cpu_count() -> int:
@@ -282,21 +286,22 @@ def _fragment_scan_options(options: object | None) -> dict[str, str] | None:
     return {"value": str(options)}
 
 
-def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfile:
-    df_profile = runtime.datafusion
-    if df_profile is None:
-        return runtime
-    settings = df_profile.settings_payload()
+def _apply_named_profile_overrides(
+    name: str,
+    runtime: RuntimeProfile,
+    df_profile: DataFusionRuntimeProfile,
+) -> tuple[RuntimeProfile, DataFusionRuntimeProfile]:
+    cpu_count = _cpu_count()
     if name == "dev_debug":
         runtime = replace(
             runtime,
-            cpu_threads=min(_cpu_count(), 4),
-            io_threads=min(_cpu_count() * 2, 8),
+            cpu_threads=min(cpu_count, 4),
+            io_threads=min(cpu_count * 2, 8),
         )
         df_profile = replace(
             df_profile,
             config_policy_name="dev",
-            target_partitions=min(_cpu_count(), 8),
+            target_partitions=min(cpu_count, 8),
             batch_size=4096,
             capture_explain=True,
             explain_analyze=True,
@@ -305,8 +310,8 @@ def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfi
     elif name == "prod_fast":
         runtime = replace(
             runtime,
-            cpu_threads=_cpu_count(),
-            io_threads=_cpu_count() * 2,
+            cpu_threads=cpu_count,
+            io_threads=cpu_count * 2,
         )
         df_profile = replace(
             df_profile,
@@ -318,44 +323,64 @@ def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfi
     elif name == "memory_tight":
         runtime = replace(
             runtime,
-            cpu_threads=min(_cpu_count(), 2),
-            io_threads=min(_cpu_count(), 4),
+            cpu_threads=min(cpu_count, 2),
+            io_threads=min(cpu_count, 4),
         )
         df_profile = replace(
             df_profile,
             config_policy_name="symtable",
-            target_partitions=min(_cpu_count(), 4),
+            target_partitions=min(cpu_count, 4),
             batch_size=4096,
             capture_explain=False,
             explain_analyze=False,
             explain_analyze_level="summary",
         )
-    if name != "dev_debug":
-        spill_dir = df_profile.spill_dir or settings.get("datafusion.runtime.temp_directory")
-        memory_limit = df_profile.memory_limit_bytes or _settings_int(
-            settings.get("datafusion.runtime.memory_limit")
-        )
-        memory_pool = df_profile.memory_pool
-        if memory_limit is not None and memory_pool == "greedy":
-            memory_pool = "fair"
-        df_profile = replace(
-            df_profile,
-            spill_dir=spill_dir,
-            memory_limit_bytes=memory_limit,
-            memory_pool=memory_pool,
-        )
+    return runtime, df_profile
+
+
+def _apply_memory_overrides(
+    name: str,
+    df_profile: DataFusionRuntimeProfile,
+    settings: Mapping[str, str],
+) -> DataFusionRuntimeProfile:
+    if name == "dev_debug":
+        return df_profile
+    spill_dir = df_profile.spill_dir or settings.get("datafusion.runtime.temp_directory")
+    memory_limit = df_profile.memory_limit_bytes or _settings_int(
+        settings.get("datafusion.runtime.memory_limit")
+    )
+    memory_pool = df_profile.memory_pool
+    if memory_limit is not None and memory_pool == "greedy":
+        memory_pool = "fair"
+    return replace(
+        df_profile,
+        spill_dir=spill_dir,
+        memory_limit_bytes=memory_limit,
+        memory_pool=memory_pool,
+    )
+
+
+def _apply_env_overrides(df_profile: DataFusionRuntimeProfile) -> DataFusionRuntimeProfile:
     policy_override = _env_value("CODEANATOMY_DATAFUSION_POLICY")
-    catalog_location = _env_value("CODEANATOMY_DATAFUSION_CATALOG_LOCATION")
-    catalog_format = _env_value("CODEANATOMY_DATAFUSION_CATALOG_FORMAT")
-    overrides: dict[str, str] = {}
     if policy_override is not None:
-        overrides["config_policy_name"] = policy_override
+        df_profile = replace(df_profile, config_policy_name=policy_override)
+    catalog_location = _env_value("CODEANATOMY_DATAFUSION_CATALOG_LOCATION")
     if catalog_location is not None:
-        overrides["catalog_auto_load_location"] = catalog_location
+        df_profile = replace(df_profile, catalog_auto_load_location=catalog_location)
+    catalog_format = _env_value("CODEANATOMY_DATAFUSION_CATALOG_FORMAT")
     if catalog_format is not None:
-        overrides["catalog_auto_load_format"] = catalog_format
-    if overrides:
-        df_profile = replace(df_profile, **overrides)
+        df_profile = replace(df_profile, catalog_auto_load_format=catalog_format)
+    return df_profile
+
+
+def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfile:
+    df_profile = runtime.datafusion
+    if df_profile is None:
+        return runtime
+    settings = df_profile.settings_payload()
+    runtime, df_profile = _apply_named_profile_overrides(name, runtime, df_profile)
+    df_profile = _apply_memory_overrides(name, df_profile, settings)
+    df_profile = _apply_env_overrides(df_profile)
     return runtime.with_datafusion(df_profile)
 
 

@@ -15,6 +15,7 @@ from ibis.backends import BaseBackend
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import empty_table
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from hamilton_pipeline.pipeline_types import (
     IncrementalDatasetUpdates,
     IncrementalImpactUpdates,
@@ -64,7 +65,7 @@ from incremental.scip_snapshot import (
 from incremental.snapshot import build_repo_snapshot, read_repo_snapshot, write_repo_snapshot
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
-from schema_spec.catalog_registry import schema_registry as central_schema_registry
+from relspec.schema_context import RelspecSchemaContext
 from storage.deltalake import DeltaCdfOptions, delta_table_version, read_delta_cdf, read_table_delta
 
 
@@ -129,9 +130,10 @@ def incremental_invalidation(
     """
     if not incremental_config.enabled or incremental_state_store is None:
         return None
+    schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
     return check_state_store_invalidation_with_diff(
         state_store=incremental_state_store,
-        registry=central_schema_registry(),
+        schema_context=schema_context,
     )
 
 

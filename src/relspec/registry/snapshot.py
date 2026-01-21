@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from registry_common.arrow_payloads import ipc_hash
 from relspec.compiler import rel_plan_for_rule
 from relspec.graph import rule_graph_signature
@@ -17,7 +18,7 @@ from relspec.rules.definitions import RuleDefinition
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.rel_ops import rel_ops_signature
 from relspec.rules.spec_tables import rule_definition_table
-from schema_spec.catalog_registry import schema_registry as central_schema_registry
+from relspec.schema_context import RelspecSchemaContext
 
 
 @dataclass(frozen=True)
@@ -91,8 +92,15 @@ def _incremental_spec(
     *,
     rules: tuple[RuleDefinition, ...],
 ) -> RelspecIncrementalSpec:
-    schema_registry = registry.schema_registry or central_schema_registry()
-    return build_incremental_spec(rules, registry=schema_registry)
+    if registry.schema_context is not None:
+        schema_context = registry.schema_context
+    elif registry.engine_session is not None:
+        schema_context = RelspecSchemaContext.from_engine_session(registry.engine_session)
+    else:
+        schema_context = RelspecSchemaContext.from_session(
+            DataFusionRuntimeProfile().session_context()
+        )
+    return build_incremental_spec(rules, schema_context=schema_context)
 
 
 __all__ = ["RelspecSnapshot", "build_relspec_snapshot"]

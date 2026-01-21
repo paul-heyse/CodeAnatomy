@@ -466,7 +466,12 @@ def reader_from_arrow_stream(obj: object) -> RecordBatchReaderLike:
     return pa.RecordBatchReader.from_stream(obj)
 
 
-def table_from_arrow_c_array(obj: object, *, name: str = "value") -> TableLike:
+def table_from_arrow_c_array(
+    obj: object,
+    *,
+    name: str = "value",
+    requested_schema: pa.Schema | None = None,
+) -> TableLike:
     """Return a table from an Arrow C array provider.
 
     Parameters
@@ -475,6 +480,8 @@ def table_from_arrow_c_array(obj: object, *, name: str = "value") -> TableLike:
         Object implementing the Arrow C array protocol.
     name
         Column name to assign to the imported array.
+    requested_schema
+        Optional schema request for providers that support projection or reordering.
 
     Returns
     -------
@@ -497,7 +504,13 @@ def table_from_arrow_c_array(obj: object, *, name: str = "value") -> TableLike:
     if not callable(array_provider):
         msg = "Object does not expose __arrow_c_array__."
         raise TypeError(msg)
-    capsule = array_provider()
+    if requested_schema is not None:
+        try:
+            capsule = array_provider(requested_schema=requested_schema)
+        except TypeError:
+            capsule = array_provider()
+    else:
+        capsule = array_provider()
     schema_capsule = None
     if isinstance(capsule, tuple) and len(capsule) == ARROW_C_ARRAY_TUPLE_LEN:
         schema_capsule, array_capsule = capsule
@@ -514,7 +527,11 @@ def table_from_arrow_c_array(obj: object, *, name: str = "value") -> TableLike:
     return pa.table({name: array})
 
 
-def coerce_table_like(obj: object) -> TableLike | RecordBatchReaderLike:
+def coerce_table_like(
+    obj: object,
+    *,
+    requested_schema: pa.Schema | None = None,
+) -> TableLike | RecordBatchReaderLike:
     """Coerce Arrow-like inputs into table or reader representations.
 
     Parameters
@@ -537,7 +554,7 @@ def coerce_table_like(obj: object) -> TableLike | RecordBatchReaderLike:
     if hasattr(obj, "__arrow_c_stream__"):
         return reader_from_arrow_stream(obj)
     if hasattr(obj, "__arrow_c_array__"):
-        return table_from_arrow_c_array(obj)
+        return table_from_arrow_c_array(obj, requested_schema=requested_schema)
     if hasattr(obj, "__dataframe__"):
         return table_from_dataframe_protocol(obj)
     msg = "Unsupported Arrow-like input; provide a Table or RecordBatchReader."

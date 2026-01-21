@@ -46,7 +46,10 @@ def parquet_listing_table_provider(
     path: str,
     schema: object | None,
     file_extension: str,
+    table_name: str,
+    table_definition: str | None,
     table_partition_cols: Sequence[tuple[str, pa.DataType]] | None,
+    expr_adapter_factory: object | None,
     parquet_pruning: bool | None,
     skip_metadata: bool | None,
     collect_statistics: bool | None,
@@ -61,8 +64,14 @@ def parquet_listing_table_provider(
         Optional schema to use for the listing table.
     file_extension:
         File extension for listing table discovery.
+    table_name:
+        Table name for provenance metadata.
+    table_definition:
+        Optional CREATE EXTERNAL TABLE statement.
     table_partition_cols:
         Optional partition columns expressed as (name, dtype) tuples.
+    expr_adapter_factory:
+        Optional physical expression adapter factory capsule.
     parquet_pruning:
         Optional parquet pruning flag for the listing table provider.
     skip_metadata:
@@ -93,8 +102,11 @@ def parquet_listing_table_provider(
     capsule = factory(
         path=path,
         file_extension=file_extension,
+        table_name=table_name,
+        table_definition=table_definition,
         schema_ipc=_schema_ipc_payload(resolved_schema),
         partition_schema_ipc=_schema_ipc_payload(partition_schema),
+        expr_adapter_factory=expr_adapter_factory,
         parquet_pruning=parquet_pruning,
         skip_metadata=skip_metadata,
         collect_statistics=collect_statistics,

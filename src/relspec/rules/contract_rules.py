@@ -9,28 +9,35 @@ import pyarrow as pa
 from registry_common.arrow_payloads import ipc_table
 from relspec.rules.definitions import RuleDefinition
 from relspec.rules.spec_tables import rule_definitions_from_table
-from schema_spec.system import SchemaRegistry
+from relspec.schema_context import RelspecSchemaContext
 
 RULE_DEFINITIONS_META_KEY = b"relspec.rule_definitions_ipc"
 
 
-def rules_from_contracts(registry: SchemaRegistry) -> tuple[RuleDefinition, ...]:
+def rules_from_contracts(context: RelspecSchemaContext) -> tuple[RuleDefinition, ...]:
     """Return rule definitions derived from dataset schema metadata.
 
     Parameters
     ----------
-    registry
-        Schema registry to scan for metadata-driven rules.
+    context
+        DataFusion schema context to scan for metadata-driven rules.
 
     Returns
     -------
     tuple[RuleDefinition, ...]
         Rule definitions extracted from dataset metadata.
+
+    Raises
+    ------
+    KeyError
+        Raised when a dataset schema cannot be resolved from DataFusion.
     """
     collected: list[RuleDefinition] = []
-    for name in sorted(registry.dataset_specs):
-        spec = registry.dataset_specs[name]
-        schema = spec.schema()
+    for name in context.dataset_names():
+        schema = context.dataset_schema(name)
+        if schema is None:
+            msg = f"Contract rule extraction missing schema for {name!r}."
+            raise KeyError(msg)
         meta = schema.metadata or {}
         collected.extend(_rules_from_metadata(meta, dataset_name=name))
     return tuple(collected)

@@ -8,7 +8,12 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from datafusion_engine.schema_authority import dataset_schema_from_context
-from schema_spec.system import Contract, DatasetSpec, dataset_spec_from_schema
+from schema_spec.system import (
+    Contract,
+    DatasetSpec,
+    dataset_spec_from_schema,
+    dataset_table_definition,
+)
 
 RELATION_OUTPUT_NAME = "relation_output_v1"
 
@@ -66,13 +71,27 @@ def relation_output_contract() -> Contract:
 def relation_output_ddl(*, dialect: str | None = None) -> str:
     """Return a CREATE TABLE statement for the relation output contract.
 
+    Parameters
+    ----------
+    dialect
+        Optional dialect hint (ignored; DataFusion is authoritative).
+
     Returns
     -------
     str
         CREATE TABLE statement for contract auditing.
+
+    Raises
+    ------
+    ValueError
+        Raised when DataFusion cannot provide a CREATE TABLE statement.
     """
-    spec = relation_output_spec()
-    return spec.table_spec.to_create_table_sql(dialect=dialect)
+    _ = dialect
+    ddl = dataset_table_definition(RELATION_OUTPUT_NAME)
+    if ddl is None:
+        msg = "DataFusion did not return a CREATE TABLE statement for relation_output_v1."
+        raise ValueError(msg)
+    return ddl
 
 
 __all__ = [

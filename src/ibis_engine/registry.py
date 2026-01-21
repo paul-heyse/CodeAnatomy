@@ -205,6 +205,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "meta_fetch_concurrency": loc.datafusion_scan.meta_fetch_concurrency,
                 "list_files_cache_ttl": loc.datafusion_scan.list_files_cache_ttl,
                 "list_files_cache_limit": loc.datafusion_scan.list_files_cache_limit,
+                "projection_exprs": list(loc.datafusion_scan.projection_exprs),
                 "unbounded": loc.datafusion_scan.unbounded,
             }
         delta_scan = None

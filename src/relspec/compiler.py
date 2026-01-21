@@ -27,6 +27,10 @@ from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from datafusion_engine.kernel_registry import resolve_kernel
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from datafusion_engine.schema_authority import (
+    dataset_schema_from_context,
+    dataset_spec_from_context,
+)
 from engine.materialize import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.compiler_checkpoint import try_plan_hash
@@ -78,7 +82,6 @@ from relspec.policies import (
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
 from relspec.rules.exec_events import RuleExecutionObserver, rule_execution_event_from_table
-from schema_spec.catalog_registry import dataset_spec as catalog_spec
 from schema_spec.system import dataset_spec_from_contract
 from sqlglot_tools.bridge import IbisCompilerBackend
 
@@ -794,7 +797,7 @@ def _dedupe_spec_with_defaults(spec: DedupeSpec, *, schema: SchemaLike) -> Dedup
 
 
 def _schema_for_contract(contract: Contract) -> SchemaLike:
-    """Resolve schema for a contract via the global registry.
+    """Resolve schema for a contract via the DataFusion catalog.
 
     Parameters
     ----------
@@ -805,14 +808,17 @@ def _schema_for_contract(contract: Contract) -> SchemaLike:
     -------
     SchemaLike
         Schema for the contract.
+
+    Raises
+    ------
+    KeyError
+        Raised when the contract schema is not registered in DataFusion.
     """
     try:
-        dataset_spec = catalog_spec(contract.name)
-    except KeyError:
-        dataset_spec = None
-    if dataset_spec is not None:
-        return dataset_spec.schema()
-    return contract.schema
+        return dataset_schema_from_context(contract.name)
+    except KeyError as exc:
+        msg = f"Contract schema not registered in DataFusion: {contract.name!r}."
+        raise KeyError(msg) from exc
 
 
 def _schema_for_rule(
@@ -839,12 +845,9 @@ def _schema_for_rule(
     if contracts is not None:
         return _schema_for_contract(contracts.get(rule.contract_name))
     try:
-        dataset_spec = catalog_spec(rule.contract_name)
+        return dataset_schema_from_context(rule.contract_name)
     except KeyError:
-        dataset_spec = None
-    if dataset_spec is not None:
-        return dataset_spec.schema()
-    return None
+        return None
 
 
 def apply_policy_defaults(
@@ -1840,6 +1843,11 @@ def _finalize_output_tables(
     -------
     FinalizeResult
         Finalized output tables and artifacts.
+
+    Raises
+    ------
+    KeyError
+        Raised when the output contract schema is missing in DataFusion.
     """
     if contract_name is None:
         unioned = SchemaEvolutionSpec().unify_and_cast(
@@ -1856,9 +1864,10 @@ def _finalize_output_tables(
 
     contract = contracts.get(contract_name)
     try:
-        dataset_spec = catalog_spec(contract.name)
-    except KeyError:
-        dataset_spec = dataset_spec_from_contract(contract)
+        dataset_spec = dataset_spec_from_context(contract.name)
+    except KeyError as exc:
+        msg = f"Contract dataset not registered in DataFusion: {contract.name!r}."
+        raise KeyError(msg) from exc
     unioned = dataset_spec.unify_tables(table_parts, ctx=ctx)
     result = dataset_spec.finalize_context(ctx).run(unioned, ctx=ctx)
     _enforce_output_ordering(result.good.schema, ctx=ctx, label=output_dataset)

@@ -86,10 +86,85 @@ def register_param_tables_df(
             table_name=table_name,
             table=artifact.table,
         )
+        _validate_param_table_schema(
+            ctx,
+            catalog=policy.catalog,
+            schema=schema_name,
+            table_name=table_name,
+            expected_schema=artifact.table.schema,
+        )
         mapping[logical_name] = qualified
         if signature_cache is not None:
             signature_cache[logical_name] = artifact.signature
     return mapping
+
+
+def _validate_param_table_schema(
+    ctx: SessionContext,
+    *,
+    catalog: str,
+    schema: str,
+    table_name: str,
+    expected_schema: pa.Schema,
+) -> None:
+    """Validate parameter table schema against DataFusion metadata.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    catalog
+        Catalog name for the parameter table.
+    schema
+        Schema name for the parameter table.
+    table_name
+        Table name for the parameter table.
+    expected_schema
+        Expected Arrow schema for the parameter table.
+
+    Raises
+    ------
+    ValueError
+        Raised when DataFusion metadata does not match the expected schema.
+    """
+    query = (
+        "SELECT column_name, data_type, ordinal_position "
+        "FROM information_schema.columns "
+        f"WHERE table_catalog = '{catalog}' "
+        f"AND table_schema = '{schema}' "
+        f"AND table_name = '{table_name}' "
+        "ORDER BY ordinal_position"
+    )
+    try:
+        rows = ctx.sql(query).to_arrow_table().to_pylist()
+    except (RuntimeError, TypeError, ValueError):
+        return
+    if not rows:
+        return
+    actual_names = [str(row.get("column_name")) for row in rows if row.get("column_name")]
+    expected_names = list(expected_schema.names)
+    if actual_names != expected_names:
+        msg = (
+            "Param table schema mismatch for "
+            f"{catalog}.{schema}.{table_name}: expected {expected_names}, got {actual_names}."
+        )
+        raise ValueError(msg)
+    expected_types = {field.name: str(field.type).lower() for field in expected_schema}
+    for row in rows:
+        name = row.get("column_name")
+        data_type = row.get("data_type")
+        if name is None or data_type is None:
+            continue
+        expected = expected_types.get(str(name))
+        actual = str(data_type).lower()
+        if expected is None:
+            continue
+        if expected != actual:
+            msg = (
+                "Param table type mismatch for "
+                f"{catalog}.{schema}.{table_name}.{name}: expected {expected}, got {actual}."
+            )
+            raise ValueError(msg)
 
 
 __all__ = [

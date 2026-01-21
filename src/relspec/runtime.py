@@ -12,7 +12,7 @@ from relspec.policies import PolicyRegistry
 from relspec.registry.rules import RuleRegistry, default_rule_registry
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers import default_rule_handlers
-from schema_spec.system import SchemaRegistry
+from relspec.schema_context import RelspecSchemaContext
 
 if TYPE_CHECKING:
     from engine.session import EngineSession
@@ -35,7 +35,7 @@ class RelspecRuntimeOptions:
     policies: PolicyRegistry | None = None
     param_table_specs: Sequence[ParamTableSpec] = ()
     engine_session: EngineSession | None = None
-    schema_registry: SchemaRegistry | None = None
+    schema_context: RelspecSchemaContext | None = None
     include_contract_rules: bool = True
 
 
@@ -58,7 +58,7 @@ def compose_relspec(
         param_table_specs=resolved_options.param_table_specs,
         config=resolved_config,
         engine_session=resolved_options.engine_session,
-        schema_registry=resolved_options.schema_registry,
+        schema_context=resolved_options.schema_context,
         include_contract_rules=resolved_options.include_contract_rules,
     )
     compiler = RuleCompiler(handlers=default_rule_handlers(policies=resolved_policies))

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from arrowdsl.core.ids import hash64_from_text
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
@@ -125,6 +126,12 @@ def _scope_type_str(tbl: symtable.SymbolTable) -> str:
 
 def _scope_role(scope_type_str: str) -> str:
     return "runtime" if scope_type_str in {"MODULE", "FUNCTION", "CLASS"} else "type_meta"
+
+
+def _is_meta_scope(scope_type: str | None) -> bool:
+    if scope_type is None:
+        return False
+    return scope_type not in {"MODULE", "FUNCTION", "CLASS"}
 
 
 def _stable_scope_id(
@@ -387,8 +394,14 @@ def _symbol_entry(row: Mapping[str, object]) -> dict[str, object]:
         if isinstance(namespace_block_ids, list)
         else []
     )
+    scope_id = row.get("scope_id")
+    name = row.get("name")
+    scope_text = scope_id if isinstance(scope_id, str) else None
+    name_text = name if isinstance(name, str) else None
+    sym_symbol_id = _sym_symbol_id(scope_text, name_text)
     return {
         "name": row.get("name"),
+        "sym_symbol_id": sym_symbol_id,
         "flags": {
             "is_referenced": bool(row.get("is_referenced")),
             "is_imported": bool(row.get("is_imported")),
@@ -407,6 +420,15 @@ def _symbol_entry(row: Mapping[str, object]) -> dict[str, object]:
         "namespace_block_ids": block_ids,
         "attrs": attrs_map({}),
     }
+
+
+def _sym_symbol_id(scope_id: str | None, name: str | None) -> str | None:
+    if scope_id is None or name is None:
+        return None
+    hashed = hash64_from_text(f"{scope_id}:{name}")
+    if hashed is None:
+        return None
+    return f"sym_symbol:{hashed}"
 
 
 def _symtable_file_row(
@@ -460,6 +482,9 @@ def _symtable_file_row(
                 "block_id": table_id,
                 "parent_block_id": parent_map.get(table_id),
                 "block_type": scope.get("scope_type"),
+                "is_meta_scope": _is_meta_scope(
+                    scope.get("scope_type") if isinstance(scope.get("scope_type"), str) else None
+                ),
                 "name": scope.get("scope_name"),
                 "lineno1": lineno_int,
                 "span_hint": span_hint,

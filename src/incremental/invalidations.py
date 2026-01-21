@@ -23,7 +23,7 @@ from relspec.rules.cache import (
     rule_graph_signature_cached,
     rule_plan_sql_cached,
 )
-from schema_spec.system import SchemaRegistry
+from relspec.schema_context import RelspecSchemaContext
 from storage.deltalake import (
     DeltaWriteOptions,
     enable_delta_features,
@@ -119,7 +119,7 @@ class InvalidationOutcome:
 
 
 def build_invalidation_snapshot(
-    registry: SchemaRegistry,
+    schema_context: RelspecSchemaContext,
     *,
     relspec_snapshot: RelspecSnapshot | None = None,
 ) -> InvalidationSnapshot:
@@ -139,7 +139,7 @@ def build_invalidation_snapshot(
         rule_plan_signatures=dict(snapshot.plan_signatures),
         rule_plan_sql=rule_plan_sql_cached(),
         rule_graph_signature=rule_graph_signature,
-        dataset_identities=_dataset_identities(registry),
+        dataset_identities=_dataset_identities(schema_context),
     )
 
 
@@ -195,7 +195,7 @@ def write_invalidation_snapshot(
 def check_state_store_invalidation(
     *,
     state_store: StateStore,
-    registry: SchemaRegistry,
+    schema_context: RelspecSchemaContext,
     relspec_snapshot: RelspecSnapshot | None = None,
 ) -> InvalidationResult:
     """Check invalidation signatures and reset state store on mismatch.
@@ -205,7 +205,7 @@ def check_state_store_invalidation(
     InvalidationResult
         Outcome indicating whether a full refresh is required.
     """
-    current = build_invalidation_snapshot(registry, relspec_snapshot=relspec_snapshot)
+    current = build_invalidation_snapshot(schema_context, relspec_snapshot=relspec_snapshot)
     previous = read_invalidation_snapshot(state_store)
     if previous is None:
         write_invalidation_snapshot(state_store, current)
@@ -221,7 +221,7 @@ def check_state_store_invalidation(
 def check_state_store_invalidation_with_diff(
     *,
     state_store: StateStore,
-    registry: SchemaRegistry,
+    schema_context: RelspecSchemaContext,
     relspec_snapshot: RelspecSnapshot | None = None,
 ) -> InvalidationOutcome:
     """Check invalidation signatures and return plan diff details.
@@ -231,7 +231,7 @@ def check_state_store_invalidation_with_diff(
     InvalidationOutcome
         Outcome containing invalidation result and plan diff table.
     """
-    current = build_invalidation_snapshot(registry, relspec_snapshot=relspec_snapshot)
+    current = build_invalidation_snapshot(schema_context, relspec_snapshot=relspec_snapshot)
     previous = read_invalidation_snapshot(state_store)
     diff_table = rule_plan_diff_table(previous, current)
     if previous is None:
@@ -310,18 +310,17 @@ def validate_schema_identity(
         raise ValueError(msg)
 
 
-def _dataset_identities(registry: SchemaRegistry) -> dict[str, SchemaIdentity]:
+def _dataset_identities(schema_context: RelspecSchemaContext) -> dict[str, SchemaIdentity]:
     identities: dict[str, SchemaIdentity] = {}
-    for name, spec in registry.dataset_specs.items():
-        schema = spec.schema()
+    for name in schema_context.dataset_names():
+        schema = schema_context.dataset_schema(name)
+        if schema is None:
+            continue
         meta_name, meta_version = schema_identity_from_metadata(schema.metadata)
-        resolved_name = meta_name or spec.table_spec.name
-        resolved_version = meta_version
-        if resolved_version is None:
-            resolved_version = spec.table_spec.version
+        resolved_name = meta_name or name
         identities[name] = SchemaIdentity(
             name=resolved_name,
-            version=resolved_version,
+            version=meta_version,
         )
     return identities
 

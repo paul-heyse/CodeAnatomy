@@ -48,6 +48,7 @@ from datafusion_engine.query_fragments import (
     tree_sitter_nodes_sql,
 )
 from datafusion_engine.runtime import AdapterExecutionPolicy
+from datafusion_engine.schema_authority import dataset_spec_from_context
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import (
@@ -128,13 +129,8 @@ from relspec.rules.exec_events import RuleExecutionEventCollector
 from relspec.rules.handlers import default_rule_handlers
 from relspec.rules.validation import SqlGlotDiagnosticsConfig, rule_dependency_reports
 from relspec.runtime import RelspecRuntime, RelspecRuntimeOptions, compose_relspec
+from relspec.schema_context import RelspecSchemaContext
 from relspec.validate import validate_registry
-from schema_spec.catalog_registry import (
-    dataset_spec as catalog_spec,
-)
-from schema_spec.catalog_registry import (
-    schema_registry as central_schema_registry,
-)
 from schema_spec.relationship_specs import (
     relationship_contract_spec as build_relationship_contract_spec,
 )
@@ -143,7 +139,6 @@ from schema_spec.system import (
     ContractCatalogSpec,
     DataFusionScanOptions,
     DatasetSpec,
-    SchemaRegistry,
     make_dataset_spec,
     table_spec_from_schema,
 )
@@ -157,7 +152,6 @@ from storage.deltalake import (
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
-    from ibis_engine.scan_io import DatasetSource
 
 # -----------------------------
 # Relationship contracts
@@ -355,7 +349,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
 
 def _catalog_spec_for(name: str) -> DatasetSpec | None:
     try:
-        return catalog_spec(name)
+        return dataset_spec_from_context(name)
     except KeyError:
         return None
 
@@ -376,19 +370,16 @@ def relationship_contracts(
     return catalog
 
 
-@tag(layer="relspec", artifact="schema_registry", kind="registry")
-def schema_registry(
-    relationship_contract_spec: ContractCatalogSpec,
-) -> SchemaRegistry:
-    """Build a schema registry with CPG and relationship specs.
+@tag(layer="relspec", artifact="schema_context", kind="object")
+def relspec_schema_context(engine_session: EngineSession) -> RelspecSchemaContext:
+    """Build the DataFusion schema context for relspec validation.
 
     Returns
     -------
-    SchemaRegistry
-        Registry containing table and contract specs.
+    RelspecSchemaContext
+        Schema context bound to the engine session.
     """
-    _ = relationship_contract_spec
-    return central_schema_registry()
+    return RelspecSchemaContext.from_engine_session(engine_session)
 
 
 # -----------------------------
@@ -401,7 +392,7 @@ def relspec_runtime(
     param_table_specs: tuple[ParamTableSpec, ...],
     relspec_rule_config: RelspecConfig,
     engine_session: EngineSession,
-    schema_registry: SchemaRegistry,
+    relspec_schema_context: RelspecSchemaContext,
     pipeline_policy: PipelinePolicy,
 ) -> RelspecRuntime:
     """Compose the relspec runtime bundle.
@@ -417,7 +408,7 @@ def relspec_runtime(
             policies=pipeline_policy.policy_registry,
             param_table_specs=param_table_specs,
             engine_session=engine_session,
-            schema_registry=schema_registry,
+            schema_context=relspec_schema_context,
         ),
     )
     validate_registry(runtime.registry).raise_for_errors()
@@ -500,7 +491,7 @@ def relspec_param_dependency_reports(
         rules,
         config=SqlGlotDiagnosticsConfig(
             backend=cast("IbisCompilerBackend", engine_session.ibis_backend),
-            registry=central_schema_registry(),
+            schema_context=RelspecSchemaContext.from_engine_session(engine_session),
             ctx=engine_session.ctx,
             param_table_specs=param_table_specs,
             param_table_policy=param_table_policy,
@@ -1735,16 +1726,74 @@ def scip_build_inputs(
     )
 
 
-@tag(layer="cpg", artifact="symtable_build_inputs", kind="bundle")
-def symtable_build_inputs(
+@dataclass(frozen=True)
+class SymtableCoreInputs:
+    """Core symtable inputs for relationship builds."""
+
+    symtable_scopes: TableLike | DatasetSource | SqlFragment
+    symtable_symbols: TableLike | DatasetSource | SqlFragment
+    symtable_scope_edges: TableLike | DatasetSource | SqlFragment
+    symtable_bindings: TableLike | DatasetSource | SqlFragment
+
+
+@dataclass(frozen=True)
+class SymtableSiteInputs:
+    """Symtable site inputs for relationship builds."""
+
+    symtable_def_sites: TableLike | DatasetSource | SqlFragment
+    symtable_use_sites: TableLike | DatasetSource | SqlFragment
+    symtable_type_params: TableLike | DatasetSource | SqlFragment
+    symtable_type_param_edges: TableLike | DatasetSource | SqlFragment
+
+
+@tag(layer="cpg", artifact="symtable_core_inputs", kind="bundle")
+def symtable_core_inputs(
     symtable_scopes: TableLike | DatasetSource | SqlFragment,
     symtable_symbols: TableLike | DatasetSource | SqlFragment,
     symtable_scope_edges: TableLike | DatasetSource | SqlFragment,
     symtable_bindings: TableLike | DatasetSource | SqlFragment,
+) -> SymtableCoreInputs:
+    """Bundle core symtable inputs for CPG builds.
+
+    Returns
+    -------
+    SymtableCoreInputs
+        Core symtable build input bundle.
+    """
+    return SymtableCoreInputs(
+        symtable_scopes=symtable_scopes,
+        symtable_symbols=symtable_symbols,
+        symtable_scope_edges=symtable_scope_edges,
+        symtable_bindings=symtable_bindings,
+    )
+
+
+@tag(layer="cpg", artifact="symtable_site_inputs", kind="bundle")
+def symtable_site_inputs(
     symtable_def_sites: TableLike | DatasetSource | SqlFragment,
     symtable_use_sites: TableLike | DatasetSource | SqlFragment,
     symtable_type_params: TableLike | DatasetSource | SqlFragment,
     symtable_type_param_edges: TableLike | DatasetSource | SqlFragment,
+) -> SymtableSiteInputs:
+    """Bundle symtable site inputs for CPG builds.
+
+    Returns
+    -------
+    SymtableSiteInputs
+        Symtable site build input bundle.
+    """
+    return SymtableSiteInputs(
+        symtable_def_sites=symtable_def_sites,
+        symtable_use_sites=symtable_use_sites,
+        symtable_type_params=symtable_type_params,
+        symtable_type_param_edges=symtable_type_param_edges,
+    )
+
+
+@tag(layer="cpg", artifact="symtable_build_inputs", kind="bundle")
+def symtable_build_inputs(
+    symtable_core_inputs: SymtableCoreInputs,
+    symtable_site_inputs: SymtableSiteInputs,
 ) -> SymtableBuildInputs:
     """Bundle symtable inputs for CPG builds.
 
@@ -1754,14 +1803,14 @@ def symtable_build_inputs(
         Symtable build input bundle.
     """
     return SymtableBuildInputs(
-        symtable_scopes=symtable_scopes,
-        symtable_symbols=symtable_symbols,
-        symtable_scope_edges=symtable_scope_edges,
-        symtable_bindings=symtable_bindings,
-        symtable_def_sites=symtable_def_sites,
-        symtable_use_sites=symtable_use_sites,
-        symtable_type_params=symtable_type_params,
-        symtable_type_param_edges=symtable_type_param_edges,
+        symtable_scopes=symtable_core_inputs.symtable_scopes,
+        symtable_symbols=symtable_core_inputs.symtable_symbols,
+        symtable_scope_edges=symtable_core_inputs.symtable_scope_edges,
+        symtable_bindings=symtable_core_inputs.symtable_bindings,
+        symtable_def_sites=symtable_site_inputs.symtable_def_sites,
+        symtable_use_sites=symtable_site_inputs.symtable_use_sites,
+        symtable_type_params=symtable_site_inputs.symtable_type_params,
+        symtable_type_param_edges=symtable_site_inputs.symtable_type_param_edges,
     )
 
 
@@ -1924,7 +1973,7 @@ def _materialize_symtable_source(
     coerced = coerce_table_like(source)
     if isinstance(coerced, RecordBatchReaderLike):
         return coerced.read_all()
-    return cast("TableLike", coerced)
+    return coerced
 
 
 @tag(layer="cpg", artifact="cpg_node_inputs", kind="bundle")

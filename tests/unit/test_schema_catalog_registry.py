@@ -12,5 +12,3 @@ def test_catalog_schema_resolves_nested_dataset() -> None:
     expected = nested_schema_for(name, allow_derived=True)
     resolved = dataset_schema(name)
     assert expected.equals(resolved)
-
-

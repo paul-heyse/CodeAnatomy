@@ -23,8 +23,8 @@ from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.extract_bundles import bundle
 from datafusion_engine.extract_pipelines import post_kernels_for_postprocess
 from datafusion_engine.kernel_registry import kernel_capability
-from datafusion_engine.runtime import snapshot_plans
-from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for
+from datafusion_engine.runtime import DataFusionRuntimeProfile, snapshot_plans
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from engine.session import EngineSession
 from ibis_engine.compiler_checkpoint import compile_checkpoint
 from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
@@ -55,13 +55,11 @@ from relspec.rules.definitions import (
 )
 from relspec.rules.diagnostics import (
     KernelLaneDiagnosticOptions,
-    MissingColumnsDiagnosticOptions,
     RuleDiagnostic,
     RuleDiagnosticSeverity,
     SqlGlotMetadataDiagnosticOptions,
     kernel_lane_diagnostic,
     sqlglot_metadata_diagnostic,
-    sqlglot_missing_columns_diagnostic,
 )
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.rel_ops import (
@@ -70,13 +68,11 @@ from relspec.rules.rel_ops import (
     query_spec_from_rel_ops,
     rel_ops_signature,
 )
-from schema_spec.catalog_registry import schema_registry as central_schema_registry
-from schema_spec.system import SchemaRegistry, table_spec_from_schema
+from relspec.schema_context import RelspecSchemaContext
 from sqlglot_tools.bridge import (
     IbisCompilerBackend,
     SqlGlotDiagnostics,
     SqlGlotDiagnosticsOptions,
-    missing_schema_columns,
     relation_diff,
     sqlglot_diagnostics,
 )
@@ -266,9 +262,18 @@ def validate_sqlglot_columns(
     expr: IbisTable,
     *,
     backend: IbisCompilerBackend,
-    schema: SchemaLike,
+    ctx: ExecutionContext,
 ) -> SqlGlotDiagnostics:
-    """Validate SQLGlot-derived columns against a schema.
+    """Validate SQLGlot-derived columns with DataFusion DESCRIBE.
+
+    Parameters
+    ----------
+    expr
+        Ibis expression to validate.
+    backend
+        SQLGlot compiler backend.
+    ctx
+        Execution context with a DataFusion runtime profile.
 
     Returns
     -------
@@ -278,17 +283,24 @@ def validate_sqlglot_columns(
     Raises
     ------
     ValueError
-        Raised when SQLGlot references missing columns.
+        Raised when DataFusion cannot compute the query schema.
     """
     diagnostics = sqlglot_diagnostics(
         expr,
         backend=backend,
         options=SqlGlotDiagnosticsOptions(),
     )
-    missing = missing_schema_columns(diagnostics.columns, schema=schema.names)
-    if missing:
-        msg = f"SQLGlot validation missing columns: {missing}."
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        msg = "SQLGlot validation requires a DataFusion runtime profile."
         raise ValueError(msg)
+    session = profile.session_context()
+    sql_text = sanitize_templated_sql(diagnostics.sql_text_optimized)
+    try:
+        SchemaIntrospector(session).describe_query(sql_text)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = f"DataFusion DESCRIBE failed for SQLGlot validation: {exc}"
+        raise ValueError(msg) from exc
     return diagnostics
 
 
@@ -309,7 +321,7 @@ class SqlGlotDiagnosticsConfig:
     """Optional inputs for SQLGlot diagnostics."""
 
     backend: IbisCompilerBackend | None = None
-    registry: SchemaRegistry | None = None
+    schema_context: RelspecSchemaContext | None = None
     ctx: ExecutionContext | None = None
     engine_session: EngineSession | None = None
     param_table_specs: Sequence[ParamTableSpec] = ()
@@ -323,7 +335,7 @@ class SqlGlotDiagnosticsContext:
     """Resolved SQLGlot diagnostics context."""
 
     backend: IbisCompilerBackend
-    registry: SchemaRegistry
+    schema_context: RelspecSchemaContext
     ctx: ExecutionContext
     param_specs: Mapping[str, ParamTableSpec]
     param_policy: ParamTablePolicy
@@ -345,10 +357,10 @@ class SqlGlotRuleContext:
 
 @dataclass(frozen=True)
 class _SchemaPlanResolver:
-    """Plan resolver that returns empty tables from schema registry."""
+    """Plan resolver that returns empty tables from DataFusion schemas."""
 
     backend: IbisCompilerBackend
-    registry: SchemaRegistry
+    schema_context: RelspecSchemaContext
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         """Resolve a dataset reference to an empty-schema Ibis plan.
@@ -363,15 +375,15 @@ class _SchemaPlanResolver:
         Returns
         -------
         IbisPlan
-            Plan built from the schema registry.
+            Plan built from the DataFusion schema context.
 
         Raises
         ------
         KeyError
-            Raised when the dataset schema is missing from the registry.
+            Raised when the dataset schema is missing from the context.
         """
         _ = ctx
-        schema = _schema_for_dataset(ref.name, registry=self.registry)
+        schema = _schema_for_dataset(ref.name, schema_context=self.schema_context)
         if schema is None:
             msg = f"SQLGlot validation missing schema for dataset {ref.name!r}."
             raise KeyError(msg)
@@ -415,22 +427,52 @@ def build_sqlglot_context(
     else:
         msg = "SQLGlot diagnostics require an EngineSession or compiler backend."
         raise ValueError(msg)
-    registry = config.registry or central_schema_registry()
     ctx = config.ctx or (config.engine_session.ctx if config.engine_session is not None else None)
     if ctx is None:
         msg = "SQLGlot diagnostics require an execution context."
         raise ValueError(msg)
+    schema_context = _resolve_schema_context(config, ctx=ctx)
     spec_map = {spec.logical_name: spec for spec in config.param_table_specs}
     param_policy = config.param_table_policy or ParamTablePolicy()
     return SqlGlotDiagnosticsContext(
         backend=backend,
-        registry=registry,
+        schema_context=schema_context,
         ctx=ctx,
         param_specs=spec_map,
         param_policy=param_policy,
         list_filter_gate_policy=config.list_filter_gate_policy,
         kernel_lane_policy=config.kernel_lane_policy,
     )
+
+
+def _resolve_schema_context(
+    config: SqlGlotDiagnosticsConfig,
+    *,
+    ctx: ExecutionContext,
+) -> RelspecSchemaContext:
+    """Resolve the schema context for SQLGlot diagnostics.
+
+    Parameters
+    ----------
+    config
+        SQLGlot diagnostics configuration.
+    ctx
+        Execution context providing runtime profile access.
+
+    Returns
+    -------
+    RelspecSchemaContext
+        Resolved DataFusion schema context.
+    """
+    if config.schema_context is not None:
+        return config.schema_context
+    if config.engine_session is not None:
+        return RelspecSchemaContext.from_engine_session(config.engine_session)
+    profile = ctx.runtime.datafusion
+    if profile is not None:
+        return RelspecSchemaContext.from_session(profile.session_context())
+    runtime_profile = DataFusionRuntimeProfile()
+    return RelspecSchemaContext.from_session(runtime_profile.session_context())
 
 
 def rule_sqlglot_diagnostics(
@@ -524,7 +566,7 @@ def _prepare_sqlglot_rule_context(
         return None, ()
     schema_map, union_schema, missing_inputs = _schema_map_for_inputs(
         input_names,
-        registry=context.registry,
+        schema_context=context.schema_context,
     )
     plan_signature = _plan_signature_for_rule(rule)
     if missing_inputs:
@@ -535,12 +577,10 @@ def _prepare_sqlglot_rule_context(
         )
         return None, (diagnostic,)
     schema_ddl = None
-    if union_schema is not None:
-        schema_ddl = _schema_ddl(union_schema, name=f"{rule.name}_inputs")
     source = _rule_sqlglot_source(
         rule,
         backend=context.backend,
-        registry=context.registry,
+        schema_context=context.schema_context,
         ctx=context.ctx,
         plan_signature=plan_signature,
     )
@@ -655,6 +695,7 @@ def _build_rule_diagnostics(
         schema_map=rule_ctx.schema_map,
         ctx=context.ctx,
     )
+    describe_error = extra_metadata.get("df_describe_error")
     extra_metadata.update(_rule_ir_metadata(rule_ctx, context=context))
     metadata = _final_sqlglot_metadata(
         extra_metadata,
@@ -680,19 +721,25 @@ def _build_rule_diagnostics(
             ),
         )
     )
-    if rule_ctx.union_schema is not None:
-        missing = sqlglot_missing_columns_diagnostic(
-            optimized,
-            domain=rule_ctx.rule.domain,
-            schema=rule_ctx.union_schema,
-            options=MissingColumnsDiagnosticOptions(
+    drift = _contract_schema_drift_diagnostic(
+        rule_ctx,
+        context=context,
+        sql=optimized.optimized.sql(unsupported_level=ErrorLevel.RAISE),
+    )
+    if drift is not None:
+        diagnostics.append(drift)
+    if describe_error is not None:
+        diagnostics.append(
+            RuleDiagnostic(
+                domain=rule_ctx.rule.domain,
+                template=None,
                 rule_name=rule_ctx.rule.name,
+                severity="warning",
+                message="DataFusion DESCRIBE failed for rule SQL.",
                 plan_signature=rule_ctx.source.plan_signature,
-                schema_ddl=rule_ctx.schema_ddl,
-            ),
+                metadata={"df_describe_error": str(describe_error)},
+            )
         )
-        if missing is not None:
-            diagnostics.append(missing)
     return tuple(diagnostics)
 
 
@@ -714,6 +761,87 @@ def _required_columns_metadata(
         if columns:
             metadata[f"required_columns:{table}"] = ",".join(columns)
     return metadata
+
+
+def _contract_schema_drift_diagnostic(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+    sql: str,
+) -> RuleDiagnostic | None:
+    """Return a diagnostic when output schema drifts from the contract.
+
+    Parameters
+    ----------
+    rule_ctx
+        Prepared SQLGlot rule context.
+    context
+        Diagnostics context bundle.
+    sql
+        SQL string to describe via DataFusion.
+
+    Returns
+    -------
+    RuleDiagnostic | None
+        Diagnostic describing schema drift when detected.
+    """
+    payload = rule_ctx.rule.payload
+    if not isinstance(payload, RelationshipPayload) or payload.contract_name is None:
+        return None
+    expected_schema = context.schema_context.dataset_schema(payload.contract_name)
+    if expected_schema is None:
+        return None
+    profile = context.ctx.runtime.datafusion
+    if profile is None:
+        return None
+    sql_text = sanitize_templated_sql(sql)
+    try:
+        rows = SchemaIntrospector(profile.session_context()).describe_query(sql_text)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return RuleDiagnostic(
+            domain=rule_ctx.rule.domain,
+            template=None,
+            rule_name=rule_ctx.rule.name,
+            severity="warning",
+            message="DataFusion DESCRIBE failed while validating contract schema.",
+            plan_signature=rule_ctx.source.plan_signature,
+            metadata={"df_describe_error": str(exc)},
+        )
+    actual_columns = _describe_column_names(rows)
+    expected_columns = tuple(expected_schema.names)
+    missing = sorted(name for name in expected_columns if name not in actual_columns)
+    extra = sorted(name for name in actual_columns if name not in expected_columns)
+    if not missing and not extra:
+        return None
+    metadata = {
+        "contract": payload.contract_name,
+        "expected_columns": ",".join(expected_columns),
+        "actual_columns": ",".join(actual_columns),
+    }
+    if missing:
+        metadata["missing_columns"] = ",".join(missing)
+    if extra:
+        metadata["extra_columns"] = ",".join(extra)
+    return RuleDiagnostic(
+        domain=rule_ctx.rule.domain,
+        template=None,
+        rule_name=rule_ctx.rule.name,
+        severity="warning",
+        message="Rule output schema does not match the contract.",
+        plan_signature=rule_ctx.source.plan_signature,
+        metadata=metadata,
+    )
+
+
+def _describe_column_names(rows: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    names: list[str] = []
+    for row in rows:
+        for key in ("column_name", "name", "column"):
+            value = row.get(key)
+            if value is not None:
+                names.append(str(value))
+                break
+    return tuple(names)
 
 
 def _plan_hash_metadata(
@@ -948,7 +1076,7 @@ def rule_dependency_reports(
             continue
         schema_map, _union_schema, missing_inputs = _schema_map_for_inputs(
             input_names,
-            registry=context.registry,
+            schema_context=context.schema_context,
         )
         if missing_inputs:
             continue
@@ -956,7 +1084,7 @@ def rule_dependency_reports(
         source = _rule_sqlglot_source(
             rule,
             backend=context.backend,
-            registry=context.registry,
+            schema_context=context.schema_context,
             ctx=context.ctx,
             plan_signature=plan_signature,
         )
@@ -1127,8 +1255,20 @@ def _datafusion_diagnostics_metadata(
             metadata["df_logical_plan"] = str(plans["logical"])
             metadata["df_optimized_plan"] = str(plans["optimized"])
             metadata["df_physical_plan"] = str(plans["physical"])
+            ddls = _table_ddl_payloads(session, table_names=tuple(schema_map))
+            metadata.update(ddls)
         except (RuntimeError, TypeError, ValueError) as exc:
             metadata["df_plan_error"] = str(exc)
+    try:
+        explain_rows = session.sql(f"EXPLAIN {sanitized_sql}").to_arrow_table().to_pylist()
+        metadata["df_explain"] = _stable_repr(explain_rows)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        metadata["df_explain_error"] = str(exc)
+    try:
+        describe_rows = SchemaIntrospector(session).describe_query(sanitized_sql)
+        metadata["df_describe"] = _describe_snapshot_payload(describe_rows)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        metadata["df_describe_error"] = str(exc)
     try:
         settings = profile.settings_snapshot(session)
         metadata["df_settings"] = _settings_snapshot_payload(settings)
@@ -1162,6 +1302,60 @@ def _register_schema_tables(
             col: pa.array([], type=pa.type_for_alias(dtype)) for col, dtype in columns.items()
         }
         session.register_table(name, pa.table(arrays))
+
+
+def _table_ddl_payloads(
+    session: SessionContext,
+    *,
+    table_names: Sequence[str],
+) -> dict[str, str]:
+    """Collect SHOW CREATE TABLE payloads for tables when available.
+
+    Parameters
+    ----------
+    session
+        DataFusion session context.
+    table_names
+        Table names to describe.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of metadata keys to DDL payloads.
+    """
+    payloads: dict[str, str] = {}
+    for name in table_names:
+        ddl = _table_ddl_payload(session, name=name)
+        if ddl is not None:
+            payloads[f"df_table_ddl:{name}"] = ddl
+    return payloads
+
+
+def _table_ddl_payload(session: SessionContext, *, name: str) -> str | None:
+    """Return a CREATE TABLE statement when supported.
+
+    Parameters
+    ----------
+    session
+        DataFusion session context.
+    name
+        Table name to describe.
+
+    Returns
+    -------
+    str | None
+        DDL statement when available.
+    """
+    try:
+        rows = session.sql(f"SHOW CREATE TABLE {name}").to_arrow_table().to_pylist()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if not rows:
+        return None
+    first = rows[0]
+    if isinstance(first, Mapping) and len(first) == 1:
+        return str(next(iter(first.values())))
+    return _stable_repr(rows)
 
 
 def _json_payload(payload: Mapping[str, object]) -> str:
@@ -1203,6 +1397,23 @@ def _settings_snapshot_payload(table: pa.Table) -> str:
     return _stable_repr(rows)
 
 
+def _describe_snapshot_payload(rows: Sequence[Mapping[str, object]]) -> str:
+    """Serialize DataFusion DESCRIBE rows to text.
+
+    Parameters
+    ----------
+    rows
+        Rows returned by ``DESCRIBE`` for a SQL query.
+
+    Returns
+    -------
+    str
+        Stable string representation of the describe rows.
+    """
+    payload = [{str(key): str(value) for key, value in row.items()} for row in rows]
+    return _stable_repr(payload)
+
+
 def _stable_repr(value: object) -> str:
     if isinstance(value, Mapping):
         items = ", ".join(
@@ -1224,7 +1435,7 @@ def _rule_sqlglot_source(
     rule: RuleDefinition,
     *,
     backend: IbisCompilerBackend,
-    registry: SchemaRegistry,
+    schema_context: RelspecSchemaContext,
     ctx: ExecutionContext,
     plan_signature: str | None,
 ) -> _RuleSqlGlotSource | None:
@@ -1236,8 +1447,8 @@ def _rule_sqlglot_source(
         Rule definition to compile.
     backend
         Compiler backend for Ibis.
-    registry
-        Schema registry for dataset lookups.
+    schema_context
+        DataFusion schema context for dataset lookups.
     ctx
         Execution context.
     plan_signature
@@ -1258,7 +1469,7 @@ def _rule_sqlglot_source(
         rel_plan = _rel_plan_for_rule(rel_rule)
         if rel_plan is None:
             return None
-        resolver = _SchemaPlanResolver(backend=backend, registry=registry)
+        resolver = _SchemaPlanResolver(backend=backend, schema_context=schema_context)
         compiler = _ibis_rel_plan_compiler()
         ibis_plan = compiler.compile(rel_plan, ctx=ctx, resolver=resolver)
         inputs = tuple(ref.name for ref in rel_rule.inputs)
@@ -1271,7 +1482,7 @@ def _rule_sqlglot_source(
     if query_source is None:
         return None
     query_spec, source = query_source
-    schema = _schema_for_dataset(source, registry=registry)
+    schema = _schema_for_dataset(source, schema_context=schema_context)
     if schema is None:
         msg = f"SQLGlot validation missing schema for dataset {source!r}."
         raise KeyError(msg)
@@ -1361,7 +1572,7 @@ def _rule_input_names(rule: RuleDefinition) -> tuple[str, ...]:
 def _schema_map_for_inputs(
     inputs: Sequence[str],
     *,
-    registry: SchemaRegistry,
+    schema_context: RelspecSchemaContext,
 ) -> tuple[dict[str, dict[str, str]], pa.Schema | None, tuple[str, ...]]:
     """Build a schema map and union schema for input datasets.
 
@@ -1369,8 +1580,8 @@ def _schema_map_for_inputs(
     ----------
     inputs
         Input dataset names.
-    registry
-        Schema registry for dataset lookups.
+    schema_context
+        DataFusion schema context for dataset lookups.
 
     Returns
     -------
@@ -1382,20 +1593,10 @@ def _schema_map_for_inputs(
     schema_map: dict[str, dict[str, str]] = {}
     missing: list[str] = []
     for name in dict.fromkeys(inputs):
-        if is_nested_dataset(name):
-            schema = nested_schema_for(name, allow_derived=True)
-            schema_map[name] = {field.name: str(field.type) for field in schema}
-            for field in schema:
-                if field.name in seen:
-                    continue
-                seen.add(field.name)
-                fields.append(field)
-            continue
-        spec = registry.dataset_specs.get(name)
-        if spec is None:
+        schema = schema_context.dataset_schema(name)
+        if schema is None:
             missing.append(name)
             continue
-        schema = cast("pa.Schema", spec.schema())
         schema_map[name] = {field.name: str(field.type) for field in schema}
         for field in schema:
             if field.name in seen:
@@ -1406,50 +1607,26 @@ def _schema_map_for_inputs(
     return schema_map, union_schema, tuple(missing)
 
 
-def _schema_ddl(schema: SchemaLike, *, name: str) -> str:
-    """Render a CREATE TABLE DDL statement for a schema.
-
-    Parameters
-    ----------
-    schema
-        Schema to render.
-    name
-        Table name for the DDL.
-
-    Returns
-    -------
-    str
-        CREATE TABLE statement.
-    """
-    spec = table_spec_from_schema(name, schema)
-    return spec.to_create_table_sql(dialect="datafusion")
-
-
 def _schema_for_dataset(
     name: str,
     *,
-    registry: SchemaRegistry,
+    schema_context: RelspecSchemaContext,
 ) -> SchemaLike | None:
-    """Resolve a dataset schema from the registry.
+    """Resolve a dataset schema from the DataFusion context.
 
     Parameters
     ----------
     name
         Dataset name.
-    registry
-        Schema registry for dataset lookups.
+    schema_context
+        DataFusion schema context for dataset lookups.
 
     Returns
     -------
     SchemaLike | None
         Schema for the dataset when available.
     """
-    if is_nested_dataset(name):
-        return nested_schema_for(name, allow_derived=True)
-    spec = registry.dataset_specs.get(name)
-    if spec is None:
-        return None
-    return spec.schema()
+    return schema_context.dataset_schema(name)
 
 
 def _ibis_plan_from_schema(

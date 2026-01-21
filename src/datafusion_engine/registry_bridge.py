@@ -27,6 +27,10 @@ from datafusion_engine.listing_table_provider import (
     TableProviderCapsule,
     parquet_listing_table_provider,
 )
+from datafusion_engine.schema_introspection import (
+    SchemaIntrospector,
+    record_table_definition_override,
+)
 from datafusion_engine.schema_registry import SCHEMA_REGISTRY, is_nested_dataset
 from ibis_engine.registry import (
     DatasetLocation,
@@ -35,11 +39,13 @@ from ibis_engine.registry import (
     resolve_dataset_schema,
     resolve_delta_scan_options,
 )
-from schema_spec.specs import ExternalTableConfig, TableSchemaSpec
+from schema_spec.specs import ArrowFieldSpec, ExternalTableConfig, TableSchemaSpec
 from schema_spec.system import (
     DataFusionScanOptions,
     DeltaScanOptions,
+    ddl_fingerprint_from_definition,
     ddl_fingerprint_from_schema,
+    table_spec_from_schema,
 )
 from sqlglot_tools.optimizer import (
     SqlGlotSurface,
@@ -60,6 +66,9 @@ _INPUT_PLUGIN_PREFIXES = ("artifact://", "dataset://", "repo://")
 _CST_EXTERNAL_TABLE_NAME = "libcst_files_v1"
 _CST_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
 _CST_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
+_SYMTABLE_EXTERNAL_TABLE_NAME = "symtable_files_v1"
+_SYMTABLE_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
+_SYMTABLE_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
 
 try:
     from datafusion.input.base import BaseInputSource as _BaseInputSource
@@ -233,8 +242,27 @@ class DataFusionRegistrationContext:
     runtime_profile: DataFusionRuntimeProfile | None = None
 
 
+@dataclass(frozen=True)
+class DeltaTableArtifactSnapshot:
+    """Schema snapshot for Delta table registration artifacts."""
+
+    provider: str
+    delta_version: int | None
+    delta_features: Mapping[str, str] | None
+    delta_protocol: Mapping[str, object] | None
+    expected_schema: pa.Schema | None
+    delta_schema: pa.Schema | None
+    provider_schema: pa.Schema | None
+
+
 def _schema_field_type(dataset: str, field: str) -> pa.DataType | None:
-    """Return the Arrow type for a schema field, when available."""
+    """Return the Arrow type for a schema field, when available.
+
+    Returns
+    -------
+    pyarrow.DataType | None
+        Field type when available.
+    """
     schema = SCHEMA_REGISTRY.get(dataset)
     if schema is None:
         return None
@@ -247,20 +275,37 @@ def _default_scan_options_for_dataset(
     name: str,
     location: DatasetLocation,
 ) -> DataFusionScanOptions | None:
-    """Return default DataFusion scan options for supported datasets."""
-    if name != _CST_EXTERNAL_TABLE_NAME:
+    """Return default DataFusion scan options for supported datasets.
+
+    Returns
+    -------
+    DataFusionScanOptions | None
+        Default scan options when the dataset is supported.
+    """
+    if name not in {_CST_EXTERNAL_TABLE_NAME, _SYMTABLE_EXTERNAL_TABLE_NAME}:
         return None
     schema = SCHEMA_REGISTRY.get(name)
     if schema is None:
         return None
     partition_cols: list[tuple[str, pa.DataType]] = []
-    for field_name in _CST_PARTITION_FIELDS:
+    if name == _CST_EXTERNAL_TABLE_NAME:
+        partition_fields = _CST_PARTITION_FIELDS
+        file_sort_order = _CST_FILE_SORT_ORDER
+        infer_partitions = True
+        cache_ttl = "2m"
+        listing_mutable = True
+    else:
+        # Symtable defaults are snapshot-style (stable listing) with explicit partitions.
+        partition_fields = _SYMTABLE_PARTITION_FIELDS
+        file_sort_order = _SYMTABLE_FILE_SORT_ORDER
+        infer_partitions = False
+        cache_ttl = "1m"
+        listing_mutable = False
+    for field_name in partition_fields:
         dtype = _schema_field_type(name, field_name)
         if dtype is not None:
             partition_cols.append((field_name, dtype))
-    file_sort_order = tuple(
-        field for field in _CST_FILE_SORT_ORDER if field in schema.names
-    )
+    file_sort_order = tuple(field for field in file_sort_order if field in schema.names)
     return DataFusionScanOptions(
         partition_cols=tuple(partition_cols),
         file_sort_order=file_sort_order,
@@ -268,8 +313,10 @@ def _default_scan_options_for_dataset(
         parquet_pruning=True,
         skip_metadata=True,
         collect_statistics=False,
-        listing_table_factory_infer_partitions=True,
-        listing_mutable=True,
+        listing_table_factory_infer_partitions=infer_partitions,
+        list_files_cache_limit=str(64 * 1024 * 1024),
+        list_files_cache_ttl=cache_ttl,
+        listing_mutable=listing_mutable,
         unbounded=location.format != "delta",
     )
 
@@ -284,7 +331,13 @@ def _default_delta_scan_options_for_dataset(name: str) -> DeltaScanOptions | Non
 
 
 def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocation:
-    """Attach default scan options to a dataset location."""
+    """Attach default scan options to a dataset location.
+
+    Returns
+    -------
+    DatasetLocation
+        Dataset location with default scan options applied.
+    """
     updated = location
     if location.datafusion_scan is not None:
         defaults = None
@@ -322,6 +375,39 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
         cache=bool(scan.cache) if scan is not None else False,
         provider=provider,
     )
+
+
+def _apply_runtime_scan_hardening(
+    options: DataFusionRegistryOptions,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> DataFusionRegistryOptions:
+    if runtime_profile is None:
+        return options
+    hardened_scan = _scan_hardening_defaults(options.scan, runtime_profile=runtime_profile)
+    if hardened_scan is options.scan:
+        return options
+    return replace(options, scan=hardened_scan)
+
+
+def _scan_hardening_defaults(
+    scan: DataFusionScanOptions | None,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DataFusionScanOptions | None:
+    if scan is None or scan.schema_force_view_types is not None:
+        return scan
+    enable_view_types = _schema_hardening_view_types(runtime_profile)
+    if not enable_view_types:
+        return scan
+    return replace(scan, schema_force_view_types=True)
+
+
+def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile) -> bool:
+    hardening = runtime_profile.schema_hardening
+    if hardening is not None:
+        return hardening.enable_view_types
+    return runtime_profile.schema_hardening_name == "arrow_performance"
 
 
 def _prefers_listing_table(
@@ -367,13 +453,14 @@ def datafusion_external_table_sql(
     """
     if location.format == "delta":
         return None
+    scan = resolve_datafusion_scan_options(location)
     table_spec = _resolve_table_spec(location)
     schema = SCHEMA_REGISTRY.get(name)
     if table_spec is None and schema is not None:
         table_spec = table_spec_from_schema(name, schema)
     if table_spec is None:
         return None
-    scan = resolve_datafusion_scan_options(location)
+    table_spec = _table_spec_with_partition_cols(table_spec, scan=scan)
     resolved_dialect = (
         dialect or sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_EXTERNAL_TABLE).dialect
     )
@@ -400,6 +487,24 @@ def datafusion_external_table_sql(
         unbounded=unbounded,
     )
     return table_spec.to_create_external_table_sql(config)
+
+
+def _table_spec_with_partition_cols(
+    table_spec: TableSchemaSpec,
+    *,
+    scan: DataFusionScanOptions | None,
+) -> TableSchemaSpec:
+    if scan is None or not scan.partition_cols:
+        return table_spec
+    existing = {field.name for field in table_spec.fields}
+    missing = [
+        ArrowFieldSpec(name=col, dtype=dtype)
+        for col, dtype in scan.partition_cols
+        if col not in existing
+    ]
+    if not missing:
+        return table_spec
+    return replace(table_spec, fields=[*table_spec.fields, *missing])
 
 
 def _resolve_table_spec(location: DatasetLocation) -> TableSchemaSpec | None:
@@ -479,6 +584,7 @@ def _enforce_schema_handshake(
     ctx: SessionContext,
     name: str,
     location: DatasetLocation,
+    enable_information_schema: bool,
 ) -> None:
     if is_nested_dataset(name):
         return
@@ -486,7 +592,12 @@ def _enforce_schema_handshake(
     if expected is None:
         return
     actual_schema = ctx.table(name).schema()
-    actual = ddl_fingerprint_from_schema(name, actual_schema)
+    actual = _ddl_fingerprint(
+        ctx,
+        name=name,
+        schema=actual_schema,
+        enable_information_schema=enable_information_schema,
+    )
     if actual == expected:
         return
     msg = (
@@ -524,6 +635,7 @@ def register_dataset_df(
             schema=runtime_profile.default_schema,
         )
     options = resolve_registry_options(location)
+    options = _apply_runtime_scan_hardening(options, runtime_profile=runtime_profile)
     cache = _resolve_cache_policy(
         options,
         cache_policy=cache_policy,
@@ -543,6 +655,8 @@ def register_dataset_df(
         ),
         runtime_profile=runtime_profile,
     )
+    if context.external_table_sql is not None:
+        record_table_definition_override(ctx, name=name, ddl=context.external_table_sql)
     scan = options.scan
     if (scan is not None and scan.unbounded) or _should_register_external_table(context):
         df = _register_external_table(context)
@@ -561,7 +675,14 @@ def register_dataset_df(
     else:
         msg = f"Unsupported DataFusion dataset format: {location.format!r}."
         raise ValueError(msg)
-    _enforce_schema_handshake(ctx=ctx, name=name, location=location)
+    _enforce_schema_handshake(
+        ctx=ctx,
+        name=name,
+        location=location,
+        enable_information_schema=(
+            runtime_profile.enable_information_schema if runtime_profile is not None else False
+        ),
+    )
     return df
 
 
@@ -608,6 +729,8 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
                 path=str(context.location.path),
                 schema=context.options.schema,
                 file_extension=file_extension,
+                table_name=context.name,
+                table_definition=context.external_table_sql,
                 table_partition_cols=partition_cols,
                 parquet_pruning=scan.parquet_pruning if scan is not None else None,
                 skip_metadata=skip_metadata,
@@ -635,6 +758,22 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         else:
             _register_listing()
         df = context.ctx.table(context.name)
+        if scan is not None and scan.projection_exprs:
+            df = _apply_projection_exprs(
+                context.ctx,
+                table_name=context.name,
+                projection_exprs=scan.projection_exprs,
+            )
+        _require_partition_schema_validation(
+            context.ctx,
+            table_name=context.name,
+            expected_partition_cols=table_partition_cols,
+            enable_information_schema=(
+                context.runtime_profile.enable_information_schema
+                if context.runtime_profile is not None
+                else False
+            ),
+        )
         _record_listing_table_artifact(
             context,
             scan=scan,
@@ -879,8 +1018,7 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
         delta_version = context.location.delta_version
     else:
         delta_version = table.version()
-    _record_delta_table_artifact(
-        context,
+    snapshot = DeltaTableArtifactSnapshot(
         provider=provider,
         delta_version=delta_version,
         delta_features=delta_features,
@@ -889,6 +1027,7 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
         delta_schema=delta_schema,
         provider_schema=provider_schema,
     )
+    _record_delta_table_artifact(context, snapshot=snapshot)
     return _maybe_cache(context, df)
 
 
@@ -903,6 +1042,11 @@ def _record_listing_table_artifact(
     profile = context.runtime_profile
     if profile is None or profile.diagnostics_sink is None:
         return
+    provenance = _table_provenance_snapshot(
+        context.ctx,
+        name=context.name,
+        enable_information_schema=profile.enable_information_schema,
+    )
     schema_payload = (
         schema_to_dict(context.options.schema) if context.options.schema is not None else None
     )
@@ -942,12 +1086,39 @@ def _record_listing_table_artifact(
         "listing_table_ignore_subdirectory": (
             scan.listing_table_ignore_subdirectory if scan is not None else None
         ),
+        "projection_exprs": list(scan.projection_exprs) if scan is not None else None,
         "listing_mutable": scan.listing_mutable if scan is not None else None,
         "unbounded": scan.unbounded if scan is not None else None,
         "schema": schema_payload,
         "read_options": dict(context.options.read_options),
     }
+    payload["partition_schema_validation"] = _partition_schema_validation(
+        context.ctx,
+        table_name=context.name,
+        expected_partition_cols=table_partition_cols,
+        enable_information_schema=profile.enable_information_schema,
+    )
+    payload.update(provenance)
     profile.diagnostics_sink.record_artifact("datafusion_listing_tables_v1", payload)
+
+
+def _apply_projection_exprs(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    projection_exprs: Sequence[str],
+) -> DataFrame:
+    if not projection_exprs:
+        return ctx.table(table_name)
+    base_name = f"{table_name}__raw"
+    with suppress(KeyError, ValueError):
+        ctx.deregister_table(base_name)
+    ctx.register_table(base_name, ctx.table(table_name))
+    selection = ", ".join(projection_exprs)
+    projected = ctx.sql(f"SELECT {selection} FROM {base_name}")
+    ctx.deregister_table(table_name)
+    ctx.register_table(table_name, projected)
+    return ctx.table(table_name)
 
 
 def _apply_scan_settings(ctx: SessionContext, *, scan: DataFusionScanOptions | None) -> None:
@@ -1019,7 +1190,17 @@ def _schema_fingerprint(schema: pa.Schema | None) -> str | None:
     return schema_fingerprint(schema)
 
 
-def _ddl_fingerprint(name: str, schema: pa.Schema | None) -> str | None:
+def _ddl_fingerprint(
+    ctx: SessionContext,
+    *,
+    name: str,
+    schema: pa.Schema | None,
+    enable_information_schema: bool,
+) -> str | None:
+    if enable_information_schema:
+        ddl = SchemaIntrospector(ctx).table_definition(name)
+        if ddl is not None:
+            return ddl_fingerprint_from_definition(ddl)
     if schema is None:
         return None
     return ddl_fingerprint_from_schema(name, schema)
@@ -1034,23 +1215,38 @@ def _fingerprints_match(left: str | None, right: str | None) -> bool | None:
 def _record_delta_table_artifact(
     context: DataFusionRegistrationContext,
     *,
-    provider: str,
-    delta_version: int | None,
-    delta_features: Mapping[str, str] | None,
-    delta_protocol: Mapping[str, object] | None,
-    expected_schema: pa.Schema | None,
-    delta_schema: pa.Schema | None,
-    provider_schema: pa.Schema | None,
+    snapshot: DeltaTableArtifactSnapshot,
 ) -> None:
     profile = context.runtime_profile
     if profile is None or profile.diagnostics_sink is None:
         return
-    expected_fingerprint = _schema_fingerprint(expected_schema)
-    delta_fingerprint = _schema_fingerprint(delta_schema)
-    provider_fingerprint = _schema_fingerprint(provider_schema)
-    expected_ddl = _ddl_fingerprint(context.name, expected_schema)
-    delta_ddl = _ddl_fingerprint(context.name, delta_schema)
-    provider_ddl = _ddl_fingerprint(context.name, provider_schema)
+    provenance = _table_provenance_snapshot(
+        context.ctx,
+        name=context.name,
+        enable_information_schema=profile.enable_information_schema,
+    )
+    expected_fingerprint = _schema_fingerprint(snapshot.expected_schema)
+    delta_fingerprint = _schema_fingerprint(snapshot.delta_schema)
+    provider_fingerprint = _schema_fingerprint(snapshot.provider_schema)
+    enable_info = profile.enable_information_schema
+    expected_ddl = _ddl_fingerprint(
+        context.ctx,
+        name=context.name,
+        schema=snapshot.expected_schema,
+        enable_information_schema=enable_info,
+    )
+    delta_ddl = _ddl_fingerprint(
+        context.ctx,
+        name=context.name,
+        schema=snapshot.delta_schema,
+        enable_information_schema=enable_info,
+    )
+    provider_ddl = _ddl_fingerprint(
+        context.ctx,
+        name=context.name,
+        schema=snapshot.provider_schema,
+        enable_information_schema=enable_info,
+    )
     schema_payload = (
         schema_to_dict(context.options.schema) if context.options.schema is not None else None
     )
@@ -1058,11 +1254,11 @@ def _record_delta_table_artifact(
         "name": context.name,
         "path": str(context.location.path),
         "format": context.location.format,
-        "provider": provider,
-        "delta_version": delta_version,
+        "provider": snapshot.provider,
+        "delta_version": snapshot.delta_version,
         "delta_timestamp": context.location.delta_timestamp,
-        "delta_features": dict(delta_features) if delta_features else None,
-        "delta_protocol": dict(delta_protocol) if delta_protocol else None,
+        "delta_features": dict(snapshot.delta_features) if snapshot.delta_features else None,
+        "delta_protocol": dict(snapshot.delta_protocol) if snapshot.delta_protocol else None,
         "schema": schema_payload,
         "expected_schema_fingerprint": expected_fingerprint,
         "delta_schema_fingerprint": delta_fingerprint,
@@ -1082,7 +1278,128 @@ def _record_delta_table_artifact(
         if context.location.storage_options
         else None,
     }
+    payload.update(provenance)
     profile.diagnostics_sink.record_artifact("datafusion_delta_tables_v1", payload)
+
+
+def _table_provenance_snapshot(
+    ctx: SessionContext,
+    *,
+    name: str,
+    enable_information_schema: bool,
+) -> dict[str, object]:
+    introspector = SchemaIntrospector(ctx)
+    table_definition = introspector.table_definition(name)
+    constraints: tuple[str, ...] = ()
+    if enable_information_schema:
+        constraints = introspector.table_constraints(name)
+    return {
+        "table_definition": table_definition,
+        "table_constraints": list(constraints) if constraints else None,
+    }
+
+
+def _partition_schema_validation(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    expected_partition_cols: Sequence[tuple[str, str]] | None,
+    enable_information_schema: bool,
+) -> dict[str, object] | None:
+    if not enable_information_schema:
+        return None
+    if not expected_partition_cols:
+        return None
+    expected_names = [name for name, _ in expected_partition_cols]
+    expected_types = {name: str(dtype) for name, dtype in expected_partition_cols}
+    try:
+        table = ctx.sql(
+            "SELECT column_name, data_type, ordinal_position "
+            "FROM information_schema.columns "
+            f"WHERE table_name = '{table_name}' "
+            "ORDER BY ordinal_position"
+        ).to_arrow_table()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return {
+            "expected_partition_cols": expected_names,
+            "error": str(exc),
+        }
+    rows = table.to_pylist()
+    actual_order: list[str] = []
+    actual_types: dict[str, str] = {}
+    for row in rows:
+        name = row.get("column_name")
+        if name is None:
+            continue
+        name_text = str(name)
+        actual_order.append(name_text)
+        data_type = row.get("data_type")
+        if data_type is not None:
+            actual_types[name_text] = str(data_type)
+    actual_partition_cols = [name for name in actual_order if name in expected_types]
+    missing = [name for name in expected_names if name not in actual_types]
+    order_matches = actual_partition_cols == expected_names if actual_partition_cols else None
+    type_mismatches: list[dict[str, str]] = []
+    for name in expected_names:
+        expected_type = expected_types.get(name)
+        actual_type = actual_types.get(name)
+        if expected_type is None or actual_type is None:
+            continue
+        if expected_type.lower() != actual_type.lower():
+            type_mismatches.append(
+                {
+                    "name": name,
+                    "expected": expected_type,
+                    "actual": actual_type,
+                }
+            )
+    return {
+        "expected_partition_cols": expected_names,
+        "actual_partition_cols": actual_partition_cols,
+        "missing_partition_cols": missing or None,
+        "partition_order_matches": order_matches,
+        "expected_partition_types": expected_types,
+        "actual_partition_types": actual_types or None,
+        "partition_type_mismatches": type_mismatches or None,
+    }
+
+
+def _require_partition_schema_validation(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    expected_partition_cols: Sequence[tuple[str, str]] | None,
+    enable_information_schema: bool,
+) -> None:
+    validation = _partition_schema_validation(
+        ctx,
+        table_name=table_name,
+        expected_partition_cols=expected_partition_cols,
+        enable_information_schema=enable_information_schema,
+    )
+    if validation is None:
+        return
+    missing: list[str] = []
+    missing_value = validation.get("missing_partition_cols")
+    if isinstance(missing_value, Sequence) and not isinstance(
+        missing_value,
+        (str, bytes, bytearray),
+    ):
+        missing = [str(item) for item in missing_value]
+    order_matches = validation.get("partition_order_matches")
+    type_value = validation.get("partition_type_mismatches")
+    type_mismatches: list[dict[str, str]]
+    if isinstance(type_value, Sequence) and not isinstance(type_value, (str, bytes, bytearray)):
+        type_mismatches = [
+            {str(key): str(val) for key, val in item.items()}
+            for item in type_value
+            if isinstance(item, Mapping)
+        ]
+    else:
+        type_mismatches = []
+    if missing or order_matches is False or type_mismatches:
+        msg = f"Partition schema validation failed for {table_name}: {validation}."
+        raise ValueError(msg)
 
 
 def _delta_dataset_from_table(

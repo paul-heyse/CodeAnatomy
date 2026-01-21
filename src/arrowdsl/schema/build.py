@@ -322,9 +322,7 @@ def table_from_schema(
         Table with missing columns filled as typed nulls.
     """
     resolved = _resolve_schema(schema)
-    arrays = [
-        columns.get(field.name, pa.nulls(num_rows, type=field.type)) for field in resolved
-    ]
+    arrays = [columns.get(field.name, pa.nulls(num_rows, type=field.type)) for field in resolved]
     return pa.Table.from_arrays(arrays, schema=resolved)
 
 
@@ -342,8 +340,7 @@ def table_from_rows(
     resolved = _resolve_schema(schema)
     row_list = [dict(row) for row in rows]
     arrays = [
-        nested_array_factory(field, [row.get(field.name) for row in row_list])
-        for field in resolved
+        nested_array_factory(field, [row.get(field.name) for row in row_list]) for field in resolved
     ]
     return pa.Table.from_arrays(arrays, schema=resolved)
 

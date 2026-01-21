@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -40,6 +41,8 @@ from arrowdsl.schema.schema import (
 )
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from arrowdsl.spec.io import read_spec_table
+from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import (
     is_nested_dataset,
     nested_dataset_names,
@@ -148,6 +151,27 @@ class DedupeSpecSpec:
 
 
 @dataclass(frozen=True)
+class TableSchemaContract:
+    """Combine file and partition schema into a TableSchema contract."""
+
+    file_schema: pa.Schema
+    partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
+
+    def partition_schema(self) -> pa.Schema | None:
+        """Return the partition schema when partition columns are present.
+
+        Returns
+        -------
+        pyarrow.Schema | None
+            Partition schema when partition columns are defined.
+        """
+        if not self.partition_cols:
+            return None
+        fields = [pa.field(name, dtype, nullable=False) for name, dtype in self.partition_cols]
+        return pa.schema(fields)
+
+
+@dataclass(frozen=True)
 class DataFusionScanOptions:
     """DataFusion-specific scan configuration."""
 
@@ -166,8 +190,11 @@ class DataFusionScanOptions:
     meta_fetch_concurrency: int | None = None
     list_files_cache_ttl: str | None = None
     list_files_cache_limit: str | None = None
+    projection_exprs: tuple[str, ...] = ()
     listing_mutable: bool = False
     unbounded: bool = False
+    table_schema_contract: TableSchemaContract | None = None
+    expr_adapter_factory: object | None = None
 
 
 @dataclass(frozen=True)
@@ -889,6 +916,42 @@ def _merge_names(*parts: Iterable[str]) -> tuple[str, ...]:
     return tuple(merged)
 
 
+def _merge_constraints(*parts: Iterable[str]) -> tuple[str, ...]:
+    """Return unique constraint expressions in stable order.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Normalized constraint expressions.
+    """
+    merged: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        for constraint in part:
+            normalized = constraint.strip()
+            if not normalized or normalized in seen:
+                continue
+            merged.append(normalized)
+            seen.add(normalized)
+    return tuple(merged)
+
+
+def _delta_constraints_from_table_spec(table_spec: TableSchemaSpec) -> tuple[str, ...]:
+    """Return default Delta constraints derived from schema constraints.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Constraint expressions derived from required and key fields.
+    """
+    required = _merge_names(table_spec.required_non_null, table_spec.key_fields)
+    if not required:
+        return ()
+    required_set = set(required)
+    ordered = [field.name for field in table_spec.fields if field.name in required_set]
+    return tuple(f"{name} IS NOT NULL" for name in ordered)
+
+
 def _merge_fields(
     bundles: Iterable[FieldBundle],
     fields: Iterable[ArrowFieldSpec],
@@ -1052,6 +1115,10 @@ def dataset_spec_from_contract(contract: Contract) -> DatasetSpec:
     """
     table_spec = _table_spec_from_contract(contract)
     constraints = contract.constraints if hasattr(contract, "constraints") else ()
+    delta_constraints = _merge_constraints(
+        constraints,
+        _delta_constraints_from_table_spec(table_spec),
+    )
     contract_spec = ContractSpec(
         name=contract.name,
         table_schema=table_spec,
@@ -1066,7 +1133,7 @@ def dataset_spec_from_contract(contract: Contract) -> DatasetSpec:
     return make_dataset_spec(
         table_spec=table_spec,
         contract_spec=contract_spec,
-        delta_constraints=constraints,
+        delta_constraints=delta_constraints,
     )
 
 
@@ -1148,6 +1215,22 @@ def ddl_fingerprint_from_schema(
     return table_spec.ddl_fingerprint(dialect=dialect)
 
 
+def ddl_fingerprint_from_definition(ddl: str) -> str:
+    """Return a stable fingerprint for a CREATE TABLE statement.
+
+    Parameters
+    ----------
+    ddl
+        CREATE TABLE statement text.
+
+    Returns
+    -------
+    str
+        Stable fingerprint of the DDL string.
+    """
+    return hashlib.sha256(ddl.encode("utf-8")).hexdigest()
+
+
 def dataset_spec_from_schema(
     name: str,
     schema: SchemaLike,
@@ -1168,7 +1251,42 @@ def dataset_spec_from_schema(
         table_spec=table_spec,
         metadata_spec=metadata_spec,
         evolution_spec=evolution_spec,
+        delta_constraints=_delta_constraints_from_table_spec(table_spec),
     )
+
+
+def dataset_table_definition(name: str) -> str | None:
+    """Return the DataFusion CREATE TABLE definition for a dataset.
+
+    Parameters
+    ----------
+    name
+        Dataset name registered in DataFusion.
+
+    Returns
+    -------
+    str | None
+        CREATE TABLE statement when available.
+    """
+    ctx = DataFusionRuntimeProfile().session_context()
+    return SchemaIntrospector(ctx).table_definition(name)
+
+
+def dataset_table_constraints(name: str) -> tuple[str, ...]:
+    """Return DataFusion constraint metadata for a dataset.
+
+    Parameters
+    ----------
+    name
+        Dataset name registered in DataFusion.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Constraint expressions or identifiers, when available.
+    """
+    ctx = DataFusionRuntimeProfile().session_context()
+    return SchemaIntrospector(ctx).table_constraints(name)
 
 
 def dataset_spec_from_dataset(
@@ -1329,7 +1447,7 @@ SCHEMA_EVOLUTION_PRESETS: Mapping[str, SchemaEvolutionSpec] = {
         allow_extra=True,
         allow_casts=True,
     )
-    for name in nested_dataset_names()
+    for name in (*nested_dataset_names(), "symtable_files_v1")
 }
 
 
@@ -1442,6 +1560,9 @@ __all__ = [
     "dataset_spec_from_dataset",
     "dataset_spec_from_path",
     "dataset_spec_from_schema",
+    "dataset_table_constraints",
+    "dataset_table_definition",
+    "ddl_fingerprint_from_definition",
     "ddl_fingerprint_from_schema",
     "make_contract_spec",
     "make_dataset_spec",

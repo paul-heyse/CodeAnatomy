@@ -2865,6 +2865,12 @@ def _datafusion_diagnostics_notes(runtime: DataFusionRuntimeProfile) -> JsonDict
     table_providers = artifacts.get("datafusion_table_providers_v1", [])
     if table_providers:
         notes["datafusion_table_providers"] = cast("JsonValue", table_providers)
+    constraint_violations = artifacts.get("delta_constraint_violations_v1", [])
+    if constraint_violations:
+        notes["datafusion_delta_constraint_violations"] = cast(
+            "JsonValue",
+            constraint_violations,
+        )
     return notes
 
 

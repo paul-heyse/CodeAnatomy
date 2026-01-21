@@ -807,6 +807,8 @@ NODE_CONTRACT_ROWS: tuple[NodeContractRow, ...] = (
             "scope_name",
         ),
         optional=(
+            "function_partitions",
+            "class_methods",
             "lineno",
             "is_meta_scope",
             "path",
@@ -821,6 +823,8 @@ NODE_CONTRACT_ROWS: tuple[NodeContractRow, ...] = (
             "name",
         ),
         optional=(
+            "namespace_count",
+            "namespace_block_ids",
             "is_local",
             "is_global",
             "is_nonlocal",
@@ -1769,8 +1773,8 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         id_recipe="binding_id = f'{scope_id}:BIND:{name}'",
         confidence_policy="confidence=1.0",
         ambiguity_policy="none",
-        status="planned",
-        extractor="normalize.schema_infer:build_bindings",
+        status="implemented",
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_bindings",
     ),
     DerivationRow(
         kind=NodeKind.PY_DEF_SITE,
@@ -1781,14 +1785,14 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
             "bend",
             "name",
         ),
-        id_recipe=stable_span_id("def_site_id", "PY_DEF_SITE"),
+        id_recipe="def_site_id = sha('PY_DEF_SITE:'+binding_id+':'+bstart+':'+bend)[:16]",
         confidence_policy="confidence=0.85-0.95 depending on def-site classifier maturity",
         ambiguity_policy=(
             "if multiple bindings match, emit multiple DEF_SITE_OF edges "
             "(ambiguity_group_id=def_site_id)"
         ),
-        status="planned",
-        extractor="normalize.schema_infer:build_def_use_sites",
+        status="implemented",
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_def_sites",
     ),
     DerivationRow(
         kind=NodeKind.PY_FILE,
@@ -1864,8 +1868,8 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         ambiguity_policy=(
             "if libcst vs symtable mismatch, keep both and link via props or resolution edges"
         ),
-        status="planned",
-        extractor="normalize.schema_infer:build_scopes",
+        status="implemented",
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_scopes",
     ),
     DerivationRow(
         kind=NodeKind.PY_USE_SITE,
@@ -1876,11 +1880,11 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
             "bend",
             "name",
         ),
-        id_recipe=stable_span_id("use_site_id", "PY_USE_SITE"),
+        id_recipe="use_site_id = sha('PY_USE_SITE:'+binding_id+':'+bstart+':'+bend)[:16]",
         confidence_policy="confidence=0.85-0.95 depending on binding resolution maturity",
         ambiguity_policy="emit multiple USE_SITE_OF edges if needed; dedupe by winner policy",
-        status="planned",
-        extractor="normalize.schema_infer:build_def_use_sites",
+        status="implemented",
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_use_sites",
     ),
     DerivationRow(
         kind=NodeKind.RT_MEMBER,
@@ -2079,11 +2083,12 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
             "scope_id",
             "name",
         ),
-        id_recipe="type_param_id = sha('TP:'+scope_id+':'+name)[:16]",
+        id_recipe="type_param_id = scope_id",
         confidence_policy="confidence=0.9",
         ambiguity_policy="none",
-        status="planned",
+        status="implemented",
         template=DERIV_T_SYMTABLE,
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_type_params",
     ),
 )
 
@@ -2123,8 +2128,8 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
             "if multiple candidates, emit multiple edges with scores and "
             "ambiguity_group_id=binding_id"
         ),
-        status="planned",
-        extractor="normalize.schema_infer:resolve_bindings",
+        status="implemented",
+        extractor="cpg.symtable_resolution:build_binding_resolution_table",
     ),
     DerivationRow(
         kind=EdgeKind.BYTECODE_ANCHOR,
@@ -2231,8 +2236,8 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('DEF_SITE_OF:'+def_site_id+':'+binding_id)[:16]",
         confidence_policy="confidence=0.85-0.95",
         ambiguity_policy="multiple edges allowed, winner selection by score",
-        status="planned",
-        extractor="normalize.schema_infer:build_def_use_sites",
+        status="implemented",
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_def_sites",
     ),
     DerivationRow(
         kind=EdgeKind.FILE_CONTAINS,
@@ -2498,8 +2503,8 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('SCOPE_BINDS:'+scope_id+':'+binding_id)[:16]",
         confidence_policy="confidence=1.0",
         ambiguity_policy="none",
-        status="planned",
-        extractor="normalize.schema_infer:build_bindings",
+        status="implemented",
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_bindings",
     ),
     DerivationRow(
         kind=EdgeKind.SCOPE_PARENT,
@@ -2509,6 +2514,8 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=1.0",
         ambiguity_policy="none",
         template=DERIV_T_SYMTABLE,
+        status="implemented",
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_scope_edges",
     ),
     DerivationRow(
         kind=EdgeKind.STEP_DEF,
@@ -2553,8 +2560,9 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('TYPE_PARAM_OF:'+type_param_id+':'+owner_id)[:16]",
         confidence_policy="confidence=0.8-0.95",
         ambiguity_policy="none",
-        status="planned",
+        status="implemented",
         template=DERIV_T_SYMTABLE,
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_type_param_edges",
     ),
     DerivationRow(
         kind=EdgeKind.USE_SITE_OF,
@@ -2568,8 +2576,8 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('USE_SITE_OF:'+use_site_id+':'+binding_id)[:16]",
         confidence_policy="confidence=0.85-0.95",
         ambiguity_policy="multiple edges allowed, winner selection by score",
-        status="planned",
-        extractor="normalize.schema_infer:build_def_use_sites",
+        status="implemented",
+        extractor="hamilton_pipeline.modules.cpg_build:symtable_use_sites",
     ),
 )
 

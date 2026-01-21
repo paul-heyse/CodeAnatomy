@@ -310,6 +310,33 @@ def ibis_plan_from_rows(
     return IbisPlan(expr=expr, ordering=Ordering.unordered())
 
 
+def ibis_plan_from_row_batches(
+    name: str,
+    row_batches: Iterable[Sequence[Mapping[str, object]]],
+) -> IbisPlan:
+    """Return an Ibis plan for batched row data aligned to the DataFusion schema.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan backed by a union of per-batch memtables.
+    """
+    schema = dataset_schema(name)
+    exprs: list[IbisTable] = []
+    for batch in row_batches:
+        if not batch:
+            continue
+        expr = ibis.memtable(batch)
+        expr = align_table_to_schema(expr, schema=schema, keep_extra_columns=True)
+        exprs.append(expr)
+    if not exprs:
+        return empty_ibis_plan(name)
+    if len(exprs) == 1:
+        return IbisPlan(expr=exprs[0], ordering=Ordering.unordered())
+    combined = ibis.union(*exprs, distinct=False)
+    return IbisPlan(expr=combined, ordering=Ordering.unordered())
+
+
 def apply_query_and_project(
     name: str,
     table: IbisTable,
@@ -551,6 +578,7 @@ __all__ = [
     "bytes_from_file_ctx",
     "empty_ibis_plan",
     "file_identity_row",
+    "ibis_plan_from_row_batches",
     "ibis_plan_from_rows",
     "iter_contexts",
     "iter_file_contexts",

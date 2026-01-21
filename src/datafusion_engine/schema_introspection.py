@@ -8,6 +8,47 @@ from dataclasses import dataclass
 import pyarrow as pa
 from datafusion import SessionContext
 
+_TABLE_DEFINITION_OVERRIDES: dict[int, dict[str, str]] = {}
+
+
+def record_table_definition_override(
+    ctx: SessionContext,
+    *,
+    name: str,
+    ddl: str,
+) -> None:
+    """Record a CREATE TABLE definition override for a session.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context to scope the override.
+    name
+        Table name associated with the override.
+    ddl
+        CREATE TABLE statement to record for the table.
+    """
+    overrides = _TABLE_DEFINITION_OVERRIDES.setdefault(id(ctx), {})
+    overrides[name] = ddl
+
+
+def table_definition_override(ctx: SessionContext, *, name: str) -> str | None:
+    """Return a recorded table definition override when available.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context that scoped the override.
+    name
+        Table name to look up.
+
+    Returns
+    -------
+    str | None
+        Recorded CREATE TABLE statement when available.
+    """
+    return _TABLE_DEFINITION_OVERRIDES.get(id(ctx), {}).get(name)
+
 
 def _rows_for_query(ctx: SessionContext, query: str) -> list[dict[str, object]]:
     """Return a list of row mappings for a SQL query.
@@ -66,6 +107,28 @@ class SchemaIntrospector:
         )
         return _rows_for_query(self.ctx, query)
 
+    def catalogs_snapshot(self) -> list[dict[str, object]]:
+        """Return catalog inventory rows from information_schema.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Catalog inventory rows.
+        """
+        query = "SELECT DISTINCT catalog_name FROM information_schema.schemata"
+        return _rows_for_query(self.ctx, query)
+
+    def schemata_snapshot(self) -> list[dict[str, object]]:
+        """Return schema inventory rows from information_schema.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Schema inventory rows including catalog and schema names.
+        """
+        query = "SELECT catalog_name, schema_name FROM information_schema.schemata"
+        return _rows_for_query(self.ctx, query)
+
     def columns_snapshot(self) -> list[dict[str, object]]:
         """Return all column metadata rows from information_schema.
 
@@ -80,6 +143,35 @@ class SchemaIntrospector:
         )
         return _rows_for_query(self.ctx, query)
 
+    def routines_snapshot(self) -> list[dict[str, object]]:
+        """Return routine inventory rows from information_schema.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Routine inventory rows including name and type.
+        """
+        query = (
+            "SELECT routine_catalog, routine_schema, routine_name, routine_type "
+            "FROM information_schema.routines"
+        )
+        return _rows_for_query(self.ctx, query)
+
+    def parameters_snapshot(self) -> list[dict[str, object]]:
+        """Return routine parameter rows from information_schema.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Parameter metadata rows including names and data types.
+        """
+        query = (
+            "SELECT specific_name, routine_name, parameter_name, parameter_mode, "
+            "data_type, ordinal_position "
+            "FROM information_schema.parameters"
+        )
+        return _rows_for_query(self.ctx, query)
+
     def settings_snapshot(self) -> list[dict[str, object]]:
         """Return session settings from information_schema.df_settings.
 
@@ -90,6 +182,62 @@ class SchemaIntrospector:
         """
         query = "SELECT name, value FROM information_schema.df_settings"
         return _rows_for_query(self.ctx, query)
+
+    def table_definition(self, table_name: str) -> str | None:
+        """Return a CREATE TABLE definition when supported.
+
+        Parameters
+        ----------
+        table_name
+            Table name to describe.
+
+        Returns
+        -------
+        str | None
+            CREATE TABLE statement when available.
+        """
+        try:
+            rows = _rows_for_query(self.ctx, f"SHOW CREATE TABLE {table_name}")
+        except (RuntimeError, TypeError, ValueError):
+            return table_definition_override(self.ctx, name=table_name)
+        if not rows:
+            return table_definition_override(self.ctx, name=table_name)
+        first = rows[0]
+        if len(first) == 1:
+            return str(next(iter(first.values())))
+        return repr(first)
+
+    def table_constraints(self, table_name: str) -> tuple[str, ...]:
+        """Return constraint expressions for a table when available.
+
+        Parameters
+        ----------
+        table_name
+            Table name to inspect.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Constraint expressions or identifiers.
+        """
+        try:
+            rows = _rows_for_query(
+                self.ctx,
+                "SELECT constraint_name, constraint_type, constraint_definition "
+                "FROM information_schema.table_constraints "
+                f"WHERE table_name = '{table_name}'",
+            )
+        except (RuntimeError, TypeError, ValueError):
+            return ()
+        constraints: list[str] = []
+        for row in rows:
+            definition = row.get("constraint_definition")
+            name = row.get("constraint_name")
+            if definition:
+                constraints.append(str(definition))
+            elif name:
+                constraints.append(str(name))
+        return tuple(constraints)
 
 
 def find_struct_field_keys(
@@ -154,4 +302,9 @@ def _extract_struct_keys(dtype: pa.DataType) -> tuple[str, ...] | None:
     return None
 
 
-__all__ = ["SchemaIntrospector", "find_struct_field_keys"]
+__all__ = [
+    "SchemaIntrospector",
+    "find_struct_field_keys",
+    "record_table_definition_override",
+    "table_definition_override",
+]

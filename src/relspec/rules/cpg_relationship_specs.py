@@ -245,9 +245,7 @@ def _base_definition_specs() -> tuple[RuleDefinitionSpec, ...]:
             name="symtable_type_param_edges",
             kind=RuleKind.FILTER_PROJECT,
             inputs=("symtable_type_param_edges",),
-            project=ProjectConfig(
-                select=("type_param_id", "owner_scope_id", "path", "scope_type")
-            ),
+            project=ProjectConfig(select=("type_param_id", "owner_scope_id", "path", "scope_type")),
             edge=EdgeDefinitionSpec(
                 edge_kind=EdgeKind.TYPE_PARAM_OF,
                 src_cols=("type_param_id",),

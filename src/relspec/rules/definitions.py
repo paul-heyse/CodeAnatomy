@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.ordering import OrderingKey
@@ -18,10 +18,6 @@ from relspec.model import (
     ProjectConfig,
     WinnerSelectConfig,
 )
-from relspec.rules.rel_ops import validate_rel_ops
-
-if TYPE_CHECKING:
-    from relspec.rules.rel_ops import RelOpT
 
 RuleDomain = Literal["cpg", "normalize", "extract"]
 ExecutionMode = Literal["auto", "plan", "table", "external", "hybrid"]
@@ -142,7 +138,6 @@ class RuleDefinition:
     evidence_output: EvidenceOutput | None = None
     policy_overrides: PolicyOverrides = field(default_factory=PolicyOverrides)
     emit_rule_meta: bool = True
-    rel_ops: tuple[RelOpT, ...] = ()
     post_kernels: tuple[KernelSpecT, ...] = ()
     stages: tuple[RuleStage, ...] = ()
     payload: RulePayload | None = None
@@ -167,8 +162,6 @@ class RuleDefinition:
         if self.domain not in {"cpg", "normalize", "extract"}:
             msg = f"RuleDefinition.domain is invalid: {self.domain!r}."
             raise ValueError(msg)
-        if self.rel_ops:
-            validate_rel_ops(self.rel_ops)
 
 
 def stage_enabled(stage: RuleStage, options: Mapping[str, object]) -> bool:

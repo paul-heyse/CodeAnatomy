@@ -269,9 +269,7 @@ def execute_sqlglot_ast(
         # Fetch all results
         rows = cursor.fetchall()
         # Get column names from description
-        columns = (
-            tuple(str(desc[0]) for desc in cursor.description) if cursor.description else None
-        )
+        columns = tuple(str(desc[0]) for desc in cursor.description) if cursor.description else None
 
     return AstExecutionResult(
         expression=expr,

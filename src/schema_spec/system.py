@@ -14,7 +14,7 @@ import pyarrow.dataset as ds
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, Table
 
-from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
@@ -42,8 +42,7 @@ from datafusion_engine.schema_registry import (
     nested_dataset_names,
     nested_view_spec,
 )
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution_factory import ibis_backend_from_ctx, ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from ibis_engine.sources import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
@@ -652,16 +651,11 @@ class ValidationPlans:
 
 
 def _ibis_backend_for_ctx(ctx: ExecutionContext) -> BaseBackend:
-    return build_backend(IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion))
+    return ibis_backend_from_ctx(ctx)
 
 
 def _ibis_execution_for_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
-    module = importlib.import_module("ibis_engine.execution")
-    execution_cls = cast("type[IbisExecutionContext]", module.IbisExecutionContext)
-    return execution_cls(
-        ctx=ctx,
-        ibis_backend=_ibis_backend_for_ctx(ctx),
-    )
+    return ibis_execution_from_ctx(ctx)
 
 
 def _invalid_rows_plan(plan: IbisPlan, *, spec: TableSchemaSpec) -> IbisPlan:
@@ -1356,7 +1350,8 @@ def dataset_spec_from_path(
     """
     options = options or DatasetOpenSpec()
     if options.dataset_format == "delta":
-        backend = build_backend(IbisBackendConfig())
+        ctx = execution_context_factory("default")
+        backend = ibis_backend_from_ctx(ctx)
         table = options.read_ibis_table(path, backend=backend)
         schema = table.schema().to_pyarrow()
         return dataset_spec_from_schema(name, schema, version=version)

@@ -351,8 +351,6 @@ class _ListingTableArtifactDetails:
     actual_schema: pa.Schema | None
 
 
-
-
 def _schema_field_type(dataset: str, field: str) -> pa.DataType | None:
     """Return the Arrow type for a schema field, when available.
 
@@ -1223,7 +1221,9 @@ def _record_table_provider_artifact(
     payload: dict[str, object] = {
         "name": artifact.name,
         "provider": artifact.provider_kind,
-        "provider_type": type(artifact.provider).__name__ if artifact.provider is not None else None,
+        "provider_type": type(artifact.provider).__name__
+        if artifact.provider is not None
+        else None,
         "capsule_id": capsule_id,
     }
     if artifact.provider is not None:

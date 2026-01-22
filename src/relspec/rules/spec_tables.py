@@ -28,6 +28,7 @@ from arrowdsl.spec.literals import (
     parse_string_tuple,
 )
 from datafusion_engine.extract_metadata import ExtractDerivedIdSpec, ExtractOrderingKeySpec
+from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -56,11 +57,6 @@ from relspec.rules.definitions import (
     RuleDomain,
     RulePayload,
     RuleStage,
-)
-from relspec.rules.rel_ops import (
-    query_spec_from_rel_ops,
-    rel_ops_from_rows,
-    rel_ops_to_rows,
 )
 from relspec.rules.spec_codec import SpecCodec
 
@@ -286,13 +282,10 @@ POLICY_OVERRIDE_STRUCT = pa.struct(
     ]
 )
 
-REL_OP_STRUCT = pa.struct(
+QUERY_DERIVED_STRUCT = pa.struct(
     [
-        pa.field("kind", pa.string(), nullable=False),
-        pa.field("columns", list_view_type(pa.string()), nullable=True),
-        pa.field("name", pa.string(), nullable=True),
-        pa.field("expr_json", pa.string(), nullable=True),
-        pa.field("payload_json", pa.string(), nullable=True),
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("expr_json", pa.string(), nullable=False),
     ]
 )
 
@@ -315,6 +308,10 @@ RELATIONSHIP_STRUCT = pa.struct(
 NORMALIZE_STRUCT = pa.struct(
     [
         pa.field("plan_builder", pa.string(), nullable=True),
+        pa.field("query_base", list_view_type(pa.string()), nullable=True),
+        pa.field("query_derived", list_view_type(QUERY_DERIVED_STRUCT), nullable=True),
+        pa.field("query_predicate_expr", pa.string(), nullable=True),
+        pa.field("query_pushdown_predicate_expr", pa.string(), nullable=True),
     ]
 )
 
@@ -353,7 +350,6 @@ RULE_DEF_SCHEMA = pa.schema(
         pa.field("relationship_payload", RELATIONSHIP_STRUCT, nullable=True),
         pa.field("normalize_payload", NORMALIZE_STRUCT, nullable=True),
         pa.field("extract_payload", EXTRACT_STRUCT, nullable=True),
-        pa.field("rel_ops", list_view_type(REL_OP_STRUCT), nullable=True),
         pa.field("post_kernels", list_view_type(KERNEL_SPEC_STRUCT), nullable=True),
     ],
     metadata={b"spec_kind": b"relspec_rule_definitions"},
@@ -392,7 +388,6 @@ def rule_definition_table(definitions: Sequence[RuleDefinition]) -> pa.Table:
             "relationship_payload": _relationship_payload_row(definition.payload),
             "normalize_payload": _normalize_payload_row(definition.payload),
             "extract_payload": _extract_payload_row(definition.payload),
-            "rel_ops": rel_ops_to_rows(definition.rel_ops),
             "post_kernels": _kernel_rows(definition.post_kernels),
         }
         for definition in definitions
@@ -415,7 +410,6 @@ def rule_definitions_from_table(table: pa.Table) -> tuple[RuleDefinition, ...]:
         execution_mode = row.get("execution_mode")
         priority = row.get("priority")
         payload = _payload_from_row(domain, row)
-        rel_ops = rel_ops_from_rows(row.get("rel_ops"))
         post_kernels = _kernels_from_row(row.get("post_kernels"))
         definitions.append(
             RuleDefinition(
@@ -429,7 +423,6 @@ def rule_definitions_from_table(table: pa.Table) -> tuple[RuleDefinition, ...]:
                 evidence=_evidence_from_row(row.get("evidence")),
                 evidence_output=_evidence_output_from_row(row.get("evidence_output")),
                 policy_overrides=_policy_overrides_from_row(row.get("policy_overrides")),
-                rel_ops=rel_ops,
                 post_kernels=post_kernels,
                 stages=_stages_from_payload(domain, payload),
                 payload=payload,
@@ -867,10 +860,33 @@ def _normalize_payload_row(payload: object | None) -> dict[str, object] | None:
     -------
     dict[str, object] | None
         Serialized normalize payload.
+
+    Raises
+    ------
+    ValueError
+        Raised when normalize query macros are present.
     """
     if not isinstance(payload, NormalizePayload):
         return None
-    return {"plan_builder": payload.plan_builder}
+    query = payload.query
+    query_payload: dict[str, object] = {}
+    if query is not None:
+        if query.macros:
+            msg = "Normalize query macros are not supported in rule spec tables."
+            raise ValueError(msg)
+        query_payload = {
+            "query_base": list(query.projection.base) or None,
+            "query_derived": _query_derived_rows(query.projection.derived),
+            "query_predicate_expr": _expr_ir_json(query.predicate, label="query_predicate"),
+            "query_pushdown_predicate_expr": _expr_ir_json(
+                query.pushdown_predicate,
+                label="query_pushdown_predicate",
+            ),
+        }
+    return {
+        "plan_builder": payload.plan_builder,
+        **query_payload,
+    }
 
 
 def _extract_payload_row(payload: object | None) -> dict[str, object] | None:
@@ -971,12 +987,7 @@ def _payload_from_row(domain: RuleDomain, row: Mapping[str, Any]) -> RulePayload
     if domain == "cpg":
         return _relationship_payload_from_row(row.get("relationship_payload"))
     if domain == "normalize":
-        normalize_payload = _normalize_payload_from_row(row.get("normalize_payload"))
-        ops = row.get("rel_ops")
-        if normalize_payload is None and ops:
-            rel_ops = rel_ops_from_rows(ops)
-            normalize_payload = NormalizePayload(query=query_spec_from_rel_ops(rel_ops))
-        return normalize_payload
+        return _normalize_payload_from_row(row.get("normalize_payload"))
     if domain == "extract":
         return _extract_payload_from_row(row.get("extract_payload"))
     return None
@@ -1028,7 +1039,72 @@ def _normalize_payload_from_row(payload: Mapping[str, Any] | None) -> NormalizeP
     """
     if payload is None:
         return None
-    return NormalizePayload(plan_builder=payload.get("plan_builder"))
+    query = _query_spec_from_payload(payload)
+    return NormalizePayload(plan_builder=payload.get("plan_builder"), query=query)
+
+
+def _query_spec_from_payload(payload: Mapping[str, Any]) -> IbisQuerySpec | None:
+    base = parse_string_tuple(payload.get("query_base"), label="query_base")
+    derived_rows = payload.get("query_derived")
+    predicate_expr = payload.get("query_predicate_expr")
+    pushdown_expr = payload.get("query_pushdown_predicate_expr")
+    if not base and not derived_rows and not predicate_expr and not pushdown_expr:
+        return None
+    derived = _query_derived_from_rows(derived_rows)
+    projection = IbisProjectionSpec(base=base, derived=derived)
+    predicate = _expr_ir_from_json(predicate_expr, label="query_predicate")
+    pushdown = _expr_ir_from_json(pushdown_expr, label="query_pushdown_predicate")
+    return IbisQuerySpec(
+        projection=projection,
+        predicate=predicate,
+        pushdown_predicate=pushdown,
+    )
+
+
+def _query_derived_rows(derived: Mapping[str, object]) -> list[dict[str, object]] | None:
+    if not derived:
+        return None
+    rows: list[dict[str, object]] = []
+    for name, expr in sorted(derived.items(), key=lambda item: item[0]):
+        if not isinstance(expr, ExprIR):
+            msg = f"Normalize query derived expression {name!r} is not ExprIR."
+            raise TypeError(msg)
+        rows.append({"name": name, "expr_json": expr.to_json()})
+    return rows
+
+
+def _query_derived_from_rows(
+    rows: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, ExprIR]:
+    if not rows:
+        return {}
+    derived: dict[str, ExprIR] = {}
+    for row in rows:
+        name = row.get("name")
+        expr_json = row.get("expr_json")
+        if name is None or expr_json is None:
+            msg = "Normalize query derived entries require name and expr_json."
+            raise ValueError(msg)
+        derived[str(name)] = ExprIR.from_json(str(expr_json))
+    return derived
+
+
+def _expr_ir_json(expr: object | None, *, label: str) -> str | None:
+    if expr is None:
+        return None
+    if not isinstance(expr, ExprIR):
+        msg = f"{label} must be ExprIR for rule spec serialization."
+        raise TypeError(msg)
+    return expr.to_json()
+
+
+def _expr_ir_from_json(value: object | None, *, label: str) -> ExprIR | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f"{label} must be a JSON string."
+        raise TypeError(msg)
+    return ExprIR.from_json(value)
 
 
 def _extract_payload_from_row(payload: Mapping[str, Any] | None) -> ExtractPayload | None:
@@ -1714,8 +1790,8 @@ __all__ = [
     "NORMALIZE_STRUCT",
     "PROJECT_EXPR_STRUCT",
     "PROJECT_STRUCT",
+    "QUERY_DERIVED_STRUCT",
     "RELATIONSHIP_STRUCT",
-    "REL_OP_STRUCT",
     "RULES_SCHEMA",
     "RULE_DEF_SCHEMA",
     "WINNER_SELECT_STRUCT",

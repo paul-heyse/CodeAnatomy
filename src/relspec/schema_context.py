@@ -8,8 +8,17 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 from datafusion import SessionContext
 
-from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.schema_introspection import (
+    SchemaIntrospector,
+    schema_map_for_sqlglot,
+)
 from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for
+from datafusion_engine.table_provider_metadata import (
+    TableProviderMetadata,
+    all_table_provider_metadata,
+    table_provider_metadata,
+)
+from sqlglot_tools.optimizer import SchemaMapping
 
 if TYPE_CHECKING:
     from engine.session import EngineSession
@@ -143,6 +152,46 @@ class RelspecSchemaContext:
             Column metadata rows.
         """
         return self.introspector.table_columns(table_name)
+
+    def schema_map(self) -> SchemaMapping:
+        """Return a SQLGlot-compatible schema mapping.
+
+        Returns
+        -------
+        SchemaMapping
+            Nested schema mapping suitable for SQLGlot qualification.
+        """
+        return schema_map_for_sqlglot(self.introspector)
+
+    def schema_map_fingerprint(self) -> str:
+        """Return a stable fingerprint for the schema mapping.
+
+        Returns
+        -------
+        str
+            Hash fingerprint for the schema map.
+        """
+        return self.introspector.schema_map_fingerprint()
+
+    def table_provider_metadata(self, table_name: str) -> TableProviderMetadata | None:
+        """Return TableProvider metadata for a dataset when available.
+
+        Returns
+        -------
+        TableProviderMetadata | None
+            TableProvider metadata for the dataset, if available.
+        """
+        return table_provider_metadata(id(self.ctx), table_name=table_name)
+
+    def all_table_provider_metadata(self) -> dict[str, TableProviderMetadata]:
+        """Return all TableProvider metadata for the session context.
+
+        Returns
+        -------
+        dict[str, TableProviderMetadata]
+            Mapping of table names to provider metadata.
+        """
+        return all_table_provider_metadata(id(self.ctx))
 
 
 def _coerce_schema(schema: object | None) -> pa.Schema | None:

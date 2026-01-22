@@ -19,11 +19,11 @@ from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table
-from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.materialize_pipeline import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
-from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.catalog import IbisPlanCatalog, IbisPlanSource
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.expr_compiler import (
     IbisExprRegistry,
     default_expr_registry,
@@ -33,11 +33,8 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.schema_utils import validate_expr_schema
 from ibis_engine.sources import (
-    DatasetSource,
     SourceToIbisOptions,
-    namespace_recorder_from_ctx,
     register_ibis_view,
-    source_to_ibis,
     table_to_ibis,
 )
 from relspec.compiler import (
@@ -76,6 +73,7 @@ if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
 
 
+
 @dataclass(frozen=True)
 class RelationPlanBundle:
     """Compiled relation plans plus scan telemetry."""
@@ -98,9 +96,6 @@ class RelationPlanCompileOptions:
     policy_registry: PolicyRegistry = field(default_factory=PolicyRegistry)
 
 
-IbisPlanSource = IbisPlan | Table | TableLike | DatasetSource | ViewReference
-
-
 def _plan_executor_factory(
     *,
     execution_policy: AdapterExecutionPolicy | None,
@@ -113,12 +108,12 @@ def _plan_executor_factory(
         execution_label: ExecutionLabel | None = None,
     ) -> TableLike:
         policy = ExecutionSurfacePolicy(determinism_tier=exec_ctx.determinism)
-        execution = IbisExecutionContext(
-            ctx=exec_ctx,
+        execution = ibis_execution_from_ctx(
+            exec_ctx,
+            backend=ibis_backend,
+            params=exec_params,
             execution_policy=execution_policy,
             execution_label=execution_label,
-            ibis_backend=ibis_backend,
-            params=exec_params,
         )
         product = build_plan_product(
             plan,
@@ -131,60 +126,6 @@ def _plan_executor_factory(
     return _plan_executor
 
 
-@dataclass
-class IbisPlanCatalog:
-    """Catalog wrapper for resolving Ibis plan inputs."""
-
-    backend: BaseBackend
-    tables: dict[str, IbisPlanSource] = field(default_factory=dict)
-
-    def resolve(
-        self,
-        name: str,
-        *,
-        ctx: ExecutionContext,
-        label: str | None = None,
-    ) -> IbisPlan | None:
-        """Resolve a catalog entry into an Ibis plan.
-
-        Returns
-        -------
-        IbisPlan | None
-            Ibis plan for the named entry when available.
-
-        Raises
-        ------
-        TypeError
-            Raised when a DatasetSource requires materialization.
-        """
-        source = self.tables.get(name)
-        if source is None:
-            return None
-        if isinstance(source, IbisPlan):
-            return source
-        if isinstance(source, ViewReference):
-            expr = _view_reference_expr(self.backend, source)
-            plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
-            self.tables[name] = plan
-            return plan
-        if isinstance(source, Table):
-            return IbisPlan(expr=source, ordering=Ordering.unordered())
-        if isinstance(source, DatasetSource):
-            msg = f"DatasetSource {name!r} must be materialized before Ibis compilation."
-            raise TypeError(msg)
-        plan = source_to_ibis(
-            cast("TableLike", source),
-            options=SourceToIbisOptions(
-                backend=self.backend,
-                name=label or name,
-                ordering=Ordering.unordered(),
-                namespace_recorder=namespace_recorder_from_ctx(ctx),
-            ),
-        )
-        self.tables[name] = plan
-        return plan
-
-
 class CatalogIbisResolver:
     """Resolve dataset refs into Ibis plans from an Ibis catalog."""
 
@@ -193,7 +134,7 @@ class CatalogIbisResolver:
         self.backend: BaseBackend | None = catalog.backend
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
-        plan = self._catalog.resolve(ref.name, ctx=ctx, label=ref.label or ref.name)
+        plan = self._catalog.resolve_plan(ref.name, ctx=ctx, label=ref.label or ref.name)
         if plan is None:
             msg = f"Unknown dataset reference: {ref.name!r}."
             raise KeyError(msg)
@@ -207,10 +148,6 @@ class CatalogIbisResolver:
         _ = ref
         _ = ctx
         return None
-
-
-def _view_reference_expr(backend: BaseBackend, fragment: ViewReference) -> Table:
-    return backend.table(fragment.name)
 
 
 @dataclass(frozen=True)

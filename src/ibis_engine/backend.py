@@ -14,6 +14,7 @@ from ibis_engine.config import IbisBackendConfig
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
+
 class _IbisDataFusionModule(Protocol):
     def connect(self, ctx: object) -> ibis.backends.BaseBackend:
         """Return an Ibis DataFusion backend."""

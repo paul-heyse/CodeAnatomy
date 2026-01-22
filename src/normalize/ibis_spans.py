@@ -46,24 +46,16 @@ def _span_struct_expr(inputs: SpanStructInputs) -> Value:
     null_i32 = ibis_null_literal(pa.int32())
     null_bool = ibis_null_literal(pa.bool_())
     null_str = ibis_null_literal(pa.string())
-    start_line_expr = (
-        inputs.start_line0 if inputs.start_line0 is not None else null_i32
-    ).cast("int32")
-    end_line_expr = (inputs.end_line0 if inputs.end_line0 is not None else null_i32).cast(
+    start_line_expr = (inputs.start_line0 if inputs.start_line0 is not None else null_i32).cast(
         "int32"
     )
-    start_col_expr = (inputs.start_col if inputs.start_col is not None else null_i32).cast(
-        "int32"
-    )
+    end_line_expr = (inputs.end_line0 if inputs.end_line0 is not None else null_i32).cast("int32")
+    start_col_expr = (inputs.start_col if inputs.start_col is not None else null_i32).cast("int32")
     end_col_expr = (inputs.end_col if inputs.end_col is not None else null_i32).cast("int32")
-    col_unit_expr = (inputs.col_unit if inputs.col_unit is not None else null_str).cast(
-        "string"
-    )
+    col_unit_expr = (inputs.col_unit if inputs.col_unit is not None else null_str).cast("string")
     end_exclusive_expr = (
         inputs.end_exclusive if inputs.end_exclusive is not None else null_bool
-    ).cast(
-        "boolean"
-    )
+    ).cast("boolean")
     bstart_i64 = cast("NumericValue", inputs.bstart.cast("int64"))
     bend_i64 = cast("NumericValue", inputs.bend.cast("int64"))
     byte_start = ibis.ifelse(span_ok, bstart_i64.cast("int32"), null_i32)

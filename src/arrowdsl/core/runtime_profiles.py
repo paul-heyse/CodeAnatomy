@@ -376,7 +376,8 @@ class RuntimeProfile:
         RuntimeProfile
             Updated runtime profile.
         """
-        return replace(self, datafusion=profile)
+        updated = replace(self, datafusion=profile)
+        return _align_datafusion_profile(updated)
 
 
 def runtime_profile_factory(profile: str) -> RuntimeProfile:
@@ -406,8 +407,28 @@ def runtime_profile_factory(profile: str) -> RuntimeProfile:
         determinism=determinism,
     )
     if determinism in {DeterminismTier.CANONICAL, DeterminismTier.STABLE_SET}:
-        return runtime.with_determinism(determinism)
-    return runtime
+        runtime = runtime.with_determinism(determinism)
+    return _align_datafusion_profile(runtime)
+
+
+def _align_datafusion_profile(runtime: RuntimeProfile) -> RuntimeProfile:
+    profile = runtime.datafusion
+    if profile is None:
+        return runtime
+    batch_size = profile.batch_size
+    if batch_size is None:
+        batch_size = runtime.scan.batch_size
+    target_partitions = profile.target_partitions
+    if target_partitions is None and runtime.cpu_threads is not None:
+        target_partitions = runtime.cpu_threads
+    if batch_size == profile.batch_size and target_partitions == profile.target_partitions:
+        return runtime
+    updated_profile = replace(
+        profile,
+        batch_size=batch_size,
+        target_partitions=target_partitions,
+    )
+    return replace(runtime, datafusion=updated_profile)
 
 
 __all__ = [

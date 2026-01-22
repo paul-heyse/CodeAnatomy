@@ -13,6 +13,11 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 from hamilton.function_modifiers import tag
+from normalize.output_writes import (
+    NormalizeDeltaWriteRequest,
+    NormalizeDeltaWriteResult,
+    write_normalize_output_delta,
+)
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
@@ -23,7 +28,6 @@ from arrowdsl.core.metrics import (
     scan_telemetry_table,
 )
 from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from arrowdsl.core.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.io.ipc import ipc_hash
@@ -65,9 +69,8 @@ from hamilton_pipeline.pipeline_types import (
     RelspecSnapshots,
     RepoScanConfig,
 )
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.execution_factory import ibis_execution_from_profile
 from ibis_engine.io_bridge import (
     IbisCopyWriteOptions,
     IbisDatasetWriteOptions,
@@ -90,11 +93,6 @@ from incremental.fingerprint_changes import (
 from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig
-from normalize.output_writes import (
-    NormalizeDeltaWriteRequest,
-    NormalizeDeltaWriteResult,
-    write_normalize_output_delta,
-)
 from normalize.registry_runtime import (
     dataset_name_from_alias as normalize_dataset_name_from_alias,
 )
@@ -226,18 +224,7 @@ def _ensure_dir(path: Path) -> None:
 
 
 def _ibis_execution_from_profile(profile: DataFusionRuntimeProfile) -> IbisExecutionContext:
-    runtime_profile = runtime_profile_factory("default").with_datafusion(profile)
-    ctx = ExecutionContext(runtime=runtime_profile)
-    backend = build_backend(
-        IbisBackendConfig(
-            datafusion_profile=profile,
-            fuse_selects=runtime_profile.ibis_fuse_selects,
-            default_limit=runtime_profile.ibis_default_limit,
-            default_dialect=runtime_profile.ibis_default_dialect,
-            interactive=runtime_profile.ibis_interactive,
-        )
-    )
-    return IbisExecutionContext(ctx=ctx, ibis_backend=backend)
+    return ibis_execution_from_profile(profile)
 
 
 def _require_explicit_ordering(schema: pa.Schema, *, label: str) -> None:

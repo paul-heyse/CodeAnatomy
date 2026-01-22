@@ -25,7 +25,9 @@ from datafusion_engine.nested_tables import ViewReference, materialize_view_refe
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_options import sql_options_for_profile
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.catalog import IbisPlanCatalog
+from ibis_engine.execution import materialize_ibis_plan
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.sources import (
@@ -37,7 +39,6 @@ from ibis_engine.sources import (
     table_to_ibis,
 )
 from normalize.ibis_bridge import resolve_plan_builder_ibis
-from normalize.ibis_plan_builders import IbisPlanCatalog
 from normalize.registry_runtime import (
     NORMALIZE_ALIAS_META,
     NORMALIZE_STAGE_META,
@@ -77,6 +78,7 @@ PostFn = Callable[[TableLike, ExecutionContext], TableLike]
 if TYPE_CHECKING:
     from sqlglot.expressions import Expression
 
+    from ibis_engine.execution import IbisExecutionContext
     from relspec.rules.rel_ops import RelOpT
     from sqlglot_tools.bridge import IbisCompilerBackend
     from sqlglot_tools.lineage import LineagePayload
@@ -195,10 +197,10 @@ def _normalize_ibis_context(
         selectors=selectors,
         label="Normalize rule",
     )
-    execution = IbisExecutionContext(
-        ctx=ctx,
+    execution = ibis_execution_from_ctx(
+        ctx,
+        backend=options.backend,
         execution_policy=options.execution_policy,
-        ibis_backend=options.backend,
     )
     return _NormalizeIbisCompilationContext(
         ordered=tuple(ordered),
@@ -306,9 +308,7 @@ def _record_sqlglot_plan(
         "columns": list(diagnostics.columns),
         "identifiers": list(diagnostics.identifiers),
         "ast_repr": diagnostics.ast_repr,
-        "canonical_fingerprint": (
-            lineage.canonical_fingerprint if lineage is not None else None
-        ),
+        "canonical_fingerprint": (lineage.canonical_fingerprint if lineage is not None else None),
         "lineage_tables": list(lineage.tables) if lineage is not None else None,
         "lineage_columns": list(lineage.columns) if lineage is not None else None,
         "lineage_scopes": list(lineage.scopes) if lineage is not None else None,
@@ -477,12 +477,12 @@ def run_normalize(
         runtime=runtime,
         execution_label=options.execution_label,
     )
-    execution = IbisExecutionContext(
-        ctx=ctx,
+    execution = ibis_execution_from_ctx(
+        ctx,
+        backend=runtime.ibis_backend,
+        params=options.params,
         execution_policy=options.execution_policy,
         execution_label=options.execution_label,
-        ibis_backend=runtime.ibis_backend,
-        params=options.params,
     )
     table = materialize_ibis_plan(plan, execution=execution)
     for fn in post:

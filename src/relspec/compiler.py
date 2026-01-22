@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+    from datafusion_engine.runtime import (
+        AdapterExecutionPolicy,
+        DataFusionRuntimeProfile,
+        ExecutionLabel,
+    )
 
 import ibis
 import pyarrow as pa
@@ -17,6 +23,8 @@ from ibis.expr.types import BooleanValue
 from ibis.expr.types import Column as IbisColumn
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
+from sqlglot.diff import diff as sqlglot_diff
+from sqlglot.serde import dump as sqlglot_dump
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
@@ -33,7 +41,7 @@ from datafusion_engine.kernel_registry import resolve_kernel
 from engine.materialize_pipeline import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.compiler_checkpoint import try_plan_hash
-from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.expr_compiler import IbisExprRegistry, default_expr_registry, expr_ir_to_ibis
 from ibis_engine.io_bridge import IbisMaterializeOptions, materialize_table
 from ibis_engine.plan import IbisPlan
@@ -46,11 +54,30 @@ from ibis_engine.sources import (
     register_ibis_table,
     table_to_ibis,
 )
+from ibis_engine.substrait_bridge import try_ibis_to_substrait_bytes
+from obs.diagnostics import DiagnosticsCollector
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
 )
 from relspec.engine import IbisRelPlanCompiler, PlanResolver, RelPlanCompiler, output_plan_hash
+from relspec.errors import (
+    RelspecCompilationError,
+    RelspecExecutionError,
+    RelspecValidationError,
+)
+from relspec.execution_bundle import (
+    ExecutionBundle,
+    execution_bundle_signature,
+)
+from relspec.execution_lanes import (
+    DataFusionLaneInputs,
+    DataFusionLaneOptions,
+    ExecutionLaneRecord,
+    execute_plan_datafusion,
+    record_execution_lane,
+    safe_backend,
+)
 from relspec.model import (
     AddLiteralSpec,
     AmbiguityPolicy,
@@ -73,7 +100,6 @@ from relspec.plan import (
     RelProject,
     RelSource,
     RelUnion,
-    rel_plan_signature,
 )
 from relspec.policies import (
     PolicyRegistry,
@@ -84,9 +110,27 @@ from relspec.policies import (
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
 from relspec.rules.exec_events import RuleExecutionObserver, rule_execution_event_from_table
+from relspec.schema_context import RelspecSchemaContext
 from schema_spec.system import dataset_spec_from_contract
-from sqlglot_tools.bridge import IbisCompilerBackend
-from sqlglot_tools.lineage import required_columns_by_table
+from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
+from sqlglot_tools.compat import Expression
+from sqlglot_tools.lineage import (
+    LineageExtractionOptions,
+    extract_lineage_payload,
+    required_columns_by_table,
+)
+from sqlglot_tools.optimizer import (
+    NormalizeExprOptions,
+    ast_to_artifact,
+    canonical_ast_fingerprint,
+    normalize_expr,
+    plan_fingerprint,
+    resolve_sqlglot_policy,
+    serialize_ast_artifact,
+    sqlglot_policy_snapshot_for,
+)
+
+logger = logging.getLogger(__name__)
 
 PlanTransform = Callable[[IbisTable, ExecutionContext], IbisTable]
 PlanExecutor = Callable[
@@ -113,6 +157,33 @@ def _scan_ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
     return Ordering.unordered()
 
 
+def _sqlglot_diff_payload(
+    source: Expression,
+    target: Expression,
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for op in sqlglot_diff(source, target):
+        entry: dict[str, object] = {"op": op.__class__.__name__.lower()}
+        for key in ("expression", "source", "target"):
+            expr = getattr(op, key, None)
+            dumped = _dump_sqlglot_expr(expr)
+            if dumped is not None:
+                entry[key] = dumped
+        entries.append(entry)
+    return entries
+
+
+def _dump_sqlglot_expr(expr: object) -> object | None:
+    if expr is None:
+        return None
+    if not isinstance(expr, Expression):
+        return repr(expr)
+    try:
+        return sqlglot_dump(expr)
+    except (TypeError, ValueError):
+        return repr(expr)
+
+
 def runtime_telemetry_for_ctx(ctx: ExecutionContext) -> Mapping[str, object]:
     """Return runtime telemetry payload for the execution context.
 
@@ -136,7 +207,7 @@ def _require_explicit_ordering(schema: SchemaLike, *, label: str) -> tuple[tuple
     ordering = ordering_from_schema(schema)
     if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
         msg = f"{label} requires explicit ordering metadata."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return ordering.keys
 
 
@@ -176,9 +247,120 @@ def _compiled_rule_signature(compiled: CompiledRule) -> str:
     str
         Deterministic signature hash for the rule plan.
     """
-    if compiled.rel_plan is not None:
-        return rel_plan_signature(compiled.rel_plan)
+    if compiled.plan_signature is not None:
+        return compiled.plan_signature
     return _rule_signature_for_output(compiled.rule)
+
+
+def _schema_context_for_ctx(ctx: ExecutionContext) -> RelspecSchemaContext:
+    profile = ctx.runtime.datafusion
+    if profile is not None:
+        return RelspecSchemaContext.from_session(profile.session_context())
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+    return RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
+
+
+def _execution_bundle_for_plan(
+    plan: IbisPlan,
+    *,
+    backend: IbisCompilerBackend,
+    schema_context: RelspecSchemaContext,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> ExecutionBundle | None:
+    policy = resolve_sqlglot_policy()
+    schema_map = schema_context.schema_map()
+    schema_map_hash = schema_context.schema_map_fingerprint()
+    try:
+        expr = ibis_to_sqlglot(plan.expr, backend=backend, params=None)
+        normalized = normalize_expr(
+            expr,
+            options=NormalizeExprOptions(
+                schema=schema_map,
+                policy=policy,
+            ),
+        )
+    except (TypeError, ValueError):
+        return None
+    policy_snapshot = sqlglot_policy_snapshot_for(policy)
+    plan_fingerprint_value = plan_fingerprint(normalized, dialect=policy_snapshot.write_dialect)
+    ast_fingerprint = canonical_ast_fingerprint(normalized)
+    lineage = None
+    try:
+        lineage = extract_lineage_payload(
+            normalized,
+            options=LineageExtractionOptions(
+                schema=cast("Mapping[str, Mapping[str, str]]", schema_map),
+                dialect=policy.read_dialect,
+                include_qualified_sql=False,
+            ),
+        )
+    except (TypeError, ValueError):
+        lineage = None
+    diagnostics_sink = None
+    if runtime_profile is not None:
+        sink = runtime_profile.diagnostics_sink
+        if isinstance(sink, DiagnosticsCollector):
+            diagnostics_sink = sink
+    substrait_bytes = try_ibis_to_substrait_bytes(plan.expr, diagnostics_sink=diagnostics_sink)
+    artifacts: dict[str, object] = {
+        "sqlglot_ast": serialize_ast_artifact(ast_to_artifact(normalized, policy=policy)),
+        "sqlglot_policy_hash": policy_snapshot.policy_hash,
+        "sqlglot_policy_rules_hash": policy_snapshot.rules_hash,
+        "plan_signature": plan_fingerprint_value,
+    }
+    diff_payload = None
+    try:
+        diff_payload = _sqlglot_diff_payload(expr, normalized)
+    except (TypeError, ValueError):
+        diff_payload = None
+    if diff_payload:
+        artifacts["sqlglot_ast_diff"] = json.dumps(
+            diff_payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    if schema_map_hash is not None:
+        artifacts["schema_map_hash"] = schema_map_hash
+    return ExecutionBundle(
+        sqlglot_expr=normalized,
+        sqlglot_policy=policy_snapshot,
+        schema_map_hash=schema_map_hash,
+        plan_fingerprint=plan_fingerprint_value,
+        ast_fingerprint=ast_fingerprint,
+        lineage=lineage,
+        substrait_bytes=substrait_bytes,
+        df_logical_plan=None,
+        df_physical_plan=None,
+        artifacts=artifacts,
+    )
+
+
+def _compiled_rule_execution_bundle(
+    compiled: CompiledRule,
+    *,
+    ctx: ExecutionContext,
+    resolver: PlanResolver[IbisPlan],
+    compiler: RelPlanCompiler[IbisPlan],
+) -> ExecutionBundle | None:
+    if compiled.rel_plan is None:
+        return None
+    backend = resolver.backend
+    if backend is None:
+        return None
+    try:
+        ibis_backend = cast("IbisCompilerBackend", backend)
+        plan = compiler.compile(compiled.rel_plan, ctx=ctx, resolver=resolver)
+        schema_context = _schema_context_for_ctx(ctx)
+        return _execution_bundle_for_plan(
+            plan,
+            backend=ibis_backend,
+            schema_context=schema_context,
+            runtime_profile=ctx.runtime.datafusion,
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def _input_dataset_names(rules: Sequence[RelationshipRule]) -> tuple[str, ...]:
@@ -220,12 +402,40 @@ def _adapter_plan_executor(
         exec_params: Mapping[IbisValue, object] | None,
         execution_label: ExecutionLabel | None = None,
     ) -> TableLike:
-        execution = IbisExecutionContext(
-            ctx=exec_ctx,
+        runtime_profile = exec_ctx.runtime.datafusion
+        sqlglot_backend = safe_backend(ibis_backend)
+        if runtime_profile is not None and sqlglot_backend is not None:
+            try:
+                return execute_plan_datafusion(
+                    plan,
+                    inputs=DataFusionLaneInputs(
+                        ctx=exec_ctx,
+                        backend=sqlglot_backend,
+                        params=exec_params,
+                        execution_policy=execution_policy,
+                        execution_label=execution_label,
+                        runtime_profile=runtime_profile,
+                        options=DataFusionLaneOptions(),
+                    ),
+                )
+            except (TypeError, ValueError, RuntimeError) as exc:
+                record_execution_lane(
+                    diagnostics_sink=runtime_profile.diagnostics_sink,
+                    record=ExecutionLaneRecord(
+                        engine="ibis",
+                        lane="fallback",
+                        fallback_reason=str(exc),
+                        execution_label=execution_label,
+                        options=DataFusionLaneOptions(),
+                    ),
+                )
+                logger.exception("DataFusion lane failed; falling back to Ibis execution.")
+        execution = ibis_execution_from_ctx(
+            exec_ctx,
+            backend=ibis_backend,
+            params=exec_params,
             execution_policy=execution_policy,
             execution_label=execution_label,
-            ibis_backend=ibis_backend,
-            params=exec_params,
         )
         product = build_plan_product(
             plan,
@@ -646,7 +856,7 @@ def _apply_dedupe_ibis(table: IbisTable, spec: DedupeKernelSpec) -> IbisTable:
         "KEEP_ARBITRARY",
     }:
         msg = f"Unsupported dedupe strategy for Ibis: {dedupe.strategy!r}."
-        raise ValueError(msg)
+        raise RelspecCompilationError(msg)
     resolved = _dedupe_spec_with_defaults(dedupe, schema=table.schema().to_pyarrow())
     order_by = _dedupe_order_by(table, spec=resolved)
     window = ibis.window(
@@ -739,7 +949,7 @@ def _kernel_transform_from_spec(
     if builder is not None:
         return builder(spec)
     msg = f"Unknown KernelSpec type: {type(spec).__name__}."
-    raise ValueError(msg)
+    raise RelspecCompilationError(msg)
 
 
 def _compile_post_kernels(
@@ -944,7 +1154,7 @@ def validate_policy_requirements(rule: RelationshipRule, schema: SchemaLike) -> 
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when required columns are missing.
     """
     names = set(schema.names)
@@ -953,10 +1163,10 @@ def validate_policy_requirements(rule: RelationshipRule, schema: SchemaLike) -> 
         missing = required - names
         if missing:
             msg = f"Rule {rule.name!r} missing confidence columns: {sorted(missing)}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
     if rule.ambiguity_policy is not None and "ambiguity_group_id" not in names:
         msg = f"Rule {rule.name!r} requires ambiguity_group_id column."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
 
 
 def _source_node(ref: DatasetRef) -> RelSource:
@@ -1005,7 +1215,7 @@ def rel_plan_for_rule(rule: RelationshipRule) -> RelPlan | None:
 
     Raises
     ------
-    ValueError
+    RelspecCompilationError
         Raised when a rule is missing required configuration.
     """
     if rule.kind == RuleKind.FILTER_PROJECT:
@@ -1014,7 +1224,7 @@ def rel_plan_for_rule(rule: RelationshipRule) -> RelPlan | None:
     if rule.kind == RuleKind.HASH_JOIN:
         if rule.hash_join is None:
             msg = "HASH_JOIN rules require hash_join config."
-            raise ValueError(msg)
+            raise RelspecCompilationError(msg)
         left, right = rule.inputs
         join_node = RelJoin(
             left=_source_node(left),
@@ -1048,6 +1258,8 @@ class CompiledRule:
     rule: RelationshipRule
     rel_plan: RelPlan | None
     execute_fn: Callable[[ExecutionContext, PlanResolver[IbisPlan], PlanExecutor], TableLike] | None
+    plan_signature: str | None = None
+    execution_bundle: ExecutionBundle | None = None
     post_kernels: tuple[PlanTransform, ...] = ()
     emit_rule_meta: bool = True
     required_columns: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
@@ -1093,9 +1305,9 @@ class CompiledRule:
 
         Raises
         ------
-        RuntimeError
+        RelspecCompilationError
             Raised when no execution path is available.
-        ValueError
+        RelspecExecutionError
             Raised when no Ibis backend is configured.
         """
         from datafusion_engine.runtime import ExecutionLabel
@@ -1108,7 +1320,7 @@ class CompiledRule:
         resolved_backend = options.ibis_backend or resolver.backend
         if resolved_backend is None:
             msg = "Ibis backend is required for compiled output execution."
-            raise ValueError(msg)
+            raise RelspecExecutionError(msg)
         if options.plan_executor is None:
             resolved_executor = _adapter_plan_executor(
                 execution_policy=options.execution_policy,
@@ -1151,7 +1363,7 @@ class CompiledRule:
             table = resolved_executor(plan, ctx, options.params, label)
         else:
             msg = "CompiledRule has neither rel_plan nor execute_fn."
-            raise RuntimeError(msg)
+            raise RelspecCompilationError(msg)
         return _apply_rule_metadata(table, rule=self.rule)
 
 
@@ -1206,7 +1418,7 @@ class CompiledOutput:
 
         Raises
         ------
-        ValueError
+        RelspecCompilationError
             Raised when the output has no contributors.
         """
         ctx_exec = ctx
@@ -1214,7 +1426,7 @@ class CompiledOutput:
             ctx_exec = ctx.with_provenance(provenance=True)
         if not self.contributors:
             msg = f"CompiledOutput {self.output_dataset!r} has no contributors."
-            raise ValueError(msg)
+            raise RelspecCompilationError(msg)
         plan_compiler = options.compiler or IbisRelPlanCompiler()
         expected_schema = None
         if self.contract_name is not None:
@@ -1385,12 +1597,12 @@ class RelationshipRuleCompiler:
 
         Raises
         ------
-        ValueError
+        RelspecCompilationError
             Raised when required hash-join config is missing.
         """
         if rule.hash_join is None:
             msg = "HASH_JOIN rules require hash_join config."
-            raise ValueError(msg)
+            raise RelspecCompilationError(msg)
         left_ref, right_ref = rule.inputs
         join_cfg = rule.hash_join
         left = _source_node(left_ref)
@@ -1490,13 +1702,13 @@ class RelationshipRuleCompiler:
 
         Raises
         ------
-        ValueError
+        RelspecCompilationError
             Raised when required interval-align config is missing.
         """
         cfg = rule.interval_align
         if cfg is None:
             msg = "INTERVAL_ALIGN rules require interval_align config."
-            raise ValueError(msg)
+            raise RelspecCompilationError(msg)
         interval_cfg = IntervalAlignOptions(
             mode=cfg.mode,
             how=cfg.how,
@@ -1570,13 +1782,13 @@ class RelationshipRuleCompiler:
 
         Raises
         ------
-        ValueError
+        RelspecCompilationError
             Raised when required winner-select config is missing.
         """
         cfg = rule.winner_select
         if cfg is None:
             msg = "WINNER_SELECT rules require winner_select config."
-            raise ValueError(msg)
+            raise RelspecCompilationError(msg)
         winner_cfg = cfg
 
         def _exec(
@@ -1634,7 +1846,7 @@ class RelationshipRuleCompiler:
 
         Raises
         ------
-        ValueError
+        RelspecCompilationError
             Raised when the rule kind is unknown.
         """
         _ = ctx
@@ -1649,10 +1861,19 @@ class RelationshipRuleCompiler:
         handler = handlers.get(rule.kind)
         if handler is None:
             msg = f"Unknown rule kind: {rule.kind}."
-            raise ValueError(msg)
+            raise RelspecCompilationError(msg)
         compiled = handler(rule, post_kernels=rule.post_kernels)
         self._enforce_execution_mode(rule, compiled)
-        return compiled
+        bundle = _compiled_rule_execution_bundle(
+            compiled,
+            ctx=ctx,
+            resolver=self.resolver,
+            compiler=self.plan_compiler,
+        )
+        plan_signature = None
+        if bundle is not None:
+            plan_signature = execution_bundle_signature(bundle)
+        return replace(compiled, plan_signature=plan_signature, execution_bundle=bundle)
 
     @staticmethod
     def _enforce_execution_mode(rule: RelationshipRule, compiled: CompiledRule) -> None:
@@ -1667,14 +1888,14 @@ class RelationshipRuleCompiler:
 
         Raises
         ------
-        ValueError
+        RelspecCompilationError
             Raised when plan-only execution constraints are violated.
         """
         if rule.execution_mode != "plan":
             return
         if compiled.rel_plan is None:
             msg = f"Rule {rule.name!r} requires plan execution."
-            raise ValueError(msg)
+            raise RelspecCompilationError(msg)
 
     def compile_registry(
         self,
@@ -1755,7 +1976,7 @@ class RelationshipRuleCompiler:
                 f"Output {out_name!r} has inconsistent contract_name across rules: "
                 f"{contract_names}."
             )
-            raise ValueError(msg)
+            raise RelspecCompilationError(msg)
 
         contributors = tuple(
             replace(

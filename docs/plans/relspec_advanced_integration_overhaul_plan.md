@@ -17,12 +17,21 @@
 - Prefer DataFusion TableProvider and DDL registration over bespoke registration paths.
 - Stream when possible; materialize only when necessary and gated.
 
+## Progress Update (2026-01-22)
+- ExecutionBundle signatures exist in `src/relspec/execution_bundle.py`, but compiler/plan signatures still use RelPlan-only hashing.
+- DataFusion execution lane helpers are present and used in `src/relspec/compiler.py` and `src/relspec/graph.py`.
+- Schema introspection and TableProvider metadata are already wired via `src/relspec/schema_context.py`.
+- Runtime tuning propagation improvements landed: DataFusion runtime profiles align batch size/partitions with scan/cpu_threads, and Ibis write batch sizes inherit execution defaults.
+- Error taxonomy rollout started (compiler/graph/validation/registry/validate), with remaining ValueError sites pending.
+
 ---
 
 ## Scope 1: Canonical SQLGlot IR + ExecutionBundle
 
 ### Objective
 Promote SQLGlot AST to the canonical rule IR and emit a unified ExecutionBundle that captures AST, lineage, Substrait bytes, DataFusion plans, schema maps, and plan fingerprints.
+
+Status: In progress (ExecutionBundle exists but is not yet used by compiler/plan signatures).
 
 ### Representative code
 ```python
@@ -78,10 +87,10 @@ bundle = ExecutionBundle(
 - src/sqlglot_tools/lineage.py
 
 ### Implementation checklist
-- Define ExecutionBundle and unify plan fingerprint inputs (policy hash + schema hash + AST hash).
-- Generate SQLGlot AST from relspec rules and normalize via SQLGlot policy.
-- Attach lineage metadata and AST diffs to bundle artifacts.
-- Make plan signatures use ExecutionBundle fingerprints instead of RelPlan-only hashing.
+- [x] Define ExecutionBundle and unify plan fingerprint inputs (policy hash + schema hash + AST hash).
+- [ ] Generate SQLGlot AST from relspec rules and normalize via SQLGlot policy.
+- [ ] Attach lineage metadata and AST diffs to bundle artifacts.
+- [ ] Make plan signatures use ExecutionBundle fingerprints instead of RelPlan-only hashing.
 
 ### Legacy decommission
 - src/relspec/plan.py (rel_plan_signature as canonical plan identity)
@@ -93,6 +102,8 @@ bundle = ExecutionBundle(
 
 ### Objective
 Make DataFusion the primary execution lane with Substrait-first compilation and policy-gated SQL fallback. Ibis remains as a compatibility lane but no longer defines the canonical path.
+
+Status: In progress (DataFusion lane exists but policy gating and diagnostics are incomplete).
 
 ### Representative code
 ```python
@@ -126,10 +137,10 @@ if not sql_policy.allow_statements:
 - src/ibis_engine/substrait_bridge.py
 
 ### Implementation checklist
-- Add a lane selection layer with explicit reason codes and diagnostics.
-- Route all SQL through SQLOptions from runtime profile.
-- Enforce policy gates for DDL/DML and parameter use.
-- Emit Substrait plan bytes when supported, with SQL fallback on failure.
+- [ ] Add a lane selection layer with explicit reason codes and diagnostics (lane exists, reason codes not yet surfaced).
+- [ ] Route all SQL through SQLOptions from runtime profile (partial wiring via DataFusion compile options).
+- [ ] Enforce policy gates for DDL/DML and parameter use.
+- [ ] Emit Substrait plan bytes when supported, with SQL fallback on failure (substrait-first exists, artifacts not captured).
 
 ### Legacy decommission
 - Any Ibis-only execution path in src/relspec/engine.py that does not respect SQLOptions.
@@ -140,6 +151,8 @@ if not sql_policy.allow_statements:
 
 ### Objective
 Replace static schema assumptions with information_schema-driven schema maps and TableProvider metadata to power qualification, validation, and adaptive compilation.
+
+Status: In progress (schema context and SQLGlot qualification are wired; artifact capture remains).
 
 ### Representative code
 ```python
@@ -167,10 +180,10 @@ qualified = qualify(
 - src/sqlglot_tools/optimizer.py
 
 ### Implementation checklist
-- Extend schema context to expose schema maps and provider metadata.
-- Feed schema maps into SQLGlot qualification and star expansion.
-- Validate column presence from information_schema before execution.
-- Record provider metadata in execution bundle artifacts.
+- [x] Extend schema context to expose schema maps and provider metadata.
+- [x] Feed schema maps into SQLGlot qualification and star expansion.
+- [x] Validate column presence from information_schema before execution.
+- [ ] Record provider metadata in execution bundle artifacts.
 
 ### Legacy decommission
 - Any static, hard-coded schema tables in relspec rules (favor info_schema snapshots).
@@ -181,6 +194,8 @@ qualified = qualify(
 
 ### Objective
 Build a runtime capability registry from information_schema and backend features, then adapt function resolution across UDF tiers and execution lanes.
+
+Status: Not started (capability snapshot type exists but is not wired).
 
 ### Representative code
 ```python
@@ -212,10 +227,10 @@ is_builtin = func_name in capabilities.function_names
 - src/engine/function_registry.py
 
 ### Implementation checklist
-- Build capability snapshots from information_schema and provider metadata.
-- Use the catalog to drive rule coverage and function selection.
-- Prefer builtin -> rust -> pyarrow -> python tiers at resolution time.
-- Surface missing capabilities in diagnostics output.
+- [ ] Build capability snapshots from information_schema and provider metadata.
+- [ ] Use the catalog to drive rule coverage and function selection (coverage uses FunctionCatalog, not wired to relspec capabilities).
+- [ ] Prefer builtin -> rust -> pyarrow -> python tiers at resolution time.
+- [ ] Surface missing capabilities in diagnostics output.
 
 ### Legacy decommission
 - Static builtin registries or function allowlists not tied to runtime catalog.
@@ -226,6 +241,8 @@ is_builtin = func_name in capabilities.function_names
 
 ### Objective
 Standardize diagnostics as structured artifacts for traceability, reproducibility, and debugging.
+
+Status: In progress (rule diagnostics exist; artifacts not standardized per execution).
 
 ### Representative code
 ```python
@@ -250,10 +267,10 @@ runtime_profile.diagnostics_sink.record_artifact("relspec_execution_v1", payload
 - src/datafusion_engine/runtime.py
 
 ### Implementation checklist
-- Emit AST, lineage, and SQL text artifacts for every rule execution.
-- Attach DataFusion EXPLAIN and plan snapshots when available.
-- Add Substrait bytes and fingerprint metadata to diagnostics.
-- Standardize artifact names and payload versions.
+- [ ] Emit AST, lineage, and SQL text artifacts for every rule execution (diagnostics exist but are not enforced per execution).
+- [ ] Attach DataFusion EXPLAIN and plan snapshots when available (compile options capture exists, not wired into relspec artifacts).
+- [ ] Add Substrait bytes and fingerprint metadata to diagnostics.
+- [ ] Standardize artifact names and payload versions.
 
 ### Legacy decommission
 - Ad-hoc debug payloads that are not recorded as structured artifacts.
@@ -264,6 +281,8 @@ runtime_profile.diagnostics_sink.record_artifact("relspec_execution_v1", payload
 
 ### Objective
 Introduce Delta CDF, time travel, and DataFusion INSERT semantics into relspec incremental flows and output writes.
+
+Status: Not started.
 
 ### Representative code
 ```python
@@ -292,10 +311,10 @@ ctx.sql_with_options(sql, sql_options).collect()
 - src/ibis_engine/sources.py
 
 ### Implementation checklist
-- Add Delta CDF and time-travel selectors to incremental specs.
-- Prefer INSERT INTO for Delta where provider supports inserts; fallback to write_deltalake.
-- Record commit properties (app_id/version) for idempotent writes.
-- Surface Delta protocol/features in diagnostics.
+- [ ] Add Delta CDF and time-travel selectors to incremental specs.
+- [ ] Prefer INSERT INTO for Delta where provider supports inserts; fallback to write_deltalake.
+- [ ] Record commit properties (app_id/version) for idempotent writes.
+- [ ] Surface Delta protocol/features in diagnostics.
 
 ### Legacy decommission
 - File-id-only incremental paths that ignore Delta CDF or snapshot semantics.
@@ -306,6 +325,8 @@ ctx.sql_with_options(sql, sql_options).collect()
 
 ### Objective
 Prefer streaming outputs and propagate runtime tuning (memory pools, partitions, spill) into relspec execution for predictable performance.
+
+Status: In progress (batch size propagation improved; streaming policy enforcement pending).
 
 ### Representative code
 ```python
@@ -328,10 +349,10 @@ SessionConfig()
 - src/relspec/engine.py
 
 ### Implementation checklist
-- Prefer to_pyarrow_batches and dataset writers for large outputs.
-- Propagate runtime tuning from ExecutionContext into DataFusion SessionConfig.
-- Capture runtime tuning settings in execution artifacts.
-- Avoid full materialization unless explicitly allowed by policy.
+- [ ] Prefer to_pyarrow_batches and dataset writers for large outputs (partial usage in io_bridge only).
+- [ ] Propagate runtime tuning from ExecutionContext into DataFusion SessionConfig (batch_size/target_partitions alignment done; spill/memory tuning pending).
+- [ ] Capture runtime tuning settings in execution artifacts.
+- [ ] Avoid full materialization unless explicitly allowed by policy.
 
 ### Legacy decommission
 - Unconditional to_arrow_table() materialization in execution paths.
@@ -342,6 +363,8 @@ SessionConfig()
 
 ### Objective
 Standardize error classes and enforce preflight checks for schema, constraints, and capability mismatches before execution.
+
+Status: In progress (core error types wired in key modules; remaining ValueError sites pending).
 
 ### Representative code
 ```python
@@ -366,10 +389,10 @@ if missing_columns:
 - src/relspec/schema_context.py
 
 ### Implementation checklist
-- Introduce explicit error types and use them consistently.
-- Add preflight validation for schema, constraints, and policy gates.
-- Emit failure diagnostics with context and remediation hints.
-- Ensure errors are deterministic and non-suppressive.
+- [ ] Introduce explicit error types and use them consistently (compiler/graph/validation/registry/validate updated; other relspec modules pending).
+- [ ] Add preflight validation for schema, constraints, and policy gates (partial in SQLGlot validation paths).
+- [ ] Emit failure diagnostics with context and remediation hints.
+- [ ] Ensure errors are deterministic and non-suppressive.
 
 ### Legacy decommission
 - Generic ValueError/RuntimeError usage without structured context.
@@ -380,6 +403,8 @@ if missing_columns:
 
 ### Objective
 Expose explicit customization points for rule execution policy, SQL dialects, and adapter integrations.
+
+Status: Not started.
 
 ### Representative code
 ```python
@@ -404,9 +429,9 @@ class RuleHandler(Protocol):
 - src/relspec/rules/handlers/__init__.py
 
 ### Implementation checklist
-- Add config-driven overrides for SQLGlot policies and SQL execution lanes.
-- Allow adapter-provided schema or capability overrides for specific domains.
-- Document the customization contract and how adapters register.
+- [ ] Add config-driven overrides for SQLGlot policies and SQL execution lanes.
+- [ ] Allow adapter-provided schema or capability overrides for specific domains.
+- [ ] Document the customization contract and how adapters register.
 
 ### Legacy decommission
 - Hard-coded execution mode defaults that ignore config overrides.
@@ -414,11 +439,13 @@ class RuleHandler(Protocol):
 ---
 
 ## Global Legacy Decommission List
-- src/relspec/rules/rel_ops.py as primary rule IR (replace with SQLGlot AST bundles).
-- src/relspec/plan.py rel_plan_signature as canonical identity (replace with bundle fingerprints).
-- Ibis-only execution in src/relspec/engine.py when DataFusion lanes are available.
-- Static builtin function tables replaced by information_schema-derived catalogs.
-- File-id-only incremental logic when Delta CDF/time travel is available.
+Status: Not started.
+
+- [ ] src/relspec/rules/rel_ops.py as primary rule IR (replace with SQLGlot AST bundles).
+- [ ] src/relspec/plan.py rel_plan_signature as canonical identity (replace with bundle fingerprints).
+- [ ] Ibis-only execution in src/relspec/engine.py when DataFusion lanes are available.
+- [ ] Static builtin function tables replaced by information_schema-derived catalogs.
+- [ ] File-id-only incremental logic when Delta CDF/time travel is available.
 
 ---
 
@@ -446,4 +473,3 @@ class RuleHandler(Protocol):
 - Run `uv run ruff check --fix` on touched files.
 - Run `uv run pyrefly check` for type and contract validation.
 - Run `uv run pyright --warnings --pythonversion=3.13` for strict typing.
-

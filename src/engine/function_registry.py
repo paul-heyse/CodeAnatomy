@@ -29,15 +29,16 @@ ExecutionLane = Literal[
 FunctionKind = Literal["scalar", "aggregate", "window", "table"]
 
 DEFAULT_LANE_PRECEDENCE: tuple[ExecutionLane, ...] = (
+    "df_rust",
     "ibis_builtin",
     "ibis_pyarrow",
     "ibis_pandas",
     "ibis_python",
     "df_udf",
-    "df_rust",
 )
 UDF_TIER_PRIORITY: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
 LANE_UDF_TIER: Mapping[ExecutionLane, UdfTier] = {
+    "df_rust": "builtin",
     "ibis_builtin": "builtin",
     "ibis_pyarrow": "pyarrow",
     "ibis_pandas": "pandas",
@@ -450,9 +451,7 @@ def _function_kind_from_type(value: str) -> FunctionKind:
     return "scalar"
 
 
-def _prefer_function_kind(
-    current: FunctionKind | None, incoming: FunctionKind
-) -> FunctionKind:
+def _prefer_function_kind(current: FunctionKind | None, incoming: FunctionKind) -> FunctionKind:
     if current is None:
         return incoming
     ranking: dict[FunctionKind, int] = {

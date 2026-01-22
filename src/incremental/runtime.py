@@ -13,13 +13,13 @@ from datafusion import SessionContext
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
-from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.execution_factory import ibis_backend_from_profile, ibis_execution_from_ctx
 from sqlglot_tools.optimizer import SqlGlotPolicy, default_sqlglot_policy
 
 if TYPE_CHECKING:
     from ibis.backends import BaseBackend
+
+    from ibis_engine.execution import IbisExecutionContext
 
 
 @dataclass
@@ -67,7 +67,7 @@ class IncrementalRuntime:
         """
         backend = self._ibis_backend
         if backend is None:
-            backend = build_backend(IbisBackendConfig(datafusion_profile=self.profile))
+            backend = ibis_backend_from_profile(self.profile)
             self._ibis_backend = backend
         return backend
 
@@ -96,9 +96,9 @@ class IncrementalRuntime:
         """
         execution = self._ibis_execution
         if execution is None:
-            execution = IbisExecutionContext(
-                ctx=self.execution_context(),
-                ibis_backend=self.ibis_backend(),
+            execution = ibis_execution_from_ctx(
+                self.execution_context(),
+                backend=self.ibis_backend(),
             )
             self._ibis_execution = execution
         return execution

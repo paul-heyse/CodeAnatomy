@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import importlib
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol, cast
@@ -28,13 +29,17 @@ from datafusion_engine.kernel_registry import kernel_capability
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from engine.session import EngineSession
 from ibis_engine.compiler_checkpoint import compile_checkpoint
+from ibis_engine.execution_factory import ibis_backend_from_profile
 from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
 from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
-from ibis_engine.params_bridge import list_param_names_from_rel_ops
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
 from ibis_engine.sql_bridge import decompile_expr
+from ibis_engine.substrait_bridge import try_ibis_to_substrait_bytes
+from obs.diagnostics import DiagnosticsCollector
+from relspec.errors import RelspecValidationError
+from relspec.execution_bundle import sqlglot_plan_signature
 from relspec.list_filter_gate import (
     ListFilterGateError,
     ListFilterGatePolicy,
@@ -58,12 +63,6 @@ from relspec.rules.diagnostics import (
     sqlglot_metadata_diagnostic,
 )
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
-from relspec.rules.rel_ops import (
-    RelOpT,
-    ScanOp,
-    query_spec_from_rel_ops,
-    rel_ops_signature,
-)
 from relspec.schema_context import RelspecSchemaContext
 from sqlglot_tools.bridge import (
     IbisCompilerBackend,
@@ -72,18 +71,27 @@ from sqlglot_tools.bridge import (
     relation_diff,
     sqlglot_diagnostics,
 )
-from sqlglot_tools.compat import ErrorLevel
+from sqlglot_tools.compat import ErrorLevel, Expression
 from sqlglot_tools.lineage import (
+    LineageExtractionOptions,
+    LineagePayload,
     TableRef,
+    extract_lineage_payload,
     extract_table_refs,
     lineage_graph_by_output,
     required_columns_by_table,
 )
 from sqlglot_tools.optimizer import (
+    SchemaMapping,
+    SqlGlotPolicy,
     SqlGlotQualificationError,
+    ast_to_artifact,
     default_sqlglot_policy,
     parse_sql_strict,
+    plan_fingerprint,
     sanitize_templated_sql,
+    serialize_ast_artifact,
+    sqlglot_policy_snapshot_for,
     sqlglot_sql,
 )
 
@@ -104,12 +112,6 @@ def _ibis_rel_plan_compiler() -> _IbisRelPlanCompiler:
     return compiler_cls()
 
 
-def _rel_plan_signature(plan: object) -> str:
-    module = importlib.import_module("relspec.plan")
-    sig_fn = cast("Callable[..., str]", module.rel_plan_signature)
-    return sig_fn(plan)
-
-
 def validate_rule_definitions(
     rules: Sequence[RuleDefinition],
     *,
@@ -119,14 +121,14 @@ def validate_rule_definitions(
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when definitions are invalid or inconsistent.
     """
     seen: set[str] = set()
     for rule in rules:
         if rule.name in seen:
             msg = f"Duplicate rule definition name: {rule.name!r}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         seen.add(rule.name)
         _validate_payload(rule)
         _validate_stages(rule)
@@ -144,24 +146,24 @@ def _validate_payload(rule: RuleDefinition) -> None:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the rule payload is missing or invalid.
     """
     payload = rule.payload
     if rule.domain == "cpg":
         if not isinstance(payload, RelationshipPayload):
             msg = f"RuleDefinition {rule.name!r} missing relationship payload."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return
     if rule.domain == "normalize":
         if payload is not None and not isinstance(payload, NormalizePayload):
             msg = f"RuleDefinition {rule.name!r} has invalid normalize payload."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return
     if rule.domain == "extract":
         if not isinstance(payload, ExtractPayload):
             msg = f"RuleDefinition {rule.name!r} missing extract payload."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         _validate_extract_payload(rule.name, payload)
         return
 
@@ -178,14 +180,14 @@ def _validate_extract_payload(name: str, payload: ExtractPayload) -> None:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when referenced fields are missing.
     """
     available = _extract_available_fields(payload)
     for key in payload.join_keys:
         if key not in available:
             msg = f"Extract rule {name!r} join_keys references missing field: {key!r}"
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
     for derived in payload.derived_ids:
         for key in derived.required:
             if key not in available:
@@ -193,7 +195,7 @@ def _validate_extract_payload(name: str, payload: ExtractPayload) -> None:
                     f"Extract rule {name!r} derived id {derived.name!r} "
                     f"references missing field: {key!r}"
                 )
-                raise ValueError(msg)
+                raise RelspecValidationError(msg)
     if payload.postprocess is not None:
         _validate_postprocess_kernel(name, payload.postprocess)
 
@@ -210,14 +212,14 @@ def _validate_postprocess_kernel(name: str, kernel_name: str) -> None:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the postprocess kernel name is unknown.
     """
     try:
         post_kernels_for_postprocess(kernel_name)
     except KeyError as exc:
         msg = f"Extract rule {name!r} has unknown postprocess kernel: {kernel_name!r}"
-        raise ValueError(msg) from exc
+        raise RelspecValidationError(msg) from exc
 
 
 def _extract_available_fields(payload: ExtractPayload) -> set[str]:
@@ -251,13 +253,13 @@ def _validate_stages(rule: RuleDefinition) -> None:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when stage names are duplicated.
     """
     names = [stage.name for stage in rule.stages]
     if len(set(names)) != len(names):
         msg = f"RuleDefinition {rule.name!r} contains duplicate stages."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
 
 
 def validate_sqlglot_columns(
@@ -284,7 +286,7 @@ def validate_sqlglot_columns(
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when DataFusion cannot compute the query schema.
     """
     from datafusion_engine.runtime import sql_options_for_profile
@@ -297,7 +299,7 @@ def validate_sqlglot_columns(
     profile = ctx.runtime.datafusion
     if profile is None:
         msg = "SQLGlot validation requires a DataFusion runtime profile."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     session = profile.session_context()
     sql_text = sanitize_templated_sql(diagnostics.sql_text_optimized)
     try:
@@ -307,7 +309,7 @@ def validate_sqlglot_columns(
         ).describe_query(sql_text)
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"DataFusion DESCRIBE failed for SQLGlot validation: {exc}"
-        raise ValueError(msg) from exc
+        raise RelspecValidationError(msg) from exc
     describe_names = _describe_column_names(describe_rows)
     duplicates = _find_duplicate_names(describe_names)
     if duplicates:
@@ -315,7 +317,7 @@ def validate_sqlglot_columns(
             "DataFusion schema contains ambiguous columns for SQLGlot validation: "
             f"{sorted(duplicates)}."
         )
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return diagnostics
 
 
@@ -325,7 +327,6 @@ class _RuleSqlGlotSource:
 
     expr: IbisTable
     input_names: tuple[str, ...]
-    plan_signature: str | None
 
 
 RuleSqlGlotSource = _RuleSqlGlotSource
@@ -352,6 +353,9 @@ class SqlGlotDiagnosticsContext:
     backend: IbisCompilerBackend
     schema_context: RelspecSchemaContext
     ctx: ExecutionContext
+    schema_map: SchemaMapping | None
+    schema_map_hash: str | None
+    policy: SqlGlotPolicy
     param_specs: Mapping[str, ParamTableSpec]
     param_policy: ParamTablePolicy
     list_filter_gate_policy: ListFilterGatePolicy | None
@@ -428,28 +432,37 @@ def build_sqlglot_context(
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when no engine session or execution context is available.
     """
     config = config or SqlGlotDiagnosticsConfig()
+    ctx = config.ctx or (config.engine_session.ctx if config.engine_session is not None else None)
+    if ctx is None:
+        msg = "SQLGlot diagnostics require an execution context."
+        raise RelspecValidationError(msg)
     if config.backend is not None:
         backend = config.backend
     elif config.engine_session is not None:
         backend = cast("IbisCompilerBackend", config.engine_session.ibis_backend)
     else:
-        msg = "SQLGlot diagnostics require an EngineSession or compiler backend."
-        raise ValueError(msg)
-    ctx = config.ctx or (config.engine_session.ctx if config.engine_session is not None else None)
-    if ctx is None:
-        msg = "SQLGlot diagnostics require an execution context."
-        raise ValueError(msg)
+        profile = ctx.runtime.datafusion
+        if profile is None:
+            from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+            profile = DataFusionRuntimeProfile()
+        backend = cast("IbisCompilerBackend", ibis_backend_from_profile(profile))
     schema_context = _resolve_schema_context(config, ctx=ctx)
+    schema_map = schema_context.schema_map()
+    schema_map_hash = schema_context.schema_map_fingerprint()
     spec_map = {spec.logical_name: spec for spec in config.param_table_specs}
     param_policy = config.param_table_policy or ParamTablePolicy()
     return SqlGlotDiagnosticsContext(
         backend=backend,
         schema_context=schema_context,
         ctx=ctx,
+        schema_map=schema_map,
+        schema_map_hash=schema_map_hash,
+        policy=default_sqlglot_policy(),
         param_specs=spec_map,
         param_policy=param_policy,
         list_filter_gate_policy=config.list_filter_gate_policy,
@@ -516,8 +529,7 @@ def rule_sqlglot_diagnostics(
         diagnostics.extend(
             _kernel_lane_diagnostics_for_rule(
                 rule,
-                ctx=context.ctx,
-                kernel_lane_policy=context.kernel_lane_policy,
+                context=context,
             )
         )
     return tuple(diagnostics)
@@ -553,7 +565,12 @@ def _sqlglot_diagnostics_for_rule(
     optimized = _compile_rule_sqlglot(rule_ctx, context=context, normalize=True)
     if isinstance(optimized, RuleDiagnostic):
         return (optimized,)
-    return _build_rule_diagnostics(rule_ctx, context=context, raw=raw, optimized=optimized)
+    plan_signature = _sqlglot_plan_signature(
+        optimized.optimized,
+        context=context,
+    )
+    updated_ctx = replace(rule_ctx, plan_signature=plan_signature)
+    return _build_rule_diagnostics(updated_ctx, context=context, raw=raw, optimized=optimized)
 
 
 def _prepare_sqlglot_rule_context(
@@ -582,11 +599,10 @@ def _prepare_sqlglot_rule_context(
         input_names,
         schema_context=context.schema_context,
     )
-    plan_signature = _plan_signature_for_rule(rule)
     if missing_inputs:
         diagnostic = _schema_missing_diagnostic(
             rule,
-            plan_signature=plan_signature,
+            plan_signature=None,
             missing_inputs=missing_inputs,
         )
         return None, (diagnostic,)
@@ -595,7 +611,6 @@ def _prepare_sqlglot_rule_context(
         backend=context.backend,
         schema_context=context.schema_context,
         ctx=context.ctx,
-        plan_signature=plan_signature,
     )
     if source is None:
         return None, ()
@@ -606,7 +621,7 @@ def _prepare_sqlglot_rule_context(
     if missing_ops:
         diagnostic = _unsupported_ops_diagnostic(
             rule,
-            plan_signature=plan_signature,
+            plan_signature=None,
             missing_ops=missing_ops,
         )
         return None, (diagnostic,)
@@ -614,7 +629,7 @@ def _prepare_sqlglot_rule_context(
         SqlGlotRuleContext(
             rule=rule,
             source=source,
-            plan_signature=plan_signature,
+            plan_signature=None,
         ),
         (),
     )
@@ -642,7 +657,11 @@ def _compile_rule_sqlglot(
     SqlGlotDiagnostics | RuleDiagnostic
         Diagnostics or a failure diagnostic.
     """
-    options = SqlGlotDiagnosticsOptions(normalize=normalize)
+    options = SqlGlotDiagnosticsOptions(
+        normalize=normalize,
+        policy=context.policy,
+        schema_map=context.schema_map,
+    )
     try:
         return sqlglot_diagnostics(
             rule_ctx.source.expr,
@@ -652,9 +671,31 @@ def _compile_rule_sqlglot(
     except (TypeError, ValueError) as exc:
         return _sqlglot_failure_diagnostic(
             rule_ctx.rule,
-            plan_signature=rule_ctx.source.plan_signature,
+            plan_signature=rule_ctx.plan_signature,
             error=exc,
         )
+
+
+def _sqlglot_plan_signature(
+    expr: Expression,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> str | None:
+    """Return a canonical SQLGlot plan signature for an expression.
+
+    Returns
+    -------
+    str | None
+        Plan signature when computed, otherwise ``None``.
+    """
+    try:
+        return sqlglot_plan_signature(
+            expr,
+            policy=context.policy,
+            schema_map_hash=context.schema_map_hash,
+        )
+    except (TypeError, ValueError):
+        return None
 
 
 def _build_rule_diagnostics(
@@ -702,6 +743,8 @@ def _build_rule_diagnostics(
         ctx=context.ctx,
     )
     describe_error = extra_metadata.get("df_describe_error")
+    if context.schema_map_hash is not None:
+        extra_metadata["schema_map_hash"] = context.schema_map_hash
     extra_metadata.update(_rule_ir_metadata(rule_ctx, context=context))
     metadata = _final_sqlglot_metadata(
         extra_metadata,
@@ -709,11 +752,15 @@ def _build_rule_diagnostics(
         table_refs=table_refs,
         param_policy=context.param_policy,
     )
+    metadata.update(_provider_metadata_payload(rule_ctx, context=context))
     metadata.update(_required_columns_metadata(rule_ctx, context=context))
     if (lineage_payload := _lineage_graph_metadata(rule_ctx, context=context)) is not None:
         metadata["lineage_graph"] = lineage_payload
     if (plan_hash := _plan_hash_metadata(rule_ctx, context=context)) is not None:
         metadata["plan_hash"] = plan_hash
+    substrait_b64 = _substrait_payload(rule_ctx, context=context)
+    if substrait_b64 is not None:
+        metadata["substrait_plan_b64"] = substrait_b64
     diagnostics.append(
         sqlglot_metadata_diagnostic(
             optimized,
@@ -721,11 +768,18 @@ def _build_rule_diagnostics(
             diff=diff,
             options=SqlGlotMetadataDiagnosticOptions(
                 rule_name=rule_ctx.rule.name,
-                plan_signature=rule_ctx.source.plan_signature,
+                plan_signature=rule_ctx.plan_signature,
                 schema_ddl=None,
                 extra_metadata=metadata,
             ),
         )
+    )
+    _record_sqlglot_artifact(
+        rule_ctx,
+        context=context,
+        raw=raw,
+        optimized=optimized,
+        substrait_b64=substrait_b64,
     )
     drift = _contract_schema_drift_diagnostic(
         rule_ctx,
@@ -742,11 +796,121 @@ def _build_rule_diagnostics(
                 rule_name=rule_ctx.rule.name,
                 severity="warning",
                 message="DataFusion DESCRIBE failed for rule SQL.",
-                plan_signature=rule_ctx.source.plan_signature,
+                plan_signature=rule_ctx.plan_signature,
                 metadata={"df_describe_error": str(describe_error)},
             )
         )
     return tuple(diagnostics)
+
+
+def _sqlglot_lineage_payload(
+    expr: Expression,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> LineagePayload | None:
+    try:
+        return extract_lineage_payload(
+            expr,
+            options=LineageExtractionOptions(
+                schema=cast("Mapping[str, Mapping[str, str]] | None", context.schema_map),
+                dialect=context.policy.write_dialect,
+            ),
+        )
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _sqlglot_ast_payload(
+    expr: Expression,
+    *,
+    sql: str,
+    policy: SqlGlotPolicy,
+) -> str | None:
+    try:
+        return serialize_ast_artifact(ast_to_artifact(expr, sql=sql, policy=policy))
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _substrait_payload(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> str | None:
+    runtime_profile = context.ctx.runtime.datafusion
+    sink = None
+    if runtime_profile is not None:
+        diagnostics_sink = runtime_profile.diagnostics_sink
+        if isinstance(diagnostics_sink, DiagnosticsCollector):
+            sink = diagnostics_sink
+    try:
+        plan_bytes = try_ibis_to_substrait_bytes(rule_ctx.source.expr, diagnostics_sink=sink)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if plan_bytes is None:
+        return None
+    return base64.b64encode(plan_bytes).decode("ascii")
+
+
+def _record_sqlglot_artifact(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+    raw: SqlGlotDiagnostics,
+    optimized: SqlGlotDiagnostics,
+    substrait_b64: str | None,
+) -> None:
+    runtime_profile = context.ctx.runtime.datafusion
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    policy_snapshot = sqlglot_policy_snapshot_for(context.policy)
+    plan_hash = rule_ctx.plan_signature
+    if plan_hash is None:
+        try:
+            plan_hash = plan_fingerprint(
+                optimized.optimized,
+                dialect=context.policy.write_dialect,
+                policy_hash=policy_snapshot.policy_hash,
+                schema_map_hash=context.schema_map_hash,
+            )
+        except (RuntimeError, TypeError, ValueError):
+            plan_hash = None
+    lineage = _sqlglot_lineage_payload(optimized.optimized, context=context)
+    ast_payload = _sqlglot_ast_payload(
+        optimized.optimized,
+        sql=optimized.sql_text_optimized,
+        policy=context.policy,
+    )
+    rule_ir = _rule_ir_metadata(rule_ctx, context=context)
+    payload: dict[str, object] = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "domain": rule_ctx.rule.domain,
+        "rule_name": rule_ctx.rule.name,
+        "output_dataset": rule_ctx.rule.output,
+        "plan_signature": rule_ctx.plan_signature,
+        "plan_hash": plan_hash,
+        "sql_dialect": optimized.sql_dialect,
+        "sql_text_raw": raw.sql_text_raw,
+        "sql_text_optimized": optimized.sql_text_optimized,
+        "tables": list(optimized.tables),
+        "columns": list(optimized.columns),
+        "identifiers": list(optimized.identifiers),
+        "ast_repr": optimized.ast_repr,
+        "sqlglot_ast": ast_payload,
+        "policy_hash": policy_snapshot.policy_hash,
+        "policy_rules_hash": policy_snapshot.rules_hash,
+        "schema_map_hash": context.schema_map_hash,
+        "canonical_fingerprint": (lineage.canonical_fingerprint if lineage is not None else None),
+        "lineage_tables": list(lineage.tables) if lineage is not None else None,
+        "lineage_columns": list(lineage.columns) if lineage is not None else None,
+        "lineage_scopes": list(lineage.scopes) if lineage is not None else None,
+        "lineage_qualified_sql": lineage.qualified_sql if lineage is not None else None,
+        "substrait_plan_b64": substrait_b64,
+        "ibis_decompile": rule_ir.get("ibis_decompile"),
+        "ibis_sql": rule_ir.get("ibis_sql"),
+        "ibis_sql_pretty": rule_ir.get("ibis_sql_pretty"),
+    }
+    runtime_profile.diagnostics_sink.record_artifact("relspec_sqlglot_plan_v1", payload)
 
 
 def _required_columns_metadata(
@@ -765,6 +929,27 @@ def _required_columns_metadata(
     for table, columns in sorted(required.items()):
         if columns:
             metadata[f"required_columns:{table}"] = ",".join(columns)
+    return metadata
+
+
+def _provider_metadata_payload(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for name in rule_ctx.source.input_names:
+        provider = context.schema_context.table_provider_metadata(name)
+        if provider is None:
+            continue
+        if provider.file_format:
+            metadata[f"provider:{name}:format"] = provider.file_format
+        if provider.storage_location:
+            metadata[f"provider:{name}:location"] = provider.storage_location
+        if provider.ddl_fingerprint:
+            metadata[f"provider:{name}:ddl_fingerprint"] = provider.ddl_fingerprint
+        if provider.unbounded:
+            metadata[f"provider:{name}:unbounded"] = "true"
     return metadata
 
 
@@ -814,7 +999,7 @@ def _contract_schema_drift_diagnostic(
             rule_name=rule_ctx.rule.name,
             severity="warning",
             message="DataFusion DESCRIBE failed while validating contract schema.",
-            plan_signature=rule_ctx.source.plan_signature,
+            plan_signature=rule_ctx.plan_signature,
             metadata={"df_describe_error": str(exc)},
         )
     actual_columns = _describe_column_names(rows)
@@ -838,7 +1023,7 @@ def _contract_schema_drift_diagnostic(
         rule_name=rule_ctx.rule.name,
         severity="warning",
         message="Rule output schema does not match the contract.",
-        plan_signature=rule_ctx.source.plan_signature,
+        plan_signature=rule_ctx.plan_signature,
         metadata=metadata,
     )
 
@@ -933,7 +1118,7 @@ def _list_filter_gate_diagnostics(
                 rule_name=rule_ctx.rule.name,
                 severity="error",
                 message=str(exc),
-                plan_signature=rule_ctx.source.plan_signature,
+                plan_signature=rule_ctx.plan_signature,
             ),
         )
     return ()
@@ -967,7 +1152,6 @@ def _param_metadata(
     table_refs = tuple(extract_table_refs(optimized.optimized))
     param_deps = infer_param_deps(table_refs, policy=context.param_policy)
     param_names = {dep.logical_name for dep in param_deps}
-    param_names.update(list_param_names_from_rel_ops(rule_ctx.rule.rel_ops))
     if context.param_specs:
         missing = sorted(name for name in param_names if name not in context.param_specs)
         if missing:
@@ -978,7 +1162,7 @@ def _param_metadata(
                     rule_name=rule_ctx.rule.name,
                     severity="error",
                     message="Rule references undeclared param tables.",
-                    plan_signature=rule_ctx.source.plan_signature,
+                    plan_signature=rule_ctx.plan_signature,
                     metadata={"missing_params": ",".join(missing)},
                 )
             )
@@ -991,7 +1175,7 @@ def _param_metadata(
                 rule_name=rule_ctx.rule.name,
                 severity="error",
                 message="Param table names collide with registered datasets.",
-                plan_signature=rule_ctx.source.plan_signature,
+                plan_signature=rule_ctx.plan_signature,
                 metadata={"param_table_collisions": ",".join(collisions)},
             )
         )
@@ -1126,13 +1310,11 @@ def rule_dependency_reports(
         )
         if missing_inputs:
             continue
-        plan_signature = _plan_signature_for_rule(rule)
         source = _rule_sqlglot_source(
             rule,
             backend=context.backend,
             schema_context=context.schema_context,
             ctx=context.ctx,
-            plan_signature=plan_signature,
         )
         if source is None:
             continue
@@ -1140,14 +1322,17 @@ def rule_dependency_reports(
             optimized = sqlglot_diagnostics(
                 source.expr,
                 backend=context.backend,
-                options=SqlGlotDiagnosticsOptions(normalize=True),
+                options=SqlGlotDiagnosticsOptions(
+                    normalize=True,
+                    policy=context.policy,
+                    schema_map=context.schema_map,
+                ),
             )
         except (TypeError, ValueError):
             continue
         table_refs = extract_table_refs(optimized.optimized)
         param_deps = infer_param_deps(table_refs, policy=context.param_policy)
         param_names = {dep.logical_name for dep in param_deps}
-        param_names.update(list_param_names_from_rel_ops(rule.rel_ops))
         if context.param_specs:
             missing = sorted(name for name in param_names if name not in context.param_specs)
             if missing:
@@ -1165,8 +1350,7 @@ def rule_dependency_reports(
 def _kernel_lane_diagnostics_for_rule(
     rule: RuleDefinition,
     *,
-    ctx: ExecutionContext,
-    kernel_lane_policy: KernelLanePolicy | None,
+    context: SqlGlotDiagnosticsContext,
 ) -> tuple[RuleDiagnostic, ...]:
     """Return kernel lane diagnostics for a relationship rule.
 
@@ -1174,10 +1358,8 @@ def _kernel_lane_diagnostics_for_rule(
     ----------
     rule
         Rule definition to analyze.
-    ctx
-        Execution context used for kernel capability checks.
-    kernel_lane_policy
-        Optional kernel lane policy to enforce.
+    context
+        Diagnostics context used for kernel capability checks and signatures.
 
     Returns
     -------
@@ -1190,15 +1372,16 @@ def _kernel_lane_diagnostics_for_rule(
     kernel_names = _kernel_names_for_rule(rel_rule)
     if not kernel_names:
         return ()
-    plan_signature = _plan_signature_for_rule(rule)
+    plan_signature = rule_sqlglot_signature(rule, context=context)
     base_metadata: dict[str, str] = {}
+    kernel_lane_policy = context.kernel_lane_policy
     if kernel_lane_policy is not None:
         allowed = ",".join(lane.value for lane in kernel_lane_policy.allowed)
         base_metadata["policy_allowed_lanes"] = allowed
         base_metadata["policy_action"] = kernel_lane_policy.on_violation
     diagnostics: list[RuleDiagnostic] = []
     for name in kernel_names:
-        capability = kernel_capability(name, ctx=ctx)
+        capability = kernel_capability(name, ctx=context.ctx)
         violation = False
         severity: RuleDiagnosticSeverity = "warning"
         if not capability.available:
@@ -1452,7 +1635,6 @@ def _rule_sqlglot_source(
     backend: IbisCompilerBackend,
     schema_context: RelspecSchemaContext,
     ctx: ExecutionContext,
-    plan_signature: str | None,
 ) -> _RuleSqlGlotSource | None:
     """Build a SQLGlot source expression for a rule when possible.
 
@@ -1466,8 +1648,6 @@ def _rule_sqlglot_source(
         DataFusion schema context for dataset lookups.
     ctx
         Execution context.
-    plan_signature
-        Optional plan signature for diagnostics.
 
     Returns
     -------
@@ -1488,11 +1668,7 @@ def _rule_sqlglot_source(
         compiler = _ibis_rel_plan_compiler()
         ibis_plan = compiler.compile(rel_plan, ctx=ctx, resolver=resolver)
         inputs = tuple(ref.name for ref in rel_rule.inputs)
-        return _RuleSqlGlotSource(
-            expr=ibis_plan.expr,
-            input_names=inputs,
-            plan_signature=plan_signature,
-        )
+        return _RuleSqlGlotSource(expr=ibis_plan.expr, input_names=inputs)
     query_source = _query_spec_source(rule)
     if query_source is None:
         return None
@@ -1503,11 +1679,7 @@ def _rule_sqlglot_source(
         raise KeyError(msg)
     plan = _ibis_plan_from_schema(source, schema=schema, backend=backend)
     expr = apply_query_spec(plan.expr, spec=query_spec)
-    return _RuleSqlGlotSource(
-        expr=expr,
-        input_names=(source,),
-        plan_signature=plan_signature,
-    )
+    return _RuleSqlGlotSource(expr=expr, input_names=(source,))
 
 
 def _query_spec_source(rule: RuleDefinition) -> tuple[IbisQuerySpec, str] | None:
@@ -1523,17 +1695,6 @@ def _query_spec_source(rule: RuleDefinition) -> tuple[IbisQuerySpec, str] | None
     tuple[IbisQuerySpec, str] | None
         Query spec and source dataset when available.
     """
-    if rule.rel_ops:
-        source = _scan_source(rule.rel_ops)
-        if source is None:
-            return None
-        try:
-            spec = query_spec_from_rel_ops(rule.rel_ops)
-        except ValueError:
-            return None
-        if spec is None:
-            return None
-        return spec, source
     payload = rule.payload
     if (
         isinstance(payload, NormalizePayload)
@@ -1541,25 +1702,6 @@ def _query_spec_source(rule: RuleDefinition) -> tuple[IbisQuerySpec, str] | None
         and len(rule.inputs) == 1
     ):
         return payload.query, rule.inputs[0]
-    return None
-
-
-def _scan_source(ops: Sequence[RelOpT]) -> str | None:
-    """Return the scan source name from rel ops.
-
-    Parameters
-    ----------
-    ops
-        Relational operations to inspect.
-
-    Returns
-    -------
-    str | None
-        Source name when a scan op is present.
-    """
-    for op in ops:
-        if isinstance(op, ScanOp):
-            return op.source
     return None
 
 
@@ -1576,12 +1718,7 @@ def _rule_input_names(rule: RuleDefinition) -> tuple[str, ...]:
     tuple[str, ...]
         Input dataset names for the rule.
     """
-    if rule.inputs:
-        return rule.inputs
-    source = _scan_source(rule.rel_ops)
-    if source is not None:
-        return (source,)
-    return ()
+    return rule.inputs
 
 
 def _missing_inputs_for_inputs(
@@ -1664,28 +1801,42 @@ def _ibis_plan_from_schema(
     )
 
 
-def _plan_signature_for_rule(rule: RuleDefinition) -> str | None:
-    """Return a plan signature for a rule when available.
-
-    Parameters
-    ----------
-    rule
-        Rule definition to inspect.
+def rule_sqlglot_signature(
+    rule: RuleDefinition,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> str | None:
+    """Return a canonical SQLGlot plan signature for a rule when available.
 
     Returns
     -------
     str | None
         Plan signature when available.
     """
-    if rule.domain == "cpg":
-        rel_rule = relationship_rule_from_definition(rule)
-        rel_plan = _rel_plan_for_rule(rel_rule)
-        if rel_plan is None:
-            return None
-        return _rel_plan_signature(rel_plan)
-    if rule.rel_ops:
-        return rel_ops_signature(rule.rel_ops)
-    return None
+    try:
+        source = _rule_sqlglot_source(
+            rule,
+            backend=context.backend,
+            schema_context=context.schema_context,
+            ctx=context.ctx,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    if source is None:
+        return None
+    try:
+        optimized = sqlglot_diagnostics(
+            source.expr,
+            backend=context.backend,
+            options=SqlGlotDiagnosticsOptions(
+                normalize=True,
+                policy=context.policy,
+                schema_map=context.schema_map,
+            ),
+        )
+    except (TypeError, ValueError):
+        return None
+    return _sqlglot_plan_signature(optimized.optimized, context=context)
 
 
 def _schema_missing_diagnostic(
@@ -1796,6 +1947,7 @@ __all__ = [
     "rule_dependency_reports",
     "rule_ir_metadata",
     "rule_sqlglot_diagnostics",
+    "rule_sqlglot_signature",
     "validate_rule_definitions",
     "validate_sqlglot_columns",
 ]

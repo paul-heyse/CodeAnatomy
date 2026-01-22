@@ -554,6 +554,81 @@ def default_sqlglot_policy() -> SqlGlotPolicy:
     )
 
 
+def _surface_policy_factory(surface: SqlGlotSurface) -> Callable[[], SqlGlotPolicy]:
+    def _factory() -> SqlGlotPolicy:
+        base = default_sqlglot_policy()
+        surface_policy = sqlglot_surface_policy(surface)
+        return replace(
+            base,
+            read_dialect=surface_policy.dialect,
+            write_dialect=surface_policy.dialect,
+        )
+
+    return _factory
+
+
+_SQLGLOT_POLICY_PRESETS: Final[Mapping[str, Callable[[], SqlGlotPolicy]]] = {
+    "default": default_sqlglot_policy,
+    "datafusion_compile": _surface_policy_factory(SqlGlotSurface.DATAFUSION_COMPILE),
+    "datafusion_dml": _surface_policy_factory(SqlGlotSurface.DATAFUSION_DML),
+    "datafusion_external_table": _surface_policy_factory(SqlGlotSurface.DATAFUSION_EXTERNAL_TABLE),
+    "datafusion_diagnostics": _surface_policy_factory(SqlGlotSurface.DATAFUSION_DIAGNOSTICS),
+    "datafusion_ddl": _surface_policy_factory(SqlGlotSurface.DATAFUSION_DDL),
+}
+
+
+def sqlglot_policy_by_name(name: str) -> SqlGlotPolicy:
+    """Return a SQLGlot policy preset by name.
+
+    Parameters
+    ----------
+    name
+        Named policy preset.
+
+    Returns
+    -------
+    SqlGlotPolicy
+        Resolved policy instance.
+
+    Raises
+    ------
+    ValueError
+        Raised when the policy name is not recognized.
+    """
+    normalized = name.strip().lower()
+    factory = _SQLGLOT_POLICY_PRESETS.get(normalized)
+    if factory is None:
+        msg = f"Unknown SQLGlot policy name: {name!r}."
+        raise ValueError(msg)
+    return factory()
+
+
+def resolve_sqlglot_policy(
+    *,
+    name: str | None = None,
+    policy: SqlGlotPolicy | None = None,
+) -> SqlGlotPolicy:
+    """Resolve a SQLGlot policy from explicit or named overrides.
+
+    Parameters
+    ----------
+    name
+        Optional preset name for resolving a policy.
+    policy
+        Explicit policy override.
+
+    Returns
+    -------
+    SqlGlotPolicy
+        Resolved policy instance.
+    """
+    if policy is not None:
+        return policy
+    if name:
+        return sqlglot_policy_by_name(name)
+    return default_sqlglot_policy()
+
+
 def sqlglot_surface_policy(surface: SqlGlotSurface) -> SqlGlotSurfacePolicy:
     """Return the SQLGlot policy for a compilation surface.
 
@@ -1928,10 +2003,12 @@ __all__ = [
     "qualify_expr",
     "qualify_strict",
     "register_datafusion_dialect",
+    "resolve_sqlglot_policy",
     "rewrite_expr",
     "sanitize_templated_sql",
     "serialize_ast_artifact",
     "simplify_expr",
+    "sqlglot_policy_by_name",
     "sqlglot_policy_snapshot",
     "sqlglot_policy_snapshot_for",
     "sqlglot_sql",

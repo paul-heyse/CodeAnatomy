@@ -38,7 +38,8 @@ from datafusion_engine.runtime import (
 from datafusion_engine.sql_options import sql_options_for_profile
 from extract.evidence_plan import EvidencePlan
 from ibis_engine.builtin_udfs import prefixed_hash64
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.execution import materialize_ibis_plan
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import datafusion_context
 from ibis_engine.sources import SourceToIbisOptions, source_to_ibis
@@ -226,7 +227,7 @@ def _materialize_fragment(
 
 
 def _materialize_ibis_table(table: Table, *, runtime: NormalizeRuntime) -> TableLike:
-    execution = IbisExecutionContext(ctx=runtime.execution_ctx, ibis_backend=runtime.ibis_backend)
+    execution = ibis_execution_from_ctx(runtime.execution_ctx, backend=runtime.ibis_backend)
     plan = IbisPlan(expr=table)
     return materialize_ibis_plan(plan, execution=execution)
 

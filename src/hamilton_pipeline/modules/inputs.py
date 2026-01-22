@@ -6,7 +6,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
@@ -33,13 +33,16 @@ from hamilton_pipeline.pipeline_types import (
     TreeSitterConfig,
 )
 from ibis_engine.config import IbisBackendConfig
-from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from incremental.types import IncrementalConfig
 from obs.diagnostics import DiagnosticsCollector
 from relspec.config import RelspecConfig as RelspecRuleConfig
 from relspec.cpg.build_props import PropsBuildOptions
 from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+
+if TYPE_CHECKING:
+    from ibis_engine.execution import IbisExecutionContext
 
 
 def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:
@@ -188,10 +191,10 @@ def ibis_execution(
     IbisExecutionContext
         Execution context used for Ibis materialization.
     """
-    return IbisExecutionContext(
-        ctx=engine_session.ctx,
+    return ibis_execution_from_ctx(
+        engine_session.ctx,
+        backend=engine_session.ibis_backend,
         execution_policy=adapter_execution_policy,
-        ibis_backend=engine_session.ibis_backend,
     )
 
 

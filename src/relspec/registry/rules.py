@@ -10,6 +10,7 @@ import pyarrow as pa
 
 from ibis_engine.param_tables import ParamTableSpec
 from relspec.config import RelspecConfig
+from relspec.errors import RelspecValidationError
 from relspec.rules.bundles import RuleBundle
 from relspec.rules.contract_rules import rules_from_contracts
 from relspec.rules.diagnostics import RuleDiagnostic, rule_diagnostic_table
@@ -287,7 +288,7 @@ def _raise_template_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when template diagnostics contain errors.
     """
     errors = [diag for diag in diagnostics if diag.severity == "error"]
@@ -295,7 +296,7 @@ def _raise_template_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
         return
     summary = ", ".join(diag.message for diag in errors)
     msg = f"Template diagnostics reported errors: {summary}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _raise_rule_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
@@ -308,7 +309,7 @@ def _raise_rule_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when rule diagnostics contain errors.
     """
     errors = [diag for diag in diagnostics if diag.severity == "error"]
@@ -316,7 +317,7 @@ def _raise_rule_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
         return
     summary = ", ".join(f"{diag.rule_name or 'unknown'}: {diag.message}" for diag in errors)
     msg = f"Rule diagnostics reported errors: {summary}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 __all__ = [

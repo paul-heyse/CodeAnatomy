@@ -34,8 +34,7 @@ from extract.schema_ops import (
 )
 from extract.session import ExtractSession, build_extract_session
 from extract.spec_helpers import plan_requires_row, rule_execution_options
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution_factory import ibis_backend_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
@@ -439,7 +438,7 @@ def _resolve_backend(
     if session is not None:
         return session.ibis_backend
     exec_ctx = ctx or execution_context_factory(profile)
-    return build_backend(IbisBackendConfig(datafusion_profile=exec_ctx.runtime.datafusion))
+    return ibis_backend_from_ctx(exec_ctx)
 
 
 def apply_query_and_project(

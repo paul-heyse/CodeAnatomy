@@ -1094,7 +1094,10 @@ def incremental_relationship_updates(
     ):
         return {}
     outputs = relationship_output_tables.as_dict()
-    if relationship_output_fingerprints_map and not incremental_update_context.file_changes.full_refresh:
+    if (
+        relationship_output_fingerprints_map
+        and not incremental_update_context.file_changes.full_refresh
+    ):
         previous = read_dataset_fingerprints(incremental_update_context.state_store)
         unchanged = {
             name
@@ -1136,6 +1139,11 @@ def incremental_diagnostics_artifacts(
         return None
     artifacts = write_incremental_artifacts(
         incremental_state_store,
+        runtime=incremental_runtime,
+    )
+    write_cdf_cursor_snapshot(
+        incremental_state_store,
+        cursor_store=CdfCursorStore(cursors_path=incremental_state_store.cdf_cursors_path()),
         runtime=incremental_runtime,
     )
     schema_context = RelspecSchemaContext.from_session(incremental_runtime.session_context())

@@ -38,7 +38,8 @@ from datafusion_engine.runtime import (
 from engine.materialize_pipeline import resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.execution import materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import (
     DatasetSource,
@@ -340,10 +341,10 @@ def _finalize_edges_ibis(
             ordering=raw_plan.ordering,
         ),
     )
-    execution = IbisExecutionContext(
-        ctx=exec_ctx,
+    execution = ibis_execution_from_ctx(
+        exec_ctx,
+        backend=config.ibis_backend,
         execution_policy=config.execution_policy,
-        ibis_backend=config.ibis_backend,
     )
     raw = (
         _materialize_table(stream_ibis_plan(registered, execution=execution))

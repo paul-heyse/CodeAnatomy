@@ -33,7 +33,8 @@ from datafusion_engine.runtime import (
 from engine.materialize_pipeline import resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.execution import materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import (
     DatasetSource,
@@ -46,6 +47,7 @@ from ibis_engine.sources import (
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
+    from ibis_engine.execution import IbisExecutionContext
 from relspec.cpg.emit_props_ibis import (
     filter_prop_fields,
 )
@@ -586,10 +588,10 @@ def _build_cpg_props_ibis(
         schema=context.props_schema,
         backend=backend,
     )
-    execution = IbisExecutionContext(
-        ctx=context.ctx,
+    execution = ibis_execution_from_ctx(
+        context.ctx,
+        backend=backend,
         execution_policy=config.execution_policy,
-        ibis_backend=backend,
     )
     materialize_context = IbisMaterializeContext(
         execution=execution,

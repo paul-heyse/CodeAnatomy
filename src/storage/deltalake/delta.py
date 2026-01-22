@@ -152,6 +152,34 @@ def delta_table_features(
     return features or None
 
 
+def delta_cdf_enabled(
+    path: str,
+    *,
+    storage_options: StorageOptions | None = None,
+) -> bool:
+    """Return True when Delta CDF is enabled for the table.
+
+    Returns
+    -------
+    bool
+        True when Change Data Feed is enabled.
+    """
+    features = delta_table_features(path, storage_options=storage_options)
+    if not features:
+        return False
+    cdf_flag = features.get("delta.enableChangeDataFeed")
+    if cdf_flag is not None:
+        return str(cdf_flag).lower() == "true"
+    for key in ("reader_features", "writer_features"):
+        raw = features.get(key)
+        if not raw:
+            continue
+        tokens = [token.strip().lower() for token in str(raw).split(",") if token.strip()]
+        if "changedatafeed" in tokens:
+            return True
+    return False
+
+
 def delta_commit_metadata(
     path: str,
     *,
@@ -479,6 +507,7 @@ __all__ = [
     "cleanup_delta_log",
     "coerce_delta_table",
     "create_delta_checkpoint",
+    "delta_cdf_enabled",
     "delta_commit_metadata",
     "delta_history_snapshot",
     "delta_protocol_snapshot",

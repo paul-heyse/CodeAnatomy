@@ -3,22 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from arrowdsl.core.execution_context import execution_context_factory
 from arrowdsl.io.ipc import ipc_hash
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from relspec.compiler import rel_plan_for_rule
 from relspec.graph import rule_graph_signature
 from relspec.incremental import RelspecIncrementalSpec, build_incremental_spec
-from relspec.plan import rel_plan_signature
 from relspec.registry.rules import RuleRegistry
 from relspec.rules.coverage import RuleCoverageAssessment, assess_rule_coverage
 from relspec.rules.definitions import RuleDefinition
-from relspec.rules.handlers.cpg import relationship_rule_from_definition
-from relspec.rules.rel_ops import rel_ops_signature
 from relspec.rules.spec_tables import rule_definition_table
+from relspec.rules.validation import (
+    SqlGlotDiagnosticsConfig,
+    build_sqlglot_context,
+    rule_sqlglot_signature,
+)
 from relspec.schema_context import RelspecSchemaContext
+
+if TYPE_CHECKING:
+    from relspec.rules.validation import SqlGlotDiagnosticsContext
 
 
 @dataclass(frozen=True)
@@ -59,28 +65,39 @@ def build_relspec_snapshot(registry: RuleRegistry) -> RelspecSnapshot:
 
 
 def _rule_plan_signatures(rules: tuple[RuleDefinition, ...]) -> dict[str, str]:
-    return {rule.name: _rule_signature(rule) for rule in rules}
+    context = _snapshot_sqlglot_context()
+    return {rule.name: _rule_signature(rule, context=context) for rule in rules}
 
 
-def _rule_signature(rule: RuleDefinition) -> str:
-    if rule.domain == "cpg":
-        rel_rule = relationship_rule_from_definition(rule)
-        plan = rel_plan_for_rule(rel_rule)
-        if plan is not None:
-            return rel_plan_signature(plan)
-    if rule.rel_ops:
-        return rel_ops_signature(rule.rel_ops)
+def _rule_signature(
+    rule: RuleDefinition,
+    *,
+    context: SqlGlotDiagnosticsContext | None,
+) -> str:
+    if context is not None:
+        signature = rule_sqlglot_signature(rule, context=context)
+        if signature is not None:
+            return signature
     table = rule_definition_table((rule,))
     return ipc_hash(table)
 
 
 def _graph_signature(rules: tuple[RuleDefinition, ...]) -> str:
+    context = _snapshot_sqlglot_context()
     return rule_graph_signature(
         rules,
         name_for=lambda rule: rule.name,
-        signature_for=_rule_signature,
+        signature_for=lambda rule: _rule_signature(rule, context=context),
         label="relspec",
     )
+
+
+def _snapshot_sqlglot_context() -> SqlGlotDiagnosticsContext | None:
+    try:
+        ctx = execution_context_factory("default")
+        return build_sqlglot_context(SqlGlotDiagnosticsConfig(ctx=ctx))
+    except (ImportError, ValueError):
+        return None
 
 
 def _bundle_inventory(registry: RuleRegistry) -> dict[str, str]:

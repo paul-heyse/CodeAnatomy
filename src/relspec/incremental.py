@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 
 import pyarrow as pa
@@ -15,6 +15,7 @@ from normalize.registry_runtime import dataset_name_from_alias
 from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.definitions import RelationshipPayload, RuleDefinition
 from relspec.schema_context import RelspecSchemaContext
+from storage.deltalake.delta import delta_cdf_enabled, delta_table_features, delta_table_version
 
 _FILE_ID_COLUMNS: tuple[str, ...] = ("edge_owner_file_id", "file_id")
 
@@ -40,6 +41,7 @@ class RelspecIncrementalSpec:
     normalize_alias_overrides: Mapping[str, str]
     file_id_columns: Mapping[str, str]
     scoped_datasets: frozenset[str]
+    delta_tables: Mapping[str, DeltaTableSnapshot] = field(default_factory=dict)
     file_id_param_name: str = "file_ids"
 
     def relation_contract_for_output(self, name: str) -> str | None:
@@ -99,6 +101,17 @@ class RelspecIncrementalSpec:
         )
 
 
+@dataclass(frozen=True)
+class DeltaTableSnapshot:
+    """Delta table feature snapshot for incremental planning."""
+
+    name: str
+    path: str
+    version: int | None
+    cdf_enabled: bool
+    features: Mapping[str, str] | None = None
+
+
 def build_incremental_spec(
     rules: Sequence[RuleDefinition],
     *,
@@ -121,6 +134,10 @@ def build_incremental_spec(
         scoped_input_names,
         schema_context=schema_context,
     )
+    delta_tables = _delta_table_snapshots(
+        scoped_input_names,
+        schema_context=schema_context,
+    )
     scoped = {name for name in input_datasets if name in file_id_columns}
     scoped_datasets = frozenset(scoped or input_datasets)
     return RelspecIncrementalSpec(
@@ -128,6 +145,7 @@ def build_incremental_spec(
         normalize_alias_overrides=alias_overrides,
         file_id_columns=file_id_columns,
         scoped_datasets=scoped_datasets,
+        delta_tables=delta_tables,
         file_id_param_name=file_id_param_name,
     )
 
@@ -144,6 +162,42 @@ def incremental_spec() -> RelspecIncrementalSpec:
     rules = rule_definitions_cached()
     schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
     return build_incremental_spec(rules, schema_context=schema_context)
+
+
+def _delta_table_snapshots(
+    dataset_names: Iterable[str],
+    *,
+    schema_context: RelspecSchemaContext,
+) -> Mapping[str, DeltaTableSnapshot]:
+    snapshots: dict[str, DeltaTableSnapshot] = {}
+    for name in dataset_names:
+        metadata = schema_context.table_provider_metadata(name)
+        if metadata is None or metadata.file_format is None:
+            continue
+        if metadata.file_format.lower() != "delta":
+            continue
+        if metadata.storage_location is None:
+            continue
+        snapshot = _delta_snapshot(name, path=str(metadata.storage_location))
+        if snapshot is not None:
+            snapshots[name] = snapshot
+    return snapshots
+
+
+def _delta_snapshot(name: str, *, path: str) -> DeltaTableSnapshot | None:
+    try:
+        version = delta_table_version(path)
+        features = delta_table_features(path)
+        cdf = delta_cdf_enabled(path)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    return DeltaTableSnapshot(
+        name=name,
+        path=path,
+        version=version,
+        cdf_enabled=cdf,
+        features=features,
+    )
 
 
 def _relationship_input_datasets(rules: Sequence[RuleDefinition]) -> set[str]:
@@ -247,4 +301,9 @@ def _file_id_column_from_columns(columns: Sequence[str]) -> str | None:
     return None
 
 
-__all__ = ["RelspecIncrementalSpec", "build_incremental_spec", "incremental_spec"]
+__all__ = [
+    "DeltaTableSnapshot",
+    "RelspecIncrementalSpec",
+    "build_incremental_spec",
+    "incremental_spec",
+]

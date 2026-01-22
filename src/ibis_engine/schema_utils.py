@@ -88,6 +88,17 @@ def sqlglot_column_defs(schema: pa.Schema, *, dialect: str = "datafusion") -> li
     return list(ibis_schema.to_sqlglot_column_defs(dialect=dialect))
 
 
+def sqlglot_column_sql(schema: pa.Schema, *, dialect: str = "datafusion") -> list[str]:
+    """Return SQL-rendered column definitions for an Arrow schema.
+
+    Returns
+    -------
+    list[str]
+        Column definition SQL strings.
+    """
+    return [col.sql(dialect=dialect) for col in sqlglot_column_defs(schema, dialect=dialect)]
+
+
 def validate_expr_schema(
     expr: Table,
     *,
@@ -189,5 +200,6 @@ __all__ = [
     "ibis_null_literal",
     "ibis_schema_from_arrow",
     "sqlglot_column_defs",
+    "sqlglot_column_sql",
     "validate_expr_schema",
 ]

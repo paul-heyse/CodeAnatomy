@@ -112,7 +112,6 @@ from sqlglot_tools.optimizer import (
 logger = logging.getLogger(__name__)
 
 
-
 @dataclass(frozen=True)
 class MaterializationPolicy:
     """Policy controlling when full materialization is allowed.

@@ -37,6 +37,27 @@ class SelectorPattern:
     predicate: Callable[[Value], bool] | None = None
 
 
+def selector_from_pattern(pattern: SelectorPattern) -> object:
+    """Return an Ibis selector from a selector pattern.
+
+    Returns
+    -------
+    object
+        Ibis selector expression.
+    """
+    import ibis.selectors as s
+
+    if pattern.column_type == "numeric":
+        return s.numeric()
+    if pattern.column_type == "string":
+        return s.of_type("string")
+    if pattern.column_type == "temporal":
+        return s.of_type("timestamp") | s.of_type("date") | s.of_type("time")
+    if pattern.regex_pattern:
+        return s.matches(pattern.regex_pattern)
+    return s.all()
+
+
 def across_columns(
     table: Table,
     selector: SelectorPattern,
@@ -65,21 +86,7 @@ def across_columns(
     >>> selector = SelectorPattern(name="numeric", column_type="numeric")
     >>> normalized = across_columns(table, selector, lambda col: (col - col.mean()) / col.std())
     """
-    import ibis.selectors as s
-
-    # Build selector from pattern
-    if selector.column_type == "numeric":
-        sel = s.numeric()
-    elif selector.column_type == "string":
-        sel = s.of_type("string")
-    elif selector.column_type == "temporal":
-        # Use individual type selectors combined with OR
-        sel = s.of_type("timestamp") | s.of_type("date") | s.of_type("time")
-    elif selector.regex_pattern:
-        sel = s.matches(selector.regex_pattern)
-    else:
-        # Default to all columns if no specific pattern
-        sel = s.all()
+    sel = selector_from_pattern(selector)
 
     # Bind selector to table to get column expressions
     bound_cols = table.bind(sel)
@@ -334,4 +341,5 @@ __all__ = [
     "deferred_coalesce",
     "deferred_concat_columns",
     "deferred_hash_column",
+    "selector_from_pattern",
 ]

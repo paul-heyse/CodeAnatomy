@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import ibis
 import pyarrow as pa
@@ -37,7 +37,8 @@ from datafusion_engine.runtime import (
 from engine.materialize_pipeline import resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.execution import materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import ibis_null_literal
 from ibis_engine.sources import (
@@ -50,6 +51,9 @@ from ibis_engine.sources import (
 )
 from relspec.rules.handlers.cpg_emit import NodeEmitRuleHandler
 from schema_spec.system import DatasetSpec
+
+if TYPE_CHECKING:
+    from ibis_engine.execution import IbisExecutionContext
 
 
 def _file_span_arrays(
@@ -597,10 +601,10 @@ def _build_cpg_nodes_ibis(
         if not parts
         else _union_nodes_ibis(parts)
     )
-    execution = IbisExecutionContext(
-        ctx=context.ctx,
+    execution = ibis_execution_from_ctx(
+        context.ctx,
+        backend=backend,
         execution_policy=config.execution_policy,
-        ibis_backend=backend,
     )
     materialize_context = IbisMaterializeContext(
         execution=execution,

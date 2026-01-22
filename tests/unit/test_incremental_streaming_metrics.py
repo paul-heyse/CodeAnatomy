@@ -17,6 +17,7 @@ from sqlglot_tools.optimizer import default_sqlglot_policy
 
 EXPECTED_ROW_COUNT = 2
 
+
 def test_streaming_write_records_metrics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

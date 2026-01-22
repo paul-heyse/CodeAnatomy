@@ -21,10 +21,8 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 from sqlglot.errors import ParseError
 
-from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
-from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.io.ipc import IpcWriteInput, ipc_hash
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
@@ -32,9 +30,8 @@ from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_product import PlanProduct
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.execution_factory import ibis_execution_from_profile
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
@@ -155,18 +152,7 @@ def _ensure_dir(path: Path) -> None:
 @lru_cache(maxsize=1)
 def _repro_ibis_execution() -> IbisExecutionContext:
     profile = DataFusionRuntimeProfile()
-    runtime_profile = runtime_profile_factory("default").with_datafusion(profile)
-    ctx = ExecutionContext(runtime=runtime_profile)
-    backend = build_backend(
-        IbisBackendConfig(
-            datafusion_profile=profile,
-            fuse_selects=runtime_profile.ibis_fuse_selects,
-            default_limit=runtime_profile.ibis_default_limit,
-            default_dialect=runtime_profile.ibis_default_dialect,
-            interactive=runtime_profile.ibis_interactive,
-        )
-    )
-    return IbisExecutionContext(ctx=ctx, ibis_backend=backend)
+    return ibis_execution_from_profile(profile)
 
 
 def _write_obs_dataset(

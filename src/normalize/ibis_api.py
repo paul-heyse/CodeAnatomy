@@ -13,7 +13,9 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from arrowdsl.schema.build import empty_table
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.catalog import IbisPlanCatalog, IbisPlanSource
+from ibis_engine.execution import materialize_ibis_plan
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from normalize.ibis_plan_builders import (
@@ -24,8 +26,6 @@ from normalize.ibis_plan_builders import (
     REACHES_NAME,
     TYPE_EXPRS_NAME,
     TYPE_NODES_NAME,
-    IbisPlanCatalog,
-    IbisPlanSource,
     cfg_blocks_plan_ibis,
     cfg_edges_plan_ibis,
     def_use_events_plan_ibis,
@@ -90,7 +90,7 @@ def _require_runtime(runtime: NormalizeRuntime | None) -> NormalizeRuntime:
 def _materialize_table_expr(expr: Table, *, runtime: NormalizeRuntime) -> TableLike:
     runtime_profile = runtime_profile_factory("default").with_datafusion(runtime.runtime_profile)
     exec_ctx = ExecutionContext(runtime=runtime_profile)
-    execution = IbisExecutionContext(ctx=exec_ctx, ibis_backend=runtime.ibis_backend)
+    execution = ibis_execution_from_ctx(exec_ctx, backend=runtime.ibis_backend)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
     return materialize_ibis_plan(plan, execution=execution)
 

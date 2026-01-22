@@ -66,9 +66,7 @@ def _export_delta_expr(
     curr_f = curr.inner_join(changed, predicates=[curr.file_id == changed.file_id])
     key_cols = _export_key_columns(prev, curr)
     predicates = [curr_f[col] == prev_f[col] for col in key_cols]
-    added = curr_f.anti_join(prev_f, predicates=predicates).mutate(
-        delta_kind=ibis.literal("added")
-    )
+    added = curr_f.anti_join(prev_f, predicates=predicates).mutate(delta_kind=ibis.literal("added"))
     removed = prev_f.anti_join(curr_f, predicates=predicates).mutate(
         delta_kind=ibis.literal("removed")
     )
@@ -84,9 +82,7 @@ def _export_key_columns(prev: ibis.Table, curr: ibis.Table) -> list[str]:
 
 def _select_delta_columns(out: ibis.Table) -> list[Value]:
     output_cols = ["delta_kind", "file_id", "path", "qname_id", "qname", "symbol"]
-    return [
-        out[col] if col in out.columns else ibis.literal(None).name(col) for col in output_cols
-    ]
+    return [out[col] if col in out.columns else ibis.literal(None).name(col) for col in output_cols]
 
 
 def _table_expr(backend: BaseBackend, table: TableLike) -> ibis.Table:

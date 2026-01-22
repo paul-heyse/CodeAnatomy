@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from ibis.backends import BaseBackend
 
-from normalize.ibis_plan_builders import IbisPlanCatalog, IbisPlanSource
+from ibis_engine.catalog import IbisPlanCatalog, IbisPlanSource
 
 
 @dataclass(frozen=True)

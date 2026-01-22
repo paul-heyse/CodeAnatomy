@@ -457,6 +457,7 @@ def _matcher_counts(module: cst.Module, options: CSTExtractOptions) -> dict[str,
         parsed = _parse_matcher_template(template, config)
         if parsed is None:
             continue
+
         def _match(node: cst.CSTNode, *, tmpl: cst.CSTNode = parsed) -> bool:
             return node.deep_equals(tmpl)
 

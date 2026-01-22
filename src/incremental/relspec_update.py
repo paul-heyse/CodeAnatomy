@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING
 import ibis
 import pyarrow as pa
 import pyarrow.dataset as ds
+from datafusion import SessionContext
 from deltalake import DeltaTable
 from ibis.backends import BaseBackend
 
@@ -18,10 +20,10 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import align_table, empty_table
 from datafusion_engine.extract_bundles import dataset_name_for_output
+from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.runtime import dataset_spec_from_context
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.execution import materialize_ibis_plan
+from ibis_engine.execution_factory import ibis_backend_from_ctx, ibis_execution_from_ctx
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
@@ -35,16 +37,27 @@ from ibis_engine.query_compiler import (
     apply_query_spec,
     dataset_query_for_file_ids,
 )
-from ibis_engine.registry import ReadDatasetParams, read_dataset
+from ibis_engine.registry import DatasetLocation, ReadDatasetParams, read_dataset
 from ibis_engine.sources import plan_from_source
+from incremental.cdf_cursors import CdfCursorStore
+from incremental.cdf_filters import CdfFilterPolicy
+from incremental.cdf_runtime import CdfReadResult, read_cdf_changes
+from incremental.changes import file_changes_from_cdf
 from incremental.invalidations import validate_schema_identity
 from incremental.pruning import FileScopePolicy, prune_delta_files, record_pruning_metrics
 from incremental.runtime import IncrementalRuntime
+from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_runtime import dataset_name_from_alias
 from relspec.engine import PlanResolver
 from relspec.incremental import incremental_spec
-from storage.deltalake import build_commit_properties, coerce_delta_table
+from schema_spec.system import dataset_spec_from_schema
+from storage.deltalake import (
+    build_commit_properties,
+    coerce_delta_table,
+    delta_cdf_enabled,
+    delta_table_version,
+)
 
 if TYPE_CHECKING:
     from arrowdsl.core.scan_telemetry import ScanTelemetry
@@ -80,12 +93,147 @@ def impacted_file_ids(
     return tuple(sorted(combined))
 
 
+@dataclass(frozen=True)
+class DeltaSnapshot:
+    """Delta time-travel selector for incremental reads."""
+
+    version: int | None = None
+    timestamp: str | None = None
+
+    def read_options(self) -> Mapping[str, object] | None:
+        """Return read options for Delta time travel.
+
+        Returns
+        -------
+        Mapping[str, object] | None
+            Read options compatible with Delta time travel.
+
+        Raises
+        ------
+        ValueError
+            Raised when both version and timestamp are specified.
+        """
+        if self.version is not None and self.timestamp is not None:
+            msg = "DeltaSnapshot cannot include both version and timestamp."
+            raise ValueError(msg)
+        if self.version is not None:
+            return {"version": self.version}
+        if self.timestamp is not None:
+            return {"timestamp": self.timestamp}
+        return None
+
+
+@dataclass(frozen=True)
+class CdfDatasetReadOptions:
+    """Options for reading Delta CDF changes for a dataset."""
+
+    dataset_name: str
+    runtime: IncrementalRuntime
+    cursor_store: CdfCursorStore
+    filter_policy: CdfFilterPolicy | None
+    file_id_column: str
+
+
+@dataclass(frozen=True)
+class RelspecStateReadOptions:
+    """Options controlling state-store reads for relspec inputs."""
+
+    runtime: IncrementalRuntime | None = None
+    cdf_policy: CdfFilterPolicy | None = None
+    use_delta_cdf: bool = True
+    use_delta_time_travel: bool = True
+
+
+def _merge_file_ids(
+    base: Sequence[str],
+    changes: IncrementalFileChanges | None,
+) -> tuple[str, ...]:
+    combined = set(base)
+    if changes is not None:
+        combined.update(changes.changed_file_ids)
+        combined.update(changes.deleted_file_ids)
+    return tuple(sorted(combined))
+
+
+def _cdf_has_columns(result: CdfReadResult, *, file_id_column: str) -> bool:
+    column_names = set(result.table.column_names)
+    return "_change_type" in column_names and file_id_column in column_names
+
+
+def _cdf_changes_for_dataset(
+    dataset_dir: Path,
+    *,
+    options: CdfDatasetReadOptions,
+) -> tuple[CdfReadResult | None, IncrementalFileChanges | None]:
+    if not delta_cdf_enabled(str(dataset_dir)):
+        return None, None
+    cdf_result = read_cdf_changes(
+        options.runtime,
+        dataset_path=str(dataset_dir),
+        dataset_name=options.dataset_name,
+        cursor_store=options.cursor_store,
+        filter_policy=options.filter_policy,
+    )
+    if cdf_result is None:
+        return None, None
+    if not _cdf_has_columns(cdf_result, file_id_column=options.file_id_column):
+        return cdf_result, None
+    changes = file_changes_from_cdf(
+        cdf_result,
+        runtime=options.runtime,
+        file_id_column=options.file_id_column,
+    )
+    if not changes.changed_file_ids and not changes.deleted_file_ids:
+        return cdf_result, None
+    return cdf_result, changes
+
+
+def _delta_snapshot_version(dataset_dir: Path) -> int | None:
+    return delta_table_version(str(dataset_dir))
+
+
+def _table_registered(ctx: SessionContext, *, table_name: str) -> bool:
+    try:
+        ctx.table(table_name)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _register_delta_table_for_insert(
+    ctx: SessionContext,
+    *,
+    dataset_name: str,
+    dataset_dir: Path,
+    schema: pa.Schema,
+    runtime: IncrementalRuntime,
+) -> None:
+    if not DeltaTable.is_deltatable(str(dataset_dir)):
+        return
+    if _table_registered(ctx, table_name=dataset_name):
+        return
+    location = DatasetLocation(
+        path=str(dataset_dir),
+        format="delta",
+        partitioning="hive",
+        dataset_spec=dataset_spec_from_schema(dataset_name, schema),
+    )
+    with contextlib.suppress(RuntimeError, TypeError, ValueError):
+        register_dataset_df(
+            ctx,
+            name=dataset_name,
+            location=location,
+            runtime_profile=runtime.profile,
+        )
+
+
 def relspec_inputs_from_state(
     fallback: Mapping[str, TableLike],
     *,
     state_root: Path,
     ctx: ExecutionContext,
     file_ids: Sequence[str],
+    options: RelspecStateReadOptions | None = None,
 ) -> dict[str, TableLike]:
     """Load relationship input tables from the state store with file-id filtering.
 
@@ -94,6 +242,13 @@ def relspec_inputs_from_state(
     dict[str, TableLike]
         Relationship input tables with scoped file ids when available.
     """
+    spec = incremental_spec()
+    resolved_options = options or RelspecStateReadOptions()
+    cursor_store = None
+    if resolved_options.runtime is not None and resolved_options.use_delta_cdf:
+        cursor_store = CdfCursorStore(
+            cursors_path=StateStore(state_root).cdf_cursors_path(),
+        )
     out: dict[str, TableLike] = {}
     for name, table in fallback.items():
         dataset_name = _relspec_state_dataset_name(name)
@@ -104,11 +259,39 @@ def relspec_inputs_from_state(
         if not dataset_dir.exists():
             out[name] = table
             continue
+        snapshot = None
+        file_id_column = spec.file_id_column_for(dataset_name)
+        effective_file_ids = tuple(file_ids)
+        if (
+            resolved_options.runtime is not None
+            and cursor_store is not None
+            and resolved_options.use_delta_cdf
+            and file_id_column is not None
+        ):
+            cdf_result, cdf_changes = _cdf_changes_for_dataset(
+                dataset_dir,
+                options=CdfDatasetReadOptions(
+                    dataset_name=dataset_name,
+                    runtime=resolved_options.runtime,
+                    cursor_store=cursor_store,
+                    filter_policy=resolved_options.cdf_policy,
+                    file_id_column=file_id_column,
+                ),
+            )
+            if cdf_result is not None and resolved_options.use_delta_time_travel:
+                snapshot = DeltaSnapshot(version=cdf_result.updated_version)
+            if cdf_changes is not None:
+                effective_file_ids = _merge_file_ids(file_ids, cdf_changes)
+        if snapshot is None and resolved_options.use_delta_time_travel:
+            version = _delta_snapshot_version(dataset_dir)
+            if version is not None:
+                snapshot = DeltaSnapshot(version=version)
         out[name] = _read_state_dataset(
             dataset_dir,
             dataset_name=dataset_name,
             ctx=ctx,
-            file_ids=file_ids,
+            file_ids=effective_file_ids,
+            snapshot=snapshot,
         )
     return out
 
@@ -137,16 +320,24 @@ def upsert_relationship_outputs(
         file_id_column = spec.file_id_column_for(dataset_name, columns=table.column_names)
         if file_id_column is None or file_id_column not in table.column_names:
             continue
+        dataset_dir = state_root / "datasets" / dataset_name
         delete_partitions = _partition_specs(file_id_column, changes.deleted_file_ids)
         data = coerce_delta_table(
             table,
             schema=table.schema,
             encoding_policy=encoding_policy_from_schema(table.schema),
         )
-        base_dir = str(state_root / "datasets" / dataset_name)
+        base_dir = str(dataset_dir)
         _delete_delta_partitions(
             base_dir,
             delete_partitions=delete_partitions,
+            runtime=runtime,
+        )
+        _register_delta_table_for_insert(
+            runtime.profile.session_context(),
+            dataset_name=dataset_name,
+            dataset_dir=dataset_dir,
+            schema=data.schema,
             runtime=runtime,
         )
         result = write_ibis_dataset_delta(
@@ -291,6 +482,7 @@ def _read_state_dataset(
     dataset_name: str,
     ctx: ExecutionContext,
     file_ids: Sequence[str],
+    snapshot: DeltaSnapshot | None = None,
 ) -> TableLike:
     try:
         dataset_spec = dataset_spec_from_context(dataset_name)
@@ -300,13 +492,15 @@ def _read_state_dataset(
     if ctx.runtime.datafusion is None:
         msg = "DataFusion runtime profile is required for delta state datasets."
         raise TypeError(msg)
-    backend = build_backend(IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion))
+    backend = ibis_backend_from_ctx(ctx)
+    read_options = snapshot.read_options() if snapshot is not None else None
     table = read_dataset(
         backend,
         params=ReadDatasetParams(
             path=dataset_dir,
             dataset_format="delta",
             partitioning="hive",
+            read_options=read_options,
         ),
     )
     dataset_schema = schema or table.schema().to_pyarrow()
@@ -316,42 +510,66 @@ def _read_state_dataset(
             actual=dataset_schema,
             dataset_name=dataset_name,
         )
-    spec = incremental_spec()
-    file_id_column = spec.file_id_column_for(dataset_name, columns=dataset_schema.names)
-    if file_id_column is not None:
-        if file_ids and len(file_ids) >= FILE_ID_PARAM_THRESHOLD:
-            pruned = _read_state_dataset_pruned(
-                _PrunedDatasetInputs(
-                    dataset_dir=dataset_dir,
-                    dataset_name=dataset_name,
-                    file_id_column=file_id_column,
-                    file_ids=file_ids,
-                    schema=dataset_schema,
-                    ctx=ctx,
-                )
-            )
-            if pruned is not None:
-                return pruned
-        param_spec = spec.file_id_param_spec()
-        policy = ParamTablePolicy()
-        table_name = param_table_name(policy, param_spec.logical_name)
-        query = dataset_query_for_file_ids(
-            file_ids,
-            schema=dataset_schema,
-            options=FileIdQueryOptions(
-                file_id_column=file_id_column,
-                param_table_name=table_name,
-                param_key_column=param_spec.key_col,
-                param_table_threshold=FILE_ID_PARAM_THRESHOLD,
-            ),
-        )
-        plan = plan_from_source(table, ctx=ctx, backend=backend, name=dataset_name)
-        plan = IbisPlan(expr=apply_query_spec(plan.expr, spec=query), ordering=plan.ordering)
-        execution = IbisExecutionContext(ctx=ctx, ibis_backend=backend)
-        return materialize_ibis_plan(plan, execution=execution)
+    filtered = _apply_file_id_filter(
+        table=table,
+        dataset_schema=dataset_schema,
+        dataset_name=dataset_name,
+        file_ids=file_ids,
+        ctx=ctx,
+        backend=backend,
+        dataset_dir=dataset_dir,
+    )
+    if filtered is not None:
+        return filtered
     if schema is None:
         return table.to_pyarrow()
     return empty_table(schema)
+
+
+def _apply_file_id_filter(
+    *,
+    table: TableLike,
+    dataset_schema: pa.Schema,
+    dataset_name: str,
+    file_ids: Sequence[str],
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+    dataset_dir: Path,
+) -> TableLike | None:
+    spec = incremental_spec()
+    file_id_column = spec.file_id_column_for(dataset_name, columns=dataset_schema.names)
+    if file_id_column is None:
+        return None
+    if file_ids and len(file_ids) >= FILE_ID_PARAM_THRESHOLD:
+        pruned = _read_state_dataset_pruned(
+            _PrunedDatasetInputs(
+                dataset_dir=dataset_dir,
+                dataset_name=dataset_name,
+                file_id_column=file_id_column,
+                file_ids=file_ids,
+                schema=dataset_schema,
+                ctx=ctx,
+            )
+        )
+        if pruned is not None:
+            return pruned
+    param_spec = spec.file_id_param_spec()
+    policy = ParamTablePolicy()
+    table_name = param_table_name(policy, param_spec.logical_name)
+    query = dataset_query_for_file_ids(
+        file_ids,
+        schema=dataset_schema,
+        options=FileIdQueryOptions(
+            file_id_column=file_id_column,
+            param_table_name=table_name,
+            param_key_column=param_spec.key_col,
+            param_table_threshold=FILE_ID_PARAM_THRESHOLD,
+        ),
+    )
+    plan = plan_from_source(table, ctx=ctx, backend=backend, name=dataset_name)
+    plan = IbisPlan(expr=apply_query_spec(plan.expr, spec=query), ordering=plan.ordering)
+    execution = ibis_execution_from_ctx(ctx, backend=backend)
+    return materialize_ibis_plan(plan, execution=execution)
 
 
 def _read_state_dataset_pruned(inputs: _PrunedDatasetInputs) -> pa.Table | None:
@@ -361,9 +579,7 @@ def _read_state_dataset_pruned(inputs: _PrunedDatasetInputs) -> pa.Table | None:
     )
     result = prune_delta_files(inputs.dataset_dir, policy)
     diagnostics_sink = (
-        inputs.ctx.runtime.datafusion.diagnostics_sink
-        if inputs.ctx.runtime.datafusion
-        else None
+        inputs.ctx.runtime.datafusion.diagnostics_sink if inputs.ctx.runtime.datafusion else None
     )
     record_pruning_metrics(
         sink=diagnostics_sink,

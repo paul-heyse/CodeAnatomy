@@ -16,6 +16,7 @@ def file_changes_from_cdf(
     cdf_result: CdfReadResult | None,
     *,
     runtime: IncrementalRuntime,
+    file_id_column: str = "file_id",
 ) -> IncrementalFileChanges:
     """Derive file change sets from Delta CDF table.
 
@@ -25,6 +26,8 @@ def file_changes_from_cdf(
         CDF read result with _change_type column.
     runtime : IncrementalRuntime
         Shared incremental runtime for DataFusion execution.
+    file_id_column : str
+        Column name to use for file identifiers in the CDF table.
 
     Returns
     -------
@@ -40,7 +43,7 @@ def file_changes_from_cdf(
     update_type = ibis.literal(CdfChangeType.UPDATE_POSTIMAGE.to_cdf_column_value())
     delete_type = ibis.literal(CdfChangeType.DELETE.to_cdf_column_value())
     change_type_col = cdf_expr["_change_type"]
-    file_id_col = cdf_expr["file_id"]
+    file_id_col = cdf_expr[file_id_column]
 
     changed_filter = ibis.and_(
         change_type_col.isin([insert_type, update_type]),

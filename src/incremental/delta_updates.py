@@ -67,10 +67,7 @@ def upsert_partitioned_dataset(
         Raised when required partition columns are missing.
     """
     if spec.partition_column not in table.column_names:
-        msg = (
-            "Partition column "
-            f"{spec.partition_column!r} is required for dataset {spec.name!r}."
-        )
+        msg = f"Partition column {spec.partition_column!r} is required for dataset {spec.name!r}."
         raise ValueError(msg)
     if spec.schema is not None and spec.partition_column not in spec.schema.names:
         msg = (

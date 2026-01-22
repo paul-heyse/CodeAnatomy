@@ -91,10 +91,12 @@ from incremental.publish import (
     publish_cpg_props,
 )
 from incremental.relspec_update import (
+    RelspecStateReadOptions,
     impacted_file_ids,
     relspec_inputs_from_state,
     scoped_relspec_resolver,
 )
+from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
 from normalize.utils import encoding_policy_from_schema
@@ -253,6 +255,18 @@ class RelspecIncrementalContext:
     impact: IncrementalImpact
     config: IncrementalConfig
     ctx: ExecutionContext
+    runtime: IncrementalRuntime | None
+
+
+@dataclass(frozen=True)
+class RelspecIncrementalInputs:
+    """Inputs required to assemble the relspec incremental context."""
+
+    file_changes: IncrementalFileChanges
+    impact: IncrementalImpact
+    config: IncrementalConfig
+    ctx: ExecutionContext
+    runtime: IncrementalRuntime | None
 
 
 @dataclass(frozen=True)
@@ -980,13 +994,34 @@ def relspec_input_bundles(
     )
 
 
-@tag(layer="incremental", artifact="relspec_incremental_context", kind="object")
-def relspec_incremental_context(
-    incremental_state_store: StateStore | None,
+@tag(layer="incremental", artifact="relspec_incremental_inputs", kind="object")
+def relspec_incremental_inputs(
     incremental_file_changes: IncrementalFileChanges,
     incremental_impact: IncrementalImpact,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
     ctx: ExecutionContext,
+) -> RelspecIncrementalInputs:
+    """Bundle incremental inputs for relationship datasets.
+
+    Returns
+    -------
+    RelspecIncrementalInputs
+        Incremental inputs for relspec dataset assembly.
+    """
+    return RelspecIncrementalInputs(
+        file_changes=incremental_file_changes,
+        impact=incremental_impact,
+        config=incremental_config,
+        ctx=ctx,
+        runtime=incremental_runtime,
+    )
+
+
+@tag(layer="incremental", artifact="relspec_incremental_context", kind="object")
+def relspec_incremental_context(
+    incremental_state_store: StateStore | None,
+    relspec_incremental_inputs: RelspecIncrementalInputs,
 ) -> RelspecIncrementalContext:
     """Bundle incremental context for relationship datasets.
 
@@ -997,10 +1032,11 @@ def relspec_incremental_context(
     """
     return RelspecIncrementalContext(
         state_store=incremental_state_store,
-        file_changes=incremental_file_changes,
-        impact=incremental_impact,
-        config=incremental_config,
-        ctx=ctx,
+        file_changes=relspec_incremental_inputs.file_changes,
+        impact=relspec_incremental_inputs.impact,
+        config=relspec_incremental_inputs.config,
+        ctx=relspec_incremental_inputs.ctx,
+        runtime=relspec_incremental_inputs.runtime,
     )
 
 
@@ -1145,6 +1181,7 @@ def relspec_input_datasets(
         state_root=relspec_incremental_context.state_store.root,
         ctx=relspec_incremental_context.ctx,
         file_ids=file_ids,
+        options=RelspecStateReadOptions(runtime=relspec_incremental_context.runtime),
     )
 
 
@@ -1212,11 +1249,7 @@ def persist_relspec_input_datasets(
         spec = dataset_specs.get(name)
         policy = spec.encoding_policy() if spec is not None else None
         encoding_policies[name] = policy or encoding_policy_from_schema(table.schema)
-    delta_mode = (
-        "overwrite"
-        if relspec_persist_options.overwrite_intermediate_datasets
-        else "error"
-    )
+    delta_mode = "overwrite" if relspec_persist_options.overwrite_intermediate_datasets else "error"
     delta_options = IbisDeltaWriteOptions(mode=delta_mode, schema_mode="overwrite")
     converted = {
         name: coerce_delta_table(

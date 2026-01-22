@@ -449,9 +449,7 @@ def _plan_artifact_row(
         ),
         "run_id": str(artifact.get("run_id")) if artifact.get("run_id") is not None else None,
         "plan_hash": (
-            str(artifact.get("plan_hash"))
-            if artifact.get("plan_hash") is not None
-            else None
+            str(artifact.get("plan_hash")) if artifact.get("plan_hash") is not None else None
         ),
         "sql": str(artifact.get("sql") or ""),
         "normalized_sql": (
@@ -471,14 +469,10 @@ def _plan_artifact_row(
         ),
         "substrait_validation_status": substrait_status,
         "sqlglot_ast": (
-            str(artifact.get("sqlglot_ast"))
-            if artifact.get("sqlglot_ast") is not None
-            else None
+            str(artifact.get("sqlglot_ast")) if artifact.get("sqlglot_ast") is not None else None
         ),
         "read_dialect": (
-            str(artifact.get("read_dialect"))
-            if artifact.get("read_dialect") is not None
-            else None
+            str(artifact.get("read_dialect")) if artifact.get("read_dialect") is not None else None
         ),
         "write_dialect": (
             str(artifact.get("write_dialect"))
@@ -504,9 +498,7 @@ def _plan_artifact_row(
             else None
         ),
         "unparsed_sql": (
-            str(artifact.get("unparsed_sql"))
-            if artifact.get("unparsed_sql") is not None
-            else None
+            str(artifact.get("unparsed_sql")) if artifact.get("unparsed_sql") is not None else None
         ),
         "unparse_error": (
             str(artifact.get("unparse_error"))
@@ -514,9 +506,7 @@ def _plan_artifact_row(
             else None
         ),
         "logical_plan": (
-            str(artifact.get("logical_plan"))
-            if artifact.get("logical_plan") is not None
-            else None
+            str(artifact.get("logical_plan")) if artifact.get("logical_plan") is not None else None
         ),
         "optimized_plan": (
             str(artifact.get("optimized_plan"))
@@ -560,18 +550,14 @@ def engine_runtime_table(
             "runtime_profile_name": str(artifact.get("runtime_profile_name") or ""),
             "determinism_tier": str(artifact.get("determinism_tier") or ""),
             "runtime_profile_hash": str(artifact.get("runtime_profile_hash") or ""),
-            "runtime_profile_snapshot": _stringify_payload(
-                artifact.get("runtime_profile_snapshot")
-            )
+            "runtime_profile_snapshot": _stringify_payload(artifact.get("runtime_profile_snapshot"))
             or "",
             "sqlglot_policy_hash": (
                 str(artifact.get("sqlglot_policy_hash"))
                 if artifact.get("sqlglot_policy_hash") is not None
                 else None
             ),
-            "sqlglot_policy_snapshot": _stringify_payload(
-                artifact.get("sqlglot_policy_snapshot")
-            ),
+            "sqlglot_policy_snapshot": _stringify_payload(artifact.get("sqlglot_policy_snapshot")),
             "function_registry_hash": (
                 str(artifact.get("function_registry_hash"))
                 if artifact.get("function_registry_hash") is not None
@@ -585,9 +571,7 @@ def engine_runtime_table(
                 if artifact.get("datafusion_settings_hash") is not None
                 else None
             ),
-            "datafusion_settings": _stringify_payload(
-                artifact.get("datafusion_settings")
-            ),
+            "datafusion_settings": _stringify_payload(artifact.get("datafusion_settings")),
         }
         for artifact in artifacts
     ]
@@ -646,9 +630,7 @@ def datafusion_object_stores_table(
             "scheme": str(record.get("scheme") or ""),
             "host": str(record.get("host")) if record.get("host") is not None else None,
             "store_type": (
-                str(record.get("store_type"))
-                if record.get("store_type") is not None
-                else None
+                str(record.get("store_type")) if record.get("store_type") is not None else None
             ),
         }
         for record in records

@@ -308,6 +308,7 @@ def list_param_join(
     param_table: Table,
     left_col: str,
     right_col: str | None = None,
+    options: JoinOptions | None = None,
 ) -> Table:
     """Return a semi-join against a list-parameter table.
 
@@ -317,11 +318,12 @@ def list_param_join(
         Filtered table constrained by param table membership.
     """
     key = right_col or left_col
+    resolved = options or JoinOptions(how="semi")
     return stable_join(
         table,
         param_table,
         [table[left_col] == param_table[key]],
-        options=JoinOptions(how="semi"),
+        options=resolved,
     )
 
 

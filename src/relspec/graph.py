@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -15,13 +16,27 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.io.ipc import payload_hash
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.execution import materialize_ibis_plan
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.expr_compiler import align_set_op_tables, union_tables
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from relspec.compiler import RelationshipRuleCompiler, RuleExecutionOptions
 from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_schema
 from relspec.engine import IbisRelPlanCompiler
+from relspec.errors import (
+    RelspecCompilationError,
+    RelspecExecutionError,
+    RelspecValidationError,
+)
+from relspec.execution_lanes import (
+    DataFusionLaneInputs,
+    DataFusionLaneOptions,
+    ExecutionLaneRecord,
+    execute_plan_datafusion,
+    record_execution_lane,
+    safe_backend,
+)
 from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
 from relspec.model import RelationshipRule
 from relspec.rules.definitions import EvidenceSpec as RuleEvidenceSpec
@@ -29,6 +44,8 @@ from relspec.rules.evidence import EvidenceCatalog
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+
+logger = logging.getLogger(__name__)
 
 RULE_GRAPH_SIGNATURE_VERSION = 1
 _RULE_GRAPH_RULE_SCHEMA = pa.struct(
@@ -109,7 +126,7 @@ def compile_graph_plan(
 
     Raises
     ------
-    ValueError
+    RelspecExecutionError
         Raised when no Ibis backend is configured.
 
     Returns
@@ -122,7 +139,7 @@ def compile_graph_plan(
     execution = execution or GraphExecutionOptions()
     if execution.ibis_backend is None:
         msg = "Ibis backend is required for graph plan compilation."
-        raise ValueError(msg)
+        raise RelspecExecutionError(msg)
     ibis_backend = execution.ibis_backend
 
     def _plan_executor(
@@ -132,12 +149,40 @@ def compile_graph_plan(
         execution_label: ExecutionLabel | None = None,
     ) -> TableLike:
         resolved_params = exec_params if exec_params is not None else execution.params
-        ibis_execution = IbisExecutionContext(
-            ctx=exec_ctx,
+        runtime_profile = exec_ctx.runtime.datafusion
+        sqlglot_backend = safe_backend(ibis_backend)
+        if runtime_profile is not None and sqlglot_backend is not None:
+            try:
+                return execute_plan_datafusion(
+                    plan,
+                    inputs=DataFusionLaneInputs(
+                        ctx=exec_ctx,
+                        backend=sqlglot_backend,
+                        params=resolved_params,
+                        execution_policy=execution.execution_policy,
+                        execution_label=execution_label,
+                        runtime_profile=runtime_profile,
+                        options=DataFusionLaneOptions(),
+                    ),
+                )
+            except (TypeError, ValueError, RuntimeError) as exc:
+                record_execution_lane(
+                    diagnostics_sink=runtime_profile.diagnostics_sink,
+                    record=ExecutionLaneRecord(
+                        engine="ibis",
+                        lane="fallback",
+                        fallback_reason=str(exc),
+                        execution_label=execution_label,
+                        options=DataFusionLaneOptions(),
+                    ),
+                )
+                logger.exception("DataFusion lane failed; falling back to Ibis execution.")
+        ibis_execution = ibis_execution_from_ctx(
+            exec_ctx,
+            backend=ibis_backend,
+            params=resolved_params,
             execution_policy=execution.execution_policy,
             execution_label=execution_label,
-            ibis_backend=ibis_backend,
-            params=resolved_params,
         )
         return materialize_ibis_plan(plan, execution=ibis_execution)
 
@@ -199,14 +244,14 @@ def compile_union_graph_plan[RuleT](
 
     Raises
     ------
-    ValueError
+    RelspecCompilationError
         Raised when there are no output plans available.
     """
     ordered_outputs = [output_for(rule) for rule in rules if output_for(rule) in plans]
     outputs = {name: plans[name] for name in ordered_outputs}
     if not outputs:
         msg = f"{label} requires at least one output plan."
-        raise ValueError(msg)
+        raise RelspecCompilationError(msg)
     expr = union_tables([plan.expr for plan in outputs.values()], distinct=False)
     union = IbisPlan(expr=expr, ordering=Ordering.unordered())
     return GraphPlan(plan=union, outputs=outputs)
@@ -237,7 +282,7 @@ def order_rules(
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the rule dependency graph contains cycles.
     """
     work = evidence.clone()
@@ -248,7 +293,7 @@ def order_rules(
         if not ready:
             missing = sorted({rule.name for rule in pending})
             msg = f"Relationship rule graph cannot resolve evidence for: {missing}"
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
 
         ready_sorted = sorted(ready, key=lambda rule: (rule.priority, rule.name))
         for rule in ready_sorted:
@@ -274,7 +319,7 @@ def order_rules_by_evidence[RuleT](
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the rule dependency graph contains cycles.
     """
     schema_for = selectors.output_schema_for or (lambda _: None)
@@ -301,7 +346,7 @@ def order_rules_by_evidence[RuleT](
         if not ready:
             missing = sorted(selectors.name_for(rule) for rule in pending)
             msg = f"{label} graph cannot resolve evidence for: {missing}"
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         ready_sorted = sorted(
             ready,
             key=lambda rule: (
@@ -360,7 +405,7 @@ def _union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
 
     Raises
     ------
-    ValueError
+    RelspecCompilationError
         Raised when no plans are provided.
 
     Returns
@@ -370,7 +415,7 @@ def _union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
     """
     if not plans:
         msg = f"{label} requires at least one plan to union."
-        raise ValueError(msg)
+        raise RelspecCompilationError(msg)
     _validate_set_op_ordering([plan.ordering for plan in plans], op_label="union")
     unioned = union_tables([plan.expr for plan in plans], distinct=False)
     return IbisPlan(expr=unioned, ordering=Ordering.unordered())
@@ -398,11 +443,11 @@ def _validate_set_op_ordering(orderings: Sequence[Ordering], *, op_label: str) -
         return
     if len(levels) != 1:
         msg = f"Set op {op_label} requires consistent ordering levels."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     reference = orderings[0]
     if any(ordering != reference for ordering in orderings[1:]):
         msg = f"Set op {op_label} requires consistent ordering keys."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
 
 
 def _plan_schema(plan: IbisPlan) -> SchemaLike:

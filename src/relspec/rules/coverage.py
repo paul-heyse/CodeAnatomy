@@ -13,6 +13,7 @@ from arrowdsl.kernel.registry import KERNEL_REGISTRY, KernelDef
 from datafusion_engine.extract_builders import QueryContext, build_query_spec
 from datafusion_engine.extract_metadata import extract_metadata_specs
 from datafusion_engine.extract_pipelines import post_kernels_for_postprocess
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.function_registry import (
     FunctionRegistry,
     FunctionSpec,
@@ -22,6 +23,7 @@ from engine.function_registry import (
 from ibis_engine.expr_compiler import IbisExprRegistry, default_expr_registry
 from ibis_engine.query_compiler import IbisQuerySpec
 from normalize.rule_factories import build_rule_definitions_from_specs
+from relspec.capabilities import RuntimeCapabilities, runtime_capabilities_for_profile
 from relspec.model import KernelSpecT
 from relspec.normalize.rule_registry_specs import rule_family_specs
 from relspec.rules.cache import rule_definitions_cached
@@ -31,7 +33,6 @@ from relspec.rules.definitions import (
     RelationshipPayload,
     RuleDefinition,
 )
-from relspec.rules.rel_ops import AggregateOp, DeriveOp, FilterOp, PushdownFilterOp, RelOpT
 from relspec.rules.relationship_specs import relationship_rule_definitions
 
 
@@ -111,6 +112,8 @@ class FunctionCoverage:
     ibis_supported: bool
     pyarrow_supported: bool
     registry_supported: bool
+    datafusion_builtin: bool
+    datafusion_category: str | None
     lanes: tuple[str, ...] = ()
     kind: str | None = None
 
@@ -126,6 +129,8 @@ class FunctionCoverage:
             "ibis_supported": self.ibis_supported,
             "pyarrow_supported": self.pyarrow_supported,
             "registry_supported": self.registry_supported,
+            "datafusion_builtin": self.datafusion_builtin,
+            "datafusion_category": self.datafusion_category,
             "lanes": list(self.lanes),
             "kind": self.kind,
         }
@@ -212,6 +217,7 @@ def assess_rule_coverage(
     *,
     registry: FunctionRegistry | None = None,
     include_extract_queries: bool = True,
+    capabilities: RuntimeCapabilities | None = None,
 ) -> RuleCoverageAssessment:
     """Assess function and kernel coverage for rule-driven demands.
 
@@ -223,6 +229,8 @@ def assess_rule_coverage(
         Optional function registry override.
     include_extract_queries
         Whether to include extract dataset query specs in ExprIR demands.
+    capabilities
+        Optional runtime capability snapshot for builtin coverage checks.
 
     Returns
     -------
@@ -239,11 +247,13 @@ def assess_rule_coverage(
         registry=registry,
         expr_registry=expr_registry,
         pyarrow_functions=pyarrow_functions,
+        capabilities=capabilities,
     )
     aggregate_coverage = _aggregate_coverage(
         demands.aggregate_funcs,
         registry=registry,
         pyarrow_functions=pyarrow_functions,
+        capabilities=capabilities,
     )
     kernel_coverage = _kernel_coverage(demands.kernel_names)
     supported_post_kernels = set(_post_kernel_kinds())
@@ -284,25 +294,11 @@ def collect_rule_demands(
     """
     demands = RuleDemandIndex()
     for rule in rules:
-        _collect_rel_ops(rule.rel_ops, rule.name, demands)
         _collect_payload(rule, demands)
         _collect_post_kernels(rule, demands)
     if include_extract_queries:
         _collect_extract_queries(demands)
     return demands
-
-
-def _collect_rel_ops(ops: Sequence[RelOpT], rule_name: str, demands: RuleDemandIndex) -> None:
-    for op in ops:
-        if isinstance(op, DeriveOp):
-            _collect_expr_calls(op.expr, rule_name, demands)
-        elif isinstance(op, (FilterOp, PushdownFilterOp)):
-            _collect_expr_calls(op.predicate, rule_name, demands)
-        elif isinstance(op, AggregateOp):
-            for spec in op.aggregates:
-                _add_demand(demands.aggregate_funcs, spec.func, rule_name)
-                for arg in spec.args:
-                    _collect_expr_calls(arg, rule_name, demands)
 
 
 def _collect_payload(rule: RuleDefinition, demands: RuleDemandIndex) -> None:
@@ -382,14 +378,42 @@ def _collect_extract_payload(
         _add_demand(demands.extract_postprocess, payload.postprocess, rule.name)
 
 
+@cache
+def _runtime_capabilities() -> RuntimeCapabilities | None:
+    try:
+        profile = DataFusionRuntimeProfile()
+    except (ImportError, RuntimeError, ValueError):
+        return None
+    try:
+        return runtime_capabilities_for_profile(profile)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _datafusion_category_map(
+    capabilities: RuntimeCapabilities | None,
+) -> dict[str, str]:
+    if capabilities is None:
+        return {}
+    mapping: dict[str, str] = {}
+    for category, names in capabilities.functions_by_category.items():
+        for name in names:
+            mapping.setdefault(name, category)
+    return mapping
+
+
 def _function_coverage(
     demands: Mapping[str, set[str]],
     *,
     registry: FunctionRegistry,
     expr_registry: IbisExprRegistry,
     pyarrow_functions: set[str],
+    capabilities: RuntimeCapabilities | None = None,
 ) -> dict[str, FunctionCoverage]:
     coverage: dict[str, FunctionCoverage] = {}
+    resolved = capabilities or _runtime_capabilities()
+    builtin_names = resolved.function_names if resolved is not None else frozenset()
+    category_map = _datafusion_category_map(resolved)
     for name in sorted(demands):
         registry_spec = registry.specs.get(name)
         registry_supported = registry_spec is not None
@@ -400,6 +424,8 @@ def _function_coverage(
             ibis_supported=ibis_supported,
             pyarrow_supported=pyarrow_supported,
             registry_supported=registry_supported,
+            datafusion_builtin=name in builtin_names,
+            datafusion_category=category_map.get(name),
             lanes=lanes,
             kind=kind,
         )
@@ -411,9 +437,13 @@ def _aggregate_coverage(
     *,
     registry: FunctionRegistry,
     pyarrow_functions: set[str],
+    capabilities: RuntimeCapabilities | None = None,
 ) -> dict[str, FunctionCoverage]:
     coverage: dict[str, FunctionCoverage] = {}
     ibis_supported = _ibis_aggregate_support_map(demands)
+    resolved = capabilities or _runtime_capabilities()
+    builtin_names = resolved.function_names if resolved is not None else frozenset()
+    category_map = _datafusion_category_map(resolved)
     for name in sorted(demands):
         registry_spec = registry.specs.get(name)
         registry_supported = registry_spec is not None
@@ -423,6 +453,8 @@ def _aggregate_coverage(
             ibis_supported=ibis_supported.get(name, False),
             pyarrow_supported=pyarrow_supported,
             registry_supported=registry_supported,
+            datafusion_builtin=name in builtin_names,
+            datafusion_category=category_map.get(name),
             lanes=lanes,
             kind=kind,
         )
@@ -504,6 +536,9 @@ def _coverage_summary(assessment: RuleCoverageAssessment) -> dict[str, int]:
         "expr_calls_missing_pyarrow": sum(
             1 for cov in assessment.expr_call_coverage.values() if not cov.pyarrow_supported
         ),
+        "expr_calls_missing_datafusion": sum(
+            1 for cov in assessment.expr_call_coverage.values() if not cov.datafusion_builtin
+        ),
         "aggregate_funcs": len(assessment.aggregate_coverage),
         "aggregate_funcs_missing_ibis": sum(
             1 for cov in assessment.aggregate_coverage.values() if not cov.ibis_supported
@@ -513,6 +548,9 @@ def _coverage_summary(assessment: RuleCoverageAssessment) -> dict[str, int]:
         ),
         "aggregate_funcs_missing_pyarrow": sum(
             1 for cov in assessment.aggregate_coverage.values() if not cov.pyarrow_supported
+        ),
+        "aggregate_funcs_missing_datafusion": sum(
+            1 for cov in assessment.aggregate_coverage.values() if not cov.datafusion_builtin
         ),
         "kernel_names": len(assessment.kernel_coverage),
         "kernel_names_missing_registry": sum(

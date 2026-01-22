@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from relspec.errors import RelspecValidationError
 from relspec.registry.rules import RuleRegistry
 from relspec.rules.coverage import RuleCoverageAssessment, assess_rule_coverage
 from relspec.rules.diagnostics import RuleDiagnostic
@@ -22,14 +23,14 @@ class ValidationReport:
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when validation errors are present.
         """
         if not self.errors:
             return
         summary = "; ".join(self.errors)
         msg = f"Relspec validation failed: {summary}"
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
 
 
 def validate_registry(

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
+from arrowdsl.core.execution_context import execution_context_factory
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.schemas import (
@@ -15,8 +16,7 @@ from cpg.schemas import (
     CPG_PROPS_GLOBAL_SCHEMA,
     CPG_PROPS_SCHEMA,
 )
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution_factory import ibis_backend_from_ctx
 from ibis_engine.registry import ReadDatasetParams, read_dataset
 from incremental.invalidations import validate_schema_identity
 from incremental.state_store import StateStore
@@ -123,7 +123,8 @@ def _dataset_path(
 def _read_state_dataset_optional(path: Path, *, schema: pa.Schema) -> pa.Table | None:
     if not path.exists():
         return None
-    backend = build_backend(IbisBackendConfig())
+    ctx = execution_context_factory("default")
+    backend = ibis_backend_from_ctx(ctx)
     table = read_dataset(
         backend,
         params=ReadDatasetParams(

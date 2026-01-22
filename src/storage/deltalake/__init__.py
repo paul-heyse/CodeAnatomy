@@ -20,6 +20,7 @@ __all__ = (
     "cleanup_delta_log",
     "coerce_delta_table",
     "create_delta_checkpoint",
+    "delta_cdf_enabled",
     "delta_commit_metadata",
     "delta_history_snapshot",
     "delta_protocol_snapshot",
@@ -49,6 +50,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "cleanup_delta_log": ("storage.deltalake.delta", "cleanup_delta_log"),
     "coerce_delta_table": ("storage.deltalake.delta", "coerce_delta_table"),
     "create_delta_checkpoint": ("storage.deltalake.delta", "create_delta_checkpoint"),
+    "delta_cdf_enabled": ("storage.deltalake.delta", "delta_cdf_enabled"),
     "delta_commit_metadata": ("storage.deltalake.delta", "delta_commit_metadata"),
     "delta_history_snapshot": ("storage.deltalake.delta", "delta_history_snapshot"),
     "delta_protocol_snapshot": ("storage.deltalake.delta", "delta_protocol_snapshot"),
@@ -91,6 +93,7 @@ if TYPE_CHECKING:
     delta_commit_metadata = _delta_io.delta_commit_metadata
     delta_history_snapshot = _delta_io.delta_history_snapshot
     delta_protocol_snapshot = _delta_io.delta_protocol_snapshot
+    delta_cdf_enabled = _delta_io.delta_cdf_enabled
     delta_table_features = _delta_io.delta_table_features
     delta_table_version = _delta_io.delta_table_version
     enable_delta_features = _delta_io.enable_delta_features

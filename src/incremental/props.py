@@ -192,7 +192,10 @@ def _attach_file_id_expr(
     inputs: _AttachFileIdInputs,
 ) -> tuple[ibis.Table | None, ibis.Table]:
     kind_props = props_expr.filter(props_expr.entity_kind == ibis.literal(inputs.kind))
-    if inputs.mapping_id not in mapping_expr.columns or inputs.mapping_file_id not in mapping_expr.columns:
+    if (
+        inputs.mapping_id not in mapping_expr.columns
+        or inputs.mapping_file_id not in mapping_expr.columns
+    ):
         return None, kind_props
     mapping = mapping_expr.select(
         entity_id=mapping_expr[inputs.mapping_id],

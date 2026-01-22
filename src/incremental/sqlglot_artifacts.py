@@ -109,6 +109,7 @@ def record_sqlglot_artifact(
     )
     sink.record_artifact("incremental_sqlglot_plan_v1", payload)
 
+
 __all__ = [
     "record_sqlglot_artifact",
     "sqlglot_artifact_hash",

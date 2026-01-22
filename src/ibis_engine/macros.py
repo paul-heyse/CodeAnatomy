@@ -80,28 +80,13 @@ def bind_columns(table: Table, *selectors: object) -> tuple[Value, ...]:
     >>> # Bind numeric columns, a specific column, and a deferred expression
     >>> bound = bind_columns(table, cs.numeric(), "id", _.x + 1)
     """
-    from ibis_engine.selector_utils import SelectorPattern
+    from ibis_engine.selector_utils import SelectorPattern, selector_from_pattern
 
     # Convert SelectorPattern objects to Ibis selectors
     converted_selectors: list[object] = []
     for selector in selectors:
         if isinstance(selector, SelectorPattern):
-            # Import here to avoid circular dependency
-            import ibis.selectors as s
-
-            if selector.column_type == "numeric":
-                converted_selectors.append(s.numeric())
-            elif selector.column_type == "string":
-                converted_selectors.append(s.of_type("string"))
-            elif selector.column_type == "temporal":
-                # Use individual type selectors combined with OR
-                temporal_sel = s.of_type("timestamp") | s.of_type("date") | s.of_type("time")
-                converted_selectors.append(temporal_sel)
-            elif selector.regex_pattern:
-                converted_selectors.append(s.matches(selector.regex_pattern))
-            else:
-                # Default to all columns
-                converted_selectors.append(s.all())
+            converted_selectors.append(selector_from_pattern(selector))
         else:
             converted_selectors.append(selector)
 
@@ -209,22 +194,11 @@ def apply_across(
     >>> from ibis import _
     >>> centered = apply_across(table, s.numeric(), lambda col: col - col.mean())
     """
-    from ibis_engine.selector_utils import SelectorPattern
+    from ibis_engine.selector_utils import SelectorPattern, selector_from_pattern
 
     # Convert SelectorPattern to Ibis selector if needed
     if isinstance(selector, SelectorPattern):
-        import ibis.selectors as s
-
-        if selector.column_type == "numeric":
-            selector = s.numeric()
-        elif selector.column_type == "string":
-            selector = s.of_type("string")
-        elif selector.column_type == "temporal":
-            selector = s.of_type("timestamp") | s.of_type("date") | s.of_type("time")
-        elif selector.regex_pattern:
-            selector = s.matches(selector.regex_pattern)
-        else:
-            selector = s.all()
+        selector = selector_from_pattern(selector)
 
     # Bind selector to get columns, then apply function to each
     bound_cols = bind_columns(table, selector)

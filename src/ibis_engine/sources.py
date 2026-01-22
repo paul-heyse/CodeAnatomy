@@ -546,9 +546,7 @@ def write_delta_ibis(
 
 
 def _commit_properties(options: IbisDeltaWriteOptions) -> CommitProperties | None:
-    custom_metadata = (
-        dict(options.commit_metadata) if options.commit_metadata is not None else None
-    )
+    custom_metadata = dict(options.commit_metadata) if options.commit_metadata is not None else None
     app_transactions = None
     if options.app_id is not None and options.version is not None:
         app_transactions = [Transaction(app_id=options.app_id, version=options.version)]

@@ -21,6 +21,7 @@ from ibis_engine.expr_compiler import (
 )
 from ibis_engine.macros import IbisMacroSpec, apply_macros
 from ibis_engine.param_tables import ParamTablePolicy, ParamTableRegistry, ParamTableSpec
+from ibis_engine.params_bridge import list_param_join
 
 FILE_ID_PARAM_THRESHOLD = 500
 
@@ -41,9 +42,11 @@ class FileIdParamMacro:
         ibis.expr.types.Table
             Filtered table containing rows that match the parameter table.
         """
-        return table.semi_join(
-            self.param_table,
-            (table[self.file_id_column] == self.param_table[self.param_key_column],),
+        return list_param_join(
+            table,
+            param_table=self.param_table,
+            left_col=self.file_id_column,
+            right_col=self.param_key_column,
         )
 
 

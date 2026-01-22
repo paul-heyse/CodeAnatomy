@@ -33,9 +33,8 @@ from datafusion_engine.runtime import (
 )
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
@@ -386,20 +385,10 @@ def _copy_options(
 
 
 def _ibis_execution_from_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
-    runtime_profile = ctx.runtime
-    datafusion_profile = runtime_profile.datafusion
-    if datafusion_profile is None:
-        datafusion_profile = DataFusionRuntimeProfile()
-    backend = build_backend(
-        IbisBackendConfig(
-            datafusion_profile=datafusion_profile,
-            fuse_selects=runtime_profile.ibis_fuse_selects,
-            default_limit=runtime_profile.ibis_default_limit,
-            default_dialect=runtime_profile.ibis_default_dialect,
-            interactive=runtime_profile.ibis_interactive,
-        )
-    )
-    return IbisExecutionContext(ctx=ctx, ibis_backend=backend)
+    if ctx.runtime.datafusion is None:
+        runtime_profile = ctx.runtime.with_datafusion(DataFusionRuntimeProfile())
+        ctx = ExecutionContext(runtime=runtime_profile)
+    return ibis_execution_from_ctx(ctx)
 
 
 def _write_policy_for_dataset(
@@ -518,10 +507,7 @@ def _write_external(
     location = context.location
     normalized_format = location.format.lower()
     if normalized_format not in {"parquet", "csv", "json"}:
-        msg = (
-            "DataFusion writes only support parquet/csv/json, "
-            f"got {context.location.format!r}."
-        )
+        msg = f"DataFusion writes only support parquet/csv/json, got {context.location.format!r}."
         raise ValueError(msg)
     df_ctx = context.runtime_profile.session_context()
     temp_name = f"__extract_write_{uuid.uuid4().hex}"

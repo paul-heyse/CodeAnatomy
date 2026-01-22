@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import cast
 
 import ibis
@@ -19,13 +19,11 @@ from ibis.expr.types import (
 )
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering, OrderingKey
 from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
 from arrowdsl.schema.semantic_types import SPAN_STORAGE
 from datafusion_engine.extract_registry import dataset_schema as extract_dataset_schema
-from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.normalize_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -35,6 +33,7 @@ from datafusion_engine.normalize_ids import (
 )
 from datafusion_engine.schema_registry import DIAG_DETAILS_TYPE
 from ibis_engine.builtin_udfs import col_to_byte
+from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
@@ -44,11 +43,9 @@ from ibis_engine.schema_utils import (
     validate_expr_schema,
 )
 from ibis_engine.sources import (
-    DatasetSource,
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
     register_ibis_table,
-    source_to_ibis,
 )
 from normalize.ibis_exprs import position_encoding_norm_expr
 from normalize.registry_runtime import dataset_input_schema, dataset_schema
@@ -65,75 +62,6 @@ DIAG_NAME = "diagnostics_norm_v1"
 _DEF_USE_OPS: tuple[str, ...] = ("IMPORT_NAME", "IMPORT_FROM")
 _DEF_USE_PREFIXES: tuple[str, ...] = ("STORE_", "DELETE_")
 _USE_PREFIXES: tuple[str, ...] = ("LOAD_",)
-
-IbisPlanSource = IbisPlan | Table | TableLike | ViewReference
-
-
-@dataclass
-class IbisPlanCatalog:
-    """Catalog wrapper for Ibis plan inputs."""
-
-    backend: BaseBackend
-    tables: dict[str, IbisPlanSource] = field(default_factory=dict)
-
-    def resolve_expr(
-        self,
-        name: str,
-        *,
-        ctx: ExecutionContext,
-        schema: pa.Schema,
-    ) -> Table:
-        """Resolve an input table into an Ibis expression.
-
-        Returns
-        -------
-        ibis.expr.types.Table
-            Ibis table expression for the named input.
-
-        Raises
-        ------
-        TypeError
-            Raised when a DatasetSource must be materialized before use.
-        """
-        source = self.tables.get(name)
-        if source is None:
-            empty = empty_table(schema)
-            plan = register_ibis_table(
-                empty,
-                options=SourceToIbisOptions(
-                    backend=self.backend,
-                    name=None,
-                    ordering=Ordering.unordered(),
-                    namespace_recorder=namespace_recorder_from_ctx(ctx),
-                ),
-            )
-            return plan.expr
-        if isinstance(source, IbisPlan):
-            return source.expr
-        if isinstance(source, ViewReference):
-            expr = _view_reference_expr(self.backend, source)
-            self.tables[name] = expr
-            return expr
-        if isinstance(source, Table):
-            return source
-        if isinstance(source, DatasetSource):
-            msg = f"DatasetSource {name!r} must be materialized before normalize builds."
-            raise TypeError(msg)
-        plan = source_to_ibis(
-            cast("TableLike", source),
-            options=SourceToIbisOptions(
-                backend=self.backend,
-                name=name,
-                ordering=Ordering.unordered(),
-                namespace_recorder=namespace_recorder_from_ctx(ctx),
-            ),
-        )
-        self.tables[name] = plan
-        return plan.expr
-
-    def add(self, name: str, plan: IbisPlan) -> None:
-        """Add a derived Ibis plan to the catalog."""
-        self.tables[name] = plan
 
 
 def _drop_columns(table: Table, names: Sequence[str]) -> Table:
@@ -176,9 +104,7 @@ def type_exprs_plan_ibis(
             bstart=filtered.bstart,
             bend=filtered.bend,
             col_unit=filtered.col_unit if "col_unit" in filtered.columns else None,
-            end_exclusive=filtered.end_exclusive
-            if "end_exclusive" in filtered.columns
-            else None,
+            end_exclusive=filtered.end_exclusive if "end_exclusive" in filtered.columns else None,
         )
     )
     updates: dict[str, Value] = {
@@ -211,10 +137,6 @@ def type_exprs_plan_ibis(
         allow_extra_columns=ctx.debug,
     )
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
-
-
-def _view_reference_expr(backend: BaseBackend, fragment: ViewReference) -> Table:
-    return backend.table(fragment.name)
 
 
 def type_nodes_plan_ibis(
@@ -667,26 +589,16 @@ def _span_struct_expr(inputs: SpanStructInputs) -> Value:
     null_i32 = ibis_null_literal(pa.int32())
     null_bool = ibis_null_literal(pa.bool_())
     null_str = ibis_null_literal(pa.string())
-    start_line_expr = (
-        inputs.start_line0 if inputs.start_line0 is not None else null_i32
-    ).cast("int32")
-    end_line_expr = (inputs.end_line0 if inputs.end_line0 is not None else null_i32).cast(
+    start_line_expr = (inputs.start_line0 if inputs.start_line0 is not None else null_i32).cast(
         "int32"
     )
-    start_col_expr = (inputs.start_col if inputs.start_col is not None else null_i32).cast(
-        "int32"
-    )
-    end_col_expr = (inputs.end_col if inputs.end_col is not None else null_i32).cast(
-        "int32"
-    )
-    col_unit_expr = (inputs.col_unit if inputs.col_unit is not None else null_str).cast(
-        "string"
-    )
+    end_line_expr = (inputs.end_line0 if inputs.end_line0 is not None else null_i32).cast("int32")
+    start_col_expr = (inputs.start_col if inputs.start_col is not None else null_i32).cast("int32")
+    end_col_expr = (inputs.end_col if inputs.end_col is not None else null_i32).cast("int32")
+    col_unit_expr = (inputs.col_unit if inputs.col_unit is not None else null_str).cast("string")
     end_exclusive_expr = (
         inputs.end_exclusive if inputs.end_exclusive is not None else null_bool
-    ).cast(
-        "boolean"
-    )
+    ).cast("boolean")
     bstart_i64 = cast("NumericValue", inputs.bstart.cast("int64"))
     bend_i64 = cast("NumericValue", inputs.bend.cast("int64"))
     byte_start = ibis.ifelse(span_ok, bstart_i64.cast("int32"), null_i32)

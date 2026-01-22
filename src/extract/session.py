@@ -9,8 +9,7 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution_factory import ibis_backend_from_ctx
 
 
 @dataclass(frozen=True)
@@ -32,8 +31,11 @@ def build_extract_session(ctx: ExecutionContext) -> ExtractSession:
         DataFusion SessionContext plus Ibis backend bound to the runtime profile.
     """
     df_profile = ctx.runtime.datafusion or DataFusionRuntimeProfile()
+    if ctx.runtime.datafusion is None:
+        runtime_profile = ctx.runtime.with_datafusion(df_profile)
+        ctx = ExecutionContext(runtime=runtime_profile)
     df_ctx = df_profile.session_context()
-    backend = build_backend(IbisBackendConfig(datafusion_profile=df_profile))
+    backend = ibis_backend_from_ctx(ctx)
     return ExtractSession(
         exec_ctx=ctx,
         df_profile=df_profile,

@@ -1827,7 +1827,10 @@ def _effective_catalog_autoload_for_profile(
         return profile.ast_catalog_location, profile.ast_catalog_format
     if profile.bytecode_catalog_location is not None or profile.bytecode_catalog_format is not None:
         return profile.bytecode_catalog_location, profile.bytecode_catalog_format
-    if profile.catalog_auto_load_location is not None or profile.catalog_auto_load_format is not None:
+    if (
+        profile.catalog_auto_load_location is not None
+        or profile.catalog_auto_load_format is not None
+    ):
         return profile.catalog_auto_load_location, profile.catalog_auto_load_format
     env_settings = _catalog_autoload_settings()
     return (
@@ -1867,7 +1870,9 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         "write_policy": write_policy_payload,
         "feature_gates": _map_entries(profile.feature_gates.settings()),
         "join_policy": (
-            _map_entries(profile.join_policy.settings()) if profile.join_policy is not None else None
+            _map_entries(profile.join_policy.settings())
+            if profile.join_policy is not None
+            else None
         ),
         "parquet_read": _map_entries(parquet_read),
         "listing_table": _map_entries(listing_table),
@@ -2155,7 +2160,9 @@ class _RuntimeDiagnosticsMixin:
                 else None
             ),
             "param_identifier_allowlist": (
-                list(profile.param_identifier_allowlist) if profile.param_identifier_allowlist else None
+                list(profile.param_identifier_allowlist)
+                if profile.param_identifier_allowlist
+                else None
             ),
             "external_table_options": dict(profile.external_table_options)
             if profile.external_table_options
@@ -2204,11 +2211,15 @@ class _RuntimeDiagnosticsMixin:
                 else None
             ),
             "param_identifier_allowlist": (
-                list(profile.param_identifier_allowlist) if profile.param_identifier_allowlist else None
+                list(profile.param_identifier_allowlist)
+                if profile.param_identifier_allowlist
+                else None
             ),
             "write_policy": _datafusion_write_policy_payload(profile.write_policy),
             "feature_gates": dict(profile.feature_gates.settings()),
-            "join_policy": profile.join_policy.settings() if profile.join_policy is not None else None,
+            "join_policy": profile.join_policy.settings()
+            if profile.join_policy is not None
+            else None,
             "parquet_read": _settings_by_prefix(settings, "datafusion.execution.parquet."),
             "listing_table": _settings_by_prefix(settings, "datafusion.runtime.list_files_"),
             "spill": {
@@ -2759,7 +2770,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
             base_metadata: dict[str, str] = {"key": key}
             if metadata:
-                base_metadata.update({str(item_key): str(item_value) for item_key, item_value in metadata.items()})
+                base_metadata.update(
+                    {str(item_key): str(item_value) for item_key, item_value in metadata.items()}
+                )
             run = create_run_context(
                 label="delta_commit",
                 sink=self.diagnostics_sink,
@@ -3250,7 +3263,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = f"No dataset location configured for {name!r}."
             raise KeyError(msg)
         return location
-
 
     def _register_scip_datasets(self, ctx: SessionContext) -> None:
         if not self.scip_dataset_locations:
@@ -4252,7 +4264,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             plan_artifacts_hook=cast("PlanArtifactsHook | None", hooks["plan_artifacts"]),
             sql_ingest_hook=cast("SqlIngestHook | None", hooks["sql_ingest"]),
             cache_event_hook=cast("CacheEventHook | None", hooks["cache_event"]),
-            substrait_fallback_hook=cast("SubstraitFallbackHook | None", hooks["substrait_fallback"]),
+            substrait_fallback_hook=cast(
+                "SubstraitFallbackHook | None", hooks["substrait_fallback"]
+            ),
         )
 
     def _resolve_sql_policy(
@@ -4706,9 +4720,7 @@ def _rulepack_required_functions(
     from relspec.rules.coverage import collect_rule_demands
 
     demands = collect_rule_demands(rule_definitions_cached(), include_extract_queries=True)
-    registry = default_function_registry(
-        datafusion_function_catalog=datafusion_function_catalog
-    )
+    registry = default_function_registry(datafusion_function_catalog=datafusion_function_catalog)
     required: dict[str, set[str]] = {}
     required_counts: dict[str, int] = {}
     required_signatures: dict[str, set[tuple[str, ...]]] = {}
@@ -5077,13 +5089,12 @@ def read_delta_as_reader(
     if delta_scan is not None:
         msg = "Ibis read_delta does not support DeltaScanConfig overrides."
         raise ValueError(msg)
-    from ibis_engine.backend import build_backend
-    from ibis_engine.config import IbisBackendConfig
+    from ibis_engine.execution_factory import ibis_backend_from_profile
     from ibis_engine.io_bridge import ibis_table_to_reader
     from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
 
     runtime_profile = DataFusionRuntimeProfile()
-    backend = build_backend(IbisBackendConfig(datafusion_profile=runtime_profile))
+    backend = ibis_backend_from_profile(runtime_profile)
     table = read_delta_ibis(
         backend,
         path,

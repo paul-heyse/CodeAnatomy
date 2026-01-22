@@ -49,6 +49,14 @@ class IbisExecutionContext:
     probe_capabilities: bool = True
     cache_policy: IbisCachePolicy | None = None
 
+    def __post_init__(self) -> None:
+        """Apply runtime defaults after initialization."""
+        if self.batch_size is not None:
+            return
+        runtime_batch = self.ctx.runtime.scan.batch_size
+        if runtime_batch is not None:
+            object.__setattr__(self, "batch_size", runtime_batch)
+
     def plan_options(self) -> IbisPlanExecutionOptions:
         """Build plan execution options for the current context.
 

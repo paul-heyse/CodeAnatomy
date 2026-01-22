@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import pyarrow as pa
@@ -14,6 +14,7 @@ from datafusion_engine.sql_options import (
     statement_sql_options_for_profile,
 )
 from datafusion_engine.table_provider_metadata import table_provider_metadata
+from ibis_engine.schema_utils import sqlglot_column_defs
 from sqlglot_tools.optimizer import SchemaMapping, SchemaMappingNode
 
 SCHEMA_MAP_HASH_VERSION: int = 1
@@ -230,67 +231,20 @@ def constraint_rows(
     return _rows_for_query(ctx, query, sql_options=sql_options)
 
 
-def _arrow_type_to_sql_type(arrow_type: pa.DataType) -> str:
-    """Convert PyArrow type to DataFusion SQL type string.
-
-    Parameters
-    ----------
-    arrow_type : pa.DataType
-        PyArrow data type to convert.
-
-    Returns
-    -------
-    str
-        SQL type string for CREATE EXTERNAL TABLE DDL.
-    """
-    scalar_type = _arrow_scalar_sql_type(arrow_type)
-    if scalar_type is not None:
-        return scalar_type
-    if pa.types.is_decimal(arrow_type):
-        decimal_type = arrow_type
-        return f"DECIMAL({decimal_type.precision}, {decimal_type.scale})"
-    if pa.types.is_list(arrow_type):
-        value_type = _arrow_type_to_sql_type(arrow_type.value_type)
-        return f"{value_type}[]"
-    if pa.types.is_struct(arrow_type):
-        field_defs = ", ".join(
-            f"{struct_field.name} {_arrow_type_to_sql_type(struct_field.type)}"
-            for struct_field in arrow_type
-        )
-        return f"STRUCT({field_defs})"
-    if pa.types.is_map(arrow_type):
-        key_type = _arrow_type_to_sql_type(arrow_type.key_type)
-        item_type = _arrow_type_to_sql_type(arrow_type.item_type)
-        return f"MAP({key_type}, {item_type})"
-    return "VARCHAR"
-
-
-def _arrow_scalar_sql_type(arrow_type: pa.DataType) -> str | None:
-    checks: tuple[tuple[Callable[[pa.DataType], bool], str], ...] = (
-        (pa.types.is_boolean, "BOOLEAN"),
-        (pa.types.is_int8, "TINYINT"),
-        (pa.types.is_int16, "SMALLINT"),
-        (pa.types.is_int32, "INT"),
-        (pa.types.is_int64, "BIGINT"),
-        (pa.types.is_uint8, "TINYINT UNSIGNED"),
-        (pa.types.is_uint16, "SMALLINT UNSIGNED"),
-        (pa.types.is_uint32, "INT UNSIGNED"),
-        (pa.types.is_uint64, "BIGINT UNSIGNED"),
-        (pa.types.is_float32, "FLOAT"),
-        (pa.types.is_float64, "DOUBLE"),
-        (pa.types.is_string, "VARCHAR"),
-        (pa.types.is_large_string, "VARCHAR"),
-        (pa.types.is_binary, "BYTEA"),
-        (pa.types.is_large_binary, "BYTEA"),
-        (pa.types.is_date32, "DATE"),
-        (pa.types.is_date64, "DATE"),
-        (pa.types.is_timestamp, "TIMESTAMP"),
-        (pa.types.is_duration, "INTERVAL"),
-    )
-    for check, sql_type in checks:
-        if check(arrow_type):
-            return sql_type
-    return None
+def _ddl_column_defs(schema: pa.Schema, *, partition_columns: set[str]) -> list[str]:
+    sqlglot_defs = sqlglot_column_defs(schema, dialect="datafusion")
+    if len(sqlglot_defs) != len(schema):
+        msg = "SQLGlot column definitions must match schema column count."
+        raise ValueError(msg)
+    column_defs: list[str] = []
+    for schema_field, column_def in zip(schema, sqlglot_defs, strict=True):
+        if schema_field.name in partition_columns:
+            continue
+        column_sql = column_def.sql(dialect="datafusion")
+        if not schema_field.nullable and "NOT NULL" not in column_sql.upper():
+            column_sql = f"{column_sql} NOT NULL"
+        column_defs.append(f"  {column_sql}")
+    return column_defs
 
 
 @dataclass(frozen=True)
@@ -316,13 +270,10 @@ class ExternalTableDDLBuilder:
         str
             DDL statement for registering the external table.
         """
-        column_defs = []
-        for schema_field in self.schema:
-            if schema_field.name in self.partition_columns:
-                continue
-            sql_type = _arrow_type_to_sql_type(schema_field.type)
-            nullable = "" if schema_field.nullable else " NOT NULL"
-            column_defs.append(f"  {schema_field.name} {sql_type}{nullable}")
+        column_defs = _ddl_column_defs(
+            self.schema,
+            partition_columns=set(self.partition_columns),
+        )
 
         columns_clause = ",\n".join(column_defs)
 
@@ -554,37 +505,6 @@ class SchemaIntrospector:
             )
         return mapping
 
-    def _schema_map_for_sqlglot(self) -> SchemaMapping:
-        """Return a SQLGlot-compatible nested schema mapping.
-
-        Returns a nested mapping structure compatible with SQLGlot's SchemaMapping
-        type, which has the form: {catalog: {schema: {table: {column: type}}}}.
-
-        Returns
-        -------
-        SchemaMapping
-            Nested mapping structure for SQLGlot optimizer.
-        """
-        rows = self.columns_snapshot()
-        mapping: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
-        for row in rows:
-            catalog = row.get("table_catalog")
-            schema = row.get("table_schema")
-            table = row.get("table_name")
-            column = row.get("column_name")
-            dtype = row.get("data_type")
-            if not isinstance(table, str) or not isinstance(column, str):
-                continue
-            if not table or not column:
-                continue
-            catalog_name = str(catalog) if catalog is not None else "datafusion"
-            schema_name = str(schema) if schema is not None else "public"
-            dtype_str = str(dtype) if dtype is not None else "unknown"
-            mapping.setdefault(catalog_name, {}).setdefault(schema_name, {}).setdefault(table, {})[
-                column
-            ] = dtype_str
-        return mapping
-
     def schema_map_fingerprint(self) -> str:
         """Return a stable fingerprint for the information_schema schema map.
 
@@ -813,6 +733,38 @@ class SchemaIntrospector:
             elif name:
                 constraints.append(str(name))
         return tuple(constraints)
+
+
+def schema_map_for_sqlglot(introspector: SchemaIntrospector) -> SchemaMapping:
+    """Return a SQLGlot-compatible nested schema mapping.
+
+    Returns a nested mapping structure compatible with SQLGlot's SchemaMapping
+    type, which has the form: {catalog: {schema: {table: {column: type}}}}.
+
+    Returns
+    -------
+    SchemaMapping
+        Nested schema mapping for SQLGlot qualification and validation.
+    """
+    rows = introspector.columns_snapshot()
+    mapping: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
+    for row in rows:
+        catalog = row.get("table_catalog")
+        schema = row.get("table_schema")
+        table = row.get("table_name")
+        column = row.get("column_name")
+        dtype = row.get("data_type")
+        if not isinstance(table, str) or not isinstance(column, str):
+            continue
+        if not table or not column:
+            continue
+        catalog_name = str(catalog) if catalog is not None else "datafusion"
+        schema_name = str(schema) if schema is not None else "public"
+        dtype_str = str(dtype) if dtype is not None else "unknown"
+        mapping.setdefault(catalog_name, {}).setdefault(schema_name, {}).setdefault(table, {})[
+            column
+        ] = dtype_str
+    return mapping
 
 
 def schema_map_fingerprint_from_mapping(mapping: SchemaMapping) -> str:

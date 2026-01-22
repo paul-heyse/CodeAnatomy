@@ -1,0 +1,19 @@
+{
+  "$defs": {
+    "CdfCursorStore": {
+      "additionalProperties": false,
+      "description": "Persistent storage for CDF cursors.\n\nThis store manages per-dataset cursors that track the last processed\nDelta table version for incremental CDF reads.\n\nAttributes\n----------\ncursors_path : Path\n    Path to the directory containing cursor files.",
+      "properties": {
+        "cursors_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cursors_path"
+      ],
+      "title": "CdfCursorStore",
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/CdfCursorStore"
+}

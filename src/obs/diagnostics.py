@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from serde_msgspec import StructBase
+
 
 @dataclass
 class DiagnosticsCollector:
@@ -44,8 +46,7 @@ class DiagnosticsCollector:
         return {name: list(rows) for name, rows in self.artifacts.items()}
 
 
-@dataclass(frozen=True)
-class PreparedStatementSpec:
+class PreparedStatementSpec(StructBase):
     """Prepared statement metadata for diagnostics reporting."""
 
     name: str

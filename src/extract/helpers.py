@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import ibis
+import msgspec
 import pyarrow as pa
 from ibis.backends import BaseBackend
 
@@ -39,6 +40,7 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from relspec.rules.definitions import RuleStage, stage_enabled
+from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
@@ -725,10 +727,14 @@ def ast_def_nodes_plan(plan: IbisPlan) -> IbisPlan:
 def _options_overrides(options: object | None) -> Mapping[str, object]:
     if options is None:
         return {}
-    if is_dataclass(options) and not isinstance(options, type):
-        return asdict(options)
     if isinstance(options, Mapping):
         return dict(options)
+    try:
+        builtins = to_builtins(options)
+    except (msgspec.EncodeError, TypeError):
+        return {}
+    if isinstance(builtins, Mapping):
+        return dict(builtins)
     return {}
 
 

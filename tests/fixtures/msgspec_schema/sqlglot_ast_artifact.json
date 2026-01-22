@@ -1,0 +1,25 @@
+{
+  "$defs": {
+    "AstArtifact": {
+      "additionalProperties": false,
+      "description": "SQLGlot AST artifact with serialization metadata.",
+      "properties": {
+        "ast_raw": {},
+        "policy_hash": {
+          "type": "string"
+        },
+        "sql": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sql",
+        "ast_raw",
+        "policy_hash"
+      ],
+      "title": "AstArtifact",
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/AstArtifact"
+}

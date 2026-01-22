@@ -15,6 +15,13 @@ This plan upgrades SQLGlot usage to a best-in-class, production-grade policy eng
 
 ---
 
+## Status (Updated)
+
+- Implementation completed across core SQLGlot policy, dialect, transforms, and parameter handling.
+- Documentation, emission, and regression test follow-ups are complete.
+
+---
+
 ## Item 1: Canonical Pipeline on `optimize()` (Policy Alignment)
 
 ### Goal
@@ -58,10 +65,10 @@ def compile_expr(
 - `src/normalize/runner.py`
 
 ### Implementation Checklist
-- [ ] Add `SqlGlotCompileOptions` + `compile_expr`.
-- [ ] Make `normalize_expr` delegate to `compile_expr` or explicitly migrate call sites.
-- [ ] Ensure `SqlGlotPolicySnapshot.rules` reflects the actual optimizer rules in use.
-- [ ] Add a migration note in docs for any deprecated normalization path.
+- [x] Add `SqlGlotCompileOptions` + `compile_expr`.
+- [x] Make `normalize_expr` delegate to `compile_expr` or explicitly migrate call sites.
+- [x] Ensure `SqlGlotPolicySnapshot.rules` reflects the actual optimizer rules in use.
+- [x] Add a migration note in docs for any deprecated normalization path.
 
 ---
 
@@ -94,9 +101,9 @@ DEFAULT_SURFACE_POLICIES: dict[SqlGlotSurface, SqlGlotSurfacePolicy] = {
 - `src/schema_spec/view_specs.py`
 
 ### Implementation Checklist
-- [ ] Introduce canonical dialect constants and update `default_sqlglot_policy`.
-- [ ] Ensure DataFusion execution uses `datafusion_ext` at the surface policy layer.
-- [ ] Verify any DuckDB-specific functions/types used in IR are valid.
+- [x] Introduce canonical dialect constants and update `default_sqlglot_policy`.
+- [x] Ensure DataFusion execution uses `datafusion_ext` at the surface policy layer.
+- [x] Verify any DuckDB-specific functions/types used in IR are valid.
 
 ---
 
@@ -135,9 +142,9 @@ class DataFusionGenerator(SqlGlotGenerator):
 - `src/schema_spec/view_specs.py`
 
 ### Implementation Checklist
-- [ ] Add a generator-level transform chain via `preprocess`.
-- [ ] Keep DDL-specific property transforms in the generator.
-- [ ] Add regression tests for `CREATE EXTERNAL TABLE` and `QUALIFY`.
+- [x] Add a generator-level transform chain via `preprocess`.
+- [x] Keep DDL-specific property transforms in the generator.
+- [x] Add regression tests for `CREATE EXTERNAL TABLE` and `QUALIFY`.
 
 ---
 
@@ -178,11 +185,11 @@ def parse_sql(
 - `src/datafusion_engine/runtime.py`
 
 ### Implementation Checklist
-- [ ] Add `ParseSqlOptions` + `parse_sql`.
-- [ ] Update `sanitize_templated_sql` to preserve parameter markers when requested.
-- [ ] Use `parse_sql(..., preserve_params=True)` for DML/exec/preflight when params exist.
-- [ ] Expand `bind_params` to accept numeric placeholders (`$1`) and normalize names.
-- [ ] Add tests for parameterized SQL parsing + binding.
+- [x] Add `ParseSqlOptions` + `parse_sql`.
+- [x] Update `sanitize_templated_sql` to preserve parameter markers when requested.
+- [x] Use `parse_sql(..., preserve_params=True)` for DML/exec/preflight when params exist.
+- [x] Expand `bind_params` to accept numeric placeholders (`$1`) and normalize names.
+- [x] Add tests for parameterized SQL parsing + binding.
 
 ---
 
@@ -214,9 +221,9 @@ expr = parse_sql(
 - `src/sqlglot_tools/compat.py`
 
 ### Implementation Checklist
-- [ ] Replace direct `parse_one` usage with `parse_sql`.
-- [ ] Use `sqlglot_tools.compat.diff` consistently for semantic diffs.
-- [ ] Add a test fixture for parse + diff stability.
+- [x] Replace direct `parse_one` usage with `parse_sql`.
+- [x] Use `sqlglot_tools.compat.diff` consistently for semantic diffs.
+- [x] Add a test fixture for parse + diff stability.
 
 ---
 
@@ -245,9 +252,9 @@ schema_map_hash = (
 - `src/relspec/execution_bundle.py`
 
 ### Implementation Checklist
-- [ ] Remove duplicate `canonical_ast_fingerprint` in `lineage.py`.
-- [ ] Use `schema_map_fingerprint_from_mapping` for preflight hashing.
-- [ ] Ensure plan signatures include policy hash + rules hash + schema hash.
+- [x] Remove duplicate `canonical_ast_fingerprint` in `lineage.py`.
+- [x] Use `schema_map_fingerprint_from_mapping` for preflight hashing.
+- [x] Ensure plan signatures include policy hash + rules hash + schema hash.
 
 ---
 
@@ -282,9 +289,9 @@ def sqlglot_emit(
 - `src/schema_spec/specs.py`
 
 ### Implementation Checklist
-- [ ] Implement `sqlglot_emit` and update `sqlglot_sql` or call sites.
-- [ ] Ensure all SQL emission uses the helper.
-- [ ] Add a quoting regression test for uppercase identifiers.
+- [x] Implement `sqlglot_emit` and update `sqlglot_sql` or call sites.
+- [x] Ensure all SQL emission uses the helper.
+- [x] Add a quoting regression test for uppercase identifiers.
 
 ---
 
@@ -315,9 +322,9 @@ if resolved.prefer_ast_execution:
 - `tests/sqlglot/test_rewrite_regressions.py`
 
 ### Implementation Checklist
-- [ ] Add `prefer_ast_execution` to compile options.
-- [ ] Route to `df_from_sqlglot_ast` when enabled.
-- [ ] Add a regression test that uses AST execution and validates results.
+- [x] Add `prefer_ast_execution` to compile options.
+- [x] Route to `df_from_sqlglot_ast` when enabled.
+- [x] Add a regression test that uses AST execution and validates results.
 
 ---
 
@@ -345,9 +352,9 @@ policy = replace(policy, identify=True, validate_qualify_columns=True)
 - `src/normalize/runner.py`
 
 ### Implementation Checklist
-- [ ] Replace local policy helpers with `resolve_sqlglot_policy`.
-- [ ] Keep override adjustments (`identify`, `validate_qualify_columns`) explicit.
-- [ ] Update docstrings for any policy surfaces.
+- [x] Replace local policy helpers with `resolve_sqlglot_policy`.
+- [x] Keep override adjustments (`identify`, `validate_qualify_columns`) explicit.
+- [x] Update docstrings for any policy surfaces.
 
 ---
 
@@ -375,19 +382,21 @@ def test_optimize_pipeline_semantics() -> None:
 - `scripts/sqlglot_semantic_harness.py`
 
 ### Implementation Checklist
-- [ ] Add optimize() semantic regression tests.
-- [ ] Add parameterized SQL parse/bind tests.
-- [ ] Add generator transform tests for DataFusion DDL.
+- [x] Add optimize() semantic regression tests.
+- [x] Add parameterized SQL parse/bind tests.
+- [x] Add generator transform tests for DataFusion DDL.
 
 ---
 
 ## Global Implementation Checklist
 
-- [ ] Introduce `compile_expr` with `optimize()` as the canonical pipeline.
-- [ ] Move to a DuckDB canonical dialect and DataFusion emission surfaces.
-- [ ] Add parameterized SQL parsing and binding support.
-- [ ] Standardize parse/diff entrypoints.
-- [ ] Unify AST + schema hashing.
-- [ ] Enforce policy-accurate SQL emission (`identify`, `unsupported_level`).
-- [ ] Keep AST execution path tested.
-- [ ] Expand SQLGlot regression tests for rewrites and parameters.
+- [x] Introduce `compile_expr` with `optimize()` as the canonical pipeline.
+- [x] Move to a DuckDB canonical dialect and DataFusion emission surfaces.
+- [x] Add parameterized SQL parsing and binding support.
+- [x] Standardize parse/diff entrypoints.
+- [x] Unify AST + schema hashing.
+- [x] Enforce policy-accurate SQL emission (`identify`, `unsupported_level`).
+- [x] Keep AST execution path tested.
+- [x] Expand SQLGlot regression tests for rewrites and parameters.
+
+---

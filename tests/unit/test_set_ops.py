@@ -13,7 +13,7 @@ from ibis_engine.expr_compiler import (
     union_tables,
 )
 from ibis_engine.plan import IbisPlan
-from relspec.compiler_graph import union_plans
+from relspec.graph import union_plans
 
 EXPECTED_UNION_ALL_COUNT = 4
 EXPECTED_UNION_DISTINCT_COUNT = 3

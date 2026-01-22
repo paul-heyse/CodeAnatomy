@@ -7,10 +7,10 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 import ibis
+import msgspec
 import pyarrow as pa
 from ibis.expr.types import Expr, Table, Value
 from sqlglot.errors import ParseError
-from sqlglot.serde import dump
 
 from ibis_engine.schema_utils import validate_expr_schema
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
@@ -19,9 +19,11 @@ from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
     SqlGlotPolicy,
+    ast_to_artifact,
     normalize_expr,
     parse_sql_strict,
     resolve_sqlglot_policy,
+    serialize_ast_artifact,
     sqlglot_policy_snapshot_for,
     sqlglot_sql,
     transpile_sql,
@@ -57,8 +59,8 @@ class SqlIngestArtifacts:
     dialect: str | None = None
     sqlglot_sql: str | None = None
     normalized_sql: str | None = None
-    sqlglot_ast: object | None = None
-    ibis_sqlglot_ast: object | None = None
+    sqlglot_ast: bytes | None = None
+    ibis_sqlglot_ast: bytes | None = None
     sqlglot_policy_hash: str | None = None
     sqlglot_policy_snapshot: Mapping[str, object] | None = None
 
@@ -98,6 +100,7 @@ class SqlIngestSqlGlotContext:
     policy_hash: str | None = None
     policy_snapshot: Mapping[str, object] | None = None
     dialect: str | None = None
+    policy: SqlGlotPolicy | None = None
 
 
 def parse_sql_table(spec: SqlIngestSpec) -> Table:
@@ -125,6 +128,7 @@ def parse_sql_table(spec: SqlIngestSpec) -> Table:
         policy_hash=policy_hash,
         policy_snapshot=policy_snapshot.payload(),
         dialect=policy.write_dialect,
+        policy=policy,
     )
     try:
         normalized_expr = _resolve_ingest_expr(
@@ -256,7 +260,7 @@ def _emit_sql_ingest_failure(
         "error": str(error),
         "sqlglot_sql": _sql_text(context.sqlglot_expr, dialect=dialect),
         "normalized_sql": context.normalized_sql,
-        "sqlglot_ast": _sqlglot_ast_payload(context.sqlglot_expr),
+        "sqlglot_ast": _sqlglot_ast_payload(context.sqlglot_expr, policy=context.policy),
         "sqlglot_policy_hash": context.policy_hash,
         "sqlglot_policy_snapshot": (
             dict(context.policy_snapshot) if context.policy_snapshot is not None else None
@@ -276,6 +280,17 @@ def _schema_map_from_catalog(
 
 
 def _sqlglot_policy_for_spec(spec: SqlIngestSpec) -> SqlGlotPolicy:
+    """Return a resolved SQLGlot policy for a SQL ingest specification.
+
+    Notes
+    -----
+    Uses ``resolve_sqlglot_policy`` and applies dialect overrides when provided.
+
+    Returns
+    -------
+    SqlGlotPolicy
+        Resolved SQLGlot policy configured for the ingestion spec.
+    """
     policy = resolve_sqlglot_policy()
     if spec.dialect is None:
         return replace(policy, validate_qualify_columns=True, identify=True)
@@ -356,8 +371,8 @@ def sql_ingest_artifacts(
         dialect=context.dialect,
         sqlglot_sql=_sql_text(context.sqlglot_expr, dialect=context.dialect),
         normalized_sql=context.normalized_sql,
-        sqlglot_ast=_sqlglot_ast_payload(context.sqlglot_expr),
-        ibis_sqlglot_ast=_sqlglot_ast_payload(context.ibis_sqlglot_expr),
+        sqlglot_ast=_sqlglot_ast_payload(context.sqlglot_expr, policy=context.policy),
+        ibis_sqlglot_ast=_sqlglot_ast_payload(context.ibis_sqlglot_expr, policy=context.policy),
         sqlglot_policy_hash=context.policy_hash,
         sqlglot_policy_snapshot=context.policy_snapshot,
     )
@@ -372,12 +387,16 @@ def _sql_text(expr: Expression | None, *, dialect: str | None) -> str | None:
         return str(expr)
 
 
-def _sqlglot_ast_payload(expr: Expression | None) -> object | None:
+def _sqlglot_ast_payload(
+    expr: Expression | None,
+    *,
+    policy: SqlGlotPolicy | None,
+) -> bytes | None:
     if expr is None:
         return None
     try:
-        return dump(expr)
-    except (TypeError, ValueError):
+        return serialize_ast_artifact(ast_to_artifact(expr, policy=policy))
+    except (TypeError, ValueError, msgspec.EncodeError):
         return None
 
 

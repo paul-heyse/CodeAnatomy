@@ -12,6 +12,8 @@ from datafusion_engine.nested_tables import ViewReference
 from engine.plan_policy import WriterStrategy
 from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation, RelspecSnapshot
+from relspec.rustworkx_graph import GraphDiagnostics, RuleGraphSnapshot
+from relspec.rustworkx_schedule import RuleSchedule
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
@@ -346,6 +348,11 @@ class RelspecSnapshots:
     registry_snapshot: RelspecSnapshot
     contracts: ContractCatalog
     compiled_outputs: dict[str, CompiledOutput]
+    rule_graph_snapshot: RuleGraphSnapshot
+    rule_graph_diagnostics: GraphDiagnostics
+    rule_schedule: RuleSchedule
+    rule_provenance: Mapping[str, tuple[str, ...]]
+    evidence_impact: Mapping[str, tuple[str, ...]]
 
 
 @dataclass(frozen=True)

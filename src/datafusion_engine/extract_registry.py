@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Mapping
-from dataclasses import asdict, is_dataclass
 from functools import cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+
+import msgspec
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.metadata import (
@@ -32,6 +33,7 @@ from relspec.extract.registry_policies import policy_row, template_policy_row
 from relspec.rules.definitions import RuleStage, stage_enabled
 from relspec.rules.options import RuleExecutionOptions
 from schema_spec.system import DatasetSpec, dataset_spec_from_schema
+from serde_msgspec import convert, to_builtins
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -198,10 +200,14 @@ def extractor_defaults(name: str) -> dict[str, object]:
 
 
 def _options_dict(options: object) -> dict[str, object]:
-    if is_dataclass(options) and not isinstance(options, type):
-        return asdict(options)
-    if isinstance(options, dict):
+    if isinstance(options, Mapping):
         return dict(options)
+    try:
+        builtins = to_builtins(options)
+    except (msgspec.EncodeError, TypeError) as exc:
+        raise OptionsTypeError from exc
+    if isinstance(builtins, Mapping):
+        return dict(builtins)
     raise OptionsTypeError
 
 
@@ -210,10 +216,14 @@ def _options_mapping(options: object | None) -> Mapping[str, object]:
         return {}
     if isinstance(options, RuleExecutionOptions):
         return options.as_mapping()
-    if is_dataclass(options) and not isinstance(options, type):
-        return asdict(options)
     if isinstance(options, Mapping):
         return options
+    try:
+        builtins = to_builtins(options)
+    except (msgspec.EncodeError, TypeError):
+        return {}
+    if isinstance(builtins, Mapping):
+        return cast("Mapping[str, object]", builtins)
     return {}
 
 
@@ -228,7 +238,11 @@ def normalize_options[T](name: str, options: object | None, factory: type[T]) ->
     defaults = extractor_defaults(name)
     if options is None:
         return factory(**defaults)
-    merged = {**defaults, **_options_dict(options)}
+    incoming = convert(options, type=factory, strict=False, from_attributes=True)
+    incoming_payload = to_builtins(incoming)
+    if not isinstance(incoming_payload, Mapping):
+        return factory(**defaults)
+    merged = {**defaults, **dict(incoming_payload)}
     return factory(**merged)
 
 

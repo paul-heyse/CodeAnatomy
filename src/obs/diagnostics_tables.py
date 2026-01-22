@@ -7,12 +7,15 @@ import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Annotated, TypeVar
 
+import msgspec
 import pyarrow as pa
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_rows
 from datafusion_engine.schema_registry import schema_for
+from serde_msgspec import convert
 
 try:
     from sqlglot_tools.lineage import LineagePayload
@@ -20,71 +23,238 @@ except ImportError:
     LineagePayload = None  # type: ignore[misc, assignment]
 
 
+T = TypeVar("T")
+
+
+class DiagnosticsStruct(
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+    omit_defaults=True,
+    repr_omit_defaults=True,
+    forbid_unknown_fields=False,
+):
+    """Base struct for diagnostics ingestion."""
+
+
+EventTimeMs = Annotated[int, msgspec.Meta(ge=0)]
+
+
+def _convert_event(obj: object, *, target_type: type[T]) -> T:
+    try:
+        return convert(obj, type=target_type, strict=False, from_attributes=True)
+    except msgspec.ValidationError:
+        return target_type()
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _coerce_event_time(value: object, *, default: int) -> int:
-    if isinstance(value, bool):
+def _coalesce_event_time(
+    value: int | None | msgspec.UnsetType,
+    *,
+    default: int,
+) -> int:
+    if value is msgspec.UNSET or value is None or isinstance(value, bool):
         return default
-    if isinstance(value, (int, float)):
-        return int(value)
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            try:
-                return int(stripped)
-            except ValueError:
-                return default
-    return default
+    return value
 
 
-def _coerce_int(value: object, *, default: int) -> int:
-    if isinstance(value, bool):
+def _coalesce_int(
+    value: int | None | msgspec.UnsetType,
+    *,
+    default: int,
+) -> int:
+    if value is msgspec.UNSET or value is None or isinstance(value, bool):
         return default
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            try:
-                return int(stripped)
-            except ValueError:
-                return default
-    return default
+    return value
 
 
-def _coerce_float(value: object, *, default: float) -> float:
-    if isinstance(value, bool):
+def _optional_int(value: int | None | msgspec.UnsetType) -> int | None:
+    if value is msgspec.UNSET or value is None or isinstance(value, bool):
+        return None
+    return value
+
+
+def _optional_float(value: float | int | None | msgspec.UnsetType) -> float | None:
+    if value is msgspec.UNSET or value is None or isinstance(value, bool):
+        return None
+    return float(value)
+
+
+def _coalesce_float(
+    value: float | int | None | msgspec.UnsetType,
+    *,
+    default: float,
+) -> float:
+    if value is msgspec.UNSET or value is None or isinstance(value, bool):
         return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            try:
-                return float(stripped)
-            except ValueError:
-                return default
-    return default
+    return float(value)
 
 
-def _coerce_str_list(value: object) -> list[str]:
-    if value is None:
-        return []
+def _string_list(value: object | msgspec.UnsetType) -> list[str] | None:
+    if value is msgspec.UNSET or value is None:
+        return None
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [str(item) for item in value]
     return [str(value)]
 
 
+def _string_list_or_empty(value: object | msgspec.UnsetType) -> list[str]:
+    items = _string_list(value)
+    return items if items is not None else []
+
+
 def _stringify_payload(value: object) -> str | None:
-    if value is None:
+    if value is None or value is msgspec.UNSET:
         return None
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=True, default=str)
+
+
+def _binary_payload(value: object) -> bytes | None:
+    if value is None or value is msgspec.UNSET:
+        return None
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    return None
+
+
+class DatafusionExplainEvent(DiagnosticsStruct):
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    sql: str | None = None
+    rows: object | None = None
+    explain_analyze: bool = False
+
+
+class SchemaRegistryValidationRecord(DiagnosticsStruct):
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    missing: Sequence[object] | None = None
+    type_errors: Mapping[str, object] | None = None
+    view_errors: Mapping[str, object] | None = None
+    sql_parse_errors: Mapping[str, object] | None = None
+    constraint_drift: Sequence[object] | None = None
+    relationship_constraint_errors: Mapping[str, object] | None = None
+
+
+class SchemaMapFingerprintRecord(DiagnosticsStruct):
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    schema_map_hash: str | None = None
+    schema_map_version: int | None = None
+    table_count: int | None = None
+    column_count: int | None = None
+
+
+class DdlFingerprintRecord(DiagnosticsStruct):
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    table_catalog: str | None = None
+    table_schema: str | None = None
+    table_name: str | None = None
+    table_type: str | None = None
+    ddl_fingerprint: str | None = None
+
+
+class FeatureStateEvent(DiagnosticsStruct):
+    profile_name: str | None = None
+    determinism_tier: str | None = None
+    dynamic_filters_enabled: bool = False
+    spill_enabled: bool = False
+    named_args_supported: bool = False
+
+
+class DatafusionRunRecord(DiagnosticsStruct):
+    run_id: str | None = None
+    label: str | None = None
+    start_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    end_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    status: str | None = None
+    duration_ms: int | None = None
+    metadata: object | None = None
+
+
+class DatafusionCacheStateRecord(DiagnosticsStruct):
+    cache_name: str | None = None
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    entry_count: int | None = None
+    hit_count: int | None = None
+    miss_count: int | None = None
+    eviction_count: int | None = None
+    config_ttl: str | None = None
+    config_limit: str | None = None
+
+
+class DatafusionPlanArtifactRecord(DiagnosticsStruct):
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    run_id: str | None = None
+    plan_hash: str | None = None
+    sql: str | None = None
+    normalized_sql: str | None = None
+    explain: object | None = None
+    explain_analyze: object | None = None
+    substrait_b64: str | None = None
+    substrait_validation: Mapping[str, object] | None = None
+    sqlglot_ast: bytes | bytearray | memoryview | None = None
+    read_dialect: str | None = None
+    write_dialect: str | None = None
+    canonical_fingerprint: str | None = None
+    lineage_tables: Sequence[object] | object | None = None
+    lineage_columns: Sequence[object] | object | None = None
+    lineage_scopes: Sequence[object] | object | None = None
+    param_signature: str | None = None
+    projection_map: bytes | bytearray | memoryview | None = None
+    unparsed_sql: str | None = None
+    unparse_error: str | None = None
+    logical_plan: str | None = None
+    optimized_plan: str | None = None
+    physical_plan: str | None = None
+    graphviz: str | None = None
+    partition_count: int | None = None
+    join_operators: Sequence[object] | object | None = None
+
+
+class EngineRuntimeRecord(DiagnosticsStruct):
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    runtime_profile_name: str | None = None
+    determinism_tier: str | None = None
+    runtime_profile_hash: str | None = None
+    runtime_profile_snapshot: bytes | bytearray | memoryview | None = None
+    sqlglot_policy_hash: str | None = None
+    sqlglot_policy_snapshot: bytes | bytearray | memoryview | None = None
+    function_registry_hash: str | None = None
+    function_registry_snapshot: bytes | bytearray | memoryview | None = None
+    datafusion_settings_hash: str | None = None
+    datafusion_settings: bytes | bytearray | memoryview | None = None
+
+
+class DatafusionUdfValidationRecord(DiagnosticsStruct):
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    udf_catalog_policy: str | None = None
+    missing_udfs: Sequence[object] | object | None = None
+    missing_count: int | None = None
+
+
+class DatafusionObjectStoreRecord(DiagnosticsStruct):
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    scheme: str | None = None
+    host: str | None = None
+    store_type: str | None = None
+
+
+class FilePruningDiagnosticsRecord(DiagnosticsStruct):
+    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    table_name: str | None = None
+    table_path: str | None = None
+    total_files: int | None = None
+    candidate_count: int | None = None
+    pruned_count: int | None = None
+    pruned_percentage: float | int | None = None
+    filter_summary: str | None = None
 
 
 def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Table:
@@ -98,18 +268,19 @@ def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Ta
     now = _now_ms()
     rows: list[dict[str, object]] = []
     for explain in explains:
-        raw_rows = explain.get("rows")
-        artifact_path, artifact_format, schema_fp = _explain_rows_metadata(raw_rows)
+        event = _convert_event(explain, target_type=DatafusionExplainEvent)
+        artifact_path, artifact_format, schema_fp = _explain_rows_metadata(event.rows)
         rows.append(
             {
-                "event_time_unix_ms": _coerce_event_time(
-                    explain.get("event_time_unix_ms"), default=now
+                "event_time_unix_ms": _coalesce_event_time(
+                    event.event_time_unix_ms,
+                    default=now,
                 ),
-                "sql": str(explain.get("sql") or ""),
+                "sql": str(event.sql or ""),
                 "explain_rows_artifact_path": artifact_path,
                 "explain_rows_artifact_format": artifact_format,
                 "explain_rows_schema_fingerprint": schema_fp,
-                "explain_analyze": bool(explain.get("explain_analyze") or False),
+                "explain_analyze": bool(event.explain_analyze),
             }
         )
     schema = schema_for("datafusion_explains_v1")
@@ -129,8 +300,9 @@ def datafusion_schema_registry_validation_table(
     now = _now_ms()
     rows: list[dict[str, object]] = []
     for record in records:
-        event_time = _coerce_event_time(record.get("event_time_unix_ms"), default=now)
-        missing = _coerce_str_list(record.get("missing"))
+        event = _convert_event(record, target_type=SchemaRegistryValidationRecord)
+        event_time = _coalesce_event_time(event.event_time_unix_ms, default=now)
+        missing = _string_list_or_empty(event.missing)
         rows.extend(
             {
                 "event_time_unix_ms": event_time,
@@ -140,7 +312,7 @@ def datafusion_schema_registry_validation_table(
             }
             for name in missing
         )
-        type_errors = record.get("type_errors")
+        type_errors = event.type_errors
         if isinstance(type_errors, Mapping):
             rows.extend(
                 {
@@ -151,7 +323,7 @@ def datafusion_schema_registry_validation_table(
                 }
                 for name, detail in type_errors.items()
             )
-        view_errors = record.get("view_errors")
+        view_errors = event.view_errors
         if isinstance(view_errors, Mapping):
             rows.extend(
                 {
@@ -162,7 +334,7 @@ def datafusion_schema_registry_validation_table(
                 }
                 for name, detail in view_errors.items()
             )
-        parse_errors = record.get("sql_parse_errors")
+        parse_errors = event.sql_parse_errors
         if isinstance(parse_errors, Mapping):
             rows.extend(
                 {
@@ -173,8 +345,11 @@ def datafusion_schema_registry_validation_table(
                 }
                 for name, detail in parse_errors.items()
             )
-        constraint_drift = record.get("constraint_drift")
-        if isinstance(constraint_drift, Sequence):
+        constraint_drift = event.constraint_drift
+        if isinstance(constraint_drift, Sequence) and not isinstance(
+            constraint_drift,
+            (str, bytes, bytearray),
+        ):
             for entry in constraint_drift:
                 if not isinstance(entry, Mapping):
                     continue
@@ -189,7 +364,7 @@ def datafusion_schema_registry_validation_table(
                         "detail": json.dumps(entry, ensure_ascii=True, default=str),
                     }
                 )
-        relationship_errors = record.get("relationship_constraint_errors")
+        relationship_errors = event.relationship_constraint_errors
         if isinstance(relationship_errors, Mapping):
             rows.extend(
                 {
@@ -215,22 +390,30 @@ def datafusion_schema_map_fingerprints_table(
         Diagnostics table aligned to DATAFUSION_SCHEMA_MAP_FINGERPRINTS_V1.
     """
     now = _now_ms()
-    rows = [
-        {
-            "event_time_unix_ms": _coerce_event_time(
-                record.get("event_time_unix_ms"),
-                default=now,
-            ),
-            "schema_map_hash": str(record.get("schema_map_hash") or ""),
-            "schema_map_version": _coerce_int(
-                record.get("schema_map_version"),
-                default=1,
-            ),
-            "table_count": _coerce_int(record.get("table_count"), default=0),
-            "column_count": _coerce_int(record.get("column_count"), default=0),
-        }
-        for record in records
-    ]
+    rows = []
+    for record in records:
+        event = _convert_event(record, target_type=SchemaMapFingerprintRecord)
+        rows.append(
+            {
+                "event_time_unix_ms": _coalesce_event_time(
+                    event.event_time_unix_ms,
+                    default=now,
+                ),
+                "schema_map_hash": str(event.schema_map_hash or ""),
+                "schema_map_version": _coalesce_int(
+                    event.schema_map_version,
+                    default=1,
+                ),
+                "table_count": _coalesce_int(
+                    event.table_count,
+                    default=0,
+                ),
+                "column_count": _coalesce_int(
+                    event.column_count,
+                    default=0,
+                ),
+            }
+        )
     schema = schema_for("datafusion_schema_map_fingerprints_v1")
     return table_from_rows(schema, rows)
 
@@ -246,26 +429,24 @@ def datafusion_ddl_fingerprints_table(
         Diagnostics table aligned to DATAFUSION_DDL_FINGERPRINTS_V1.
     """
     now = _now_ms()
-    rows = [
-        {
-            "event_time_unix_ms": _coerce_event_time(
-                record.get("event_time_unix_ms"),
-                default=now,
-            ),
-            "table_catalog": str(record.get("table_catalog") or ""),
-            "table_schema": str(record.get("table_schema") or ""),
-            "table_name": str(record.get("table_name") or ""),
-            "table_type": (
-                str(record.get("table_type")) if record.get("table_type") is not None else None
-            ),
-            "ddl_fingerprint": (
-                str(record.get("ddl_fingerprint"))
-                if record.get("ddl_fingerprint") is not None
-                else None
-            ),
-        }
-        for record in records
-    ]
+    rows = []
+    for record in records:
+        event = _convert_event(record, target_type=DdlFingerprintRecord)
+        rows.append(
+            {
+                "event_time_unix_ms": _coalesce_event_time(
+                    event.event_time_unix_ms,
+                    default=now,
+                ),
+                "table_catalog": str(event.table_catalog or ""),
+                "table_schema": str(event.table_schema or ""),
+                "table_name": str(event.table_name or ""),
+                "table_type": str(event.table_type) if event.table_type is not None else None,
+                "ddl_fingerprint": (
+                    str(event.ddl_fingerprint) if event.ddl_fingerprint is not None else None
+                ),
+            }
+        )
     schema = schema_for("datafusion_ddl_fingerprints_v1")
     return table_from_rows(schema, rows)
 
@@ -298,16 +479,18 @@ def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
     pyarrow.Table
         Diagnostics table aligned to FEATURE_STATE_V1.
     """
-    rows = [
-        {
-            "profile_name": str(event.get("profile_name") or ""),
-            "determinism_tier": str(event.get("determinism_tier") or ""),
-            "dynamic_filters_enabled": bool(event.get("dynamic_filters_enabled") or False),
-            "spill_enabled": bool(event.get("spill_enabled") or False),
-            "named_args_supported": bool(event.get("named_args_supported") or False),
-        }
-        for event in events
-    ]
+    rows = []
+    for event in events:
+        entry = _convert_event(event, target_type=FeatureStateEvent)
+        rows.append(
+            {
+                "profile_name": str(entry.profile_name or ""),
+                "determinism_tier": str(entry.determinism_tier or ""),
+                "dynamic_filters_enabled": bool(entry.dynamic_filters_enabled),
+                "spill_enabled": bool(entry.spill_enabled),
+                "named_args_supported": bool(entry.named_args_supported),
+            }
+        )
     schema = schema_for("feature_state_v1")
     return table_from_rows(schema, rows)
 
@@ -323,32 +506,25 @@ def datafusion_runs_table(records: Sequence[Mapping[str, object]]) -> pa.Table:
     now = _now_ms()
     rows: list[dict[str, object]] = []
     for record in records:
-        metadata_raw = record.get("metadata")
-        metadata_str = None
-        if metadata_raw:
-            if isinstance(metadata_raw, str):
-                metadata_str = metadata_raw
-            elif isinstance(metadata_raw, Mapping):
-                metadata_str = json.dumps(metadata_raw, ensure_ascii=True, default=str)
+        entry = _convert_event(record, target_type=DatafusionRunRecord)
+        metadata_str = _stringify_payload(entry.metadata)
+        end_time = None
+        if entry.end_time_unix_ms is not None and entry.end_time_unix_ms is not msgspec.UNSET:
+            end_time = _coalesce_event_time(entry.end_time_unix_ms, default=0)
+        duration_ms = None
+        if entry.duration_ms is not None and not isinstance(entry.duration_ms, bool):
+            duration_ms = entry.duration_ms
         rows.append(
             {
-                "run_id": str(record.get("run_id") or ""),
-                "label": str(record.get("label") or ""),
-                "start_time_unix_ms": _coerce_event_time(
-                    record.get("start_time_unix_ms"),
+                "run_id": str(entry.run_id or ""),
+                "label": str(entry.label or ""),
+                "start_time_unix_ms": _coalesce_event_time(
+                    entry.start_time_unix_ms,
                     default=now,
                 ),
-                "end_time_unix_ms": (
-                    _coerce_event_time(record.get("end_time_unix_ms"), default=0)
-                    if record.get("end_time_unix_ms") is not None
-                    else None
-                ),
-                "status": str(record.get("status") or "unknown"),
-                "duration_ms": (
-                    _coerce_int(record.get("duration_ms"), default=0)
-                    if record.get("duration_ms") is not None
-                    else None
-                ),
+                "end_time_unix_ms": end_time,
+                "status": str(entry.status or "unknown"),
+                "duration_ms": duration_ms,
                 "metadata": metadata_str,
             }
         )
@@ -367,42 +543,24 @@ def datafusion_cache_state_table(
         Diagnostics table aligned to DATAFUSION_CACHE_STATE_V1.
     """
     now = _now_ms()
-    rows = [
-        {
-            "cache_name": str(record.get("cache_name") or ""),
-            "event_time_unix_ms": _coerce_event_time(
-                record.get("event_time_unix_ms"),
-                default=now,
-            ),
-            "entry_count": (
-                _coerce_int(record.get("entry_count"), default=0)
-                if record.get("entry_count") is not None
-                else None
-            ),
-            "hit_count": (
-                _coerce_int(record.get("hit_count"), default=0)
-                if record.get("hit_count") is not None
-                else None
-            ),
-            "miss_count": (
-                _coerce_int(record.get("miss_count"), default=0)
-                if record.get("miss_count") is not None
-                else None
-            ),
-            "eviction_count": (
-                _coerce_int(record.get("eviction_count"), default=0)
-                if record.get("eviction_count") is not None
-                else None
-            ),
-            "config_ttl": (
-                str(record.get("config_ttl")) if record.get("config_ttl") is not None else None
-            ),
-            "config_limit": (
-                str(record.get("config_limit")) if record.get("config_limit") is not None else None
-            ),
-        }
-        for record in records
-    ]
+    rows = []
+    for record in records:
+        entry = _convert_event(record, target_type=DatafusionCacheStateRecord)
+        rows.append(
+            {
+                "cache_name": str(entry.cache_name or ""),
+                "event_time_unix_ms": _coalesce_event_time(
+                    entry.event_time_unix_ms,
+                    default=now,
+                ),
+                "entry_count": _optional_int(entry.entry_count),
+                "hit_count": _optional_int(entry.hit_count),
+                "miss_count": _optional_int(entry.miss_count),
+                "eviction_count": _optional_int(entry.eviction_count),
+                "config_ttl": str(entry.config_ttl) if entry.config_ttl is not None else None,
+                "config_limit": str(entry.config_limit) if entry.config_limit is not None else None,
+            }
+        )
     schema = schema_for("datafusion_cache_state_v1")
     return table_from_rows(schema, rows)
 
@@ -423,110 +581,55 @@ def datafusion_plan_artifacts_table(
     return table_from_rows(schema, rows)
 
 
-def _string_list(value: object | None) -> list[str] | None:
-    if value is None:
-        return None
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [str(item) for item in value]
-    return [str(value)]
-
-
 def _plan_artifact_row(
     artifact: Mapping[str, object],
     *,
     default_time: int,
 ) -> dict[str, object]:
-    explain_path, explain_format, explain_fp = _explain_rows_metadata(artifact.get("explain"))
-    analyze_path, analyze_format, _ = _explain_rows_metadata(artifact.get("explain_analyze"))
-    substrait_validation = artifact.get("substrait_validation")
+    entry = _convert_event(artifact, target_type=DatafusionPlanArtifactRecord)
+    explain_path, explain_format, explain_fp = _explain_rows_metadata(entry.explain)
+    analyze_path, analyze_format, _ = _explain_rows_metadata(entry.explain_analyze)
+    substrait_validation = entry.substrait_validation
     substrait_status = None
     if substrait_validation and isinstance(substrait_validation, Mapping):
         substrait_status = str(substrait_validation.get("status") or "")
     return {
-        "event_time_unix_ms": _coerce_event_time(
-            artifact.get("event_time_unix_ms"),
+        "event_time_unix_ms": _coalesce_event_time(
+            entry.event_time_unix_ms,
             default=default_time,
         ),
-        "run_id": str(artifact.get("run_id")) if artifact.get("run_id") is not None else None,
-        "plan_hash": (
-            str(artifact.get("plan_hash")) if artifact.get("plan_hash") is not None else None
-        ),
-        "sql": str(artifact.get("sql") or ""),
-        "normalized_sql": (
-            str(artifact.get("normalized_sql"))
-            if artifact.get("normalized_sql") is not None
-            else None
-        ),
+        "run_id": str(entry.run_id) if entry.run_id is not None else None,
+        "plan_hash": str(entry.plan_hash) if entry.plan_hash is not None else None,
+        "sql": str(entry.sql or ""),
+        "normalized_sql": str(entry.normalized_sql) if entry.normalized_sql is not None else None,
         "explain_rows_artifact_path": explain_path,
         "explain_rows_artifact_format": explain_format,
         "explain_rows_schema_fingerprint": explain_fp,
         "explain_analyze_artifact_path": analyze_path,
         "explain_analyze_artifact_format": analyze_format,
-        "substrait_b64": (
-            str(artifact.get("substrait_b64"))
-            if artifact.get("substrait_b64") is not None
-            else None
-        ),
+        "substrait_b64": str(entry.substrait_b64) if entry.substrait_b64 is not None else None,
         "substrait_validation_status": substrait_status,
-        "sqlglot_ast": (
-            str(artifact.get("sqlglot_ast")) if artifact.get("sqlglot_ast") is not None else None
-        ),
-        "read_dialect": (
-            str(artifact.get("read_dialect")) if artifact.get("read_dialect") is not None else None
-        ),
-        "write_dialect": (
-            str(artifact.get("write_dialect"))
-            if artifact.get("write_dialect") is not None
-            else None
-        ),
+        "sqlglot_ast": _binary_payload(entry.sqlglot_ast),
+        "read_dialect": str(entry.read_dialect) if entry.read_dialect is not None else None,
+        "write_dialect": str(entry.write_dialect) if entry.write_dialect is not None else None,
         "canonical_fingerprint": (
-            str(artifact.get("canonical_fingerprint"))
-            if artifact.get("canonical_fingerprint") is not None
-            else None
+            str(entry.canonical_fingerprint) if entry.canonical_fingerprint is not None else None
         ),
-        "lineage_tables": _string_list(artifact.get("lineage_tables")),
-        "lineage_columns": _string_list(artifact.get("lineage_columns")),
-        "lineage_scopes": _string_list(artifact.get("lineage_scopes")),
+        "lineage_tables": _string_list(entry.lineage_tables),
+        "lineage_columns": _string_list(entry.lineage_columns),
+        "lineage_scopes": _string_list(entry.lineage_scopes),
         "param_signature": (
-            str(artifact.get("param_signature"))
-            if artifact.get("param_signature") is not None
-            else None
+            str(entry.param_signature) if entry.param_signature is not None else None
         ),
-        "projection_map": (
-            str(artifact.get("projection_map"))
-            if artifact.get("projection_map") is not None
-            else None
-        ),
-        "unparsed_sql": (
-            str(artifact.get("unparsed_sql")) if artifact.get("unparsed_sql") is not None else None
-        ),
-        "unparse_error": (
-            str(artifact.get("unparse_error"))
-            if artifact.get("unparse_error") is not None
-            else None
-        ),
-        "logical_plan": (
-            str(artifact.get("logical_plan")) if artifact.get("logical_plan") is not None else None
-        ),
-        "optimized_plan": (
-            str(artifact.get("optimized_plan"))
-            if artifact.get("optimized_plan") is not None
-            else None
-        ),
-        "physical_plan": (
-            str(artifact.get("physical_plan"))
-            if artifact.get("physical_plan") is not None
-            else None
-        ),
-        "graphviz": (
-            str(artifact.get("graphviz")) if artifact.get("graphviz") is not None else None
-        ),
-        "partition_count": (
-            _coerce_int(artifact.get("partition_count"), default=0)
-            if artifact.get("partition_count") is not None
-            else None
-        ),
-        "join_operators": _string_list(artifact.get("join_operators")),
+        "projection_map": _binary_payload(entry.projection_map),
+        "unparsed_sql": str(entry.unparsed_sql) if entry.unparsed_sql is not None else None,
+        "unparse_error": str(entry.unparse_error) if entry.unparse_error is not None else None,
+        "logical_plan": str(entry.logical_plan) if entry.logical_plan is not None else None,
+        "optimized_plan": str(entry.optimized_plan) if entry.optimized_plan is not None else None,
+        "physical_plan": str(entry.physical_plan) if entry.physical_plan is not None else None,
+        "graphviz": str(entry.graphviz) if entry.graphviz is not None else None,
+        "partition_count": _optional_int(entry.partition_count),
+        "join_operators": _string_list(entry.join_operators),
     }
 
 
@@ -541,40 +644,38 @@ def engine_runtime_table(
         Diagnostics table aligned to ENGINE_RUNTIME_V1.
     """
     now = _now_ms()
-    rows = [
-        {
-            "event_time_unix_ms": _coerce_event_time(
-                artifact.get("event_time_unix_ms"),
-                default=now,
-            ),
-            "runtime_profile_name": str(artifact.get("runtime_profile_name") or ""),
-            "determinism_tier": str(artifact.get("determinism_tier") or ""),
-            "runtime_profile_hash": str(artifact.get("runtime_profile_hash") or ""),
-            "runtime_profile_snapshot": _stringify_payload(artifact.get("runtime_profile_snapshot"))
-            or "",
-            "sqlglot_policy_hash": (
-                str(artifact.get("sqlglot_policy_hash"))
-                if artifact.get("sqlglot_policy_hash") is not None
-                else None
-            ),
-            "sqlglot_policy_snapshot": _stringify_payload(artifact.get("sqlglot_policy_snapshot")),
-            "function_registry_hash": (
-                str(artifact.get("function_registry_hash"))
-                if artifact.get("function_registry_hash") is not None
-                else None
-            ),
-            "function_registry_snapshot": _stringify_payload(
-                artifact.get("function_registry_snapshot")
-            ),
-            "datafusion_settings_hash": (
-                str(artifact.get("datafusion_settings_hash"))
-                if artifact.get("datafusion_settings_hash") is not None
-                else None
-            ),
-            "datafusion_settings": _stringify_payload(artifact.get("datafusion_settings")),
-        }
-        for artifact in artifacts
-    ]
+    rows = []
+    for artifact in artifacts:
+        entry = _convert_event(artifact, target_type=EngineRuntimeRecord)
+        rows.append(
+            {
+                "event_time_unix_ms": _coalesce_event_time(
+                    entry.event_time_unix_ms,
+                    default=now,
+                ),
+                "runtime_profile_name": str(entry.runtime_profile_name or ""),
+                "determinism_tier": str(entry.determinism_tier or ""),
+                "runtime_profile_hash": str(entry.runtime_profile_hash or ""),
+                "runtime_profile_snapshot": _binary_payload(entry.runtime_profile_snapshot)
+                or b"",
+                "sqlglot_policy_hash": (
+                    str(entry.sqlglot_policy_hash) if entry.sqlglot_policy_hash is not None else None
+                ),
+                "sqlglot_policy_snapshot": _binary_payload(entry.sqlglot_policy_snapshot),
+                "function_registry_hash": (
+                    str(entry.function_registry_hash)
+                    if entry.function_registry_hash is not None
+                    else None
+                ),
+                "function_registry_snapshot": _binary_payload(entry.function_registry_snapshot),
+                "datafusion_settings_hash": (
+                    str(entry.datafusion_settings_hash)
+                    if entry.datafusion_settings_hash is not None
+                    else None
+                ),
+                "datafusion_settings": _binary_payload(entry.datafusion_settings),
+            }
+        )
     schema = schema_for("engine_runtime_v1")
     return table_from_rows(schema, rows)
 
@@ -590,22 +691,20 @@ def datafusion_udf_validation_table(
         Diagnostics table aligned to DATAFUSION_UDF_VALIDATION_V1.
     """
     now = _now_ms()
-    rows = [
-        {
-            "event_time_unix_ms": _coerce_event_time(
-                record.get("event_time_unix_ms"),
-                default=now,
-            ),
-            "udf_catalog_policy": str(record.get("udf_catalog_policy") or "default"),
-            "missing_udfs": _coerce_str_list(record.get("missing_udfs")),
-            "missing_count": (
-                _coerce_int(record.get("missing_count"), default=0)
-                if record.get("missing_count") is not None
-                else None
-            ),
-        }
-        for record in records
-    ]
+    rows = []
+    for record in records:
+        entry = _convert_event(record, target_type=DatafusionUdfValidationRecord)
+        rows.append(
+            {
+                "event_time_unix_ms": _coalesce_event_time(
+                    entry.event_time_unix_ms,
+                    default=now,
+                ),
+                "udf_catalog_policy": str(entry.udf_catalog_policy or "default"),
+                "missing_udfs": _string_list_or_empty(entry.missing_udfs),
+                "missing_count": _optional_int(entry.missing_count),
+            }
+        )
     schema = schema_for("datafusion_udf_validation_v1")
     return table_from_rows(schema, rows)
 
@@ -621,20 +720,20 @@ def datafusion_object_stores_table(
         Diagnostics table aligned to DATAFUSION_OBJECT_STORES_V1.
     """
     now = _now_ms()
-    rows = [
-        {
-            "event_time_unix_ms": _coerce_event_time(
-                record.get("event_time_unix_ms"),
-                default=now,
-            ),
-            "scheme": str(record.get("scheme") or ""),
-            "host": str(record.get("host")) if record.get("host") is not None else None,
-            "store_type": (
-                str(record.get("store_type")) if record.get("store_type") is not None else None
-            ),
-        }
-        for record in records
-    ]
+    rows = []
+    for record in records:
+        entry = _convert_event(record, target_type=DatafusionObjectStoreRecord)
+        rows.append(
+            {
+                "event_time_unix_ms": _coalesce_event_time(
+                    entry.event_time_unix_ms,
+                    default=now,
+                ),
+                "scheme": str(entry.scheme or ""),
+                "host": str(entry.host) if entry.host is not None else None,
+                "store_type": str(entry.store_type) if entry.store_type is not None else None,
+            }
+        )
     schema = schema_for("datafusion_object_stores_v1")
     return table_from_rows(schema, rows)
 
@@ -729,22 +828,36 @@ def file_pruning_diagnostics_table(
         Diagnostics table with file pruning metrics.
     """
     now = _now_ms()
-    rows = [
-        {
-            "event_time_unix_ms": _coerce_event_time(
-                record.get("event_time_unix_ms"),
-                default=now,
-            ),
-            "table_name": str(record.get("table_name") or ""),
-            "table_path": str(record.get("table_path") or ""),
-            "total_files": _coerce_int(record.get("total_files"), default=0),
-            "candidate_count": _coerce_int(record.get("candidate_count"), default=0),
-            "pruned_count": _coerce_int(record.get("pruned_count"), default=0),
-            "pruned_percentage": _coerce_float(record.get("pruned_percentage"), default=0.0),
-            "filter_summary": str(record.get("filter_summary") or ""),
-        }
-        for record in records
-    ]
+    rows = []
+    for record in records:
+        entry = _convert_event(record, target_type=FilePruningDiagnosticsRecord)
+        rows.append(
+            {
+                "event_time_unix_ms": _coalesce_event_time(
+                    entry.event_time_unix_ms,
+                    default=now,
+                ),
+                "table_name": str(entry.table_name or ""),
+                "table_path": str(entry.table_path or ""),
+                "total_files": _coalesce_int(
+                    entry.total_files,
+                    default=0,
+                ),
+                "candidate_count": _coalesce_int(
+                    entry.candidate_count,
+                    default=0,
+                ),
+                "pruned_count": _coalesce_int(
+                    entry.pruned_count,
+                    default=0,
+                ),
+                "pruned_percentage": _coalesce_float(
+                    entry.pruned_percentage,
+                    default=0.0,
+                ),
+                "filter_summary": str(entry.filter_summary or ""),
+            }
+        )
 
     schema = pa.schema(
         [

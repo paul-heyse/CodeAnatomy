@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pyarrow as pa
 import pytest
 
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.plan_diff import semantic_diff_sql
-from sqlglot_tools.compat import exp, parse_one
+from sqlglot_tools.compat import diff, exp, parse_one
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
+    ParseSqlOptions,
+    SqlGlotCompileOptions,
     SqlGlotQualificationError,
     canonical_ast_fingerprint,
+    compile_expr,
     default_sqlglot_policy,
     normalize_expr,
     normalize_expr_with_stats,
+    parse_sql,
+    parse_sql_strict,
     plan_fingerprint,
     register_datafusion_dialect,
+    resolve_sqlglot_policy,
+    sqlglot_emit,
     sqlglot_policy_snapshot,
     sqlglot_sql,
 )
@@ -179,6 +188,54 @@ def test_transformed_sql_parses_in_datafusion() -> None:
     )
     df = ctx.sql(sqlglot_sql(normalized, policy=policy))
     assert df is not None
+
+
+def test_parse_diff_stability() -> None:
+    """Ensure parse+diff outputs are stable across runs."""
+    policy = default_sqlglot_policy()
+    left = parse_sql(
+        "SELECT a FROM t",
+        options=ParseSqlOptions(dialect=policy.read_dialect, sanitize_templated=True),
+    )
+    right = parse_sql(
+        "SELECT b FROM t",
+        options=ParseSqlOptions(dialect=policy.read_dialect, sanitize_templated=True),
+    )
+    script_a = tuple(change.__class__.__name__ for change in diff(left, right))
+    script_b = tuple(change.__class__.__name__ for change in diff(left, right))
+    assert script_a == script_b
+
+
+def test_sqlglot_emit_honors_identify() -> None:
+    """Quote identifiers when policy.identify is enabled."""
+    policy = replace(default_sqlglot_policy(), identify=True)
+    expr = parse_one("SELECT foo FROM bar", dialect=policy.read_dialect)
+    rendered = sqlglot_emit(expr, policy=policy)
+    lowered = rendered.lower()
+    assert '"foo"' in lowered
+    assert '"bar"' in lowered
+
+
+def test_duckdb_ir_emits_datafusion_sql() -> None:
+    """Ensure canonical IR emits SQL that parses in DataFusion dialect."""
+    canonical = default_sqlglot_policy()
+    emit_policy = resolve_sqlglot_policy(name="datafusion_compile")
+    sql_cases = (
+        "SELECT a FROM t QUALIFY ROW_NUMBER() OVER (PARTITION BY a ORDER BY a) = 1",
+        "SELECT * FROM left_table FULL OUTER JOIN right_table ON left_table.id = right_table.id",
+        "SELECT payload['key'] AS val FROM t",
+    )
+    for sql in sql_cases:
+        expr = parse_sql(
+            sql,
+            options=ParseSqlOptions(dialect=canonical.read_dialect, sanitize_templated=True),
+        )
+        compiled = compile_expr(
+            expr,
+            options=SqlGlotCompileOptions(policy=canonical, sql=sql),
+        )
+        rendered = sqlglot_emit(compiled, policy=emit_policy)
+        parse_sql_strict(rendered, dialect=emit_policy.write_dialect)
 
 
 def test_qualification_failure_payload() -> None:

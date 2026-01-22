@@ -11,11 +11,6 @@ from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value
 
 from sqlglot_tools.compat import Expression, diff
-from sqlglot_tools.lineage import (
-    referenced_columns,
-    referenced_identifiers,
-    referenced_tables,
-)
 from sqlglot_tools.optimizer import (
     DEFAULT_WRITE_DIALECT,
     CanonicalizationRules,
@@ -124,6 +119,12 @@ def sqlglot_diagnostics(
     SqlGlotDiagnostics
         Metadata extracted from the SQLGlot AST.
     """
+    from sqlglot_tools.lineage import (
+        referenced_columns,
+        referenced_identifiers,
+        referenced_tables,
+    )
+
     options = options or SqlGlotDiagnosticsOptions()
     compiled = ibis_to_sqlglot(expr, backend=backend, params=options.params)
     dialect = _resolved_dialect(options.policy)

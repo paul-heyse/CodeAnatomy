@@ -81,6 +81,7 @@ from sqlglot_tools.lineage import (
     lineage_graph_by_output,
     required_columns_by_table,
 )
+import msgspec
 from sqlglot_tools.optimizer import (
     PreflightOptions,
     SchemaMapping,
@@ -836,10 +837,10 @@ def _sqlglot_ast_payload(
     *,
     sql: str,
     policy: SqlGlotPolicy,
-) -> str | None:
+) -> bytes | None:
     try:
         return serialize_ast_artifact(ast_to_artifact(expr, sql=sql, policy=policy))
-    except (RuntimeError, TypeError, ValueError):
+    except (RuntimeError, TypeError, ValueError, msgspec.EncodeError):
         return None
 
 

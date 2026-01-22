@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, is_dataclass, replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+import msgspec
 import pyarrow as pa
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
 from arrowdsl.io.ipc import payload_hash
 from engine.function_registry import default_function_registry
+from serde_msgspec import dumps_msgpack, to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 
 if TYPE_CHECKING:
@@ -309,25 +310,22 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
         "runtime_profile_name": runtime.name,
         "determinism_tier": runtime.determinism.value,
         "runtime_profile_hash": snapshot.profile_hash,
-        "runtime_profile_snapshot": json.dumps(snapshot.payload(), sort_keys=True),
+        "runtime_profile_snapshot": dumps_msgpack(snapshot.payload()),
         "sqlglot_policy_hash": (
             policy_snapshot.policy_hash if policy_snapshot is not None else None
         ),
         "sqlglot_policy_snapshot": (
-            json.dumps(policy_snapshot.payload(), sort_keys=True)
+            dumps_msgpack(policy_snapshot.payload())
             if policy_snapshot is not None
             else None
         ),
         "function_registry_hash": function_registry.fingerprint(),
-        "function_registry_snapshot": json.dumps(
-            function_registry.payload(),
-            sort_keys=True,
-        ),
+        "function_registry_snapshot": dumps_msgpack(function_registry.payload()),
         "datafusion_settings_hash": (
             runtime.datafusion.settings_hash() if runtime.datafusion is not None else None
         ),
         "datafusion_settings": (
-            json.dumps(datafusion_settings, sort_keys=True)
+            dumps_msgpack(datafusion_settings)
             if datafusion_settings is not None
             else None
         ),
@@ -361,13 +359,13 @@ def _scan_profile_payload(scan: ScanProfile) -> dict[str, object]:
 def _fragment_scan_options(options: object | None) -> dict[str, str] | None:
     if options is None:
         return None
-    if is_dataclass(options) and not isinstance(options, type):
-        payload = asdict(options)
-        return {str(key): str(value) for key, value in payload.items()}
     if isinstance(options, Mapping):
         return {str(key): str(value) for key, value in options.items()}
-    if hasattr(options, "__dict__"):
-        payload = vars(options)
+    try:
+        payload = to_builtins(options)
+    except (msgspec.EncodeError, TypeError):
+        payload = None
+    if isinstance(payload, Mapping):
         return {str(key): str(value) for key, value in payload.items()}
     return {"value": str(options)}
 

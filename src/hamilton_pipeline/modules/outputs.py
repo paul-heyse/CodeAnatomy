@@ -133,6 +133,8 @@ from relspec.rules.coverage import collect_rule_demands
 from relspec.rules.diagnostics import rule_diagnostics_from_table
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.spec_tables import rule_definitions_from_table
+from relspec.rustworkx_graph import RuleGraph, rule_graph_diagnostics, rule_graph_snapshot
+from relspec.rustworkx_schedule import RuleSchedule, impacted_rules, provenance_for_rule
 from relspec.runtime import RelspecRuntime
 from schema_spec.system import (
     DatasetSpec,
@@ -3048,6 +3050,8 @@ def relspec_snapshots(
     relspec_runtime: RelspecRuntime,
     relationship_contracts: ContractCatalog,
     compiled_relationship_outputs: dict[str, CompiledOutput],
+    relspec_rule_graph: RuleGraph,
+    relspec_rule_schedule: RuleSchedule,
 ) -> RelspecSnapshots:
     """Bundle relationship snapshots for observability.
 
@@ -3057,10 +3061,27 @@ def relspec_snapshots(
         Relationship snapshot bundle.
     """
     snapshot = build_relspec_snapshot(relspec_runtime.registry)
+    rule_provenance = {
+        name: provenance_for_rule(relspec_rule_graph, rule_name=name)
+        for name in sorted(relspec_rule_graph.rule_idx)
+    }
+    evidence_impact = {
+        name: impacted_rules(relspec_rule_graph, evidence_name=name)
+        for name in sorted(relspec_rule_graph.evidence_idx)
+    }
     return RelspecSnapshots(
         registry_snapshot=snapshot,
         contracts=relationship_contracts,
         compiled_outputs=compiled_relationship_outputs,
+        rule_graph_snapshot=rule_graph_snapshot(
+            relspec_rule_graph,
+            label="relspec",
+            rule_signatures=snapshot.plan_signatures,
+        ),
+        rule_graph_diagnostics=rule_graph_diagnostics(relspec_rule_graph),
+        rule_schedule=relspec_rule_schedule,
+        rule_provenance=rule_provenance,
+        evidence_impact=evidence_impact,
     )
 
 
@@ -4075,6 +4096,11 @@ def run_bundle_context(
         rule_diagnostics=snapshot.rule_diagnostics,
         relationship_contracts=run_bundle_inputs.relspec_snapshots.contracts,
         compiled_relationship_outputs=run_bundle_inputs.relspec_snapshots.compiled_outputs,
+        rule_graph_snapshot=run_bundle_inputs.relspec_snapshots.rule_graph_snapshot,
+        rule_graph_diagnostics=run_bundle_inputs.relspec_snapshots.rule_graph_diagnostics,
+        rule_schedule=run_bundle_inputs.relspec_snapshots.rule_schedule,
+        rule_provenance=run_bundle_inputs.relspec_snapshots.rule_provenance,
+        evidence_impact=run_bundle_inputs.relspec_snapshots.evidence_impact,
         datafusion_metrics=datafusion_artifacts.metrics,
         datafusion_traces=datafusion_artifacts.traces,
         datafusion_explains=datafusion_artifacts.explains,

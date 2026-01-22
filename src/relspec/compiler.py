@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -318,12 +317,7 @@ def _execution_bundle_for_plan(
     except (TypeError, ValueError):
         diff_payload = None
     if diff_payload:
-        artifacts["sqlglot_ast_diff"] = json.dumps(
-            diff_payload,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        artifacts["sqlglot_ast_diff"] = diff_payload
     if schema_map_hash is not None:
         artifacts["schema_map_hash"] = schema_map_hash
     return ExecutionBundle(

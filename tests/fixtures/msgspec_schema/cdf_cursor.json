@@ -1,0 +1,24 @@
+{
+  "$defs": {
+    "CdfCursor": {
+      "additionalProperties": false,
+      "description": "Cursor tracking the last processed Delta table version for CDF reads.\n\nAttributes\n----------\ndataset_name : str\n    Name of the dataset this cursor tracks.\nlast_version : int\n    Last Delta table version that was processed.",
+      "properties": {
+        "dataset_name": {
+          "type": "string"
+        },
+        "last_version": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dataset_name",
+        "last_version"
+      ],
+      "title": "CdfCursor",
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/CdfCursor"
+}

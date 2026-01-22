@@ -58,6 +58,10 @@ if TYPE_CHECKING:
 def _ddl_policy(dialect: str) -> SqlGlotPolicy:
     """Return a SQLGlot policy with the given dialect pinned.
 
+    Notes
+    -----
+    Uses ``resolve_sqlglot_policy`` to honor centralized policy defaults.
+
     Returns
     -------
     SqlGlotPolicy

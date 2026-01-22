@@ -230,7 +230,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ArrowFieldSpec(name="substrait_validation_datafusion_hash", dtype=interop.string()),
             ArrowFieldSpec(name="substrait_validation_substrait_rows", dtype=interop.int64()),
             ArrowFieldSpec(name="substrait_validation_substrait_hash", dtype=interop.string()),
-            ArrowFieldSpec(name="sqlglot_ast", dtype=interop.string()),
+            ArrowFieldSpec(name="sqlglot_ast", dtype=interop.binary()),
             ArrowFieldSpec(name="read_dialect", dtype=interop.string()),
             ArrowFieldSpec(name="write_dialect", dtype=interop.string()),
             ArrowFieldSpec(name="canonical_fingerprint", dtype=interop.string()),

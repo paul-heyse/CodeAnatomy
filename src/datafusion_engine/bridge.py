@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import contextlib
 import hashlib
-import json
 import logging
 import re
 import time
@@ -14,6 +13,7 @@ from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
+import msgspec
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 
@@ -79,6 +79,7 @@ from ibis_engine.substrait_bridge import (
 )
 from obs.diagnostics import PreparedStatementSpec
 from schema_spec.policies import DataFusionWritePolicy
+from serde_msgspec import dumps_msgpack
 from sqlglot_tools.bridge import (
     AstExecutionResult,
     IbisCompilerBackend,
@@ -107,8 +108,10 @@ from sqlglot_tools.optimizer import (
     plan_fingerprint,
     preflight_sql,
     register_datafusion_dialect,
+    resolve_sqlglot_policy,
     rewrite_expr,
     serialize_ast_artifact,
+    sqlglot_emit,
     sqlglot_sql,
 )
 
@@ -297,7 +300,7 @@ def _plan_cache_key(
     )
     _ensure_dialect(options.dialect)
     try:
-        sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+        sql = _emit_sql(expr, options=options)
     except (RuntimeError, TypeError, ValueError):
         return None
     plan_bytes = _substrait_bytes(ctx, sql)
@@ -453,7 +456,7 @@ def _maybe_store_substrait(
     if options.plan_cache.contains(cache_key):
         return
     _ensure_dialect(options.dialect)
-    sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    sql = _emit_sql(expr, options=options)
     plan_bytes = _substrait_bytes(ctx, sql)
     if plan_bytes is None:
         return
@@ -494,6 +497,21 @@ def _sql_options_for_options(options: DataFusionCompileOptions) -> SQLOptions:
 def _ensure_dialect(name: str) -> None:
     if name == "datafusion_ext":
         register_datafusion_dialect()
+
+
+def _sqlglot_emit_policy(options: DataFusionCompileOptions) -> SqlGlotPolicy:
+    base = options.sqlglot_policy or resolve_sqlglot_policy(name="datafusion_compile")
+    return replace(
+        base,
+        read_dialect=options.dialect,
+        write_dialect=options.dialect,
+        unsupported_level=ErrorLevel.RAISE,
+    )
+
+
+def _emit_sql(expr: Expression, *, options: DataFusionCompileOptions) -> str:
+    policy = _sqlglot_emit_policy(options)
+    return sqlglot_emit(expr, policy=policy)
 
 
 def df_from_sqlglot_or_sql(
@@ -1164,14 +1182,14 @@ def _projection_map_payload(
     expr: Expression,
     *,
     options: DataFusionCompileOptions,
-) -> str | None:
+) -> bytes | None:
     if not options.dynamic_projection:
         return None
     projection_map = _projection_requirements(expr)
     if not projection_map:
         return None
     payload = {name: list(columns) for name, columns in projection_map.items()}
-    return json.dumps(payload, sort_keys=True)
+    return dumps_msgpack(payload)
 
 
 def _lineage_schema_map(
@@ -1309,7 +1327,7 @@ def _maybe_enforce_preflight(
     if not options.enforce_preflight and options.sql_ingest_hook is None:
         return
     policy = options.sqlglot_policy or default_sqlglot_policy()
-    sql_text = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    sql_text = _emit_sql(expr, options=options)
     result = preflight_sql(
         sql_text,
         options=PreflightOptions(
@@ -1423,7 +1441,7 @@ class DataFusionPlanArtifacts:
     substrait_plan: bytes | None
     normalized_sql: str | None = None
     substrait_validation: Mapping[str, object] | None = None
-    sqlglot_ast: str | None = None
+    sqlglot_ast: bytes | None = None
     ibis_decompile: str | None = None
     ibis_sql: str | None = None
     ibis_sql_pretty: str | None = None
@@ -1434,7 +1452,7 @@ class DataFusionPlanArtifacts:
     lineage_columns: tuple[str, ...] | None = None
     lineage_scopes: tuple[str, ...] | None = None
     param_signature: str | None = None
-    projection_map: str | None = None
+    projection_map: bytes | None = None
     unparsed_sql: str | None = None
     unparse_error: str | None = None
     logical_plan: str | None = None
@@ -1890,7 +1908,7 @@ def _maybe_explain(
     if not options.capture_explain and options.explain_hook is None:
         return
     _ensure_dialect(options.dialect)
-    sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    sql = _emit_sql(expr, options=options)
     prefix = "EXPLAIN ANALYZE" if options.explain_analyze else "EXPLAIN"
     sql_options = _sql_options_for_options(options)
     explain_df = ctx.sql_with_options(f"{prefix} {sql}", sql_options)
@@ -2037,7 +2055,7 @@ class _PlanArtifactInputs:
     resolved_expr: Expression
     sql: str
     param_signature: str | None
-    projection_map: str | None
+    projection_map: bytes | None
     policy: SqlGlotPolicy
     details: _PlanArtifactsDetails
     plan_hash: str
@@ -2064,7 +2082,7 @@ def _collect_plan_artifact_inputs(
             resolved_expr = bind_params(expr, params=bindings)
         except (KeyError, TypeError, ValueError):
             resolved_expr = expr
-    sql = resolved_expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    sql = _emit_sql(resolved_expr, options=options)
     details = _collect_plan_artifacts_details(ctx, sql=sql, options=options, df=df)
     plan_hash = options.plan_hash or plan_fingerprint(
         resolved_expr,
@@ -2088,10 +2106,10 @@ def _collect_sqlglot_ast_artifact(
     *,
     sql: str,
     policy: SqlGlotPolicy,
-) -> str | None:
+) -> bytes | None:
     try:
         return serialize_ast_artifact(ast_to_artifact(resolved_expr, sql=sql, policy=policy))
-    except (RuntimeError, TypeError, ValueError):
+    except (RuntimeError, TypeError, ValueError, msgspec.EncodeError):
         return None
 
 

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Final, Literal, TypedDict, Unpack, cast
 
+import msgspec
 import pyarrow as pa
 import sqlglot
 from sqlglot.errors import SqlglotError
@@ -45,6 +46,7 @@ from sqlglot.transforms import (
 )
 
 from arrowdsl.io.ipc import payload_hash
+from serde_msgspec import StructBase
 from sqlglot_tools.compat import Dialect, DialectType, ErrorLevel, Expression, exp, parse_one
 
 type SchemaMappingNode = Mapping[str, str] | Mapping[str, SchemaMappingNode]
@@ -380,27 +382,18 @@ class NormalizeExprResult:
     stats: NormalizationStats
 
 
-@dataclass(frozen=True)
-class AstArtifact:
+class AstArtifact(StructBase):
     """SQLGlot AST artifact with serialization metadata."""
 
     sql: str
-    ast_json: str
+    ast_raw: msgspec.Raw
     policy_hash: str
 
-    def to_dict(self) -> dict[str, str]:
-        """Return dictionary representation for serialization.
 
-        Returns
-        -------
-        dict[str, str]
-            Dictionary with sql, ast_json, and policy_hash fields.
-        """
-        return {
-            "sql": self.sql,
-            "ast_json": self.ast_json,
-            "policy_hash": self.policy_hash,
-        }
+_AST_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
+_AST_DECODER = msgspec.msgpack.Decoder(type=dict[str, object], strict=False)
+_AST_ARTIFACT_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
+_AST_ARTIFACT_DECODER = msgspec.msgpack.Decoder(type=AstArtifact, strict=True)
 
 
 @dataclass(frozen=True)
@@ -1808,8 +1801,8 @@ def emit_preflight_diagnostics(result: PreflightResult) -> dict[str, object]:
     return diagnostics
 
 
-def serialize_ast_artifact(artifact: AstArtifact) -> str:
-    """Serialize an AstArtifact to JSON string.
+def serialize_ast_artifact(artifact: AstArtifact) -> bytes:
+    """Serialize an AstArtifact to MessagePack bytes.
 
     Parameters
     ----------
@@ -1818,19 +1811,19 @@ def serialize_ast_artifact(artifact: AstArtifact) -> str:
 
     Returns
     -------
-    str
-        JSON-serialized artifact.
+    bytes
+        MessagePack-serialized artifact.
     """
-    return json.dumps(artifact.to_dict(), sort_keys=True)
+    return _AST_ARTIFACT_ENCODER.encode(artifact)
 
 
-def deserialize_ast_artifact(serialized: str) -> AstArtifact:
-    """Deserialize an AstArtifact from JSON string.
+def deserialize_ast_artifact(serialized: bytes) -> AstArtifact:
+    """Deserialize an AstArtifact from MessagePack bytes.
 
     Parameters
     ----------
     serialized
-        JSON-serialized artifact string.
+        MessagePack-serialized artifact bytes.
 
     Returns
     -------
@@ -1843,15 +1836,8 @@ def deserialize_ast_artifact(serialized: str) -> AstArtifact:
         Raised when the serialized data is invalid.
     """
     try:
-        data = json.loads(serialized)
-        if not isinstance(data, dict):
-            _raise_invalid_artifact_type()
-        return AstArtifact(
-            sql=data["sql"],
-            ast_json=data["ast_json"],
-            policy_hash=data["policy_hash"],
-        )
-    except (KeyError, TypeError) as exc:
+        return _AST_ARTIFACT_DECODER.decode(serialized)
+    except msgspec.DecodeError as exc:
         msg = f"Invalid AstArtifact serialization: {exc}"
         raise ValueError(msg) from exc
 
@@ -1881,18 +1867,13 @@ def ast_to_artifact(
     policy_obj = policy or default_sqlglot_policy()
     policy_snapshot = sqlglot_policy_snapshot_for(policy_obj)
     ast_data = dump(expr)
-    ast_json = json.dumps(ast_data, sort_keys=True)
+    ast_raw = msgspec.Raw(_AST_ENCODER.encode(ast_data))
     sql_text = sql or expr.sql(dialect=policy_obj.write_dialect)
     return AstArtifact(
         sql=sql_text,
-        ast_json=ast_json,
+        ast_raw=ast_raw,
         policy_hash=policy_snapshot.policy_hash,
     )
-
-
-def _raise_invalid_artifact_type() -> None:
-    msg = "Serialized artifact must be a JSON object."
-    raise ValueError(msg)
 
 
 def artifact_to_ast(artifact: AstArtifact) -> Expression:
@@ -1911,12 +1892,12 @@ def artifact_to_ast(artifact: AstArtifact) -> Expression:
     Raises
     ------
     ValueError
-        Raised when the AST JSON cannot be deserialized.
+        Raised when the AST payload cannot be deserialized.
     """
     try:
-        ast_data = json.loads(artifact.ast_json)
+        ast_data = _AST_DECODER.decode(artifact.ast_raw)
         result = load(ast_data)
-    except (SqlglotError, TypeError, ValueError) as exc:
+    except (SqlglotError, TypeError, ValueError, msgspec.DecodeError) as exc:
         msg = f"Failed to deserialize AST: {exc}"
         raise ValueError(msg) from exc
     if result is None:

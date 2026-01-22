@@ -27,27 +27,9 @@ from arrowdsl.finalize.finalize import Contract
 from arrowdsl.io.ipc import IpcWriteInput, ipc_hash
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from serde_msgspec import StructBase, to_builtins
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_product import PlanProduct
-from ibis_engine.execution import IbisExecutionContext
-from ibis_engine.execution_factory import ibis_execution_from_profile
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
-from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
-from ibis_engine.params_bridge import ScalarParamSpec
-from relspec.compiler import CompiledOutput
-from relspec.model import RelationshipRule
-from relspec.param_deps import RuleDependencyReport
-from relspec.registry import ContractCatalog, DatasetLocation
-from relspec.rules.diagnostics import rule_diagnostics_from_table
-from schema_spec.system import (
-    dataset_table_ddl_fingerprint,
-    dataset_table_definition,
-)
 from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
     ParseSqlOptions,
@@ -58,10 +40,55 @@ from sqlglot_tools.optimizer import (
 
 if TYPE_CHECKING:
     from arrowdsl.spec.io import IpcWriteConfig
+    from ibis_engine.execution import IbisExecutionContext
+    from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
+    from ibis_engine.params_bridge import ScalarParamSpec
+    from relspec.compiler import CompiledOutput
+    from relspec.model import RelationshipRule
+    from relspec.param_deps import RuleDependencyReport
+    from relspec.registry import ContractCatalog, DatasetLocation
+    from relspec.rustworkx_graph import GraphDiagnostics, RuleGraphSnapshot
+    from relspec.rustworkx_schedule import RuleSchedule
 
 # -----------------------
 # Basic environment capture
 # -----------------------
+
+
+class PythonInfo(StructBase):
+    version: str
+    executable: str
+
+
+class PlatformInfo(StructBase):
+    platform: str
+    machine: str
+    python_implementation: str
+
+
+class PackageVersions(StructBase):
+    pyarrow: str | None = None
+    datafusion: str | None = None
+    ibis_framework: str | None = None
+    sqlglot: str | None = None
+    sf_hamilton: str | None = None
+    libcst: str | None = None
+
+
+class GitInfo(StructBase):
+    present: bool
+    head: str | None = None
+    ref: str | None = None
+    commit: str | None = None
+    error: str | None = None
+
+
+class ReproInfo(StructBase):
+    python: PythonInfo
+    platform: PlatformInfo
+    packages: PackageVersions
+    git: GitInfo
+    extra: JsonDict | None = None
 
 
 def _pkg_version(name: str) -> str | None:
@@ -71,7 +98,7 @@ def _pkg_version(name: str) -> str | None:
         return None
 
 
-def try_get_git_info(repo_root: str | None) -> JsonDict:
+def try_get_git_info(repo_root: str | None) -> GitInfo:
     """Collect best-effort git info without shelling out.
 
     Looks for:
@@ -83,17 +110,17 @@ def try_get_git_info(repo_root: str | None) -> JsonDict:
         Git metadata when available, otherwise a minimal status dict.
     """
     if not repo_root:
-        return {"present": False}
+        return GitInfo(present=False)
 
     git_dir = Path(repo_root) / ".git"
     head_path = git_dir / "HEAD"
     if not head_path.exists():
-        return {"present": False}
+        return GitInfo(present=False)
 
     try:
         head = head_path.read_text(encoding="utf-8").strip()
     except OSError:
-        return {"present": True, "error": "failed_to_read_HEAD"}
+        return GitInfo(present=True, error="failed_to_read_HEAD")
 
     if head.startswith("ref:"):
         ref = head.split(":", 1)[1].strip()
@@ -102,15 +129,15 @@ def try_get_git_info(repo_root: str | None) -> JsonDict:
         if ref_path.exists():
             with suppress(OSError):
                 sha = ref_path.read_text(encoding="utf-8").strip()
-        return {"present": True, "head": head, "ref": ref, "commit": sha}
+        return GitInfo(present=True, head=head, ref=ref, commit=sha)
 
     # Detached head case: HEAD contains commit sha
-    return {"present": True, "head": "detached", "commit": head}
+    return GitInfo(present=True, head="detached", commit=head)
 
 
 def collect_repro_info(
     repo_root: str | None = None, *, extra: Mapping[str, JsonValue] | None = None
-) -> JsonDict:
+) -> ReproInfo:
     """Capture a compact reproducibility bundle.
 
     Intentionally avoids huge payloads (pip freeze, full env vars).
@@ -120,29 +147,29 @@ def collect_repro_info(
     JsonDict
         Reproducibility metadata snapshot.
     """
-    info: JsonDict = {
-        "python": {
-            "version": sys.version,
-            "executable": sys.executable,
-        },
-        "platform": {
-            "platform": platform.platform(),
-            "machine": platform.machine(),
-            "python_implementation": platform.python_implementation(),
-        },
-        "packages": {
-            "pyarrow": _pkg_version("pyarrow"),
-            "datafusion": _pkg_version("datafusion"),
-            "ibis-framework": _pkg_version("ibis-framework"),
-            "sqlglot": _pkg_version("sqlglot"),
-            "sf-hamilton": _pkg_version("sf-hamilton") or _pkg_version("hamilton"),
-            "libcst": _pkg_version("libcst"),
-        },
-        "git": try_get_git_info(repo_root),
-    }
-    if extra:
-        info["extra"] = dict(extra)
-    return info
+    packages = PackageVersions(
+        pyarrow=_pkg_version("pyarrow"),
+        datafusion=_pkg_version("datafusion"),
+        ibis_framework=_pkg_version("ibis-framework"),
+        sqlglot=_pkg_version("sqlglot"),
+        sf_hamilton=_pkg_version("sf-hamilton") or _pkg_version("hamilton"),
+        libcst=_pkg_version("libcst"),
+    )
+    return ReproInfo(
+        python=PythonInfo(version=sys.version, executable=sys.executable),
+        platform=PlatformInfo(
+            platform=platform.platform(),
+            machine=platform.machine(),
+            python_implementation=platform.python_implementation(),
+        ),
+        packages=packages,
+        git=try_get_git_info(repo_root),
+        extra=dict(extra) if extra else None,
+    )
+
+
+def _to_json_value(value: object) -> JsonValue:
+    return cast("JsonValue", to_builtins(value))
 
 
 # -----------------------
@@ -156,6 +183,9 @@ def _ensure_dir(path: Path) -> None:
 
 @lru_cache(maxsize=1)
 def _repro_ibis_execution() -> IbisExecutionContext:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from ibis_engine.execution_factory import ibis_execution_from_profile
+
     profile = DataFusionRuntimeProfile()
     return ibis_execution_from_profile(profile)
 
@@ -167,6 +197,12 @@ def _write_obs_dataset(
     table: pa.Table,
     overwrite: bool,
 ) -> str:
+    from ibis_engine.io_bridge import (
+        IbisDatasetWriteOptions,
+        IbisDeltaWriteOptions,
+        write_ibis_dataset_delta,
+    )
+
     dataset_dir = base_dir / name
     mode = "overwrite" if overwrite else "error"
     options = IbisDeltaWriteOptions(
@@ -185,18 +221,19 @@ def _write_obs_dataset(
     return result.path
 
 
-def _payload_table(payload: JsonValue) -> pa.Table:
-    if isinstance(payload, Mapping):
-        return pa.Table.from_pylist([dict(payload)])
-    mapping_list = _mapping_list(payload)
+def _payload_table(payload: object) -> pa.Table:
+    builtins = to_builtins(payload)
+    if isinstance(builtins, Mapping):
+        return pa.Table.from_pylist([dict(builtins)])
+    mapping_list = _mapping_list(builtins)
     if mapping_list is not None:
         return pa.Table.from_pylist([dict(item) for item in mapping_list])
-    if isinstance(payload, list):
-        return pa.table({"value": payload})
-    return pa.table({"value": [payload]})
+    if isinstance(builtins, list):
+        return pa.table({"value": builtins})
+    return pa.table({"value": [builtins]})
 
 
-def _mapping_list(value: JsonValue) -> list[Mapping[str, JsonValue]] | None:
+def _mapping_list(value: object) -> list[Mapping[str, JsonValue]] | None:
     if not isinstance(value, list):
         return None
     if not value:
@@ -208,10 +245,16 @@ def _mapping_list(value: JsonValue) -> list[Mapping[str, JsonValue]] | None:
 
 def _write_delta_payload(
     path: PathLike,
-    payload: JsonValue,
+    payload: object,
     *,
     overwrite: bool = True,
 ) -> str:
+    from ibis_engine.io_bridge import (
+        IbisDatasetWriteOptions,
+        IbisDeltaWriteOptions,
+        write_ibis_dataset_delta,
+    )
+
     target = ensure_path(path)
     if target.exists() and not overwrite:
         msg = f"Target already exists at {target}."
@@ -234,33 +277,6 @@ def _write_delta_payload(
     return result.path
 
 
-def _normalize_value(value: object) -> object:
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, bytes):
-        return value.hex()
-    if isinstance(value, Mapping):
-        return {str(key): _normalize_value(val) for key, val in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_normalize_value(item) for item in value]
-    return _stable_repr(value)
-
-
-def _stable_repr(value: object) -> str:
-    if isinstance(value, Mapping):
-        items = ", ".join(
-            f"{_stable_repr(key)}:{_stable_repr(val)}"
-            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
-        )
-        return f"{{{items}}}"
-    if isinstance(value, (list, tuple, set)):
-        rendered = [_stable_repr(item) for item in value]
-        if isinstance(value, set):
-            rendered = sorted(rendered)
-        items = ", ".join(rendered)
-        bracket = "()" if isinstance(value, tuple) else "[]"
-        return f"{bracket[0]}{items}{bracket[1]}"
-    return repr(value)
 
 
 # -----------------------
@@ -276,6 +292,7 @@ def serialize_contract(contract: Contract) -> JsonDict:
     JsonDict
         Serialized contract metadata.
     """
+    from schema_spec.system import dataset_table_ddl_fingerprint
 
     def _serialize_sort_keys(keys: tuple[SortKey, ...] | None) -> list[JsonDict] | None:
         if keys is None:
@@ -333,19 +350,19 @@ def serialize_relationship_rule(rule: RelationshipRule) -> JsonDict:
         "priority": int(rule.priority),
         "emit_rule_meta": bool(rule.emit_rule_meta),
         "inputs": inputs,
-        "hash_join": cast("JsonValue", _normalize_value(rule.hash_join))
+        "hash_join": _to_json_value(rule.hash_join)
         if rule.hash_join is not None
         else None,
-        "interval_align": cast("JsonValue", _normalize_value(rule.interval_align))
+        "interval_align": _to_json_value(rule.interval_align)
         if rule.interval_align is not None
         else None,
-        "winner_select": cast("JsonValue", _normalize_value(rule.winner_select))
+        "winner_select": _to_json_value(rule.winner_select)
         if rule.winner_select is not None
         else None,
-        "project": cast("JsonValue", _normalize_value(rule.project))
+        "project": _to_json_value(rule.project)
         if rule.project is not None
         else None,
-        "post_kernels": [cast("JsonValue", _normalize_value(k)) for k in rule.post_kernels],
+        "post_kernels": [_to_json_value(k) for k in rule.post_kernels],
     }
 
 
@@ -445,7 +462,9 @@ def make_run_bundle_name(
         ts = int(created_value)
     else:
         ts = int(time.time())
-    payload = {"version": 1, "manifest": dict(run_manifest), "config": dict(run_config)}
+    manifest_payload = cast("JsonDict", to_builtins(run_manifest))
+    config_payload = cast("JsonDict", to_builtins(run_config))
+    payload = {"version": 1, "manifest": manifest_payload, "config": config_payload}
     table = pa.Table.from_pylist([payload])
     h = ipc_hash(table)[:10]
     return f"run_{ts}_{h}"
@@ -465,6 +484,11 @@ class RunBundleContext:
     rule_diagnostics: pa.Table | None = None
     relationship_contracts: ContractCatalog | None = None
     compiled_relationship_outputs: Mapping[str, CompiledOutput] | None = None
+    rule_graph_snapshot: RuleGraphSnapshot | None = None
+    rule_graph_diagnostics: GraphDiagnostics | None = None
+    rule_schedule: RuleSchedule | None = None
+    rule_provenance: Mapping[str, Sequence[str]] | None = None
+    evidence_impact: Mapping[str, Sequence[str]] | None = None
     datafusion_metrics: JsonDict | None = None
     datafusion_traces: JsonDict | None = None
     datafusion_explains: pa.Table | None = None
@@ -557,14 +581,14 @@ def _write_manifest_files(
     files_written.append(
         _write_delta_payload(
             bundle_dir / "manifest.delta",
-            dict(context.run_manifest),
+            context.run_manifest,
             overwrite=True,
         )
     )
     files_written.append(
         _write_delta_payload(
             bundle_dir / "config.delta",
-            dict(context.run_config),
+            context.run_config,
             overwrite=True,
         )
     )
@@ -695,6 +719,46 @@ def _write_relspec_snapshots(
                 overwrite=True,
             )
         )
+    if context.rule_graph_snapshot is not None:
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / "rule_graph_snapshot.delta",
+                serialize_rule_graph_snapshot(context.rule_graph_snapshot),
+                overwrite=True,
+            )
+        )
+    if context.rule_graph_diagnostics is not None:
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / "rule_graph_diagnostics.delta",
+                serialize_rule_graph_diagnostics(context.rule_graph_diagnostics),
+                overwrite=True,
+            )
+        )
+    if context.rule_schedule is not None:
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / "rule_schedule.delta",
+                serialize_rule_schedule(context.rule_schedule),
+                overwrite=True,
+            )
+        )
+    if context.rule_provenance is not None:
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / "rule_provenance.delta",
+                context.rule_provenance,
+                overwrite=True,
+            )
+        )
+    if context.evidence_impact is not None:
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / "evidence_impact.delta",
+                context.evidence_impact,
+                overwrite=True,
+            )
+        )
     _write_runtime_artifacts(relspec_dir, context, files_written)
     if context.rule_diagnostics is not None:
         _write_substrait_artifacts(
@@ -702,6 +766,39 @@ def _write_relspec_snapshots(
             context.rule_diagnostics,
             files_written,
         )
+
+
+def serialize_rule_graph_snapshot(snapshot: RuleGraphSnapshot) -> Mapping[str, object]:
+    """Serialize a rule graph snapshot into a payload mapping."""
+    return {
+        "version": snapshot.version,
+        "label": snapshot.label,
+        "output_policy": snapshot.output_policy,
+        "nodes": list(snapshot.nodes),
+        "edges": list(snapshot.edges),
+    }
+
+
+def serialize_rule_graph_diagnostics(diag: GraphDiagnostics) -> Mapping[str, object]:
+    """Serialize rule graph diagnostics into a payload mapping."""
+    return {
+        "status": diag.status,
+        "cycles": [list(cycle) for cycle in diag.cycles],
+        "scc": [list(component) for component in diag.scc],
+        "critical_path_length": diag.critical_path_length,
+        "critical_path": list(diag.critical_path) if diag.critical_path is not None else None,
+        "dot": diag.dot,
+        "node_map": diag.node_map,
+    }
+
+
+def serialize_rule_schedule(schedule: RuleSchedule) -> Mapping[str, object]:
+    """Serialize a rule schedule into a payload mapping."""
+    return {
+        "ordered_rules": list(schedule.ordered_rules),
+        "generations": [list(gen) for gen in schedule.generations],
+        "missing_rules": list(schedule.missing_rules),
+    }
 
 
 def _write_incremental_artifacts(
@@ -744,48 +841,42 @@ def _write_runtime_artifacts(
     files_written: list[str],
 ) -> None:
     def _json_list(entries: Sequence[object]) -> list[JsonValue]:
-        return [cast("JsonValue", _normalize_value(entry)) for entry in entries]
+        return [_to_json_value(entry) for entry in entries]
 
     json_artifacts = [
         ("datafusion_metrics.delta", context.datafusion_metrics),
         ("datafusion_traces.delta", context.datafusion_traces),
         (
             "datafusion_function_catalog.delta",
-            cast(
-                "JsonValue",
-                _normalize_value(
-                    {
-                        "functions": context.datafusion_function_catalog,
-                        "hash": context.datafusion_function_catalog_hash,
-                    }
-                ),
+            _to_json_value(
+                {
+                    "functions": context.datafusion_function_catalog,
+                    "hash": context.datafusion_function_catalog_hash,
+                }
             )
             if context.datafusion_function_catalog
             else None,
         ),
         (
             "datafusion_write_policy.delta",
-            cast("JsonValue", _normalize_value(context.datafusion_write_policy))
+            _to_json_value(context.datafusion_write_policy)
             if context.datafusion_write_policy
             else None,
         ),
         (
             "function_registry_snapshot.delta",
-            cast(
-                "JsonValue",
-                _normalize_value(
-                    {
-                        "snapshot": context.function_registry_snapshot,
-                        "hash": context.function_registry_hash,
-                    }
-                ),
+            _to_json_value(
+                {
+                    "snapshot": context.function_registry_snapshot,
+                    "hash": context.function_registry_hash,
+                }
             )
             if context.function_registry_snapshot
             else None,
         ),
         (
             "arrow_kernel_registry.delta",
-            cast("JsonValue", _normalize_value(context.arrow_kernel_registry))
+            _to_json_value(context.arrow_kernel_registry)
             if context.arrow_kernel_registry
             else None,
         ),
@@ -981,6 +1072,8 @@ def _contract_schema_ddls(contracts: ContractCatalog) -> JsonDict:
     ValueError
         Raised when DataFusion cannot provide a CREATE TABLE statement.
     """
+    from schema_spec.system import dataset_table_definition
+
     payload: JsonDict = {}
     for name in contracts.names():
         ddl = dataset_table_definition(name)
@@ -1004,6 +1097,8 @@ def _contract_schema_asts(contracts: ContractCatalog) -> JsonDict:
     ValueError
         Raised when schema DDL is missing or cannot be parsed.
     """
+    from schema_spec.system import dataset_table_definition
+
     register_datafusion_dialect()
     payload: JsonDict = {}
     for name in contracts.names():
@@ -1101,6 +1196,8 @@ def _write_substrait_artifacts(
     diagnostics_table: pa.Table,
     files_written: list[str],
 ) -> None:
+    from relspec.rules.diagnostics import rule_diagnostics_from_table
+
     diagnostics = rule_diagnostics_from_table(diagnostics_table)
     substrait_dir = relspec_dir / "substrait"
     used: set[str] = set()
@@ -1144,6 +1241,8 @@ def _write_sqlglot_ast_payloads(
     diagnostics_table: pa.Table,
     files_written: list[str],
 ) -> None:
+    from relspec.rules.diagnostics import rule_diagnostics_from_table
+
     diagnostics = rule_diagnostics_from_table(diagnostics_table)
     payloads: list[JsonDict] = []
     for diagnostic in diagnostics:
@@ -1184,6 +1283,8 @@ def _write_sqlglot_planner_dag(
     diagnostics_table: pa.Table,
     files_written: list[str],
 ) -> None:
+    from relspec.rules.diagnostics import rule_diagnostics_from_table
+
     diagnostics = rule_diagnostics_from_table(diagnostics_table)
     payloads: list[JsonDict] = []
     for diagnostic in diagnostics:
@@ -1198,11 +1299,11 @@ def _write_sqlglot_planner_dag(
             continue
         dag = planner_dag_snapshot(expr, dialect=dialect)
         steps = [
-            {str(key): cast("JsonValue", _normalize_value(value)) for key, value in row.items()}
+            {str(key): _to_json_value(value) for key, value in row.items()}
             for row in dag.steps
         ]
         edges = [
-            {str(key): cast("JsonValue", _normalize_value(value)) for key, value in row.items()}
+            {str(key): _to_json_value(value) for key, value in row.items()}
             for row in dag.edges
         ]
         payloads.append(
@@ -1233,6 +1334,8 @@ def _write_sqlglot_qualification_failures(
     diagnostics_table: pa.Table,
     files_written: list[str],
 ) -> None:
+    from relspec.rules.diagnostics import rule_diagnostics_from_table
+
     diagnostics = rule_diagnostics_from_table(diagnostics_table)
     payloads: list[JsonDict] = []
     for diagnostic in diagnostics:
@@ -1264,6 +1367,8 @@ def _write_schema_snapshot(
     table: TableLike,
     files_written: list[str],
 ) -> None:
+    from schema_spec.system import dataset_table_ddl_fingerprint
+
     doc: JsonDict = {
         "name": name,
         "rows": int(table.num_rows),
@@ -1339,6 +1444,8 @@ def _delta_metadata_payload(
     *,
     table: IpcWriteInput,
 ) -> JsonDict:
+    from schema_spec.system import dataset_table_ddl_fingerprint
+
     schema = _ipc_schema(table)
     return {
         "name": name,
@@ -1356,6 +1463,12 @@ def _write_delta_group(
     context: RunBundleContext,
     files_written: list[str],
 ) -> None:
+    from ibis_engine.io_bridge import (
+        IbisDatasetWriteOptions,
+        IbisDeltaWriteOptions,
+        write_ibis_dataset_delta,
+    )
+
     if not context.ipc_dump_enabled or not tables:
         return
     delta_dir = bundle_dir / "delta" / prefix
@@ -1477,6 +1590,8 @@ def _write_param_signatures(
     context: RunBundleContext,
     files_written: list[str],
 ) -> None:
+    from schema_spec.system import dataset_table_ddl_fingerprint
+
     signatures: dict[str, JsonDict] = {}
     if context.param_scalar_signature:
         signatures["_scalar_signature"] = {"signature": context.param_scalar_signature}
@@ -1574,7 +1689,7 @@ def _scalar_param_spec_payload(spec: ScalarParamSpec) -> JsonDict:
     return {
         "name": spec.name,
         "dtype": spec.dtype,
-        "default": cast("JsonValue", _normalize_value(spec.default)),
+        "default": _to_json_value(spec.default),
         "required": bool(spec.required),
     }
 
@@ -1635,6 +1750,11 @@ def write_run_bundle(
         relspec/contracts_ddl.delta
         relspec/contracts_ast.delta
         relspec/compiled_outputs.delta
+        relspec/rule_graph_snapshot.delta
+        relspec/rule_graph_diagnostics.delta
+        relspec/rule_schedule.delta
+        relspec/rule_provenance.delta
+        relspec/evidence_impact.delta
         relspec/scan_telemetry/
         relspec/rule_exec_events/
         incremental/incremental_diff/

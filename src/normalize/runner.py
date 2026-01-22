@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 from functools import cache
 from typing import TYPE_CHECKING, cast
 
+import msgspec
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value
 
@@ -49,10 +50,11 @@ from normalize.rule_defaults import resolve_rule_defaults
 from normalize.rule_factories import build_rule_definitions_from_specs
 from normalize.runtime import NormalizeRuntime
 from normalize.runtime_validation import validate_rule_specs
-from relspec.graph import RuleSelectors, order_rules_by_evidence
 from relspec.model import AmbiguityPolicy, ConfidencePolicy
 from relspec.normalize.rule_registry_specs import rule_family_specs
 from relspec.policies import PolicyRegistry
+from relspec.rustworkx_graph import build_rule_graph_from_normalize_rules
+from relspec.rustworkx_schedule import schedule_rules
 from relspec.rules.definitions import (
     EvidenceOutput,
     EvidenceSpec,
@@ -183,27 +185,21 @@ def _normalize_ibis_context(
         scan_provenance_columns=options.scan_provenance_columns,
     )
     evidence = EvidenceCatalog.from_sources(catalog.tables)
-    selectors = RuleSelectors(
-        inputs_for=lambda rule: rule.inputs,
-        output_for=lambda rule: rule.output,
-        name_for=lambda rule: rule.name,
-        priority_for=lambda rule: rule.priority,
-        evidence_for=lambda rule: rule.evidence,
-        output_schema_for=_normalize_output_schema,
-    )
-    ordered = order_rules_by_evidence(
-        resolved_rules,
+    graph = build_rule_graph_from_normalize_rules(resolved_rules)
+    output_schemas = _normalize_output_schema_map(resolved_rules)
+    schedule = schedule_rules(
+        graph,
         evidence=evidence,
-        selectors=selectors,
-        label="Normalize rule",
+        output_schema_for=output_schemas.get,
     )
+    ordered = _order_normalize_rules(resolved_rules, schedule.ordered_rules)
     execution = ibis_execution_from_ctx(
         ctx,
         backend=options.backend,
         execution_policy=options.execution_policy,
     )
     return _NormalizeIbisCompilationContext(
-        ordered=tuple(ordered),
+        ordered=ordered,
         ibis_catalog=catalog,
         execution=execution,
         evidence=evidence,
@@ -254,8 +250,8 @@ def _sqlglot_lineage_payload(
         return None
 
 
-def _sqlglot_ast_payload(expr: Expression, *, sql: str, policy: SqlGlotPolicy) -> str | None:
-    with contextlib.suppress(RuntimeError, TypeError, ValueError):
+def _sqlglot_ast_payload(expr: Expression, *, sql: str, policy: SqlGlotPolicy) -> bytes | None:
+    with contextlib.suppress(RuntimeError, TypeError, ValueError, msgspec.EncodeError):
         return serialize_ast_artifact(ast_to_artifact(expr, sql=sql, policy=policy))
     return None
 
@@ -551,6 +547,30 @@ def _normalize_output_schema(rule: ResolvedNormalizeRule) -> SchemaLike | None:
         return dataset_schema(rule.output)
     except KeyError:
         return None
+
+
+def _normalize_output_schema_map(
+    rules: Sequence[ResolvedNormalizeRule],
+) -> dict[str, SchemaLike | None]:
+    schemas: dict[str, SchemaLike | None] = {}
+    for rule in rules:
+        output = rule.output
+        if output in schemas and schemas[output] is not None:
+            continue
+        schemas[output] = _normalize_output_schema(rule)
+    return schemas
+
+
+def _order_normalize_rules(
+    rules: Sequence[ResolvedNormalizeRule],
+    ordered_names: Sequence[str],
+) -> tuple[ResolvedNormalizeRule, ...]:
+    by_name = {rule.name: rule for rule in rules}
+    missing = [name for name in ordered_names if name not in by_name]
+    if missing:
+        msg = f"Normalize rule schedule missing rules: {missing}."
+        raise ValueError(msg)
+    return tuple(by_name[name] for name in ordered_names)
 
 
 def _normalize_table_metadata(output: str) -> Mapping[str, str]:

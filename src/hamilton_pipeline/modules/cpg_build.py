@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
+import rustworkx as rx
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 from hamilton.function_modifiers import cache, extract_fields, tag
@@ -124,7 +125,7 @@ from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
 )
-from relspec.graph import order_rules
+from relspec.errors import RelspecValidationError
 from relspec.model import DatasetRef, RelationshipRule
 from relspec.param_deps import RuleDependencyReport
 from relspec.pipeline_policy import PipelinePolicy
@@ -136,6 +137,13 @@ from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.exec_events import RuleExecutionEventCollector
 from relspec.rules.handlers import default_rule_handlers
 from relspec.rules.validation import SqlGlotDiagnosticsConfig, rule_dependency_reports
+from relspec.rustworkx_graph import (
+    EvidenceNode,
+    RuleGraph,
+    RuleNode,
+    build_rule_graph_from_relationship_rules,
+)
+from relspec.rustworkx_schedule import RuleSchedule, schedule_rules
 from relspec.runtime import RelspecRuntime, RelspecRuntimeOptions, compose_relspec
 from relspec.schema_context import RelspecSchemaContext
 from relspec.validate import validate_registry
@@ -209,6 +217,9 @@ class RelationshipTableInputs:
     """Inputs required to build relationship tables."""
 
     compiled_relationship_outputs: dict[str, CompiledOutput]
+    relspec_rule_graph: RuleGraph
+    relspec_rule_schedule: RuleSchedule
+    relspec_evidence_catalog: EvidenceCatalog
     relspec_resolver: PlanResolver[IbisPlan]
     relationship_contracts: ContractCatalog
     engine_session: EngineSession
@@ -1425,6 +1436,20 @@ def _relationship_evidence_catalog(
     return evidence
 
 
+def _relationship_output_schema_map(
+    rules: Sequence[RelationshipRule],
+    *,
+    contracts: ContractCatalog,
+) -> dict[str, SchemaLike | None]:
+    schemas: dict[str, SchemaLike | None] = {}
+    for rule in rules:
+        output = rule.output_dataset
+        if output in schemas and schemas[output] is not None:
+            continue
+        schemas[output] = _relationship_rule_schema(rule, contracts=contracts)
+    return schemas
+
+
 def _runtime_telemetry(ctx: ExecutionContext) -> Mapping[str, object]:
     profile = ctx.runtime.datafusion
     if profile is None:
@@ -1493,7 +1518,8 @@ def _compile_relationship_outputs(
     for rule in rules:
         by_output.setdefault(rule.output_dataset, []).append(rule)
     compiled: dict[str, CompiledOutput] = {}
-    for out_name, output_rules in by_output.items():
+    for out_name in sorted(by_output):
+        output_rules = sorted(by_output[out_name], key=lambda rule: (rule.priority, rule.name))
         contract_names = {rule.contract_name for rule in output_rules}
         if len(contract_names) > 1:
             msg = (
@@ -1520,22 +1546,13 @@ def _compile_relationship_outputs(
 
 
 @cache()
-@tag(layer="relspec", artifact="compiled_relationship_outputs", kind="object")
-def compiled_relationship_outputs(
+@tag(layer="relspec", artifact="resolved_relationship_rules", kind="object")
+def resolved_relationship_rules(
     rule_registry_context: RuleRegistryContext,
-    relspec_input_datasets: dict[str, TableLike],
-    relspec_resolver: PlanResolver[IbisPlan],
-    relationship_contracts: ContractCatalog,  # add dep
+    relationship_contracts: ContractCatalog,
     ctx: ExecutionContext,
-) -> dict[str, CompiledOutput]:
-    """Compile relationship rules into executable outputs.
-
-    Returns
-    -------
-    dict[str, CompiledOutput]
-        Compiled relationship outputs.
-    """
-    compiler = RelationshipRuleCompiler(resolver=relspec_resolver)
+) -> tuple[RelationshipRule, ...]:
+    """Return resolved relationship rules with policies applied."""
     rule_compiler = RuleCompiler(
         handlers=default_rule_handlers(
             policies=rule_registry_context.pipeline_policy.policy_registry
@@ -1552,15 +1569,66 @@ def compiled_relationship_outputs(
         policy_registry=rule_registry_context.pipeline_policy.policy_registry,
     )
     contract_names = set(relationship_contracts.names())
-    resolved = tuple(
+    return tuple(
         rule
         for rule in resolved
         if rule.contract_name is not None and rule.contract_name in contract_names
     )
-    evidence = _relationship_evidence_catalog(relspec_input_datasets)
-    ordered = order_rules(resolved, evidence=evidence)
+
+
+@tag(layer="relspec", artifact="relspec_evidence_catalog", kind="object")
+def relspec_evidence_catalog(
+    relspec_input_datasets: dict[str, TableLike],
+) -> EvidenceCatalog:
+    """Return evidence catalog seeded from relationship input datasets."""
+    return _relationship_evidence_catalog(relspec_input_datasets)
+
+
+@tag(layer="relspec", artifact="relspec_rule_graph", kind="object")
+def relspec_rule_graph(
+    resolved_relationship_rules: tuple[RelationshipRule, ...],
+) -> RuleGraph:
+    """Return the rustworkx rule graph for relationship rules."""
+    return build_rule_graph_from_relationship_rules(resolved_relationship_rules)
+
+
+@tag(layer="relspec", artifact="relspec_rule_schedule", kind="object")
+def relspec_rule_schedule(
+    resolved_relationship_rules: tuple[RelationshipRule, ...],
+    relspec_rule_graph: RuleGraph,
+    relspec_evidence_catalog: EvidenceCatalog,
+    relationship_contracts: ContractCatalog,
+) -> RuleSchedule:
+    """Return a deterministic schedule for relationship rules."""
+    output_schemas = _relationship_output_schema_map(
+        resolved_relationship_rules,
+        contracts=relationship_contracts,
+    )
+    return schedule_rules(
+        relspec_rule_graph,
+        evidence=relspec_evidence_catalog,
+        output_schema_for=output_schemas.get,
+    )
+
+
+@cache()
+@tag(layer="relspec", artifact="compiled_relationship_outputs", kind="object")
+def compiled_relationship_outputs(
+    resolved_relationship_rules: tuple[RelationshipRule, ...],
+    relspec_resolver: PlanResolver[IbisPlan],
+    relationship_contracts: ContractCatalog,  # add dep
+    ctx: ExecutionContext,
+) -> dict[str, CompiledOutput]:
+    """Compile relationship rules into executable outputs.
+
+    Returns
+    -------
+    dict[str, CompiledOutput]
+        Compiled relationship outputs.
+    """
+    compiler = RelationshipRuleCompiler(resolver=relspec_resolver)
     return _compile_relationship_outputs(
-        ordered,
+        resolved_relationship_rules,
         compiler=compiler,
         ctx=ctx,
         contracts=relationship_contracts,
@@ -1658,6 +1726,9 @@ def _add_edge_owner_file_id(
 @tag(layer="relspec", artifact="relationship_table_inputs", kind="object")
 def relationship_table_inputs(
     compiled_relationship_outputs: dict[str, CompiledOutput],
+    relspec_rule_graph: RuleGraph,
+    relspec_rule_schedule: RuleSchedule,
+    relspec_evidence_catalog: EvidenceCatalog,
     relspec_resolver: PlanResolver[IbisPlan],
     relationship_contracts: ContractCatalog,
     engine_session: EngineSession,
@@ -1672,11 +1743,186 @@ def relationship_table_inputs(
     """
     return RelationshipTableInputs(
         compiled_relationship_outputs=compiled_relationship_outputs,
+        relspec_rule_graph=relspec_rule_graph,
+        relspec_rule_schedule=relspec_rule_schedule,
+        relspec_evidence_catalog=relspec_evidence_catalog,
         relspec_resolver=relspec_resolver,
         relationship_contracts=relationship_contracts,
         engine_session=engine_session,
         incremental_config=incremental_config,
     )
+
+
+def _execute_relationship_rule_graph(
+    *,
+    graph: RuleGraph,
+    compiled_outputs: Mapping[str, CompiledOutput],
+    evidence: EvidenceCatalog,
+    base_resolver: PlanResolver[IbisPlan],
+    relationship_contracts: ContractCatalog,
+    engine_session: EngineSession,
+    execution_context: RelationshipExecutionContext,
+    incremental_config: IncrementalConfig,
+) -> tuple[dict[str, TableLike], RuleExecutionEventCollector]:
+    exec_ctx = execution_context.ctx
+    execution_policy = execution_context.execution_policy
+    ibis_backend = execution_context.ibis_backend
+    relspec_param_bindings = execution_context.relspec_param_bindings
+    working = evidence.clone()
+    seed_nodes = _seed_graph_nodes(graph, working.sources)
+    sorter = _make_graph_sorter(graph, seed_nodes=seed_nodes)
+    out: dict[str, TableLike] = {}
+    dynamic_outputs: dict[str, TableLike] = {}
+    executed_outputs: set[str] = set()
+    visited_rules: set[str] = set()
+    event_collector = RuleExecutionEventCollector(diagnostics=engine_session.diagnostics)
+    exec_options = CompiledOutputExecutionOptions(
+        contracts=relationship_contracts,
+        params=relspec_param_bindings,
+        execution_policy=execution_policy,
+        ibis_backend=ibis_backend,
+        rule_exec_observer=event_collector,
+        surface_policy=execution_context.surface_policy,
+    )
+    while sorter.is_active():
+        ready = list(sorter.get_ready())
+        if not ready:
+            break
+        done_nodes: list[int] = []
+        for idx in ready:
+            node = graph.graph[idx]
+            if node.kind != "rule":
+                continue
+            payload = node.payload
+            if not isinstance(payload, RuleNode):
+                msg = "Expected RuleNode payload for rule graph node."
+                raise TypeError(msg)
+            if not working.satisfies(payload.evidence, inputs=payload.inputs):
+                msg = f"Relationship rule graph cannot resolve evidence for: {payload.name!r}."
+                raise RelspecValidationError(msg)
+            visited_rules.add(payload.name)
+            done_nodes.append(idx)
+        for idx in ready:
+            node = graph.graph[idx]
+            if node.kind != "evidence":
+                continue
+            payload = node.payload
+            if not isinstance(payload, EvidenceNode):
+                msg = "Expected EvidenceNode payload for evidence graph node."
+                raise TypeError(msg)
+            name = payload.name
+            if _is_output_node(graph, idx):
+                compiled = compiled_outputs.get(name)
+                if compiled is None:
+                    msg = f"Missing compiled output for {name!r}."
+                    raise RelspecValidationError(msg)
+                if name not in executed_outputs:
+                    resolver = _resolver_with_dynamic_outputs(
+                        base_resolver,
+                        dynamic_outputs,
+                        ibis_backend=ibis_backend,
+                    )
+                    result = compiled.execute(
+                        ctx=exec_ctx,
+                        resolver=resolver,
+                        options=exec_options,
+                    )
+                    contract_schema = _output_contract_schema(
+                        compiled,
+                        contracts=relationship_contracts,
+                    )
+                    updated = _add_edge_owner_file_id(
+                        result.good,
+                        repo_id=incremental_config.repo_id,
+                        ctx=exec_ctx,
+                        schema=contract_schema,
+                    )
+                    out[name] = updated
+                    dynamic_outputs[name] = updated
+                    _register_output_evidence(
+                        working,
+                        name=name,
+                        compiled=compiled,
+                        table=updated,
+                        contracts=relationship_contracts,
+                    )
+                    executed_outputs.add(name)
+            done_nodes.append(idx)
+        sorter.done(done_nodes)
+    missing = sorted(set(graph.rule_idx) - visited_rules)
+    if missing:
+        msg = f"Relationship rule graph cannot resolve evidence for: {missing}."
+        raise RelspecValidationError(msg)
+    return out, event_collector
+
+
+def _seed_graph_nodes(graph: RuleGraph, seed_sources: Iterable[str]) -> list[int]:
+    nodes: list[int] = []
+    for name in seed_sources:
+        idx = graph.evidence_idx.get(name)
+        if idx is not None:
+            nodes.append(idx)
+    return nodes
+
+
+def _make_graph_sorter(graph: RuleGraph, *, seed_nodes: list[int]) -> rx.TopologicalSorter:
+    try:
+        return rx.TopologicalSorter(graph.graph, check_cycle=True, initial=seed_nodes)
+    except (TypeError, ValueError) as exc:
+        msg = "Relationship rule graph contains a cycle or invalid dependency."
+        raise RelspecValidationError(msg) from exc
+
+
+def _is_output_node(graph: RuleGraph, node_idx: int) -> bool:
+    for pred_idx in graph.graph.predecessor_indices(node_idx):
+        pred = graph.graph[pred_idx]
+        if pred.kind == "rule":
+            return True
+    return False
+
+
+def _resolver_with_dynamic_outputs(
+    base_resolver: PlanResolver[IbisPlan],
+    outputs: Mapping[str, TableLike],
+    *,
+    ibis_backend: BaseBackend,
+) -> PlanResolver[IbisPlan]:
+    if not outputs:
+        return base_resolver
+    dynamic_resolver = InMemoryPlanResolver(outputs, backend=ibis_backend)
+    return _CompositePlanResolver(
+        primary=dynamic_resolver,
+        fallback=base_resolver,
+        primary_names=frozenset(outputs),
+    )
+
+
+def _output_contract_schema(
+    compiled: CompiledOutput,
+    *,
+    contracts: ContractCatalog,
+) -> SchemaLike:
+    if compiled.contract_name is None:
+        return relation_output_schema()
+    return contracts.get(compiled.contract_name).schema
+
+
+def _register_output_evidence(
+    evidence: EvidenceCatalog,
+    *,
+    name: str,
+    compiled: CompiledOutput,
+    table: TableLike,
+    contracts: ContractCatalog,
+) -> None:
+    if compiled.contract_name is not None:
+        evidence.register(name, contracts.get(compiled.contract_name).schema)
+        return
+    schema = getattr(table, "schema", None)
+    if schema is None or not hasattr(schema, "names"):
+        evidence.sources.add(name)
+        return
+    evidence.register(name, schema)
 
 
 @cache()
@@ -1707,46 +1953,16 @@ def relationship_tables(
     ibis_backend = relationship_execution_context.ibis_backend
     relspec_param_bindings = relationship_execution_context.relspec_param_bindings
 
-    out: dict[str, TableLike] = {}
-    dynamic_outputs: dict[str, TableLike] = {}
-    event_collector = RuleExecutionEventCollector(
-        diagnostics=relationship_table_inputs.engine_session.diagnostics
+    out, event_collector = _execute_relationship_rule_graph(
+        graph=relationship_table_inputs.relspec_rule_graph,
+        compiled_outputs=relationship_table_inputs.compiled_relationship_outputs,
+        evidence=relationship_table_inputs.relspec_evidence_catalog,
+        base_resolver=relationship_table_inputs.relspec_resolver,
+        relationship_contracts=relationship_table_inputs.relationship_contracts,
+        engine_session=relationship_table_inputs.engine_session,
+        execution_context=relationship_execution_context,
+        incremental_config=relationship_table_inputs.incremental_config,
     )
-    exec_options = CompiledOutputExecutionOptions(
-        contracts=relationship_table_inputs.relationship_contracts,
-        params=relspec_param_bindings,
-        execution_policy=execution_policy,
-        ibis_backend=ibis_backend,
-        rule_exec_observer=event_collector,
-        surface_policy=relationship_execution_context.surface_policy,
-    )
-    for key, compiled in relationship_table_inputs.compiled_relationship_outputs.items():
-        resolver = relationship_table_inputs.relspec_resolver
-        if dynamic_outputs:
-            dynamic_resolver = InMemoryPlanResolver(dynamic_outputs, backend=ibis_backend)
-            resolver = _CompositePlanResolver(
-                primary=dynamic_resolver,
-                fallback=relationship_table_inputs.relspec_resolver,
-                primary_names=frozenset(dynamic_outputs),
-            )
-        res = compiled.execute(
-            ctx=exec_ctx,
-            resolver=resolver,
-            options=exec_options,
-        )
-        contract_schema = relation_output_schema()
-        if compiled.contract_name is not None:
-            contract_schema = relationship_table_inputs.relationship_contracts.get(
-                compiled.contract_name
-            ).schema
-        updated = _add_edge_owner_file_id(
-            res.good,
-            repo_id=relationship_table_inputs.incremental_config.repo_id,
-            ctx=exec_ctx,
-            schema=contract_schema,
-        )
-        out[key] = updated
-        dynamic_outputs[key] = updated
 
     # Ensure expected keys exist for extract_fields
     out.setdefault(

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, TypeVar, cast
 
+import msgspec
 import pyarrow as pa
 from sqlglot.errors import ParseError
 
@@ -15,17 +15,8 @@ from arrowdsl.core.metrics import table_summary
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.serialization import dataset_fingerprint, schema_fingerprint
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
-from datafusion_engine.extract_extractors import extractor_spec
-from datafusion_engine.extract_registry import dataset_schema
-from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
-from ibis_engine.param_tables import ParamTableArtifact
-from obs.repro import collect_repro_info
-from schema_spec.system import dataset_table_ddl_fingerprint
+from obs.repro import ReproInfo
+from serde_msgspec import StructBase, to_builtins
 from sqlglot_tools.optimizer import ParseSqlOptions, parse_sql, planner_dag_snapshot
 from storage.io import (
     delta_commit_metadata,
@@ -37,28 +28,32 @@ from storage.io import (
 
 if TYPE_CHECKING:
     from arrowdsl.core.scan_telemetry import ScanTelemetry
+    from extract.evidence_specs import EvidenceSpec
     from extract.evidence_plan import EvidencePlan
     from ibis_engine.execution import IbisExecutionContext
+    from ibis_engine.param_tables import ParamTableArtifact
     from normalize.runner import ResolvedNormalizeRule
     from relspec.compiler import CompiledOutput
     from relspec.model import RelationshipRule
     from relspec.registry import DatasetLocation
+    from obs.repro import ReproInfo
 
 
 T = TypeVar("T")
 
+NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
+
 DIAGNOSTICS_SCHEMA_VERSION = "v1"
 
 
-@dataclass(frozen=True)
-class DatasetRecord:
+class DatasetRecord(StructBase):
     """Record a dataset artifact."""
 
     name: str
     kind: str  # "input" | "intermediate" | "relationship_output" | "cpg_output"
     path: str | None = None
     format: str | None = None
-    delta_version: int | None = None
+    delta_version: NonNegInt | None = None
     delta_features: Mapping[str, str] | None = None
     delta_commit_metadata: JsonDict | None = None
     delta_protocol: JsonDict | None = None
@@ -67,8 +62,8 @@ class DatasetRecord:
     delta_schema_policy: JsonDict | None = None
     delta_constraints: list[str] | None = None
 
-    rows: int | None = None
-    columns: int | None = None
+    rows: NonNegInt | None = None
+    columns: NonNegInt | None = None
     schema_fingerprint: str | None = None
     ddl_fingerprint: str | None = None
     ordering_level: str | None = None
@@ -77,14 +72,12 @@ class DatasetRecord:
     # Optional: include a small schema description (safe for debugging)
     schema: list[JsonDict] | None = None
 
-
-@dataclass(frozen=True)
-class DatasetRecordMetadata:
+class DatasetRecordMetadata(StructBase):
     """Metadata for dataset records."""
 
     path: str | None = None
     data_format: str | None = None
-    delta_version: int | None = None
+    delta_version: NonNegInt | None = None
     delta_features: Mapping[str, str] | None = None
     delta_commit_metadata: JsonDict | None = None
     delta_protocol: JsonDict | None = None
@@ -94,27 +87,25 @@ class DatasetRecordMetadata:
     delta_constraints: list[str] | None = None
 
 
-@dataclass(frozen=True)
-class RuleRecord:
+class RuleRecord(StructBase):
     """Record a rule definition."""
 
     name: str
     output_dataset: str
     kind: str
     contract_name: str | None
-    priority: int
-    inputs: list[str] = field(default_factory=list)
+    priority: NonNegInt
+    inputs: list[str] = msgspec.field(default_factory=list)
     evidence: JsonDict | None = None
     confidence_policy: JsonDict | None = None
     ambiguity_policy: JsonDict | None = None
 
 
-@dataclass(frozen=True)
-class OutputRecord:
+class OutputRecord(StructBase):
     """Record a produced output (e.g., relationship outputs, cpg outputs)."""
 
     name: str
-    rows: int | None = None
+    rows: NonNegInt | None = None
     schema_fingerprint: str | None = None
     ddl_fingerprint: str | None = None
     ordering_level: str | None = None
@@ -126,8 +117,7 @@ class OutputRecord:
     dataset_fingerprint: str | None = None
 
 
-@dataclass(frozen=True)
-class OutputFingerprintInputs:
+class OutputFingerprintInputs(StructBase):
     """Inputs required to compute output dataset fingerprints."""
 
     plan_hash: str | None = None
@@ -136,16 +126,14 @@ class OutputFingerprintInputs:
     input_fingerprints: Sequence[str] | None = None
 
 
-@dataclass(frozen=True)
-class OutputLineageRecord:
+class OutputLineageRecord(StructBase):
     """Record rule lineage for a relationship output."""
 
     output_dataset: str
-    rules: list[str] = field(default_factory=list)
+    rules: list[str] = msgspec.field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class ExtractRecord:
+class ExtractRecord(StructBase):
     """Record extract output lineage and metadata."""
 
     name: str
@@ -153,35 +141,33 @@ class ExtractRecord:
     template: str | None
     evidence_family: str | None
     coordinate_system: str | None
-    evidence_rank: int | None
+    evidence_rank: NonNegInt | None
     ambiguity_policy: str | None
-    required_columns: list[str] = field(default_factory=list)
-    sources: list[str] = field(default_factory=list)
+    required_columns: list[str] = msgspec.field(default_factory=list)
+    sources: list[str] = msgspec.field(default_factory=list)
     schema_fingerprint: str | None = None
-    error_rows: int | None = None
+    error_rows: NonNegInt | None = None
 
 
-@dataclass(frozen=True)
-class Manifest:
+class Manifest(StructBase):
     """Top-level manifest record."""
 
-    manifest_version: int
-    created_at_unix_s: int
+    manifest_version: NonNegInt
+    created_at_unix_s: NonNegInt
 
     repo_root: str | None
     relspec_mode: str
     work_dir: str | None
     output_dir: str | None
 
-    datasets: list[DatasetRecord] = field(default_factory=list)
-    rules: list[RuleRecord] = field(default_factory=list)
-    outputs: list[OutputRecord] = field(default_factory=list)
-    lineage: list[OutputLineageRecord] = field(default_factory=list)
-    extracts: list[ExtractRecord] = field(default_factory=list)
-    params: JsonDict = field(default_factory=dict)
-
-    repro: JsonDict = field(default_factory=dict)
-    notes: JsonDict = field(default_factory=dict)
+    repro: ReproInfo
+    datasets: list[DatasetRecord] = msgspec.field(default_factory=list)
+    rules: list[RuleRecord] = msgspec.field(default_factory=list)
+    outputs: list[OutputRecord] = msgspec.field(default_factory=list)
+    lineage: list[OutputLineageRecord] = msgspec.field(default_factory=list)
+    extracts: list[ExtractRecord] = msgspec.field(default_factory=list)
+    params: JsonDict = msgspec.field(default_factory=dict)
+    notes: JsonDict = msgspec.field(default_factory=dict)
 
     def to_dict(self) -> JsonDict:
         """Convert the manifest to a plain dictionary.
@@ -191,11 +177,10 @@ class Manifest:
         JsonDict
             Manifest data as a dictionary.
         """
-        return asdict(self)
+        return cast("JsonDict", to_builtins(self))
 
 
-@dataclass(frozen=True)
-class ManifestContext:
+class ManifestContext(StructBase):
     """Core context fields for manifest construction."""
 
     repo_root: str | None
@@ -204,8 +189,7 @@ class ManifestContext:
     output_dir: str | None
 
 
-@dataclass(frozen=True)
-class ManifestData:
+class ManifestData(StructBase):
     """Optional inputs used to populate manifest records."""
 
     relspec_input_tables: Mapping[str, TableLike] | None = None
@@ -256,6 +240,8 @@ def _dataset_record_from_table(
     table: TableLike | None,
     metadata: DatasetRecordMetadata | None = None,
 ) -> DatasetRecord:
+    from schema_spec.system import dataset_table_ddl_fingerprint
+
     metadata = metadata or DatasetRecordMetadata()
     if table is None:
         return DatasetRecord(
@@ -305,6 +291,8 @@ def _output_record_from_table(
     table: TableLike | None,
     fingerprints: OutputFingerprintInputs | None = None,
 ) -> OutputRecord:
+    from schema_spec.system import dataset_table_ddl_fingerprint
+
     schema_fp = schema_fingerprint(table.schema) if table is not None else None
     ddl_fp = dataset_table_ddl_fingerprint(name) if table is not None else None
     ordering_level, ordering_keys = (
@@ -420,12 +408,11 @@ def _materialized_delta_version(payload: Mapping[str, object]) -> int | None:
     return version_value if isinstance(version_value, int) else None
 
 
-@dataclass(frozen=True)
-class DeltaMaterializationMetadata:
+class DeltaMaterializationMetadata(StructBase):
     """Delta metadata captured from materialization reports."""
 
     path: str | None
-    version: int | None
+    version: NonNegInt | None
     features: Mapping[str, str] | None
     commit_metadata: JsonDict | None
     protocol: JsonDict | None
@@ -721,13 +708,21 @@ def _collect_rule_records(data: ManifestData) -> list[RuleRecord]:
                     contract_name=rule.contract_name,
                     priority=int(rule.priority),
                     inputs=[dref.name for dref in rule.inputs],
-                    evidence=asdict(rule.evidence) if rule.evidence is not None else None,
-                    confidence_policy=asdict(rule.confidence_policy)
-                    if rule.confidence_policy is not None
-                    else None,
-                    ambiguity_policy=asdict(rule.ambiguity_policy)
-                    if rule.ambiguity_policy is not None
-                    else None,
+                    evidence=(
+                        cast("JsonDict", to_builtins(rule.evidence))
+                        if rule.evidence is not None
+                        else None
+                    ),
+                    confidence_policy=(
+                        cast("JsonDict", to_builtins(rule.confidence_policy))
+                        if rule.confidence_policy is not None
+                        else None
+                    ),
+                    ambiguity_policy=(
+                        cast("JsonDict", to_builtins(rule.ambiguity_policy))
+                        if rule.ambiguity_policy is not None
+                        else None
+                    ),
                 )
                 for rule in data.relationship_rules
             ]
@@ -742,13 +737,21 @@ def _collect_rule_records(data: ManifestData) -> list[RuleRecord]:
                     contract_name=None,
                     priority=int(rule.priority),
                     inputs=list(rule.inputs),
-                    evidence=asdict(rule.evidence) if rule.evidence is not None else None,
-                    confidence_policy=asdict(rule.confidence_policy)
-                    if rule.confidence_policy is not None
-                    else None,
-                    ambiguity_policy=asdict(rule.ambiguity_policy)
-                    if rule.ambiguity_policy is not None
-                    else None,
+                    evidence=(
+                        cast("JsonDict", to_builtins(rule.evidence))
+                        if rule.evidence is not None
+                        else None
+                    ),
+                    confidence_policy=(
+                        cast("JsonDict", to_builtins(rule.confidence_policy))
+                        if rule.confidence_policy is not None
+                        else None
+                    ),
+                    ambiguity_policy=(
+                        cast("JsonDict", to_builtins(rule.ambiguity_policy))
+                        if rule.ambiguity_policy is not None
+                        else None
+                    ),
                 )
                 for rule in data.normalize_rules
             ]
@@ -775,6 +778,9 @@ def _extract_record_from_spec(
     required_columns: Sequence[str] | None = None,
     error_rows: int | None = None,
 ) -> ExtractRecord:
+    from datafusion_engine.extract_extractors import extractor_spec
+    from datafusion_engine.extract_registry import dataset_schema
+
     sources: list[str] = []
     if spec.template is not None:
         try:
@@ -798,6 +804,8 @@ def _extract_record_from_spec(
 
 
 def _collect_extract_records(data: ManifestData) -> list[ExtractRecord]:
+    from extract.evidence_specs import evidence_spec, evidence_specs
+
     plan = data.extract_evidence_plan
     records: list[ExtractRecord] = []
     seen: set[str] = set()
@@ -857,13 +865,8 @@ def _scan_telemetry_payload(
 
 
 def _json_dict_list(rows: Sequence[Mapping[str, object]]) -> list[JsonDict]:
-    payload: list[JsonDict] = []
-    for row in rows:
-        record: JsonDict = {}
-        for key, value in row.items():
-            record[str(key)] = cast("JsonValue", _normalize_value(value))
-        payload.append(record)
-    return payload
+    payload = to_builtins(list(rows))
+    return cast("list[JsonDict]", payload)
 
 
 def _param_tables_payload(data: ManifestData) -> JsonDict:
@@ -929,7 +932,7 @@ def _optional_note(value: T | None, transform: Callable[[T], JsonValue]) -> Json
 
 
 def _to_json_value(value: object) -> JsonValue:
-    return cast("JsonValue", value)
+    return cast("JsonValue", to_builtins(value))
 
 
 def _manifest_notes(data: ManifestData) -> JsonDict:
@@ -1040,6 +1043,8 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
         repro_extra["function_registry_snapshot"] = cast(
             "JsonValue", data.function_registry_snapshot
         )
+    from obs.repro import collect_repro_info
+
     repro = collect_repro_info(context.repo_root, extra=repro_extra or None)
     notes = _manifest_notes(data)
     params_payload = _param_tables_payload(data)
@@ -1081,6 +1086,12 @@ def write_manifest_delta(
     FileExistsError
         Raised when the manifest already exists and overwrite is False.
     """
+    from ibis_engine.io_bridge import (
+        IbisDatasetWriteOptions,
+        IbisDeltaWriteOptions,
+        write_ibis_dataset_delta,
+    )
+
     payload = manifest.to_dict() if isinstance(manifest, Manifest) else manifest
     target = ensure_path(path)
     if target.exists() and not overwrite:
@@ -1101,32 +1112,3 @@ def write_manifest_delta(
         ),
     )
     return result.path
-
-
-def _normalize_value(value: object) -> object:
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, bytes):
-        return value.hex()
-    if isinstance(value, Mapping):
-        return {str(key): _normalize_value(val) for key, val in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_normalize_value(item) for item in value]
-    return _stable_repr(value)
-
-
-def _stable_repr(value: object) -> str:
-    if isinstance(value, Mapping):
-        items = ", ".join(
-            f"{_stable_repr(key)}:{_stable_repr(val)}"
-            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
-        )
-        return f"{{{items}}}"
-    if isinstance(value, (list, tuple, set)):
-        rendered = [_stable_repr(item) for item in value]
-        if isinstance(value, set):
-            rendered = sorted(rendered)
-        items = ", ".join(rendered)
-        bracket = "()" if isinstance(value, tuple) else "[]"
-        return f"{bracket[0]}{items}{bracket[1]}"
-    return repr(value)

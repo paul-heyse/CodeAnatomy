@@ -1,0 +1,30 @@
+{
+  "$defs": {
+    "PreparedStatementSpec": {
+      "additionalProperties": false,
+      "description": "Prepared statement metadata for diagnostics reporting.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "param_types": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sql": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sql",
+        "param_types"
+      ],
+      "title": "PreparedStatementSpec",
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/PreparedStatementSpec"
+}

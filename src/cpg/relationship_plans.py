@@ -46,7 +46,8 @@ from relspec.compiler import (
 )
 from relspec.contracts import relation_output_schema
 from relspec.engine import IbisRelPlanCompiler
-from relspec.graph import order_rules
+from relspec.rustworkx_graph import build_rule_graph_from_relationship_rules
+from relspec.rustworkx_schedule import schedule_rules
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -411,7 +412,16 @@ def _compile_relation_plans_ibis(
         ibis_backend=backend,
     )
 
-    for rule in order_rules(context.rules, evidence=context.evidence):
+    graph = build_rule_graph_from_relationship_rules(context.rules)
+    output_schemas = {rule.output_dataset: context.output_schema for rule in context.rules}
+    schedule = schedule_rules(
+        graph,
+        evidence=context.evidence,
+        output_schema_for=output_schemas.get,
+    )
+    rules_by_name = {rule.name: rule for rule in context.rules}
+    for name in schedule.ordered_rules:
+        rule = rules_by_name[name]
         compiled = context.compiler.compile_rule(rule, ctx=context.ctx_exec)
         plan = None
         metrics_plan = None

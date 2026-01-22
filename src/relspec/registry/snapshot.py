@@ -10,7 +10,6 @@ import pyarrow as pa
 from arrowdsl.core.execution_context import execution_context_factory
 from arrowdsl.io.ipc import ipc_hash
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from relspec.graph import rule_graph_signature
 from relspec.incremental import RelspecIncrementalSpec, build_incremental_spec
 from relspec.registry.rules import RuleRegistry
 from relspec.rules.coverage import RuleCoverageAssessment, assess_rule_coverage
@@ -21,6 +20,7 @@ from relspec.rules.validation import (
     build_sqlglot_context,
     rule_sqlglot_signature,
 )
+from relspec.rustworkx_graph import rule_graph_signature_from_definitions
 from relspec.schema_context import RelspecSchemaContext
 
 if TYPE_CHECKING:
@@ -84,11 +84,11 @@ def _rule_signature(
 
 def _graph_signature(rules: tuple[RuleDefinition, ...]) -> str:
     context = _snapshot_sqlglot_context()
-    return rule_graph_signature(
+    signatures = {rule.name: _rule_signature(rule, context=context) for rule in rules}
+    return rule_graph_signature_from_definitions(
         rules,
-        name_for=lambda rule: rule.name,
-        signature_for=lambda rule: _rule_signature(rule, context=context),
         label="relspec",
+        rule_signatures=signatures,
     )
 
 

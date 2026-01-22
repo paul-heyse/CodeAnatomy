@@ -1,4 +1,4 @@
-"""Graph helpers for relspec rule execution and signatures."""
+"""Graph helpers for relspec rule execution and plan compilation."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
-from arrowdsl.io.ipc import payload_hash
 from ibis_engine.execution import materialize_ibis_plan
 from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.expr_compiler import align_set_op_tables, union_tables
@@ -29,6 +28,8 @@ from relspec.errors import (
     RelspecExecutionError,
     RelspecValidationError,
 )
+from relspec.rustworkx_graph import build_rule_graph_from_relationship_rules
+from relspec.rustworkx_schedule import schedule_rules
 from relspec.execution_lanes import (
     DataFusionLaneInputs,
     DataFusionLaneOptions,
@@ -37,39 +38,13 @@ from relspec.execution_lanes import (
     record_execution_lane,
     safe_backend,
 )
-from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
 from relspec.model import RelationshipRule
-from relspec.rules.definitions import EvidenceSpec as RuleEvidenceSpec
 from relspec.rules.evidence import EvidenceCatalog
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 
 logger = logging.getLogger(__name__)
-
-RULE_GRAPH_SIGNATURE_VERSION = 1
-_RULE_GRAPH_RULE_SCHEMA = pa.struct(
-    [
-        pa.field("name", pa.string()),
-        pa.field("signature", pa.string()),
-    ]
-)
-_RULE_GRAPH_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32()),
-        pa.field("label", pa.string()),
-        pa.field("rules", pa.list_(_RULE_GRAPH_RULE_SCHEMA)),
-    ]
-)
-
-
-@dataclass(frozen=True)
-class RuleNode:
-    """Node in the relationship rule graph."""
-
-    name: str
-    rule: RelationshipRule
-    requires: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -87,18 +62,6 @@ class GraphExecutionOptions:
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     params: Mapping[IbisValue, object] | None = None
-
-
-@dataclass(frozen=True)
-class RuleSelectors[RuleT]:
-    """Selection helpers for generic rule ordering."""
-
-    inputs_for: Callable[[RuleT], Sequence[str]]
-    output_for: Callable[[RuleT], str]
-    name_for: Callable[[RuleT], str]
-    priority_for: Callable[[RuleT], int]
-    evidence_for: Callable[[RuleT], RuleEvidenceSpec | None]
-    output_schema_for: Callable[[RuleT], SchemaLike | None] | None = None
 
 
 def compile_graph_plan(
@@ -187,7 +150,16 @@ def compile_graph_plan(
         return materialize_ibis_plan(plan, execution=ibis_execution)
 
     outputs: dict[str, list[IbisPlan]] = {}
-    for rule in order_rules(rules, evidence=work):
+    graph = build_rule_graph_from_relationship_rules(rules)
+    output_schemas = _output_schema_map(rules)
+    schedule = schedule_rules(
+        graph,
+        evidence=work,
+        output_schema_for=output_schemas.get,
+    )
+    rules_by_name = {rule.name: rule for rule in rules}
+    for name in schedule.ordered_rules:
+        rule = rules_by_name[name]
         compiled = compiler.compile_rule(rule, ctx=ctx)
         if compiled.rel_plan is not None:
             plan = plan_compiler.compile(
@@ -268,131 +240,6 @@ def union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
     return _union_plans(plans, label=label)
 
 
-def order_rules(
-    rules: Sequence[RelationshipRule],
-    *,
-    evidence: EvidenceCatalog,
-) -> list[RelationshipRule]:
-    """Return rules ordered by dependency and priority.
-
-    Returns
-    -------
-    list[RelationshipRule]
-        Ordered, evidence-eligible rules.
-
-    Raises
-    ------
-    RelspecValidationError
-        Raised when the rule dependency graph contains cycles.
-    """
-    work = evidence.clone()
-    pending = list(rules)
-    resolved: list[RelationshipRule] = []
-    while pending:
-        ready = _ready_rules(pending, work)
-        if not ready:
-            missing = sorted({rule.name for rule in pending})
-            msg = f"Relationship rule graph cannot resolve evidence for: {missing}"
-            raise RelspecValidationError(msg)
-
-        ready_sorted = sorted(ready, key=lambda rule: (rule.priority, rule.name))
-        for rule in ready_sorted:
-            resolved.append(rule)
-            pending.remove(rule)
-            _register_rule_output(work, rule)
-    return resolved
-
-
-def order_rules_by_evidence[RuleT](
-    rules: Sequence[RuleT],
-    *,
-    evidence: EvidenceCatalog,
-    selectors: RuleSelectors[RuleT],
-    label: str = "Rule",
-) -> list[RuleT]:
-    """Return rules ordered by dependency and priority.
-
-    Returns
-    -------
-    list[RuleT]
-        Ordered, evidence-eligible rules.
-
-    Raises
-    ------
-    RelspecValidationError
-        Raised when the rule dependency graph contains cycles.
-    """
-    schema_for = selectors.output_schema_for or (lambda _: None)
-    work = evidence.clone()
-    pending = list(rules)
-    chosen_outputs: set[str] = set()
-    resolved: list[RuleT] = []
-    while pending:
-        ready = [
-            rule
-            for rule in pending
-            if selectors.output_for(rule) not in chosen_outputs
-            and work.satisfies(
-                selectors.evidence_for(rule),
-                inputs=selectors.inputs_for(rule),
-            )
-        ]
-        ready = _select_by_output(
-            ready,
-            selectors.output_for,
-            selectors.priority_for,
-            selectors.name_for,
-        )
-        if not ready:
-            missing = sorted(selectors.name_for(rule) for rule in pending)
-            msg = f"{label} graph cannot resolve evidence for: {missing}"
-            raise RelspecValidationError(msg)
-        ready_sorted = sorted(
-            ready,
-            key=lambda rule: (
-                selectors.priority_for(rule),
-                selectors.name_for(rule),
-            ),
-        )
-        for rule in ready_sorted:
-            resolved.append(rule)
-            output_name = selectors.output_for(rule)
-            chosen_outputs.add(output_name)
-            _register_output(work, output_name, schema_for(rule))
-        pending = [
-            rule
-            for rule in pending
-            if rule not in ready_sorted and selectors.output_for(rule) not in chosen_outputs
-        ]
-    return resolved
-
-
-def rule_graph_signature[RuleT](
-    rules: Sequence[RuleT],
-    *,
-    name_for: Callable[[RuleT], str],
-    signature_for: Callable[[RuleT], str],
-    label: str,
-) -> str:
-    """Return a stable signature for a rule graph.
-
-    Returns
-    -------
-    str
-        Deterministic hash for the rule graph.
-    """
-    entries = [
-        {"name": name, "signature": signature}
-        for name, signature in sorted((name_for(rule), signature_for(rule)) for rule in rules)
-    ]
-    payload = {
-        "version": RULE_GRAPH_SIGNATURE_VERSION,
-        "label": label,
-        "rules": entries,
-    }
-    return payload_hash(payload, _RULE_GRAPH_SCHEMA)
-
-
 def _union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
     """Union a sequence of Ibis plans into a single plan.
 
@@ -454,49 +301,6 @@ def _plan_schema(plan: IbisPlan) -> SchemaLike:
     return pa.schema(plan.expr.schema().to_pyarrow())
 
 
-def _ready_rules(
-    pending: Sequence[RelationshipRule],
-    evidence: EvidenceCatalog,
-) -> list[RelationshipRule]:
-    """Return rules whose evidence dependencies are satisfied.
-
-    Parameters
-    ----------
-    pending
-        Rules not yet scheduled.
-    evidence
-        Evidence catalog used for dependency checks.
-
-    Returns
-    -------
-    list[RelationshipRule]
-        Rules ready to be scheduled.
-    """
-    ready: list[RelationshipRule] = []
-    for rule in pending:
-        inputs = tuple(ref.name for ref in rule.inputs)
-        if evidence.satisfies(_central_evidence(rule.evidence), inputs=inputs):
-            ready.append(rule)
-    return ready
-
-
-def _register_rule_output(evidence: EvidenceCatalog, rule: RelationshipRule) -> None:
-    """Register a rule's output schema or source in evidence.
-
-    Parameters
-    ----------
-    evidence
-        Evidence catalog to update.
-    rule
-        Relationship rule whose output is registered.
-    """
-    output_schema = _virtual_output_schema(rule)
-    if output_schema is not None:
-        evidence.register(rule.output_dataset, output_schema)
-    else:
-        evidence.sources.add(rule.output_dataset)
-
-
 def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
     """Resolve a virtual output schema for a relationship rule.
 
@@ -524,96 +328,22 @@ def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
     return None
 
 
-def _central_evidence(
-    spec: RelationshipEvidenceSpec | None,
-) -> RuleEvidenceSpec | None:
-    """Convert relationship evidence spec to central evidence spec.
-
-    Parameters
-    ----------
-    spec
-        Relationship-level evidence specification.
-
-    Returns
-    -------
-    RuleEvidenceSpec | None
-        Converted evidence spec when provided.
-    """
-    if spec is None:
-        return None
-    return RuleEvidenceSpec(
-        sources=spec.sources,
-        required_columns=spec.required_columns,
-        required_types=spec.required_types,
-    )
-
-
-def _register_output(evidence: EvidenceCatalog, name: str, schema: SchemaLike | None) -> None:
-    """Register a rule output in the evidence catalog.
-
-    Parameters
-    ----------
-    evidence
-        Evidence catalog to update.
-    name
-        Output dataset name.
-    schema
-        Optional schema for the output dataset.
-    """
-    if schema is None:
-        evidence.sources.add(name)
-        return
-    evidence.register(name, schema)
-
-
-def _select_by_output[RuleT](
-    rules: Sequence[RuleT],
-    output_for: Callable[[RuleT], str],
-    priority_for: Callable[[RuleT], int],
-    name_for: Callable[[RuleT], str],
-) -> list[RuleT]:
-    """Select one rule per output based on priority and name.
-
-    Parameters
-    ----------
-    rules
-        Rules to select from.
-    output_for
-        Function mapping a rule to its output name.
-    priority_for
-        Function mapping a rule to its priority.
-    name_for
-        Function mapping a rule to its name.
-
-    Returns
-    -------
-    list[RuleT]
-        Selected rules, one per output.
-    """
-    selected: dict[str, RuleT] = {}
+def _output_schema_map(
+    rules: Sequence[RelationshipRule],
+) -> dict[str, SchemaLike | None]:
+    schemas: dict[str, SchemaLike | None] = {}
     for rule in rules:
-        output = output_for(rule)
-        existing = selected.get(output)
-        if existing is None:
-            selected[output] = rule
+        output = rule.output_dataset
+        if output in schemas and schemas[output] is not None:
             continue
-        if priority_for(rule) < priority_for(existing):
-            selected[output] = rule
-            continue
-        if priority_for(rule) == priority_for(existing) and name_for(rule) < name_for(existing):
-            selected[output] = rule
-    return list(selected.values())
+        schemas[output] = _virtual_output_schema(rule)
+    return schemas
 
 
 __all__ = [
     "GraphExecutionOptions",
     "GraphPlan",
-    "RuleNode",
-    "RuleSelectors",
     "compile_graph_plan",
     "compile_union_graph_plan",
-    "order_rules",
-    "order_rules_by_evidence",
-    "rule_graph_signature",
     "union_plans",
 ]

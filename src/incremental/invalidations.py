@@ -22,7 +22,7 @@ from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
 from incremental.runtime import IncrementalRuntime
 from incremental.sqlglot_artifacts import sqlglot_artifact_hash
 from incremental.state_store import StateStore
-from relspec.graph import rule_graph_signature
+from relspec.rustworkx_graph import rule_graph_signature_from_definitions
 from relspec.registry.snapshot import RelspecSnapshot
 from relspec.rules.cache import (
     relspec_snapshot_cached,
@@ -474,11 +474,10 @@ def _plan_hashes_from_artifacts(
 
 def _rule_graph_signature_for_snapshot(snapshot: RelspecSnapshot) -> str:
     rules = rule_definitions_cached()
-    return rule_graph_signature(
+    return rule_graph_signature_from_definitions(
         rules,
-        name_for=lambda rule: rule.name,
-        signature_for=lambda rule: snapshot.plan_signatures.get(rule.name, ""),
         label="all",
+        rule_signatures=snapshot.plan_signatures,
     )
 
 

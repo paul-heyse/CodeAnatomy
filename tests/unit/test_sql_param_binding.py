@@ -33,3 +33,13 @@ def test_param_allowlist_allows_named_params() -> None:
     result = reader.read_all()
     assert result.num_rows == 1
     assert result.column(0)[0].as_py() == 1
+
+
+def test_ast_execution_lane() -> None:
+    """Execute SQL via the AST execution lane."""
+    ctx = DataFusionRuntimeProfile().session_context()
+    options = DataFusionCompileOptions(prefer_ast_execution=True)
+    reader = execute_sql(ctx, sql="SELECT 1 AS val", options=options)
+    result = reader.read_all()
+    assert result.num_rows == 1
+    assert result.column(0)[0].as_py() == 1

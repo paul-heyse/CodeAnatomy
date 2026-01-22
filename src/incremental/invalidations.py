@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.io.ipc import payload_hash
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import schema_identity_from_metadata
 from datafusion_engine.runtime import read_delta_as_reader
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
 from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
 from incremental.runtime import IncrementalRuntime
+from incremental.sqlglot_artifacts import sqlglot_artifact_hash
 from incremental.state_store import StateStore
-from registry_common.arrow_payloads import payload_hash
 from relspec.graph import rule_graph_signature
 from relspec.registry.snapshot import RelspecSnapshot
 from relspec.rules.cache import (
@@ -27,13 +33,9 @@ from relspec.rules.cache import (
 )
 from relspec.schema_context import RelspecSchemaContext
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
-from storage.deltalake import (
-    DeltaWriteOptions,
-    enable_delta_features,
-    write_table_delta,
-)
+from storage.deltalake import enable_delta_features
 
-INVALIDATION_SNAPSHOT_VERSION = 3
+INVALIDATION_SNAPSHOT_VERSION = 4
 _RULE_SIGNATURE_ENTRY = pa.struct(
     [
         pa.field("rule_name", pa.string(), nullable=False),
@@ -59,6 +61,12 @@ _DATASET_IDENTITY_ENTRY = pa.struct(
         pa.field("schema_version", pa.int64(), nullable=True),
     ]
 )
+_INCREMENTAL_PLAN_HASH_ENTRY = pa.struct(
+    [
+        pa.field("plan_name", pa.string(), nullable=False),
+        pa.field("plan_hash", pa.string(), nullable=False),
+    ]
+)
 _INVALIDATION_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32(), nullable=False),
@@ -67,6 +75,11 @@ _INVALIDATION_SCHEMA = pa.schema(
         pa.field("rule_plan_sql", pa.list_(_RULE_SQL_ENTRY), nullable=False),
         pa.field("rule_plan_hashes", pa.list_(_RULE_HASH_ENTRY), nullable=False),
         pa.field("dataset_identities", pa.list_(_DATASET_IDENTITY_ENTRY), nullable=False),
+        pa.field(
+            "incremental_plan_hashes",
+            pa.list_(_INCREMENTAL_PLAN_HASH_ENTRY),
+            nullable=False,
+        ),
         pa.field("incremental_metadata_hash", pa.string(), nullable=True),
     ]
 )
@@ -95,6 +108,7 @@ class InvalidationSnapshot:
     rule_plan_hashes: dict[str, str]
     rule_graph_signature: str
     dataset_identities: dict[str, SchemaIdentity]
+    incremental_plan_hashes: dict[str, str] = field(default_factory=dict)
     incremental_metadata_hash: str | None = None
 
     def to_payload(self) -> dict[str, object]:
@@ -112,6 +126,7 @@ class InvalidationSnapshot:
             "rule_plan_sql": _rule_sql_entries(self.rule_plan_sql),
             "rule_plan_hashes": _rule_hash_entries(self.rule_plan_hashes),
             "dataset_identities": _dataset_entries(self.dataset_identities),
+            "incremental_plan_hashes": _plan_hash_entries(self.incremental_plan_hashes),
             "incremental_metadata_hash": self.incremental_metadata_hash,
         }
 
@@ -137,6 +152,7 @@ def build_invalidation_snapshot(
     *,
     relspec_snapshot: RelspecSnapshot | None = None,
     runtime: IncrementalRuntime | None = None,
+    state_store: StateStore | None = None,
 ) -> InvalidationSnapshot:
     """Build the current invalidation signature snapshot.
 
@@ -156,6 +172,10 @@ def build_invalidation_snapshot(
         rule_plan_hashes=rule_plan_hashes_cached(),
         rule_graph_signature=rule_graph_signature,
         dataset_identities=_dataset_identities(schema_context),
+        incremental_plan_hashes=_incremental_plan_hashes(
+            runtime=runtime,
+            state_store=state_store,
+        ),
         incremental_metadata_hash=_incremental_metadata_hash(runtime),
     )
 
@@ -191,6 +211,8 @@ def read_invalidation_snapshot(state_store: StateStore) -> InvalidationSnapshot 
 def write_invalidation_snapshot(
     state_store: StateStore,
     snapshot: InvalidationSnapshot,
+    *,
+    runtime: IncrementalRuntime,
 ) -> None:
     """Persist the invalidation snapshot to the state store."""
     state_store.ensure_dirs()
@@ -198,16 +220,44 @@ def write_invalidation_snapshot(
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = snapshot.to_payload()
     table = pa.Table.from_pylist([payload], schema=_INVALIDATION_SCHEMA)
-    result = write_table_delta(
+    result = write_ibis_dataset_delta(
         table,
         str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata={"snapshot_kind": "invalidation_snapshot"},
+        options=IbisDatasetWriteOptions(
+            execution=runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata={"snapshot_kind": "invalidation_snapshot"},
+            ),
         ),
     )
     enable_delta_features(result.path)
+
+
+def update_invalidation_snapshot(
+    *,
+    state_store: StateStore,
+    schema_context: RelspecSchemaContext,
+    relspec_snapshot: RelspecSnapshot | None = None,
+    runtime: IncrementalRuntime,
+) -> InvalidationSnapshot:
+    """Recompute and persist the invalidation snapshot.
+
+    Returns
+    -------
+    InvalidationSnapshot
+        Snapshot that was persisted to the state store.
+    """
+    snapshot = build_invalidation_snapshot(
+        schema_context,
+        relspec_snapshot=relspec_snapshot,
+        runtime=runtime,
+        state_store=state_store,
+    )
+    write_invalidation_snapshot(state_store, snapshot, runtime=runtime)
+    return snapshot
 
 
 def check_state_store_invalidation(
@@ -215,7 +265,7 @@ def check_state_store_invalidation(
     state_store: StateStore,
     schema_context: RelspecSchemaContext,
     relspec_snapshot: RelspecSnapshot | None = None,
-    runtime: IncrementalRuntime | None = None,
+    runtime: IncrementalRuntime,
 ) -> InvalidationResult:
     """Check invalidation signatures and reset state store on mismatch.
 
@@ -228,15 +278,16 @@ def check_state_store_invalidation(
         schema_context,
         relspec_snapshot=relspec_snapshot,
         runtime=runtime,
+        state_store=state_store,
     )
     previous = read_invalidation_snapshot(state_store)
     if previous is None:
-        write_invalidation_snapshot(state_store, current)
+        write_invalidation_snapshot(state_store, current, runtime=runtime)
         return InvalidationResult(full_refresh=False, reasons=("missing_snapshot",))
     reasons = diff_invalidation_snapshots(previous, current)
     if reasons:
         reset_state_store(state_store)
-        write_invalidation_snapshot(state_store, current)
+        write_invalidation_snapshot(state_store, current, runtime=runtime)
         return InvalidationResult(full_refresh=True, reasons=reasons)
     return InvalidationResult(full_refresh=False, reasons=())
 
@@ -246,7 +297,7 @@ def check_state_store_invalidation_with_diff(
     state_store: StateStore,
     schema_context: RelspecSchemaContext,
     relspec_snapshot: RelspecSnapshot | None = None,
-    runtime: IncrementalRuntime | None = None,
+    runtime: IncrementalRuntime,
 ) -> InvalidationOutcome:
     """Check invalidation signatures and return plan diff details.
 
@@ -259,22 +310,23 @@ def check_state_store_invalidation_with_diff(
         schema_context,
         relspec_snapshot=relspec_snapshot,
         runtime=runtime,
+        state_store=state_store,
     )
     previous = read_invalidation_snapshot(state_store)
     diff_table = rule_plan_diff_table(previous, current)
     if previous is None:
-        write_invalidation_snapshot(state_store, current)
+        write_invalidation_snapshot(state_store, current, runtime=runtime)
         result = InvalidationResult(full_refresh=False, reasons=("missing_snapshot",))
         return InvalidationOutcome(result=result, plan_diff=diff_table)
     reasons = diff_invalidation_snapshots(previous, current)
     if reasons:
         reset_state_store(state_store)
-        write_invalidation_snapshot(state_store, current)
+        write_invalidation_snapshot(state_store, current, runtime=runtime)
         return InvalidationOutcome(
             result=InvalidationResult(full_refresh=True, reasons=reasons),
             plan_diff=diff_table,
         )
-    write_invalidation_snapshot(state_store, current)
+    write_invalidation_snapshot(state_store, current, runtime=runtime)
     return InvalidationOutcome(
         result=InvalidationResult(full_refresh=False, reasons=()),
         plan_diff=diff_table,
@@ -315,6 +367,13 @@ def diff_invalidation_snapshots(
                 prefix="rule_signature",
             )
         )
+    reasons.extend(
+        _diff_mapping(
+            previous.incremental_plan_hashes,
+            current.incremental_plan_hashes,
+            prefix="incremental_plan_hash",
+        )
+    )
     reasons.extend(_diff_schema_identities(previous.dataset_identities, current.dataset_identities))
     if previous.incremental_metadata_hash != current.incremental_metadata_hash:
         reasons.append("incremental_metadata")
@@ -377,6 +436,42 @@ def _incremental_metadata_hash(runtime: IncrementalRuntime | None) -> str | None
     return payload_hash(payload, _INCREMENTAL_METADATA_SCHEMA)
 
 
+def _incremental_plan_hashes(
+    *,
+    runtime: IncrementalRuntime | None,
+    state_store: StateStore | None,
+) -> dict[str, str]:
+    sink = runtime.profile.diagnostics_sink if runtime is not None else None
+    if sink is not None:
+        artifacts = sink.artifacts_snapshot().get("incremental_sqlglot_plan_v1")
+        if artifacts:
+            return _plan_hashes_from_artifacts(artifacts)
+    if state_store is None:
+        return {}
+    path = state_store.sqlglot_artifacts_path()
+    if not path.exists():
+        return {}
+    try:
+        reader = read_delta_as_reader(str(path))
+    except (FileNotFoundError, RuntimeError, ValueError, OSError):
+        return {}
+    table = reader.read_all()
+    rows = table.to_pylist()
+    return _plan_hashes_from_artifacts(rows)
+
+
+def _plan_hashes_from_artifacts(
+    artifacts: Sequence[Mapping[str, object]],
+) -> dict[str, str]:
+    resolved: dict[str, str] = {}
+    for payload in artifacts:
+        name = payload.get("name")
+        if not name:
+            continue
+        resolved[str(name)] = sqlglot_artifact_hash(payload)
+    return resolved
+
+
 def _rule_graph_signature_for_snapshot(snapshot: RelspecSnapshot) -> str:
     rules = rule_definitions_cached()
     return rule_graph_signature(
@@ -405,6 +500,7 @@ def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
     rule_plan_hashes = _coerce_rule_hash_entries(row.get("rule_plan_hashes"))
     rule_graph_signature = str(row.get("rule_graph_signature", ""))
     dataset_identities = _coerce_dataset_entries(row.get("dataset_identities"))
+    incremental_plan_hashes = _coerce_plan_hash_entries(row.get("incremental_plan_hashes"))
     metadata_hash = row.get("incremental_metadata_hash")
     return InvalidationSnapshot(
         rule_plan_signatures=rule_signatures,
@@ -412,6 +508,7 @@ def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
         rule_plan_hashes=rule_plan_hashes,
         rule_graph_signature=rule_graph_signature,
         dataset_identities=dataset_identities,
+        incremental_plan_hashes=incremental_plan_hashes,
         incremental_metadata_hash=str(metadata_hash) if metadata_hash is not None else None,
     )
 
@@ -558,6 +655,12 @@ def _rule_hash_entries(values: Mapping[str, str]) -> list[dict[str, str]]:
     ]
 
 
+def _plan_hash_entries(values: Mapping[str, str]) -> list[dict[str, str]]:
+    return [
+        {"plan_name": name, "plan_hash": plan_hash} for name, plan_hash in sorted(values.items())
+    ]
+
+
 def _dataset_entries(values: Mapping[str, SchemaIdentity]) -> list[dict[str, object]]:
     return [
         {
@@ -598,6 +701,18 @@ def _coerce_rule_hash_entries(value: object) -> dict[str, str]:
     resolved: dict[str, str] = {}
     for entry in entries:
         name = entry.get("rule_name")
+        plan_hash = entry.get("plan_hash")
+        if name is None or plan_hash is None:
+            continue
+        resolved[str(name)] = str(plan_hash)
+    return resolved
+
+
+def _coerce_plan_hash_entries(value: object) -> dict[str, str]:
+    entries = _coerce_entry_list(value, label="incremental_plan_hashes")
+    resolved: dict[str, str] = {}
+    for entry in entries:
+        name = entry.get("plan_name")
         plan_hash = entry.get("plan_hash")
         if name is None or plan_hash is None:
             continue
@@ -697,6 +812,7 @@ __all__ = [
     "read_invalidation_snapshot",
     "reset_state_store",
     "rule_plan_diff_table",
+    "update_invalidation_snapshot",
     "validate_schema_identity",
     "write_invalidation_snapshot",
 ]

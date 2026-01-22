@@ -8,12 +8,12 @@ from dataclasses import dataclass, field
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
+from arrowdsl.io.ipc import payload_hash
 from datafusion_engine.sql_options import (
     sql_options_for_profile,
     statement_sql_options_for_profile,
 )
 from datafusion_engine.table_provider_metadata import table_provider_metadata
-from registry_common.arrow_payloads import payload_hash
 from sqlglot_tools.optimizer import SchemaMapping, SchemaMappingNode
 
 SCHEMA_MAP_HASH_VERSION: int = 1

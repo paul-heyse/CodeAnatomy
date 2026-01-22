@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from arrowdsl.core.expr_types import ScalarValue
+from arrowdsl.schema.metadata import metadata_map_bytes, metadata_scalar_map_bytes
 from arrowdsl.schema.validation import ArrowValidationOptions
 from arrowdsl.spec.expr_ir import ExprIR
 from datafusion_engine.normalize_ids import (
@@ -17,7 +18,6 @@ from datafusion_engine.normalize_ids import (
 )
 from ibis_engine.hashing import hash_expr_ir, hash_expr_ir_from_parts, masked_hash_expr_ir
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
-from registry_common.metadata import metadata_map_bytes, metadata_scalar_map_bytes
 from schema_spec.specs import DerivedFieldSpec
 from schema_spec.system import DedupeSpecSpec, SortKeySpec
 
@@ -148,10 +148,8 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             "expr_text",
             "type_repr",
             "type_id",
-            "line_base",
-            "col_unit",
-            "end_exclusive",
         ),
+        input_fields=("bstart", "bend", "line_base", "col_unit", "end_exclusive"),
         derived=(
             DerivedFieldSpec(name="type_repr", expr=_trim_expr("expr_text")),
             DerivedFieldSpec(
@@ -200,7 +198,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
     DatasetRow(
         name="py_bc_blocks_norm_v1",
         version=SCHEMA_VERSION,
-        bundles=("file_identity",),
+        bundles=("file_identity", "span"),
         fields=("block_id", "code_unit_id", "start_offset", "end_offset", "kind"),
         join_keys=("code_unit_id", "block_id"),
         contract=ContractRow(
@@ -211,9 +209,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         template="normalize_bytecode",
         metadata_extra={
-            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes(
-                {"bstart": "start_offset", "bend": "end_offset", "role": "kind"}
-            ),
+            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"span": "span", "role": "kind"}),
             EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_blocks"}),
         },
     ),
@@ -246,7 +242,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
     DatasetRow(
         name="py_bc_def_use_events_v1",
         version=SCHEMA_VERSION,
-        bundles=("file_identity",),
+        bundles=("file_identity", "span"),
         fields=("event_id", "instr_id", "code_unit_id", "kind", "symbol", "opname", "offset"),
         derived=(
             DerivedFieldSpec(
@@ -279,9 +275,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         template="normalize_bytecode",
         metadata_extra={
-            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes(
-                {"bstart": "offset", "bend": "offset", "role": "kind"}
-            ),
+            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"span": "span", "role": "kind"}),
             EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes(
                 {"source": "py_bc_instructions"}
             ),
@@ -325,9 +319,6 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             "diag_source",
             "code",
             "details",
-            "line_base",
-            "col_unit",
-            "end_exclusive",
         ),
         derived=(DerivedFieldSpec(name="diag_id", expr=hash_expr_ir(spec=DIAG_ID_SPEC)),),
         join_keys=("diag_id",),

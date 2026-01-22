@@ -29,7 +29,6 @@ from datafusion_engine.schema_introspection import SchemaIntrospector, table_nam
 from engine.session import EngineSession
 from ibis_engine.compiler_checkpoint import compile_checkpoint
 from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
-from ibis_engine.lineage import lineage_graph_by_output, required_columns_by_table
 from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
 from ibis_engine.params_bridge import list_param_names_from_rel_ops
 from ibis_engine.plan import IbisPlan
@@ -74,7 +73,12 @@ from sqlglot_tools.bridge import (
     sqlglot_diagnostics,
 )
 from sqlglot_tools.compat import ErrorLevel
-from sqlglot_tools.lineage import TableRef, extract_table_refs
+from sqlglot_tools.lineage import (
+    TableRef,
+    extract_table_refs,
+    lineage_graph_by_output,
+    required_columns_by_table,
+)
 from sqlglot_tools.optimizer import (
     SqlGlotQualificationError,
     default_sqlglot_policy,

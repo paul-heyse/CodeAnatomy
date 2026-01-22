@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import ibis
 import pyarrow as pa
 import pyarrow.dataset as ds
+from deltalake import DeltaTable
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
@@ -21,6 +22,11 @@ from datafusion_engine.runtime import dataset_spec_from_context
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
 from ibis_engine.param_tables import ParamTablePolicy, param_table_name
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import (
@@ -33,16 +39,12 @@ from ibis_engine.registry import ReadDatasetParams, read_dataset
 from ibis_engine.sources import plan_from_source
 from incremental.invalidations import validate_schema_identity
 from incremental.pruning import FileScopePolicy, prune_delta_files, record_pruning_metrics
+from incremental.runtime import IncrementalRuntime
 from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_runtime import dataset_name_from_alias
 from relspec.engine import PlanResolver
 from relspec.incremental import incremental_spec
-from storage.deltalake import (
-    DeltaUpsertOptions,
-    DeltaWriteOptions,
-    coerce_delta_table,
-    upsert_dataset_partitions_delta,
-)
+from storage.deltalake import build_commit_properties, coerce_delta_table
 
 if TYPE_CHECKING:
     from arrowdsl.core.scan_telemetry import ScanTelemetry
@@ -116,6 +118,7 @@ def upsert_relationship_outputs(
     *,
     state_root: Path,
     changes: IncrementalFileChanges,
+    runtime: IncrementalRuntime,
 ) -> dict[str, str]:
     """Upsert relationship outputs by edge_owner_file_id into the state store.
 
@@ -140,13 +143,23 @@ def upsert_relationship_outputs(
             schema=table.schema,
             encoding_policy=encoding_policy_from_schema(table.schema),
         )
-        result = upsert_dataset_partitions_delta(
+        base_dir = str(state_root / "datasets" / dataset_name)
+        _delete_delta_partitions(
+            base_dir,
+            delete_partitions=delete_partitions,
+            runtime=runtime,
+        )
+        result = write_ibis_dataset_delta(
             data,
-            options=DeltaUpsertOptions(
-                base_dir=str(state_root / "datasets" / dataset_name),
-                partition_cols=(file_id_column,),
-                delete_partitions=delete_partitions,
-                options=DeltaWriteOptions(schema_mode="merge"),
+            base_dir,
+            options=IbisDatasetWriteOptions(
+                execution=runtime.ibis_execution(),
+                writer_strategy="datafusion",
+                delta_options=IbisDeltaWriteOptions(
+                    mode="append",
+                    schema_mode="merge",
+                    partition_by=(file_id_column,),
+                ),
             ),
         )
         updated[dataset_name] = result.path
@@ -212,6 +225,45 @@ def _partition_specs(
     values: Sequence[str],
 ) -> tuple[dict[str, str], ...]:
     return tuple({column: value} for value in values)
+
+
+def _partition_predicate(
+    partitions: Sequence[Mapping[str, str]],
+) -> str:
+    clauses: list[str] = []
+    for partition in partitions:
+        if not partition:
+            continue
+        parts = [f"{key} = '{value}'" for key, value in partition.items()]
+        clauses.append(f"({' AND '.join(parts)})")
+    return " OR ".join(clauses)
+
+
+def _delete_delta_partitions(
+    base_dir: str,
+    *,
+    delete_partitions: Sequence[Mapping[str, str]],
+    runtime: IncrementalRuntime,
+) -> None:
+    if not delete_partitions:
+        return
+    predicate = _partition_predicate(delete_partitions)
+    if not predicate:
+        return
+    commit_options, commit_run = runtime.profile.reserve_delta_commit(
+        key=base_dir,
+        metadata={"dataset": base_dir, "operation": "delete"},
+    )
+    commit_properties = build_commit_properties(
+        app_id=commit_options.app_id,
+        version=commit_options.version,
+    )
+    DeltaTable(base_dir).delete(predicate, commit_properties=commit_properties)
+    runtime.profile.finalize_delta_commit(
+        key=base_dir,
+        run=commit_run,
+        metadata={"operation": "delete", "partition_count": len(delete_partitions)},
+    )
 
 
 def _relspec_state_dataset_name(name: str) -> str | None:

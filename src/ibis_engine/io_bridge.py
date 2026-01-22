@@ -405,13 +405,20 @@ def _merge_delta_configurations(
     return merged or None
 
 
-def _apply_ibis_delta_write_policies(
+def apply_ibis_delta_write_policies(
     options: IbisDeltaWriteOptions,
     *,
     write_policy: DeltaWritePolicy | None,
     schema_policy: DeltaSchemaPolicy | None,
     storage_options: StorageOptions | None,
 ) -> IbisDeltaWriteOptions:
+    """Return Delta write options with policy overrides applied.
+
+    Returns
+    -------
+    IbisDeltaWriteOptions
+        Delta write options with merged policy overrides.
+    """
     configs = _merge_delta_configurations(
         delta_write_configuration(write_policy),
         delta_schema_configuration(schema_policy),
@@ -459,7 +466,7 @@ def write_ibis_dataset_delta(
     """
     options = options or IbisDatasetWriteOptions()
     delta_options = options.delta_options or IbisDeltaWriteOptions()
-    delta_options = _apply_ibis_delta_write_policies(
+    delta_options = apply_ibis_delta_write_policies(
         delta_options,
         write_policy=options.delta_write_policy,
         schema_policy=options.delta_schema_policy,
@@ -489,10 +496,13 @@ def write_ibis_dataset_delta(
     )
     commit_key = str(base_dir)
     commit_run = None
-    if runtime_profile is not None:
+    if runtime_profile is not None and (
+        delta_options.app_id is None or delta_options.version is None
+    ):
         commit_options, commit_run = runtime_profile.reserve_delta_commit(
             key=commit_key,
             metadata={"dataset": commit_key},
+            commit_metadata=delta_options.commit_metadata,
         )
         delta_options = replace(
             delta_options,
@@ -545,7 +555,7 @@ def write_ibis_named_datasets_delta(
         raise ValueError(msg)
     backend = options.execution.ibis_backend
     delta_options = options.delta_options or IbisDeltaWriteOptions()
-    delta_options = _apply_ibis_delta_write_policies(
+    delta_options = apply_ibis_delta_write_policies(
         delta_options,
         write_policy=options.delta_write_policy,
         schema_policy=options.delta_schema_policy,
@@ -567,10 +577,13 @@ def write_ibis_named_datasets_delta(
         commit_run = None
         commit_key = dataset_path
         resolved_options = delta_options
-        if runtime_profile is not None:
+        if runtime_profile is not None and (
+            resolved_options.app_id is None or resolved_options.version is None
+        ):
             commit_options, commit_run = runtime_profile.reserve_delta_commit(
                 key=commit_key,
                 metadata={"dataset": name},
+                commit_metadata=resolved_options.commit_metadata,
             )
             resolved_options = replace(
                 delta_options,
@@ -849,6 +862,7 @@ __all__ = [
     "IbisNamedDatasetWriteOptions",
     "IbisParquetWriteOptions",
     "IbisWriteInput",
+    "apply_ibis_delta_write_policies",
     "ibis_plan_to_reader",
     "ibis_table_to_reader",
     "ibis_to_table",

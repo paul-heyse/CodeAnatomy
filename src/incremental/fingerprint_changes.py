@@ -9,13 +9,15 @@ import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
 from datafusion_engine.runtime import read_delta_as_reader
+from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore
-from storage.deltalake import (
-    DeltaWriteOptions,
-    enable_delta_features,
-    write_table_delta,
-)
+from storage.deltalake import enable_delta_features
 
 FINGERPRINTS_VERSION = 1
 _FINGERPRINTS_SCHEMA = pa.schema(
@@ -64,7 +66,12 @@ def read_dataset_fingerprints(state_store: StateStore) -> dict[str, str]:
     return results
 
 
-def write_dataset_fingerprints(state_store: StateStore, fingerprints: Mapping[str, str]) -> None:
+def write_dataset_fingerprints(
+    state_store: StateStore,
+    fingerprints: Mapping[str, str],
+    *,
+    execution: IbisExecutionContext,
+) -> None:
     """Persist dataset fingerprints to the state store."""
     state_store.ensure_dirs()
     path = _fingerprints_path(state_store)
@@ -83,13 +90,17 @@ def write_dataset_fingerprints(state_store: StateStore, fingerprints: Mapping[st
             },
             num_rows=len(names),
         )
-    result = write_table_delta(
+    result = write_ibis_dataset_delta(
         table,
         str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata={"snapshot_kind": "dataset_fingerprints"},
+        options=IbisDatasetWriteOptions(
+            execution=execution,
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata={"snapshot_kind": "dataset_fingerprints"},
+            ),
         ),
     )
     enable_delta_features(result.path)

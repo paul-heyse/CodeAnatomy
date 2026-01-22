@@ -11,64 +11,59 @@ from datafusion import SessionContext
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from datafusion_engine.bridge import datafusion_from_arrow
+from datafusion_engine.df_builder import df_from_sqlglot
 from extract.helpers import FileContext, iter_file_contexts
-
-_WORKLIST_SQL: dict[str, str] = {
-    "ast_files_v1": (
-        "SELECT r.* FROM {repo} r "
-        "LEFT JOIN {output} o ON r.file_id = o.file_id "
-        "WHERE o.file_id IS NULL OR o.file_sha256 IS DISTINCT FROM r.file_sha256"
-    ),
-    "libcst_files_v1": (
-        "SELECT r.* FROM {repo} r "
-        "LEFT JOIN {output} o ON r.file_id = o.file_id "
-        "WHERE o.file_id IS NULL OR o.file_sha256 IS DISTINCT FROM r.file_sha256"
-    ),
-    "tree_sitter_files_v1": (
-        "SELECT r.* FROM {repo} r "
-        "LEFT JOIN {output} o ON r.file_id = o.file_id "
-        "WHERE o.file_id IS NULL OR o.file_sha256 IS DISTINCT FROM r.file_sha256"
-    ),
-    "bytecode_files_v1": (
-        "SELECT r.* FROM {repo} r "
-        "LEFT JOIN {output} o ON r.file_id = o.file_id "
-        "WHERE o.file_id IS NULL OR o.file_sha256 IS DISTINCT FROM r.file_sha256"
-    ),
-    "symtable_files_v1": (
-        "SELECT r.* FROM {repo} r "
-        "LEFT JOIN {output} o ON r.file_id = o.file_id "
-        "WHERE o.file_id IS NULL OR o.file_sha256 IS DISTINCT FROM r.file_sha256"
-    ),
-}
+from sqlglot_tools.compat import Expression, exp
 
 
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
+def _is_null(expr: Expression) -> Expression:
+    return exp.Is(this=expr, expression=exp.null())
 
 
-def worklist_sql(
+def _is_not_null(expr: Expression) -> Expression:
+    return exp.Not(this=_is_null(expr))
+
+
+def _is_distinct(left: Expression, right: Expression) -> Expression:
+    return exp.or_(
+        exp.and_(_is_null(left), _is_not_null(right)),
+        exp.and_(_is_not_null(left), _is_null(right)),
+        exp.NEQ(this=left, expression=right),
+    )
+
+
+def worklist_expr(
     output_table: str | None,
     *,
     repo_table: str,
     output_table_name: str | None = None,
-) -> str:
-    """Return a worklist SQL string for a dataset output.
+) -> Expression:
+    """Return a SQLGlot expression for a dataset worklist.
 
     Returns
     -------
-    str
-        Worklist SQL string.
+    sqlglot.expressions.Expression
+        SQLGlot expression representing the worklist query.
     """
+    repo_tbl = exp.to_table(repo_table)
     if output_table is None:
-        return f"SELECT * FROM {_sql_identifier(repo_table)}"
-    template = _WORKLIST_SQL.get(output_table)
-    if template is None:
-        return f"SELECT * FROM {_sql_identifier(repo_table)}"
+        return exp.select("*").from_(repo_tbl)
     output_name = output_table_name or output_table
-    return template.format(
-        repo=_sql_identifier(repo_table),
-        output=_sql_identifier(output_name),
+    output_tbl = exp.to_table(output_name)
+    repo_alias = repo_tbl.alias_or_name
+    output_alias = output_tbl.alias_or_name
+    join_on = exp.EQ(
+        this=exp.column("file_id", table=repo_alias),
+        expression=exp.column("file_id", table=output_alias),
+    )
+    output_file_id = exp.column("file_id", table=output_alias)
+    output_sha = exp.column("file_sha256", table=output_alias)
+    repo_sha = exp.column("file_sha256", table=repo_alias)
+    return (
+        exp.select("*")
+        .from_(repo_tbl)
+        .join(output_tbl, on=join_on, join_type="left")
+        .where(exp.or_(_is_null(output_file_id), _is_distinct(output_sha, repo_sha)))
     )
 
 
@@ -105,13 +100,13 @@ def _worklist_stream(
     repo_name = f"__repo_files_{uuid.uuid4().hex}"
     output_exists = _table_exists(ctx, output_table)
     output_name = output_table if output_exists else None
-    sql = worklist_sql(
+    expr = worklist_expr(
         output_table if output_exists else None,
         repo_table=repo_name,
         output_table_name=output_name,
     )
     with _registered_table(ctx, name=repo_name, table=repo_files):
-        stream = ctx.sql(sql).execute_stream()
+        stream = df_from_sqlglot(ctx, expr).execute_stream()
         for batch in stream:
             arrow_batch = batch.to_pyarrow()
             rows = arrow_batch.to_pylist()
@@ -120,11 +115,21 @@ def _worklist_stream(
 
 
 def _table_exists(ctx: SessionContext, name: str) -> bool:
+    tables_expr = (
+        exp.select("table_name")
+        .from_(exp.to_table("tables", db="information_schema"))
+        .where(exp.EQ(this=exp.column("table_name"), expression=exp.Literal.string(name)))
+        .limit(1)
+    )
     try:
-        ctx.table(name)
-    except KeyError:
-        return False
-    return True
+        stream = df_from_sqlglot(ctx, tables_expr).execute_stream()
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        try:
+            ctx.table(name)
+        except KeyError:
+            return False
+        return True
+    return any(batch.to_pyarrow().num_rows for batch in stream)
 
 
 @contextlib.contextmanager
@@ -144,4 +149,4 @@ def _registered_table(
                 deregister(name)
 
 
-__all__ = ["iter_worklist_contexts", "worklist_sql"]
+__all__ = ["iter_worklist_contexts", "worklist_expr"]

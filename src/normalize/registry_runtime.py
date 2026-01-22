@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
-from datafusion import SessionContext
+from datafusion import SessionContext, SQLOptions
 
 import normalize.dataset_specs as static_dataset_specs
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from core_types import PathLike, ensure_path
+from datafusion_engine.registry_bridge import DatasetDdlRegistration, register_dataset_ddl
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import table_names_snapshot
-from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_engine.sql_options import sql_options_for_profile, statement_sql_options_for_profile
 from datafusion_engine.table_provider_metadata import TableProviderMetadata, table_provider_metadata
 from ibis_engine.query_compiler import IbisQuerySpec
 from relspec.rules.cache import rule_definitions_cached
@@ -25,6 +28,89 @@ from schema_spec.system import ContractSpec, DatasetSpec, dataset_spec_from_sche
 
 NORMALIZE_STAGE_META = "normalize_stage"
 NORMALIZE_ALIAS_META = "normalize_alias"
+
+
+def normalize_output_root(output_dir: PathLike) -> Path:
+    """Return the normalize output root directory.
+
+    Parameters
+    ----------
+    output_dir : PathLike
+        Base output directory.
+
+    Returns
+    -------
+    pathlib.Path
+        Normalize output root directory.
+    """
+    resolved = ensure_path(output_dir)
+    return resolved / "normalize"
+
+
+def normalize_output_locations(
+    output_dir: PathLike,
+    *,
+    datasets: Sequence[str] | None = None,
+) -> Mapping[str, str]:
+    """Return output paths for normalize datasets.
+
+    Parameters
+    ----------
+    output_dir : PathLike
+        Base output directory.
+    datasets : Sequence[str] | None
+        Optional dataset names or aliases to resolve.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Mapping of dataset names to output locations.
+    """
+    root = normalize_output_root(output_dir)
+    names = _normalize_output_names(datasets)
+    return {name: str(root / name) for name in names}
+
+
+def register_normalize_output_tables(
+    ctx: SessionContext,
+    output_dir: PathLike,
+    *,
+    datasets: Sequence[str] | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+    sql_options: SQLOptions | None = None,
+) -> Mapping[str, str]:
+    """Register normalize outputs in DataFusion using DDL.
+
+    Parameters
+    ----------
+    ctx : SessionContext
+        DataFusion session context for DDL registration.
+    output_dir : PathLike
+        Base output directory.
+    datasets : Sequence[str] | None
+        Optional dataset names or aliases to register.
+    runtime_profile : DataFusionRuntimeProfile | None
+        Optional runtime profile used for SQL options.
+    sql_options : SQLOptions | None
+        Explicit SQL options for DDL execution.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Mapping of dataset names to registered output locations.
+    """
+    locations = normalize_output_locations(output_dir, datasets=datasets)
+    options = sql_options or statement_sql_options_for_profile(runtime_profile)
+    for name, location in locations.items():
+        spec = static_dataset_specs.dataset_spec(name)
+        registration = DatasetDdlRegistration(
+            name=name,
+            spec=spec,
+            location=location,
+            file_format="delta",
+        )
+        register_dataset_ddl(ctx, registration, sql_options=options)
+    return locations
 
 
 def dataset_names(ctx: SessionContext | None = None) -> tuple[str, ...]:
@@ -343,6 +429,18 @@ def _normalize_rule_outputs() -> set[str]:
     return outputs
 
 
+def _normalize_output_names(names: Sequence[str] | None) -> tuple[str, ...]:
+    if names is None:
+        return tuple(static_dataset_specs.dataset_names())
+    resolved: list[str] = []
+    for raw_name in names:
+        resolved_name = raw_name
+        with contextlib.suppress(KeyError):
+            resolved_name = static_dataset_specs.dataset_name_from_alias(raw_name)
+        resolved.append(resolved_name)
+    return tuple(dict.fromkeys(resolved))
+
+
 def _strip_version(name: str) -> str:
     base, sep, suffix = name.rpartition("_v")
     if sep and suffix.isdigit():
@@ -413,4 +511,7 @@ __all__ = [
     "dataset_spec",
     "dataset_specs",
     "dataset_table_spec",
+    "normalize_output_locations",
+    "normalize_output_root",
+    "register_normalize_output_tables",
 ]

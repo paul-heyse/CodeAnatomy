@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import ibis
-import pyarrow as pa
 
 from incremental.cdf_filters import CdfChangeType
+from incremental.cdf_runtime import CdfReadResult
 from incremental.ibis_exec import ibis_expr_to_table
 from incremental.ibis_utils import ibis_table_from_arrow
 from incremental.runtime import IncrementalRuntime
@@ -13,7 +13,7 @@ from incremental.types import IncrementalFileChanges
 
 
 def file_changes_from_cdf(
-    cdf: pa.Table | None,
+    cdf_result: CdfReadResult | None,
     *,
     runtime: IncrementalRuntime,
 ) -> IncrementalFileChanges:
@@ -21,8 +21,8 @@ def file_changes_from_cdf(
 
     Parameters
     ----------
-    cdf:
-        CDF table with _change_type column.
+    cdf_result:
+        CDF read result with _change_type column.
     runtime : IncrementalRuntime
         Shared incremental runtime for DataFusion execution.
 
@@ -31,11 +31,11 @@ def file_changes_from_cdf(
     IncrementalFileChanges
         Change sets derived from CDF change types.
     """
-    if cdf is None or cdf.num_rows == 0:
+    if cdf_result is None or cdf_result.table.num_rows == 0:
         return IncrementalFileChanges()
 
     backend = runtime.ibis_backend()
-    cdf_expr = ibis_table_from_arrow(backend, cdf)
+    cdf_expr = ibis_table_from_arrow(backend, cdf_result.table)
     insert_type = ibis.literal(CdfChangeType.INSERT.to_cdf_column_value())
     update_type = ibis.literal(CdfChangeType.UPDATE_POSTIMAGE.to_cdf_column_value())
     delete_type = ibis.literal(CdfChangeType.DELETE.to_cdf_column_value())

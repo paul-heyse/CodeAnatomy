@@ -20,8 +20,10 @@ from hamilton_pipeline.pipeline_types import (
     RepoScanConfig,
 )
 from incremental.cdf_cursors import CdfCursorStore
+from incremental.cdf_runtime import CdfReadResult
 from incremental.changes import file_changes_from_cdf
 from incremental.delta_updates import (
+    OverwriteDatasetSpec,
     upsert_cpg_edges,
     upsert_cpg_nodes,
     upsert_exported_defs,
@@ -47,6 +49,7 @@ from incremental.imports_resolved import resolve_imports
 from incremental.invalidations import (
     InvalidationOutcome,
     check_state_store_invalidation_with_diff,
+    update_invalidation_snapshot,
 )
 from incremental.metadata import (
     write_cdf_cursor_snapshot,
@@ -99,6 +102,16 @@ class IncrementalImpactClosureInputs:
     impacted_callers: pa.Table | None
     impacted_importers: pa.Table | None
     state_store: StateStore | None
+
+
+@dataclass(frozen=True)
+class IncrementalUpdateContext:
+    """Shared context for incremental dataset updates."""
+
+    state_store: StateStore | None
+    file_changes: IncrementalFileChanges
+    config: IncrementalConfig
+    runtime: IncrementalRuntime | None
 
 
 @tag(layer="incremental", kind="object")
@@ -506,8 +519,16 @@ def incremental_scip_diff(
     else:
         prev = read_scip_snapshot(incremental_state_store)
     diff = diff_scip_snapshots(prev, incremental_scip_snapshot, runtime=incremental_runtime)
-    write_scip_snapshot(incremental_state_store, incremental_scip_snapshot)
-    write_scip_diff(incremental_state_store, diff)
+    write_scip_snapshot(
+        incremental_state_store,
+        incremental_scip_snapshot,
+        runtime=incremental_runtime,
+    )
+    write_scip_diff(
+        incremental_state_store,
+        diff,
+        runtime=incremental_runtime,
+    )
     return diff
 
 
@@ -534,19 +555,19 @@ def incremental_scip_changed_file_ids(
     )
 
 
-@tag(layer="incremental", kind="table")
-def incremental_diff(
+@tag(layer="incremental", kind="object")
+def incremental_repo_snapshot_cdf(
     incremental_repo_snapshot: pa.Table | None,
     incremental_state_store: StateStore | None,
     incremental_invalidation: InvalidationOutcome | None,
     incremental_runtime: IncrementalRuntime | None,
-) -> pa.Table | None:
-    """Compute and persist the incremental diff for the latest snapshot.
+) -> CdfReadResult | None:
+    """Read repo snapshot changes from Delta CDF.
 
     Returns
     -------
-    pa.Table | None
-        Diff table when a snapshot and state store are available.
+    CdfReadResult | None
+        CDF result when available, otherwise ``None``.
     """
     if (
         incremental_state_store is None
@@ -556,7 +577,11 @@ def incremental_diff(
         return None
 
     snapshot_path = incremental_state_store.repo_snapshot_path()
-    write_repo_snapshot(incremental_state_store, incremental_repo_snapshot)
+    write_repo_snapshot(
+        incremental_state_store,
+        incremental_repo_snapshot,
+        runtime=incremental_runtime,
+    )
 
     cursor_store = CdfCursorStore(cursors_path=incremental_state_store.cdf_cursors_path())
     if incremental_invalidation is not None and incremental_invalidation.result.full_refresh:
@@ -569,17 +594,47 @@ def incremental_diff(
         runtime=incremental_runtime,
     )
 
-    if cdf_result is None:
-        write_cdf_cursor_snapshot(incremental_state_store, cursor_store=cursor_store)
-        return None
-    write_incremental_diff(incremental_state_store, cdf_result)
-    write_cdf_cursor_snapshot(incremental_state_store, cursor_store=cursor_store)
+    write_cdf_cursor_snapshot(
+        incremental_state_store,
+        cursor_store=cursor_store,
+        runtime=incremental_runtime,
+    )
     return cdf_result
+
+
+@tag(layer="incremental", kind="table")
+def incremental_diff(
+    incremental_repo_snapshot_cdf: CdfReadResult | None,
+    incremental_state_store: StateStore | None,
+    incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
+) -> pa.Table | None:
+    """Compute and persist the incremental diff for the latest snapshot.
+
+    Returns
+    -------
+    pa.Table | None
+        Diff table when a snapshot and state store are available.
+    """
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
+        return None
+    if incremental_repo_snapshot_cdf is None:
+        return None
+    write_incremental_diff(
+        incremental_state_store,
+        incremental_repo_snapshot_cdf.table,
+        runtime=incremental_runtime,
+    )
+    return incremental_repo_snapshot_cdf.table
 
 
 @tag(layer="incremental", kind="object")
 def incremental_file_changes(
-    incremental_diff: pa.Table | None,
+    incremental_repo_snapshot_cdf: CdfReadResult | None,
     incremental_scip_changed_file_ids: tuple[str, ...],
     incremental_config: IncrementalConfig,
     incremental_runtime: IncrementalRuntime | None,
@@ -593,10 +648,10 @@ def incremental_file_changes(
     """
     if not incremental_config.enabled or incremental_runtime is None:
         return IncrementalFileChanges()
-    if incremental_diff is None:
+    if incremental_repo_snapshot_cdf is None:
         changes = IncrementalFileChanges(full_refresh=True)
     else:
-        changes = file_changes_from_cdf(incremental_diff, runtime=incremental_runtime)
+        changes = file_changes_from_cdf(incremental_repo_snapshot_cdf, runtime=incremental_runtime)
     if not incremental_scip_changed_file_ids:
         return changes
     combined = sorted(set(changes.changed_file_ids) | set(incremental_scip_changed_file_ids))
@@ -604,6 +659,28 @@ def incremental_file_changes(
         changed_file_ids=tuple(combined),
         deleted_file_ids=changes.deleted_file_ids,
         full_refresh=changes.full_refresh,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_update_context(
+    incremental_state_store: StateStore | None,
+    incremental_file_changes: IncrementalFileChanges,
+    incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
+) -> IncrementalUpdateContext:
+    """Bundle shared inputs for incremental update steps.
+
+    Returns
+    -------
+    IncrementalUpdateContext
+        Shared context for incremental update nodes.
+    """
+    return IncrementalUpdateContext(
+        state_store=incremental_state_store,
+        file_changes=incremental_file_changes,
+        config=incremental_config,
+        runtime=incremental_runtime,
     )
 
 
@@ -635,6 +712,7 @@ def incremental_module_index_updates(
     incremental_state_store: StateStore | None,
     incremental_file_changes: IncrementalFileChanges,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> Mapping[str, str] | None:
     """Upsert module index outputs into the incremental state store.
 
@@ -643,7 +721,11 @@ def incremental_module_index_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
@@ -653,16 +735,15 @@ def incremental_module_index_updates(
         incremental_module_index,
         state_store=incremental_state_store,
         changes=incremental_file_changes,
+        runtime=incremental_runtime,
     )
 
 
 @tag(layer="incremental", kind="object")
 def incremental_imports_resolved_updates(
     incremental_imports_resolved: pa.Table | None,
-    incremental_state_store: StateStore | None,
-    incremental_file_changes: IncrementalFileChanges,
-    incremental_config: IncrementalConfig,
     incremental_module_index_updates: Mapping[str, str] | None,
+    incremental_update_context: IncrementalUpdateContext,
 ) -> Mapping[str, str] | None:
     """Upsert resolved imports outputs into the incremental state store.
 
@@ -672,16 +753,24 @@ def incremental_imports_resolved_updates(
         Updated dataset paths, or None when incremental is disabled.
     """
     _ = incremental_module_index_updates
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_update_context.config.enabled
+        or incremental_update_context.state_store is None
+        or incremental_update_context.runtime is None
+    ):
         return None
-    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
+    if not (
+        incremental_update_context.file_changes.changed_file_ids
+        or incremental_update_context.file_changes.deleted_file_ids
+    ):
         return {}
     if incremental_imports_resolved is None:
         return {}
     return upsert_imports_resolved(
         incremental_imports_resolved,
-        state_store=incremental_state_store,
-        changes=incremental_file_changes,
+        state_store=incremental_update_context.state_store,
+        changes=incremental_update_context.file_changes,
+        runtime=incremental_update_context.runtime,
     )
 
 
@@ -689,9 +778,7 @@ def incremental_imports_resolved_updates(
 def incremental_exported_defs_updates(
     incremental_exported_defs: pa.Table | None,
     incremental_changed_exports: pa.Table | None,
-    incremental_state_store: StateStore | None,
-    incremental_file_changes: IncrementalFileChanges,
-    incremental_config: IncrementalConfig,
+    incremental_update_context: IncrementalUpdateContext,
 ) -> Mapping[str, str] | None:
     """Upsert exported definitions into the incremental state store.
 
@@ -701,16 +788,24 @@ def incremental_exported_defs_updates(
         Updated dataset paths, or None when incremental is disabled.
     """
     _ = incremental_changed_exports
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_update_context.config.enabled
+        or incremental_update_context.state_store is None
+        or incremental_update_context.runtime is None
+    ):
         return None
-    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
+    if not (
+        incremental_update_context.file_changes.changed_file_ids
+        or incremental_update_context.file_changes.deleted_file_ids
+    ):
         return {}
     if incremental_exported_defs is None:
         return {}
     return upsert_exported_defs(
         incremental_exported_defs,
-        state_store=incremental_state_store,
-        changes=incremental_file_changes,
+        state_store=incremental_update_context.state_store,
+        changes=incremental_update_context.file_changes,
+        runtime=incremental_update_context.runtime,
     )
 
 
@@ -743,6 +838,7 @@ def incremental_impacted_callers_updates(
     incremental_impacted_callers: pa.Table | None,
     incremental_state_store: StateStore | None,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> Mapping[str, str] | None:
     """Persist impacted caller diagnostics to the state store.
 
@@ -751,16 +847,24 @@ def incremental_impacted_callers_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if incremental_impacted_callers is None:
         return {}
+    spec = OverwriteDatasetSpec(
+        name="inc_impacted_callers_v1",
+        schema=incremental_dataset_schema("inc_impacted_callers_v1"),
+        commit_metadata={"snapshot_kind": "incremental_impacted_callers"},
+    )
     return write_overwrite_dataset(
         incremental_impacted_callers,
-        dataset_name="inc_impacted_callers_v1",
-        schema=incremental_dataset_schema("inc_impacted_callers_v1"),
+        spec=spec,
         state_store=incremental_state_store,
-        commit_metadata={"snapshot_kind": "incremental_impacted_callers"},
+        runtime=incremental_runtime,
     )
 
 
@@ -769,6 +873,7 @@ def incremental_impacted_importers_updates(
     incremental_impacted_importers: pa.Table | None,
     incremental_state_store: StateStore | None,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> Mapping[str, str] | None:
     """Persist impacted importer diagnostics to the state store.
 
@@ -777,16 +882,24 @@ def incremental_impacted_importers_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if incremental_impacted_importers is None:
         return {}
+    spec = OverwriteDatasetSpec(
+        name="inc_impacted_importers_v1",
+        schema=incremental_dataset_schema("inc_impacted_importers_v1"),
+        commit_metadata={"snapshot_kind": "incremental_impacted_importers"},
+    )
     return write_overwrite_dataset(
         incremental_impacted_importers,
-        dataset_name="inc_impacted_importers_v1",
-        schema=incremental_dataset_schema("inc_impacted_importers_v1"),
+        spec=spec,
         state_store=incremental_state_store,
-        commit_metadata={"snapshot_kind": "incremental_impacted_importers"},
+        runtime=incremental_runtime,
     )
 
 
@@ -795,6 +908,7 @@ def incremental_impacted_files_updates(
     incremental_impacted_files: pa.Table | None,
     incremental_state_store: StateStore | None,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> Mapping[str, str] | None:
     """Persist impacted file diagnostics to the state store.
 
@@ -803,16 +917,24 @@ def incremental_impacted_files_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if incremental_impacted_files is None:
         return {}
+    spec = OverwriteDatasetSpec(
+        name="inc_impacted_files_v2",
+        schema=incremental_dataset_schema("inc_impacted_files_v2"),
+        commit_metadata={"snapshot_kind": "incremental_impacted_files"},
+    )
     return write_overwrite_dataset(
         incremental_impacted_files,
-        dataset_name="inc_impacted_files_v2",
-        schema=incremental_dataset_schema("inc_impacted_files_v2"),
+        spec=spec,
         state_store=incremental_state_store,
-        commit_metadata={"snapshot_kind": "incremental_impacted_files"},
+        runtime=incremental_runtime,
     )
 
 
@@ -891,6 +1013,7 @@ def incremental_extract_updates(
     incremental_state_store: StateStore | None,
     incremental_file_changes: IncrementalFileChanges,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> Mapping[str, str] | None:
     """Upsert extract outputs into the incremental state store.
 
@@ -899,7 +1022,11 @@ def incremental_extract_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
@@ -907,6 +1034,7 @@ def incremental_extract_updates(
         extract_bundle_tables,
         state_store=incremental_state_store,
         changes=incremental_file_changes,
+        runtime=incremental_runtime,
     )
 
 
@@ -916,6 +1044,7 @@ def incremental_normalize_updates(
     incremental_state_store: StateStore | None,
     incremental_file_changes: IncrementalFileChanges,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> Mapping[str, str] | None:
     """Upsert normalize outputs into the incremental state store.
 
@@ -924,7 +1053,11 @@ def incremental_normalize_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
@@ -932,6 +1065,7 @@ def incremental_normalize_updates(
         normalize_outputs_bundle,
         state_store=incremental_state_store,
         changes=incremental_file_changes,
+        runtime=incremental_runtime,
     )
 
 
@@ -939,9 +1073,7 @@ def incremental_normalize_updates(
 def incremental_relationship_updates(
     relationship_output_tables: RelationshipOutputTables,
     relationship_output_fingerprints_map: Mapping[str, str] | None,
-    incremental_state_store: StateStore | None,
-    incremental_file_changes: IncrementalFileChanges,
-    incremental_config: IncrementalConfig,
+    incremental_update_context: IncrementalUpdateContext,
 ) -> Mapping[str, str] | None:
     """Upsert relationship outputs into the incremental state store.
 
@@ -950,13 +1082,20 @@ def incremental_relationship_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_update_context.config.enabled
+        or incremental_update_context.state_store is None
+        or incremental_update_context.runtime is None
+    ):
         return None
-    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
+    if not (
+        incremental_update_context.file_changes.changed_file_ids
+        or incremental_update_context.file_changes.deleted_file_ids
+    ):
         return {}
     outputs = relationship_output_tables.as_dict()
-    if relationship_output_fingerprints_map and not incremental_file_changes.full_refresh:
-        previous = read_dataset_fingerprints(incremental_state_store)
+    if relationship_output_fingerprints_map and not incremental_update_context.file_changes.full_refresh:
+        previous = read_dataset_fingerprints(incremental_update_context.state_store)
         unchanged = {
             name
             for name, fingerprint in relationship_output_fingerprints_map.items()
@@ -968,8 +1107,9 @@ def incremental_relationship_updates(
                 return {}
     return upsert_relationship_outputs(
         outputs,
-        state_root=incremental_state_store.root,
-        changes=incremental_file_changes,
+        state_root=incremental_update_context.state_store.root,
+        changes=incremental_update_context.file_changes,
+        runtime=incremental_update_context.runtime,
     )
 
 
@@ -994,10 +1134,17 @@ def incremental_diagnostics_artifacts(
         or incremental_runtime is None
     ):
         return None
-    return write_incremental_artifacts(
+    artifacts = write_incremental_artifacts(
         incremental_state_store,
         runtime=incremental_runtime,
     )
+    schema_context = RelspecSchemaContext.from_session(incremental_runtime.session_context())
+    update_invalidation_snapshot(
+        state_store=incremental_state_store,
+        schema_context=schema_context,
+        runtime=incremental_runtime,
+    )
+    return artifacts
 
 
 @tag(layer="incremental", kind="object")
@@ -1006,6 +1153,7 @@ def incremental_cpg_nodes_updates(
     incremental_state_store: StateStore | None,
     incremental_file_changes: IncrementalFileChanges,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> Mapping[str, str] | None:
     """Upsert CPG nodes into the incremental state store.
 
@@ -1014,7 +1162,11 @@ def incremental_cpg_nodes_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
@@ -1022,6 +1174,7 @@ def incremental_cpg_nodes_updates(
         cpg_nodes_delta,
         state_store=incremental_state_store,
         changes=incremental_file_changes,
+        runtime=incremental_runtime,
     )
 
 
@@ -1031,6 +1184,7 @@ def incremental_cpg_edges_updates(
     incremental_state_store: StateStore | None,
     incremental_file_changes: IncrementalFileChanges,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> Mapping[str, str] | None:
     """Upsert CPG edges into the incremental state store.
 
@@ -1039,7 +1193,11 @@ def incremental_cpg_edges_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
@@ -1047,6 +1205,7 @@ def incremental_cpg_edges_updates(
         cpg_edges_delta,
         state_store=incremental_state_store,
         changes=incremental_file_changes,
+        runtime=incremental_runtime,
     )
 
 
@@ -1124,8 +1283,10 @@ __all__ = [
     "incremental_plan_diff",
     "incremental_relationship_updates",
     "incremental_repo_snapshot",
+    "incremental_repo_snapshot_cdf",
     "incremental_scip_changed_file_ids",
     "incremental_scip_diff",
     "incremental_scip_snapshot",
     "incremental_state_store",
+    "incremental_update_context",
 ]

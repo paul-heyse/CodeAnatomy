@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
@@ -28,7 +28,7 @@ from libcst.metadata import (
     WhitespaceInclusivePositionProvider,
 )
 
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
@@ -43,9 +43,10 @@ from extract.helpers import (
     attrs_map,
     bytes_from_file_ctx,
     file_identity_row,
-    ibis_plan_from_row_batches,
-    ibis_plan_from_rows,
+    ibis_plan_from_reader,
     materialize_extract_plan,
+    record_batch_reader_from_row_batches,
+    record_batch_reader_from_rows,
     span_dict,
 )
 from extract.parallel import parallel_map, supports_fork
@@ -56,6 +57,7 @@ from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
+    from extract.session import ExtractSession
 
 type QualifiedNameSet = Collection[QualifiedName] | Callable[[], Collection[QualifiedName]]
 type Row = dict[str, object]
@@ -1485,11 +1487,13 @@ def _build_cst_file_plan(
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
+    session: ExtractSession,
 ) -> IbisPlan:
     if row_batches is not None:
-        raw = ibis_plan_from_row_batches("libcst_files_v1", row_batches)
+        reader = record_batch_reader_from_row_batches("libcst_files_v1", row_batches)
     else:
-        raw = ibis_plan_from_rows("libcst_files_v1", rows or [])
+        reader = record_batch_reader_from_rows("libcst_files_v1", rows or [])
+    raw = ibis_plan_from_reader("libcst_files_v1", reader, session=session)
     return apply_query_and_project(
         "libcst_files_v1",
         raw.expr,
@@ -1598,7 +1602,9 @@ def extract_cst(
     """
     normalized_options = normalize_options("cst", options, CSTExtractOptions)
     exec_context = context or ExtractExecutionContext()
-    exec_ctx = exec_context.ensure_ctx()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    exec_ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
@@ -1630,6 +1636,7 @@ def extract_cst(
         row_batches=row_batches,
         normalize=normalize,
         evidence_plan=exec_context.evidence_plan,
+        session=session,
     )
     return CSTExtractResult(
         libcst_files=materialize_extract_plan(
@@ -1659,6 +1666,8 @@ def extract_cst_plans(
     """
     normalized_options = normalize_options("cst", options, CSTExtractOptions)
     exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
@@ -1691,6 +1700,7 @@ def extract_cst_plans(
             row_batches=row_batches,
             normalize=normalize,
             evidence_plan=exec_context.evidence_plan,
+            session=session,
         ),
     }
 
@@ -1700,6 +1710,7 @@ class _CstTablesKwargs(TypedDict, total=False):
     options: CSTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     prefer_reader: bool
@@ -1710,6 +1721,7 @@ class _CstTablesKwargsTable(TypedDict, total=False):
     options: CSTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     prefer_reader: Literal[False]
@@ -1720,6 +1732,7 @@ class _CstTablesKwargsReader(TypedDict, total=False):
     options: CSTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     prefer_reader: Required[Literal[True]]
@@ -1758,8 +1771,16 @@ def extract_cst_tables(
     file_contexts = kwargs.get("file_contexts")
     evidence_plan = kwargs.get("evidence_plan")
     profile = kwargs.get("profile", "default")
-    exec_ctx = kwargs.get("ctx") or execution_context_factory(profile)
     prefer_reader = kwargs.get("prefer_reader", False)
+    exec_context = ExtractExecutionContext(
+        file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
+        ctx=kwargs.get("ctx"),
+        session=kwargs.get("session"),
+        profile=profile,
+    )
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
@@ -1772,18 +1793,13 @@ def extract_cst_tables(
     plans = extract_cst_plans(
         repo_files,
         options=normalized_options,
-        context=ExtractExecutionContext(
-            file_contexts=file_contexts,
-            evidence_plan=evidence_plan,
-            ctx=exec_ctx,
-            profile=profile,
-        ),
+        context=exec_context,
     )
     return {
         "libcst_files": materialize_extract_plan(
             "libcst_files_v1",
             plans["libcst_files"],
-            ctx=exec_ctx,
+            ctx=session.exec_ctx,
             options=options,
         )
     }

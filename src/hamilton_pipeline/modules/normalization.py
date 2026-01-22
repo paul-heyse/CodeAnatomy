@@ -22,6 +22,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import empty_table, set_or_append_column
+from arrowdsl.schema.semantic_types import SPAN_STORAGE
 from datafusion_engine.kernel_registry import resolve_kernel
 from datafusion_engine.nested_tables import (
     ViewReference,
@@ -37,6 +38,8 @@ from datafusion_engine.runtime import (
 from datafusion_engine.sql_options import sql_options_for_profile
 from extract.evidence_plan import EvidencePlan
 from ibis_engine.builtin_udfs import prefixed_hash64
+from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import datafusion_context
 from ibis_engine.sources import SourceToIbisOptions, source_to_ibis
 from normalize.catalog import IbisPlanCatalog, NormalizeCatalogInputs
@@ -44,11 +47,11 @@ from normalize.catalog import normalize_plan_catalog as build_normalize_plan_cat
 from normalize.ibis_api import DiagnosticsSources
 from normalize.ibis_plan_builders import IbisPlanSource
 from normalize.ibis_spans import (
-    add_ast_byte_spans_ibis,
-    add_scip_occurrence_byte_spans_ibis,
-    anchor_instructions_ibis,
-    normalize_cst_defs_spans_ibis,
-    normalize_cst_imports_spans_ibis,
+    add_ast_span_struct_ibis,
+    add_scip_occurrence_span_struct_ibis,
+    anchor_instructions_span_struct_ibis,
+    normalize_cst_defs_span_struct_ibis,
+    normalize_cst_imports_span_struct_ibis,
 )
 from normalize.registry_runtime import (
     dataset_alias,
@@ -67,7 +70,8 @@ from normalize.runner import (
     resolve_normalize_rules,
     run_normalize,
 )
-from normalize.span_pipeline import span_error_table
+from normalize.runtime import NormalizeRuntime, build_normalize_runtime
+from normalize.schemas import SPAN_ERROR_SCHEMA
 from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from relspec.pipeline_policy import PipelinePolicy
 from relspec.registry.rules import RuleRegistry
@@ -219,6 +223,12 @@ def _materialize_fragment(
     if not isinstance(source, ViewReference):
         return source
     return materialize_view_reference(backend, source)
+
+
+def _materialize_ibis_table(table: Table, *, runtime: NormalizeRuntime) -> TableLike:
+    execution = IbisExecutionContext(ctx=runtime.execution_ctx, ibis_backend=runtime.ibis_backend)
+    plan = IbisPlan(expr=table)
+    return materialize_ibis_plan(plan, execution=execution)
 
 
 def _ibis_table_from_source(
@@ -405,8 +415,13 @@ class SpanNormalizeContext:
     """Shared inputs for span normalization helpers."""
 
     file_line_index: TableLike
-    ibis_backend: BaseBackend
+    runtime: NormalizeRuntime
     ctx: ExecutionContext
+
+    @property
+    def ibis_backend(self) -> BaseBackend:
+        """Return the Ibis backend for span normalization."""
+        return self.runtime.ibis_backend
 
 
 @dataclass(frozen=True)
@@ -415,7 +430,12 @@ class NormalizeExecutionContext:
 
     ctx: ExecutionContext
     execution_policy: AdapterExecutionPolicy
-    ibis_backend: BaseBackend
+    runtime: NormalizeRuntime
+
+    @property
+    def ibis_backend(self) -> BaseBackend:
+        """Return the Ibis backend for normalize execution."""
+        return self.runtime.ibis_backend
 
 
 @cache()
@@ -423,7 +443,6 @@ class NormalizeExecutionContext:
 def normalize_execution_context(
     ctx: ExecutionContext,
     adapter_execution_policy: AdapterExecutionPolicy,
-    ibis_backend: BaseBackend,
 ) -> NormalizeExecutionContext:
     """Bundle execution settings for normalize pipelines.
 
@@ -432,10 +451,12 @@ def normalize_execution_context(
     NormalizeExecutionContext
         Execution settings for normalize compilation and execution.
     """
+    runtime = build_normalize_runtime(ctx)
+    _require_datafusion_backend(runtime.ibis_backend)
     return NormalizeExecutionContext(
         ctx=ctx,
         execution_policy=adapter_execution_policy,
-        ibis_backend=ibis_backend,
+        runtime=runtime,
     )
 
 
@@ -599,8 +620,7 @@ def normalize_qname_context(
 @tag(layer="normalize", artifact="span_normalize_context", kind="object")
 def span_normalize_context(
     file_line_index: TableLike,
-    ibis_backend: BaseBackend,
-    ctx: ExecutionContext,
+    normalize_execution_context: NormalizeExecutionContext,
 ) -> SpanNormalizeContext:
     """Bundle inputs for span normalization helpers.
 
@@ -609,11 +629,12 @@ def span_normalize_context(
     SpanNormalizeContext
         Shared inputs for span normalization operations.
     """
+    ibis_backend = normalize_execution_context.ibis_backend
     _require_datafusion_backend(ibis_backend)
     return SpanNormalizeContext(
         file_line_index=file_line_index,
-        ibis_backend=ibis_backend,
-        ctx=ctx,
+        runtime=normalize_execution_context.runtime,
+        ctx=normalize_execution_context.ctx,
     )
 
 
@@ -799,7 +820,7 @@ def _normalize_rule_output(
             finalize_spec=finalize_spec,
             execution_policy=normalize_execution_context.execution_policy,
             execution_label=execution_label,
-            ibis_backend=normalize_execution_context.ibis_backend,
+            runtime=normalize_execution_context.runtime,
         ),
     ).good
 
@@ -808,6 +829,7 @@ def _empty_scip_occurrences_norm(schema: pa.Schema) -> TableLike:
     table = empty_table(schema)
     table = set_or_append_column(table, "bstart", pa.array([], type=pa.int64()))
     table = set_or_append_column(table, "bend", pa.array([], type=pa.int64()))
+    table = set_or_append_column(table, "span", pa.array([], type=SPAN_STORAGE))
     table = set_or_append_column(table, "span_ok", pa.array([], type=pa.bool_()))
     table = set_or_append_column(table, "enc_bstart", pa.array([], type=pa.int64()))
     table = set_or_append_column(table, "enc_bend", pa.array([], type=pa.int64()))
@@ -1289,12 +1311,12 @@ def ast_nodes_norm(
     ast_files: TableLike | RecordBatchReaderLike | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
-    """Add byte-span columns to AST nodes for join-ready alignment.
+    """Add span structs to AST nodes for join-ready alignment.
 
     Returns
     -------
     TableLike
-        AST nodes with bstart/bend/span_ok columns appended.
+        AST nodes with span structs appended.
     """
     backend = span_normalize_context.ibis_backend
     register_nested_table(backend, name="ast_files_v1", table=ast_files)
@@ -1315,11 +1337,12 @@ def ast_nodes_norm(
         )
         return empty_table(schema)
     _require_datafusion_backend(backend)
-    table = add_ast_byte_spans_ibis(
+    expr = add_ast_span_struct_ibis(
         span_normalize_context.file_line_index,
         ast_nodes,
         backend=backend,
     )
+    table = _materialize_ibis_table(expr, runtime=span_normalize_context.runtime)
     schema = dataset_schema_from_context("py_ast_nodes_v1")
     return align_table_to_schema(table, schema=schema, keep_extra_columns=True)
 
@@ -1332,12 +1355,12 @@ def py_bc_instructions_norm(
     bytecode_files: TableLike | RecordBatchReaderLike | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
-    """Anchor bytecode instructions to source byte spans.
+    """Anchor bytecode instructions to source span structs.
 
     Returns
     -------
     TableLike
-        Bytecode instruction table with bstart/bend/span_ok columns.
+        Bytecode instruction table with span structs.
     """
     backend = span_normalize_context.ibis_backend
     register_nested_table(backend, name="bytecode_files_v1", table=bytecode_files)
@@ -1358,11 +1381,12 @@ def py_bc_instructions_norm(
         )
         return empty_table(schema)
     _require_datafusion_backend(backend)
-    table = anchor_instructions_ibis(
+    expr = anchor_instructions_span_struct_ibis(
         span_normalize_context.file_line_index,
         py_bc_instructions,
         backend=backend,
     )
+    table = _materialize_ibis_table(expr, runtime=span_normalize_context.runtime)
     schema = dataset_schema_from_context("py_bc_instructions_v1")
     return align_table_to_schema(table, schema=schema, keep_extra_columns=True)
 
@@ -1635,7 +1659,7 @@ def scip_occurrences_norm_bundle(
     scip_occurrences: TableLike | ViewReference | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, TableLike]:
-    """Convert SCIP occurrences into byte offsets.
+    """Convert SCIP occurrences into span structs.
 
     Returns
     -------
@@ -1658,12 +1682,12 @@ def scip_occurrences_norm_bundle(
     ):
         return {
             "scip_occurrences_norm": _empty_scip_occurrences_norm(fallback_schema),
-            "scip_span_errors": span_error_table([]),
+            "scip_span_errors": empty_table(SPAN_ERROR_SCHEMA),
         }
     if scip_documents is None or scip_occurrences is None:
         return {
             "scip_occurrences_norm": _empty_scip_occurrences_norm(fallback_schema),
-            "scip_span_errors": span_error_table([]),
+            "scip_span_errors": empty_table(SPAN_ERROR_SCHEMA),
         }
     _require_datafusion_backend(backend)
     stats = _scip_position_encoding_stats(scip_documents, backend=backend)
@@ -1682,14 +1706,17 @@ def scip_occurrences_norm_bundle(
                 encodings,
                 invalid_values,
             )
-    occ, errs = add_scip_occurrence_byte_spans_ibis(
+    occ_expr, err_expr = add_scip_occurrence_span_struct_ibis(
         span_normalize_context.file_line_index,
         scip_documents,
         scip_occurrences,
         backend=backend,
     )
+    occ = _materialize_ibis_table(occ_expr, runtime=span_normalize_context.runtime)
+    errs = _materialize_ibis_table(err_expr, runtime=span_normalize_context.runtime)
     schema = dataset_schema_from_context("scip_occurrences_v1")
     occ = align_table_to_schema(occ, schema=schema, keep_extra_columns=True)
+    errs = align_table_to_schema(errs, schema=SPAN_ERROR_SCHEMA)
     return {"scip_occurrences_norm": occ, "scip_span_errors": errs}
 
 
@@ -1710,12 +1737,12 @@ def cst_imports_norm(
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
-    """Normalize CST import spans into bstart/bend.
+    """Normalize CST import spans into span structs.
 
     Returns
     -------
     TableLike
-        Normalized CST imports table.
+        Normalized CST imports table with span structs.
 
     Raises
     ------
@@ -1724,6 +1751,7 @@ def cst_imports_norm(
     """
     _ = ctx
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    runtime = normalize_execution_context.runtime if normalize_execution_context else None
     register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
     if cst_imports is None and libcst_files is not None:
         cst_imports = ViewReference("cst_imports")
@@ -1736,11 +1764,12 @@ def cst_imports_norm(
             fallback="py_cst_imports_v1",
         )
         return empty_table(schema)
-    if backend is None:
-        msg = "CST import normalization requires an Ibis backend."
+    if backend is None or runtime is None:
+        msg = "CST import normalization requires a normalize execution context."
         raise ValueError(msg)
     _require_datafusion_backend(backend)
-    return normalize_cst_imports_spans_ibis(cst_imports, backend=backend)
+    expr = normalize_cst_imports_span_struct_ibis(cst_imports, backend=backend)
+    return _materialize_ibis_table(expr, runtime=runtime)
 
 
 @cache(format="delta")
@@ -1753,12 +1782,12 @@ def cst_defs_norm(
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
-    """Normalize CST def spans into bstart/bend.
+    """Normalize CST def spans into span structs.
 
     Returns
     -------
     TableLike
-        Normalized CST definitions table.
+        Normalized CST definitions table with span structs.
 
     Raises
     ------
@@ -1767,6 +1796,7 @@ def cst_defs_norm(
     """
     _ = ctx
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    runtime = normalize_execution_context.runtime if normalize_execution_context else None
     register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
     if cst_defs is None and libcst_files is not None:
         cst_defs = ViewReference("cst_defs")
@@ -1779,11 +1809,12 @@ def cst_defs_norm(
             fallback="py_cst_defs_v1",
         )
         return empty_table(schema)
-    if backend is None:
-        msg = "CST definition normalization requires an Ibis backend."
+    if backend is None or runtime is None:
+        msg = "CST definition normalization requires a normalize execution context."
         raise ValueError(msg)
     _require_datafusion_backend(backend)
-    return normalize_cst_defs_spans_ibis(cst_defs, backend=backend)
+    expr = normalize_cst_defs_span_struct_ibis(cst_defs, backend=backend)
+    return _materialize_ibis_table(expr, runtime=runtime)
 
 
 @cache()

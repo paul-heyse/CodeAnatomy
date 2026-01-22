@@ -7,22 +7,24 @@ import subprocess
 import sys
 import textwrap
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from pyarrow import ipc
 
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import dataset_query, normalize_options
 from extract.helpers import (
+    ExtractExecutionContext,
     ExtractMaterializeOptions,
     apply_query_and_project,
-    ibis_plan_from_rows,
+    ibis_plan_from_reader,
     materialize_extract_plan,
+    record_batch_reader_from_rows,
 )
 from extract.schema_ops import ExtractNormalizeOptions
+from extract.session import ExtractSession
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_projection
 
@@ -505,8 +507,10 @@ def _build_rt_objects(
     *,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
+    session: ExtractSession,
 ) -> tuple[IbisPlan, IbisPlan]:
-    raw_plan = ibis_plan_from_rows("rt_objects_v1", obj_rows)
+    reader = record_batch_reader_from_rows("rt_objects_v1", obj_rows)
+    raw_plan = ibis_plan_from_reader("rt_objects_v1", reader, session=session)
     raw_table = raw_plan.expr
     with_rt_id = _with_derived_columns(raw_table, dataset="rt_objects_v1")
     rt_keys = with_rt_id.select(with_rt_id["object_key"], with_rt_id["rt_id"])
@@ -527,8 +531,10 @@ def _build_rt_signatures(
     rt_objects_key_plan: IbisPlan,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
+    session: ExtractSession,
 ) -> tuple[IbisPlan, IbisPlan | None]:
-    raw_plan = ibis_plan_from_rows("rt_signatures_v1", sig_rows)
+    reader = record_batch_reader_from_rows("rt_signatures_v1", sig_rows)
+    raw_plan = ibis_plan_from_reader("rt_signatures_v1", reader, session=session)
     sig_table = raw_plan.expr
     if not sig_rows:
         empty_plan = apply_query_and_project(
@@ -570,8 +576,10 @@ def _build_rt_params(
     sig_meta_plan: IbisPlan | None,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
+    session: ExtractSession,
 ) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows("rt_signature_params_v1", param_rows)
+    reader = record_batch_reader_from_rows("rt_signature_params_v1", param_rows)
+    raw_plan = ibis_plan_from_reader("rt_signature_params_v1", reader, session=session)
     params_table = raw_plan.expr
     if not param_rows or sig_meta_plan is None:
         return apply_query_and_project(
@@ -607,8 +615,10 @@ def _build_rt_members(
     rt_objects_key_plan: IbisPlan,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
+    session: ExtractSession,
 ) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows("rt_members_v1", member_rows)
+    reader = record_batch_reader_from_rows("rt_members_v1", member_rows)
+    raw_plan = ibis_plan_from_reader("rt_members_v1", reader, session=session)
     member_table = raw_plan.expr
     if not member_rows:
         return apply_query_and_project(
@@ -640,29 +650,34 @@ def _runtime_plans_from_rows(
     rows: RuntimeRows,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
+    session: ExtractSession,
 ) -> dict[str, IbisPlan]:
     rt_objects_plan, rt_objects_key_plan = _build_rt_objects(
         rows.obj_rows,
         normalize=normalize,
         evidence_plan=evidence_plan,
+        session=session,
     )
     rt_signatures_plan, sig_meta_plan = _build_rt_signatures(
         rows.sig_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         normalize=normalize,
         evidence_plan=evidence_plan,
+        session=session,
     )
     rt_params_plan = _build_rt_params(
         rows.param_rows,
         sig_meta_plan=sig_meta_plan,
         normalize=normalize,
         evidence_plan=evidence_plan,
+        session=session,
     )
     rt_members_plan = _build_rt_members(
         rows.member_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         normalize=normalize,
         evidence_plan=evidence_plan,
+        session=session,
     )
     return {
         "rt_objects": rt_objects_plan,
@@ -677,8 +692,7 @@ def extract_runtime_tables(
     *,
     options: RuntimeInspectOptions,
     evidence_plan: EvidencePlan | None = None,
-    ctx: ExecutionContext | None = None,
-    profile: str = "default",
+    context: ExtractExecutionContext | None = None,
 ) -> RuntimeInspectResult:
     """Extract runtime inspection tables via subprocess.
 
@@ -690,10 +704,8 @@ def extract_runtime_tables(
         Runtime inspect options.
     evidence_plan:
         Evidence plan used for early column projection.
-    ctx:
-        Execution context for plan execution.
-    profile:
-        Execution profile name used when ``ctx`` is not provided.
+    context:
+        Optional extract execution context for session and profile resolution.
 
     Returns
     -------
@@ -701,7 +713,10 @@ def extract_runtime_tables(
         Extracted runtime inspection tables.
     """
     normalized_options = normalize_options("runtime_inspect", options, RuntimeInspectOptions)
-    ctx = ctx or execution_context_factory(profile)
+    exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(options=normalized_options)
     if not normalized_options.module_allowlist:
         empty_rows = RuntimeRows(obj_rows=[], sig_rows=[], param_rows=[], member_rows=[])
@@ -709,6 +724,7 @@ def extract_runtime_tables(
             rows=empty_rows,
             normalize=normalize,
             evidence_plan=evidence_plan,
+            session=session,
         )
         return RuntimeInspectResult(
             rt_objects=materialize_extract_plan(
@@ -768,6 +784,7 @@ def extract_runtime_tables(
         rows=rows,
         normalize=normalize,
         evidence_plan=evidence_plan,
+        session=session,
     )
     return RuntimeInspectResult(
         rt_objects=materialize_extract_plan(
@@ -814,6 +831,7 @@ def extract_runtime_plans(
     *,
     options: RuntimeInspectOptions,
     evidence_plan: EvidencePlan | None = None,
+    context: ExtractExecutionContext | None = None,
 ) -> dict[str, IbisPlan]:
     """Extract runtime inspection plans via subprocess.
 
@@ -823,6 +841,9 @@ def extract_runtime_plans(
         Ibis plan bundle keyed by runtime inspection table name.
     """
     normalized_options = normalize_options("runtime_inspect", options, RuntimeInspectOptions)
+    exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     normalize = ExtractNormalizeOptions(options=normalized_options)
     if not normalized_options.module_allowlist:
         rows = RuntimeRows(obj_rows=[], sig_rows=[], param_rows=[], member_rows=[])
@@ -830,6 +851,7 @@ def extract_runtime_plans(
             rows=rows,
             normalize=normalize,
             evidence_plan=evidence_plan,
+            session=session,
         )
 
     payload = _run_inspect_subprocess(
@@ -851,6 +873,7 @@ def extract_runtime_plans(
         rows=rows,
         normalize=normalize,
         evidence_plan=evidence_plan,
+        session=session,
     )
 
 
@@ -860,14 +883,14 @@ def extract_runtime_objects(
     module_allowlist: Sequence[str],
     timeout_s: int,
     prefer_reader: bool = False,
-    profile: str = "default",
+    context: ExtractExecutionContext | None = None,
 ) -> TableLike | RecordBatchReaderLike:
     """Extract runtime objects via subprocess.
 
     prefer_reader:
         When True, return a streaming reader when possible.
-    profile:
-        Execution profile name used for the default execution context.
+    context:
+        Optional extract execution context for session and profile resolution.
 
     Returns
     -------
@@ -875,11 +898,15 @@ def extract_runtime_objects(
         Runtime object output.
     """
     options = RuntimeInspectOptions(module_allowlist=module_allowlist, timeout_s=timeout_s)
+    exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     plans = extract_runtime_plans(
         repo_root,
         options=options,
+        context=exec_context,
     )
-    exec_ctx = execution_context_factory(profile)
+    exec_ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(options=options)
     return materialize_extract_plan(
         "rt_objects_v1",
@@ -899,14 +926,14 @@ def extract_runtime_signatures(
     module_allowlist: Sequence[str],
     timeout_s: int,
     prefer_reader: bool = False,
-    profile: str = "default",
+    context: ExtractExecutionContext | None = None,
 ) -> dict[str, TableLike | RecordBatchReaderLike]:
     """Extract runtime signatures and parameters via subprocess.
 
     prefer_reader:
         When True, return streaming readers when possible.
-    profile:
-        Execution profile name used for the default execution context.
+    context:
+        Optional extract execution context for session and profile resolution.
 
     Returns
     -------
@@ -914,11 +941,15 @@ def extract_runtime_signatures(
         Signature bundle with ``rt_signatures`` and ``rt_signature_params``.
     """
     options = RuntimeInspectOptions(module_allowlist=module_allowlist, timeout_s=timeout_s)
+    exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     plans = extract_runtime_plans(
         repo_root,
         options=options,
+        context=exec_context,
     )
-    exec_ctx = execution_context_factory(profile)
+    exec_ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(options=options)
     return {
         "rt_signatures": materialize_extract_plan(
@@ -950,14 +981,14 @@ def extract_runtime_members(
     module_allowlist: Sequence[str],
     timeout_s: int,
     prefer_reader: bool = False,
-    profile: str = "default",
+    context: ExtractExecutionContext | None = None,
 ) -> TableLike | RecordBatchReaderLike:
     """Extract runtime members via subprocess.
 
     prefer_reader:
         When True, return a streaming reader when possible.
-    profile:
-        Execution profile name used for the default execution context.
+    context:
+        Optional extract execution context for session and profile resolution.
 
     Returns
     -------
@@ -965,11 +996,15 @@ def extract_runtime_members(
         Runtime member output.
     """
     options = RuntimeInspectOptions(module_allowlist=module_allowlist, timeout_s=timeout_s)
+    exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     plans = extract_runtime_plans(
         repo_root,
         options=options,
+        context=exec_context,
     )
-    exec_ctx = execution_context_factory(profile)
+    exec_ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(options=options)
     return materialize_extract_plan(
         "rt_members_v1",

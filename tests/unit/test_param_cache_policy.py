@@ -7,7 +7,7 @@ import pytest
 from ibis.expr.types import Value
 
 from arrowdsl.core.execution_context import execution_context_factory
-from engine.materialize import resolve_cache_policy
+from engine import resolve_cache_policy
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.runner import validate_plan_params
 

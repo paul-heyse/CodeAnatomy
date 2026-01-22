@@ -8,13 +8,14 @@ from typing import Literal
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
-from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
-from arrowdsl.spec.expr_ir import ExprIR
-from registry_common.metadata import (
+from arrowdsl.schema.metadata import (
     decode_metadata_list,
     decode_metadata_map,
     decode_metadata_scalar_map,
+    infer_ordering_keys,
+    ordering_from_schema,
 )
+from arrowdsl.spec.expr_ir import ExprIR
 from relspec.model import AmbiguityPolicy, ConfidencePolicy, DedupeKernelSpec, EvidenceSpec
 from relspec.policies.registry import PolicyRegistry
 

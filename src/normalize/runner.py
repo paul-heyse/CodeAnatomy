@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value
@@ -21,6 +23,8 @@ from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_pol
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.nested_tables import ViewReference, materialize_view_reference
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.sql_options import sql_options_for_profile
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
@@ -42,6 +46,7 @@ from normalize.registry_runtime import (
 )
 from normalize.rule_defaults import resolve_rule_defaults
 from normalize.rule_factories import build_rule_definitions_from_specs
+from normalize.runtime import NormalizeRuntime
 from normalize.runtime_validation import validate_rule_specs
 from relspec.graph import RuleSelectors, order_rules_by_evidence
 from relspec.model import AmbiguityPolicy, ConfidencePolicy
@@ -57,11 +62,25 @@ from relspec.rules.definitions import (
 from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.rel_ops import query_spec_from_rel_ops
 from schema_spec.system import ContractSpec
+from sqlglot_tools.bridge import SqlGlotDiagnosticsOptions, sqlglot_diagnostics
+from sqlglot_tools.lineage import LineageExtractionOptions, extract_lineage_payload
+from sqlglot_tools.optimizer import (
+    ast_to_artifact,
+    default_sqlglot_policy,
+    plan_fingerprint,
+    serialize_ast_artifact,
+    sqlglot_policy_snapshot_for,
+)
 
 PostFn = Callable[[TableLike, ExecutionContext], TableLike]
 
 if TYPE_CHECKING:
+    from sqlglot.expressions import Expression
+
     from relspec.rules.rel_ops import RelOpT
+    from sqlglot_tools.bridge import IbisCompilerBackend
+    from sqlglot_tools.lineage import LineagePayload
+    from sqlglot_tools.optimizer import SqlGlotPolicy
 
 
 @dataclass(frozen=True)
@@ -79,7 +98,7 @@ class NormalizeRunOptions:
     finalize_spec: NormalizeFinalizeSpec | None = None
     execution_policy: AdapterExecutionPolicy | None = None
     execution_label: ExecutionLabel | None = None
-    ibis_backend: BaseBackend | None = None
+    runtime: NormalizeRuntime | None = None
     params: Mapping[Value, object] | None = None
 
 
@@ -134,6 +153,15 @@ class _NormalizeIbisCompilationContext:
     evidence: EvidenceCatalog
 
 
+@dataclass(frozen=True)
+class _SqlGlotPlanContext:
+    policy: SqlGlotPolicy
+    policy_hash: str
+    policy_rules_hash: str
+    schema_map: Mapping[str, Mapping[str, str]] | None
+    schema_map_hash: str | None
+
+
 def _normalize_ibis_context(
     catalog: IbisPlanCatalog,
     *,
@@ -178,6 +206,118 @@ def _normalize_ibis_context(
         execution=execution,
         evidence=evidence,
     )
+
+
+def _sqlglot_context(runtime: NormalizeRuntime) -> _SqlGlotPlanContext:
+    policy = default_sqlglot_policy()
+    snapshot = sqlglot_policy_snapshot_for(policy)
+    schema_map, schema_map_hash = _sqlglot_schema_map(runtime)
+    return _SqlGlotPlanContext(
+        policy=policy,
+        policy_hash=snapshot.policy_hash,
+        policy_rules_hash=snapshot.rules_hash,
+        schema_map=schema_map,
+        schema_map_hash=schema_map_hash,
+    )
+
+
+def _sqlglot_schema_map(
+    runtime: NormalizeRuntime,
+) -> tuple[Mapping[str, Mapping[str, str]] | None, str | None]:
+    try:
+        introspector = SchemaIntrospector(
+            runtime.ctx,
+            sql_options=sql_options_for_profile(runtime.runtime_profile),
+        )
+        schema_map = introspector.schema_map()
+        return schema_map, introspector.schema_map_fingerprint()
+    except (RuntimeError, TypeError, ValueError):
+        return None, None
+
+
+def _sqlglot_lineage_payload(
+    expr: Expression,
+    *,
+    context: _SqlGlotPlanContext,
+) -> LineagePayload | None:
+    try:
+        return extract_lineage_payload(
+            expr,
+            options=LineageExtractionOptions(
+                schema=context.schema_map,
+                dialect=context.policy.write_dialect,
+            ),
+        )
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _sqlglot_ast_payload(expr: Expression, *, sql: str, policy: SqlGlotPolicy) -> str | None:
+    with contextlib.suppress(RuntimeError, TypeError, ValueError):
+        return serialize_ast_artifact(ast_to_artifact(expr, sql=sql, policy=policy))
+    return None
+
+
+def _record_sqlglot_plan(
+    plan: IbisPlan,
+    *,
+    runtime: NormalizeRuntime,
+    execution_label: ExecutionLabel | None,
+) -> None:
+    sink = runtime.diagnostics
+    if sink is None:
+        return
+    backend = runtime.ibis_backend
+    if not hasattr(backend, "compiler"):
+        return
+    context = _sqlglot_context(runtime)
+    diagnostics = sqlglot_diagnostics(
+        plan.expr,
+        backend=cast("IbisCompilerBackend", backend),
+        options=SqlGlotDiagnosticsOptions(
+            schema_map=context.schema_map,
+            policy=context.policy,
+        ),
+    )
+    plan_hash = plan_fingerprint(
+        diagnostics.optimized,
+        dialect=context.policy.write_dialect,
+        policy_hash=context.policy_hash,
+        schema_map_hash=context.schema_map_hash,
+    )
+    lineage = _sqlglot_lineage_payload(
+        diagnostics.optimized,
+        context=context,
+    )
+    ast_payload = _sqlglot_ast_payload(
+        diagnostics.optimized,
+        sql=diagnostics.sql_text_optimized,
+        policy=context.policy,
+    )
+    payload = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "rule": execution_label.rule_name if execution_label else None,
+        "output": execution_label.output_dataset if execution_label else None,
+        "plan_hash": plan_hash,
+        "sql_dialect": diagnostics.sql_dialect,
+        "sql_text_raw": diagnostics.sql_text_raw,
+        "sql_text_optimized": diagnostics.sql_text_optimized,
+        "tables": list(diagnostics.tables),
+        "columns": list(diagnostics.columns),
+        "identifiers": list(diagnostics.identifiers),
+        "ast_repr": diagnostics.ast_repr,
+        "canonical_fingerprint": (
+            lineage.canonical_fingerprint if lineage is not None else None
+        ),
+        "lineage_tables": list(lineage.tables) if lineage is not None else None,
+        "lineage_columns": list(lineage.columns) if lineage is not None else None,
+        "lineage_scopes": list(lineage.scopes) if lineage is not None else None,
+        "sqlglot_ast": ast_payload,
+        "policy_hash": context.policy_hash,
+        "policy_rules_hash": context.policy_rules_hash,
+        "schema_map_hash": context.schema_map_hash,
+    }
+    sink.record_artifact("normalize_sqlglot_plan_v1", payload)
 
 
 def ensure_execution_context(
@@ -321,13 +461,27 @@ def run_normalize(
     -------
     FinalizeResult
         Finalize bundle with good/errors/stats/alignment outputs.
+
+    Raises
+    ------
+    ValueError
+        Raised when the normalize runtime is missing.
     """
     options = options or NormalizeRunOptions()
+    runtime = options.runtime
+    if runtime is None:
+        msg = "Normalize execution requires a NormalizeRuntime."
+        raise ValueError(msg)
+    _record_sqlglot_plan(
+        plan,
+        runtime=runtime,
+        execution_label=options.execution_label,
+    )
     execution = IbisExecutionContext(
         ctx=ctx,
         execution_policy=options.execution_policy,
         execution_label=options.execution_label,
-        ibis_backend=options.ibis_backend,
+        ibis_backend=runtime.ibis_backend,
         params=options.params,
     )
     table = materialize_ibis_plan(plan, execution=execution)

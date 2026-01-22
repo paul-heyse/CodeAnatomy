@@ -278,7 +278,7 @@ def create_run_context(
     >>> run = create_run_context(label="data_pipeline")
     >>> # Get idempotent write options for first commit
     >>> options, run = run.next_commit_version()
-    >>> # Use options with write_table_delta_idempotent or write_deltalake_idempotent
+    >>> # Use options to populate IbisDeltaWriteOptions(app_id=..., version=...)
     """
     if run_id is not None:
         # Resume existing run

@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
 
 import pyarrow as pa
@@ -25,11 +25,7 @@ from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import ensure_path
-from datafusion_engine.listing_table_provider import (
-    ParquetListingTableConfig,
-    TableProviderCapsule,
-    parquet_listing_table_provider,
-)
+from datafusion_engine.listing_table_provider import TableProviderCapsule
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     table_constraint_rows,
@@ -355,11 +351,6 @@ class _ListingTableArtifactDetails:
     actual_schema: pa.Schema | None
 
 
-_SIMPLE_REGISTRATION_METHODS: dict[str, str] = {
-    "csv": "register_csv",
-    "json": "register_json",
-    "avro": "register_avro",
-}
 
 
 def _schema_field_type(dataset: str, field: str) -> pa.DataType | None:
@@ -852,7 +843,6 @@ def _build_registration_context(
 
 
 def _register_dataset_with_context(context: DataFusionRegistrationContext) -> DataFrame:
-    scan = context.options.scan
     if context.location.format == "delta":
         if _should_register_delta_provider(context):
             return _register_delta_provider(context)
@@ -860,15 +850,10 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
             msg = "Delta registration requires a schema-backed DDL statement."
             raise ValueError(msg)
         return _register_external_table(context)
-    if (scan is not None and scan.unbounded) or _should_register_external_table(context):
-        return _register_external_table(context)
-    if context.location.format == "parquet":
-        return _register_parquet(context)
-    method = _SIMPLE_REGISTRATION_METHODS.get(context.location.format)
-    if method is not None:
-        return _register_simple(context, method=method)
-    msg = f"Unsupported DataFusion dataset format: {context.location.format!r}."
-    raise ValueError(msg)
+    if context.external_table_sql is None:
+        msg = "External table registration requires a schema-backed DDL statement."
+        raise ValueError(msg)
+    return _register_external_table(context)
 
 
 def _should_register_delta_provider(context: DataFusionRegistrationContext) -> bool:
@@ -880,17 +865,35 @@ def _should_register_delta_provider(context: DataFusionRegistrationContext) -> b
     return resolve_delta_scan_options(location) is not None
 
 
+@dataclass(frozen=True)
+class _DeltaProviderRequest:
+    ctx: SessionContext
+    path: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+    delta_scan: DeltaScanOptions | None
+
+
+@dataclass(frozen=True)
+class _DeltaProviderResponse:
+    provider: object
+    delta_scan_effective: Mapping[str, object] | None
+
+
 def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
     location = context.location
     delta_scan = resolve_delta_scan_options(location)
-    provider = _delta_table_provider_from_session(
-        context.ctx,
+    request = _DeltaProviderRequest(
+        ctx=context.ctx,
         path=str(location.path),
         storage_options=location.storage_options,
         version=location.delta_version,
         timestamp=location.delta_timestamp,
         delta_scan=delta_scan,
     )
+    response = _delta_table_provider_from_session(request)
+    provider = response.provider
     register = getattr(context.ctx, "register_table", None)
     if not callable(register):
         msg = "DataFusion SessionContext missing register_table."
@@ -898,25 +901,25 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
     register(context.name, TableProviderCapsule(provider))
     _record_table_provider_artifact(
         context.runtime_profile,
-        name=context.name,
-        provider=provider,
-        provider_kind="delta_table_provider",
-        source=None,
-        details=_delta_provider_artifact_payload(location, delta_scan=delta_scan),
+        artifact=_TableProviderArtifact(
+            name=context.name,
+            provider=provider,
+            provider_kind="delta_table_provider",
+            source=None,
+            details=_delta_provider_artifact_payload(
+                location,
+                delta_scan=delta_scan,
+                delta_scan_effective=response.delta_scan_effective,
+            ),
+        ),
     )
     df = context.ctx.table(context.name)
     return _maybe_cache(context, df)
 
 
 def _delta_table_provider_from_session(
-    ctx: SessionContext,
-    *,
-    path: str,
-    storage_options: Mapping[str, str] | None,
-    version: int | None,
-    timestamp: str | None,
-    delta_scan: DeltaScanOptions | None,
-) -> object:
+    request: _DeltaProviderRequest,
+) -> _DeltaProviderResponse:
     try:
         module = importlib.import_module("datafusion_ext")
     except ImportError as exc:
@@ -926,20 +929,27 @@ def _delta_table_provider_from_session(
     if not callable(provider_factory):
         msg = "datafusion_ext.delta_table_provider_from_session is unavailable."
         raise TypeError(msg)
-    schema_ipc = _schema_ipc_payload(delta_scan.schema) if delta_scan else None
-    storage_payload = list(storage_options.items()) if storage_options else None
-    return provider_factory(
-        ctx,
-        path,
+    schema_ipc = _schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
+    storage_payload = list(request.storage_options.items()) if request.storage_options else None
+    provider = provider_factory(
+        request.ctx,
+        request.path,
         storage_payload,
-        version,
-        timestamp,
-        delta_scan.file_column_name if delta_scan else None,
-        delta_scan.enable_parquet_pushdown if delta_scan else None,
-        delta_scan.schema_force_view_types if delta_scan else None,
-        delta_scan.wrap_partition_values if delta_scan else None,
+        request.version,
+        request.timestamp,
+        request.delta_scan.file_column_name if request.delta_scan else None,
+        request.delta_scan.enable_parquet_pushdown if request.delta_scan else None,
+        request.delta_scan.schema_force_view_types if request.delta_scan else None,
+        request.delta_scan.wrap_partition_values if request.delta_scan else None,
         schema_ipc,
     )
+    effective_scan = _delta_scan_effective_from_session(
+        module,
+        ctx=request.ctx,
+        delta_scan=request.delta_scan,
+        schema_ipc=schema_ipc,
+    )
+    return _DeltaProviderResponse(provider=provider, delta_scan_effective=effective_scan)
 
 
 def _schema_ipc_payload(schema: pa.Schema | None) -> bytes | None:
@@ -949,16 +959,67 @@ def _schema_ipc_payload(schema: pa.Schema | None) -> bytes | None:
     return buffer.to_pybytes()
 
 
+def _delta_scan_effective_from_session(
+    module: object,
+    *,
+    ctx: SessionContext,
+    delta_scan: DeltaScanOptions | None,
+    schema_ipc: bytes | None,
+) -> Mapping[str, object] | None:
+    config_factory = getattr(module, "delta_scan_config_from_session", None)
+    if not callable(config_factory):
+        msg = "datafusion_ext.delta_scan_config_from_session is unavailable."
+        raise TypeError(msg)
+    payload = config_factory(
+        ctx,
+        delta_scan.file_column_name if delta_scan else None,
+        delta_scan.enable_parquet_pushdown if delta_scan else None,
+        delta_scan.schema_force_view_types if delta_scan else None,
+        delta_scan.wrap_partition_values if delta_scan else None,
+        schema_ipc,
+    )
+    if not isinstance(payload, Mapping):
+        msg = "delta_scan_config_from_session returned invalid payload."
+        raise TypeError(msg)
+    return _delta_scan_effective_payload(payload)
+
+
+def _delta_scan_effective_payload(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    schema_payload = None
+    schema_ipc = payload.get("schema_ipc")
+    if isinstance(schema_ipc, (bytes, bytearray)):
+        schema_payload = schema_to_dict(_decode_schema_ipc(bytes(schema_ipc)))
+    return {
+        "file_column_name": payload.get("file_column_name"),
+        "enable_parquet_pushdown": payload.get("enable_parquet_pushdown"),
+        "schema_force_view_types": payload.get("schema_force_view_types"),
+        "wrap_partition_values": payload.get("wrap_partition_values"),
+        "schema": schema_payload,
+    }
+
+
+def _decode_schema_ipc(payload: bytes) -> pa.Schema:
+    try:
+        return pa.ipc.read_schema(pa.BufferReader(payload))
+    except (pa.ArrowInvalid, TypeError, ValueError) as exc:
+        msg = "Invalid Delta scan schema IPC payload."
+        raise ValueError(msg) from exc
+
+
 def _delta_provider_artifact_payload(
     location: DatasetLocation,
     *,
     delta_scan: DeltaScanOptions | None,
+    delta_scan_effective: Mapping[str, object] | None,
 ) -> dict[str, object]:
     return {
         "path": str(location.path),
         "delta_version": location.delta_version,
         "delta_timestamp": location.delta_timestamp,
         "delta_scan": _delta_scan_payload(delta_scan),
+        "delta_scan_effective": delta_scan_effective,
     }
 
 
@@ -973,167 +1034,6 @@ def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] |
         "wrap_partition_values": options.wrap_partition_values,
         "schema": schema_payload,
     }
-
-
-def _should_register_external_table(context: DataFusionRegistrationContext) -> bool:
-    if context.external_table_sql is None:
-        return False
-    if context.name == _BYTECODE_EXTERNAL_TABLE_NAME:
-        return False
-    return context.name in SCHEMA_REGISTRY
-
-
-def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
-    scan = context.options.scan
-    file_extension = scan.file_extension if scan and scan.file_extension else ".parquet"
-    partition_cols = scan.partition_cols if scan and scan.partition_cols else None
-    table_schema_contract = _resolve_table_schema_contract(
-        schema=context.options.schema,
-        scan=scan,
-        partition_cols=partition_cols,
-    )
-    _validate_table_schema_contract(table_schema_contract)
-    _validate_ordering_contract(context, scan=scan)
-    table_partition_cols = (
-        [(col, str(dtype)) for col, dtype in partition_cols] if partition_cols else None
-    )
-    kwargs: dict[str, Any] = {
-        "schema": context.options.schema,
-        "file_extension": file_extension,
-        "table_partition_cols": table_partition_cols,
-    }
-    skip_metadata = None
-    file_sort_order = None
-    if scan is not None:
-        file_sort_order = scan.file_sort_order or None
-        kwargs["file_sort_order"] = file_sort_order
-        kwargs["parquet_pruning"] = scan.parquet_pruning
-        skip_metadata = _effective_skip_metadata(context.location, scan)
-        kwargs["skip_metadata"] = skip_metadata
-    kwargs = _merge_kwargs(kwargs, context.options.read_options)
-    use_listing = context.options.provider == "listing"
-    if use_listing:
-        _apply_scan_settings(
-            context.ctx,
-            scan=scan,
-            sql_options=_statement_sql_options_for_profile(context.runtime_profile),
-        )
-        if skip_metadata is not None:
-            _set_runtime_setting(
-                context.ctx,
-                key="datafusion.execution.parquet.skip_metadata",
-                value=str(skip_metadata).lower(),
-                sql_options=_statement_sql_options_for_profile(context.runtime_profile),
-            )
-
-        listing_provider = None
-        expr_adapter_factory = _resolve_expr_adapter_factory(
-            scan,
-            runtime_profile=context.runtime_profile,
-            dataset_name=context.name,
-            location=context.location,
-        )
-        key_fields = _table_key_fields(context)
-        listing_provider = parquet_listing_table_provider(
-            ParquetListingTableConfig(
-                path=str(context.location.path),
-                schema=context.options.schema,
-                file_extension=file_extension,
-                table_name=context.name,
-                table_definition=context.external_table_sql,
-                table_partition_cols=partition_cols,
-                file_sort_order=file_sort_order,
-                key_fields=key_fields,
-                expr_adapter_factory=expr_adapter_factory,
-                parquet_pruning=scan.parquet_pruning if scan is not None else None,
-                skip_metadata=skip_metadata,
-                collect_statistics=scan.collect_statistics if scan is not None else None,
-            )
-        )
-
-        def _register_listing() -> None:
-            if listing_provider is not None:
-                context.ctx.register_table(context.name, listing_provider)
-                return
-            _call_register(
-                context.ctx.register_listing_table,
-                context.name,
-                context.location.path,
-                kwargs,
-            )
-
-        if scan is not None and scan.listing_mutable:
-            _refresh_listing_table(
-                context.ctx,
-                name=context.name,
-                register=_register_listing,
-                runtime_profile=context.runtime_profile,
-            )
-        else:
-            _register_listing()
-        df = context.ctx.table(context.name)
-        registered_schema = df.schema()
-        if scan is not None and scan.projection_exprs:
-            sql_options = _sql_options_for_profile(context.runtime_profile)
-            df = _apply_projection_exprs(
-                context.ctx,
-                table_name=context.name,
-                projection_exprs=scan.projection_exprs,
-                sql_options=sql_options,
-                runtime_profile=context.runtime_profile,
-            )
-        _require_partition_schema_validation(
-            context.ctx,
-            table_name=context.name,
-            expected_partition_cols=table_partition_cols,
-            enable_information_schema=(
-                context.runtime_profile.enable_information_schema
-                if context.runtime_profile is not None
-                else False
-            ),
-            sql_options=_sql_options_for_profile(context.runtime_profile),
-        )
-        _validate_constraints_and_defaults(
-            context,
-            enable_information_schema=(
-                context.runtime_profile.enable_information_schema
-                if context.runtime_profile is not None
-                else False
-            ),
-        )
-        _record_listing_table_artifact(
-            context,
-            details=_ListingTableArtifactDetails(
-                scan=scan,
-                file_extension=file_extension,
-                table_partition_cols=table_partition_cols,
-                skip_metadata=skip_metadata,
-                table_schema_contract=table_schema_contract,
-                expr_adapter_factory=expr_adapter_factory,
-                actual_schema=registered_schema,
-            ),
-        )
-    else:
-        _apply_scan_settings(
-            context.ctx,
-            scan=scan,
-            sql_options=_statement_sql_options_for_profile(context.runtime_profile),
-        )
-        if skip_metadata is not None:
-            _set_runtime_setting(
-                context.ctx,
-                key="datafusion.execution.parquet.skip_metadata",
-                value=str(skip_metadata).lower(),
-                sql_options=_statement_sql_options_for_profile(context.runtime_profile),
-            )
-        _call_register(
-            context.ctx.register_parquet,
-            context.name,
-            context.location.path,
-            kwargs,
-        )
-        df = context.ctx.table(context.name)
-    return _maybe_cache(context, df)
 
 
 def _register_external_table(
@@ -1303,28 +1203,33 @@ def _provider_pushdown_hints(provider: object) -> dict[str, object]:
     }
 
 
+@dataclass(frozen=True)
+class _TableProviderArtifact:
+    name: str
+    provider: object | None
+    provider_kind: str
+    source: object | None = None
+    details: Mapping[str, object] | None = None
+
+
 def _record_table_provider_artifact(
     runtime_profile: DataFusionRuntimeProfile | None,
     *,
-    name: str,
-    provider: object | None,
-    provider_kind: str,
-    source: object | None = None,
-    details: Mapping[str, object] | None = None,
+    artifact: _TableProviderArtifact,
 ) -> None:
     if runtime_profile is None or runtime_profile.diagnostics_sink is None:
         return
-    capsule_id = _provider_capsule_id(provider, source=source)
+    capsule_id = _provider_capsule_id(artifact.provider, source=artifact.source)
     payload: dict[str, object] = {
-        "name": name,
-        "provider": provider_kind,
-        "provider_type": type(provider).__name__ if provider is not None else None,
+        "name": artifact.name,
+        "provider": artifact.provider_kind,
+        "provider_type": type(artifact.provider).__name__ if artifact.provider is not None else None,
         "capsule_id": capsule_id,
     }
-    if provider is not None:
-        payload.update(_provider_pushdown_hints(provider))
-    if details:
-        payload.update(details)
+    if artifact.provider is not None:
+        payload.update(_provider_pushdown_hints(artifact.provider))
+    if artifact.details:
+        payload.update(artifact.details)
     runtime_profile.diagnostics_sink.record_artifact("datafusion_table_providers_v1", payload)
 
 
@@ -1504,6 +1409,44 @@ def apply_projection_overrides(
                 runtime_profile=runtime_profile,
             )
         except (KeyError, RuntimeError, TypeError, ValueError):
+            continue
+
+
+def apply_projection_scan_overrides(
+    ctx: SessionContext,
+    *,
+    projection_map: Mapping[str, Sequence[str]],
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> None:
+    """Re-register datasets with projection scan overrides when possible."""
+    if runtime_profile is None:
+        return
+    for table_name, columns in projection_map.items():
+        if not columns:
+            continue
+        location = runtime_profile.dataset_location(table_name)
+        if location is None:
+            continue
+        scan = resolve_datafusion_scan_options(location)
+        if scan is None:
+            continue
+        projection_exprs = tuple(_sql_identifier(name) for name in columns)
+        if scan.projection_exprs == projection_exprs:
+            continue
+        updated_scan = replace(scan, projection_exprs=projection_exprs)
+        updated_location = replace(location, datafusion_scan=updated_scan)
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            with suppress(KeyError, RuntimeError, TypeError, ValueError):
+                deregister(table_name)
+        try:
+            register_dataset_df(
+                ctx,
+                name=table_name,
+                location=updated_location,
+                runtime_profile=runtime_profile,
+            )
+        except (RuntimeError, TypeError, ValueError):
             continue
 
 
@@ -2072,10 +2015,12 @@ def register_delta_cdf_df(
     ctx.register_table(name, provider)
     _record_table_provider_artifact(
         runtime_profile,
-        name=name,
-        provider=provider,
-        provider_kind="cdf_table_provider",
-        source=None,
+        artifact=_TableProviderArtifact(
+            name=name,
+            provider=provider,
+            provider_kind="cdf_table_provider",
+            source=None,
+        ),
     )
     _record_delta_cdf_artifact(
         runtime_profile,
@@ -2147,19 +2092,6 @@ def _cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object] |
         "predicate": options.predicate,
         "allow_out_of_range": options.allow_out_of_range,
     }
-
-
-def _register_simple(context: DataFusionRegistrationContext, *, method: str) -> DataFrame:
-    register = getattr(context.ctx, method, None)
-    if not callable(register):
-        msg = f"DataFusion SessionContext missing {method}."
-        raise TypeError(msg)
-    kwargs = dict(context.options.read_options)
-    if context.options.schema is not None:
-        kwargs.setdefault("schema", context.options.schema)
-    _call_register(register, context.name, context.location.path, kwargs)
-    df = context.ctx.table(context.name)
-    return _maybe_cache(context, df)
 
 
 def _register_object_store(ctx: SessionContext, location: DatasetLocation) -> None:

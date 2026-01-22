@@ -8,6 +8,7 @@ import pyarrow as pa
 import pytest
 
 from arrowdsl.schema.build import rows_from_table
+from ibis_engine.sources import IbisDeltaWriteOptions
 from incremental.impact import (
     impacted_callers_from_changed_exports,
     impacted_importers_from_changed_exports,
@@ -15,8 +16,7 @@ from incremental.impact import (
 )
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime
-from storage.deltalake import DeltaWriteOptions, write_table_delta
-from tests.utils import values_as_list
+from tests.utils import values_as_list, write_delta_table
 
 
 def test_impacted_callers_from_changed_exports(tmp_path: Path) -> None:
@@ -128,10 +128,10 @@ def _changed_exports() -> pa.Table:
 
 
 def _write_table(path: Path, table: pa.Table) -> str:
-    write_table_delta(
+    write_delta_table(
         table,
         str(path),
-        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+        options=IbisDeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
     )
     return str(path)
 

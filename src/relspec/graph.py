@@ -14,11 +14,11 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
+from arrowdsl.io.ipc import payload_hash
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.expr_compiler import align_set_op_tables, union_tables
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
-from registry_common.arrow_payloads import payload_hash
 from relspec.compiler import RelationshipRuleCompiler, RuleExecutionOptions
 from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_schema
 from relspec.engine import IbisRelPlanCompiler

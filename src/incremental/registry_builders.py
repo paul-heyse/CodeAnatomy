@@ -7,8 +7,7 @@ from typing import TYPE_CHECKING
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from arrowdsl.spec.infra import DatasetRegistration, register_dataset
 from incremental.registry_rows import ContractRow, DatasetRow
-from registry_common.registry_builders import build_contract_spec as shared_build_contract_spec
-from schema_spec.system import make_table_spec
+from schema_spec.system import make_contract_spec, make_table_spec
 
 if TYPE_CHECKING:
     from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaSpec
@@ -52,7 +51,15 @@ def build_contract_spec(
     ContractSpec | None
         Contract spec or ``None`` when no contract row is provided.
     """
-    return shared_build_contract_spec(contract, table_spec=table_spec)
+    if contract is None:
+        return None
+    return make_contract_spec(
+        table_spec=table_spec,
+        dedupe=contract.dedupe,
+        canonical_sort=contract.canonical_sort,
+        constraints=contract.constraints,
+        version=contract.version,
+    )
 
 
 def build_dataset_spec(row: DatasetRow) -> DatasetSpec:

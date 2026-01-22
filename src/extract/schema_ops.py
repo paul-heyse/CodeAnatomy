@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -18,6 +18,8 @@ from datafusion_engine.extract_registry import (
     dataset_schema_policy,
     dataset_spec,
 )
+from datafusion_engine.runtime import sql_options_for_profile
+from datafusion_engine.schema_introspection import SchemaIntrospector
 
 
 def schema_policy_for_dataset(
@@ -51,6 +53,40 @@ class ExtractNormalizeOptions:
     options: object | None = None
     repo_id: str | None = None
     enable_encoding: bool = True
+
+
+def _information_schema_column_order(
+    name: str,
+    *,
+    ctx: ExecutionContext,
+) -> tuple[str, ...] | None:
+    runtime = ctx.runtime.datafusion
+    if runtime is None or not runtime.enable_information_schema:
+        return None
+    sql_options = sql_options_for_profile(runtime)
+    introspector = SchemaIntrospector(runtime.session_context(), sql_options=sql_options)
+    try:
+        rows = introspector.table_columns_with_ordinal(name)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    columns: list[str] = []
+    for row in rows:
+        value = row.get("column_name")
+        if not isinstance(value, str) or not value:
+            continue
+        if value in columns:
+            continue
+        columns.append(value)
+    return tuple(columns) if columns else None
+
+
+def _ordered_schema(schema: pa.Schema, ordered: Sequence[str]) -> pa.Schema:
+    ordered_fields = [schema.field(name) for name in ordered if name in schema.names]
+    if not ordered_fields:
+        return schema
+    ordered_names = {field.name for field in ordered_fields}
+    remaining = [field for field in schema if field.name not in ordered_names]
+    return pa.schema(ordered_fields + remaining, metadata=schema.metadata)
 
 
 def metadata_spec_for_dataset(
@@ -112,6 +148,9 @@ def normalize_extract_output(
         enable_encoding=normalize.enable_encoding,
     )
     schema = policy.resolved_schema()
+    ordered = _information_schema_column_order(name, ctx=ctx)
+    if ordered is not None:
+        schema = _ordered_schema(schema, ordered)
     aligned = align_table(
         processed,
         schema=schema,
@@ -154,6 +193,9 @@ def normalize_extract_reader(
         enable_encoding=normalize.enable_encoding,
     )
     schema = policy.resolved_schema()
+    ordered = _information_schema_column_order(name, ctx=ctx)
+    if ordered is not None:
+        schema = _ordered_schema(schema, ordered)
     if policy.keep_extra_columns:
         msg = f"Streaming normalization does not support keep_extra_columns for {name!r}."
         raise ValueError(msg)

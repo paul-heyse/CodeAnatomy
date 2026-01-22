@@ -5,11 +5,22 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 
+import ibis
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.types as patypes
 
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.core.runtime_profiles import runtime_profile_factory
+from datafusion_engine.runtime import DataFusionRuntimeProfile
+from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
+from storage.deltalake import DeltaWriteResult
 
 SortKey = tuple[str, str]
 
@@ -87,3 +98,32 @@ def _coerce_sort_columns(table: pa.Table, *, sort_keys: Sequence[SortKey]) -> pa
         columns.append(col)
         names.append(field.name)
     return pa.table(columns, names=names)
+
+
+def write_delta_table(
+    table: TableLike,
+    path: str,
+    *,
+    options: IbisDeltaWriteOptions | None = None,
+) -> DeltaWriteResult:
+    """Write a Delta table for tests using Ibis to_delta.
+
+    Returns
+    -------
+    DeltaWriteResult
+        Delta write result.
+    """
+    profile = DataFusionRuntimeProfile()
+    runtime_profile = runtime_profile_factory("default").with_datafusion(profile)
+    execution_ctx = ExecutionContext(runtime=runtime_profile)
+    backend = ibis.datafusion.connect(ctx=profile.session_context())
+    execution = IbisExecutionContext(ctx=execution_ctx, ibis_backend=backend)
+    return write_ibis_dataset_delta(
+        table,
+        path,
+        options=IbisDatasetWriteOptions(
+            execution=execution,
+            writer_strategy="datafusion",
+            delta_options=options,
+        ),
+    )

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from ibis.expr.types import Value
 
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from engine.plan_cache import PlanCache
     from sqlglot_tools.compat import Expression
     from sqlglot_tools.optimizer import SqlGlotPolicy
@@ -169,10 +170,10 @@ class DataFusionCompileOptions:
     plan_cache: PlanCache | None = None
     plan_hash: str | None = None
     profile_hash: str | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
     sqlglot_policy: SqlGlotPolicy | None = None
     sqlglot_policy_hash: str | None = None
     run_id: str | None = None
     prefer_substrait: bool = False
     record_substrait_gaps: bool = False
-    force_sql_fallback: bool = False
     dynamic_projection: bool = True

@@ -92,7 +92,13 @@ DATAFUSION_SQL_EXPRESSION_SPECS: tuple[DataFusionSqlExpressionSpec, ...] = (
 
 
 def datafusion_sql_expression_specs() -> tuple[DataFusionSqlExpressionSpec, ...]:
-    """Return the DataFusion SQL expression specs."""
+    """Return the DataFusion SQL expression specs.
+
+    Returns
+    -------
+    tuple[DataFusionSqlExpressionSpec, ...]
+        Catalog of SQL expression specs.
+    """
     return DATAFUSION_SQL_EXPRESSION_SPECS
 
 

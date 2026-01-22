@@ -8,15 +8,15 @@ from typing import Literal, TypeVar, cast
 
 import pyarrow as pa
 
+from arrowdsl.core.interop import pc
+from arrowdsl.io.ipc import payload_hash
 from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
 from datafusion_engine.sql_expression_registry import (
     DataFusionSqlExpressionSpec,
     datafusion_sql_expression_specs,
 )
 from datafusion_engine.udf_registry import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
-from engine.pyarrow_registry import pyarrow_compute_functions
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
-from registry_common.arrow_payloads import payload_hash
 
 ExecutionLane = Literal[
     "ibis_builtin",
@@ -77,6 +77,43 @@ _FUNCTION_REGISTRY_SCHEMA = pa.schema(
         pa.field("specs", pa.list_(_FUNCTION_SPEC_SCHEMA)),
     ]
 )
+
+
+def pyarrow_compute_functions() -> tuple[str, ...]:
+    """Return sorted PyArrow compute function names.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted function names from ``pyarrow.compute``.
+
+    Raises
+    ------
+    TypeError
+        Raised when ``pyarrow.compute.list_functions`` is unavailable.
+    """
+    if not callable(pc.list_functions):
+        msg = "pyarrow.compute.list_functions is unavailable."
+        raise TypeError(msg)
+    return tuple(sorted(pc.list_functions()))
+
+
+def arrow_kernel_registry_snapshot() -> dict[str, object]:
+    """Return a snapshot of available Arrow compute kernels.
+
+    Returns
+    -------
+    dict[str, object]
+        Snapshot payload for kernel availability.
+    """
+    functions = list(pyarrow_compute_functions())
+    return {
+        "version": 1,
+        "available_kernels": functions,
+        "registered_udfs": [],
+        "registered_kernels": [],
+        "pyarrow_compute": functions,
+    }
 
 
 @dataclass(frozen=True)
@@ -236,7 +273,29 @@ def default_function_registry(
     -------
     FunctionRegistry
         Default cross-lane registry instance.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion function catalog cannot be loaded.
     """
+    if datafusion_function_catalog is None:
+        try:
+            from datafusion_engine.runtime import (
+                DataFusionRuntimeProfile,
+                function_catalog_snapshot_for_profile,
+            )
+
+            profile = DataFusionRuntimeProfile()
+            session = profile.session_context()
+            datafusion_function_catalog = function_catalog_snapshot_for_profile(
+                profile,
+                session,
+                include_routines=True,
+            )
+        except (RuntimeError, TypeError, ValueError) as exc:
+            msg = "Failed to build DataFusion function catalog from information_schema."
+            raise ValueError(msg) from exc
     return build_function_registry(datafusion_function_catalog=datafusion_function_catalog)
 
 
@@ -543,6 +602,8 @@ __all__ = [
     "FunctionKind",
     "FunctionRegistry",
     "FunctionSpec",
+    "arrow_kernel_registry_snapshot",
     "build_function_registry",
     "default_function_registry",
+    "pyarrow_compute_functions",
 ]

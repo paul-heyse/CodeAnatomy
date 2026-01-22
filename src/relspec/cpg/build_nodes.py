@@ -34,7 +34,7 @@ from datafusion_engine.runtime import (
     dataset_schema_from_context,
     dataset_spec_from_context,
 )
-from engine.materialize import resolve_prefer_reader
+from engine.materialize_pipeline import resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan

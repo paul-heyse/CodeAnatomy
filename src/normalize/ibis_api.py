@@ -6,11 +6,14 @@ from dataclasses import dataclass, field
 from typing import Literal, cast
 
 from ibis.backends import BaseBackend
+from ibis.expr.types import Table
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering
+from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from arrowdsl.schema.build import empty_table
+from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from normalize.ibis_plan_builders import (
@@ -33,12 +36,12 @@ from normalize.ibis_plan_builders import (
 )
 from normalize.ibis_spans import (
     SpanSource,
-    add_ast_byte_spans_ibis,
-    add_scip_occurrence_byte_spans_ibis,
-    anchor_instructions_ibis,
-    normalize_cst_callsites_spans_ibis,
-    normalize_cst_defs_spans_ibis,
-    normalize_cst_imports_spans_ibis,
+    add_ast_span_struct_ibis,
+    add_scip_occurrence_span_struct_ibis,
+    anchor_instructions_span_struct_ibis,
+    normalize_cst_callsites_span_struct_ibis,
+    normalize_cst_defs_span_struct_ibis,
+    normalize_cst_imports_span_struct_ibis,
 )
 from normalize.registry_runtime import (
     dataset_contract,
@@ -52,6 +55,8 @@ from normalize.runner import (
     ensure_execution_context,
     run_normalize,
 )
+from normalize.runtime import NormalizeRuntime
+from normalize.schemas import SPAN_ERROR_SCHEMA
 
 NormalizeSource = IbisPlanSource | None
 
@@ -75,11 +80,19 @@ class DiagnosticsInputs:
     sources: DiagnosticsSources = field(default_factory=DiagnosticsSources)
 
 
-def _require_backend(backend: BaseBackend | None) -> BaseBackend:
-    if backend is None:
-        msg = "Ibis backend is required for normalize Ibis APIs."
+def _require_runtime(runtime: NormalizeRuntime | None) -> NormalizeRuntime:
+    if runtime is None:
+        msg = "Normalize runtime is required for normalize Ibis APIs."
         raise ValueError(msg)
-    return backend
+    return runtime
+
+
+def _materialize_table_expr(expr: Table, *, runtime: NormalizeRuntime) -> TableLike:
+    runtime_profile = runtime_profile_factory("default").with_datafusion(runtime.runtime_profile)
+    exec_ctx = ExecutionContext(runtime=runtime_profile)
+    execution = IbisExecutionContext(ctx=exec_ctx, ibis_backend=runtime.ibis_backend)
+    plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
+    return materialize_ibis_plan(plan, execution=execution)
 
 
 def _empty_plan(output: str, *, backend: BaseBackend) -> IbisPlan:
@@ -119,7 +132,7 @@ def _finalize_plan(
     *,
     output: str,
     ctx: ExecutionContext,
-    backend: BaseBackend,
+    runtime: NormalizeRuntime,
 ) -> TableLike:
     if plan is None:
         return empty_table(dataset_schema(output))
@@ -134,7 +147,7 @@ def _finalize_plan(
         ctx=ctx,
         options=NormalizeRunOptions(
             finalize_spec=finalize_spec,
-            ibis_backend=backend,
+            runtime=runtime,
         ),
     ).good
 
@@ -144,7 +157,7 @@ def build_cfg_blocks(
     py_bc_code_units: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     profile: str = "default",
 ) -> TableLike:
     """Normalize CFG block rows and enrich with file/path metadata.
@@ -154,17 +167,22 @@ def build_cfg_blocks(
     TableLike
         Normalized CFG block table.
     """
-    ibis_backend = _require_backend(backend)
+    normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
     catalog = _catalog_from_tables(
-        ibis_backend,
+        normalize_runtime.ibis_backend,
         tables={
             "py_bc_blocks": py_bc_blocks,
             "py_bc_code_units": py_bc_code_units,
         },
     )
-    plan = cfg_blocks_plan_ibis(catalog, exec_ctx, ibis_backend)
-    return _finalize_plan(plan, output=CFG_BLOCKS_NAME, ctx=exec_ctx, backend=ibis_backend)
+    plan = cfg_blocks_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    return _finalize_plan(
+        plan,
+        output=CFG_BLOCKS_NAME,
+        ctx=exec_ctx,
+        runtime=normalize_runtime,
+    )
 
 
 def build_cfg_edges(
@@ -172,7 +190,7 @@ def build_cfg_edges(
     py_bc_cfg_edges: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     profile: str = "default",
 ) -> TableLike:
     """Normalize CFG edge rows and enrich with file/path metadata.
@@ -182,24 +200,29 @@ def build_cfg_edges(
     TableLike
         Normalized CFG edge table.
     """
-    ibis_backend = _require_backend(backend)
+    normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
     catalog = _catalog_from_tables(
-        ibis_backend,
+        normalize_runtime.ibis_backend,
         tables={
             "py_bc_cfg_edges": py_bc_cfg_edges,
             "py_bc_code_units": py_bc_code_units,
         },
     )
-    plan = cfg_edges_plan_ibis(catalog, exec_ctx, ibis_backend)
-    return _finalize_plan(plan, output=CFG_EDGES_NAME, ctx=exec_ctx, backend=ibis_backend)
+    plan = cfg_edges_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    return _finalize_plan(
+        plan,
+        output=CFG_EDGES_NAME,
+        ctx=exec_ctx,
+        runtime=normalize_runtime,
+    )
 
 
 def build_def_use_events(
     py_bc_instructions: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     profile: str = "default",
 ) -> TableLike:
     """Build def/use events from bytecode instruction rows.
@@ -209,21 +232,21 @@ def build_def_use_events(
     TableLike
         Def/use events table.
     """
-    ibis_backend = _require_backend(backend)
+    normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
     catalog = _catalog_from_tables(
-        ibis_backend,
+        normalize_runtime.ibis_backend,
         tables={"py_bc_instructions": py_bc_instructions},
     )
-    plan = def_use_events_plan_ibis(catalog, exec_ctx, ibis_backend)
-    return _finalize_plan(plan, output=DEF_USE_NAME, ctx=exec_ctx, backend=ibis_backend)
+    plan = def_use_events_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    return _finalize_plan(plan, output=DEF_USE_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
 def run_reaching_defs(
     def_use_events: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     profile: str = "default",
 ) -> TableLike:
     """Compute a best-effort reaching-defs edge table.
@@ -233,21 +256,21 @@ def run_reaching_defs(
     TableLike
         Reaching-def edges table.
     """
-    ibis_backend = _require_backend(backend)
+    normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
     catalog = _catalog_from_tables(
-        ibis_backend,
+        normalize_runtime.ibis_backend,
         tables={"py_bc_def_use_events_v1": def_use_events},
     )
-    plan = reaching_defs_plan_ibis(catalog, exec_ctx, ibis_backend)
-    return _finalize_plan(plan, output=REACHES_NAME, ctx=exec_ctx, backend=ibis_backend)
+    plan = reaching_defs_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    return _finalize_plan(plan, output=REACHES_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
 def normalize_type_exprs(
     cst_type_exprs: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     profile: str = "default",
 ) -> TableLike:
     """Normalize type expressions into join-ready tables.
@@ -257,14 +280,14 @@ def normalize_type_exprs(
     TableLike
         Normalized type expressions table.
     """
-    ibis_backend = _require_backend(backend)
+    normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
     catalog = _catalog_from_tables(
-        ibis_backend,
+        normalize_runtime.ibis_backend,
         tables={"cst_type_exprs": cst_type_exprs},
     )
-    plan = type_exprs_plan_ibis(catalog, exec_ctx, ibis_backend)
-    return _finalize_plan(plan, output=TYPE_EXPRS_NAME, ctx=exec_ctx, backend=ibis_backend)
+    plan = type_exprs_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    return _finalize_plan(plan, output=TYPE_EXPRS_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
 def normalize_types(
@@ -272,7 +295,7 @@ def normalize_types(
     scip_symbol_information: NormalizeSource = None,
     *,
     ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     profile: str = "default",
 ) -> TableLike:
     """Normalize type expressions into type node rows.
@@ -282,28 +305,28 @@ def normalize_types(
     TableLike
         Normalized type nodes table.
     """
-    ibis_backend = _require_backend(backend)
+    normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
     catalog = _catalog_from_tables(
-        ibis_backend,
+        normalize_runtime.ibis_backend,
         tables={
             "cst_type_exprs": cst_type_exprs,
             "scip_symbol_information": scip_symbol_information,
         },
     )
-    exprs_plan = type_exprs_plan_ibis(catalog, exec_ctx, ibis_backend)
+    exprs_plan = type_exprs_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
     if exprs_plan is None:
-        exprs_plan = _empty_plan(TYPE_EXPRS_NAME, backend=ibis_backend)
+        exprs_plan = _empty_plan(TYPE_EXPRS_NAME, backend=normalize_runtime.ibis_backend)
     catalog.add(TYPE_EXPRS_NAME, exprs_plan)
-    plan = type_nodes_plan_ibis(catalog, exec_ctx, ibis_backend)
-    return _finalize_plan(plan, output=TYPE_NODES_NAME, ctx=exec_ctx, backend=ibis_backend)
+    plan = type_nodes_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    return _finalize_plan(plan, output=TYPE_NODES_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
 def collect_diags(
     inputs: DiagnosticsInputs,
     *,
     ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     profile: str = "default",
 ) -> TableLike:
     """Aggregate diagnostics into a single normalized table.
@@ -313,10 +336,10 @@ def collect_diags(
     TableLike
         Normalized diagnostics table.
     """
-    ibis_backend = _require_backend(backend)
+    normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
     catalog = _catalog_from_tables(
-        ibis_backend,
+        normalize_runtime.ibis_backend,
         tables={
             "file_line_index": inputs.file_line_index,
             "cst_parse_errors": inputs.sources.cst_parse_errors,
@@ -326,8 +349,8 @@ def collect_diags(
             "scip_documents": inputs.sources.scip_documents,
         },
     )
-    plan = diagnostics_plan_ibis(catalog, exec_ctx, ibis_backend)
-    return _finalize_plan(plan, output=DIAG_NAME, ctx=exec_ctx, backend=ibis_backend)
+    plan = diagnostics_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    return _finalize_plan(plan, output=DIAG_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
 def add_scip_occurrence_byte_spans(
@@ -335,9 +358,9 @@ def add_scip_occurrence_byte_spans(
     scip_documents: NormalizeSource,
     scip_occurrences: NormalizeSource,
     *,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
 ) -> tuple[TableLike, TableLike]:
-    """Add byte spans to SCIP occurrences using line index joins.
+    """Add span structs to SCIP occurrences using line index joins.
 
     Parameters
     ----------
@@ -347,153 +370,163 @@ def add_scip_occurrence_byte_spans(
         SCIP documents input table or plan.
     scip_occurrences
         SCIP occurrences input table or plan.
-    backend
-        Ibis backend used for execution.
+    runtime
+        Normalize runtime used for execution.
 
     Returns
     -------
     tuple[TableLike, TableLike]
-        SCIP documents and occurrences with byte spans.
+        SCIP occurrences with span structs and span error rows.
     """
-    ibis_backend = _require_backend(backend)
-    return add_scip_occurrence_byte_spans_ibis(
+    normalize_runtime = _require_runtime(runtime)
+    occ_expr, err_expr = add_scip_occurrence_span_struct_ibis(
         _span_source("file_line_index", file_line_index),
         _span_source("scip_documents", scip_documents),
         _span_source("scip_occurrences", scip_occurrences),
-        backend=ibis_backend,
+        backend=normalize_runtime.ibis_backend,
     )
+    occ_table = _materialize_table_expr(occ_expr, runtime=normalize_runtime)
+    err_table = _materialize_table_expr(err_expr, runtime=normalize_runtime)
+    if err_table.num_rows == 0:
+        return occ_table, empty_table(SPAN_ERROR_SCHEMA)
+    return occ_table, err_table
 
 
 def normalize_cst_callsites_spans(
     py_cst_callsites: NormalizeSource,
     *,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     primary: Literal["callee", "call"] = "callee",
 ) -> TableLike:
-    """Ensure callsites expose canonical bstart/bend aliases.
+    """Ensure callsites expose canonical span structs.
 
     Parameters
     ----------
     py_cst_callsites
         CST callsite rows or a plan to materialize them.
-    backend
-        Ibis backend used for execution.
+    runtime
+        Normalize runtime used for execution.
     primary
         Which span to treat as canonical.
 
     Returns
     -------
     TableLike
-        Callsites table with canonical span aliases.
+        Callsites table with canonical span structs.
     """
-    ibis_backend = _require_backend(backend)
-    return normalize_cst_callsites_spans_ibis(
+    normalize_runtime = _require_runtime(runtime)
+    expr = normalize_cst_callsites_span_struct_ibis(
         _span_source("py_cst_callsites", py_cst_callsites),
-        backend=ibis_backend,
+        backend=normalize_runtime.ibis_backend,
         primary=primary,
     )
+    return _materialize_table_expr(expr, runtime=normalize_runtime)
 
 
 def normalize_cst_imports_spans(
     py_cst_imports: NormalizeSource,
     *,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     primary: Literal["alias", "stmt"] = "alias",
 ) -> TableLike:
-    """Ensure imports expose canonical bstart/bend aliases.
+    """Ensure imports expose canonical span structs.
 
     Parameters
     ----------
     py_cst_imports
         CST imports rows or a plan to materialize them.
-    backend
-        Ibis backend used for execution.
+    runtime
+        Normalize runtime used for execution.
     primary
         Which span to treat as canonical.
 
     Returns
     -------
     TableLike
-        Imports table with canonical span aliases.
+        Imports table with canonical span structs.
     """
-    ibis_backend = _require_backend(backend)
-    return normalize_cst_imports_spans_ibis(
+    normalize_runtime = _require_runtime(runtime)
+    expr = normalize_cst_imports_span_struct_ibis(
         _span_source("py_cst_imports", py_cst_imports),
-        backend=ibis_backend,
+        backend=normalize_runtime.ibis_backend,
         primary=primary,
     )
+    return _materialize_table_expr(expr, runtime=normalize_runtime)
 
 
 def normalize_cst_defs_spans(
     py_cst_defs: NormalizeSource,
     *,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
     primary: Literal["name", "def"] = "name",
 ) -> TableLike:
-    """Ensure defs expose canonical bstart/bend aliases.
+    """Ensure defs expose canonical span structs.
 
     Parameters
     ----------
     py_cst_defs
         CST definition rows or a plan to materialize them.
-    backend
-        Ibis backend used for execution.
+    runtime
+        Normalize runtime used for execution.
     primary
         Which span to treat as canonical.
 
     Returns
     -------
     TableLike
-        Definitions table with canonical span aliases.
+        Definitions table with canonical span structs.
     """
-    ibis_backend = _require_backend(backend)
-    return normalize_cst_defs_spans_ibis(
+    normalize_runtime = _require_runtime(runtime)
+    expr = normalize_cst_defs_span_struct_ibis(
         _span_source("py_cst_defs", py_cst_defs),
-        backend=ibis_backend,
+        backend=normalize_runtime.ibis_backend,
         primary=primary,
     )
+    return _materialize_table_expr(expr, runtime=normalize_runtime)
 
 
 def anchor_instructions(
     file_line_index: NormalizeSource,
     py_bc_instructions: NormalizeSource,
     *,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
 ) -> TableLike:
     """Anchor bytecode instruction spans using line index joins.
 
     Returns
     -------
     TableLike
-        Instruction table with byte spans applied.
+        Instruction table with span structs applied.
     """
-    ibis_backend = _require_backend(backend)
-    return anchor_instructions_ibis(
+    normalize_runtime = _require_runtime(runtime)
+    expr = anchor_instructions_span_struct_ibis(
         _span_source("file_line_index", file_line_index),
         _span_source("py_bc_instructions", py_bc_instructions),
-        backend=ibis_backend,
+        backend=normalize_runtime.ibis_backend,
     )
+    return _materialize_table_expr(expr, runtime=normalize_runtime)
 
 
 def add_ast_byte_spans(
     file_line_index: NormalizeSource,
     py_ast_nodes: NormalizeSource,
     *,
-    backend: BaseBackend | None = None,
+    runtime: NormalizeRuntime | None = None,
 ) -> TableLike:
-    """Append AST byte-span columns using line index joins.
+    """Append AST span structs using line index joins.
 
     Returns
     -------
     TableLike
-        AST table with byte spans applied.
+        AST table with span structs applied.
     """
-    ibis_backend = _require_backend(backend)
-    return add_ast_byte_spans_ibis(
+    normalize_runtime = _require_runtime(runtime)
+    expr = add_ast_span_struct_ibis(
         _span_source("file_line_index", file_line_index),
         _span_source("py_ast_nodes", py_ast_nodes),
-        backend=ibis_backend,
+        backend=normalize_runtime.ibis_backend,
     )
+    return _materialize_table_expr(expr, runtime=normalize_runtime)
 
 
 __all__ = [

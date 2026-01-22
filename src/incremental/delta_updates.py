@@ -4,24 +4,28 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
+from deltalake import DeltaTable
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from cpg.schemas import CPG_EDGES_SCHEMA, CPG_NODES_SCHEMA
 from datafusion_engine.extract_bundles import dataset_name_for_output
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
 from incremental.registry_specs import dataset_schema
+from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
 from normalize.registry_runtime import dataset_name_from_alias
-from storage.deltalake import (
-    DeltaUpsertOptions,
-    DeltaWriteOptions,
-    coerce_delta_table,
-    upsert_dataset_partitions_delta,
-    write_table_delta,
-)
+from storage.deltalake import build_commit_properties, coerce_delta_table
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 
 @dataclass(frozen=True)
@@ -33,12 +37,22 @@ class PartitionedDatasetSpec:
     schema: pa.Schema | None = None
 
 
+@dataclass(frozen=True)
+class OverwriteDatasetSpec:
+    """Overwrite dataset descriptor for full-table writes."""
+
+    name: str
+    schema: pa.Schema
+    commit_metadata: Mapping[str, str] | None = None
+
+
 def upsert_partitioned_dataset(
     table: TableLike,
     *,
     spec: PartitionedDatasetSpec,
     base_dir: str,
     changes: IncrementalFileChanges,
+    runtime: IncrementalRuntime,
 ) -> str | None:
     """Upsert a partitioned dataset using the incremental delete set.
 
@@ -46,9 +60,24 @@ def upsert_partitioned_dataset(
     -------
     str | None
         Dataset path when updated, otherwise ``None``.
+
+    Raises
+    ------
+    ValueError
+        Raised when required partition columns are missing.
     """
     if spec.partition_column not in table.column_names:
-        return None
+        msg = (
+            "Partition column "
+            f"{spec.partition_column!r} is required for dataset {spec.name!r}."
+        )
+        raise ValueError(msg)
+    if spec.schema is not None and spec.partition_column not in spec.schema.names:
+        msg = (
+            "Partition column "
+            f"{spec.partition_column!r} missing from schema for dataset {spec.name!r}."
+        )
+        raise ValueError(msg)
     schema = spec.schema or table.schema
     delete_partitions = _partition_specs(spec.partition_column, changes.deleted_file_ids)
     data = coerce_delta_table(
@@ -56,13 +85,22 @@ def upsert_partitioned_dataset(
         schema=schema,
         encoding_policy=encoding_policy_from_schema(schema),
     )
-    result = upsert_dataset_partitions_delta(
+    _delete_delta_partitions(
+        base_dir,
+        delete_partitions=delete_partitions,
+        runtime=runtime,
+    )
+    result = write_ibis_dataset_delta(
         data,
-        options=DeltaUpsertOptions(
-            base_dir=base_dir,
-            partition_cols=(spec.partition_column,),
-            delete_partitions=delete_partitions,
-            options=DeltaWriteOptions(schema_mode="merge"),
+        base_dir,
+        options=IbisDatasetWriteOptions(
+            execution=runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="append",
+                schema_mode="merge",
+                partition_by=(spec.partition_column,),
+            ),
         ),
     )
     return result.path
@@ -71,10 +109,9 @@ def upsert_partitioned_dataset(
 def write_overwrite_dataset(
     table: TableLike,
     *,
-    dataset_name: str,
-    schema: pa.Schema,
+    spec: OverwriteDatasetSpec,
     state_store: StateStore,
-    commit_metadata: Mapping[str, str] | None = None,
+    runtime: IncrementalRuntime,
 ) -> dict[str, str]:
     """Overwrite a dataset with schema enforcement.
 
@@ -83,21 +120,27 @@ def write_overwrite_dataset(
     dict[str, str]
         Mapping of dataset name to dataset path.
     """
+    metadata = spec.commit_metadata
     data = coerce_delta_table(
         table,
-        schema=schema,
-        encoding_policy=encoding_policy_from_schema(schema),
+        schema=spec.schema,
+        encoding_policy=encoding_policy_from_schema(spec.schema),
     )
-    result = write_table_delta(
+    target = str(state_store.dataset_dir(spec.name))
+    result = write_ibis_dataset_delta(
         data,
-        str(state_store.dataset_dir(dataset_name)),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata=dict(commit_metadata) if commit_metadata else None,
+        target,
+        options=IbisDatasetWriteOptions(
+            execution=runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata=dict(metadata) if metadata else None,
+            ),
         ),
     )
-    return {dataset_name: result.path}
+    return {spec.name: result.path}
 
 
 def upsert_cpg_nodes(
@@ -105,6 +148,7 @@ def upsert_cpg_nodes(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
+    runtime: IncrementalRuntime,
 ) -> dict[str, str]:
     """Upsert CPG nodes into the incremental state store.
 
@@ -123,6 +167,7 @@ def upsert_cpg_nodes(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
+        runtime=runtime,
     )
     return {} if path is None else {spec.name: path}
 
@@ -132,6 +177,7 @@ def upsert_cpg_edges(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
+    runtime: IncrementalRuntime,
 ) -> dict[str, str]:
     """Upsert CPG edges into the incremental state store.
 
@@ -150,6 +196,7 @@ def upsert_cpg_edges(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
+        runtime=runtime,
     )
     return {} if path is None else {spec.name: path}
 
@@ -159,6 +206,7 @@ def upsert_exported_defs(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
+    runtime: IncrementalRuntime,
 ) -> dict[str, str]:
     """Upsert exported definition partitions by file_id.
 
@@ -177,6 +225,7 @@ def upsert_exported_defs(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
+        runtime=runtime,
     )
     return {} if path is None else {spec.name: path}
 
@@ -186,6 +235,7 @@ def upsert_module_index(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
+    runtime: IncrementalRuntime,
 ) -> dict[str, str]:
     """Upsert module index partitions by file_id.
 
@@ -204,6 +254,7 @@ def upsert_module_index(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
+        runtime=runtime,
     )
     return {} if path is None else {spec.name: path}
 
@@ -213,6 +264,7 @@ def upsert_imports_resolved(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
+    runtime: IncrementalRuntime,
 ) -> dict[str, str]:
     """Upsert resolved import partitions by importer_file_id.
 
@@ -231,6 +283,7 @@ def upsert_imports_resolved(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
+        runtime=runtime,
     )
     return {} if path is None else {spec.name: path}
 
@@ -240,6 +293,7 @@ def upsert_extract_outputs(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
+    runtime: IncrementalRuntime,
 ) -> dict[str, str]:
     """Upsert extract outputs into the incremental state store.
 
@@ -259,6 +313,7 @@ def upsert_extract_outputs(
             spec=spec,
             base_dir=str(state_store.dataset_dir(dataset_name)),
             changes=changes,
+            runtime=runtime,
         )
         if path is not None:
             updated[dataset_name] = path
@@ -270,6 +325,7 @@ def upsert_normalize_outputs(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
+    runtime: IncrementalRuntime,
 ) -> dict[str, str]:
     """Upsert normalize outputs into the incremental state store.
 
@@ -290,10 +346,50 @@ def upsert_normalize_outputs(
             spec=spec,
             base_dir=str(state_store.dataset_dir(dataset_name)),
             changes=changes,
+            runtime=runtime,
         )
         if path is not None:
             updated[dataset_name] = path
     return updated
+
+
+def _delete_delta_partitions(
+    base_dir: str,
+    *,
+    delete_partitions: Sequence[Mapping[str, str]],
+    runtime: IncrementalRuntime,
+) -> None:
+    if not delete_partitions:
+        return
+    predicate = _partition_predicate(delete_partitions)
+    if not predicate:
+        return
+    commit_options, commit_run = runtime.profile.reserve_delta_commit(
+        key=base_dir,
+        metadata={"dataset": base_dir, "operation": "delete"},
+    )
+    commit_properties = build_commit_properties(
+        app_id=commit_options.app_id,
+        version=commit_options.version,
+    )
+    DeltaTable(base_dir).delete(predicate, commit_properties=commit_properties)
+    runtime.profile.finalize_delta_commit(
+        key=base_dir,
+        run=commit_run,
+        metadata={"operation": "delete", "partition_count": len(delete_partitions)},
+    )
+
+
+def _partition_predicate(
+    partitions: Sequence[Mapping[str, str]],
+) -> str:
+    clauses: list[str] = []
+    for partition in partitions:
+        if not partition:
+            continue
+        parts = [f"{key} = '{value}'" for key, value in partition.items()]
+        clauses.append(f"({' AND '.join(parts)})")
+    return " OR ".join(clauses)
 
 
 def _partition_specs(
@@ -304,6 +400,7 @@ def _partition_specs(
 
 
 __all__ = [
+    "OverwriteDatasetSpec",
     "PartitionedDatasetSpec",
     "upsert_cpg_edges",
     "upsert_cpg_nodes",

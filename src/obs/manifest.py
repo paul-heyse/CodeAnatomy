@@ -18,12 +18,16 @@ from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from datafusion_engine.extract_extractors import extractor_spec
 from datafusion_engine.extract_registry import dataset_schema
 from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
 from ibis_engine.param_tables import ParamTableArtifact
 from obs.repro import collect_repro_info
 from schema_spec.system import dataset_table_ddl_fingerprint
 from sqlglot_tools.compat import parse_one
 from sqlglot_tools.optimizer import planner_dag_snapshot
-from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 from storage.io import (
     delta_commit_metadata,
     delta_history_snapshot,
@@ -35,6 +39,7 @@ from storage.io import (
 if TYPE_CHECKING:
     from arrowdsl.core.scan_telemetry import ScanTelemetry
     from extract.evidence_plan import EvidencePlan
+    from ibis_engine.execution import IbisExecutionContext
     from normalize.runner import ResolvedNormalizeRule
     from relspec.compiler import CompiledOutput
     from relspec.model import RelationshipRule
@@ -1060,6 +1065,7 @@ def write_manifest_delta(
     path: PathLike,
     *,
     overwrite: bool = True,
+    execution: IbisExecutionContext,
 ) -> str:
     """Write manifest Delta table to the provided path.
 
@@ -1079,11 +1085,19 @@ def write_manifest_delta(
         msg = f"Manifest already exists at {target}."
         raise FileExistsError(msg)
     table = pa.Table.from_pylist([dict(payload)])
-    options = DeltaWriteOptions(
+    options = IbisDeltaWriteOptions(
         mode="overwrite" if overwrite else "error",
         schema_mode="overwrite" if overwrite else None,
     )
-    result = write_dataset_delta(table, str(target), options=options)
+    result = write_ibis_dataset_delta(
+        table,
+        str(target),
+        options=IbisDatasetWriteOptions(
+            execution=execution,
+            writer_strategy="datafusion",
+            delta_options=options,
+        ),
+    )
     return result.path
 
 

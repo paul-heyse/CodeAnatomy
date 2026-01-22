@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from typing import TYPE_CHECKING
@@ -11,11 +13,13 @@ import pyarrow as pa
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
+from arrowdsl.io.ipc import payload_hash
 from engine.function_registry import default_function_registry
-from registry_common.arrow_payloads import payload_hash
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
@@ -261,6 +265,75 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     )
 
 
+def _function_catalog_snapshot(
+    runtime: RuntimeProfile,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = runtime.datafusion
+    if profile is None or not profile.enable_information_schema:
+        return None
+    try:
+        from datafusion_engine.runtime import function_catalog_snapshot_for_profile
+
+        session = profile.session_context()
+        return function_catalog_snapshot_for_profile(
+            profile,
+            session,
+            include_routines=True,
+        )
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
+    """Return an engine runtime artifact payload for diagnostics.
+
+    Returns
+    -------
+    dict[str, object]
+        Diagnostics payload for engine runtime settings.
+    """
+    snapshot = runtime_profile_snapshot(runtime)
+    policy_snapshot = sqlglot_policy_snapshot()
+    function_catalog = _function_catalog_snapshot(runtime)
+    try:
+        function_registry = default_function_registry(
+            datafusion_function_catalog=function_catalog,
+        )
+    except ValueError:
+        function_registry = default_function_registry(datafusion_function_catalog=[])
+    datafusion_settings = (
+        runtime.datafusion.settings_payload() if runtime.datafusion is not None else None
+    )
+    return {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "runtime_profile_name": runtime.name,
+        "determinism_tier": runtime.determinism.value,
+        "runtime_profile_hash": snapshot.profile_hash,
+        "runtime_profile_snapshot": json.dumps(snapshot.payload(), sort_keys=True),
+        "sqlglot_policy_hash": (
+            policy_snapshot.policy_hash if policy_snapshot is not None else None
+        ),
+        "sqlglot_policy_snapshot": (
+            json.dumps(policy_snapshot.payload(), sort_keys=True)
+            if policy_snapshot is not None
+            else None
+        ),
+        "function_registry_hash": function_registry.fingerprint(),
+        "function_registry_snapshot": json.dumps(
+            function_registry.payload(),
+            sort_keys=True,
+        ),
+        "datafusion_settings_hash": (
+            runtime.datafusion.settings_hash() if runtime.datafusion is not None else None
+        ),
+        "datafusion_settings": (
+            json.dumps(datafusion_settings, sort_keys=True)
+            if datafusion_settings is not None
+            else None
+        ),
+    }
+
+
 def _scan_profile_payload(scan: ScanProfile) -> dict[str, object]:
     """Return a scan profile payload for runtime snapshots.
 
@@ -426,6 +499,7 @@ def resolve_runtime_profile(
 __all__ = [
     "RuntimeProfileSnapshot",
     "RuntimeProfileSpec",
+    "engine_runtime_artifact",
     "resolve_runtime_profile",
     "runtime_profile_snapshot",
 ]

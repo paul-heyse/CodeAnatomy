@@ -57,7 +57,7 @@ def datafusion_context(backend: object) -> SessionContext:
 
 ## Scope 2: Parameterization + prepared statements as the default lane
 
-**Status:** mostly complete (param signatures in diagnostics pending).
+**Status:** completed.
 
 **Objective:** eliminate large literal expansions and stabilize plan caches.
 
@@ -94,13 +94,13 @@ def execute_parametrized_sql(
 - [x] Route large `file_id` filters through param tables or prepared statements
       instead of literal OR chains.
 - [x] Add `PreparedStatementOptions` usage in execution policy.
-- [ ] Record parameter signatures in diagnostics for reproducibility.
+- [x] Record parameter signatures in diagnostics for reproducibility.
 
 ---
 
 ## Scope 3: Dynamic projection pushdown from SQLGlot lineage
 
-**Status:** partial (projection rewrite implemented; scan-option pushdown pending).
+**Status:** partial (projection rewrite + diagnostics complete; scan-option pushdown pending).
 
 **Objective:** minimize scanned columns by computing required input columns per
 query and passing them into DataFusion scan options.
@@ -129,14 +129,14 @@ def _apply_dynamic_projection(
 **Implementation checklist**
 - [x] Rewrite SQLGlot plans to project required columns per table.
 - [ ] Inject `projection_exprs` into `DataFusionScanOptions` per request.
-- [ ] Persist lineage-derived projections as diagnostics artifacts.
+- [x] Persist lineage-derived projections as diagnostics artifacts.
 - [ ] Add tests that confirm reduced column scans via `EXPLAIN`.
 
 ---
 
 ## Scope 4: Substrait lane expansion (SQL fallback only)
 
-**Status:** mostly complete (force-fallback flag pending).
+**Status:** completed.
 
 **Objective:** treat Substrait as the primary IR lane and SQL as fallback.
 
@@ -159,13 +159,13 @@ def _try_ibis_substrait(expr: IbisTable, *, record_gaps: bool, diagnostics_sink:
 - [x] Add `ibis-substrait` path before `pyarrow.substrait` fallback.
 - [x] Replay Substrait via `datafusion.substrait.Consumer` in the bridge.
 - [x] Record Substrait plan bytes + validation artifacts.
-- [ ] Add feature flag to force SQL fallback for debugging.
+- [x] Add feature flag to force SQL fallback for debugging.
 
 ---
 
 ## Scope 5: SQL ingestion as a first-class path
 
-**Status:** partial (AST ingestion done; policy hardening/tests pending).
+**Status:** partial (AST ingestion + policy hardening done; golden tests pending).
 
 **Objective:** support SQL and SQLGlot AST ingestion with deterministic artifacts.
 
@@ -194,14 +194,14 @@ def parse_sql_expr(
 **Implementation checklist**
 - [x] Add AST ingestion function alongside string ingestion.
 - [x] Persist SQLGlot serde payloads + policy snapshots in diagnostics.
-- [ ] Enforce `validate_qualify_columns` and identifier normalization.
+- [x] Enforce `validate_qualify_columns` and identifier normalization.
 - [ ] Add golden tests for SQL->Ibis round-trips.
 
 ---
 
 ## Scope 6: Schema contract hardening via DataFusion scan options
 
-**Status:** partial (ordering defaults wired; remaining contract hooks pending).
+**Status:** completed.
 
 **Objective:** turn dataset contracts into explicit scan and ordering policies.
 
@@ -227,15 +227,15 @@ DatasetSpec(
 
 **Implementation checklist**
 - [x] Encode ordering guarantees into `file_sort_order` contracts.
-- [ ] Support `unbounded=True` for streaming datasets.
-- [ ] Wire schema adapter factory hooks when present.
-- [ ] Ensure scan options are reflected in DDL and registry-based registration.
+- [x] Support `unbounded=True` for streaming datasets.
+- [x] Wire schema adapter factory hooks when present.
+- [x] Ensure scan options are reflected in DDL and registry-based registration.
 
 ---
 
 ## Scope 7: UDF catalog tightening and runtime validation
 
-**Status:** partial (runtime validation added; diagnostics/policy gates pending).
+**Status:** completed.
 
 **Objective:** ensure builtin and custom UDFs align with runtime capabilities.
 
@@ -258,16 +258,16 @@ def validate_ibis_udfs(catalog: UdfCatalog, ibis_specs: Sequence[IbisUdfSpec]) -
 - `src/engine/function_registry.py`
 
 **Implementation checklist**
-- [ ] Load builtin function metadata via `SHOW FUNCTIONS`.
+- [x] Load builtin function metadata via `SHOW FUNCTIONS`.
 - [x] Validate Ibis builtin UDF specs against runtime catalog.
-- [ ] Emit diagnostics for missing or mismatched functions.
-- [ ] Add strict/permissive policy gates for UDF usage.
+- [x] Emit diagnostics for missing or mismatched functions.
+- [x] Add strict/permissive policy gates for UDF usage.
 
 ---
 
 ## Scope 8: Object store + listing-table integration in the Ibis adapter
 
-**Status:** partial (object store registration done; listing-table hooks pending).
+**Status:** partial (object store registration + diagnostics done; listing-table hooks pending).
 
 **Objective:** expose DataFusion object store registration and listing-table
 options through the Ibis backend configuration.
@@ -293,7 +293,7 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
 - [x] Add object-store definitions to `IbisBackendConfig`.
 - [x] Register object stores before `ibis.datafusion.connect(ctx)`.
 - [ ] Expose listing-table registration options from dataset specs.
-- [ ] Add diagnostics for object store and listing-table registration.
+- [x] Add diagnostics for object store and listing-table registration.
 
 ---
 

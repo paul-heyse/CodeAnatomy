@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -77,6 +79,9 @@ class ReadDatasetParams:
     filesystem: object | None = None
     partitioning: str | None = None
     table_name: str | None = None
+    dataset_spec: DatasetSpec | None = None
+    datafusion_scan: DataFusionScanOptions | None = None
+    datafusion_provider: DataFusionProvider | None = None
 
 
 class DatasetCatalog:
@@ -402,6 +407,9 @@ def read_dataset(
     if params.filesystem is not None and hasattr(backend, "register_filesystem"):
         backend_fs = cast("FilesystemBackend", backend)
         backend_fs.register_filesystem(params.filesystem)
+    datafusion_table = _read_via_datafusion_registry(backend, params=params)
+    if datafusion_table is not None:
+        return datafusion_table
     if params.dataset_format == "delta":
         options = dict(params.read_options or {})
         if params.table_name is not None:
@@ -426,6 +434,52 @@ def read_dataset(
         options.setdefault("hive_partitioning", True)
     reader = _resolve_reader(backend, params.dataset_format)
     return reader(params.path, **options)
+
+
+def _read_via_datafusion_registry(
+    backend: ibis.backends.BaseBackend,
+    *,
+    params: ReadDatasetParams,
+) -> Table | None:
+    if params.dataset_format == "delta":
+        return None
+    if (
+        params.datafusion_scan is None
+        and params.datafusion_provider is None
+        and params.dataset_spec is None
+    ):
+        return None
+    try:
+        ctx = datafusion_context(backend)
+    except ValueError:
+        return None
+    table_name = params.table_name or f"__ibis_{uuid.uuid4().hex}"
+    scan = params.datafusion_scan
+    location = DatasetLocation(
+        path=params.path,
+        format=params.dataset_format,
+        partitioning=params.partitioning,
+        read_options=dict(params.read_options or {}),
+        storage_options=dict(params.storage_options or {}),
+        filesystem=params.filesystem,
+        dataset_spec=params.dataset_spec,
+        datafusion_scan=scan,
+        datafusion_provider=params.datafusion_provider,
+    )
+    scan = resolve_datafusion_scan_options(location)
+    if scan is not None and scan is not location.datafusion_scan:
+        location = replace(location, datafusion_scan=scan)
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            deregister(table_name)
+    _register_datafusion_dataset(
+        ctx,
+        name=table_name,
+        location=location,
+        runtime_profile=None,
+    )
+    return backend.table(table_name)
 
 
 def _resolve_reader(

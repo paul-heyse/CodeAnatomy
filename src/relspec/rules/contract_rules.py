@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 import pyarrow as pa
 
-from registry_common.arrow_payloads import ipc_table
+from arrowdsl.io.ipc import ipc_table
 from relspec.rules.definitions import RuleDefinition
 from relspec.rules.spec_tables import rule_definitions_from_table
 from relspec.schema_context import RelspecSchemaContext

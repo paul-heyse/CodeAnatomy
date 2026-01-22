@@ -33,6 +33,7 @@ except ImportError:
     DataFusionLogicalPlan = None
 from datafusion import (
     DataFrameWriteOptions,
+    ParquetColumnOptions,
     ParquetWriterOptions,
     SessionContext,
     SQLOptions,
@@ -63,11 +64,14 @@ from datafusion_engine.compile_options import (
     resolve_sql_policy,
 )
 from datafusion_engine.df_builder import TranslationError, df_from_sqlglot
-from datafusion_engine.registry_bridge import apply_projection_overrides
+from datafusion_engine.registry_bridge import (
+    apply_projection_overrides,
+    apply_projection_scan_overrides,
+)
 from datafusion_engine.schema_registry import has_schema, schema_for
 from engine.plan_cache import PlanCacheEntry, PlanCacheKey
 from ibis_engine.param_tables import scalar_param_signature
-from ibis_engine.params_bridge import datafusion_param_bindings, param_types_from_bindings
+from ibis_engine.params_bridge import datafusion_param_bindings
 from ibis_engine.plan import IbisPlan
 from ibis_engine.substrait_bridge import (
     record_substrait_gap,
@@ -102,11 +106,11 @@ from sqlglot_tools.optimizer import (
     register_datafusion_dialect,
     rewrite_expr,
     serialize_ast_artifact,
+    sqlglot_sql,
 )
 
 logger = logging.getLogger(__name__)
 
-_PARAM_REGEX = re.compile(r"(?P<prefix>[:@])(?P<name>[A-Za-z_][A-Za-z0-9_]*)")
 
 
 @dataclass(frozen=True)
@@ -195,6 +199,8 @@ if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlanType
     from datafusion.substrait import Consumer as SubstraitConsumerType
     from datafusion.substrait import Serde as SubstraitSerdeType
+
+    from schema_spec.policies import ParquetColumnPolicy
 else:
     DataFusionLogicalPlanType = object
 
@@ -496,7 +502,7 @@ def df_from_sqlglot_or_sql(
 ) -> DataFrame:
     """Translate a SQLGlot expression into a DataFusion DataFrame.
 
-    Uses DataFusion SQL when forced or when parameters are present.
+    Uses the SQLGlot AST translation path for DataFusion execution.
 
     Raises
     ------
@@ -512,6 +518,11 @@ def df_from_sqlglot_or_sql(
     if resolved.dynamic_projection:
         projection_map = _projection_requirements(expr)
         if projection_map:
+            apply_projection_scan_overrides(
+                ctx,
+                projection_map=projection_map,
+                runtime_profile=resolved.runtime_profile,
+            )
             apply_projection_overrides(
                 ctx,
                 projection_map=projection_map,
@@ -525,13 +536,11 @@ def df_from_sqlglot_or_sql(
         _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=replayed)
         return replayed
     if resolved.params and _contains_params(expr):
-        df = _df_from_sql(ctx, bound_expr, options=resolved)
-        _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
-        return df
+        bound_expr = _bind_params_for_ast(expr, options=resolved)
     try:
         df = df_from_sqlglot(ctx, bound_expr)
     except TranslationError as exc:
-        msg = f"DataFusion SQLGlot translation failed: {exc}"
+        msg = "DataFusion SQLGlot translation failed."
         raise TranslationError(msg) from exc
     _maybe_store_substrait(ctx, bound_expr, options=resolved)
     _maybe_explain(ctx, bound_expr, options=resolved)
@@ -718,9 +727,7 @@ def ibis_to_datafusion_dual_lane(
     resolved = options or DataFusionCompileOptions()
     fallback_reason = "Substrait lane disabled (prefer_substrait=False)"
 
-    if resolved.force_sql_fallback:
-        fallback_reason = "Substrait lane disabled (force_sql_fallback=True)"
-    elif resolved.prefer_substrait:
+    if resolved.prefer_substrait:
         substrait_result, fallback_reason = _attempt_substrait_lane(
             expr=expr,
             backend=backend,
@@ -1391,60 +1398,6 @@ def _validated_param_bindings(
     return bindings
 
 
-def _prepare_positional_params(
-    *,
-    sql: str,
-    bindings: Mapping[str, object],
-    param_types: Mapping[str, str],
-) -> tuple[str, list[object], list[str]]:
-    ordered: list[str] = []
-    for match in _PARAM_REGEX.finditer(sql):
-        name = match.group("name")
-        if name in ordered:
-            continue
-        ordered.append(name)
-    if not ordered:
-        msg = "Prepared statements require named parameters in SQL."
-        raise ValueError(msg)
-    missing = [name for name in ordered if name not in bindings]
-    if missing:
-        msg = f"Missing parameter bindings for: {', '.join(missing)}."
-        raise ValueError(msg)
-    types_missing = [name for name in ordered if name not in param_types]
-    if types_missing:
-        msg = f"Missing SQL types for: {', '.join(types_missing)}."
-        raise ValueError(msg)
-    unused = sorted(name for name in bindings if name not in ordered)
-    if unused:
-        msg = f"Unused parameter bindings: {', '.join(unused)}."
-        raise ValueError(msg)
-    index_map = {name: idx + 1 for idx, name in enumerate(ordered)}
-
-    def _replace(match: re.Match[str]) -> str:
-        name = match.group("name")
-        return f"${index_map[name]}"
-
-    sql_positional = _PARAM_REGEX.sub(_replace, sql)
-    params = [bindings[name] for name in ordered]
-    types = [param_types[name] for name in ordered]
-    return sql_positional, params, types
-
-
-def _prepared_statement_name(sql: str, *, prefix: str = "pstmt") -> str:
-    digest = hashlib.sha256(sql.encode("utf-8")).hexdigest()[:12]
-    return f"{prefix}_{digest}"
-
-
-def _param_types_for_options(
-    *,
-    options: DataFusionCompileOptions,
-    bindings: Mapping[str, object],
-) -> Mapping[str, str]:
-    if options.prepared_param_types is not None:
-        return options.prepared_param_types
-    return param_types_from_bindings(bindings)
-
-
 @dataclass(frozen=True)
 class DataFusionPlanArtifacts:
     """Captured DataFusion plan artifacts for diagnostics."""
@@ -1454,6 +1407,7 @@ class DataFusionPlanArtifacts:
     explain: TableLike | RecordBatchReaderLike
     explain_analyze: TableLike | RecordBatchReaderLike | None
     substrait_plan: bytes | None
+    normalized_sql: str | None = None
     substrait_validation: Mapping[str, object] | None = None
     sqlglot_ast: str | None = None
     read_dialect: str | None = None
@@ -1490,6 +1444,7 @@ class DataFusionPlanArtifacts:
         return {
             "plan_hash": self.plan_hash,
             "sql": self.sql,
+            "normalized_sql": self.normalized_sql,
             "explain": self.explain,
             "explain_analyze": self.explain_analyze,
             "substrait_b64": substrait_b64,
@@ -1542,6 +1497,7 @@ class DataFusionPlanArtifacts:
             "run_id": self.run_id,
             "plan_hash": self.plan_hash,
             "sql": self.sql,
+            "normalized_sql": self.normalized_sql,
             "explain": self.explain,
             "explain_analyze": self.explain_analyze,
             "substrait_b64": substrait_b64,
@@ -1572,59 +1528,23 @@ class DataFusionPlanArtifacts:
         }
 
 
-def _df_from_sql(
-    ctx: SessionContext,
+def _bind_params_for_ast(
     expr: Expression,
     *,
     options: DataFusionCompileOptions,
-) -> DataFrame:
-    _ensure_dialect(options.dialect)
-    sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+) -> Expression:
     bindings = _validated_param_bindings(
         options.params,
         allowlist=options.param_identifier_allowlist,
     )
-    policy = options.sql_policy or resolve_sql_policy(
-        options.sql_policy_name,
-        fallback=_default_sql_policy(),
-    )
-    sql_options = options.sql_options or policy.to_sql_options()
-    violations = _policy_violations(expr, policy)
-    if violations:
-        if options.enforce_sql_policy:
-            msg = f"DataFusion SQL policy violations: {', '.join(violations)}."
-            raise ValueError(msg)
-        if options.sql_options is None or options.sql_policy is not None or options.sql_policy_name:
-            logger.warning(
-                "DataFusion SQL policy violations detected: %s",
-                ", ".join(violations),
-            )
-    if bindings and options.prepared_statements:
-        try:
-            param_types = _param_types_for_options(options=options, bindings=bindings)
-            sql_positional, params, types = _prepare_positional_params(
-                sql=sql,
-                bindings=bindings,
-                param_types=param_types,
-            )
-            spec = prepare_statement(
-                ctx,
-                name=_prepared_statement_name(sql_positional),
-                sql=sql_positional,
-                options=PreparedStatementOptions(
-                    param_types=types,
-                    sql_options=policy,
-                ),
-            )
-            return execute_prepared_statement(
-                ctx,
-                name=spec.name,
-                params=params,
-                sql_options=policy,
-            )
-        except (RuntimeError, TypeError, ValueError):
-            return ctx.sql_with_options(sql, sql_options, param_values=bindings)
-    return ctx.sql_with_options(sql, sql_options, param_values=bindings)
+    if not bindings:
+        msg = "SQL parameters require bindings for AST execution."
+        raise ValueError(msg)
+    try:
+        return bind_params(expr, params=bindings)
+    except (KeyError, TypeError, ValueError) as exc:
+        msg = "SQL parameter binding failed for AST execution."
+        raise ValueError(msg) from exc
 
 
 def execute_dml(
@@ -1924,14 +1844,14 @@ def df_from_sql(
     *,
     options: DataFusionCompileOptions,
 ) -> DataFrame:
-    """Execute a SQLGlot expression using DataFusion SQL execution.
+    """Execute a SQLGlot expression with AST-first compilation.
 
     Returns
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame representing the expression.
     """
-    return _df_from_sql(ctx, expr, options=options)
+    return df_from_sqlglot_or_sql(ctx, expr, options=options)
 
 
 def _maybe_explain(
@@ -2157,9 +2077,23 @@ def collect_plan_artifacts(
         if lineage_payload is not None
         else canonical_ast_fingerprint(resolved_expr)
     )
+    normalized_sql = None
+    try:
+        normalize_options = NormalizeExprOptions(
+            schema=options.schema_map,
+            policy=policy,
+            enable_rewrites=options.enable_rewrites,
+            rewrite_hook=options.rewrite_hook,
+            sql=sql,
+        )
+        normalized_expr = normalize_expr(resolved_expr, options=normalize_options)
+        normalized_sql = sqlglot_sql(normalized_expr, policy=policy)
+    except (RuntimeError, TypeError, ValueError):
+        normalized_sql = None
     return DataFusionPlanArtifacts(
         plan_hash=plan_hash,
         sql=sql,
+        normalized_sql=normalized_sql,
         explain=details.explain_rows,
         explain_analyze=details.analyze_rows,
         substrait_plan=details.substrait_plan,
@@ -2229,6 +2163,17 @@ def datafusion_write_options(
         parquet_kwargs["statistics_enabled"] = policy.parquet_statistics_enabled
     if policy.parquet_row_group_size is not None:
         parquet_kwargs["max_row_group_size"] = int(policy.parquet_row_group_size)
+    if policy.parquet_bloom_filter_on_write is not None:
+        parquet_kwargs["bloom_filter_on_write"] = policy.parquet_bloom_filter_on_write
+    if policy.parquet_dictionary_enabled is not None:
+        parquet_kwargs["dictionary_enabled"] = policy.parquet_dictionary_enabled
+    if policy.parquet_encoding is not None:
+        parquet_kwargs["encoding"] = policy.parquet_encoding
+    if policy.parquet_skip_arrow_metadata is not None:
+        parquet_kwargs["skip_arrow_metadata"] = policy.parquet_skip_arrow_metadata
+    column_options = _column_options(policy.parquet_column_options)
+    if column_options:
+        parquet_kwargs["column_specific_options"] = column_options
     parquet_options = (
         ParquetWriterOptions(**parquet_kwargs) if parquet_kwargs else ParquetWriterOptions()
     )
@@ -2267,10 +2212,21 @@ def _datafusion_sort_exprs(sort_by: Sequence[str]) -> list[SortExpr]:
 def _parquet_options_payload(options: ParquetWriterOptions | None) -> dict[str, object] | None:
     if options is None:
         return None
+    column_options = getattr(options, "column_specific_options", None)
+    column_payload = (
+        {name: _parquet_column_options_payload(option) for name, option in column_options.items()}
+        if isinstance(column_options, Mapping)
+        else None
+    )
     return {
         "compression": getattr(options, "compression", None),
         "statistics_enabled": getattr(options, "statistics_enabled", None),
         "max_row_group_size": getattr(options, "max_row_group_size", None),
+        "bloom_filter_on_write": getattr(options, "bloom_filter_on_write", None),
+        "dictionary_enabled": getattr(options, "dictionary_enabled", None),
+        "encoding": getattr(options, "encoding", None),
+        "skip_arrow_metadata": getattr(options, "skip_arrow_metadata", None),
+        "column_specific_options": column_payload,
     }
 
 
@@ -2278,6 +2234,59 @@ class _ParquetWriterOptionsKwargs(TypedDict, total=False):
     compression: str | None
     statistics_enabled: str | None
     max_row_group_size: int
+    bloom_filter_on_write: bool
+    dictionary_enabled: bool
+    encoding: str
+    skip_arrow_metadata: bool
+    column_specific_options: dict[str, ParquetColumnOptions]
+
+
+class _ParquetColumnOptionsKwargs(TypedDict, total=False):
+    compression: str | None
+    dictionary_enabled: bool
+    statistics_enabled: str | None
+    bloom_filter_enabled: bool
+    bloom_filter_fpp: float
+    bloom_filter_ndv: int
+    encoding: str
+
+
+def _column_options(
+    options: Mapping[str, ParquetColumnPolicy] | None,
+) -> dict[str, ParquetColumnOptions] | None:
+    if not options:
+        return None
+    resolved: dict[str, ParquetColumnOptions] = {}
+    for name, spec in options.items():
+        kwargs: _ParquetColumnOptionsKwargs = {}
+        if spec.compression is not None:
+            kwargs["compression"] = spec.compression
+        if spec.dictionary_enabled is not None:
+            kwargs["dictionary_enabled"] = spec.dictionary_enabled
+        if spec.statistics_enabled is not None:
+            kwargs["statistics_enabled"] = spec.statistics_enabled
+        if spec.bloom_filter_enabled is not None:
+            kwargs["bloom_filter_enabled"] = spec.bloom_filter_enabled
+        if spec.bloom_filter_fpp is not None:
+            kwargs["bloom_filter_fpp"] = spec.bloom_filter_fpp
+        if spec.bloom_filter_ndv is not None:
+            kwargs["bloom_filter_ndv"] = spec.bloom_filter_ndv
+        if spec.encoding is not None:
+            kwargs["encoding"] = spec.encoding
+        resolved[name] = ParquetColumnOptions(**kwargs)
+    return resolved
+
+
+def _parquet_column_options_payload(options: ParquetColumnOptions) -> dict[str, object]:
+    return {
+        "compression": getattr(options, "compression", None),
+        "dictionary_enabled": getattr(options, "dictionary_enabled", None),
+        "statistics_enabled": getattr(options, "statistics_enabled", None),
+        "bloom_filter_enabled": getattr(options, "bloom_filter_enabled", None),
+        "bloom_filter_fpp": getattr(options, "bloom_filter_fpp", None),
+        "bloom_filter_ndv": getattr(options, "bloom_filter_ndv", None),
+        "encoding": getattr(options, "encoding", None),
+    }
 
 
 def _record_batches(
@@ -2646,11 +2655,8 @@ def df_from_sqlglot_ast(
 ) -> DataFrame:
     """Create DataFrame from SQLGlot AST without string serialization.
 
-    When Substrait is not used, this provides an alternative path that
-    maintains AST fidelity by using raw_sql with Expression objects.
-
-    Note: This requires an Ibis DataFusion backend as intermediary.
-    For direct DataFusion execution, SQL string generation is still needed.
+    This executes the AST via the Ibis DataFusion backend and materializes
+    results into a DataFusion DataFrame for downstream use.
 
     Parameters
     ----------
@@ -2665,14 +2671,38 @@ def df_from_sqlglot_ast(
     -------
     DataFrame
         DataFusion DataFrame for the expression.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Ibis DataFusion backend is unavailable.
+    ValueError
+        Raised when the AST execution returns no column metadata.
     """
     resolved = options or DataFusionCompileOptions()
     _ensure_dialect(resolved.dialect)
-
-    # Generate SQL from AST with explicit dialect
-    sql = expr.sql(dialect=resolved.dialect, unsupported_level=ErrorLevel.RAISE)
-    sql_options = _sql_options_for_options(resolved)
-    return ctx.sql_with_options(sql, sql_options)
+    try:
+        import ibis
+    except ImportError as exc:
+        msg = "AST execution requires the Ibis DataFusion backend."
+        raise RuntimeError(msg) from exc
+    backend = ibis.datafusion.connect(ctx=ctx)
+    result = execute_sqlglot_ast(
+        cast("IbisCompilerBackend", backend),
+        expr,
+        dialect=resolved.dialect,
+    )
+    columns = result.columns
+    if not columns:
+        msg = "AST execution returned no column metadata."
+        raise ValueError(msg)
+    rows = result.rows or []
+    if rows:
+        row_dicts = [dict(zip(columns, row, strict=True)) for row in rows]
+        table = table_from_row_dicts(row_dicts)
+    else:
+        table = pa.table({name: [] for name in columns})
+    return datafusion_from_arrow(ctx, name=f"__ast_result_{_uuid_short()}", value=table)
 
 
 __all__ = [

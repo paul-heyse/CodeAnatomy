@@ -6,12 +6,13 @@ from collections.abc import Mapping, Sequence
 
 import pyarrow as pa
 
+from arrowdsl.schema.semantic_types import SPAN_STORAGE
 from datafusion_engine.schema_registry import (
     DIAG_DETAIL_STRUCT,
     DIAG_DETAILS_TYPE,
     DIAG_TAGS_TYPE,
 )
-from registry_common.field_catalog import FieldCatalog
+from normalize.field_catalog import FieldCatalog
 from schema_spec.specs import ArrowFieldSpec, dict_field
 
 
@@ -53,6 +54,7 @@ _register_many(
         "col_unit": _spec("col_unit", pa.string()),
         "end_exclusive": _spec("end_exclusive", pa.bool_()),
         "span_id": _spec("span_id", pa.string()),
+        "span": _spec("span", SPAN_STORAGE),
         "bstart": _spec("bstart", pa.int64()),
         "bend": _spec("bend", pa.int64()),
         "evidence_family": _spec("evidence_family", pa.string()),

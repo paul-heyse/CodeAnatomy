@@ -36,9 +36,10 @@ from extract.helpers import (
     SpanSpec,
     apply_query_and_project,
     attrs_map,
-    ibis_plan_from_row_batches,
-    ibis_plan_from_rows,
+    ibis_plan_from_reader,
     materialize_extract_plan,
+    record_batch_reader_from_row_batches,
+    record_batch_reader_from_rows,
     span_dict,
 )
 from extract.parallel import parallel_map
@@ -50,6 +51,7 @@ from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
+    from extract.session import ExtractSession
 
 type Row = dict[str, object]
 type SourceBuffer = bytes | bytearray | memoryview
@@ -927,7 +929,9 @@ def extract_ts(
     normalized_options = _normalize_ts_options(normalized_options)
     normalized_options = _normalize_ts_options(normalized_options)
     exec_context = context or ExtractExecutionContext()
-    exec_ctx = exec_context.ensure_ctx()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    exec_ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ts_plans(
         repo_files,
@@ -966,6 +970,8 @@ def extract_ts_plans(
     normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
     normalized_options = _normalize_ts_options(normalized_options)
     exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     normalize = ExtractNormalizeOptions(options=normalized_options)
     rows: list[Row] | None = None
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
@@ -986,13 +992,17 @@ def extract_ts_plans(
             batch_size=batch_size,
         )
     evidence_plan = exec_context.evidence_plan
+    plan_context = _TreeSitterPlanContext(
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        session=session,
+    )
     return {
         "tree_sitter_files": _build_ts_plan(
             "tree_sitter_files_v1",
             rows,
             row_batches=row_batches,
-            normalize=normalize,
-            evidence_plan=evidence_plan,
+            plan_context=plan_context,
         ),
     }
 
@@ -1405,20 +1415,27 @@ def _build_ts_plan(
     rows: list[Row] | None,
     *,
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None,
-    normalize: ExtractNormalizeOptions,
-    evidence_plan: EvidencePlan | None,
+    plan_context: _TreeSitterPlanContext,
 ) -> IbisPlan:
     if row_batches is not None:
-        raw = ibis_plan_from_row_batches(name, row_batches)
+        reader = record_batch_reader_from_row_batches(name, row_batches)
     else:
-        raw = ibis_plan_from_rows(name, rows or [])
+        reader = record_batch_reader_from_rows(name, rows or [])
+    raw = ibis_plan_from_reader(name, reader, session=plan_context.session)
     return apply_query_and_project(
         name,
         raw.expr,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
+        normalize=plan_context.normalize,
+        evidence_plan=plan_context.evidence_plan,
+        repo_id=plan_context.normalize.repo_id,
     )
+
+
+@dataclass(frozen=True)
+class _TreeSitterPlanContext:
+    normalize: ExtractNormalizeOptions
+    evidence_plan: EvidencePlan | None
+    session: ExtractSession
 
 
 class _TreeSitterTablesKwargs(TypedDict, total=False):
@@ -1426,6 +1443,7 @@ class _TreeSitterTablesKwargs(TypedDict, total=False):
     options: TreeSitterExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     context: ExtractExecutionContext | None
@@ -1437,6 +1455,7 @@ class _TreeSitterTablesKwargsTable(TypedDict, total=False):
     options: TreeSitterExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     context: ExtractExecutionContext | None
@@ -1448,6 +1467,7 @@ class _TreeSitterTablesKwargsReader(TypedDict, total=False):
     options: TreeSitterExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     context: ExtractExecutionContext | None
@@ -1495,9 +1515,12 @@ def extract_ts_tables(
             file_contexts=kwargs.get("file_contexts"),
             evidence_plan=kwargs.get("evidence_plan"),
             ctx=kwargs.get("ctx"),
+            session=kwargs.get("session"),
             profile=kwargs.get("profile", "default"),
         )
-    exec_ctx = context.ensure_ctx()
+    session = context.ensure_session()
+    context = replace(context, session=session, ctx=session.exec_ctx)
+    exec_ctx = session.exec_ctx
     prefer_reader = kwargs.get("prefer_reader", False)
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ts_plans(

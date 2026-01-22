@@ -13,10 +13,10 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.interop import ScalarLike, TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, ScalarLike, TableLike
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import empty_table, table_from_rows
-from arrowdsl.schema.schema import align_table, unify_schemas_core
+from arrowdsl.schema.schema import align_table
 from datafusion_engine.extract_extractors import (
     ExtractorSpec,
     extractor_specs,
@@ -24,7 +24,7 @@ from datafusion_engine.extract_extractors import (
     select_extractors_for_outputs,
 )
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
-from engine.materialize_extract_outputs import write_extract_outputs
+from engine.materialize_pipeline import write_extract_outputs
 from extract.evidence_plan import EvidencePlan
 from extract.schema_ops import (
     ExtractNormalizeOptions,
@@ -32,12 +32,12 @@ from extract.schema_ops import (
     normalize_extract_reader,
     schema_policy_for_dataset,
 )
+from extract.session import ExtractSession, build_extract_session
 from extract.spec_helpers import plan_requires_row, rule_execution_options
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
-from ibis_engine.schema_utils import validate_expr_schema
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from relspec.rules.definitions import RuleStage, stage_enabled
 
@@ -107,6 +107,7 @@ class ExtractExecutionContext:
     file_contexts: Iterable[FileContext] | None = None
     evidence_plan: EvidencePlan | None = None
     ctx: ExecutionContext | None = None
+    session: ExtractSession | None = None
     profile: str = "default"
 
     def ensure_ctx(self) -> ExecutionContext:
@@ -117,9 +118,24 @@ class ExtractExecutionContext:
         ExecutionContext
             Provided context or a profile-derived context when missing.
         """
+        if self.session is not None:
+            return self.session.exec_ctx
         if self.ctx is not None:
             return self.ctx
         return execution_context_factory(self.profile)
+
+    def ensure_session(self) -> ExtractSession:
+        """Return the effective extract session.
+
+        Returns
+        -------
+        ExtractSession
+            Provided session or a profile-derived session when missing.
+        """
+        if self.session is not None:
+            return self.session
+        exec_ctx = self.ctx or execution_context_factory(self.profile)
+        return build_extract_session(exec_ctx)
 
 
 def iter_file_contexts(repo_files: TableLike) -> Iterator[FileContext]:
@@ -292,6 +308,7 @@ def iter_contexts(
 def empty_ibis_plan(
     name: str,
     *,
+    session: ExtractSession | None = None,
     ctx: ExecutionContext | None = None,
     backend: BaseBackend | None = None,
     profile: str = "default",
@@ -303,7 +320,7 @@ def empty_ibis_plan(
     IbisPlan
         Empty Ibis plan backed by an empty table.
     """
-    resolved = _resolve_backend(ctx=ctx, backend=backend, profile=profile)
+    resolved = _resolve_backend(session=session, ctx=ctx, backend=backend, profile=profile)
     table = empty_table(dataset_schema(name))
     return register_ibis_table(
         table,
@@ -315,116 +332,112 @@ def empty_ibis_plan(
     )
 
 
-def ibis_plan_from_rows(
-    name: str,
-    rows: Iterable[Mapping[str, object]],
-    *,
-    ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
-    profile: str = "default",
-) -> IbisPlan:
-    """Return an Ibis plan for row data aligned to the DataFusion schema.
-
-    Returns
-    -------
-    IbisPlan
-    Ibis plan backed by a backend-registered Arrow table.
-
-    """
-    resolved = _resolve_backend(ctx=ctx, backend=backend, profile=profile)
-    row_sequence = rows if isinstance(rows, Sequence) else list(rows)
-    if not row_sequence:
-        return empty_ibis_plan(name, ctx=ctx, backend=resolved, profile=profile)
-    schema = dataset_schema(name)
-    aligned = table_from_rows(schema, row_sequence)
-    extra_table = pa.Table.from_pylist(row_sequence)
+def _table_from_row_batch(schema: pa.Schema, batch: Sequence[Mapping[str, object]]) -> pa.Table:
+    aligned = table_from_rows(schema, batch)
+    extra_table = pa.Table.from_pylist(batch)
     for col in extra_table.column_names:
         if col in aligned.column_names:
             continue
         aligned = aligned.append_column(col, extra_table[col])
-    plan = register_ibis_table(
-        aligned,
-        options=SourceToIbisOptions(
-            backend=resolved,
-            name=None,
-            ordering=Ordering.unordered(),
-        ),
-    )
-    validate_expr_schema(plan.expr, expected=pa.schema(schema), allow_extra_columns=True)
-    return plan
+    return aligned
 
 
-def ibis_plan_from_row_batches(
+def record_batch_reader_from_row_batches(
     name: str,
     row_batches: Iterable[Sequence[Mapping[str, object]]],
-    *,
-    ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
-    profile: str = "default",
-) -> IbisPlan:
-    """Return an Ibis plan for batched row data aligned to the DataFusion schema.
+) -> pa.RecordBatchReader:
+    """Return a RecordBatchReader aligned to the dataset schema.
 
     Returns
     -------
-    IbisPlan
-    Ibis plan backed by a backend-registered Arrow table.
+    pyarrow.RecordBatchReader
+        Reader yielding schema-aligned record batches.
     """
-    resolved = _resolve_backend(ctx=ctx, backend=backend, profile=profile)
     schema = dataset_schema(name)
-    tables: list[pa.Table] = []
-    for batch in row_batches:
-        if not batch:
-            continue
-        aligned = table_from_rows(schema, batch)
-        extra_table = pa.Table.from_pylist(batch)
-        for col in extra_table.column_names:
-            if col in aligned.column_names:
+    iterator = iter(row_batches)
+    first_batch: Sequence[Mapping[str, object]] | None = None
+    for batch in iterator:
+        if batch:
+            first_batch = batch
+            break
+    if first_batch is None:
+        return pa.RecordBatchReader.from_batches(schema, [])
+    first_table = _table_from_row_batch(schema, first_batch)
+    reader_schema = first_table.schema
+
+    def _iter_batches() -> Iterator[pa.RecordBatch]:
+        yield from first_table.to_batches()
+        for batch in iterator:
+            if not batch:
                 continue
-            aligned = aligned.append_column(col, extra_table[col])
-        tables.append(aligned)
-    if not tables:
-        return empty_ibis_plan(name, ctx=ctx, backend=resolved, profile=profile)
-    if len(tables) == 1:
-        combined = tables[0]
-    else:
-        merged_schema = unify_schemas_core([table.schema for table in tables])
-        aligned_tables = [
-            cast(
+            table = _table_from_row_batch(schema, batch)
+            aligned = cast(
                 "pa.Table",
                 align_table(
                     table,
-                    schema=merged_schema,
+                    schema=reader_schema,
                     keep_extra_columns=True,
                     safe_cast=True,
                 ),
             )
-            for table in tables
-        ]
-        batches = [batch for table in aligned_tables for batch in table.to_batches()]
-        combined = pa.Table.from_batches(
-            batches,
-            schema=cast("pa.Schema", merged_schema),
-        )
-    plan = register_ibis_table(
-        combined,
-        options=SourceToIbisOptions(
-            backend=resolved,
-            name=None,
-            ordering=Ordering.unordered(),
-        ),
-    )
-    validate_expr_schema(plan.expr, expected=pa.schema(schema), allow_extra_columns=True)
-    return plan
+            yield from aligned.to_batches()
+
+    return pa.RecordBatchReader.from_batches(reader_schema, _iter_batches())
+
+
+def record_batch_reader_from_rows(
+    name: str,
+    rows: Iterable[Mapping[str, object]],
+) -> pa.RecordBatchReader:
+    """Return a RecordBatchReader aligned to the dataset schema.
+
+    Returns
+    -------
+    pyarrow.RecordBatchReader
+        Reader yielding schema-aligned record batches.
+    """
+    row_sequence = rows if isinstance(rows, Sequence) else list(rows)
+    return record_batch_reader_from_row_batches(name, [row_sequence])
+
+
+def ibis_plan_from_reader(
+    name: str,
+    reader: RecordBatchReaderLike,
+    *,
+    session: ExtractSession,
+) -> IbisPlan:
+    """Return an Ibis plan for a RecordBatchReader.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan backed by the registered reader.
+
+    Raises
+    ------
+    TypeError
+        Raised when the DataFusion SessionContext lacks ``from_arrow`` support.
+    """
+    from_arrow = getattr(session.df_ctx, "from_arrow", None)
+    if not callable(from_arrow):
+        msg = "DataFusion SessionContext missing from_arrow."
+        raise TypeError(msg)
+    from_arrow(reader, name=name)
+    table = session.ibis_backend.table(name)
+    return IbisPlan(expr=table, ordering=Ordering.unordered())
 
 
 def _resolve_backend(
     *,
+    session: ExtractSession | None,
     ctx: ExecutionContext | None,
     backend: BaseBackend | None,
     profile: str,
 ) -> BaseBackend:
     if backend is not None:
         return backend
+    if session is not None:
+        return session.ibis_backend
     exec_ctx = ctx or execution_context_factory(profile)
     return build_backend(IbisBackendConfig(datafusion_profile=exec_ctx.runtime.datafusion))
 
@@ -489,7 +502,7 @@ def extract_dataset_location_or_raise(
     if runtime_profile is None:
         msg = "DataFusion runtime is required to resolve extract dataset locations."
         raise ValueError(msg)
-    location = runtime_profile.extract_dataset_location(name)
+    location = runtime_profile.dataset_location(name)
     if location is None:
         msg = f"No extract dataset location configured for {name!r}."
         raise ValueError(msg)
@@ -514,7 +527,7 @@ def materialize_extract_plan(
     normalize = resolved.normalize
     runtime_profile = ctx.runtime.datafusion
     streaming_supported = True
-    if runtime_profile is None or runtime_profile.extract_dataset_location(name) is None:
+    if runtime_profile is None or runtime_profile.dataset_location(name) is None:
         streaming_supported = False
     else:
         policy = schema_policy_for_dataset(
@@ -735,12 +748,13 @@ __all__ = [
     "empty_ibis_plan",
     "extract_dataset_location_or_raise",
     "file_identity_row",
-    "ibis_plan_from_row_batches",
-    "ibis_plan_from_rows",
+    "ibis_plan_from_reader",
     "iter_contexts",
     "iter_file_contexts",
     "materialize_extract_plan",
     "pos_dict",
+    "record_batch_reader_from_row_batches",
+    "record_batch_reader_from_rows",
     "required_extractors",
     "requires_evidence",
     "requires_evidence_template",

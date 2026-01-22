@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from incremental.changes import file_changes_from_cdf
     from incremental.delta_updates import (
+        OverwriteDatasetSpec,
         PartitionedDatasetSpec,
         upsert_cpg_edges,
         upsert_cpg_nodes,
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
         read_invalidation_snapshot,
         reset_state_store,
         rule_plan_diff_table,
+        update_invalidation_snapshot,
         write_invalidation_snapshot,
     )
     from incremental.metadata import (
@@ -81,6 +83,7 @@ __all__ = [
     "IncrementalRuntime",
     "InvalidationOutcome",
     "InvalidationResult",
+    "OverwriteDatasetSpec",
     "PartitionedDatasetSpec",
     "StateStore",
     "build_exported_defs_index",
@@ -117,6 +120,7 @@ __all__ = [
     "scip_index_fingerprint",
     "scoped_relspec_resolver",
     "split_props_by_file_id",
+    "update_invalidation_snapshot",
     "upsert_cpg_edges",
     "upsert_cpg_nodes",
     "upsert_cpg_props",
@@ -144,6 +148,7 @@ _LAZY_IMPORTS: dict[str, str] = {
     "IncrementalImpact": "incremental.types",
     "IncrementalRuntime": "incremental.runtime",
     "InvalidationResult": "incremental.invalidations",
+    "OverwriteDatasetSpec": "incremental.delta_updates",
     "StateStore": "incremental.state_store",
     "PartitionedDatasetSpec": "incremental.delta_updates",
     "build_exported_defs_index": "incremental.exports",
@@ -192,6 +197,7 @@ _LAZY_IMPORTS: dict[str, str] = {
     "write_incremental_diff": "incremental.diff",
     "write_incremental_artifacts": "incremental.metadata",
     "write_incremental_metadata": "incremental.metadata",
+    "update_invalidation_snapshot": "incremental.invalidations",
     "write_invalidation_snapshot": "incremental.invalidations",
     "write_repo_snapshot": "incremental.snapshot",
     "write_scip_diff": "incremental.scip_snapshot",

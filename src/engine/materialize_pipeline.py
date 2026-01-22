@@ -1,16 +1,18 @@
-"""Materialize extract outputs to configured DataFusion dataset locations."""
+"""Unified materialization and output writing helpers."""
 
 from __future__ import annotations
 
 import contextlib
 import time
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
+from ibis.expr.types import Value as IbisValue
 
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from datafusion_engine.bridge import (
@@ -19,21 +21,233 @@ from datafusion_engine.bridge import (
     copy_to_path,
     copy_to_statement,
     datafusion_from_arrow,
+    datafusion_to_reader,
     datafusion_write_parquet,
 )
+from datafusion_engine.dataset_locations import resolve_dataset_location
 from datafusion_engine.runtime import (
+    DataFusionRuntimeProfile,
     diagnostics_arrow_ingest_hook,
     diagnostics_dml_hook,
     statement_sql_options_for_profile,
 )
+from engine.plan_policy import ExecutionSurfacePolicy
+from engine.plan_product import PlanProduct
+from ibis_engine.backend import build_backend
+from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
+from ibis_engine.params_bridge import param_binding_mode, param_binding_signature
+from ibis_engine.plan import IbisPlan
+from ibis_engine.runner import IbisCachePolicy
 from schema_spec.policies import DataFusionWritePolicy
-from storage.deltalake import DeltaWriteOptions, DeltaWriteResult, write_datafusion_delta
+from storage.deltalake import DeltaWriteResult
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from ibis_engine.registry import DatasetLocation
+
+
+def _default_plan_id(plan: IbisPlan) -> str:
+    label = getattr(plan, "label", "")
+    if isinstance(label, str) and label:
+        return label
+    return "plan"
+
+
+def _resolve_prefer_reader(
+    *,
+    ctx: ExecutionContext,
+    policy: ExecutionSurfacePolicy,
+) -> bool:
+    if ctx.determinism == DeterminismTier.CANONICAL:
+        return False
+    return policy.prefer_streaming
+
+
+def _cache_event_reporter(
+    ctx: ExecutionContext,
+) -> Callable[[Mapping[str, object]], None] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return None
+    diagnostics = profile.diagnostics_sink
+    if diagnostics is None:
+        return None
+    record_events = diagnostics.record_events
+
+    def _record(event: Mapping[str, object]) -> None:
+        record_events("ibis_cache_events_v1", [event])
+
+    return _record
+
+
+def _resolve_cache_policy(
+    *,
+    ctx: ExecutionContext,
+    policy: ExecutionSurfacePolicy,
+    prefer_reader: bool,
+    params: Mapping[IbisValue, object] | Mapping[str, object] | None,
+) -> IbisCachePolicy:
+    writer_strategy = policy.writer_strategy
+    param_mode = param_binding_mode(params)
+    param_signature = param_binding_signature(params)
+    if param_mode != "none":
+        return IbisCachePolicy(
+            enabled=False,
+            reason="params",
+            writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
+        )
+    if writer_strategy != "arrow":
+        return IbisCachePolicy(
+            enabled=False,
+            reason=f"writer_strategy_{writer_strategy}",
+            writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
+        )
+    if prefer_reader:
+        return IbisCachePolicy(
+            enabled=False,
+            reason="prefer_streaming",
+            writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
+        )
+    if ctx.determinism == DeterminismTier.BEST_EFFORT:
+        return IbisCachePolicy(
+            enabled=False,
+            reason="best_effort",
+            writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
+        )
+    if policy.determinism_tier == DeterminismTier.BEST_EFFORT:
+        return IbisCachePolicy(
+            enabled=False,
+            reason="policy_best_effort",
+            writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
+        )
+    return IbisCachePolicy(
+        enabled=True,
+        reason="materialize",
+        writer_strategy=writer_strategy,
+        param_mode=param_mode,
+        param_signature=param_signature,
+    )
+
+
+def resolve_cache_policy(
+    *,
+    ctx: ExecutionContext,
+    policy: ExecutionSurfacePolicy,
+    prefer_reader: bool,
+    params: Mapping[IbisValue, object] | Mapping[str, object] | None,
+) -> IbisCachePolicy:
+    """Return the resolved cache policy for plan materialization.
+
+    Returns
+    -------
+    IbisCachePolicy
+        Cache policy for the materialization.
+    """
+    return _resolve_cache_policy(
+        ctx=ctx,
+        policy=policy,
+        prefer_reader=prefer_reader,
+        params=params,
+    )
+
+
+def resolve_prefer_reader(*, ctx: ExecutionContext, policy: ExecutionSurfacePolicy) -> bool:
+    """Return the prefer_reader flag for plan execution.
+
+    Returns
+    -------
+    bool
+        ``True`` when plan execution should prefer streaming readers.
+    """
+    return _resolve_prefer_reader(ctx=ctx, policy=policy)
+
+
+def build_plan_product(
+    plan: IbisPlan,
+    *,
+    execution: IbisExecutionContext,
+    policy: ExecutionSurfacePolicy,
+    plan_id: str | None = None,
+) -> PlanProduct:
+    """Execute a plan and return a PlanProduct wrapper.
+
+    Returns
+    -------
+    PlanProduct
+        Plan output with schema and materialization metadata.
+
+    Raises
+    ------
+    ValueError
+        Raised when a reader materialization is missing the expected stream.
+    """
+    ctx = execution.ctx
+    prefer_reader = _resolve_prefer_reader(ctx=ctx, policy=policy)
+    cache_policy = _resolve_cache_policy(
+        ctx=ctx,
+        policy=policy,
+        prefer_reader=prefer_reader,
+        params=execution.params,
+    )
+    reporter = _cache_event_reporter(ctx)
+    if reporter is not None:
+        cache_policy = replace(cache_policy, reporter=reporter)
+    execution = replace(execution, cache_policy=cache_policy)
+    stream: RecordBatchReaderLike | None = None
+    table: TableLike | None = None
+    if prefer_reader:
+        stream = stream_ibis_plan(plan, execution=execution)
+        if not isinstance(stream, pa.RecordBatchReader):
+            msg = "Expected RecordBatchReader for reader materialization."
+            raise ValueError(msg)
+        schema = stream.schema
+    else:
+        table = materialize_ibis_plan(plan, execution=execution)
+        schema = table.schema
+    return PlanProduct(
+        plan_id=plan_id or _default_plan_id(plan),
+        schema=schema,
+        determinism_tier=ctx.determinism,
+        writer_strategy=policy.writer_strategy,
+        stream=stream,
+        table=table,
+    )
+
+
+def df_to_reader(df: DataFrame) -> pa.RecordBatchReader:
+    """Convert a DataFusion DataFrame to a streaming RecordBatchReader.
+
+    Prefers the __arrow_c_stream__ protocol for zero-copy streaming.
+
+    Parameters
+    ----------
+    df : DataFrame
+        DataFusion DataFrame to convert.
+
+    Returns
+    -------
+    pa.RecordBatchReader
+        Streaming reader for the DataFrame results.
+    """
+    return datafusion_to_reader(df)
 
 
 @dataclass(frozen=True)
@@ -171,6 +385,23 @@ def _copy_options(
     )
 
 
+def _ibis_execution_from_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
+    runtime_profile = ctx.runtime
+    datafusion_profile = runtime_profile.datafusion
+    if datafusion_profile is None:
+        datafusion_profile = DataFusionRuntimeProfile()
+    backend = build_backend(
+        IbisBackendConfig(
+            datafusion_profile=datafusion_profile,
+            fuse_selects=runtime_profile.ibis_fuse_selects,
+            default_limit=runtime_profile.ibis_default_limit,
+            default_dialect=runtime_profile.ibis_default_dialect,
+            interactive=runtime_profile.ibis_interactive,
+        )
+    )
+    return IbisExecutionContext(ctx=ctx, ibis_backend=backend)
+
+
 def _write_policy_for_dataset(
     runtime_profile: DataFusionRuntimeProfile,
     *,
@@ -214,6 +445,11 @@ def _write_policy_for_dataset(
         parquet_compression=policy.parquet_compression,
         parquet_statistics_enabled=policy.parquet_statistics_enabled,
         parquet_row_group_size=policy.parquet_row_group_size,
+        parquet_bloom_filter_on_write=policy.parquet_bloom_filter_on_write,
+        parquet_dictionary_enabled=policy.parquet_dictionary_enabled,
+        parquet_encoding=policy.parquet_encoding,
+        parquet_skip_arrow_metadata=policy.parquet_skip_arrow_metadata,
+        parquet_column_options=policy.parquet_column_options,
     )
 
 
@@ -235,12 +471,25 @@ def _coerce_reader(
         )
     if isinstance(data, RecordBatchReader):
         return cast("RecordBatchReaderLike", data), None
-    batches = list(cast("Iterable[pa.RecordBatch]", data))
-    if not batches:
+    if isinstance(data, Sequence):
+        batches = list(cast("Sequence[pa.RecordBatch]", data))
+        if not batches:
+            return None, 0
+        rows = sum(batch.num_rows for batch in batches)
+        reader = pa.RecordBatchReader.from_batches(batches[0].schema, batches)
+        return reader, rows
+    iterator = iter(cast("Iterable[pa.RecordBatch]", data))
+    try:
+        first = next(iterator)
+    except StopIteration:
         return None, 0
-    rows = sum(batch.num_rows for batch in batches)
-    reader = pa.RecordBatchReader.from_batches(batches[0].schema, batches)
-    return reader, rows
+
+    def _iter_batches() -> Iterable[pa.RecordBatch]:
+        yield first
+        yield from iterator
+
+    reader = pa.RecordBatchReader.from_batches(first.schema, _iter_batches())
+    return reader, None
 
 
 @dataclass(frozen=True)
@@ -252,12 +501,22 @@ class _ExternalWriteContext:
     rows: int | None
 
 
+@dataclass(frozen=True)
+class _DeltaWriteContext:
+    dataset: str
+    runtime_profile: DataFusionRuntimeProfile
+    location: DatasetLocation
+    rows: int | None
+    execution: IbisExecutionContext
+
+
 def _write_external(
     reader: RecordBatchReaderLike,
     *,
     context: _ExternalWriteContext,
 ) -> None:
-    normalized_format = context.location.format.lower()
+    location = context.location
+    normalized_format = location.format.lower()
     if normalized_format not in {"parquet", "csv", "json"}:
         msg = (
             "DataFusion writes only support parquet/csv/json, "
@@ -266,12 +525,12 @@ def _write_external(
         raise ValueError(msg)
     df_ctx = context.runtime_profile.session_context()
     temp_name = f"__extract_write_{uuid.uuid4().hex}"
+    view_name: str | None = None
     ingest_hook = (
         diagnostics_arrow_ingest_hook(context.runtime_profile.diagnostics_sink)
         if context.runtime_profile.diagnostics_sink is not None
         else None
     )
-    schema = cast("pa.Schema", reader.schema)
     df = datafusion_from_arrow(
         df_ctx,
         name=temp_name,
@@ -282,15 +541,15 @@ def _write_external(
         if normalized_format == "parquet":
             parquet_payload = datafusion_write_parquet(
                 df,
-                path=str(context.location.path),
+                path=str(location.path),
                 policy=context.write_policy,
             )
             _record_extract_write(
                 context.runtime_profile,
                 record=_ExtractWriteRecord(
                     dataset=context.dataset,
-                    mode="write",
-                    path=str(context.location.path),
+                    mode="copy",
+                    path=str(location.path),
                     file_format=normalized_format,
                     rows=context.rows,
                     write_policy=context.write_policy,
@@ -306,23 +565,29 @@ def _write_external(
             dataset=context.dataset,
             policy=context.write_policy,
             file_format=normalized_format,
-            schema=schema,
+            schema=df.schema(),
         )
+        view_name = f"__extract_view_{uuid.uuid4().hex}"
+        df_ctx.register_table(view_name, df)
         select_sql = _copy_select_sql(
-            temp_name,
-            sort_by=context.write_policy.sort_by if context.write_policy is not None else (),
-            schema=schema,
+            view_name,
+            sort_by=context.write_policy.sort_by if context.write_policy else (),
+            schema=df.schema(),
         )
-        copy_sql: str | None = None
+        copy_payload = _copy_options_payload(
+            file_format=normalized_format,
+            partition_by=copy_options.partition_by,
+            statement_overrides=copy_options.statement_overrides,
+        )
         copy_sql = copy_to_statement(
             select_sql,
-            path=str(context.location.path),
+            path=str(location.path),
             options=copy_options,
         )
         copy_to_path(
             df_ctx,
             sql=select_sql,
-            path=str(context.location.path),
+            path=str(location.path),
             options=copy_options,
         ).collect()
         _record_extract_write(
@@ -330,65 +595,47 @@ def _write_external(
             record=_ExtractWriteRecord(
                 dataset=context.dataset,
                 mode="copy",
-                path=str(context.location.path),
+                path=str(location.path),
                 file_format=normalized_format,
                 rows=context.rows,
                 write_policy=context.write_policy,
                 parquet_payload=None,
                 copy_sql=copy_sql,
-                copy_options=_copy_options_payload(
-                    file_format=normalized_format,
-                    partition_by=copy_options.partition_by,
-                    statement_overrides=copy_options.statement_overrides,
-                ),
+                copy_options=copy_payload,
                 delta_result=None,
             ),
         )
     finally:
         _deregister_table(df_ctx, name=temp_name)
+        if view_name is not None:
+            _deregister_table(df_ctx, name=view_name)
 
 
 def _write_delta(
     reader: RecordBatchReaderLike,
     *,
-    dataset: str,
-    runtime_profile: DataFusionRuntimeProfile,
-    location: DatasetLocation,
-    rows: int | None,
+    context: _DeltaWriteContext,
 ) -> None:
-    df_ctx = runtime_profile.session_context()
-    temp_name = f"__extract_delta_{uuid.uuid4().hex}"
-    ingest_hook = (
-        diagnostics_arrow_ingest_hook(runtime_profile.diagnostics_sink)
-        if runtime_profile.diagnostics_sink is not None
-        else None
-    )
-    df = datafusion_from_arrow(
-        df_ctx,
-        name=temp_name,
-        value=reader,
-        ingest_hook=ingest_hook,
-    )
-    try:
-        datafusion_result = write_datafusion_delta(
-            df,
-            base_dir=str(location.path),
-            options=DeltaWriteOptions(mode="append"),
-            storage_options=(
-                dict(location.storage_options) if location.storage_options is not None else None
+    datafusion_result = write_ibis_dataset_delta(
+        reader,
+        str(context.location.path),
+        options=IbisDatasetWriteOptions(
+            execution=context.execution,
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="append",
+                storage_options=context.location.storage_options,
             ),
-            runtime_profile=runtime_profile,
-        )
-    finally:
-        _deregister_table(df_ctx, name=temp_name)
+        ),
+    )
     _record_extract_write(
-        runtime_profile,
+        context.runtime_profile,
         record=_ExtractWriteRecord(
-            dataset=dataset,
+            dataset=context.dataset,
             mode="insert",
-            path=str(location.path),
+            path=str(context.location.path),
             file_format="delta",
-            rows=rows,
+            rows=context.rows,
             write_policy=None,
             parquet_payload=None,
             copy_sql=None,
@@ -404,25 +651,40 @@ def write_extract_outputs(
     *,
     ctx: ExecutionContext,
 ) -> None:
-    """Write extract outputs using DataFusion-native paths when configured."""
+    """Write extract outputs using DataFusion-native paths when configured.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is missing, a dataset location is not
+        registered, or the output yields no rows.
+    """
     runtime_profile = ctx.runtime.datafusion
     if runtime_profile is None:
-        return
-    location = runtime_profile.extract_dataset_location(name)
+        msg = "DataFusion runtime profile is required for extract outputs."
+        raise ValueError(msg)
+    runtime_profile.record_schema_snapshots()
+    location = resolve_dataset_location(name, runtime_profile=runtime_profile)
     if location is None:
-        return
+        msg = f"No dataset location registered for extract output {name!r}."
+        raise ValueError(msg)
     reader, rows = _coerce_reader(data)
     if reader is None:
-        return
+        msg = f"Extract output {name!r} yielded no rows."
+        raise ValueError(msg)
     schema = cast("pa.Schema", reader.schema)
-    write_policy = _write_policy_for_dataset(runtime_profile, dataset=name, schema=schema)
-    if location.format == "delta":
+    policy = _write_policy_for_dataset(runtime_profile, dataset=name, schema=schema)
+    if location.format.lower() == "delta":
+        execution = _ibis_execution_from_ctx(ctx)
         _write_delta(
             reader,
-            dataset=name,
-            runtime_profile=runtime_profile,
-            location=location,
-            rows=rows,
+            context=_DeltaWriteContext(
+                dataset=name,
+                runtime_profile=runtime_profile,
+                location=location,
+                rows=rows,
+                execution=execution,
+            ),
         )
         return
     _write_external(
@@ -431,10 +693,16 @@ def write_extract_outputs(
             dataset=name,
             runtime_profile=runtime_profile,
             location=location,
-            write_policy=write_policy,
+            write_policy=policy,
             rows=rows,
         ),
     )
 
 
-__all__ = ["write_extract_outputs"]
+__all__ = [
+    "build_plan_product",
+    "df_to_reader",
+    "resolve_cache_policy",
+    "resolve_prefer_reader",
+    "write_extract_outputs",
+]

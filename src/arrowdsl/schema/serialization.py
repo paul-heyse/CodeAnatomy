@@ -12,9 +12,9 @@ import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.core.interop import DataTypeLike, SchemaLike
+from arrowdsl.io.ipc import payload_hash
 from arrowdsl.schema.semantic_types import register_semantic_extension_types
 from core_types import JsonDict
-from registry_common.arrow_payloads import payload_hash
 
 DATASET_FINGERPRINT_VERSION = 1
 

@@ -12,26 +12,24 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.runtime import read_delta_as_reader
 from ibis_engine.builtin_udfs import sha256, stable_hash64
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
 from incremental.ibis_exec import ibis_expr_to_table
 from incremental.ibis_utils import ibis_table_from_arrow
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
-from incremental.streaming_writes import StreamingWriteOptions, stream_table_to_delta
-from storage.deltalake import (
-    DeltaWriteOptions,
-    DeltaWriteResult,
-    delta_table_version,
-    enable_delta_features,
-    write_table_delta,
-)
+from storage.deltalake import delta_table_version, enable_delta_features
 
 if TYPE_CHECKING:
     from ibis.expr.types import StringValue, Value
 
+    from storage.deltalake import DeltaWriteResult
+
 _HASH_NULL_SENTINEL = "None"
 _HASH_SEPARATOR = "\x1f"
-_STREAMING_ROW_THRESHOLD = 250_000
-
 _DOC_HASH_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
     ("document_id", pa.string()),
     ("path", pa.string()),
@@ -340,7 +338,12 @@ def read_scip_snapshot(store: StateStore) -> pa.Table | None:
     return reader.read_all()
 
 
-def write_scip_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResult:
+def write_scip_snapshot(
+    store: StateStore,
+    snapshot: pa.Table,
+    *,
+    runtime: IncrementalRuntime,
+) -> DeltaWriteResult:
     """Persist the SCIP snapshot to the state store as Delta.
 
     Returns
@@ -351,32 +354,33 @@ def write_scip_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResu
     store.ensure_dirs()
     target = store.scip_snapshot_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    options = DeltaWriteOptions(
-        mode="overwrite",
-        schema_mode="overwrite",
-        commit_metadata={
-            "snapshot_kind": "scip_snapshot",
-            "schema_fingerprint": schema_fingerprint(snapshot.schema),
-        },
+    commit_metadata = {
+        "snapshot_kind": "scip_snapshot",
+        "schema_fingerprint": schema_fingerprint(snapshot.schema),
+    }
+    result = write_ibis_dataset_delta(
+        snapshot,
+        str(target),
+        options=IbisDatasetWriteOptions(
+            execution=runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata=commit_metadata,
+            ),
+        ),
     )
-    if snapshot.num_rows >= _STREAMING_ROW_THRESHOLD:
-        stream_table_to_delta(
-            snapshot,
-            str(target),
-            options=StreamingWriteOptions(),
-            write_options=options,
-        )
-        result = DeltaWriteResult(
-            path=str(target),
-            version=delta_table_version(str(target)),
-        )
-    else:
-        result = write_table_delta(snapshot, str(target), options=options)
     enable_delta_features(result.path)
     return result
 
 
-def write_scip_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:
+def write_scip_diff(
+    store: StateStore,
+    diff: pa.Table,
+    *,
+    runtime: IncrementalRuntime,
+) -> DeltaWriteResult:
     """Persist the SCIP diff to the state store as Delta.
 
     Returns
@@ -387,27 +391,23 @@ def write_scip_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:
     store.ensure_dirs()
     target = store.scip_diff_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    options = DeltaWriteOptions(
-        mode="overwrite",
-        schema_mode="overwrite",
-        commit_metadata={
-            "snapshot_kind": "scip_diff",
-            "schema_fingerprint": schema_fingerprint(diff.schema),
-        },
+    commit_metadata = {
+        "snapshot_kind": "scip_diff",
+        "schema_fingerprint": schema_fingerprint(diff.schema),
+    }
+    result = write_ibis_dataset_delta(
+        diff,
+        str(target),
+        options=IbisDatasetWriteOptions(
+            execution=runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata=commit_metadata,
+            ),
+        ),
     )
-    if diff.num_rows >= _STREAMING_ROW_THRESHOLD:
-        stream_table_to_delta(
-            diff,
-            str(target),
-            options=StreamingWriteOptions(),
-            write_options=options,
-        )
-        result = DeltaWriteResult(
-            path=str(target),
-            version=delta_table_version(str(target)),
-        )
-    else:
-        result = write_table_delta(diff, str(target), options=options)
     enable_delta_features(result.path)
     return result
 

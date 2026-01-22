@@ -27,7 +27,7 @@ GraphProduct = Literal["cpg"]
 
 @dataclass(frozen=True)
 class FinalizeDeltaPaths:
-    """Paths returned by write_finalize_result_delta."""
+    """Paths returned by the finalize Delta write helper."""
 
     data: Path
     errors: Path

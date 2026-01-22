@@ -187,7 +187,11 @@ def repo_files(
         max_files=repo_scan_config.max_files,
         hash_index=hash_index,
     )
-    return scan_repo(repo_root=repo_scan_config.repo_root, options=options, ctx=ctx)
+    return scan_repo(
+        repo_root=repo_scan_config.repo_root,
+        options=options,
+        context=ExtractRunContext(ctx=ctx),
+    )
 
 
 @cache(format="delta")
@@ -206,7 +210,11 @@ def repo_file_blobs(
     """
     _ = cache_salt
     options = RepoBlobOptions()
-    return scan_repo_blobs(repo_files_extract, options=options, ctx=ctx)
+    return scan_repo_blobs(
+        repo_files_extract,
+        options=options,
+        context=ExtractRunContext(ctx=ctx),
+    )
 
 
 def _filter_repo_files_by_ids(
@@ -1042,7 +1050,10 @@ def runtime_inspect_bundle(
         repo_root,
         options=options,
         evidence_plan=evidence_plan,
-        ctx=extract_execution_context.ctx,
+        context=ExtractRunContext(
+            evidence_plan=extract_execution_context.evidence_plan,
+            ctx=extract_execution_context.ctx,
+        ),
     )
     tables = {
         "rt_objects": result.rt_objects,

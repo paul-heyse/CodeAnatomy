@@ -23,6 +23,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering, OrderingKey
 from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
+from arrowdsl.schema.semantic_types import SPAN_STORAGE
 from datafusion_engine.extract_registry import dataset_schema as extract_dataset_schema
 from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.normalize_ids import (
@@ -135,6 +136,11 @@ class IbisPlanCatalog:
         self.tables[name] = plan
 
 
+def _drop_columns(table: Table, names: Sequence[str]) -> Table:
+    cols = [name for name in names if name in table.columns]
+    return table.drop(*cols) if cols else table
+
+
 def type_exprs_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -165,10 +171,21 @@ def type_exprs_plan_ibis(
         trimmed,
         null_sentinel=TYPE_ID_SPEC.null_sentinel,
     )
+    span = _span_struct_expr(
+        SpanStructInputs(
+            bstart=filtered.bstart,
+            bend=filtered.bend,
+            col_unit=filtered.col_unit if "col_unit" in filtered.columns else None,
+            end_exclusive=filtered.end_exclusive
+            if "end_exclusive" in filtered.columns
+            else None,
+        )
+    )
     updates: dict[str, Value] = {
         "type_repr": trimmed,
         "type_expr_id": type_expr_id,
         "type_id": type_id,
+        "span": span,
     }
     if ctx.debug:
         updates["type_expr_key"] = stable_key_expr(
@@ -184,6 +201,10 @@ def type_exprs_plan_ibis(
             null_sentinel=TYPE_ID_SPEC.null_sentinel,
         )
     enriched = filtered.mutate(**updates)
+    enriched = _drop_columns(
+        enriched,
+        ("bstart", "bend", "line_base", "col_unit", "end_exclusive"),
+    )
     validate_expr_schema(
         enriched,
         expected=dataset_schema(TYPE_EXPRS_NAME),
@@ -375,6 +396,17 @@ def cfg_blocks_plan_ibis(
         )
     else:
         joined = blocks
+    bstart = joined.start_offset.cast("int64")
+    bend = ibis.coalesce(joined.end_offset.cast("int64"), bstart)
+    span = _span_struct_expr(
+        SpanStructInputs(
+            bstart=bstart,
+            bend=bend,
+            col_unit=ibis.literal("byte"),
+            end_exclusive=ibis.literal(value=True),
+        )
+    )
+    joined = joined.mutate(span=span)
     validate_expr_schema(joined, expected=dataset_schema(CFG_BLOCKS_NAME))
     return IbisPlan(expr=joined, ordering=Ordering.unordered())
 
@@ -455,8 +487,22 @@ def def_use_events_plan_ibis(
         symbol,
         null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
     )
+    bstart = table.offset.cast("int64")
+    span = _span_struct_expr(
+        SpanStructInputs(
+            bstart=bstart,
+            bend=bstart,
+            col_unit=ibis.literal("byte"),
+            end_exclusive=ibis.literal(value=True),
+        )
+    )
     valid = symbol.notnull() & kind.notnull()
-    updates: dict[str, Value] = {"symbol": symbol, "kind": kind, "event_id": event_id}
+    updates: dict[str, Value] = {
+        "symbol": symbol,
+        "kind": kind,
+        "event_id": event_id,
+        "span": span,
+    }
     if ctx.debug:
         updates["event_key"] = stable_key_expr(
             table.code_unit_id,
@@ -604,6 +650,59 @@ def _line_offset_expr(
     return left + right
 
 
+@dataclass(frozen=True)
+class SpanStructInputs:
+    bstart: Value
+    bend: Value
+    start_line0: Value | None = None
+    end_line0: Value | None = None
+    start_col: Value | None = None
+    end_col: Value | None = None
+    col_unit: Value | None = None
+    end_exclusive: Value | None = None
+
+
+def _span_struct_expr(inputs: SpanStructInputs) -> Value:
+    span_ok = inputs.bstart.notnull() & inputs.bend.notnull()
+    null_i32 = ibis_null_literal(pa.int32())
+    null_bool = ibis_null_literal(pa.bool_())
+    null_str = ibis_null_literal(pa.string())
+    start_line_expr = (
+        inputs.start_line0 if inputs.start_line0 is not None else null_i32
+    ).cast("int32")
+    end_line_expr = (inputs.end_line0 if inputs.end_line0 is not None else null_i32).cast(
+        "int32"
+    )
+    start_col_expr = (inputs.start_col if inputs.start_col is not None else null_i32).cast(
+        "int32"
+    )
+    end_col_expr = (inputs.end_col if inputs.end_col is not None else null_i32).cast(
+        "int32"
+    )
+    col_unit_expr = (inputs.col_unit if inputs.col_unit is not None else null_str).cast(
+        "string"
+    )
+    end_exclusive_expr = (
+        inputs.end_exclusive if inputs.end_exclusive is not None else null_bool
+    ).cast(
+        "boolean"
+    )
+    bstart_i64 = cast("NumericValue", inputs.bstart.cast("int64"))
+    bend_i64 = cast("NumericValue", inputs.bend.cast("int64"))
+    byte_start = ibis.ifelse(span_ok, bstart_i64.cast("int32"), null_i32)
+    byte_len_value = bend_i64 - bstart_i64
+    byte_len = ibis.ifelse(span_ok, byte_len_value.cast("int32"), null_i32)
+    return ibis.struct(
+        {
+            "start": ibis.struct({"line0": start_line_expr, "col": start_col_expr}),
+            "end": ibis.struct({"line0": end_line_expr, "col": end_col_expr}),
+            "end_exclusive": end_exclusive_expr,
+            "col_unit": col_unit_expr,
+            "byte_span": ibis.struct({"byte_start": byte_start, "byte_len": byte_len}),
+        }
+    ).cast(SPAN_STORAGE)
+
+
 def _non_empty_string(value: Value, *, default: str) -> Value:
     text = value.cast("string")
     return ibis.ifelse(
@@ -645,19 +744,30 @@ def _cst_diag_expr(cst: Table, line_index: Table) -> Table:
     )
     path_expr = ibis.coalesce(joined.path, joined.cst_path)
     file_id_expr = ibis.coalesce(joined.file_id, joined.cst_file_id)
+    end_col = _normalize_end_col(joined.raw_column, end_exclusive)
+    span = _span_struct_expr(
+        SpanStructInputs(
+            bstart=bstart,
+            bend=bstart,
+            start_line0=start_line0,
+            end_line0=start_line0,
+            start_col=joined.raw_column,
+            end_col=end_col,
+            col_unit=col_unit,
+            end_exclusive=end_exclusive,
+        )
+    )
     base = joined.select(
         file_id=file_id_expr,
         path=path_expr,
         bstart=bstart,
         bend=bstart,
+        span=span,
         severity=ibis.literal("ERROR"),
         message=_non_empty_string(joined.message, default="LibCST parse error"),
         diag_source=ibis.literal("libcst"),
         code=ibis_null_literal(pa.string()),
         details=ibis_null_literal(DIAG_DETAILS_TYPE),
-        line_base=line_base,
-        col_unit=col_unit.cast("string"),
-        end_exclusive=end_exclusive,
     )
     return base.filter(base.bstart.notnull() & base.bend.notnull() & base.path.notnull())
 
@@ -673,6 +783,14 @@ def _ts_diag_expr(table: Table, *, severity: str, message: str) -> Table:
         ("bend", "end_byte"),
         default=ibis_null_literal(pa.int64()),
     ).cast("int64")
+    span = _span_struct_expr(
+        SpanStructInputs(
+            bstart=bstart,
+            bend=bend,
+            col_unit=ibis.literal("byte"),
+            end_exclusive=ibis.literal(value=True),
+        )
+    )
     file_id = table.file_id if "file_id" in table.columns else ibis_null_literal(pa.string())
     path = table.path if "path" in table.columns else ibis_null_literal(pa.string())
     base = table.select(
@@ -680,14 +798,12 @@ def _ts_diag_expr(table: Table, *, severity: str, message: str) -> Table:
         path=path,
         bstart=bstart,
         bend=bend,
+        span=span,
         severity=ibis.literal(severity),
         message=ibis.literal(message),
         diag_source=ibis.literal("treesitter"),
         code=ibis_null_literal(pa.string()),
         details=ibis_null_literal(DIAG_DETAILS_TYPE),
-        line_base=ibis_null_literal(pa.int32()),
-        col_unit=ibis_null_literal(pa.string()),
-        end_exclusive=ibis_null_literal(pa.bool_()),
     )
     return base.filter(base.bstart.notnull() & base.bend.notnull() & base.path.notnull())
 
@@ -716,6 +832,18 @@ def _scip_diag_expr(diags: Table, docs: Table, line_index: Table) -> Table:
         ctx.end_char,
         ctx.col_unit,
     )
+    span = _span_struct_expr(
+        SpanStructInputs(
+            bstart=bstart,
+            bend=bend,
+            start_line0=ctx.joined.scip_start_line0,
+            end_line0=ctx.joined.scip_end_line0,
+            start_col=ctx.joined.start_char,
+            end_col=ctx.end_char,
+            col_unit=ctx.col_unit,
+            end_exclusive=ctx.end_exclusive,
+        )
+    )
     file_id = coalesce_columns(
         ctx.joined,
         ("file_id", "scip_start_file_id"),
@@ -726,14 +854,12 @@ def _scip_diag_expr(diags: Table, docs: Table, line_index: Table) -> Table:
         path=ctx.path_expr,
         bstart=bstart,
         bend=bend,
+        span=span,
         severity=_scip_severity_expr(ctx.joined.severity),
         message=_non_empty_string(ctx.joined.message, default="SCIP diagnostic"),
         diag_source=ibis.literal("scip"),
         code=ctx.joined.code.cast("string"),
         details=ibis_null_literal(DIAG_DETAILS_TYPE),
-        line_base=ctx.line_base,
-        col_unit=ctx.col_unit.cast("string"),
-        end_exclusive=ctx.end_exclusive,
     )
     return base.filter(base.bstart.notnull() & base.bend.notnull() & base.path.notnull())
 
@@ -907,19 +1033,25 @@ def _symtable_freevar_counts(
 
 
 def _symtable_diag_row(base: Table, *, message: StringValue, code: str) -> Table:
+    span = _span_struct_expr(
+        SpanStructInputs(
+            bstart=base.bstart,
+            bend=base.bend,
+            col_unit=ibis.literal("byte"),
+            end_exclusive=ibis.literal(value=True),
+        )
+    )
     return base.select(
         file_id=base.file_id,
         path=base.path,
         bstart=base.bstart,
         bend=base.bend,
+        span=span,
         severity=ibis.literal("WARNING"),
         message=message,
         diag_source=ibis.literal("symtable_bytecode"),
         code=ibis.literal(code),
         details=ibis_null_literal(DIAG_DETAILS_TYPE),
-        line_base=ibis.literal(1),
-        col_unit=ibis.literal("utf32"),
-        end_exclusive=ibis.literal(value=True),
     )
 
 
@@ -1044,6 +1176,10 @@ def diagnostics_plan_ibis(
             null_sentinel=DIAG_ID_SPEC.null_sentinel,
         )
     enriched = combined.mutate(**updates)
+    enriched = _drop_columns(
+        enriched,
+        ("bstart", "bend", "line_base", "col_unit", "end_exclusive"),
+    )
     validate_expr_schema(
         enriched,
         expected=diag_schema,

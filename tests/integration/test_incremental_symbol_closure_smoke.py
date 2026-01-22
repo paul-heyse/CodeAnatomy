@@ -9,6 +9,7 @@ import pyarrow as pa
 import pytest
 
 from arrowdsl.schema.build import table_from_arrays
+from ibis_engine.sources import IbisDeltaWriteOptions
 from incremental.impact import (
     ImpactedFileInputs,
     changed_file_impact_table,
@@ -21,8 +22,7 @@ from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
-from storage.deltalake import DeltaWriteOptions, write_dataset_delta
-from tests.utils import values_as_list
+from tests.utils import values_as_list, write_delta_table
 
 
 @dataclass(frozen=True)
@@ -83,14 +83,14 @@ def _write_symbol_closure_sources(
     state_store: StateStore,
     *,
     sources: _SymbolClosureSources,
-    options: DeltaWriteOptions,
+    options: IbisDeltaWriteOptions,
 ) -> dict[str, str]:
     rel_callsite_qname_path = str(state_store.dataset_dir("rel_callsite_qname_v1"))
     rel_callsite_symbol_path = str(state_store.dataset_dir("rel_callsite_symbol_v1"))
     imports_resolved_path = str(state_store.dataset_dir("py_imports_resolved_v1"))
-    write_dataset_delta(sources.rel_callsite_qname, rel_callsite_qname_path, options=options)
-    write_dataset_delta(sources.rel_callsite_symbol, rel_callsite_symbol_path, options=options)
-    write_dataset_delta(sources.imports_resolved, imports_resolved_path, options=options)
+    write_delta_table(sources.rel_callsite_qname, rel_callsite_qname_path, options=options)
+    write_delta_table(sources.rel_callsite_symbol, rel_callsite_symbol_path, options=options)
+    write_delta_table(sources.imports_resolved, imports_resolved_path, options=options)
     return {
         "rel_callsite_qname_v1": rel_callsite_qname_path,
         "rel_callsite_symbol_v1": rel_callsite_symbol_path,
@@ -123,7 +123,7 @@ def test_incremental_symbol_closure_smoke(tmp_path: Path) -> None:
         pytest.skip(str(exc))
     state_store = StateStore(root=tmp_path / "state")
     state_store.ensure_dirs()
-    delta_options = DeltaWriteOptions(mode="overwrite", schema_mode="overwrite")
+    delta_options = IbisDeltaWriteOptions(mode="overwrite", schema_mode="overwrite")
     sources = _build_symbol_closure_sources()
     paths = _write_symbol_closure_sources(state_store, sources=sources, options=delta_options)
 

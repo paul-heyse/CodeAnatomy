@@ -3,15 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
 from arrowdsl.core import interop
-from registry_common.registry_rows import ContractRow
 from schema_spec.specs import ArrowFieldSpec
 from schema_spec.system import TableSpecConstraints
 
+if TYPE_CHECKING:
+    from schema_spec.system import DedupeSpecSpec, SortKeySpec
+
 SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class ContractRow:
+    """Row configuration for a dataset contract."""
+
+    dedupe: DedupeSpecSpec | None = None
+    canonical_sort: tuple[SortKeySpec, ...] = ()
+    constraints: tuple[str, ...] = ()
+    version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -201,6 +214,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         fields=(
             ArrowFieldSpec(name="plan_hash", dtype=interop.string()),
             ArrowFieldSpec(name="sql", dtype=interop.string()),
+            ArrowFieldSpec(name="normalized_sql", dtype=interop.string()),
             ArrowFieldSpec(name="explain_artifact_path", dtype=interop.string()),
             ArrowFieldSpec(name="explain_artifact_format", dtype=interop.string()),
             ArrowFieldSpec(name="explain_schema_fingerprint", dtype=interop.string()),

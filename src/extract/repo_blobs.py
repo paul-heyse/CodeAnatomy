@@ -9,19 +9,21 @@ from dataclasses import dataclass
 from typing import Literal, overload
 
 from arrowdsl.core.array_iter import iter_table_rows
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import dataset_query, normalize_options
 from extract.helpers import (
+    ExtractExecutionContext,
     ExtractMaterializeOptions,
     FileContext,
     apply_query_and_project,
     bytes_from_file_ctx,
     empty_ibis_plan,
-    ibis_plan_from_rows,
+    ibis_plan_from_reader,
     materialize_extract_plan,
+    record_batch_reader_from_rows,
 )
 from extract.schema_ops import ExtractNormalizeOptions
+from extract.session import ExtractSession
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec
 
@@ -134,9 +136,8 @@ def _build_repo_blob_row(
 def scan_repo_blobs(
     repo_files: TableLike,
     options: RepoBlobOptions | None = None,
-    ctx: ExecutionContext | None = None,
-    profile: str = "default",
     *,
+    context: ExtractExecutionContext | None = None,
     prefer_reader: Literal[False] = False,
 ) -> TableLike: ...
 
@@ -145,9 +146,8 @@ def scan_repo_blobs(
 def scan_repo_blobs(
     repo_files: TableLike,
     options: RepoBlobOptions | None = None,
-    ctx: ExecutionContext | None = None,
-    profile: str = "default",
     *,
+    context: ExtractExecutionContext | None = None,
     prefer_reader: Literal[True],
 ) -> TableLike | RecordBatchReaderLike: ...
 
@@ -155,9 +155,8 @@ def scan_repo_blobs(
 def scan_repo_blobs(
     repo_files: TableLike,
     options: RepoBlobOptions | None = None,
-    ctx: ExecutionContext | None = None,
-    profile: str = "default",
     *,
+    context: ExtractExecutionContext | None = None,
     prefer_reader: bool = False,
 ) -> TableLike | RecordBatchReaderLike:
     """Read repo file blobs and return a repo_file_blobs table.
@@ -168,10 +167,8 @@ def scan_repo_blobs(
         Repo manifest table.
     options:
         Blob extraction options.
-    ctx:
-        Execution context for plan execution.
-    profile:
-        Execution profile name used when ``ctx`` is not provided.
+    context:
+        Optional extract execution context for session and profile resolution.
     prefer_reader:
         When True, return a streaming reader when possible.
 
@@ -181,13 +178,15 @@ def scan_repo_blobs(
         Repo file blob output.
     """
     normalized_options = normalize_options("repo_blobs", options, RepoBlobOptions)
-    ctx = ctx or execution_context_factory(profile)
+    exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
     )
     if not normalized_options.include_bytes and not normalized_options.include_text:
-        empty_plan = empty_ibis_plan("repo_file_blobs_v1")
+        empty_plan = empty_ibis_plan("repo_file_blobs_v1", session=session)
         return materialize_extract_plan(
             "repo_file_blobs_v1",
             empty_plan,
@@ -198,7 +197,7 @@ def scan_repo_blobs(
                 apply_post_kernels=True,
             ),
         )
-    plan = scan_repo_blobs_plan(repo_files, options=normalized_options, ctx=ctx)
+    plan = scan_repo_blobs_plan(repo_files, options=normalized_options, session=session)
     return materialize_extract_plan(
         "repo_file_blobs_v1",
         plan,
@@ -215,7 +214,7 @@ def scan_repo_blobs_plan(
     repo_files: TableLike,
     *,
     options: RepoBlobOptions,
-    ctx: ExecutionContext,
+    session: ExtractSession,
 ) -> IbisPlan:
     """Build the plan for repo blob extraction.
 
@@ -237,7 +236,8 @@ def scan_repo_blobs_plan(
             if options.max_files is not None and count >= options.max_files:
                 break
 
-    raw_plan = ibis_plan_from_rows("repo_file_blobs_v1", iter_rows(), ctx=ctx)
+    reader = record_batch_reader_from_rows("repo_file_blobs_v1", iter_rows())
+    raw_plan = ibis_plan_from_reader("repo_file_blobs_v1", reader, session=session)
     return apply_query_and_project(
         "repo_file_blobs_v1",
         raw_plan.expr,

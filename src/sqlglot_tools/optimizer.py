@@ -45,7 +45,7 @@ from sqlglot.transforms import (
     unnest_to_explode,
 )
 
-from registry_common.arrow_payloads import payload_hash
+from arrowdsl.io.ipc import payload_hash
 from sqlglot_tools.compat import Dialect, DialectType, ErrorLevel, Expression, exp, parse_one
 
 type SchemaMappingNode = Mapping[str, str] | Mapping[str, SchemaMappingNode]
@@ -794,12 +794,18 @@ def transpile_sql(
 
     Raises
     ------
+    TypeError
+        Raised when SQLGlot transpile is unavailable or returns invalid output.
     ValueError
         Raised when transpilation fails or yields multiple statements.
     """
     policy = policy or default_sqlglot_policy()
+    transpile = getattr(sqlglot, "transpile", None)
+    if not callable(transpile):
+        msg = "SQLGlot transpile is unavailable."
+        raise TypeError(msg)
     try:
-        results = sqlglot.transpile(
+        results = transpile(
             sql,
             read=policy.read_dialect,
             write=policy.write_dialect,
@@ -808,6 +814,12 @@ def transpile_sql(
     except (SqlglotError, TypeError, ValueError) as exc:
         msg = f"SQLGlot transpile failed: {exc}"
         raise ValueError(msg) from exc
+    if not isinstance(results, list):
+        msg = "SQLGlot transpile returned non-list results."
+        raise TypeError(msg)
+    if not all(isinstance(item, str) for item in results):
+        msg = "SQLGlot transpile returned non-string statements."
+        raise TypeError(msg)
     if not results:
         msg = "SQLGlot transpile returned no statements."
         raise ValueError(msg)

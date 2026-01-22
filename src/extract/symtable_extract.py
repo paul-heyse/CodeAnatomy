@@ -7,10 +7,10 @@ import symtable
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
@@ -21,8 +21,9 @@ from extract.helpers import (
     apply_query_and_project,
     attrs_map,
     file_identity_row,
-    ibis_plan_from_rows,
+    ibis_plan_from_reader,
     materialize_extract_plan,
+    record_batch_reader_from_rows,
     span_dict,
     text_from_file_ctx,
 )
@@ -32,6 +33,7 @@ from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
+    from extract.session import ExtractSession
 
 
 @dataclass(frozen=True)
@@ -611,8 +613,10 @@ def _build_symtable_file_plan(
     *,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
+    session: ExtractSession,
 ) -> IbisPlan:
-    raw = ibis_plan_from_rows("symtable_files_v1", rows)
+    reader = record_batch_reader_from_rows("symtable_files_v1", rows)
+    raw = ibis_plan_from_reader("symtable_files_v1", reader, session=session)
     return apply_query_and_project(
         "symtable_files_v1",
         raw.expr,
@@ -637,7 +641,9 @@ def extract_symtable(
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
     exec_context = context or ExtractExecutionContext()
-    ctx = exec_context.ensure_ctx()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(options=normalized_options)
 
     rows = _collect_symtable_file_rows(
@@ -650,6 +656,7 @@ def extract_symtable(
         rows,
         normalize=normalize,
         evidence_plan=exec_context.evidence_plan,
+        session=session,
     )
     return SymtableExtractResult(
         symtable_files=cast(
@@ -682,6 +689,8 @@ def extract_symtable_plans(
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
     exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     normalize = ExtractNormalizeOptions(options=normalized_options)
     evidence_plan = exec_context.evidence_plan
     rows = _collect_symtable_file_rows(
@@ -695,6 +704,7 @@ def extract_symtable_plans(
             rows,
             normalize=normalize,
             evidence_plan=evidence_plan,
+            session=session,
         )
     }
 
@@ -704,6 +714,7 @@ class _SymtableTableKwargs(TypedDict, total=False):
     options: SymtableExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     prefer_reader: bool
@@ -714,6 +725,7 @@ class _SymtableTableKwargsTable(TypedDict, total=False):
     options: SymtableExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     prefer_reader: Literal[False]
@@ -724,6 +736,7 @@ class _SymtableTableKwargsReader(TypedDict, total=False):
     options: SymtableExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     prefer_reader: Required[Literal[True]]
@@ -766,23 +779,26 @@ def extract_symtables_table(
     file_contexts = kwargs.get("file_contexts")
     evidence_plan = kwargs.get("evidence_plan")
     profile = kwargs.get("profile", "default")
-    exec_ctx = kwargs.get("ctx") or execution_context_factory(profile)
     prefer_reader = kwargs.get("prefer_reader", False)
+    exec_context = ExtractExecutionContext(
+        file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
+        ctx=kwargs.get("ctx"),
+        session=kwargs.get("session"),
+        profile=profile,
+    )
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_symtable_plans(
         repo_files,
         options=normalized_options,
-        context=ExtractExecutionContext(
-            file_contexts=file_contexts,
-            evidence_plan=evidence_plan,
-            ctx=exec_ctx,
-            profile=profile,
-        ),
+        context=exec_context,
     )
     return materialize_extract_plan(
         "symtable_files_v1",
         plans["symtable_files"],
-        ctx=exec_ctx,
+        ctx=session.exec_ctx,
         options=ExtractMaterializeOptions(
             normalize=normalize,
             prefer_reader=prefer_reader,

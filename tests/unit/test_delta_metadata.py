@@ -6,22 +6,22 @@ from pathlib import Path
 
 import pyarrow as pa
 
+from ibis_engine.sources import IbisDeltaWriteOptions
 from storage.deltalake import (
-    DeltaWriteOptions,
     delta_commit_metadata,
     delta_history_snapshot,
     delta_protocol_snapshot,
-    write_table_delta,
 )
+from tests.utils import write_delta_table
 
 
 def _write_delta_table(path: Path) -> None:
     table = pa.table({"id": [1, 2], "value": ["alpha", "beta"]})
-    options = DeltaWriteOptions(
+    options = IbisDeltaWriteOptions(
         mode="overwrite",
         commit_metadata={"source": "unit_test"},
     )
-    write_table_delta(table, str(path), options=options)
+    write_delta_table(table, str(path), options=options)
 
 
 def test_delta_commit_metadata_roundtrip(tmp_path: Path) -> None:

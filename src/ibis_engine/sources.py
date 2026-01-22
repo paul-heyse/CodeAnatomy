@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from typing import Literal, Protocol, cast
 
 import pyarrow as pa
-from deltalake import CommitProperties, DeltaTable, WriterProperties
+from deltalake import CommitProperties, DeltaTable, Transaction, WriterProperties
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 
@@ -157,6 +157,21 @@ def table_to_ibis(
     return register_ibis_table(table, options=options)
 
 
+def record_batches_to_ibis(
+    batches: Sequence[pa.RecordBatch],
+    *,
+    options: SourceToIbisOptions,
+) -> IbisPlan:
+    """Register record batches as an Ibis table and return a plan.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan backed by the registered table.
+    """
+    return register_ibis_record_batches(batches, options=options)
+
+
 def register_ibis_table(
     table: TableLike,
     *,
@@ -183,6 +198,61 @@ def register_ibis_table(
         temp=temp,
         overwrite=options.overwrite,
     )
+    _record_namespace_action(
+        options.namespace_recorder,
+        action="create_table",
+        name=table_name,
+        database=database_hint or _default_database_hint(options.backend),
+        overwrite=options.overwrite,
+    )
+    if database_hint is None:
+        registered = backend.table(table_name)
+    else:
+        registered = backend.table(table_name, database=database_hint)
+    _record_table_metadata(options, table_name)
+    return IbisPlan(expr=registered, ordering=options.ordering or Ordering.unordered())
+
+
+def register_ibis_record_batches(
+    batches: Sequence[pa.RecordBatch],
+    *,
+    options: SourceToIbisOptions,
+) -> IbisPlan:
+    """Register record batches as a backend table and return a plan.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan backed by the registered table.
+
+    Raises
+    ------
+    TypeError
+        Raised when record batch registration is unsupported.
+    ValueError
+        Raised when the input batch list is empty.
+    """
+    if not batches:
+        msg = "Record batch registration requires at least one batch."
+        raise ValueError(msg)
+    backend = cast("TableBackend", options.backend)
+    database_hint, name = _parse_database_hint(options.name)
+    table_name = name or _temporary_table_name()
+    try:
+        ctx = datafusion_context(options.backend)
+    except ValueError:
+        table = pa.Table.from_batches(batches)
+        return register_ibis_table(table, options=options)
+    register_batches = getattr(ctx, "register_record_batches", None)
+    if not callable(register_batches):
+        msg = "Ibis backend does not support record batch registration."
+        raise TypeError(msg)
+    if options.overwrite:
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                deregister(table_name)
+    register_batches(table_name, [list(batches)])
     _record_namespace_action(
         options.namespace_recorder,
         action="create_table",
@@ -372,7 +442,27 @@ def read_delta_ibis(
     *,
     options: IbisDeltaReadOptions | None = None,
 ) -> IbisTable:
-    """Read a Delta table via the backend read_delta method."""
+    """Read a Delta table via the backend read_delta method.
+
+    Parameters
+    ----------
+    backend : BaseBackend
+        Ibis backend to execute the read.
+    path : str
+        Delta table path.
+    options : IbisDeltaReadOptions | None
+        Read options controlling table name and storage configuration.
+
+    Returns
+    -------
+    ibis.expr.types.Table
+        Ibis table expression for the Delta source.
+
+    Raises
+    ------
+    TypeError
+        Raised when the backend does not support read_delta.
+    """
     read_delta = getattr(backend, "read_delta", None)
     if not callable(read_delta):
         msg = f"Backend {type(backend).__name__} does not support read_delta."
@@ -387,7 +477,8 @@ def read_delta_ibis(
         kwargs["version"] = resolved.version
     if resolved.timestamp is not None:
         kwargs["timestamp"] = resolved.timestamp
-    return read_delta(path, **_filter_kwargs(read_delta, kwargs))
+    result = read_delta(path, **_filter_kwargs(read_delta, kwargs))
+    return cast("IbisTable", result)
 
 
 def write_delta_ibis(
@@ -398,7 +489,33 @@ def write_delta_ibis(
     options: IbisDeltaWriteOptions | None = None,
     storage_options: Mapping[str, str] | None = None,
 ) -> int | None:
-    """Write a Delta table via the backend to_delta method."""
+    """Write a Delta table via the backend to_delta method.
+
+    Parameters
+    ----------
+    backend : BaseBackend
+        Ibis backend to execute the write.
+    expr : IbisTable
+        Ibis table expression to write.
+    path : str
+        Delta table path.
+    options : IbisDeltaWriteOptions | None
+        Delta write options.
+    storage_options : Mapping[str, str] | None
+        Storage options to merge with the write options.
+
+    Returns
+    -------
+    int | None
+        Delta table version when available.
+
+    Raises
+    ------
+    TypeError
+        Raised when the backend does not support to_delta.
+    ValueError
+        Raised when predicate filters are used without overwrite mode.
+    """
     to_delta = getattr(backend, "to_delta", None)
     if not callable(to_delta):
         msg = f"Backend {type(backend).__name__} does not support to_delta."
@@ -432,16 +549,15 @@ def _commit_properties(options: IbisDeltaWriteOptions) -> CommitProperties | Non
     custom_metadata = (
         dict(options.commit_metadata) if options.commit_metadata is not None else None
     )
-    payload: dict[str, object] = {}
-    if options.app_id is not None:
-        payload["app_id"] = options.app_id
-    if options.version is not None:
-        payload["version"] = options.version
-    if custom_metadata is not None:
-        payload["custom_metadata"] = custom_metadata
-    if not payload:
+    app_transactions = None
+    if options.app_id is not None and options.version is not None:
+        app_transactions = [Transaction(app_id=options.app_id, version=options.version)]
+    if custom_metadata is None and app_transactions is None:
         return None
-    return CommitProperties(**payload)
+    return CommitProperties(
+        app_transactions=app_transactions,
+        custom_metadata=custom_metadata,
+    )
 
 
 def _merge_storage_options(
@@ -630,7 +746,9 @@ __all__ = [
     "plan_from_dataset",
     "plan_from_source",
     "read_delta_ibis",
+    "record_batches_to_ibis",
     "record_namespace_action",
+    "register_ibis_record_batches",
     "register_ibis_table",
     "register_ibis_view",
     "resolve_database_hint",

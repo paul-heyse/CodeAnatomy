@@ -26,16 +26,16 @@ from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
+from arrowdsl.io.ipc import ipc_hash
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from datafusion_engine.kernel_registry import resolve_kernel
-from engine.materialize import build_plan_product
+from engine.materialize_pipeline import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.compiler_checkpoint import try_plan_hash
 from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.expr_compiler import IbisExprRegistry, default_expr_registry, expr_ir_to_ibis
 from ibis_engine.io_bridge import IbisMaterializeOptions, materialize_table
-from ibis_engine.lineage import required_columns_by_table
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.registry import IbisDatasetRegistry
@@ -46,7 +46,6 @@ from ibis_engine.sources import (
     register_ibis_table,
     table_to_ibis,
 )
-from registry_common.arrow_payloads import ipc_hash
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -87,6 +86,7 @@ from relspec.registry import ContractCatalog, DatasetCatalog
 from relspec.rules.exec_events import RuleExecutionObserver, rule_execution_event_from_table
 from schema_spec.system import dataset_spec_from_contract
 from sqlglot_tools.bridge import IbisCompilerBackend
+from sqlglot_tools.lineage import required_columns_by_table
 
 PlanTransform = Callable[[IbisTable, ExecutionContext], IbisTable]
 PlanExecutor = Callable[

@@ -10,7 +10,7 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import RuntimeProfile
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from engine.materialize import build_plan_product
+from engine import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.plan import IbisPlan

@@ -79,6 +79,14 @@ def _coerce_str_list(value: object) -> list[str]:
     return [str(value)]
 
 
+def _stringify_payload(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=True, default=str)
+
+
 def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Table:
     """Build a DataFusion explain diagnostics table.
 
@@ -410,126 +418,180 @@ def datafusion_plan_artifacts_table(
         Diagnostics table aligned to DATAFUSION_PLAN_ARTIFACTS_V1.
     """
     now = _now_ms()
-    def _string_list(value: object | None) -> list[str] | None:
-        if value is None:
-            return None
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            return [str(item) for item in value]
-        return [str(value)]
-
-    rows: list[dict[str, object]] = []
-    for artifact in artifacts:
-        explain = artifact.get("explain")
-        explain_path, explain_format, explain_fp = _explain_rows_metadata(explain)
-        explain_analyze = artifact.get("explain_analyze")
-        analyze_path, analyze_format, _ = _explain_rows_metadata(explain_analyze)
-        substrait_validation = artifact.get("substrait_validation")
-        substrait_status = None
-        if substrait_validation and isinstance(substrait_validation, Mapping):
-            substrait_status = str(substrait_validation.get("status") or "")
-        join_ops = artifact.get("join_operators")
-        join_ops_list = None
-        if join_ops:
-            join_ops_list = _string_list(join_ops)
-        lineage_tables = _string_list(artifact.get("lineage_tables"))
-        lineage_columns = _string_list(artifact.get("lineage_columns"))
-        lineage_scopes = _string_list(artifact.get("lineage_scopes"))
-        rows.append(
-            {
-                "event_time_unix_ms": _coerce_event_time(
-                    artifact.get("event_time_unix_ms"),
-                    default=now,
-                ),
-                "run_id": (
-                    str(artifact.get("run_id")) if artifact.get("run_id") is not None else None
-                ),
-                "plan_hash": (
-                    str(artifact.get("plan_hash"))
-                    if artifact.get("plan_hash") is not None
-                    else None
-                ),
-                "sql": str(artifact.get("sql") or ""),
-                "explain_rows_artifact_path": explain_path,
-                "explain_rows_artifact_format": explain_format,
-                "explain_rows_schema_fingerprint": explain_fp,
-                "explain_analyze_artifact_path": analyze_path,
-                "explain_analyze_artifact_format": analyze_format,
-                "substrait_b64": (
-                    str(artifact.get("substrait_b64"))
-                    if artifact.get("substrait_b64") is not None
-                    else None
-                ),
-                "substrait_validation_status": substrait_status,
-                "sqlglot_ast": (
-                    str(artifact.get("sqlglot_ast"))
-                    if artifact.get("sqlglot_ast") is not None
-                    else None
-                ),
-                "read_dialect": (
-                    str(artifact.get("read_dialect"))
-                    if artifact.get("read_dialect") is not None
-                    else None
-                ),
-                "write_dialect": (
-                    str(artifact.get("write_dialect"))
-                    if artifact.get("write_dialect") is not None
-                    else None
-                ),
-                "canonical_fingerprint": (
-                    str(artifact.get("canonical_fingerprint"))
-                    if artifact.get("canonical_fingerprint") is not None
-                    else None
-                ),
-                "lineage_tables": lineage_tables,
-                "lineage_columns": lineage_columns,
-                "lineage_scopes": lineage_scopes,
-                "param_signature": (
-                    str(artifact.get("param_signature"))
-                    if artifact.get("param_signature") is not None
-                    else None
-                ),
-                "projection_map": (
-                    str(artifact.get("projection_map"))
-                    if artifact.get("projection_map") is not None
-                    else None
-                ),
-                "unparsed_sql": (
-                    str(artifact.get("unparsed_sql"))
-                    if artifact.get("unparsed_sql") is not None
-                    else None
-                ),
-                "unparse_error": (
-                    str(artifact.get("unparse_error"))
-                    if artifact.get("unparse_error") is not None
-                    else None
-                ),
-                "logical_plan": (
-                    str(artifact.get("logical_plan"))
-                    if artifact.get("logical_plan") is not None
-                    else None
-                ),
-                "optimized_plan": (
-                    str(artifact.get("optimized_plan"))
-                    if artifact.get("optimized_plan") is not None
-                    else None
-                ),
-                "physical_plan": (
-                    str(artifact.get("physical_plan"))
-                    if artifact.get("physical_plan") is not None
-                    else None
-                ),
-                "graphviz": (
-                    str(artifact.get("graphviz")) if artifact.get("graphviz") is not None else None
-                ),
-                "partition_count": (
-                    _coerce_int(artifact.get("partition_count"), default=0)
-                    if artifact.get("partition_count") is not None
-                    else None
-                ),
-                "join_operators": join_ops_list,
-            }
-        )
+    rows = [_plan_artifact_row(artifact, default_time=now) for artifact in artifacts]
     schema = schema_for("datafusion_plan_artifacts_v1")
+    return table_from_rows(schema, rows)
+
+
+def _string_list(value: object | None) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _plan_artifact_row(
+    artifact: Mapping[str, object],
+    *,
+    default_time: int,
+) -> dict[str, object]:
+    explain_path, explain_format, explain_fp = _explain_rows_metadata(artifact.get("explain"))
+    analyze_path, analyze_format, _ = _explain_rows_metadata(artifact.get("explain_analyze"))
+    substrait_validation = artifact.get("substrait_validation")
+    substrait_status = None
+    if substrait_validation and isinstance(substrait_validation, Mapping):
+        substrait_status = str(substrait_validation.get("status") or "")
+    return {
+        "event_time_unix_ms": _coerce_event_time(
+            artifact.get("event_time_unix_ms"),
+            default=default_time,
+        ),
+        "run_id": str(artifact.get("run_id")) if artifact.get("run_id") is not None else None,
+        "plan_hash": (
+            str(artifact.get("plan_hash"))
+            if artifact.get("plan_hash") is not None
+            else None
+        ),
+        "sql": str(artifact.get("sql") or ""),
+        "normalized_sql": (
+            str(artifact.get("normalized_sql"))
+            if artifact.get("normalized_sql") is not None
+            else None
+        ),
+        "explain_rows_artifact_path": explain_path,
+        "explain_rows_artifact_format": explain_format,
+        "explain_rows_schema_fingerprint": explain_fp,
+        "explain_analyze_artifact_path": analyze_path,
+        "explain_analyze_artifact_format": analyze_format,
+        "substrait_b64": (
+            str(artifact.get("substrait_b64"))
+            if artifact.get("substrait_b64") is not None
+            else None
+        ),
+        "substrait_validation_status": substrait_status,
+        "sqlglot_ast": (
+            str(artifact.get("sqlglot_ast"))
+            if artifact.get("sqlglot_ast") is not None
+            else None
+        ),
+        "read_dialect": (
+            str(artifact.get("read_dialect"))
+            if artifact.get("read_dialect") is not None
+            else None
+        ),
+        "write_dialect": (
+            str(artifact.get("write_dialect"))
+            if artifact.get("write_dialect") is not None
+            else None
+        ),
+        "canonical_fingerprint": (
+            str(artifact.get("canonical_fingerprint"))
+            if artifact.get("canonical_fingerprint") is not None
+            else None
+        ),
+        "lineage_tables": _string_list(artifact.get("lineage_tables")),
+        "lineage_columns": _string_list(artifact.get("lineage_columns")),
+        "lineage_scopes": _string_list(artifact.get("lineage_scopes")),
+        "param_signature": (
+            str(artifact.get("param_signature"))
+            if artifact.get("param_signature") is not None
+            else None
+        ),
+        "projection_map": (
+            str(artifact.get("projection_map"))
+            if artifact.get("projection_map") is not None
+            else None
+        ),
+        "unparsed_sql": (
+            str(artifact.get("unparsed_sql"))
+            if artifact.get("unparsed_sql") is not None
+            else None
+        ),
+        "unparse_error": (
+            str(artifact.get("unparse_error"))
+            if artifact.get("unparse_error") is not None
+            else None
+        ),
+        "logical_plan": (
+            str(artifact.get("logical_plan"))
+            if artifact.get("logical_plan") is not None
+            else None
+        ),
+        "optimized_plan": (
+            str(artifact.get("optimized_plan"))
+            if artifact.get("optimized_plan") is not None
+            else None
+        ),
+        "physical_plan": (
+            str(artifact.get("physical_plan"))
+            if artifact.get("physical_plan") is not None
+            else None
+        ),
+        "graphviz": (
+            str(artifact.get("graphviz")) if artifact.get("graphviz") is not None else None
+        ),
+        "partition_count": (
+            _coerce_int(artifact.get("partition_count"), default=0)
+            if artifact.get("partition_count") is not None
+            else None
+        ),
+        "join_operators": _string_list(artifact.get("join_operators")),
+    }
+
+
+def engine_runtime_table(
+    artifacts: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build an engine runtime diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to ENGINE_RUNTIME_V1.
+    """
+    now = _now_ms()
+    rows = [
+        {
+            "event_time_unix_ms": _coerce_event_time(
+                artifact.get("event_time_unix_ms"),
+                default=now,
+            ),
+            "runtime_profile_name": str(artifact.get("runtime_profile_name") or ""),
+            "determinism_tier": str(artifact.get("determinism_tier") or ""),
+            "runtime_profile_hash": str(artifact.get("runtime_profile_hash") or ""),
+            "runtime_profile_snapshot": _stringify_payload(
+                artifact.get("runtime_profile_snapshot")
+            )
+            or "",
+            "sqlglot_policy_hash": (
+                str(artifact.get("sqlglot_policy_hash"))
+                if artifact.get("sqlglot_policy_hash") is not None
+                else None
+            ),
+            "sqlglot_policy_snapshot": _stringify_payload(
+                artifact.get("sqlglot_policy_snapshot")
+            ),
+            "function_registry_hash": (
+                str(artifact.get("function_registry_hash"))
+                if artifact.get("function_registry_hash") is not None
+                else None
+            ),
+            "function_registry_snapshot": _stringify_payload(
+                artifact.get("function_registry_snapshot")
+            ),
+            "datafusion_settings_hash": (
+                str(artifact.get("datafusion_settings_hash"))
+                if artifact.get("datafusion_settings_hash") is not None
+                else None
+            ),
+            "datafusion_settings": _stringify_payload(
+                artifact.get("datafusion_settings")
+            ),
+        }
+        for artifact in artifacts
+    ]
+    schema = schema_for("engine_runtime_v1")
     return table_from_rows(schema, rows)
 
 
@@ -777,6 +839,7 @@ __all__ = [
     "datafusion_schema_map_fingerprints_table",
     "datafusion_schema_registry_validation_table",
     "datafusion_udf_validation_table",
+    "engine_runtime_table",
     "feature_state_table",
     "file_pruning_diagnostics_table",
     "lineage_diagnostics_row",

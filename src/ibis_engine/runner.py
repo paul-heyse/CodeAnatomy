@@ -428,6 +428,8 @@ def _resolve_options(
                     execution.runtime_profile_hash or execution.runtime_profile.settings_hash()
                 ),
             )
+        if resolved.runtime_profile is None:
+            resolved = replace(resolved, runtime_profile=execution.runtime_profile)
         resolved = apply_execution_label(
             resolved,
             execution_label=execution.execution_label,

@@ -195,7 +195,13 @@ class FunctionCatalog:
         )
 
     def merge(self, other: FunctionCatalog) -> FunctionCatalog:
-        """Return a merged catalog with unioned function metadata."""
+        """Return a merged catalog with unioned function metadata.
+
+        Returns
+        -------
+        FunctionCatalog
+            Merged catalog with unioned function sets and signatures.
+        """
         merged_names = frozenset(self.function_names | other.function_names)
         merged_categories: dict[str, set[str]] = {}
         for mapping in (self.functions_by_category, other.functions_by_category):

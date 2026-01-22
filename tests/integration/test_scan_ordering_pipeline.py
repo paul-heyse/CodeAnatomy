@@ -16,8 +16,8 @@ from arrowdsl.schema.metadata import ordering_from_schema
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
-from ibis_engine.sources import plan_from_source
-from storage.deltalake import DeltaWriteOptions, write_dataset_delta
+from ibis_engine.sources import IbisDeltaWriteOptions, plan_from_source
+from tests.utils import write_delta_table
 
 
 @pytest.mark.integration
@@ -37,10 +37,10 @@ def test_scan_pipeline_ordering(
     """Apply determinism tiers to Delta-backed scan plans."""
     table = pa.table({"entity_id": [2, 1], "name": ["b", "a"]})
     dataset_dir = tmp_path / "scan_dataset"
-    write_dataset_delta(
+    write_delta_table(
         table,
         str(dataset_dir),
-        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+        options=IbisDeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
     )
 
     runtime = runtime_profile_factory("default").with_determinism(tier)

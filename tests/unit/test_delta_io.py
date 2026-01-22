@@ -12,15 +12,15 @@ from datafusion_engine.registry_bridge import (
     register_delta_cdf_df,
 )
 from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_as_reader
+from ibis_engine.sources import IbisDeltaWriteOptions
 from storage.deltalake import (
     DeltaCdfOptions,
-    DeltaWriteOptions,
     delta_commit_metadata,
     delta_table_features,
     delta_table_version,
     enable_delta_features,
-    write_table_delta,
 )
+from tests.utils import write_delta_table
 
 
 def _sample_table() -> pa.Table:
@@ -52,10 +52,10 @@ def test_delta_write_read_version(tmp_path: Path) -> None:
     """Write a Delta table and read it back."""
     path = tmp_path / "tbl"
     table = _sample_table()
-    result = write_table_delta(
+    result = write_delta_table(
         table,
         str(path),
-        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+        options=IbisDeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
     )
     assert result.version == 0
     read_back = read_delta_as_reader(str(path)).read_all()
@@ -65,10 +65,10 @@ def test_delta_write_read_version(tmp_path: Path) -> None:
 def test_delta_commit_metadata(tmp_path: Path) -> None:
     """Persist custom commit metadata for Delta writes."""
     path = tmp_path / "metadata"
-    write_table_delta(
+    write_delta_table(
         _sample_table(),
         str(path),
-        options=DeltaWriteOptions(
+        options=IbisDeltaWriteOptions(
             mode="overwrite",
             schema_mode="overwrite",
             commit_metadata={"foo": "bar"},
@@ -82,16 +82,16 @@ def test_delta_commit_metadata(tmp_path: Path) -> None:
 def test_delta_cdf_and_features(tmp_path: Path) -> None:
     """Read Delta change data feed and feature flags."""
     path = tmp_path / "cdf"
-    write_table_delta(
+    write_delta_table(
         _sample_table(),
         str(path),
-        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+        options=IbisDeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
     )
     enable_delta_features(str(path))
-    write_table_delta(
+    write_delta_table(
         pa.table({"id": [3], "value": ["c"]}),
         str(path),
-        options=DeltaWriteOptions(mode="append"),
+        options=IbisDeltaWriteOptions(mode="append"),
     )
     version = delta_table_version(str(path))
     assert version == 1

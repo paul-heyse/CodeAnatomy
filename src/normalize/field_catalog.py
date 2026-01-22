@@ -1,4 +1,4 @@
-"""Shared helpers for field catalog registration."""
+"""Field catalog helpers for normalize dataset schemas."""
 
 from __future__ import annotations
 

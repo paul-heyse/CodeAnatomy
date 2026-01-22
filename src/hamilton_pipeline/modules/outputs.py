@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
@@ -23,8 +23,10 @@ from arrowdsl.core.metrics import (
     scan_telemetry_table,
 )
 from arrowdsl.core.ordering import OrderingLevel
+from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from arrowdsl.core.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
 from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.io.ipc import ipc_hash
 from arrowdsl.schema.build import table_from_rows
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import EncodingPolicy
@@ -48,10 +50,9 @@ from datafusion_engine.runtime import (
 )
 from datafusion_engine.schema_introspection import SCHEMA_MAP_HASH_VERSION, SchemaIntrospector
 from datafusion_engine.schema_registry import is_nested_dataset
-from engine.function_registry import default_function_registry
+from engine.function_registry import arrow_kernel_registry_snapshot, default_function_registry
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_policy import WriterStrategy
-from engine.pyarrow_registry import pyarrow_registry_snapshot as kernel_registry_snapshot
 from engine.runtime_profile import RuntimeProfileSnapshot, runtime_profile_snapshot
 from extract.evidence_plan import EvidencePlan
 from hamilton_pipeline.modules.extraction import ExtractErrorArtifacts
@@ -64,10 +65,16 @@ from hamilton_pipeline.pipeline_types import (
     RelspecSnapshots,
     RepoScanConfig,
 )
+from ibis_engine.backend import build_backend
+from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.io_bridge import (
     IbisCopyWriteOptions,
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
     IbisNamedDatasetWriteOptions,
+    apply_ibis_delta_write_policies,
+    write_ibis_dataset_delta,
     write_ibis_named_datasets_copy,
     write_ibis_named_datasets_delta,
 )
@@ -83,7 +90,20 @@ from incremental.fingerprint_changes import (
 from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig
+from normalize.output_writes import (
+    NormalizeDeltaWriteRequest,
+    NormalizeDeltaWriteResult,
+    write_normalize_output_delta,
+)
+from normalize.registry_runtime import (
+    dataset_name_from_alias as normalize_dataset_name_from_alias,
+)
+from normalize.registry_runtime import (
+    normalize_output_root,
+    register_normalize_output_tables,
+)
 from normalize.runner import NormalizeRuleCompilation
+from normalize.runtime import build_normalize_runtime
 from normalize.utils import encoding_policy_from_schema
 from obs.diagnostics import DiagnosticsCollector
 from obs.diagnostics_tables import (
@@ -91,6 +111,7 @@ from obs.diagnostics_tables import (
     datafusion_explains_table,
     datafusion_schema_map_fingerprints_table,
     datafusion_schema_registry_validation_table,
+    engine_runtime_table,
     feature_state_table,
 )
 from obs.manifest import (
@@ -101,7 +122,6 @@ from obs.manifest import (
     write_manifest_delta,
 )
 from obs.repro import RunBundleContext, write_run_bundle
-from registry_common.arrow_payloads import ipc_hash
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport, build_param_reverse_index
@@ -129,18 +149,11 @@ from storage.dataset_sources import (
     DatasetSourceOptions,
     normalize_dataset_source,
 )
-from storage.deltalake import (
-    DeltaWriteOptions,
-    DeltaWriteResult,
-    apply_delta_write_policies,
-    coerce_delta_table,
-    delta_table_version,
-    write_dataset_delta,
-    write_finalize_result_delta,
-    write_named_datasets_delta,
-    write_table_delta,
-)
+from storage.deltalake import coerce_delta_table, delta_table_version
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+
+if TYPE_CHECKING:
+    from storage.deltalake import DeltaWriteResult
 
 # -----------------------
 # Public CPG outputs
@@ -212,6 +225,21 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
 
 
+def _ibis_execution_from_profile(profile: DataFusionRuntimeProfile) -> IbisExecutionContext:
+    runtime_profile = runtime_profile_factory("default").with_datafusion(profile)
+    ctx = ExecutionContext(runtime=runtime_profile)
+    backend = build_backend(
+        IbisBackendConfig(
+            datafusion_profile=profile,
+            fuse_selects=runtime_profile.ibis_fuse_selects,
+            default_limit=runtime_profile.ibis_default_limit,
+            default_dialect=runtime_profile.ibis_default_dialect,
+            interactive=runtime_profile.ibis_interactive,
+        )
+    )
+    return IbisExecutionContext(ctx=ctx, ibis_backend=backend)
+
+
 def _require_explicit_ordering(schema: pa.Schema, *, label: str) -> None:
     ordering = ordering_from_schema(schema)
     if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
@@ -235,7 +263,7 @@ def _delta_commit_metadata(dataset_name: str, schema: pa.Schema) -> dict[str, st
 class DeltaWriteContext:
     """Resolved Delta policies and options for a dataset write."""
 
-    options: DeltaWriteOptions
+    options: IbisDeltaWriteOptions
     write_policy: DeltaWritePolicy | None
     schema_policy: DeltaSchemaPolicy | None
     constraints: tuple[str, ...]
@@ -308,7 +336,7 @@ def _dataset_spec_fallback(name: str) -> DatasetSpec | None:
 
 def _resolve_delta_write_context(
     dataset_name: str,
-    base_options: DeltaWriteOptions,
+    base_options: IbisDeltaWriteOptions,
     *,
     output_config: OutputConfig | None,
     dataset_spec: DatasetSpec | None = None,
@@ -324,10 +352,11 @@ def _resolve_delta_write_context(
     if write_policy is None:
         write_policy = _default_delta_write_policy(spec)
     schema_policy = _merge_delta_schema_policy(base_schema_policy, fallback_schema_policy)
-    options = apply_delta_write_policies(
+    options = apply_ibis_delta_write_policies(
         base_options,
         write_policy=write_policy,
         schema_policy=schema_policy,
+        storage_options=output_config.delta_storage_options if output_config is not None else None,
     )
     constraints = spec.delta_constraints if spec is not None else ()
     storage_options = output_config.delta_storage_options if output_config is not None else None
@@ -937,6 +966,18 @@ def _datafusion_plan_artifacts_table(
     return table_from_rows(schema, rows)
 
 
+def _engine_runtime_artifacts_table(
+    ctx: ExecutionContext,
+) -> pa.Table | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    artifacts = profile.diagnostics_sink.artifacts_snapshot().get("engine_runtime_v1", [])
+    if not artifacts:
+        return None
+    return engine_runtime_table(artifacts)
+
+
 def _datafusion_plan_cache_entries(
     ctx: ExecutionContext,
 ) -> Sequence[PlanCacheEntry] | None:
@@ -1078,12 +1119,21 @@ def _diagnostics_rows_payload(rows: object, *, spec: DiagnosticsPayloadSpec) -> 
             name=spec.name,
             suffix=spec.suffix,
         )
-        delta_options = DeltaWriteOptions(mode="overwrite", schema_mode="overwrite")
-        result = write_dataset_delta(
+        if spec.runtime_profile is None:
+            return payload
+        delta_options = IbisDeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            storage_options=spec.storage_options,
+        )
+        result = write_ibis_dataset_delta(
             rows,
             str(path),
-            options=delta_options,
-            storage_options=spec.storage_options,
+            options=IbisDatasetWriteOptions(
+                execution=_ibis_execution_from_profile(spec.runtime_profile),
+                writer_strategy="datafusion",
+                delta_options=delta_options,
+            ),
         )
         payload["artifact_path"] = result.path
         _register_delta_artifact(
@@ -1162,6 +1212,7 @@ def _datafusion_plan_row(
     return {
         "plan_hash": plan_hash,
         "sql": str(entry.get("sql") or ""),
+        "normalized_sql": entry.get("normalized_sql"),
         "explain_artifact_path": explain_path,
         "explain_artifact_format": explain_format,
         "explain_schema_fingerprint": explain_schema_fp,
@@ -1233,6 +1284,7 @@ class IncrementalWriteContext:
     output_dir: str | None
     work_dir: str | None
     incremental_config: IncrementalConfig
+    ibis_execution: IbisExecutionContext
     output_config: OutputConfig | None = None
 
 
@@ -1244,6 +1296,7 @@ class CpgDeltaWriteContext:
     output_config: OutputConfig
     incremental_config: IncrementalConfig
     ctx: ExecutionContext
+    ibis_execution: IbisExecutionContext
 
 
 @tag(layer="materialize", artifact="cpg_delta_write_context", kind="object")
@@ -1252,6 +1305,7 @@ def cpg_delta_write_context(
     output_config: OutputConfig,
     incremental_config: IncrementalConfig,
     ctx: ExecutionContext,
+    ibis_execution: IbisExecutionContext,
 ) -> CpgDeltaWriteContext:
     """Bundle CPG Delta materialization inputs.
 
@@ -1265,6 +1319,7 @@ def cpg_delta_write_context(
         output_config=output_config,
         incremental_config=incremental_config,
         ctx=ctx,
+        ibis_execution=ibis_execution,
     )
 
 
@@ -1287,18 +1342,21 @@ def _write_incremental_dataset(
     )
     delta_context = _resolve_delta_write_context(
         name,
-        DeltaWriteOptions(
+        IbisDeltaWriteOptions(
             mode="overwrite",
             schema_mode="overwrite",
             commit_metadata=_delta_commit_metadata(name, schema),
         ),
         output_config=context.output_config,
     )
-    result = write_dataset_delta(
+    result = write_ibis_dataset_delta(
         data,
         str(base / name),
-        options=delta_context.options,
-        storage_options=delta_context.storage_options,
+        options=IbisDatasetWriteOptions(
+            execution=context.ibis_execution,
+            writer_strategy="datafusion",
+            delta_options=delta_context.options,
+        ),
     )
     return result.path
 
@@ -1329,6 +1387,7 @@ def incremental_output_fingerprint_changes(
     incremental_relationship_updates: Mapping[str, str] | None,
     incremental_state_store: StateStore | None,
     incremental_config: IncrementalConfig,
+    ibis_execution: IbisExecutionContext,
 ) -> pa.Table | None:
     """Return output fingerprint change diagnostics for incremental runs.
 
@@ -1343,7 +1402,7 @@ def incremental_output_fingerprint_changes(
     current = _output_fingerprint_map(run_manifest)
     previous = read_dataset_fingerprints(incremental_state_store)
     table = output_fingerprint_change_table(previous, current)
-    write_dataset_fingerprints(incremental_state_store, current)
+    write_dataset_fingerprints(incremental_state_store, current, execution=ibis_execution)
     return table
 
 
@@ -1632,46 +1691,30 @@ def _write_normalized_inputs(
     *,
     options: NormalizedInputsWriteOptions,
 ) -> dict[str, DeltaWriteResult]:
-    delta_options = apply_delta_write_policies(
-        DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
-        write_policy=options.output_config.delta_write_policy,
-        schema_policy=options.output_config.delta_schema_policy,
-    )
+    delta_options = IbisDeltaWriteOptions(mode="overwrite", schema_mode="overwrite")
     storage_options = options.output_config.delta_storage_options
-    if any(isinstance(table, IbisPlan) for table in input_datasets.values()):
-        results = write_ibis_named_datasets_delta(
-            input_datasets,
-            str(out_dir),
-            options=IbisNamedDatasetWriteOptions(
-                execution=options.ibis_execution,
-                writer_strategy=options.writer_strategy,
-                delta_reporter=options.reporter,
-                delta_options=delta_options,
-                delta_write_policy=options.output_config.delta_write_policy,
-                delta_schema_policy=options.output_config.delta_schema_policy,
-                storage_options=storage_options,
-            ),
-        )
-        _write_parquet_exports(input_datasets, out_dir, options=options)
-        return results
-    converted: dict[str, TableLike | RecordBatchReaderLike] = {}
+    converted: dict[str, TableLike | RecordBatchReaderLike | IbisPlan] = {}
     for name, table in input_datasets.items():
         if isinstance(table, IbisPlan):
-            msg = "Normalized input delta writes do not accept Ibis plans in Arrow mode."
-            raise TypeError(msg)
+            converted[name] = table
+            continue
         schema = options.context.schemas.get(name)
         policy = options.context.encoding_policies.get(name)
         converted[name] = coerce_delta_table(table, schema=schema, encoding_policy=policy)
-    results = write_named_datasets_delta(
+    results = write_ibis_named_datasets_delta(
         converted,
         str(out_dir),
-        options=delta_options,
-        storage_options=storage_options,
+        options=IbisNamedDatasetWriteOptions(
+            execution=options.ibis_execution,
+            writer_strategy=options.writer_strategy,
+            delta_reporter=options.reporter,
+            delta_options=delta_options,
+            delta_write_policy=options.output_config.delta_write_policy,
+            delta_schema_policy=options.output_config.delta_schema_policy,
+            storage_options=storage_options,
+        ),
     )
-    if options.reporter is not None:
-        for result in results.values():
-            options.reporter(result)
-    _write_parquet_exports(converted, out_dir, options=options)
+    _write_parquet_exports(input_datasets, out_dir, options=options)
     return results
 
 
@@ -1765,6 +1808,7 @@ def write_normalized_inputs_delta(
     -------
     JsonDict | None
         Report of written datasets, or None when output is disabled.
+
     """
     input_datasets = cast(
         "dict[str, TableLike | RecordBatchReaderLike | IbisPlan]",
@@ -1808,6 +1852,96 @@ def write_normalized_inputs_delta(
 
 
 # -----------------------
+# Materializers: normalize outputs (Delta tables)
+# -----------------------
+
+
+def _normalize_output_mode(output_config: OutputConfig) -> Literal["append", "overwrite"]:
+    return "overwrite" if output_config.overwrite_intermediate_datasets else "append"
+
+
+def _normalize_outputs_report(
+    base_dir: Path,
+    results: Mapping[str, NormalizeDeltaWriteResult],
+) -> JsonDict:
+    datasets: dict[str, JsonDict] = {}
+    for name, result in results.items():
+        datasets[name] = {
+            "path": result.path,
+            "rows_affected": result.rows_affected,
+            "mode": result.mode,
+            "commit_key": result.commit_key,
+            "app_id": result.app_id,
+            "version": result.version,
+        }
+    return {"base_dir": str(base_dir), "datasets": datasets}
+
+
+def _normalize_output_names(
+    outputs: Mapping[str, TableLike],
+) -> tuple[str, ...]:
+    resolved: list[str] = []
+    for name in outputs:
+        with suppress(KeyError):
+            resolved.append(normalize_dataset_name_from_alias(name))
+    return tuple(dict.fromkeys(resolved))
+
+
+@tag(layer="materialize", artifact="normalize_outputs_delta", kind="side_effect")
+def write_normalize_outputs_delta(
+    normalize_outputs_bundle: Mapping[str, TableLike],
+    output_dir: str | None,
+    output_config: OutputConfig,
+    ctx: ExecutionContext,
+) -> JsonDict | None:
+    """Write normalize outputs to Delta-backed tables.
+
+    Output structure:
+      <output_dir>/normalize/<dataset_name>
+
+    Returns
+    -------
+    JsonDict | None
+        Report of written datasets, or None when output is disabled.
+
+    Raises
+    ------
+    ValueError
+        Raised when the output storage policy is not Delta.
+    """
+    if output_dir is None:
+        return None
+    if output_config.output_storage_policy.format != "delta":
+        msg = "Normalize outputs require Delta storage policy."
+        raise ValueError(msg)
+    runtime = build_normalize_runtime(ctx)
+    base_dir = normalize_output_root(output_dir)
+    _ensure_dir(base_dir)
+    dataset_names = _normalize_output_names(normalize_outputs_bundle)
+    register_normalize_output_tables(
+        runtime.ctx,
+        output_dir,
+        datasets=dataset_names,
+        runtime_profile=runtime.runtime_profile,
+    )
+    results: dict[str, NormalizeDeltaWriteResult] = {}
+    mode = _normalize_output_mode(output_config)
+    for alias, table in normalize_outputs_bundle.items():
+        try:
+            dataset_name = normalize_dataset_name_from_alias(alias)
+        except KeyError:
+            continue
+        request = NormalizeDeltaWriteRequest(
+            table_name=dataset_name,
+            dataframe=table,
+            mode=mode,
+            commit_metadata={"output": dataset_name},
+        )
+        results[dataset_name] = write_normalize_output_delta(runtime, request)
+    return _normalize_outputs_report(base_dir, results)
+
+
+# -----------------------
 # Materializers: final CPG tables (Delta tables)
 # -----------------------
 
@@ -1825,6 +1959,63 @@ def _override_finalize_good(
         stats=finalize.stats,
         alignment=finalize.alignment,
     )
+
+
+def _finalize_artifact_path(base_path: str, suffix: str) -> str:
+    base = Path(base_path)
+    name = f"{base.name}_{suffix}"
+    return str(base.with_name(name))
+
+
+def _write_finalize_result_delta(
+    result: FinalizeResult,
+    base_path: str,
+    *,
+    options: IbisDeltaWriteOptions,
+    execution: IbisExecutionContext,
+) -> dict[str, str]:
+    data_result = write_ibis_dataset_delta(
+        result.good,
+        base_path,
+        options=IbisDatasetWriteOptions(
+            execution=execution,
+            writer_strategy="datafusion",
+            delta_options=options,
+        ),
+    )
+    errors_result = write_ibis_dataset_delta(
+        result.errors,
+        _finalize_artifact_path(base_path, "errors"),
+        options=IbisDatasetWriteOptions(
+            execution=execution,
+            writer_strategy="datafusion",
+            delta_options=options,
+        ),
+    )
+    stats_result = write_ibis_dataset_delta(
+        result.stats,
+        _finalize_artifact_path(base_path, "error_stats"),
+        options=IbisDatasetWriteOptions(
+            execution=execution,
+            writer_strategy="datafusion",
+            delta_options=options,
+        ),
+    )
+    alignment_result = write_ibis_dataset_delta(
+        result.alignment,
+        _finalize_artifact_path(base_path, "alignment"),
+        options=IbisDatasetWriteOptions(
+            execution=execution,
+            writer_strategy="datafusion",
+            delta_options=options,
+        ),
+    )
+    return {
+        "data": data_result.path,
+        "errors": errors_result.path,
+        "stats": stats_result.path,
+        "alignment": alignment_result.path,
+    }
 
 
 @tag(layer="materialize", artifact="cpg_nodes_delta", kind="side_effect")
@@ -1849,7 +2040,7 @@ def write_cpg_nodes_delta(
     _require_explicit_ordering(finalize.good.schema, label="cpg_nodes_final")
     delta_context = _resolve_delta_write_context(
         "cpg_nodes",
-        DeltaWriteOptions(
+        IbisDeltaWriteOptions(
             mode="overwrite",
             schema_mode="overwrite",
             commit_metadata=_delta_commit_metadata("cpg_nodes", finalize.good.schema),
@@ -1862,11 +2053,11 @@ def write_cpg_nodes_delta(
         constraints=delta_context.constraints,
         ctx=context.ctx,
     )
-    paths = write_finalize_result_delta(
+    paths = _write_finalize_result_delta(
         finalize,
         str(output_path / "cpg_nodes"),
         options=delta_context.options,
-        storage_options=delta_context.storage_options,
+        execution=context.ibis_execution,
     )
     versions = {key: delta_table_version(path) for key, path in paths.items()}
     return {
@@ -1886,6 +2077,7 @@ def write_cpg_nodes_quality_delta(
     output_dir: str | None,
     output_config: OutputConfig,
     cpg_nodes_quality: TableLike,
+    ibis_execution: IbisExecutionContext,
 ) -> JsonDict | None:
     """Write CPG node quality diagnostics to Delta.
 
@@ -1900,18 +2092,21 @@ def write_cpg_nodes_quality_delta(
     _ensure_dir(output_path)
     delta_context = _resolve_delta_write_context(
         "cpg_nodes_quality",
-        DeltaWriteOptions(
+        IbisDeltaWriteOptions(
             mode="overwrite",
             schema_mode="overwrite",
             commit_metadata=_delta_commit_metadata("cpg_nodes_quality", cpg_nodes_quality.schema),
         ),
         output_config=output_config,
     )
-    result = write_table_delta(
+    result = write_ibis_dataset_delta(
         cpg_nodes_quality,
         str(output_path / "cpg_nodes_quality"),
-        options=delta_context.options,
-        storage_options=delta_context.storage_options,
+        options=IbisDatasetWriteOptions(
+            execution=ibis_execution,
+            writer_strategy="datafusion",
+            delta_options=delta_context.options,
+        ),
     )
     return {
         "path": result.path,
@@ -1945,7 +2140,7 @@ def write_cpg_edges_delta(
     _require_explicit_ordering(finalize.good.schema, label="cpg_edges_final")
     delta_context = _resolve_delta_write_context(
         "cpg_edges",
-        DeltaWriteOptions(
+        IbisDeltaWriteOptions(
             mode="overwrite",
             schema_mode="overwrite",
             commit_metadata=_delta_commit_metadata("cpg_edges", finalize.good.schema),
@@ -1958,11 +2153,11 @@ def write_cpg_edges_delta(
         constraints=delta_context.constraints,
         ctx=context.ctx,
     )
-    paths = write_finalize_result_delta(
+    paths = _write_finalize_result_delta(
         finalize,
         str(output_path / "cpg_edges"),
         options=delta_context.options,
-        storage_options=delta_context.storage_options,
+        execution=context.ibis_execution,
     )
     versions = {key: delta_table_version(path) for key, path in paths.items()}
     return {
@@ -1999,7 +2194,7 @@ def write_cpg_props_delta(
     _require_explicit_ordering(finalize.good.schema, label="cpg_props_final")
     delta_context = _resolve_delta_write_context(
         "cpg_props",
-        DeltaWriteOptions(
+        IbisDeltaWriteOptions(
             mode="overwrite",
             schema_mode="overwrite",
             commit_metadata=_delta_commit_metadata("cpg_props", finalize.good.schema),
@@ -2012,11 +2207,11 @@ def write_cpg_props_delta(
         constraints=delta_context.constraints,
         ctx=context.ctx,
     )
-    paths = write_finalize_result_delta(
+    paths = _write_finalize_result_delta(
         finalize,
         str(output_path / "cpg_props"),
         options=delta_context.options,
-        storage_options=delta_context.storage_options,
+        execution=context.ibis_execution,
     )
     versions = {key: delta_table_version(path) for key, path in paths.items()}
     return {
@@ -2036,6 +2231,7 @@ def write_cpg_props_json_delta(
     output_dir: str | None,
     output_config: OutputConfig,
     cpg_props_json: TableLike | None,
+    ibis_execution: IbisExecutionContext,
 ) -> JsonDict | None:
     """Write optional JSON-heavy CPG properties to Delta.
 
@@ -2050,18 +2246,21 @@ def write_cpg_props_json_delta(
     _ensure_dir(output_path)
     delta_context = _resolve_delta_write_context(
         "cpg_props_json",
-        DeltaWriteOptions(
+        IbisDeltaWriteOptions(
             mode="overwrite",
             schema_mode="overwrite",
             commit_metadata=_delta_commit_metadata("cpg_props_json", cpg_props_json.schema),
         ),
         output_config=output_config,
     )
-    result = write_table_delta(
+    result = write_ibis_dataset_delta(
         cpg_props_json,
         str(output_path / "cpg_props_json"),
-        options=delta_context.options,
-        storage_options=delta_context.storage_options,
+        options=IbisDatasetWriteOptions(
+            execution=ibis_execution,
+            writer_strategy="datafusion",
+            delta_options=delta_context.options,
+        ),
     )
     return {
         "path": result.path,
@@ -2078,6 +2277,7 @@ def write_cpg_props_quality_delta(
     output_dir: str | None,
     output_config: OutputConfig,
     cpg_props_quality: TableLike,
+    ibis_execution: IbisExecutionContext,
 ) -> JsonDict | None:
     """Write CPG property quality diagnostics to Delta.
 
@@ -2092,18 +2292,21 @@ def write_cpg_props_quality_delta(
     _ensure_dir(output_path)
     delta_context = _resolve_delta_write_context(
         "cpg_props_quality",
-        DeltaWriteOptions(
+        IbisDeltaWriteOptions(
             mode="overwrite",
             schema_mode="overwrite",
             commit_metadata=_delta_commit_metadata("cpg_props_quality", cpg_props_quality.schema),
         ),
         output_config=output_config,
     )
-    result = write_table_delta(
+    result = write_ibis_dataset_delta(
         cpg_props_quality,
         str(output_path / "cpg_props_quality"),
-        options=delta_context.options,
-        storage_options=delta_context.storage_options,
+        options=IbisDatasetWriteOptions(
+            execution=ibis_execution,
+            writer_strategy="datafusion",
+            delta_options=delta_context.options,
+        ),
     )
     return {
         "path": result.path,
@@ -2203,6 +2406,7 @@ def write_extract_error_artifacts_delta(
     output_dir: str | None,
     output_config: OutputConfig,
     extract_error_artifacts: ExtractErrorArtifacts,
+    ibis_execution: IbisExecutionContext,
 ) -> JsonDict | None:
     """Write extract error artifacts to Delta tables.
 
@@ -2227,7 +2431,7 @@ def write_extract_error_artifacts_delta(
         _ensure_dir(dataset_dir)
         error_context = _resolve_delta_write_context(
             f"{output}.errors",
-            DeltaWriteOptions(
+            IbisDeltaWriteOptions(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata=_delta_commit_metadata(f"{output}.errors", errors.schema),
@@ -2236,7 +2440,7 @@ def write_extract_error_artifacts_delta(
         )
         stats_context = _resolve_delta_write_context(
             f"{output}.error_stats",
-            DeltaWriteOptions(
+            IbisDeltaWriteOptions(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata=_delta_commit_metadata(f"{output}.error_stats", stats.schema),
@@ -2245,30 +2449,39 @@ def write_extract_error_artifacts_delta(
         )
         alignment_context = _resolve_delta_write_context(
             f"{output}.alignment",
-            DeltaWriteOptions(
+            IbisDeltaWriteOptions(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata=_delta_commit_metadata(f"{output}.alignment", alignment.schema),
             ),
             output_config=output_config,
         )
-        error_result = write_table_delta(
+        error_result = write_ibis_dataset_delta(
             errors,
             str(dataset_dir / "errors"),
-            options=error_context.options,
-            storage_options=error_context.storage_options,
+            options=IbisDatasetWriteOptions(
+                execution=ibis_execution,
+                writer_strategy="datafusion",
+                delta_options=error_context.options,
+            ),
         )
-        stats_result = write_table_delta(
+        stats_result = write_ibis_dataset_delta(
             stats,
             str(dataset_dir / "error_stats"),
-            options=stats_context.options,
-            storage_options=stats_context.storage_options,
+            options=IbisDatasetWriteOptions(
+                execution=ibis_execution,
+                writer_strategy="datafusion",
+                delta_options=stats_context.options,
+            ),
         )
-        alignment_result = write_table_delta(
+        alignment_result = write_ibis_dataset_delta(
             alignment,
             str(dataset_dir / "alignment"),
-            options=alignment_context.options,
-            storage_options=alignment_context.storage_options,
+            options=IbisDatasetWriteOptions(
+                execution=ibis_execution,
+                writer_strategy="datafusion",
+                delta_options=alignment_context.options,
+            ),
         )
         datasets[output] = {
             "paths": {
@@ -2306,6 +2519,7 @@ def write_inc_changed_exports_delta(
     output_dir: str | None,
     work_dir: str | None,
     incremental_config: IncrementalConfig,
+    ibis_execution: IbisExecutionContext,
 ) -> str | None:
     """Write incremental export deltas for diagnostics.
 
@@ -2318,6 +2532,7 @@ def write_inc_changed_exports_delta(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
+        ibis_execution=ibis_execution,
     )
     return _write_incremental_dataset(
         name="inc_changed_exports_v1",
@@ -2332,6 +2547,7 @@ def write_inc_impacted_callers_delta(
     output_dir: str | None,
     work_dir: str | None,
     incremental_config: IncrementalConfig,
+    ibis_execution: IbisExecutionContext,
 ) -> str | None:
     """Write impacted caller diagnostics.
 
@@ -2344,6 +2560,7 @@ def write_inc_impacted_callers_delta(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
+        ibis_execution=ibis_execution,
     )
     return _write_incremental_dataset(
         name="inc_impacted_callers_v1",
@@ -2358,6 +2575,7 @@ def write_inc_impacted_importers_delta(
     output_dir: str | None,
     work_dir: str | None,
     incremental_config: IncrementalConfig,
+    ibis_execution: IbisExecutionContext,
 ) -> str | None:
     """Write impacted importer diagnostics.
 
@@ -2370,6 +2588,7 @@ def write_inc_impacted_importers_delta(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
+        ibis_execution=ibis_execution,
     )
     return _write_incremental_dataset(
         name="inc_impacted_importers_v1",
@@ -2384,6 +2603,7 @@ def write_inc_impacted_files_delta(
     output_dir: str | None,
     work_dir: str | None,
     incremental_config: IncrementalConfig,
+    ibis_execution: IbisExecutionContext,
 ) -> str | None:
     """Write impacted file diagnostics.
 
@@ -2396,6 +2616,7 @@ def write_inc_impacted_files_delta(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
+        ibis_execution=ibis_execution,
     )
     return _write_incremental_dataset(
         name="inc_impacted_files_v2",
@@ -2410,6 +2631,7 @@ def write_inc_output_fingerprint_changes_delta(
     output_dir: str | None,
     work_dir: str | None,
     incremental_config: IncrementalConfig,
+    ibis_execution: IbisExecutionContext,
 ) -> str | None:
     """Write output fingerprint change diagnostics.
 
@@ -2422,6 +2644,7 @@ def write_inc_output_fingerprint_changes_delta(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
+        ibis_execution=ibis_execution,
     )
     return _write_incremental_dataset(
         name="inc_output_fingerprint_changes_v1",
@@ -3398,6 +3621,7 @@ def write_run_manifest_delta(
     run_manifest: JsonDict,
     output_dir: str | None,
     work_dir: str | None,
+    ibis_execution: IbisExecutionContext,
 ) -> JsonDict | None:
     """Write run manifest Delta table.
 
@@ -3417,7 +3641,7 @@ def write_run_manifest_delta(
     base_path = Path(base)
     _ensure_dir(base_path)
     path = base_path / "manifest.delta"
-    write_manifest_delta(run_manifest, str(path), overwrite=True)
+    write_manifest_delta(run_manifest, str(path), overwrite=True, execution=ibis_execution)
     return {"path": str(path)}
 
 
@@ -3680,6 +3904,7 @@ class _RunBundleDatafusionArtifacts:
     traces: JsonDict | None
     explains: pa.Table | None
     plan_artifacts: pa.Table | None
+    engine_runtime: pa.Table | None
     plan_cache: Sequence[PlanCacheEntry] | None
     cache_events: Sequence[Mapping[str, object]] | None
     prepared_statements: Sequence[Mapping[str, object]] | None
@@ -3724,6 +3949,7 @@ def _run_bundle_datafusion_artifacts(
             traces=None,
             explains=None,
             plan_artifacts=None,
+            engine_runtime=None,
             plan_cache=None,
             cache_events=None,
             prepared_statements=None,
@@ -3751,6 +3977,7 @@ def _run_bundle_datafusion_artifacts(
         work_dir=work_dir,
     )
     function_catalog, function_catalog_hash = _datafusion_function_catalog_snapshot(ctx)
+    engine_runtime = _engine_runtime_artifacts_table(ctx)
     return _RunBundleDatafusionArtifacts(
         metrics=metrics,
         traces=traces,
@@ -3760,6 +3987,7 @@ def _run_bundle_datafusion_artifacts(
             output_dir=output_dir,
             work_dir=work_dir,
         ),
+        engine_runtime=engine_runtime,
         plan_cache=_datafusion_plan_cache_entries(ctx),
         cache_events=_datafusion_cache_events(ctx),
         prepared_statements=_datafusion_prepared_statements(ctx),
@@ -3840,7 +4068,7 @@ def run_bundle_context(
     function_registry = default_function_registry(
         datafusion_function_catalog=datafusion_artifacts.function_catalog
     )
-    kernel_registry = kernel_registry_snapshot()
+    kernel_registry = arrow_kernel_registry_snapshot()
     datafusion_write_policy = (
         _datafusion_write_policy_snapshot(context_inputs.ctx)
         if context_inputs.ctx is not None
@@ -3862,6 +4090,7 @@ def run_bundle_context(
         datafusion_traces=datafusion_artifacts.traces,
         datafusion_explains=datafusion_artifacts.explains,
         datafusion_plan_artifacts=datafusion_artifacts.plan_artifacts,
+        engine_runtime=datafusion_artifacts.engine_runtime,
         datafusion_plan_cache=datafusion_artifacts.plan_cache,
         datafusion_cache_events=datafusion_artifacts.cache_events,
         datafusion_prepared_statements=datafusion_artifacts.prepared_statements,

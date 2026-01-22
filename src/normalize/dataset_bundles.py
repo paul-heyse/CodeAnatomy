@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
 
-from registry_common.bundles import base_bundle_catalog
-
-if TYPE_CHECKING:
-    from schema_spec.specs import FieldBundle
+from arrowdsl.schema.semantic_types import SPAN_STORAGE
+from schema_spec.bundles import base_bundle_catalog
+from schema_spec.specs import ArrowFieldSpec, FieldBundle
 
 _BUNDLE_CATALOG: dict[str, FieldBundle] = base_bundle_catalog(include_sha256=False)
+_BUNDLE_CATALOG["span"] = FieldBundle(
+    name="span",
+    fields=(ArrowFieldSpec(name="span", dtype=SPAN_STORAGE),),
+)
 
 
 def bundle(name: str) -> FieldBundle:

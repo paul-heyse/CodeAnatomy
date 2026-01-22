@@ -43,6 +43,8 @@ def test_sql_ingest_golden_select() -> None:
     )
     expected = parse_one(SQL_SELECT_ID).sql()
     assert payload.get("sqlglot_sql") == expected
+    assert payload.get("normalized_sql") == expected
+    assert payload.get("sqlglot_ast") is not None
 
 
 def test_sql_ingest_golden_select_filter() -> None:
@@ -54,3 +56,5 @@ def test_sql_ingest_golden_select_filter() -> None:
     )
     expected = parse_one(SQL_SELECT_FILTER).sql()
     assert payload.get("sqlglot_sql") == expected
+    assert payload.get("normalized_sql") == expected
+    assert payload.get("sqlglot_ast") is not None

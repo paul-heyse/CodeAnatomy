@@ -7,13 +7,16 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from ibis_engine.sources import IbisDeltaWriteOptions
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.cdf_filters import CdfChangeType, CdfFilterPolicy
+from incremental.cdf_runtime import CdfReadResult
 from incremental.changes import file_changes_from_cdf
 from incremental.diff import diff_snapshots_with_delta_cdf
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
-from storage.deltalake import DeltaWriteOptions, enable_delta_features, write_table_delta
+from storage.deltalake import enable_delta_features
+from tests.utils import write_delta_table
 
 SNAPSHOT_SIZE_BYTES = 100
 SNAPSHOT_MTIME_NS = 1000
@@ -168,7 +171,10 @@ def test_file_changes_from_cdf_empty() -> None:
             "_change_type": pa.array([], type=pa.string()),
         }
     )
-    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
+    changes = file_changes_from_cdf(
+        CdfReadResult(table=cdf_table, updated_version=VERSION_THREE),
+        runtime=runtime,
+    )
     assert len(changes.changed_file_ids) == 0
     assert len(changes.deleted_file_ids) == 0
     assert not changes.full_refresh
@@ -184,7 +190,10 @@ def test_file_changes_from_cdf_inserts() -> None:
             "path": ["a.py", "b.py", "c.py"],
         }
     )
-    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
+    changes = file_changes_from_cdf(
+        CdfReadResult(table=cdf_table, updated_version=VERSION_THREE),
+        runtime=runtime,
+    )
     assert set(changes.changed_file_ids) == {"file_a", "file_b", "file_c"}
     assert len(changes.deleted_file_ids) == 0
     assert not changes.full_refresh
@@ -200,7 +209,10 @@ def test_file_changes_from_cdf_deletes() -> None:
             "path": ["x.py", "y.py"],
         }
     )
-    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
+    changes = file_changes_from_cdf(
+        CdfReadResult(table=cdf_table, updated_version=VERSION_THREE),
+        runtime=runtime,
+    )
     assert len(changes.changed_file_ids) == 0
     assert set(changes.deleted_file_ids) == {"file_x", "file_y"}
     assert not changes.full_refresh
@@ -216,7 +228,10 @@ def test_file_changes_from_cdf_mixed() -> None:
             "path": ["a.py", "b.py", "c.py", "d.py"],
         }
     )
-    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
+    changes = file_changes_from_cdf(
+        CdfReadResult(table=cdf_table, updated_version=VERSION_THREE),
+        runtime=runtime,
+    )
     # Inserts and updates are both "changed"
     assert set(changes.changed_file_ids) == {"file_a", "file_b", "file_d"}
     assert set(changes.deleted_file_ids) == {"file_c"}
@@ -240,10 +255,10 @@ def test_cdf_idempotency_replay_same_version(tmp_path: Path) -> None:
 
     # Write initial version
     initial = _make_snapshot_table([("file_a", "a.py", "sha1")])
-    write_table_delta(
+    write_delta_table(
         initial,
         str(dataset_path),
-        options=DeltaWriteOptions(mode="append"),
+        options=IbisDeltaWriteOptions(mode="append"),
     )
     enable_delta_features(str(dataset_path))
 
@@ -279,19 +294,19 @@ def test_cdf_idempotency_no_duplicate_processing(tmp_path: Path) -> None:
 
     # Write version 0
     v0 = _make_snapshot_table([("file_a", "a.py", "sha1")])
-    write_table_delta(
+    write_delta_table(
         v0,
         str(dataset_path),
-        options=DeltaWriteOptions(mode="append"),
+        options=IbisDeltaWriteOptions(mode="append"),
     )
     enable_delta_features(str(dataset_path))
 
     # Write version 1
     v1 = _make_snapshot_table([("file_b", "b.py", "sha2")])
-    write_table_delta(
+    write_delta_table(
         v1,
         str(dataset_path),
-        options=DeltaWriteOptions(mode="append"),
+        options=IbisDeltaWriteOptions(mode="append"),
     )
 
     # Set up cursor store

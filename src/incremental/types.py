@@ -3,8 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
 
-from registry_common.settings import IncrementalSettings
+
+@dataclass(frozen=True)
+class IncrementalSettings:
+    """Shared incremental pipeline settings."""
+
+    enabled: bool = False
+    state_dir: Path | None = None
+    repo_id: str | None = None
+    impact_strategy: Literal["hybrid", "symbol_closure", "import_closure"] = "hybrid"
+
 
 IncrementalConfig = IncrementalSettings
 
@@ -28,4 +39,9 @@ class IncrementalFileChanges:
     full_refresh: bool = False
 
 
-__all__ = ["IncrementalConfig", "IncrementalFileChanges", "IncrementalImpact"]
+__all__ = [
+    "IncrementalConfig",
+    "IncrementalFileChanges",
+    "IncrementalImpact",
+    "IncrementalSettings",
+]

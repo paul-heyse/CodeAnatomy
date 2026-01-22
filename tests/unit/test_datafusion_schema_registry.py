@@ -6,6 +6,7 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from arrowdsl.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
+from arrowdsl.schema.metadata import metadata_list_bytes
 from datafusion_engine.schema_registry import (
     AST_VIEW_NAMES,
     nested_view_specs,
@@ -20,7 +21,6 @@ from datafusion_engine.schema_registry import (
     validate_required_symtable_functions,
 )
 from datafusion_engine.udf_registry import register_datafusion_udfs
-from registry_common.metadata import metadata_list_bytes
 
 
 def _to_arrow_schema(value: object) -> pa.Schema:

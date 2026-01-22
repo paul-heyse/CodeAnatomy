@@ -19,15 +19,15 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
+from arrowdsl.io.ipc import payload_hash
 from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.encoding_metadata import (
     ENCODING_DICTIONARY,
     ENCODING_META,
     dict_field_metadata,
 )
+from arrowdsl.schema.metadata import metadata_list_bytes
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
-from registry_common.arrow_payloads import payload_hash
-from registry_common.metadata import metadata_list_bytes
 from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
     ExternalTableCompressionProperty,

@@ -6,12 +6,12 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.spec.literals import parse_scalar_value
-from registry_common.metadata import (
+from arrowdsl.schema.metadata import (
     decode_metadata_list,
     decode_metadata_map,
     decode_metadata_scalar_map,
 )
+from arrowdsl.spec.literals import parse_scalar_value
 from relspec.rules.definitions import EvidenceOutput, EvidenceSpec
 
 if TYPE_CHECKING:

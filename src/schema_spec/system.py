@@ -834,8 +834,20 @@ class DatasetOpenSpec:
         *,
         backend: ibis.backends.BaseBackend,
         table_name: str | None = None,
+        dataset_spec: DatasetSpec | None = None,
     ) -> Table:
         """Read an Ibis table using the stored options.
+
+        Parameters
+        ----------
+        path : PathLike
+            Dataset location.
+        backend : ibis.backends.BaseBackend
+            Ibis backend used for reading.
+        table_name : str | None
+            Optional name for registering the table.
+        dataset_spec : DatasetSpec | None
+            Optional dataset spec with DataFusion scan options.
 
         Returns
         -------
@@ -851,6 +863,7 @@ class DatasetOpenSpec:
             filesystem=self.filesystem,
             partitioning=self.partitioning,
             table_name=table_name,
+            dataset_spec=dataset_spec,
         )
         return module.read_dataset(backend, params=params)
 

@@ -14,6 +14,7 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.scan_telemetry import ScanTelemetry
+from arrowdsl.io.ipc import payload_hash
 from ibis_engine.expr_compiler import (
     IbisExprRegistry,
     align_set_op_tables,
@@ -22,7 +23,6 @@ from ibis_engine.expr_compiler import (
     union_tables,
 )
 from ibis_engine.plan import IbisPlan
-from registry_common.arrow_payloads import payload_hash
 from relspec.model import DatasetRef, HashJoinConfig
 from relspec.plan import (
     RelAggregate,

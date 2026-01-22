@@ -13,7 +13,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
@@ -23,9 +23,10 @@ from extract.helpers import (
     SpanSpec,
     apply_query_and_project,
     attrs_map,
-    ibis_plan_from_row_batches,
-    ibis_plan_from_rows,
+    ibis_plan_from_reader,
     materialize_extract_plan,
+    record_batch_reader_from_row_batches,
+    record_batch_reader_from_rows,
     span_dict,
     text_from_file_ctx,
 )
@@ -36,6 +37,7 @@ from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
+    from extract.session import ExtractSession
 
 
 @dataclass(frozen=True)
@@ -930,7 +932,9 @@ def extract_ast(
     """
     normalized_options = normalize_options("ast", options, ASTExtractOptions)
     exec_context = context or ExtractExecutionContext()
-    ctx = exec_context.ensure_ctx()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ast_plans(
         repo_files,
@@ -968,6 +972,8 @@ def extract_ast_plans(
     """
     normalized_options = normalize_options("ast", options, ASTExtractOptions)
     exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     normalize = ExtractNormalizeOptions(options=normalized_options)
     batch_size = _resolve_batch_size(normalized_options)
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
@@ -989,13 +995,17 @@ def extract_ast_plans(
             ctx=ctx,
         )
     evidence_plan = exec_context.evidence_plan
+    plan_context = _AstPlanContext(
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        session=session,
+    )
     return {
         "ast_files": _build_ast_plan(
             "ast_files_v1",
             rows,
             row_batches=row_batches,
-            normalize=normalize,
-            evidence_plan=evidence_plan,
+            plan_context=plan_context,
         ),
     }
 
@@ -1086,20 +1096,27 @@ def _build_ast_plan(
     rows: list[dict[str, object]] | None,
     *,
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None,
-    normalize: ExtractNormalizeOptions,
-    evidence_plan: EvidencePlan | None,
+    plan_context: _AstPlanContext,
 ) -> IbisPlan:
     if row_batches is not None:
-        raw = ibis_plan_from_row_batches(name, row_batches)
+        reader = record_batch_reader_from_row_batches(name, row_batches)
     else:
-        raw = ibis_plan_from_rows(name, rows or [])
+        reader = record_batch_reader_from_rows(name, rows or [])
+    raw = ibis_plan_from_reader(name, reader, session=plan_context.session)
     return apply_query_and_project(
         name,
         raw.expr,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
+        normalize=plan_context.normalize,
+        evidence_plan=plan_context.evidence_plan,
+        repo_id=plan_context.normalize.repo_id,
     )
+
+
+@dataclass(frozen=True)
+class _AstPlanContext:
+    normalize: ExtractNormalizeOptions
+    evidence_plan: EvidencePlan | None
+    session: ExtractSession
 
 
 class _AstTablesKwargs(TypedDict, total=False):
@@ -1107,6 +1124,7 @@ class _AstTablesKwargs(TypedDict, total=False):
     options: ASTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     prefer_reader: bool
@@ -1117,6 +1135,7 @@ class _AstTablesKwargsTable(TypedDict, total=False):
     options: ASTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     prefer_reader: Literal[False]
@@ -1127,6 +1146,7 @@ class _AstTablesKwargsReader(TypedDict, total=False):
     options: ASTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
+    session: ExtractSession | None
     ctx: ExecutionContext | None
     profile: str
     prefer_reader: Required[Literal[True]]
@@ -1165,14 +1185,16 @@ def extract_ast_tables(
     file_contexts = kwargs.get("file_contexts")
     evidence_plan = kwargs.get("evidence_plan")
     profile = kwargs.get("profile", "default")
-    ctx = kwargs.get("ctx") or execution_context_factory(profile)
     prefer_reader = kwargs.get("prefer_reader", False)
     exec_context = ExtractExecutionContext(
         file_contexts=file_contexts,
         evidence_plan=evidence_plan,
-        ctx=ctx,
+        ctx=kwargs.get("ctx"),
+        session=kwargs.get("session"),
         profile=profile,
     )
+    session = exec_context.ensure_session()
+    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ast_plans(
         repo_files,
@@ -1183,7 +1205,7 @@ def extract_ast_tables(
         "ast_files": materialize_extract_plan(
             "ast_files_v1",
             plans["ast_files"],
-            ctx=ctx,
+            ctx=session.exec_ctx,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
                 prefer_reader=prefer_reader,

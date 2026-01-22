@@ -161,13 +161,7 @@ def ibis_backend_config(engine_session: EngineSession) -> IbisBackendConfig:
     IbisBackendConfig
         Backend configuration for Ibis execution.
     """
-    return IbisBackendConfig(
-        datafusion_profile=engine_session.df_profile,
-        fuse_selects=engine_session.runtime_profile.ibis_fuse_selects,
-        default_limit=engine_session.runtime_profile.ibis_default_limit,
-        default_dialect=engine_session.runtime_profile.ibis_default_dialect,
-        interactive=engine_session.runtime_profile.ibis_interactive,
-    )
+    return engine_session.engine_runtime.ibis_config
 
 
 @tag(layer="inputs", kind="runtime")

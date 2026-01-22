@@ -8,20 +8,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, overload
 
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from core_types import PathLike, ensure_path
 from datafusion_engine.extract_registry import dataset_query, normalize_options
 from extract.helpers import (
+    ExtractExecutionContext,
     ExtractMaterializeOptions,
     apply_query_and_project,
     empty_ibis_plan,
-    ibis_plan_from_rows,
+    ibis_plan_from_reader,
     materialize_extract_plan,
+    record_batch_reader_from_rows,
 )
 from extract.repo_scan_fs import iter_repo_files_fs
 from extract.repo_scan_git import iter_repo_files_git
 from extract.schema_ops import ExtractNormalizeOptions
+from extract.session import ExtractSession
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec
 
@@ -223,9 +225,8 @@ def repo_scan_hash_index(repo_files: TableLike) -> dict[str, RepoFileFingerprint
 def scan_repo(
     repo_root: PathLike,
     options: RepoScanOptions | None = None,
-    ctx: ExecutionContext | None = None,
-    profile: str = "default",
     *,
+    context: ExtractExecutionContext | None = None,
     prefer_reader: Literal[False] = False,
 ) -> TableLike: ...
 
@@ -234,9 +235,8 @@ def scan_repo(
 def scan_repo(
     repo_root: PathLike,
     options: RepoScanOptions | None = None,
-    ctx: ExecutionContext | None = None,
-    profile: str = "default",
     *,
+    context: ExtractExecutionContext | None = None,
     prefer_reader: Literal[True],
 ) -> TableLike | RecordBatchReaderLike: ...
 
@@ -244,9 +244,8 @@ def scan_repo(
 def scan_repo(
     repo_root: PathLike,
     options: RepoScanOptions | None = None,
-    ctx: ExecutionContext | None = None,
-    profile: str = "default",
     *,
+    context: ExtractExecutionContext | None = None,
     prefer_reader: bool = False,
 ) -> TableLike | RecordBatchReaderLike:
     """Scan the repo for Python files and return a repo_files table.
@@ -257,10 +256,8 @@ def scan_repo(
         Repository root path.
     options:
         Scan options.
-    ctx:
-        Execution context for plan execution.
-    profile:
-        Execution profile name used when ``ctx`` is not provided.
+    context:
+        Optional extract execution context for session and profile resolution.
     prefer_reader:
         When True, return a streaming reader when possible.
 
@@ -270,14 +267,16 @@ def scan_repo(
         Repo file metadata output.
     """
     normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
-    ctx = ctx or execution_context_factory(profile)
+    exec_context = context or ExtractExecutionContext()
+    session = exec_context.ensure_session()
+    ctx = session.exec_ctx
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
     )
     max_files = normalized_options.max_files
     if max_files is not None and max_files <= 0:
-        empty_plan = empty_ibis_plan("repo_files_v1")
+        empty_plan = empty_ibis_plan("repo_files_v1", session=session)
         return materialize_extract_plan(
             "repo_files_v1",
             empty_plan,
@@ -289,7 +288,7 @@ def scan_repo(
             ),
         )
 
-    plan = scan_repo_plan(repo_root, options=normalized_options, ctx=ctx)
+    plan = scan_repo_plan(repo_root, options=normalized_options, session=session)
     return materialize_extract_plan(
         "repo_files_v1",
         plan,
@@ -306,7 +305,7 @@ def scan_repo_plan(
     repo_root: PathLike,
     *,
     options: RepoScanOptions,
-    ctx: ExecutionContext,
+    session: ExtractSession,
 ) -> IbisPlan:
     """Build the plan for repository scanning.
 
@@ -329,7 +328,8 @@ def scan_repo_plan(
             if options.max_files is not None and count >= options.max_files:
                 break
 
-    raw_plan = ibis_plan_from_rows("repo_files_v1", iter_rows(), ctx=ctx)
+    reader = record_batch_reader_from_rows("repo_files_v1", iter_rows())
+    raw_plan = ibis_plan_from_reader("repo_files_v1", reader, session=session)
     return apply_query_and_project(
         "repo_files_v1",
         raw_plan.expr,

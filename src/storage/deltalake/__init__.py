@@ -7,22 +7,15 @@ from typing import TYPE_CHECKING
 
 __all__ = (
     "DeltaCdfOptions",
-    "DeltaSchemaMode",
     "DeltaSchemaPolicy",
-    "DeltaUpsertOptions",
     "DeltaVacuumOptions",
-    "DeltaWriteInput",
-    "DeltaWriteMode",
-    "DeltaWriteOptions",
     "DeltaWritePolicy",
     "DeltaWriteResult",
-    "DeltaWriteRetryPolicy",
-    "EncodingPolicy",
     "FileIndexEntry",
     "FilePruningPolicy",
     "FilePruningResult",
     "StorageOptions",
-    "apply_delta_write_policies",
+    "build_commit_properties",
     "build_delta_file_index",
     "cleanup_delta_log",
     "coerce_delta_table",
@@ -38,14 +31,9 @@ __all__ = (
     "evaluate_and_select_files",
     "evaluate_filters_against_index",
     "open_delta_table",
+    "read_delta_cdf",
     "select_candidate_files",
-    "upsert_dataset_partitions_delta",
     "vacuum_delta",
-    "write_datafusion_delta",
-    "write_dataset_delta",
-    "write_finalize_result_delta",
-    "write_named_datasets_delta",
-    "write_table_delta",
 )
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
@@ -54,17 +42,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "delta_schema_configuration": ("storage.deltalake.config", "delta_schema_configuration"),
     "delta_write_configuration": ("storage.deltalake.config", "delta_write_configuration"),
     "DeltaCdfOptions": ("storage.deltalake.delta", "DeltaCdfOptions"),
-    "DeltaSchemaMode": ("storage.deltalake.delta", "DeltaSchemaMode"),
-    "DeltaUpsertOptions": ("storage.deltalake.delta", "DeltaUpsertOptions"),
     "DeltaVacuumOptions": ("storage.deltalake.delta", "DeltaVacuumOptions"),
-    "DeltaWriteInput": ("storage.deltalake.delta", "DeltaWriteInput"),
-    "DeltaWriteMode": ("storage.deltalake.delta", "DeltaWriteMode"),
-    "DeltaWriteOptions": ("storage.deltalake.delta", "DeltaWriteOptions"),
     "DeltaWriteResult": ("storage.deltalake.delta", "DeltaWriteResult"),
-    "DeltaWriteRetryPolicy": ("storage.deltalake.delta", "DeltaWriteRetryPolicy"),
-    "EncodingPolicy": ("storage.deltalake.delta", "EncodingPolicy"),
     "StorageOptions": ("storage.deltalake.delta", "StorageOptions"),
-    "apply_delta_write_policies": ("storage.deltalake.delta", "apply_delta_write_policies"),
+    "build_commit_properties": ("storage.deltalake.delta", "build_commit_properties"),
     "cleanup_delta_log": ("storage.deltalake.delta", "cleanup_delta_log"),
     "coerce_delta_table": ("storage.deltalake.delta", "coerce_delta_table"),
     "create_delta_checkpoint": ("storage.deltalake.delta", "create_delta_checkpoint"),
@@ -75,16 +56,8 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "delta_table_version": ("storage.deltalake.delta", "delta_table_version"),
     "enable_delta_features": ("storage.deltalake.delta", "enable_delta_features"),
     "open_delta_table": ("storage.deltalake.delta", "open_delta_table"),
-    "upsert_dataset_partitions_delta": (
-        "storage.deltalake.delta",
-        "upsert_dataset_partitions_delta",
-    ),
+    "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
-    "write_dataset_delta": ("storage.deltalake.delta", "write_dataset_delta"),
-    "write_datafusion_delta": ("storage.deltalake.delta", "write_datafusion_delta"),
-    "write_finalize_result_delta": ("storage.deltalake.delta", "write_finalize_result_delta"),
-    "write_named_datasets_delta": ("storage.deltalake.delta", "write_named_datasets_delta"),
-    "write_table_delta": ("storage.deltalake.delta", "write_table_delta"),
     "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
     "build_delta_file_index": ("storage.deltalake.file_index", "build_delta_file_index"),
     "FilePruningPolicy": ("storage.deltalake.file_pruning", "FilePruningPolicy"),
@@ -108,17 +81,10 @@ if TYPE_CHECKING:
     delta_schema_configuration = _delta_config.delta_schema_configuration
     delta_write_configuration = _delta_config.delta_write_configuration
     DeltaCdfOptions = _delta_io.DeltaCdfOptions
-    DeltaSchemaMode = _delta_io.DeltaSchemaMode
-    DeltaUpsertOptions = _delta_io.DeltaUpsertOptions
     DeltaVacuumOptions = _delta_io.DeltaVacuumOptions
-    DeltaWriteInput = _delta_io.DeltaWriteInput
-    DeltaWriteMode = _delta_io.DeltaWriteMode
-    DeltaWriteOptions = _delta_io.DeltaWriteOptions
     DeltaWriteResult = _delta_io.DeltaWriteResult
-    DeltaWriteRetryPolicy = _delta_io.DeltaWriteRetryPolicy
-    EncodingPolicy = _delta_io.EncodingPolicy
     StorageOptions = _delta_io.StorageOptions
-    apply_delta_write_policies = _delta_io.apply_delta_write_policies
+    build_commit_properties = _delta_io.build_commit_properties
     cleanup_delta_log = _delta_io.cleanup_delta_log
     coerce_delta_table = _delta_io.coerce_delta_table
     create_delta_checkpoint = _delta_io.create_delta_checkpoint
@@ -129,13 +95,8 @@ if TYPE_CHECKING:
     delta_table_version = _delta_io.delta_table_version
     enable_delta_features = _delta_io.enable_delta_features
     open_delta_table = _delta_io.open_delta_table
-    upsert_dataset_partitions_delta = _delta_io.upsert_dataset_partitions_delta
+    read_delta_cdf = _delta_io.read_delta_cdf
     vacuum_delta = _delta_io.vacuum_delta
-    write_dataset_delta = _delta_io.write_dataset_delta
-    write_datafusion_delta = _delta_io.write_datafusion_delta
-    write_finalize_result_delta = _delta_io.write_finalize_result_delta
-    write_named_datasets_delta = _delta_io.write_named_datasets_delta
-    write_table_delta = _delta_io.write_table_delta
     FileIndexEntry = _file_index.FileIndexEntry
     build_delta_file_index = _file_index.build_delta_file_index
     FilePruningPolicy = _file_pruning.FilePruningPolicy

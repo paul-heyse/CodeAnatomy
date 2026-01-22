@@ -70,6 +70,11 @@ from hamilton_pipeline.pipeline_types import (
     TypeInputs,
 )
 from ibis_engine.hashing import HashExprSpec
+from ibis_engine.io_bridge import (
+    IbisDeltaWriteOptions,
+    IbisNamedDatasetWriteOptions,
+    write_ibis_named_datasets_delta,
+)
 from ibis_engine.param_tables import (
     ParamTablePolicy,
     ParamTableRegistry,
@@ -141,15 +146,12 @@ from schema_spec.system import (
     DatasetSpec,
 )
 from sqlglot_tools.bridge import IbisCompilerBackend
-from storage.deltalake import (
-    DeltaWriteOptions,
-    apply_delta_write_policies,
-    coerce_delta_table,
-    write_named_datasets_delta,
-)
+from storage.deltalake import coerce_delta_table
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
+
+    from ibis_engine.execution import IbisExecutionContext
 
 # -----------------------------
 # Relationship contracts
@@ -786,7 +788,7 @@ def symtable_bindings(
         engine_session.ibis_backend,
         name="symtable_bindings",
         builder=symtable_bindings_df,
-        runtime_profile=engine_session.df_profile,
+        runtime_profile=engine_session.datafusion_profile,
     )
 
 
@@ -818,7 +820,7 @@ def symtable_def_sites(
         engine_session.ibis_backend,
         name="symtable_def_sites",
         builder=symtable_def_sites_df,
-        runtime_profile=engine_session.df_profile,
+        runtime_profile=engine_session.datafusion_profile,
     )
 
 
@@ -850,7 +852,7 @@ def symtable_use_sites(
         engine_session.ibis_backend,
         name="symtable_use_sites",
         builder=symtable_use_sites_df,
-        runtime_profile=engine_session.df_profile,
+        runtime_profile=engine_session.datafusion_profile,
     )
 
 
@@ -876,7 +878,7 @@ def symtable_type_params(
         engine_session.ibis_backend,
         name="symtable_type_params",
         builder=symtable_type_params_df,
-        runtime_profile=engine_session.df_profile,
+        runtime_profile=engine_session.datafusion_profile,
     )
 
 
@@ -902,7 +904,7 @@ def symtable_type_param_edges(
         engine_session.ibis_backend,
         name="symtable_type_param_edges",
         builder=symtable_type_param_edges_df,
-        runtime_profile=engine_session.df_profile,
+        runtime_profile=engine_session.datafusion_profile,
     )
 
 
@@ -1146,15 +1148,46 @@ def relspec_input_datasets(
     )
 
 
-@cache()
-@tag(layer="relspec", artifact="persisted_relspec_inputs", kind="object")
-def persist_relspec_input_datasets(
+@dataclass(frozen=True)
+class RelspecPersistOptions:
+    """Options for persisting relationship input datasets."""
+
+    mode: Literal["memory", "filesystem"]
+    input_dataset_dir: str
+    overwrite_intermediate_datasets: bool
+    output_config: OutputConfig
+
+
+@tag(layer="relspec", artifact="relspec_persist_options", kind="object")
+def relspec_persist_options(
     relspec_mode: Literal["memory", "filesystem"],
-    relspec_input_datasets: dict[str, TableLike],
     relspec_input_dataset_dir: str,
     *,
     overwrite_intermediate_datasets: bool,
     output_config: OutputConfig,
+) -> RelspecPersistOptions:
+    """Bundle options for persisting relationship input datasets.
+
+    Returns
+    -------
+    RelspecPersistOptions
+        Persist options for relationship input datasets.
+    """
+    return RelspecPersistOptions(
+        mode=relspec_mode,
+        input_dataset_dir=relspec_input_dataset_dir,
+        overwrite_intermediate_datasets=overwrite_intermediate_datasets,
+        output_config=output_config,
+    )
+
+
+@cache()
+@tag(layer="relspec", artifact="persisted_relspec_inputs", kind="object")
+def persist_relspec_input_datasets(
+    relspec_input_datasets: dict[str, TableLike],
+    relspec_persist_options: RelspecPersistOptions,
+    *,
+    ibis_execution: IbisExecutionContext,
 ) -> dict[str, DatasetLocation]:
     """Write relationship input datasets to disk in filesystem mode.
 
@@ -1166,10 +1199,11 @@ def persist_relspec_input_datasets(
     dict[str, DatasetLocation]
         Dataset locations for persisted inputs.
     """
-    mode = (relspec_mode or "memory").lower().strip()
+    mode = (relspec_persist_options.mode or "memory").lower().strip()
     if mode != "filesystem":
         return {}
 
+    output_config = relspec_persist_options.output_config
     # Write as Delta tables for durable filesystem-backed resolvers.
     schemas = {name: table.schema for name, table in relspec_input_datasets.items()}
     dataset_specs = {name: _catalog_spec_for(name) for name in relspec_input_datasets}
@@ -1178,12 +1212,12 @@ def persist_relspec_input_datasets(
         spec = dataset_specs.get(name)
         policy = spec.encoding_policy() if spec is not None else None
         encoding_policies[name] = policy or encoding_policy_from_schema(table.schema)
-    delta_mode = "overwrite" if overwrite_intermediate_datasets else "error"
-    delta_options = apply_delta_write_policies(
-        DeltaWriteOptions(mode=delta_mode, schema_mode="overwrite"),
-        write_policy=output_config.delta_write_policy,
-        schema_policy=output_config.delta_schema_policy,
+    delta_mode = (
+        "overwrite"
+        if relspec_persist_options.overwrite_intermediate_datasets
+        else "error"
     )
+    delta_options = IbisDeltaWriteOptions(mode=delta_mode, schema_mode="overwrite")
     converted = {
         name: coerce_delta_table(
             table,
@@ -1192,11 +1226,17 @@ def persist_relspec_input_datasets(
         )
         for name, table in relspec_input_datasets.items()
     }
-    results = write_named_datasets_delta(
+    results = write_ibis_named_datasets_delta(
         converted,
-        relspec_input_dataset_dir,
-        options=delta_options,
-        storage_options=output_config.delta_storage_options,
+        relspec_persist_options.input_dataset_dir,
+        options=IbisNamedDatasetWriteOptions(
+            execution=ibis_execution,
+            writer_strategy=output_config.writer_strategy,
+            delta_options=delta_options,
+            delta_write_policy=output_config.delta_write_policy,
+            delta_schema_policy=output_config.delta_schema_policy,
+            storage_options=output_config.delta_storage_options,
+        ),
     )
 
     out: dict[str, DatasetLocation] = {}
@@ -2008,7 +2048,7 @@ def symtable_binding_resolutions(
         engine_session.ibis_backend,
         name="symtable_binding_resolutions",
         builder=symtable_binding_resolutions_df,
-        runtime_profile=engine_session.df_profile,
+        runtime_profile=engine_session.datafusion_profile,
     )
 
 

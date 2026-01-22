@@ -10,9 +10,12 @@ from typing import TYPE_CHECKING, Self
 import pyarrow as pa
 from datafusion import SessionContext
 
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution import IbisExecutionContext
 from sqlglot_tools.optimizer import SqlGlotPolicy, default_sqlglot_policy
 
 if TYPE_CHECKING:
@@ -27,6 +30,8 @@ class IncrementalRuntime:
     sqlglot_policy: SqlGlotPolicy
     _ctx: SessionContext | None = None
     _ibis_backend: BaseBackend | None = None
+    _execution_ctx: ExecutionContext | None = None
+    _ibis_execution: IbisExecutionContext | None = None
 
     @classmethod
     def build(cls, *, sqlglot_policy: SqlGlotPolicy | None = None) -> IncrementalRuntime:
@@ -65,6 +70,38 @@ class IncrementalRuntime:
             backend = build_backend(IbisBackendConfig(datafusion_profile=self.profile))
             self._ibis_backend = backend
         return backend
+
+    def execution_context(self) -> ExecutionContext:
+        """Return the cached ExecutionContext for incremental work.
+
+        Returns
+        -------
+        ExecutionContext
+            Cached or newly created execution context.
+        """
+        ctx = self._execution_ctx
+        if ctx is None:
+            runtime_profile = runtime_profile_factory("default").with_datafusion(self.profile)
+            ctx = ExecutionContext(runtime=runtime_profile)
+            self._execution_ctx = ctx
+        return ctx
+
+    def ibis_execution(self) -> IbisExecutionContext:
+        """Return the cached Ibis execution context.
+
+        Returns
+        -------
+        IbisExecutionContext
+            Cached or newly created Ibis execution context.
+        """
+        execution = self._ibis_execution
+        if execution is None:
+            execution = IbisExecutionContext(
+                ctx=self.execution_context(),
+                ibis_backend=self.ibis_backend(),
+            )
+            self._ibis_execution = execution
+        return execution
 
 
 class TempTableRegistry:

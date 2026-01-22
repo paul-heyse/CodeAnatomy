@@ -11,7 +11,8 @@ import pytest
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
-from storage.deltalake import DeltaWriteOptions, write_table_delta
+from ibis_engine.sources import IbisDeltaWriteOptions
+from tests.utils import write_delta_table
 
 datafusion = pytest.importorskip("datafusion")
 
@@ -21,10 +22,10 @@ def test_register_delta_dataset(tmp_path: Path) -> None:
     """Register a Delta table into DataFusion and validate scan output."""
     table = pa.table({"id": [1, 2], "value": ["a", "b"]})
     path = tmp_path / "delta_table"
-    write_table_delta(
+    write_delta_table(
         table,
         str(path),
-        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+        options=IbisDeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
     )
 
     ctx = DataFusionRuntimeProfile().session_context()

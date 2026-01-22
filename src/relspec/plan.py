@@ -9,9 +9,9 @@ import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import Ordering
+from arrowdsl.io.ipc import ipc_hash
 from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.query_compiler import IbisQuerySpec
-from registry_common.arrow_payloads import ipc_hash
 from relspec.model import DatasetRef, HashJoinConfig
 from relspec.rules.rel_ops import AggregateExpr
 

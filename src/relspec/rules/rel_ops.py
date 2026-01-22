@@ -9,9 +9,9 @@ from typing import Literal, cast
 
 import pyarrow as pa
 
+from arrowdsl.io.ipc import ipc_hash, ipc_table, payload_ipc_bytes
 from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
-from registry_common.arrow_payloads import ipc_hash, ipc_table, payload_ipc_bytes
 from relspec.model import HashJoinConfig, JoinType
 
 REL_OP_SIGNATURE_VERSION = 1

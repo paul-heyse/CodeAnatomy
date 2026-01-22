@@ -7,13 +7,13 @@ from dataclasses import dataclass
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.ordering import OrderingLevel
-from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
-from registry_common.metadata import (
+from arrowdsl.schema.metadata import (
     EvidenceMetadataSpec,
     evidence_metadata,
     metadata_map_bytes,
     metadata_scalar_map_bytes,
 )
+from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 
 
 @dataclass(frozen=True)

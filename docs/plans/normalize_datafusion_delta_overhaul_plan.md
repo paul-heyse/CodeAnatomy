@@ -22,7 +22,7 @@ the advanced features we have documented but not yet deployed.
 
 ## Scope 1: Normalize runtime substrate (DataFusion-owned SessionContext)
 
-**Status:** planned
+**Status:** in progress (runtime substrate landed)
 
 **Objective:** centralize normalize execution around a DataFusion
 SessionContext and Ibis DataFusion backend, with a single contract for SQL
@@ -69,15 +69,16 @@ def build_normalize_runtime(profile: DataFusionRuntimeProfile) -> NormalizeRunti
 - `src/datafusion_engine/runtime.py`
 
 **Implementation checklist**
-- [ ] Add NormalizeRuntime and wire it into normalize execution entrypoints.
-- [ ] Require DataFusion-backed Ibis execution for all normalize runs.
-- [ ] Propagate execution labels and SQL policy into every normalize plan.
+- [x] Add NormalizeRuntime and wire it into normalize execution entrypoints.
+- [x] Require DataFusion-backed Ibis execution for all normalize runs.
+- [x] Propagate execution labels into normalize execution.
+- [ ] Thread SQL policy/options into normalize plan compilation and execution paths.
 
 ---
 
 ## Scope 2: DDL-first registration for normalize inputs and outputs
 
-**Status:** planned
+**Status:** in progress (outputs registered via DDL; inputs pending)
 
 **Objective:** register all normalize inputs and outputs through DDL, using
 DeltaTableFactory for Delta-backed tables and DataFusion schema contracts.
@@ -112,7 +113,8 @@ def register_normalize_table(
 - `src/normalize/catalog.py`
 
 **Implementation checklist**
-- [ ] Route all normalize dataset registrations through DDL.
+- [x] Add normalize output DDL registration helper and wire into output materialization.
+- [ ] Route all normalize dataset registrations through DDL (inputs still use non-DDL paths).
 - [ ] Use DeltaTableFactory for all Delta-backed tables.
 - [ ] Emit DDL provenance metadata into diagnostics artifacts.
 - [ ] Remove non-DDL registration paths for normalize datasets.
@@ -121,10 +123,10 @@ def register_normalize_table(
 
 ## Scope 3: Delta-backed output writes (INSERT/COPY only, idempotent)
 
-**Status:** planned
+**Status:** in progress (Delta outputs wired; INSERT/COPY path pending)
 
 **Objective:** write normalize outputs to Delta tables using DataFusion
-INSERT/COPY and idempotent commit properties, with no fallback write paths.
+INSERT/COPY (commit properties optional for normalize), with no fallback write paths.
 
 **Representative code snippet**
 ```python
@@ -153,6 +155,8 @@ def write_normalize_output_delta(
         options=DeltaInsertOptions(commit_properties=props),
     )
 ```
+Note: normalize outputs do not require commit properties; keep commit reservation for
+diagnostics, and only apply commit properties if the DataFusion INSERT path supports them.
 
 **Target files**
 - `src/normalize/output_writes.py` (new)
@@ -162,16 +166,17 @@ def write_normalize_output_delta(
 - `src/datafusion_engine/runtime.py`
 
 **Implementation checklist**
-- [ ] Make Delta-backed writes the only normalize output path.
-- [ ] Thread run_id and commit version into all normalize writes.
+- [x] Make Delta-backed writes the only normalize output path.
+- [x] Thread run_id and commit version into normalize writes.
 - [ ] Apply DataFusion write policy (partitioning, sort order, file sizing).
-- [ ] Remove fallback to `write_deltalake` or Parquet for normalize outputs.
+- [ ] Replace normalize output writes with DataFusion INSERT/COPY (no Ibis writer).
+- [x] Remove fallback to `write_deltalake` or Parquet for normalize outputs.
 
 ---
 
 ## Scope 4: Nested span objects as canonical schema
 
-**Status:** planned
+**Status:** complete (span structs landed)
 
 **Objective:** replace flat span columns with nested span structs and
 span-related attribute maps across all normalize outputs.
@@ -200,16 +205,16 @@ return joined.mutate(span=span, span_id=span_id).drop(
 - `src/normalize/schemas.py`
 
 **Implementation checklist**
-- [ ] Define canonical span struct types and replace flat span columns.
-- [ ] Update dataset specs and schemas to expose nested span objects.
+- [x] Define canonical span struct types and replace flat span columns.
+- [x] Update dataset specs and schemas to expose nested span objects.
 - [ ] Add compatibility views for legacy consumers (nested-to-flat) if needed.
-- [ ] Update span pipelines to emit span structs and span_id consistently.
+- [x] Update span pipelines to emit span structs and span_id consistently.
 
 ---
 
 ## Scope 5: Normalize plan builders stay in Ibis (no early materialization)
 
-**Status:** planned
+**Status:** in progress (some materialization remains)
 
 **Objective:** keep plan builders purely in Ibis until execution, eliminating
 `to_pyarrow` and any materialization during plan construction.
@@ -233,7 +238,7 @@ preferred = combined.order_by("source_priority").distinct(on=["type_id"])
 - `src/normalize/runner.py`
 
 **Implementation checklist**
-- [ ] Remove all `to_pyarrow` calls in normalize plan construction paths.
+- [ ] Remove all `to_pyarrow` calls in normalize plan construction paths (e.g., type row preference).
 - [ ] Replace materialized existence checks with plan-level preference logic.
 - [ ] Ensure Ibis execution uses DataFusion streaming readers by default.
 
@@ -241,7 +246,7 @@ preferred = combined.order_by("source_priority").distinct(on=["type_id"])
 
 ## Scope 6: SQLGlot compiler pipeline for normalize rules
 
-**Status:** planned
+**Status:** in progress (SQLGlot diagnostics + lineage recorded)
 
 **Objective:** treat SQLGlot as the canonical IR for normalize plans, with
 qualification, normalization, AST fingerprints, serde, and semantic diffs.
@@ -272,7 +277,8 @@ serde_payload = serialize_ast_artifact(normalized, policy=policy)
 
 **Implementation checklist**
 - [ ] Normalize all rule plans through SQLGlot qualification + normalization.
-- [ ] Record AST fingerprints and serde payloads for every normalize plan.
+- [x] Record AST fingerprints and serde payloads for every normalize plan.
+- [x] Record SQLGlot lineage and diagnostics metadata per plan.
 - [ ] Add semantic diff gating for incremental plan rebuilds.
 
 ---
@@ -309,7 +315,7 @@ scan_options = DataFusionScanOptions(
 
 ## Scope 8: Dynamic builtin function catalog (information_schema driven)
 
-**Status:** planned
+**Status:** in progress (runtime catalog exists; normalize wiring pending)
 
 **Objective:** replace static builtin function maps with a runtime catalog
 derived from DataFusion information_schema and SHOW FUNCTIONS.
@@ -332,7 +338,7 @@ is_builtin = func_id.lower() in catalog.function_names
 - `src/normalize/runtime_validation.py`
 
 **Implementation checklist**
-- [ ] Build a cached function catalog from information_schema snapshots.
+- [x] Build a cached function catalog from information_schema snapshots.
 - [ ] Replace static builtin registries with catalog-backed lookups.
 - [ ] Record function catalog snapshots in diagnostics.
 
@@ -372,7 +378,7 @@ ctx.register_table("normalize_cdf", provider)
 
 ## Scope 10: Diagnostics and plan artifacts for normalize runs
 
-**Status:** planned
+**Status:** in progress (SQLGlot artifacts captured)
 
 **Objective:** persist plan diagnostics (EXPLAIN, Substrait bytes, SQLGlot AST)
 and write policies for reproducible normalize runs.
@@ -399,7 +405,8 @@ diagnostics.record_artifact(
 - `src/ibis_engine/compiler_checkpoint.py`
 
 **Implementation checklist**
-- [ ] Capture EXPLAIN, SQL, Substrait, and SQLGlot serde payloads per plan.
+- [ ] Capture EXPLAIN and Substrait payloads per plan.
+- [x] Capture SQLGlot serde payloads and SQL text per plan.
 - [ ] Persist write policy metadata for every output write.
 - [ ] Record DDL provenance and runtime configuration snapshots.
 
@@ -466,28 +473,27 @@ decommissions (symbols removed from normalize call paths after replacements
 land).
 
 ### Delete from codebase
-- `src/normalize/span_pipeline.py` (module) and its public symbols:
+- [x] `src/normalize/span_pipeline.py` (module) and its public symbols:
   `append_span_columns`, `append_alias_cols`, `span_error_table`.
-- `src/normalize/ibis_spans.py`: `add_ast_byte_spans_ibis`,
+- [x] `src/normalize/ibis_spans.py`: `add_ast_byte_spans_ibis`,
   `anchor_instructions_ibis`, `add_scip_occurrence_byte_spans_ibis`,
   `normalize_cst_callsites_spans_ibis`, `normalize_cst_imports_spans_ibis`,
   `normalize_cst_defs_spans_ibis`.
-- `src/normalize/ibis_plan_builders.py`: `_prefer_type_rows`.
-- `src/ibis_engine/sources.py`: `IbisDeltaReadOptions`,
+- [ ] `src/normalize/ibis_plan_builders.py`: `_prefer_type_rows` (still present).
+- [ ] `src/ibis_engine/sources.py`: `IbisDeltaReadOptions`,
   `IbisDeltaWriteOptions`, `read_delta_ibis`, `write_delta_ibis`,
   `_commit_properties`, `_merge_storage_options`, `_delta_table_version`.
 
 ### Decommission from normalize paths (may remain elsewhere temporarily)
-- `src/ibis_engine/io_bridge.py`: `write_ibis_dataset_delta`,
-  `write_ibis_named_datasets_delta` (normalize outputs move to
-  `src/normalize/output_writes.py` DataFusion INSERT/COPY).
-- `src/storage/deltalake/delta.py`: `write_table_delta` and
+- [ ] `src/ibis_engine/io_bridge.py`: `write_ibis_dataset_delta`,
+  `write_ibis_named_datasets_delta` (normalize outputs still use Ibis writer).
+- [ ] `src/storage/deltalake/delta.py`: `write_table_delta` and
   `write_deltalake_idempotent` usage for normalize outputs.
 
 ---
 
 ## Global legacy decommission list
-- Remove normalize output paths that write Parquet or Arrow tables directly.
-- Remove `to_pyarrow` checks during plan construction in normalize code.
-- Remove any non-DDL table registration paths for normalize datasets.
-- Remove fallback write paths to `write_deltalake` for normalize outputs.
+- [x] Remove normalize output paths that write Parquet or Arrow tables directly.
+- [ ] Remove `to_pyarrow` checks during plan construction in normalize code.
+- [ ] Remove any non-DDL table registration paths for normalize datasets.
+- [x] Remove fallback write paths to `write_deltalake` for normalize outputs.

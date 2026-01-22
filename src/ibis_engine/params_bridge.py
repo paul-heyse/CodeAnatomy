@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -368,37 +368,27 @@ def _param_name(param: Value) -> str:
 
 
 def _sql_type_from_dtype(dtype: dt.DataType) -> str:
-    if dtype.is_boolean():
-        return "BOOLEAN"
-    if dtype.is_int8():
-        return "TINYINT"
-    if dtype.is_int16():
-        return "SMALLINT"
-    if dtype.is_int32():
-        return "INT"
-    if dtype.is_int64():
-        return "BIGINT"
-    if dtype.is_uint8():
-        return "TINYINT UNSIGNED"
-    if dtype.is_uint16():
-        return "SMALLINT UNSIGNED"
-    if dtype.is_uint32():
-        return "INT UNSIGNED"
-    if dtype.is_uint64():
-        return "BIGINT UNSIGNED"
-    if dtype.is_float32():
-        return "FLOAT"
-    if dtype.is_float64():
-        return "DOUBLE"
-    if dtype.is_string():
-        return "VARCHAR"
-    if dtype.is_timestamp():
-        return "TIMESTAMP"
-    if dtype.is_date():
-        return "DATE"
-    if dtype.is_time():
-        return "TIME"
-    if dtype.is_decimal():
+    mapping: list[tuple[Callable[[], bool], str]] = [
+        (dtype.is_boolean, "BOOLEAN"),
+        (dtype.is_int8, "TINYINT"),
+        (dtype.is_int16, "SMALLINT"),
+        (dtype.is_int32, "INT"),
+        (dtype.is_int64, "BIGINT"),
+        (dtype.is_uint8, "TINYINT UNSIGNED"),
+        (dtype.is_uint16, "SMALLINT UNSIGNED"),
+        (dtype.is_uint32, "INT UNSIGNED"),
+        (dtype.is_uint64, "BIGINT UNSIGNED"),
+        (dtype.is_float32, "FLOAT"),
+        (dtype.is_float64, "DOUBLE"),
+        (dtype.is_string, "VARCHAR"),
+        (dtype.is_timestamp, "TIMESTAMP"),
+        (dtype.is_date, "DATE"),
+        (dtype.is_time, "TIME"),
+    ]
+    for predicate, sql_type in mapping:
+        if predicate():
+            return sql_type
+    if isinstance(dtype, dt.Decimal):
         precision = dtype.precision or 38
         scale = dtype.scale or 0
         return f"DECIMAL({precision},{scale})"

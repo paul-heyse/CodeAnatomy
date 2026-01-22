@@ -17,8 +17,8 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
 from arrowdsl.core.interop import pc
+from arrowdsl.io.ipc import payload_hash
 from arrowdsl.schema.serialization import schema_fingerprint
-from registry_common.arrow_payloads import payload_hash
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
 _PARAM_SIGNATURE_SEPARATOR = "\x1f"

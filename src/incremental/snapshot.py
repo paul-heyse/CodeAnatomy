@@ -5,19 +5,24 @@ from __future__ import annotations
 from typing import cast
 
 import pyarrow as pa
-from deltalake import CommitProperties, DeltaTable
+from deltalake import DeltaTable
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import column_or_null, table_from_arrays
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.runtime import dataset_schema_from_context, read_delta_as_reader
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
+from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from storage.deltalake import (
-    DeltaWriteOptions,
     DeltaWriteResult,
+    build_commit_properties,
     delta_table_version,
     enable_delta_features,
-    write_table_delta,
 )
 
 
@@ -66,7 +71,12 @@ def read_repo_snapshot(store: StateStore) -> pa.Table | None:
     return reader.read_all()
 
 
-def write_repo_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResult:
+def write_repo_snapshot(
+    store: StateStore,
+    snapshot: pa.Table,
+    *,
+    runtime: IncrementalRuntime,
+) -> DeltaWriteResult:
     """Persist the repo snapshot to the state store as Delta.
 
     Returns
@@ -83,17 +93,32 @@ def write_repo_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResu
     }
     existing_version = delta_table_version(str(target))
     if existing_version is None:
-        result = write_table_delta(
+        result = write_ibis_dataset_delta(
             snapshot,
             str(target),
-            options=DeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata=metadata,
+            options=IbisDatasetWriteOptions(
+                execution=runtime.ibis_execution(),
+                writer_strategy="datafusion",
+                delta_options=IbisDeltaWriteOptions(
+                    mode="overwrite",
+                    schema_mode="overwrite",
+                    commit_metadata=metadata,
+                ),
             ),
         )
         enable_delta_features(result.path)
         return result
+    commit_key = str(target)
+    commit_options, commit_run = runtime.profile.reserve_delta_commit(
+        key=commit_key,
+        metadata={"dataset": commit_key, "operation": "merge"},
+        commit_metadata=metadata,
+    )
+    commit_properties = build_commit_properties(
+        app_id=commit_options.app_id,
+        version=commit_options.version,
+        commit_metadata=metadata,
+    )
     table = DeltaTable(str(target))
     update_predicate = (
         "source.file_sha256 <> target.file_sha256 OR "
@@ -108,12 +133,17 @@ def write_repo_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResu
             source_alias="source",
             target_alias="target",
             merge_schema=True,
-            commit_properties=CommitProperties(custom_metadata=metadata),
+            commit_properties=commit_properties,
         )
         .when_matched_update_all(predicate=update_predicate)
         .when_not_matched_insert_all()
         .when_not_matched_by_source_delete()
         .execute()
+    )
+    runtime.profile.finalize_delta_commit(
+        key=commit_key,
+        run=commit_run,
+        metadata={"operation": "merge", "rows_affected": snapshot.num_rows},
     )
     enable_delta_features(str(target))
     return DeltaWriteResult(

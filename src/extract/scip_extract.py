@@ -22,10 +22,12 @@ from datafusion_engine.extract_registry import extract_metadata, normalize_optio
 from extract.helpers import (
     ExtractMaterializeOptions,
     apply_query_and_project,
-    ibis_plan_from_row_batches,
+    ibis_plan_from_reader,
     materialize_extract_plan,
+    record_batch_reader_from_row_batches,
 )
 from extract.schema_ops import ExtractNormalizeOptions, schema_policy_for_dataset
+from extract.session import ExtractSession, build_extract_session
 from extract.spec_helpers import plan_requires_row
 from extract.string_utils import normalize_string_items
 from ibis_engine.plan import IbisPlan
@@ -136,6 +138,7 @@ class ScipExtractContext:
     scip_index_path: str | None
     repo_root: str | None
     ctx: ExecutionContext | None = None
+    session: ExtractSession | None = None
     profile: str = "default"
 
     def ensure_ctx(self) -> ExecutionContext:
@@ -146,9 +149,24 @@ class ScipExtractContext:
         ExecutionContext
             Provided context or a profile-derived context when missing.
         """
+        if self.session is not None:
+            return self.session.exec_ctx
         if self.ctx is not None:
             return self.ctx
         return execution_context_factory(self.profile)
+
+    def ensure_session(self) -> ExtractSession:
+        """Return the effective extract session.
+
+        Returns
+        -------
+        ExtractSession
+            Provided session or a profile-derived session when missing.
+        """
+        if self.session is not None:
+            return self.session
+        exec_ctx = self.ctx or execution_context_factory(self.profile)
+        return build_extract_session(exec_ctx)
 
 
 @dataclass
@@ -1078,8 +1096,10 @@ def _build_scip_plan(
     *,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
+    session: ExtractSession,
 ) -> IbisPlan:
-    raw = ibis_plan_from_row_batches(name, row_batches)
+    reader = record_batch_reader_from_row_batches(name, row_batches)
+    raw = ibis_plan_from_reader(name, reader, session=session)
     return apply_query_and_project(
         name,
         raw.expr,
@@ -1195,6 +1215,7 @@ def _extract_scip_tables_in_memory(
     options: ScipExtractOptions,
     *,
     evidence_plan: EvidencePlan | None,
+    session: ExtractSession,
     prefer_reader: bool,
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     dataset_names = tuple(dataset for _, dataset in SCIP_OUTPUT_DATASETS)
@@ -1297,6 +1318,7 @@ def _extract_scip_tables_in_memory(
             batches.get(dataset, []),
             normalize=resolved.normalize,
             evidence_plan=evidence_plan,
+            session=session,
         )
         for dataset in dataset_names
     }
@@ -1358,7 +1380,8 @@ def extract_scip_tables(
     options = options or ScipExtractOptions()
     normalized_opts = normalize_options("scip", options.parse_opts, SCIPParseOptions)
     evidence_plan = options.evidence_plan
-    exec_ctx = context.ensure_ctx()
+    session = context.ensure_session()
+    exec_ctx = session.exec_ctx
     resolved = _resolve_scip_index(context, normalized_opts, exec_ctx)
     if resolved is not None and _should_stream_outputs(
         resolved.index_path, options=options, prefer_reader=prefer_reader
@@ -1369,6 +1392,7 @@ def extract_scip_tables(
             resolved,
             options,
             evidence_plan=evidence_plan,
+            session=session,
             prefer_reader=prefer_reader,
         )
     dataset_names = tuple(dataset for _, dataset in SCIP_OUTPUT_DATASETS)
@@ -1379,6 +1403,7 @@ def extract_scip_tables(
             (),
             normalize=normalize,
             evidence_plan=evidence_plan,
+            session=session,
         )
         for dataset in dataset_names
     }

@@ -21,7 +21,7 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_VERSION,
 )
 from arrowdsl.schema.build import list_view_type, struct_type
-from arrowdsl.schema.metadata import ordering_metadata_spec
+from arrowdsl.schema.metadata import metadata_list_bytes, ordering_metadata_spec
 from arrowdsl.schema.semantic_types import (
     SEMANTIC_TYPE_META,
     SPAN_TYPE_INFO,
@@ -38,7 +38,6 @@ from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
 )
-from registry_common.metadata import metadata_list_bytes
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
 from sqlglot_tools.optimizer import default_sqlglot_policy, parse_sql_strict
 
@@ -1277,6 +1276,7 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("run_id", pa.string(), nullable=True),
             pa.field("plan_hash", pa.string(), nullable=True),
             pa.field("sql", pa.string(), nullable=False),
+            pa.field("normalized_sql", pa.string(), nullable=True),
             pa.field("explain_rows_artifact_path", pa.string(), nullable=True),
             pa.field("explain_rows_artifact_format", pa.string(), nullable=True),
             pa.field("explain_rows_schema_fingerprint", pa.string(), nullable=True),
@@ -1301,6 +1301,25 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("graphviz", pa.string(), nullable=True),
             pa.field("partition_count", pa.int64(), nullable=True),
             pa.field("join_operators", pa.list_(pa.string()), nullable=True),
+        ]
+    ),
+)
+
+ENGINE_RUNTIME_SCHEMA = _schema_with_metadata(
+    "engine_runtime_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("runtime_profile_name", pa.string(), nullable=False),
+            pa.field("determinism_tier", pa.string(), nullable=False),
+            pa.field("runtime_profile_hash", pa.string(), nullable=False),
+            pa.field("runtime_profile_snapshot", pa.string(), nullable=False),
+            pa.field("sqlglot_policy_hash", pa.string(), nullable=True),
+            pa.field("sqlglot_policy_snapshot", pa.string(), nullable=True),
+            pa.field("function_registry_hash", pa.string(), nullable=True),
+            pa.field("function_registry_snapshot", pa.string(), nullable=True),
+            pa.field("datafusion_settings_hash", pa.string(), nullable=True),
+            pa.field("datafusion_settings", pa.string(), nullable=True),
         ]
     ),
 )
@@ -1558,6 +1577,7 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "datafusion_schema_map_fingerprints_v1": DATAFUSION_SCHEMA_MAP_FINGERPRINTS_SCHEMA,
     "datafusion_schema_registry_validation_v1": DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA,
     "dim_qualified_names_v1": DIM_QUALIFIED_NAMES_SCHEMA,
+    "engine_runtime_v1": ENGINE_RUNTIME_SCHEMA,
     "feature_state_v1": FEATURE_STATE_SCHEMA,
     "libcst_files_v1": LIBCST_FILES_SCHEMA,
     "param_file_ids_v1": PARAM_FILE_IDS_SCHEMA,

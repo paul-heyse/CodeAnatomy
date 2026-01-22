@@ -17,6 +17,7 @@ from cpg.schemas import (
     CPG_PROPS_GLOBAL_SCHEMA,
 )
 from incremental.delta_updates import (
+    OverwriteDatasetSpec,
     PartitionedDatasetSpec,
     upsert_partitioned_dataset,
     write_overwrite_dataset,
@@ -90,18 +91,23 @@ def upsert_cpg_props(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
+        runtime=runtime,
     )
     if file_path is not None:
         updated[spec.name] = file_path
 
     if changes.full_refresh:
+        global_spec = OverwriteDatasetSpec(
+            name=_PROPS_GLOBAL_DATASET,
+            schema=CPG_PROPS_GLOBAL_SCHEMA,
+            commit_metadata={"snapshot_kind": "cpg_props_global"},
+        )
         updated.update(
             write_overwrite_dataset(
                 props_global,
-                dataset_name=_PROPS_GLOBAL_DATASET,
-                schema=CPG_PROPS_GLOBAL_SCHEMA,
+                spec=global_spec,
                 state_store=state_store,
-                commit_metadata={"snapshot_kind": "cpg_props_global"},
+                runtime=runtime,
             )
         )
     return updated

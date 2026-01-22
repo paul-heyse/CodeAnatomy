@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib import metadata as importlib_metadata
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
@@ -20,17 +21,27 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 from sqlglot.errors import ParseError
 
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
+from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from arrowdsl.finalize.finalize import Contract
-from arrowdsl.io.ipc import IpcWriteInput
+from arrowdsl.io.ipc import IpcWriteInput, ipc_hash
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_product import PlanProduct
+from ibis_engine.backend import build_backend
+from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.params_bridge import ScalarParamSpec
-from registry_common.arrow_payloads import ipc_hash
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport
@@ -42,7 +53,6 @@ from schema_spec.system import (
 )
 from sqlglot_tools.compat import exp, parse_one
 from sqlglot_tools.optimizer import planner_dag_snapshot, register_datafusion_dialect
-from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 
 if TYPE_CHECKING:
     from arrowdsl.spec.io import IpcWriteConfig
@@ -142,6 +152,23 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
 
 
+@lru_cache(maxsize=1)
+def _repro_ibis_execution() -> IbisExecutionContext:
+    profile = DataFusionRuntimeProfile()
+    runtime_profile = runtime_profile_factory("default").with_datafusion(profile)
+    ctx = ExecutionContext(runtime=runtime_profile)
+    backend = build_backend(
+        IbisBackendConfig(
+            datafusion_profile=profile,
+            fuse_selects=runtime_profile.ibis_fuse_selects,
+            default_limit=runtime_profile.ibis_default_limit,
+            default_dialect=runtime_profile.ibis_default_dialect,
+            interactive=runtime_profile.ibis_interactive,
+        )
+    )
+    return IbisExecutionContext(ctx=ctx, ibis_backend=backend)
+
+
 def _write_obs_dataset(
     base_dir: Path,
     *,
@@ -151,8 +178,19 @@ def _write_obs_dataset(
 ) -> str:
     dataset_dir = base_dir / name
     mode = "overwrite" if overwrite else "error"
-    options = DeltaWriteOptions(mode=mode, schema_mode="overwrite" if overwrite else None)
-    result = write_dataset_delta(table, str(dataset_dir), options=options)
+    options = IbisDeltaWriteOptions(
+        mode=mode,
+        schema_mode="overwrite" if overwrite else None,
+    )
+    result = write_ibis_dataset_delta(
+        table,
+        str(dataset_dir),
+        options=IbisDatasetWriteOptions(
+            execution=_repro_ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=options,
+        ),
+    )
     return result.path
 
 
@@ -189,11 +227,19 @@ def _write_delta_payload(
         raise FileExistsError(msg)
     _ensure_dir(target.parent)
     table = _payload_table(payload)
-    options = DeltaWriteOptions(
+    options = IbisDeltaWriteOptions(
         mode="overwrite" if overwrite else "error",
         schema_mode="overwrite" if overwrite else None,
     )
-    result = write_dataset_delta(table, str(target), options=options)
+    result = write_ibis_dataset_delta(
+        table,
+        str(target),
+        options=IbisDatasetWriteOptions(
+            execution=_repro_ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=options,
+        ),
+    )
     return result.path
 
 
@@ -432,6 +478,7 @@ class RunBundleContext:
     datafusion_traces: JsonDict | None = None
     datafusion_explains: pa.Table | None = None
     datafusion_plan_artifacts: pa.Table | None = None
+    engine_runtime: pa.Table | None = None
     datafusion_plan_cache: Sequence[PlanCacheEntry] | None = None
     datafusion_cache_events: Sequence[Mapping[str, object]] | None = None
     datafusion_prepared_statements: Sequence[Mapping[str, object]] | None = None
@@ -1321,7 +1368,7 @@ def _write_delta_group(
         return
     delta_dir = bundle_dir / "delta" / prefix
     _ensure_dir(delta_dir)
-    options = DeltaWriteOptions(
+    options = IbisDeltaWriteOptions(
         mode="overwrite" if context.overwrite else "error",
         schema_mode="overwrite" if context.overwrite else None,
     )
@@ -1331,7 +1378,15 @@ def _write_delta_group(
         base_path = delta_dir / name
         delta_path = base_path.with_suffix(".delta")
         delta_input = table.value() if isinstance(table, PlanProduct) else table
-        result = write_dataset_delta(delta_input, str(delta_path), options=options)
+        result = write_ibis_dataset_delta(
+            delta_input,
+            str(delta_path),
+            options=IbisDatasetWriteOptions(
+                execution=_repro_ibis_execution(),
+                writer_strategy="datafusion",
+                delta_options=options,
+            ),
+        )
         payload = _delta_metadata_payload(
             name,
             table=table,

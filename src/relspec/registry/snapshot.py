@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from arrowdsl.io.ipc import ipc_hash
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from registry_common.arrow_payloads import ipc_hash
 from relspec.compiler import rel_plan_for_rule
 from relspec.graph import rule_graph_signature
 from relspec.incremental import RelspecIncrementalSpec, build_incremental_spec

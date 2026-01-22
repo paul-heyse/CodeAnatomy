@@ -8,11 +8,16 @@ from pathlib import Path
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_schema
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
-from storage.deltalake import DeltaWriteOptions, enable_delta_features, write_table_delta
+from storage.deltalake import enable_delta_features
 
 _CDF_CURSOR_SCHEMA = pa.schema(
     [
@@ -43,13 +48,17 @@ def write_incremental_metadata(
     }
     table = pa.Table.from_pylist([payload])
     path = state_store.incremental_metadata_path()
-    result = write_table_delta(
+    result = write_ibis_dataset_delta(
         table,
         str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata={"snapshot_kind": "incremental_metadata"},
+        options=IbisDatasetWriteOptions(
+            execution=runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata={"snapshot_kind": "incremental_metadata"},
+            ),
         ),
     )
     enable_delta_features(result.path)
@@ -60,8 +69,18 @@ def write_cdf_cursor_snapshot(
     state_store: StateStore,
     *,
     cursor_store: CdfCursorStore,
+    runtime: IncrementalRuntime,
 ) -> str:
     """Persist the current CDF cursor snapshot to the state store.
+
+    Parameters
+    ----------
+    state_store : StateStore
+        State store for incremental metadata.
+    cursor_store : CdfCursorStore
+        Cursor store supplying snapshot rows.
+    runtime : IncrementalRuntime
+        Runtime used for Delta write execution.
 
     Returns
     -------
@@ -76,13 +95,17 @@ def write_cdf_cursor_snapshot(
     else:
         table = table_from_schema(_CDF_CURSOR_SCHEMA, columns={}, num_rows=0)
     path = state_store.cdf_cursor_snapshot_path()
-    result = write_table_delta(
+    result = write_ibis_dataset_delta(
         table,
         str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata={"snapshot_kind": "cdf_cursor_snapshot"},
+        options=IbisDatasetWriteOptions(
+            execution=runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata={"snapshot_kind": "cdf_cursor_snapshot"},
+            ),
         ),
     )
     enable_delta_features(result.path)
@@ -130,13 +153,17 @@ def _write_artifact_table(
     if not artifacts:
         return None
     table = _artifacts_to_table(artifacts)
-    result = write_table_delta(
+    result = write_ibis_dataset_delta(
         table,
         str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata={"artifact_name": name},
+        options=IbisDatasetWriteOptions(
+            execution=runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata={"artifact_name": name},
+            ),
         ),
     )
     enable_delta_features(result.path)

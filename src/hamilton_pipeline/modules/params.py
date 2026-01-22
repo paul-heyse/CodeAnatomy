@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from hamilton.function_modifiers import tag
@@ -15,6 +16,11 @@ from core_types import JsonDict
 from datafusion_engine.runtime import read_delta_as_reader
 from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import OutputConfig, ParamBundle
+from ibis_engine.io_bridge import (
+    IbisDatasetWriteOptions,
+    IbisDeltaWriteOptions,
+    write_ibis_dataset_delta,
+)
 from ibis_engine.param_tables import (
     ListParamSpec,
     ParamTableArtifact,
@@ -31,12 +37,10 @@ from ibis_engine.param_tables import (
 )
 from relspec.param_deps import ActiveParamSet, RuleDependencyReport
 from relspec.pipeline_policy import PipelinePolicy
-from storage.deltalake import (
-    DeltaWriteOptions,
-    apply_delta_write_policies,
-    write_dataset_delta,
-)
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+
+if TYPE_CHECKING:
+    from ibis_engine.execution import IbisExecutionContext
 
 
 @tag(layer="params", artifact="param_table_policy", kind="object")
@@ -64,9 +68,9 @@ def param_table_scope_key(
         Scope key for schema/table scoping when configured.
     """
     if param_table_policy.scope == ParamTableScope.PER_SESSION:
-        if engine_session is None or engine_session.df_profile is None:
+        if engine_session is None or engine_session.datafusion_profile is None:
             return None
-        return engine_session.df_profile.context_cache_key()
+        return engine_session.datafusion_profile.context_cache_key()
     return None
 
 
@@ -258,6 +262,7 @@ def param_tables_ibis(
 def write_param_tables_delta(
     param_table_artifacts: Mapping[str, ParamTableArtifact],
     output_config: OutputConfig,
+    ibis_execution: IbisExecutionContext,
 ) -> Mapping[str, JsonDict] | None:
     """Write param tables as Delta tables when enabled.
 
@@ -280,23 +285,25 @@ def write_param_tables_delta(
     for logical_name, artifact in param_table_artifacts.items():
         target_dir = base_dir / logical_name
         target_dir.mkdir(parents=True, exist_ok=True)
-        delta_options = apply_delta_write_policies(
-            DeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={
-                    "dataset_name": logical_name,
-                    "schema_fingerprint": artifact.schema_fingerprint,
-                },
-            ),
-            write_policy=write_policy,
-            schema_policy=schema_policy,
+        delta_options = IbisDeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={
+                "dataset_name": logical_name,
+                "schema_fingerprint": artifact.schema_fingerprint,
+            },
         )
-        result = write_dataset_delta(
+        result = write_ibis_dataset_delta(
             artifact.table,
             str(target_dir),
-            options=delta_options,
-            storage_options=storage_options,
+            options=IbisDatasetWriteOptions(
+                execution=ibis_execution,
+                writer_strategy="datafusion",
+                delta_options=delta_options,
+                delta_write_policy=write_policy,
+                delta_schema_policy=schema_policy,
+                storage_options=storage_options,
+            ),
         )
         output[logical_name] = {
             "path": str(target_dir),

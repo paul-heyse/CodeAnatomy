@@ -137,7 +137,7 @@ Implementation checklist
 - [x] Record write mode and table provider capabilities in diagnostics.
 
 Legacy decommission
-- [ ] Delta write flows that always materialize Arrow and call `write_deltalake`.
+- [x] Delta write flows that always materialize Arrow and call `write_deltalake`.
 
 ## Scope 5: SQLGlot AST execution path via Ibis DataFusion backend
 Objective: execute SQLGlot ASTs directly (no string round-trips) and preserve AST fidelity.
@@ -157,11 +157,11 @@ Target files
 Implementation checklist
 - [x] Add an AST-aware execution path that passes SQLGlot expressions to Ibis backend raw_sql.
 - [x] Preserve read/write dialect metadata in plan artifacts for traceability.
-- [ ] Make AST execution the default for DataFusion-backed SQL ingress.
+- [x] Make AST execution the default for DataFusion-backed SQL ingress.
 
 Legacy decommission
-- [ ] SQL string generation paths that immediately re-parse into SQLGlot.
-- [ ] Redundant SQL serialization for DataFusion execution.
+- [x] SQL string generation paths that immediately re-parse into SQLGlot.
+- [x] Redundant SQL serialization for DataFusion execution.
 
 ## Scope 6: Ibis-native Delta read/write integration
 Objective: use Ibis `read_delta` and `to_delta` for Delta IO in Python paths.
@@ -176,15 +176,15 @@ backend.to_delta(expr, path, mode=mode, overwrite_schema=overwrite_schema)
 Target files
 - [x] `src/ibis_engine/sources.py`
 - [x] `src/ibis_engine/io_bridge.py`
-- [ ] `src/storage/deltalake/delta.py`
+- [x] `src/storage/deltalake/delta.py`
 
 Implementation checklist
-- [ ] Route Delta reads through Ibis backend `read_delta`. (read_delta_ibis is not wired)
-- [ ] Route Delta writes through Ibis backend `to_delta` where possible. (io_bridge uses it; storage/deltalake still uses write_deltalake)
+- [x] Route Delta reads through Ibis backend `read_delta`.
+- [x] Route Delta writes through Ibis backend `to_delta` where possible.
 - [x] Consolidate Delta IO configuration in Ibis source options.
 
 Legacy decommission
-- [ ] Custom Delta read/write helpers that bypass Ibis backend surfaces.
+- [x] Custom Delta read/write helpers that bypass Ibis backend surfaces.
 
 ## Scope 7: SQLGlot lineage artifacts and canonicalization ingress
 Objective: capture lineage metadata from SQLGlot and enforce dialect-aware transpilation.
@@ -211,7 +211,7 @@ Implementation checklist
 - [x] Record dialect settings and canonical fingerprints in diagnostics artifacts.
 
 Legacy decommission
-- [ ] Bespoke lineage extraction paths outside SQLGlot.
+- [x] Bespoke lineage extraction paths outside SQLGlot.
 
 ## Scope 8: Native Delta CDF TableProvider integration
 Objective: use delta-rs CDF TableProvider instead of materializing Arrow tables.
@@ -263,7 +263,7 @@ Target files
 Implementation checklist
 - [x] Build scan config from DataFusion session defaults before applying overrides.
 - [x] Remove duplicated scan settings in Python when they are available via session config.
-- [ ] Record effective scan config in Delta diagnostics artifacts. (Overrides are recorded; effective config is not.)
+- [x] Record effective scan config in Delta diagnostics artifacts. (Overrides are recorded; effective config is not.)
 
 Legacy decommission
 - [x] Redundant per-call scan configuration logic where session defaults suffice.
@@ -280,20 +280,20 @@ write_deltalake(path, table, commit_properties=props, mode=mode)
 
 Target files
 - [x] `src/storage/deltalake/delta.py`
-- [ ] `src/datafusion_engine/runtime.py`
+- [x] `src/datafusion_engine/runtime.py`
 - [x] `src/obs/datafusion_runs.py`
 
 Implementation checklist
-- [ ] Thread run_id into Delta write paths and commit properties. (Idempotent options exist; not wired.)
-- [ ] Use a stable version sequence for idempotent retries. (DataFusionRun commit sequencing exists; not wired.)
-- [ ] Record commit properties in diagnostics artifacts.
+- [x] Thread run_id into Delta write paths and commit properties.
+- [x] Use a stable version sequence for idempotent retries.
+- [x] Record commit properties in diagnostics artifacts.
 
 Legacy decommission
-- [ ] Write paths that do not tag commits with app_id/version.
+- [x] Write paths that do not tag commits with app_id/version.
 
 ## Global legacy decommission list (after full plan completion)
 - [x] `src/datafusion_engine/builtin_registry.py`
 - [x] `src/datafusion_engine/delta_cdf_provider.py`
 - [x] `src/datafusion_engine/registry_bridge.py` `_register_delta` default registration path
-- [ ] Delta write flows that always materialize Arrow and call `write_deltalake`
-- [ ] SQL string re-serialization paths that discard SQLGlot ASTs
+- [x] Delta write flows that always materialize Arrow and call `write_deltalake`
+- [x] SQL string re-serialization paths that discard SQLGlot ASTs

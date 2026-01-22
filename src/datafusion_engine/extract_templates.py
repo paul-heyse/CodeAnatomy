@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from arrowdsl.core.ordering import OrderingLevel
-from registry_common.metadata import EvidenceMetadataSpec, evidence_metadata
+from arrowdsl.schema.metadata import EvidenceMetadataSpec, evidence_metadata
 from relspec.extract.registry_template_specs import DatasetTemplateSpec
 
 

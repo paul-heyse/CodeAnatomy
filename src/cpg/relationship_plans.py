@@ -21,7 +21,7 @@ from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table
 from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
-from engine.materialize import build_plan_product
+from engine.materialize_pipeline import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.expr_compiler import (

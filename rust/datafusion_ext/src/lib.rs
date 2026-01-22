@@ -78,7 +78,7 @@ use tokio::runtime::Runtime;
 use datafusion_python::context::PySessionContext;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyCapsule};
+use pyo3::types::{PyBytes, PyCapsule, PyDict};
 use deltalake::delta_datafusion::{DeltaTableFactory, DeltaCdfTableProvider, DeltaScanConfig};
 use deltalake::operations::DeltaOps;
 use chrono::{DateTime, Utc};
@@ -1454,6 +1454,54 @@ fn delta_table_provider_from_session(
     Ok(capsule.into_py(py))
 }
 
+#[pyfunction]
+fn delta_scan_config_from_session(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    file_column_name: Option<String>,
+    enable_parquet_pushdown: Option<bool>,
+    schema_force_view_types: Option<bool>,
+    wrap_partition_values: Option<bool>,
+    schema_ipc: Option<Vec<u8>>,
+) -> PyResult<PyObject> {
+    let state_ref = ctx.ctx.state();
+    let mut scan_config = DeltaScanConfig::new_from_session(state_ref.as_ref());
+
+    if let Some(name) = file_column_name {
+        scan_config.file_column_name = Some(name);
+    }
+
+    if let Some(pushdown) = enable_parquet_pushdown {
+        scan_config.enable_parquet_pushdown = pushdown;
+    }
+
+    if let Some(force_view) = schema_force_view_types {
+        scan_config.schema_force_view_types = force_view;
+    }
+
+    if let Some(wrap) = wrap_partition_values {
+        scan_config.wrap_partition_values = wrap;
+    }
+
+    let schema_bytes = schema_ipc.clone();
+    if let Some(schema_ipc) = schema_ipc {
+        let schema = schema_from_ipc(schema_ipc)?;
+        scan_config.schema = Some(schema);
+    }
+
+    let payload = PyDict::new(py);
+    payload.set_item("file_column_name", scan_config.file_column_name)?;
+    payload.set_item("enable_parquet_pushdown", scan_config.enable_parquet_pushdown)?;
+    payload.set_item("schema_force_view_types", scan_config.schema_force_view_types)?;
+    payload.set_item("wrap_partition_values", scan_config.wrap_partition_values)?;
+    if let Some(schema_bytes) = schema_bytes {
+        payload.set_item("schema_ipc", PyBytes::new(py, &schema_bytes))?;
+    } else {
+        payload.set_item("schema_ipc", py.None())?;
+    }
+    Ok(payload.into())
+}
+
 fn normalize_position_encoding(value: &str) -> i32 {
     let upper = value.trim().to_uppercase();
     if upper.is_empty() {
@@ -1877,5 +1925,6 @@ fn datafusion_ext(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(install_delta_table_factory, module)?)?;
     module.add_function(wrap_pyfunction!(delta_cdf_table_provider, module)?)?;
     module.add_function(wrap_pyfunction!(delta_table_provider_from_session, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_scan_config_from_session, module)?)?;
     Ok(())
 }

@@ -37,7 +37,7 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
             ("file_b", "src/b.py", "sha2", 20, 200),
         ]
     )
-    result_one = write_repo_snapshot(store, snapshot_one)
+    result_one = write_repo_snapshot(store, snapshot_one, runtime=runtime)
     assert result_one.version is not None
 
     snapshot_two = _snapshot_table(
@@ -50,18 +50,18 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     cursor_store.save_cursor(
         CdfCursor(dataset_name="repo_snapshot", last_version=result_one.version)
     )
-    result_two = write_repo_snapshot(store, snapshot_two)
+    result_two = write_repo_snapshot(store, snapshot_two, runtime=runtime)
     assert result_two.version is not None
 
-    cdf_table = diff_snapshots_with_delta_cdf(
+    cdf_result = diff_snapshots_with_delta_cdf(
         dataset_path=str(store.repo_snapshot_path()),
         cursor_store=cursor_store,
         dataset_name="repo_snapshot",
         filter_policy=None,
         runtime=runtime,
     )
-    assert cdf_table is not None
-    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
+    assert cdf_result is not None
+    changes = file_changes_from_cdf(cdf_result, runtime=runtime)
     assert changes.full_refresh is False
     assert changes.changed_file_ids == ("file_a", "file_c")
     assert changes.deleted_file_ids == ("file_b",)

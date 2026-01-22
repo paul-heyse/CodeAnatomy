@@ -8,12 +8,8 @@ from typing import TYPE_CHECKING
 __all__ = (
     "DeltaCdfOptions",
     "DeltaSchemaPolicy",
-    "DeltaUpsertOptions",
-    "DeltaWriteOptions",
     "DeltaWritePolicy",
     "DeltaWriteResult",
-    "DeltaWriteRetryPolicy",
-    "apply_delta_write_policies",
     "cleanup_delta_log",
     "coerce_delta_table",
     "create_delta_checkpoint",
@@ -24,15 +20,12 @@ __all__ = (
     "delta_table_version",
     "enable_delta_features",
     "open_delta_table",
+    "read_delta_cdf",
     "read_table_ipc_file",
     "read_table_parquet",
-    "upsert_dataset_partitions_delta",
     "vacuum_delta",
-    "write_dataset_delta",
-    "write_finalize_result_delta",
     "write_ibis_dataset_delta",
-    "write_named_datasets_delta",
-    "write_table_delta",
+    "write_ibis_named_datasets_delta",
     "write_table_ipc_file",
     "write_table_ipc_stream",
 )
@@ -44,12 +37,8 @@ if TYPE_CHECKING:
 
     DeltaCdfOptions = _storage_io.DeltaCdfOptions
     DeltaSchemaPolicy = _storage_io.DeltaSchemaPolicy
-    DeltaUpsertOptions = _storage_io.DeltaUpsertOptions
-    DeltaWriteOptions = _storage_io.DeltaWriteOptions
     DeltaWritePolicy = _storage_io.DeltaWritePolicy
     DeltaWriteResult = _storage_io.DeltaWriteResult
-    DeltaWriteRetryPolicy = _storage_io.DeltaWriteRetryPolicy
-    apply_delta_write_policies = _storage_io.apply_delta_write_policies
     cleanup_delta_log = _storage_io.cleanup_delta_log
     coerce_delta_table = _storage_io.coerce_delta_table
     create_delta_checkpoint = _storage_io.create_delta_checkpoint
@@ -60,15 +49,12 @@ if TYPE_CHECKING:
     delta_table_version = _storage_io.delta_table_version
     enable_delta_features = _storage_io.enable_delta_features
     open_delta_table = _storage_io.open_delta_table
+    read_delta_cdf = _storage_io.read_delta_cdf
     read_table_ipc_file = _storage_io.read_table_ipc_file
     read_table_parquet = _storage_io.read_table_parquet
-    upsert_dataset_partitions_delta = _storage_io.upsert_dataset_partitions_delta
     vacuum_delta = _storage_io.vacuum_delta
-    write_dataset_delta = _storage_io.write_dataset_delta
-    write_finalize_result_delta = _storage_io.write_finalize_result_delta
     write_ibis_dataset_delta = _storage_io.write_ibis_dataset_delta
-    write_named_datasets_delta = _storage_io.write_named_datasets_delta
-    write_table_delta = _storage_io.write_table_delta
+    write_ibis_named_datasets_delta = _storage_io.write_ibis_named_datasets_delta
     write_table_ipc_file = _storage_io.write_table_ipc_file
     write_table_ipc_stream = _storage_io.write_table_ipc_stream
 

@@ -129,7 +129,7 @@ Target files
 Implementation checklist
 - [x] Normalize fragment SQL into SQLGlot expressions and build DataFrames directly.
 - [x] Replace SQL fragment generators with Expr/DataFrame transformations.
-- [ ] Route any remaining raw SQL through `parse_sql_expr`.
+- [x] Route any remaining raw SQL through `parse_sql_expr`.
 - [x] Delete fragment-to-string paths once all consumers use Expr templates.
 - [x] Register fragment ViewSpecs via DataFrame builders (SQLGlot → DataFrame).
 - [x] Add CTE + UNNEST handling in the DataFrame translator to support fragment builders.
@@ -159,15 +159,15 @@ Target files
 
 Implementation checklist
 - [x] Provide streaming reader helpers (datafusion_to_reader, df_to_reader) and prefer_reader outputs.
-- [ ] Treat `execute_stream_partitioned` as the default for large outputs.
-- [ ] Avoid `to_arrow_table` in non-diagnostic code paths.
-- [ ] Route large output writes from readers rather than tables.
+- [x] Treat `execute_stream_partitioned` as the default for large outputs.
+- [x] Avoid `to_arrow_table` in non-diagnostic code paths.
+- [x] Route large output writes from readers rather than tables.
 
 ## Scope 5: Param-table replacement with UDTF/unnest/VALUES
 Objective: remove custom param-table registry plumbing and use DataFusion-native
 table functions or unnest-based parameter expansion.
 
-Status: [~] Partially complete.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -230,7 +230,7 @@ Implementation checklist
 Objective: store Substrait bytes and unparsed SQL for deterministic diffing and
 cross-engine replay.
 
-Status: [~] Partially complete.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -253,13 +253,13 @@ Target files
 Implementation checklist
 - [x] Store Substrait bytes for each plan build and attach to artifacts.
 - [x] Store unparsed SQL for human-readable review diffs.
-- [ ] Gate cache keys on Substrait fingerprints + runtime profile.
+- [x] Gate cache keys on Substrait fingerprints + runtime profile.
 
 ## Scope 8: Output parallelism + parquet writer knobs in runtime profiles
 Objective: surface write-time performance knobs in runtime profiles and apply
 them consistently for COPY/INSERT/Parquet writes.
 
-Status: [~] Partially complete.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -277,7 +277,7 @@ Target files
 - `src/engine/materialize.py`
 
 Implementation checklist
-- [ ] Add output parallelism keys to runtime profile serialization.
+- [x] Add output parallelism keys to runtime profile serialization.
 - [x] Apply parquet writer options via `write_parquet_with_options`.
 - [x] Record write options in diagnostics artifacts.
 
@@ -285,7 +285,7 @@ Implementation checklist
 Objective: make partitioning explicit for join-heavy kernels and expose knobs
 for dynamic filter pushdown and repartition behavior.
 
-Status: [~] Partially complete.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -299,8 +299,8 @@ Target files
 - `src/engine/runtime_profile.py`
 
 Implementation checklist
-- [ ] Add repartition shaping where joins are hot and stable keys exist.
-- [ ] Expose round-robin repartition and perfect-hash join knobs in profiles.
+- [x] Add repartition shaping where joins are hot and stable keys exist.
+- [x] Expose round-robin repartition and perfect-hash join knobs in profiles.
 - [x] Record optimizer settings in diagnostics snapshots.
 
 ## Scope 10: SQL safety gating for all execution surfaces
@@ -334,17 +334,15 @@ Implementation checklist
 ## Legacy decommission list (post-migration)
 Remove these once all scopes are complete and tests pass.
 
-- SQL fragment modules superseded by Expr templates:
-  - `src/datafusion_engine/query_fragments.py`
-- Bespoke parquet/Arrow output writers superseded by DataFusion writes:
-  - `src/arrowdsl/io/parquet.py`
-  - `src/obs/parquet_writers.py`
-- Param-table registry plumbing superseded by UDTF/unnest:
-  - `src/ibis_engine/param_tables.py`
-  - `src/datafusion_engine/param_tables.py`
-- Ordering metadata glue superseded by `WITH ORDER` and file_sort_order:
-  - `src/arrowdsl/core/ordering_policy.py`
-  - Ordering helpers in `src/ibis_engine/scan_io.py`
+- [x] `src/datafusion_engine/param_tables.py` (removed).
+- [x] `src/arrowdsl/io/parquet.py` (removed).
+- [x] `src/obs/parquet_writers.py` (removed).
+- [x] `src/arrowdsl/core/ordering_policy.py` (removed).
+- [x] Ordering helpers in `src/ibis_engine/scan_io.py` (removed).
+
+Retained modules (no longer legacy targets after migration):
+- `src/datafusion_engine/query_fragments.py` (Expr/DataFrame view builders).
+- `src/ibis_engine/param_tables.py` (param specs/artifacts still used by obs/params).
 
 ## Quality gates
 - `uv run ruff check --fix`

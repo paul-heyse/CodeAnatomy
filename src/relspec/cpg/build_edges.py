@@ -11,7 +11,12 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.scan_telemetry import ScanTelemetry
-from arrowdsl.schema.schema import EncodingSpec, empty_table, encode_table
+from arrowdsl.schema.schema import (
+    EncodingSpec,
+    empty_table,
+    encode_table,
+    encoding_columns_from_metadata,
+)
 from cpg.constants import CpgBuildArtifacts, quality_from_ids
 from cpg.edge_specs import edge_plan_specs_from_table
 from cpg.relationship_plans import (
@@ -22,14 +27,11 @@ from cpg.relationship_plans import (
     compile_relation_plans_ibis,
 )
 from cpg.specs import EdgePlanSpec
-from cpg.table_utils import (
-    align_table_to_schema,
-    assert_schema_metadata,
-    encoding_columns_from_metadata,
-)
 from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.runtime import (
     AdapterExecutionPolicy,
+    align_table_to_schema,
+    assert_schema_metadata,
     dataset_schema_from_context,
     dataset_spec_from_context,
 )
@@ -38,8 +40,12 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
-from ibis_engine.scan_io import DatasetSource
-from ibis_engine.sources import SourceToIbisOptions, register_ibis_table, register_ibis_view
+from ibis_engine.sources import (
+    DatasetSource,
+    SourceToIbisOptions,
+    register_ibis_table,
+    register_ibis_view,
+)
 from relspec.rules.cache import rule_table_cached
 from relspec.rules.handlers.cpg_emit import EdgeEmitRuleHandler
 from schema_spec.system import DatasetSpec

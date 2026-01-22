@@ -2,29 +2,38 @@
 
 from __future__ import annotations
 
+import importlib
 import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from arro3.core.types import ArrowArrayExportable, ArrowStreamExportable
-from datafusion import DataFrameWriteOptions, InsertOp
 from deltalake import CommitProperties, DeltaTable, WriterProperties, write_deltalake
+from deltalake._internal import Transaction
 from deltalake.exceptions import CommitFailedError, DeltaError
 
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.schema import SchemaTransform
+from datafusion_engine.bridge import DeltaInsertOptions, datafusion_insert_from_dataframe
+from datafusion_engine.listing_table_provider import TableProviderCapsule
 from storage.deltalake.config import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
     delta_schema_configuration,
     delta_write_configuration,
 )
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
+
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type DeltaWriteMode = Literal["error", "append", "overwrite", "ignore"]
 type DeltaSchemaMode = Literal["merge", "overwrite"]
@@ -75,6 +84,25 @@ class DeltaWriteRetryPolicy:
         if self.backoff_seconds < 0:
             msg = "DeltaWriteRetryPolicy.backoff_seconds must be >= 0."
             raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class IdempotentWriteOptions:
+    """Options for idempotent Delta writes.
+
+    Uses Delta Lake's CommitProperties to tag commits with app_id and version,
+    enabling safe retries where duplicate commits are ignored.
+
+    Attributes
+    ----------
+    app_id : str
+        Unique application/pipeline identifier (e.g., run_id).
+    version : int
+        Commit sequence number for this app_id.
+    """
+
+    app_id: str
+    version: int
 
 
 @dataclass(frozen=True)
@@ -161,6 +189,9 @@ def write_table_delta(
 ) -> DeltaWriteResult:
     """Write a table or reader into a Delta table path.
 
+    Supports streaming writes when passed a RecordBatchReader - the data
+    is streamed directly to Delta without materializing in memory.
+
     Returns
     -------
     DeltaWriteResult
@@ -171,19 +202,23 @@ def write_table_delta(
     ValueError
         Raised when a predicate is supplied without overwrite mode.
     """
-    data = _coerce_write_input(table)
+    # Check if DataFusion INSERT path is available (requires materialized table)
     if _supports_datafusion_delta_insert(options):
         existing_version = delta_table_version(path, storage_options=storage_options)
         if existing_version is not None:
+            # DataFusion path needs materialized table for registration
+            data = _coerce_write_input(table)
             return _write_table_delta_datafusion(
                 data,
                 path=path,
                 options=options,
                 storage_options=storage_options,
             )
+
+    # Streaming path - pass input directly to write_deltalake
     arrow_data = cast(
         "ArrowStreamExportable | ArrowArrayExportable | Sequence[ArrowArrayExportable]",
-        data,
+        table,
     )
     storage = _storage_dict(storage_options)
     partition_by = list(options.partition_by) if options.partition_by else None
@@ -206,6 +241,202 @@ def write_table_delta(
         invocation=invocation,
     )
     return DeltaWriteResult(path=path, version=delta_table_version(path, storage_options=storage))
+
+
+def _commit_properties_for_idempotent(
+    options: DeltaWriteOptions,
+    *,
+    idempotent: IdempotentWriteOptions | None,
+) -> CommitProperties | None:
+    if idempotent is not None:
+        app_transaction = Transaction(
+            app_id=idempotent.app_id,
+            version=idempotent.version,
+        )
+        return CommitProperties(
+            app_transactions=[app_transaction],
+            custom_metadata=dict(options.commit_metadata) if options.commit_metadata else None,
+        )
+    if options.commit_metadata:
+        return CommitProperties(custom_metadata=dict(options.commit_metadata))
+    return None
+
+
+def _is_duplicate_commit_error(exc: CommitFailedError) -> bool:
+    """Check if the error indicates a duplicate idempotent commit.
+
+    Delta Lake returns a specific error when attempting to write
+    with an (app_id, version) that already exists.
+
+    Returns
+    -------
+    bool
+        True when the error matches a duplicate commit failure.
+    """
+    error_msg = str(exc).lower()
+    # Delta returns errors containing "transaction" and "already committed"
+    return "already committed" in error_msg or "duplicate" in error_msg
+
+
+@dataclass(frozen=True)
+class _IdempotentWriteContext:
+    options: DeltaWriteOptions
+    partition_by: list[str] | None
+    predicate: str | None
+    commit_properties: CommitProperties | None
+    storage: dict[str, str] | None
+    retry: DeltaWriteRetryPolicy
+    idempotent: IdempotentWriteOptions | None
+
+
+def _write_deltalake_idempotent_with_retry(
+    path: str,
+    data: ArrowStreamExportable | ArrowArrayExportable | Sequence[ArrowArrayExportable],
+    *,
+    context: _IdempotentWriteContext,
+) -> None:
+    last_error: Exception | None = None
+    for attempt in range(context.retry.max_attempts):
+        try:
+            _write_deltalake_idempotent_once(
+                path,
+                data,
+                context=context,
+            )
+        except CommitFailedError as exc:
+            if context.idempotent is not None and _is_duplicate_commit_error(exc):
+                return
+            last_error = exc
+        except DeltaError as exc:
+            last_error = exc
+        else:
+            return
+        if attempt < context.retry.max_attempts - 1:
+            time.sleep(context.retry.backoff_seconds * (2**attempt))
+    if last_error is not None:
+        raise last_error
+
+
+def write_deltalake_idempotent(
+    path: str,
+    data: DeltaWriteInput,
+    *,
+    options: DeltaWriteOptions,
+    idempotent: IdempotentWriteOptions | None = None,
+    storage_options: StorageOptions | None = None,
+) -> DeltaWriteResult:
+    """Write to Delta with idempotent commit properties.
+
+    When idempotent options are provided, the commit is tagged with app_id
+    and version. Delta Lake will reject duplicate commits with the same
+    app_id + version, making retries safe.
+
+    Supports streaming writes when passed a RecordBatchReader - the data
+    is streamed directly to Delta without materializing in memory.
+
+    Parameters
+    ----------
+    path : str
+        Delta table path.
+    data : DeltaWriteInput
+        Data to write (Table or RecordBatchReader).
+    options : DeltaWriteOptions
+        Standard Delta write options.
+    idempotent : IdempotentWriteOptions | None
+        Optional idempotent commit options.
+    storage_options : StorageOptions | None
+        Storage backend options.
+
+    Returns
+    -------
+    DeltaWriteResult
+        Write result with path and version.
+
+    Raises
+    ------
+    ValueError
+        Raised when a predicate is supplied without overwrite mode.
+
+    Notes
+    -----
+    When CommitProperties with app_id + version are used:
+
+    - First write with (app_id, version) succeeds normally
+    - Retry with same (app_id, version) is silently skipped
+    - This enables safe "at-least-once" retry patterns
+    """
+    # Streaming path - pass input directly to write_deltalake
+    arrow_data = cast(
+        "ArrowStreamExportable | ArrowArrayExportable | Sequence[ArrowArrayExportable]",
+        data,
+    )
+    storage = _storage_dict(storage_options)
+    partition_by = list(options.partition_by) if options.partition_by else None
+    commit_properties = _commit_properties_for_idempotent(options, idempotent=idempotent)
+    predicate = None
+    if options.mode == "overwrite":
+        predicate = options.predicate
+    elif options.predicate is not None:
+        msg = "Predicate filters require overwrite mode for Delta writes."
+        raise ValueError(msg)
+    retry = options.retry_policy or DeltaWriteRetryPolicy()
+    context = _IdempotentWriteContext(
+        options=options,
+        partition_by=partition_by,
+        predicate=predicate,
+        commit_properties=commit_properties,
+        storage=storage,
+        retry=retry,
+        idempotent=idempotent,
+    )
+
+    _write_deltalake_idempotent_with_retry(
+        path,
+        arrow_data,
+        context=context,
+    )
+
+    return DeltaWriteResult(
+        path=path,
+        version=delta_table_version(path, storage_options=storage_options),
+    )
+
+
+def write_table_delta_idempotent(
+    table: DeltaWriteInput,
+    path: str,
+    *,
+    options: DeltaWriteOptions,
+    idempotent: IdempotentWriteOptions,
+    storage_options: StorageOptions | None = None,
+) -> DeltaWriteResult:
+    """Write Delta table with idempotent commit properties.
+
+    Parameters
+    ----------
+    table : DeltaWriteInput
+        Data to write.
+    path : str
+        Delta table path.
+    options : DeltaWriteOptions
+        Write options.
+    idempotent : IdempotentWriteOptions
+        Idempotent commit options containing app_id and version.
+    storage_options : StorageOptions | None
+        Storage backend options.
+
+    Returns
+    -------
+    DeltaWriteResult
+        Write result.
+    """
+    return write_deltalake_idempotent(
+        path,
+        table,
+        options=options,
+        idempotent=idempotent,
+        storage_options=storage_options,
+    )
 
 
 def _write_table_delta_datafusion(
@@ -282,6 +513,7 @@ def write_datafusion_delta(
     base_dir: str,
     options: DeltaWriteOptions,
     storage_options: StorageOptions | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> DeltaWriteResult:
     """Insert data into an existing Delta table using DataFusion.
 
@@ -294,8 +526,6 @@ def write_datafusion_delta(
     ------
     ValueError
         Raised when the insert configuration is unsupported or the table is missing.
-    TypeError
-        Raised when the DataFusion DataFrame is missing write capabilities.
     """
     if not _supports_datafusion_delta_insert(options):
         msg = (
@@ -306,24 +536,34 @@ def write_datafusion_delta(
     if delta_table_version(base_dir, storage_options=storage_options) is None:
         msg = "DataFusion Delta insert requires an existing Delta table."
         raise ValueError(msg)
-    write_table = getattr(df, "write_table", None)
-    if not callable(write_table):
-        msg = "DataFusion DataFrame is missing write_table."
-        raise TypeError(msg)
-    storage = dict(storage_options) if storage_options is not None else None
-    table = DeltaTable(base_dir, storage_options=storage)
+    ctx = _datafusion_ctx_from_df(df)
+    provider = _delta_table_provider_from_session(
+        ctx,
+        path=base_dir,
+        storage_options=storage_options,
+    )
     name = f"__delta_sink_{uuid.uuid4().hex}"
+    insert_mode = cast("Literal['append', 'overwrite']", options.mode)
     try:
-        _register_datafusion_delta_table(df, name=name, table=table)
-    except ValueError as exc:
-        msg = "DataFusion failed to register Delta table provider."
-        raise ValueError(msg) from exc
-    try:
-        insert_op = _delta_insert_op(options.mode)
-        write_options = DataFrameWriteOptions(insert_operation=insert_op)
-        write_table(name, write_options=write_options)
+        _register_delta_table_provider(ctx, name=name, provider=provider)
+        insert_result = datafusion_insert_from_dataframe(
+            ctx,
+            name,
+            cast("DataFrame", df),
+            options=DeltaInsertOptions(mode=insert_mode),
+        )
     finally:
-        _deregister_datafusion_table(df, name=name)
+        _deregister_datafusion_table(ctx, name=name)
+    _record_delta_write_artifact(
+        runtime_profile,
+        artifact=_DeltaWriteArtifact(
+            name=name,
+            path=base_dir,
+            mode=options.mode,
+            provider=provider,
+            rows_affected=insert_result.rows_affected,
+        ),
+    )
     version = delta_table_version(base_dir, storage_options=storage_options)
     return DeltaWriteResult(path=base_dir, version=version)
 
@@ -830,6 +1070,70 @@ def _is_retryable_delta_error(exc: Exception) -> bool:
     return any(hint in msg for hint in hints)
 
 
+def _write_deltalake_idempotent_once(
+    path: str,
+    data: ArrowStreamExportable | ArrowArrayExportable | Sequence[ArrowArrayExportable],
+    *,
+    context: _IdempotentWriteContext,
+) -> None:
+    """Execute a single Delta write with idempotent commit properties."""
+    if context.predicate is not None:
+        overwrite_mode = cast("Literal['overwrite']", context.options.mode)
+        if context.options.writer_properties is None:
+            write_deltalake(
+                path,
+                data,
+                mode=overwrite_mode,
+                schema_mode=context.options.schema_mode,
+                partition_by=context.partition_by,
+                configuration=context.options.configuration,
+                commit_properties=context.commit_properties,
+                predicate=context.predicate,
+                target_file_size=context.options.target_file_size,
+                storage_options=context.storage,
+            )
+        else:
+            write_deltalake(
+                path,
+                data,
+                mode=overwrite_mode,
+                schema_mode=context.options.schema_mode,
+                partition_by=context.partition_by,
+                configuration=context.options.configuration,
+                commit_properties=context.commit_properties,
+                predicate=context.predicate,
+                target_file_size=context.options.target_file_size,
+                writer_properties=context.options.writer_properties,
+                storage_options=context.storage,
+            )
+        return
+    if context.options.writer_properties is None:
+        write_deltalake(
+            path,
+            data,
+            mode=context.options.mode,
+            schema_mode=context.options.schema_mode,
+            partition_by=context.partition_by,
+            configuration=context.options.configuration,
+            commit_properties=context.commit_properties,
+            target_file_size=context.options.target_file_size,
+            storage_options=context.storage,
+        )
+        return
+    write_deltalake(
+        path,
+        data,
+        mode=context.options.mode,
+        schema_mode=context.options.schema_mode,
+        partition_by=context.partition_by,
+        configuration=context.options.configuration,
+        commit_properties=context.commit_properties,
+        target_file_size=context.options.target_file_size,
+        writer_properties=context.options.writer_properties,
+        storage_options=context.storage,
+    )
+
+
 def _coerce_write_input(value: DeltaWriteInput) -> TableLike:
     if isinstance(value, RecordBatchReaderLike):
         return value.read_all()
@@ -898,21 +1202,7 @@ def _supports_datafusion_delta_insert(options: DeltaWriteOptions) -> bool:
     return not any(disallowed)
 
 
-def _delta_insert_op(mode: DeltaWriteMode) -> InsertOp:
-    if mode == "append":
-        return InsertOp.APPEND
-    if mode == "overwrite":
-        return InsertOp.OVERWRITE
-    msg = f"Unsupported DataFusion Delta insert mode: {mode!r}."
-    raise ValueError(msg)
-
-
-def _register_datafusion_delta_table(
-    df: object,
-    *,
-    name: str,
-    table: DeltaTable,
-) -> None:
+def _datafusion_ctx_from_df(df: object) -> SessionContext:
     ctx = None
     for attr in ("_ctx", "_context", "context", "ctx", "session_context"):
         ctx = getattr(df, attr, None)
@@ -920,25 +1210,125 @@ def _register_datafusion_delta_table(
             break
     if ctx is None:
         msg = "DataFusion DataFrame missing SessionContext."
-        raise ValueError(msg)
+        raise TypeError(msg)
+    return cast("SessionContext", ctx)
+
+
+def _delta_table_provider_from_session(
+    ctx: SessionContext,
+    *,
+    path: str,
+    storage_options: StorageOptions | None,
+) -> object:
     try:
-        ctx.register_table(name, table)
-    except TypeError as exc:
-        msg = "DataFusion failed to register Delta table provider."
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:
+        msg = "datafusion_ext is required for Delta table providers."
         raise ValueError(msg) from exc
+    provider_factory = getattr(module, "delta_table_provider_from_session", None)
+    if not callable(provider_factory):
+        msg = "datafusion_ext.delta_table_provider_from_session is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options is not None else None
+    return provider_factory(
+        ctx,
+        path,
+        storage_payload,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
 
 
-def _deregister_datafusion_table(df: object, *, name: str) -> None:
-    ctx = None
-    for attr in ("_ctx", "_context", "context", "ctx", "session_context"):
-        ctx = getattr(df, attr, None)
-        if ctx is not None:
-            break
-    if ctx is None:
-        return
+def _register_delta_table_provider(
+    ctx: SessionContext,
+    *,
+    name: str,
+    provider: object,
+) -> None:
+    register = getattr(ctx, "register_table", None)
+    if not callable(register):
+        msg = "DataFusion SessionContext missing register_table."
+        raise TypeError(msg)
+    register(name, TableProviderCapsule(provider))
+
+
+def _deregister_datafusion_table(ctx: SessionContext, *, name: str) -> None:
     deregister = getattr(ctx, "deregister_table", None)
     if callable(deregister):
         deregister(name)
+
+
+def _provider_pushdown_value(provider: object, *, names: Sequence[str]) -> str | bool | None:
+    for name in names:
+        attr = getattr(provider, name, None)
+        if isinstance(attr, bool):
+            return attr
+        if callable(attr):
+            try:
+                value = attr()
+            except TypeError:
+                continue
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return None
+            return str(value)
+    return None
+
+
+def _provider_pushdown_hints(provider: object) -> dict[str, object]:
+    return {
+        "projection_pushdown": _provider_pushdown_value(
+            provider,
+            names=("supports_projection_pushdown",),
+        ),
+        "predicate_pushdown": _provider_pushdown_value(
+            provider,
+            names=(
+                "supports_filter_pushdown",
+                "supports_filters_pushdown",
+                "supports_predicate_pushdown",
+            ),
+        ),
+        "limit_pushdown": _provider_pushdown_value(
+            provider,
+            names=("supports_limit_pushdown",),
+        ),
+    }
+
+
+@dataclass(frozen=True)
+class _DeltaWriteArtifact:
+    name: str
+    path: str
+    mode: DeltaWriteMode
+    provider: object
+    rows_affected: int | None
+
+
+def _record_delta_write_artifact(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    artifact: _DeltaWriteArtifact,
+) -> None:
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    payload: dict[str, object] = {
+        "name": artifact.name,
+        "path": artifact.path,
+        "provider": "delta_write_provider",
+        "provider_type": type(artifact.provider).__name__,
+        "capsule_id": repr(artifact.provider),
+        "write_mode": artifact.mode,
+        "rows_affected": artifact.rows_affected,
+    }
+    payload.update(_provider_pushdown_hints(artifact.provider))
+    runtime_profile.diagnostics_sink.record_artifact("datafusion_table_providers_v1", payload)
 
 
 def read_delta_cdf(
@@ -997,18 +1387,21 @@ def read_delta_cdf(
 
     # Convert to Arrow Table
     if isinstance(cdf_data, pa.Table):
-        return cdf_data
-    if hasattr(cdf_data, "read_all"):
+        return cast("TableLike", cdf_data)
+    read_all = getattr(cdf_data, "read_all", None)
+    if callable(read_all):
         # RecordBatchReader
-        return cdf_data.read_all()
-    if hasattr(cdf_data, "to_arrow"):
+        return cast("TableLike", read_all())
+    to_arrow = getattr(cdf_data, "to_arrow", None)
+    if callable(to_arrow):
         # Polars DataFrame
-        return cdf_data.to_arrow()
-    if hasattr(cdf_data, "to_pyarrow_table"):
+        return cast("TableLike", to_arrow())
+    to_pyarrow_table = getattr(cdf_data, "to_pyarrow_table", None)
+    if callable(to_pyarrow_table):
         # Other formats
-        return cdf_data.to_pyarrow_table()
+        return cast("TableLike", to_pyarrow_table())
     # Fallback: try to convert using PyArrow
-    return pa.table(cdf_data)
+    return cast("TableLike", pa.table(cdf_data))
 
 
 __all__ = [
@@ -1022,6 +1415,7 @@ __all__ = [
     "DeltaWriteResult",
     "DeltaWriteRetryPolicy",
     "EncodingPolicy",
+    "IdempotentWriteOptions",
     "StorageOptions",
     "apply_delta_write_policies",
     "cleanup_delta_log",
@@ -1039,7 +1433,9 @@ __all__ = [
     "vacuum_delta",
     "write_datafusion_delta",
     "write_dataset_delta",
+    "write_deltalake_idempotent",
     "write_finalize_result_delta",
     "write_named_datasets_delta",
     "write_table_delta",
+    "write_table_delta_idempotent",
 ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import ibis
 import pyarrow as pa
@@ -22,10 +22,11 @@ from cpg.constants import (
 )
 from cpg.spec_registry import prop_table_specs
 from cpg.specs import PropFieldSpec, PropTableSpec, filter_fields, resolve_prop_include
-from cpg.table_utils import align_table_to_schema, assert_schema_metadata
 from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.runtime import (
     AdapterExecutionPolicy,
+    align_table_to_schema,
+    assert_schema_metadata,
     dataset_schema_from_context,
     dataset_spec_from_context,
 )
@@ -34,14 +35,17 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
-from ibis_engine.scan_io import DatasetSource
 from ibis_engine.sources import (
+    DatasetSource,
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
     register_ibis_table,
     register_ibis_view,
     source_to_ibis,
 )
+
+if TYPE_CHECKING:
+    from arrowdsl.core.interop import SchemaLike
 from relspec.cpg.emit_props_ibis import (
     filter_prop_fields,
 )
@@ -50,7 +54,30 @@ from schema_spec.system import DatasetSpec
 
 
 def _prop_table_specs() -> tuple[PropTableSpec, ...]:
-    return prop_table_specs()
+    return prop_table_specs(source_columns_lookup=_source_columns_for)
+
+
+def _source_columns_for(name: str) -> tuple[str, ...] | None:
+    try:
+        schema = dataset_schema_from_context(name)
+    except KeyError:
+        return None
+    return _schema_names(schema)
+
+
+def _schema_names(schema: SchemaLike) -> tuple[str, ...] | None:
+    if isinstance(schema, pa.Schema):
+        return tuple(schema.names)
+    names = getattr(schema, "names", None)
+    if names is not None:
+        return tuple(names)
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            schema_obj = cast("pa.Schema", resolved)
+            return tuple(schema_obj.names)
+    return None
 
 
 def _resolve_props_build_context(
@@ -247,12 +274,12 @@ def _scip_role_flags_ibis(scip_occurrences: IbisPlan) -> IbisPlan | None:
         return None
     flag_names = [flag_name for flag_name, _, _ in ROLE_FLAG_SPECS]
     if all(name in expr.columns for name in flag_names):
-        projected: dict[str, Value] = {
+        projected_cols: dict[str, Value] = {
             "symbol": expr["symbol"].cast("string"),
         }
         for flag_name in flag_names:
-            projected[flag_name] = expr[flag_name].cast("int64")
-        base = expr.select(**projected)
+            projected_cols[flag_name] = expr[flag_name].cast("int64")
+        base = expr.select(**projected_cols)
         aggregates = {name: base[name].max() for name in flag_names}
         grouped = base.group_by("symbol").aggregate(**aggregates)
         return IbisPlan(expr=grouped, ordering=Ordering.unordered())

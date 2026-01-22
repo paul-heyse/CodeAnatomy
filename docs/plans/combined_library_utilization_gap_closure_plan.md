@@ -19,6 +19,8 @@
 ## Scope 1: Rust extension parity (FunctionFactory + ExprPlanner + DeltaScanConfig)
 Objective: align Rust extension signatures and capabilities with Python expectations to make named
 args and Delta scan configuration reliable.
+Status: Mostly complete. Extension parity helpers are in place; diagnostics recording and tests are
+still outstanding.
 
 Representative code
 ```rust
@@ -67,22 +69,25 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
 ```
 
 Target files
-- [ ] `rust/datafusion_ext/src/lib.rs`
-- [ ] `src/datafusion_engine/registry_bridge.py`
-- [ ] `src/datafusion_engine/expr_planner.py`
-- [ ] `src/datafusion_engine/runtime.py`
-- [ ] `src/datafusion_engine/function_factory.py`
+- [x] `rust/datafusion_ext/src/lib.rs`
+- [x] `src/datafusion_engine/registry_bridge.py`
+- [x] `src/datafusion_engine/expr_planner.py`
+- [x] `src/datafusion_engine/runtime.py`
+- [x] `src/datafusion_engine/function_factory.py`
 - [ ] `test_scope2_implementation.py`
 
 Implementation checklist
-- [ ] Extend `delta_table_provider` signature and thread new options into `DeltaScanConfigBuilder`.
-- [ ] Add missing rule primitives (`prefixed_hash64`, `stable_id`) to Rust UDF dispatch.
-- [ ] Implement and export `install_expr_planners` from `datafusion_ext`.
-- [ ] Add a runtime parity validation hook that records extension capability state.
+- [x] Extend `delta_table_provider` signature and thread new options into `DeltaScanConfigBuilder`.
+- [x] Add missing rule primitives (`prefixed_hash64`, `stable_id`) to Rust UDF dispatch.
+- [x] Implement and export `install_expr_planners` from `datafusion_ext`.
+- [ ] Add a runtime parity validation hook that records extension capability state (helper exists,
+      not recorded to diagnostics yet).
 - [ ] Add/extend tests to assert extension hooks are discoverable.
 
 ## Scope 2: Run envelope + tracing integration
 Objective: create a run envelope with `run_id` propagation, and wire tracing to diagnostics sinks.
+Status: Mostly complete. Run envelopes, tracing hooks, and diagnostics wiring are in place; tests
+for plan artifact run IDs are still pending.
 
 Representative code
 ```python
@@ -103,22 +108,25 @@ fn install_tracing(ctx: PyRef<PySessionContext>) -> PyResult<()> {
 ```
 
 Target files
-- [ ] `src/obs/datafusion_runs.py`
-- [ ] `src/datafusion_engine/runtime.py`
-- [ ] `src/datafusion_engine/bridge.py`
+- [x] `src/obs/datafusion_runs.py`
+- [x] `src/datafusion_engine/runtime.py`
+- [x] `src/datafusion_engine/bridge.py`
 - [ ] `src/obs/diagnostics.py`
-- [ ] `rust/datafusion_ext/src/lib.rs`
-- [ ] `rust/datafusion_ext/src/tracing_ctx.rs` (new)
+- [x] `rust/datafusion_ext/src/lib.rs`
+- [ ] `rust/datafusion_ext/src/tracing_ctx.rs` (not created; hook implemented in
+      `rust/datafusion_ext/src/lib.rs`)
 
 Implementation checklist
-- [ ] Introduce a tracked run wrapper for compilation/execution entry points.
-- [ ] Propagate `run_id` into `DataFusionCompileOptions` and plan artifacts.
-- [ ] Expose a `datafusion_ext.install_tracing(ctx)` hook and call it from runtime.
-- [ ] Record run start/finish artifacts plus tracing span summaries to diagnostics.
+- [x] Introduce a tracked run wrapper for compilation/execution entry points.
+- [x] Propagate `run_id` into `DataFusionCompileOptions` and plan artifacts.
+- [x] Expose a `datafusion_ext.install_tracing(ctx)` hook and call it from runtime.
+- [x] Record run start/finish artifacts plus tracing span summaries to diagnostics.
 - [ ] Add tests verifying run IDs appear in plan artifact payloads.
 
 ## Scope 3: Dual-lane Substrait activation in the runner
 Objective: actually use dual-lane compilation when `prefer_substrait=True` and persist lane info.
+Status: Mostly complete. Dual-lane routing, cache metadata, and fallback diagnostics are live;
+runtime lane-selection tests are still pending.
 
 Representative code
 ```python
@@ -151,19 +159,21 @@ def _maybe_store_substrait_lane(result: DualLaneCompilationResult, *, options: D
 ```
 
 Target files
-- [ ] `src/ibis_engine/runner.py`
-- [ ] `src/datafusion_engine/bridge.py`
-- [ ] `src/engine/plan_cache.py`
-- [ ] `test_dual_lane_integration.py`
+- [x] `src/ibis_engine/runner.py`
+- [x] `src/datafusion_engine/bridge.py`
+- [x] `src/engine/plan_cache.py`
+- [x] `test_dual_lane_integration.py`
 
 Implementation checklist
-- [ ] Route DataFusion-backed execution through `ibis_to_datafusion_dual_lane`.
-- [ ] Persist Substrait bytes and lane metadata into `PlanCacheEntry`.
-- [ ] Record fallback reasons when Substrait lane fails.
+- [x] Route DataFusion-backed execution through `ibis_to_datafusion_dual_lane`.
+- [x] Persist Substrait bytes and lane metadata into `PlanCacheEntry`.
+- [x] Record fallback reasons when Substrait lane fails.
 - [ ] Extend integration tests to assert runtime selection of Substrait lane.
 
 ## Scope 4: SQLGlot preflight enforcement + AST artifacts
 Objective: enforce schema-aware preflight across SQL ingress and persist AST artifacts.
+Status: Mostly complete. Preflight enforcement and AST capture are in place; AST persistence tests
+are still pending.
 
 Representative code
 ```python
@@ -179,20 +189,23 @@ plan_artifacts = replace(plan_artifacts, sqlglot_ast=ast_artifact)
 ```
 
 Target files
-- [ ] `src/datafusion_engine/bridge.py`
-- [ ] `src/datafusion_engine/compile_options.py`
-- [ ] `src/sqlglot_tools/optimizer.py`
+- [x] `src/datafusion_engine/bridge.py`
+- [x] `src/datafusion_engine/compile_options.py`
+- [x] `src/sqlglot_tools/optimizer.py`
 - [ ] `tests/sqlglot/test_rewrite_regressions.py`
-- [ ] `test_preflight.py`
+- [x] `test_preflight.py`
 
 Implementation checklist
-- [ ] Make preflight enforcement opt-out (policy defaults to `True` in runtime profiles).
-- [ ] Emit structured preflight diagnostics to the diagnostics sink.
-- [ ] Extend `DataFusionPlanArtifacts` to carry serialized SQLGlot AST payloads.
-- [ ] Add tests validating AST artifact persistence and preflight gating.
+- [x] Make preflight enforcement opt-out (policy defaults to `True` in runtime profiles).
+- [x] Emit structured preflight diagnostics to the diagnostics sink.
+- [x] Extend `DataFusionPlanArtifacts` to carry serialized SQLGlot AST payloads.
+- [ ] Add tests validating AST artifact persistence and preflight gating (preflight tests exist;
+      AST persistence coverage missing).
 
 ## Scope 5: Delta file pruning with `with_files`
 Objective: use Delta add-action file indexes to restrict scans using `with_files`.
+Status: Mostly complete. Rust provider, pruning logic, and diagnostics are implemented; regression
+tests are still pending.
 
 Representative code
 ```python
@@ -222,20 +235,23 @@ pub fn delta_provider_with_files(
 ```
 
 Target files
-- [ ] `src/storage/deltalake/file_index.py`
-- [ ] `src/storage/deltalake/file_pruning.py`
-- [ ] `src/datafusion_engine/registry_bridge.py`
-- [ ] `rust/datafusion_ext/src/delta_pruning.rs` (new)
-- [ ] `rust/datafusion_ext/src/lib.rs`
+- [x] `src/storage/deltalake/file_index.py`
+- [x] `src/storage/deltalake/file_pruning.py`
+- [x] `src/datafusion_engine/registry_bridge.py`
+- [ ] `rust/datafusion_ext/src/delta_pruning.rs` (not created; provider implemented in
+      `rust/datafusion_ext/src/lib.rs`)
+- [x] `rust/datafusion_ext/src/lib.rs`
 
 Implementation checklist
-- [ ] Implement a Rust `delta_table_provider_with_files` and export it via `datafusion_ext`.
-- [ ] Replace `_delta_table_provider_with_files` placeholder with native call.
-- [ ] Add candidate file selection and pruning diagnostics.
+- [x] Implement a Rust `delta_table_provider_with_files` and export it via `datafusion_ext`.
+- [x] Replace `_delta_table_provider_with_files` placeholder with native call.
+- [x] Add candidate file selection and pruning diagnostics.
 - [ ] Add regression tests for file count reductions and correctness.
 
 ## Scope 6: Cache introspection table functions
 Objective: expose cache introspection as queryable tables and persist cache settings.
+Status: Mostly complete. Cache table UDTFs and runtime wiring are in place; contract tests that
+exercise the SQL tables after scans are still pending.
 
 Representative code
 ```python
@@ -250,19 +266,22 @@ ctx.sql("SELECT * FROM list_files_cache()").collect()
 ```
 
 Target files
-- [ ] `src/datafusion_engine/cache_introspection.py`
-- [ ] `src/datafusion_engine/runtime.py`
-- [ ] `rust/datafusion_ext/src/lib.rs`
-- [ ] `rust/datafusion_ext/src/cache_tables.rs` (new)
+- [x] `src/datafusion_engine/cache_introspection.py`
+- [x] `src/datafusion_engine/runtime.py`
+- [x] `rust/datafusion_ext/src/lib.rs`
+- [ ] `rust/datafusion_ext/src/cache_tables.rs` (not created; UDTFs implemented in
+      `rust/datafusion_ext/src/lib.rs`)
 
 Implementation checklist
-- [ ] Implement cache UDTFs (list_files, metadata, predicate) in Rust extension.
-- [ ] Wire `register_cache_introspection_functions` into runtime init.
-- [ ] Record cache config snapshots to diagnostics artifacts.
+- [x] Implement cache UDTFs (list_files, metadata, predicate) in Rust extension.
+- [x] Wire `register_cache_introspection_functions` into runtime init.
+- [x] Record cache config snapshots to diagnostics artifacts.
 - [ ] Add contract tests verifying cache tables return rows after scans.
 
 ## Scope 7: Legacy decommission and cleanup
 Objective: remove legacy helpers once new paths are live.
+Status: Complete. Legacy diff helpers and Arrow adapters have been removed; remaining modules do
+not reference deprecated paths.
 
 Representative code
 ```python
@@ -272,13 +291,13 @@ write_incremental_diff_stream(reader, state_store=incremental_state_store)
 ```
 
 Target files
-- [ ] `src/incremental/diff.py` (remove `_diff_snapshots`, `_added_sql`, `_diff_sql`, helpers)
-- [ ] `src/hamilton_pipeline/modules/incremental.py` (remove fallback path and legacy calls)
-- [ ] `src/hamilton_pipeline/arrow_adapters.py` (remove `ArrowDeltaLoader`/`ArrowDeltaSaver`)
-- [ ] `src/hamilton_pipeline/modules/outputs.py`
-- [ ] `src/hamilton_pipeline/modules/params.py`
+- [x] `src/incremental/diff.py` (remove `_diff_snapshots`, `_added_sql`, `_diff_sql`, helpers)
+- [x] `src/hamilton_pipeline/modules/incremental.py` (remove fallback path and legacy calls)
+- [x] `src/hamilton_pipeline/arrow_adapters.py` (remove `ArrowDeltaLoader`/`ArrowDeltaSaver`)
+- [x] `src/hamilton_pipeline/modules/outputs.py` (no legacy adapter references remain)
+- [x] `src/hamilton_pipeline/modules/params.py` (no legacy adapter references remain)
 
 Implementation checklist
-- [ ] Remove deprecated diff helpers and update call sites to CDF-only paths.
-- [ ] Replace Arrow adapter usages with streaming/DataFusion-native outputs.
-- [ ] Delete legacy adapters after integration tests pass.
+- [x] Remove deprecated diff helpers and update call sites to CDF-only paths.
+- [x] Replace Arrow adapter usages with streaming/DataFusion-native outputs.
+- [x] Delete legacy adapters after integration tests pass.

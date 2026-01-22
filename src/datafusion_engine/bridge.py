@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import logging
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
@@ -40,7 +42,12 @@ from datafusion.expr import SortExpr
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
+from arrowdsl.core.interop import (
+    RecordBatchReaderLike,
+    TableLike,
+    coerce_table_like,
+    concat_readers,
+)
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.streaming import to_reader
 from arrowdsl.schema.build import table_from_row_dicts
@@ -50,6 +57,7 @@ from datafusion_engine.compile_options import (
     DataFusionCompileOptions,
     DataFusionDmlOptions,
     DataFusionSqlPolicy,
+    DataFusionSubstraitFallbackEvent,
     resolve_sql_policy,
 )
 from datafusion_engine.df_builder import TranslationError, df_from_sqlglot
@@ -63,8 +71,19 @@ from ibis_engine.substrait_bridge import (
 )
 from obs.diagnostics import PreparedStatementSpec
 from schema_spec.policies import DataFusionWritePolicy
-from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
+from sqlglot_tools.bridge import (
+    AstExecutionResult,
+    IbisCompilerBackend,
+    execute_sqlglot_ast,
+    ibis_to_datafusion_ast_path,
+    ibis_to_sqlglot,
+)
 from sqlglot_tools.compat import ErrorLevel, Expression, exp
+from sqlglot_tools.lineage import (
+    LineageExtractionOptions,
+    canonical_ast_fingerprint,
+    extract_lineage_payload,
+)
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     ast_to_artifact,
@@ -230,11 +249,12 @@ def _should_cache_df(
 def _resolve_cache_policy(
     expr: Expression,
     *,
+    ctx: SessionContext,
     options: DataFusionCompileOptions,
 ) -> tuple[DataFusionCompileOptions, str | None]:
     if options.cache is not None:
         return options, "cache_configured"
-    cache_key = _plan_cache_key(expr, options=options)
+    cache_key = _plan_cache_key(expr, ctx=ctx, options=options)
     if cache_key is None or options.plan_cache is None:
         return options, None
     if options.plan_cache.contains(cache_key):
@@ -245,6 +265,7 @@ def _resolve_cache_policy(
 def _plan_cache_key(
     expr: Expression,
     *,
+    ctx: SessionContext,
     options: DataFusionCompileOptions,
 ) -> PlanCacheKey | None:
     if options.plan_cache is None or options.profile_hash is None:
@@ -258,7 +279,45 @@ def _plan_cache_key(
         policy_hash=policy_hash,
         schema_map_hash=options.schema_map_hash,
     )
-    return PlanCacheKey(plan_hash=plan_hash, profile_hash=options.profile_hash)
+    _ensure_dialect(options.dialect)
+    try:
+        sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    plan_bytes = _substrait_bytes(ctx, sql)
+    if plan_bytes is None:
+        return None
+    substrait_hash = hashlib.sha256(plan_bytes).hexdigest()
+    return PlanCacheKey(
+        plan_hash=plan_hash,
+        profile_hash=options.profile_hash,
+        substrait_hash=substrait_hash,
+    )
+
+
+def _plan_cache_key_from_substrait(
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+    plan_bytes: bytes,
+) -> PlanCacheKey | None:
+    if options.plan_cache is None or options.profile_hash is None:
+        return None
+    if options.params is not None:
+        return None
+    policy_hash = options.sqlglot_policy_hash
+    plan_hash = options.plan_hash or plan_fingerprint(
+        expr,
+        dialect=options.dialect,
+        policy_hash=policy_hash,
+        schema_map_hash=options.schema_map_hash,
+    )
+    substrait_hash = hashlib.sha256(plan_bytes).hexdigest()
+    return PlanCacheKey(
+        plan_hash=plan_hash,
+        profile_hash=options.profile_hash,
+        substrait_hash=substrait_hash,
+    )
 
 
 def _substrait_bytes(ctx: SessionContext, sql: str) -> bytes | None:
@@ -349,7 +408,7 @@ def _try_replay_substrait(
     *,
     options: DataFusionCompileOptions,
 ) -> DataFrame | None:
-    cache_key = _plan_cache_key(expr, options=options)
+    cache_key = _plan_cache_key(expr, ctx=ctx, options=options)
     if cache_key is None or options.plan_cache is None:
         return None
     cached = options.plan_cache.get(cache_key)
@@ -372,19 +431,22 @@ def _maybe_store_substrait(
     *,
     options: DataFusionCompileOptions,
 ) -> None:
-    cache_key = _plan_cache_key(expr, options=options)
+    cache_key = _plan_cache_key(expr, ctx=ctx, options=options)
     if cache_key is None or options.plan_cache is None:
         return
     if options.plan_cache.contains(cache_key):
         return
     _ensure_dialect(options.dialect)
+    policy = options.sqlglot_policy or default_sqlglot_policy()
     sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
     plan_bytes = _substrait_bytes(ctx, sql)
     if plan_bytes is None:
         return
+    substrait_hash = hashlib.sha256(plan_bytes).hexdigest()
     entry = PlanCacheEntry(
         plan_hash=cache_key.plan_hash,
         profile_hash=cache_key.profile_hash,
+        substrait_hash=substrait_hash,
         plan_bytes=plan_bytes,
         compilation_lane="sql",
     )
@@ -586,7 +648,7 @@ def ibis_to_datafusion(
     """
     resolved = options or DataFusionCompileOptions()
     sg_expr = compile_sqlglot_expr(expr, backend=backend, options=resolved)
-    resolved, cache_reason = _resolve_cache_policy(sg_expr, options=resolved)
+    resolved, cache_reason = _resolve_cache_policy(sg_expr, ctx=ctx, options=resolved)
     df = df_from_sqlglot_or_sql(
         ctx,
         sg_expr,
@@ -674,12 +736,14 @@ def _attempt_substrait_lane(
     except (RuntimeError, TypeError, ValueError) as exc:
         fallback_reason = f"Substrait lane error: {exc}"
         logger.info("Substrait lane error, falling back to SQL: %s", fallback_reason)
+        _record_substrait_fallback(expr=expr, options=options, reason=fallback_reason)
         _record_substrait_gap_if_enabled(expr=expr, options=options, reason=fallback_reason)
         return None, fallback_reason
 
     if plan_bytes is None:
         fallback_reason = "Substrait compilation not supported for this expression"
         logger.debug("Substrait lane unavailable, using SQL: %s", fallback_reason)
+        _record_substrait_fallback(expr=expr, options=options, reason=fallback_reason)
         return None, fallback_reason
 
     try:
@@ -687,6 +751,7 @@ def _attempt_substrait_lane(
     except (RuntimeError, TypeError, ValueError) as exc:
         fallback_reason = f"Substrait replay failed: {exc}"
         logger.info("Substrait lane failed, falling back to SQL: %s", fallback_reason)
+        _record_substrait_fallback(expr=expr, options=options, reason=fallback_reason)
         _record_substrait_gap_if_enabled(expr=expr, options=options, reason=fallback_reason)
         return None, fallback_reason
 
@@ -696,9 +761,15 @@ def _attempt_substrait_lane(
             logger.warning("Substrait validation mismatch detected: %s", validation_result)
 
     sg_expr = compile_sqlglot_expr(expr, backend=backend, options=options)
-    resolved_cached, cache_reason = _resolve_cache_policy(sg_expr, options=options)
+    resolved_cached, cache_reason = _resolve_cache_policy(sg_expr, ctx=ctx, options=options)
     cached_df = (
         df.cache() if _should_cache_df(df, options=resolved_cached, reason=cache_reason) else df
+    )
+    _maybe_store_substrait_lane(
+        sg_expr,
+        plan_bytes,
+        options=options,
+        lane="substrait",
     )
     return (
         DualLaneCompilationResult(
@@ -724,6 +795,49 @@ def _record_substrait_gap_if_enabled(
         reason=reason,
         sink=None,
     )
+
+
+def _record_substrait_fallback(
+    *,
+    expr: IbisTable,
+    options: DataFusionCompileOptions,
+    reason: str,
+    plan_hash: str | None = None,
+) -> None:
+    hook = options.substrait_fallback_hook
+    if hook is None:
+        return
+    hook(
+        DataFusionSubstraitFallbackEvent(
+            reason=reason,
+            expr_type=type(expr).__name__,
+            plan_hash=plan_hash,
+            profile_hash=options.profile_hash,
+            run_id=options.run_id,
+        )
+    )
+
+
+def _maybe_store_substrait_lane(
+    expr: Expression,
+    plan_bytes: bytes,
+    *,
+    options: DataFusionCompileOptions,
+    lane: str,
+) -> None:
+    cache_key = _plan_cache_key_from_substrait(expr, options=options, plan_bytes=plan_bytes)
+    if cache_key is None or options.plan_cache is None:
+        return
+    if options.plan_cache.contains(cache_key):
+        return
+    entry = PlanCacheEntry(
+        plan_hash=cache_key.plan_hash,
+        profile_hash=cache_key.profile_hash,
+        substrait_hash=cache_key.substrait_hash,
+        plan_bytes=plan_bytes,
+        compilation_lane=lane,
+    )
+    options.plan_cache.put(entry)
 
 
 def ibis_plan_to_datafusion(
@@ -780,8 +894,8 @@ def datafusion_to_table(
             "or enable debug_mode in MaterializationPolicy."
         )
         raise ValueError(msg)
+    reader = datafusion_to_reader(df, ordering=ordering)
     if resolved_policy.max_rows_for_table is not None:
-        reader = datafusion_to_reader(df, ordering=ordering)
         row_count = sum(batch.num_rows for batch in reader)
         if row_count > resolved_policy.max_rows_for_table:
             msg = (
@@ -790,9 +904,7 @@ def datafusion_to_table(
             )
             raise ValueError(msg)
         reader = datafusion_to_reader(df, ordering=ordering)
-        table = reader.read_all()
-    else:
-        table = df.to_arrow_table()
+    table = reader.read_all()
     if ordering is None or ordering.level == OrderingLevel.UNORDERED:
         return table
     spec = ordering_metadata_spec(ordering.level, keys=ordering.keys)
@@ -806,14 +918,21 @@ def datafusion_to_reader(
 ) -> pa.RecordBatchReader:
     """Return a RecordBatchReader for a DataFusion DataFrame.
 
-    Prefers the __arrow_c_stream__ protocol when available to enable
-    zero-copy streaming from DataFusion.
+    Prefers partitioned streaming when available, falling back to the
+    __arrow_c_stream__ protocol for zero-copy streaming.
 
     Returns
     -------
     pyarrow.RecordBatchReader
         Record batch reader for the DataFusion results.
     """
+    partitioned = datafusion_partitioned_readers(df)
+    if partitioned:
+        try:
+            reader = concat_readers(partitioned)
+            return _apply_ordering(reader, ordering=ordering)
+        except ValueError:
+            pass
     if hasattr(df, "__arrow_c_stream__"):
         try:
             reader = pa.RecordBatchReader.from_stream(df)
@@ -1011,10 +1130,9 @@ def _maybe_enforce_preflight(
         diagnostics["run_id"] = options.run_id
     if options.sql_ingest_hook is not None:
         options.sql_ingest_hook(diagnostics)
-    if result.errors:
-        if options.enforce_preflight:
-            msg = f"Preflight validation failed: {'; '.join(result.errors)}"
-            raise ValueError(msg)
+    if result.errors and options.enforce_preflight:
+        msg = f"Preflight validation failed: {'; '.join(result.errors)}"
+        raise ValueError(msg)
 
 
 def _policy_violations(expr: Expression, policy: DataFusionSqlPolicy) -> tuple[str, ...]:
@@ -1111,6 +1229,12 @@ class DataFusionPlanArtifacts:
     substrait_plan: bytes | None
     substrait_validation: Mapping[str, object] | None = None
     sqlglot_ast: str | None = None
+    read_dialect: str | None = None
+    write_dialect: str | None = None
+    canonical_fingerprint: str | None = None
+    lineage_tables: tuple[str, ...] | None = None
+    lineage_columns: tuple[str, ...] | None = None
+    lineage_scopes: tuple[str, ...] | None = None
     unparsed_sql: str | None = None
     unparse_error: str | None = None
     logical_plan: str | None = None
@@ -1144,6 +1268,18 @@ class DataFusionPlanArtifacts:
                 dict(self.substrait_validation) if self.substrait_validation is not None else None
             ),
             "sqlglot_ast": self.sqlglot_ast,
+            "read_dialect": self.read_dialect,
+            "write_dialect": self.write_dialect,
+            "canonical_fingerprint": self.canonical_fingerprint,
+            "lineage_tables": list(self.lineage_tables)
+            if self.lineage_tables is not None
+            else None,
+            "lineage_columns": list(self.lineage_columns)
+            if self.lineage_columns is not None
+            else None,
+            "lineage_scopes": list(self.lineage_scopes)
+            if self.lineage_scopes is not None
+            else None,
             "unparsed_sql": self.unparsed_sql,
             "unparse_error": self.unparse_error,
             "logical_plan": self.logical_plan,
@@ -1180,6 +1316,18 @@ class DataFusionPlanArtifacts:
             "substrait_b64": substrait_b64,
             "substrait_validation": self.substrait_validation,
             "sqlglot_ast": self.sqlglot_ast,
+            "read_dialect": self.read_dialect,
+            "write_dialect": self.write_dialect,
+            "canonical_fingerprint": self.canonical_fingerprint,
+            "lineage_tables": list(self.lineage_tables)
+            if self.lineage_tables is not None
+            else None,
+            "lineage_columns": list(self.lineage_columns)
+            if self.lineage_columns is not None
+            else None,
+            "lineage_scopes": list(self.lineage_scopes)
+            if self.lineage_scopes is not None
+            else None,
             "unparsed_sql": self.unparsed_sql,
             "unparse_error": self.unparse_error,
             "logical_plan": self.logical_plan,
@@ -1741,10 +1889,25 @@ def collect_plan_artifacts(
     )
     sqlglot_ast: str | None = None
     try:
-        policy = options.sqlglot_policy or default_sqlglot_policy()
         sqlglot_ast = serialize_ast_artifact(ast_to_artifact(expr, sql=sql, policy=policy))
     except (RuntimeError, TypeError, ValueError):
         sqlglot_ast = None
+    lineage_payload = None
+    try:
+        lineage_payload = extract_lineage_payload(
+            expr,
+            options=LineageExtractionOptions(
+                schema=options.schema_map,
+                dialect=policy.write_dialect,
+            ),
+        )
+    except (RuntimeError, TypeError, ValueError):
+        lineage_payload = None
+    canonical_fingerprint = (
+        lineage_payload.canonical_fingerprint
+        if lineage_payload is not None
+        else canonical_ast_fingerprint(expr)
+    )
     return DataFusionPlanArtifacts(
         plan_hash=plan_hash,
         sql=sql,
@@ -1753,6 +1916,12 @@ def collect_plan_artifacts(
         substrait_plan=substrait_plan,
         substrait_validation=substrait_validation,
         sqlglot_ast=sqlglot_ast,
+        read_dialect=policy.read_dialect,
+        write_dialect=policy.write_dialect,
+        canonical_fingerprint=canonical_fingerprint,
+        lineage_tables=lineage_payload.tables if lineage_payload is not None else None,
+        lineage_columns=lineage_payload.columns if lineage_payload is not None else None,
+        lineage_scopes=lineage_payload.scopes if lineage_payload is not None else None,
         unparsed_sql=unparsed_sql,
         unparse_error=unparse_error,
         logical_plan=cast("str | None", plan_details.get("logical_plan")),
@@ -1780,7 +1949,7 @@ def execute_sql(
     """
     _ensure_dialect(options.dialect)
     expr = parse_sql_strict(sql, dialect=options.dialect)
-    df = _df_from_sql(ctx, expr, options=options)
+    df = df_from_sqlglot_or_sql(ctx, expr, options=options)
     return _collect_reader(df)
 
 
@@ -2065,12 +2234,205 @@ def rehydrate_plan_artifacts(
     return replay_substrait_bytes(ctx, plan_bytes)
 
 
+@dataclass(frozen=True)
+class DeltaInsertOptions:
+    """Options for DataFusion INSERT INTO Delta tables."""
+
+    mode: Literal["append", "overwrite"] = "append"
+    table_name: str | None = None
+
+
+@dataclass(frozen=True)
+class DeltaInsertResult:
+    """Result of DataFusion INSERT operation."""
+
+    table_name: str
+    mode: str
+    rows_affected: int | None = None
+
+
+def datafusion_insert_delta(
+    ctx: SessionContext,
+    table_name: str,
+    source_sql: str,
+    *,
+    options: DeltaInsertOptions | None = None,
+) -> DeltaInsertResult:
+    """Execute INSERT INTO Delta table via DataFusion.
+
+    This uses DataFusion's DML support against DeltaTableProvider for
+    append/overwrite operations without materializing to Arrow first.
+
+    Parameters
+    ----------
+    ctx : SessionContext
+        DataFusion session context with Delta table registered.
+    table_name : str
+        Name of registered Delta table to insert into.
+    source_sql : str
+        SQL SELECT query providing the data to insert.
+    options : DeltaInsertOptions | None
+        Insert options (mode, etc).
+
+    Returns
+    -------
+    DeltaInsertResult
+        Result with table name and mode.
+
+    Raises
+    ------
+    ValueError
+        Raised when the insert mode is unsupported.
+    """
+    resolved = options or DeltaInsertOptions()
+    if resolved.mode == "overwrite":
+        sql = f"INSERT OVERWRITE {table_name} {source_sql}"
+    elif resolved.mode == "append":
+        sql = f"INSERT INTO {table_name} {source_sql}"
+    else:
+        msg = f"Unsupported Delta INSERT mode: {resolved.mode!r}."
+        raise ValueError(msg)
+
+    # Use DML-enabled SQL options
+    allow_dml = True
+    sql_options = SQLOptions().with_allow_dml(allow_dml)
+
+    # Execute the INSERT
+    df = ctx.sql_with_options(sql, sql_options)
+    batches = df.collect()
+
+    # Try to extract rows affected from result
+    rows_affected = None
+    if batches:
+        first_batch = batches[0]
+        if first_batch.num_columns > 0 and first_batch.num_rows > 0:
+            # DataFusion returns count in first column
+            with contextlib.suppress(IndexError, TypeError, ValueError):
+                rows_affected = int(first_batch.column(0)[0].as_py())
+
+    return DeltaInsertResult(
+        table_name=table_name,
+        mode=resolved.mode,
+        rows_affected=rows_affected,
+    )
+
+
+def datafusion_insert_from_dataframe(
+    ctx: SessionContext,
+    table_name: str,
+    source_df: DataFrame,
+    *,
+    options: DeltaInsertOptions | None = None,
+) -> DeltaInsertResult:
+    """Execute INSERT INTO Delta table from a DataFusion DataFrame.
+
+    This registers the source DataFrame as a temporary view and executes
+    INSERT INTO against it.
+
+    Parameters
+    ----------
+    ctx : SessionContext
+        DataFusion session context with Delta table registered.
+    table_name : str
+        Name of registered Delta table to insert into.
+    source_df : DataFrame
+        DataFrame to insert.
+    options : DeltaInsertOptions | None
+        Insert options (mode, etc).
+
+    Returns
+    -------
+    DeltaInsertResult
+        Result with table name, mode, and rows affected.
+
+    Raises
+    ------
+    TypeError
+        Raised when the SessionContext cannot register record batches.
+    """
+    resolved = options or DeltaInsertOptions()
+
+    # Register source as temp view using Arrow materialization
+    temp_name = f"__insert_source_{_uuid_short()}"
+    batches = source_df.collect()
+    register_batches = getattr(ctx, "register_record_batches", None)
+    if not callable(register_batches):
+        msg = "DataFusion SessionContext missing register_record_batches."
+        raise TypeError(msg)
+    register_batches(temp_name, batches)
+
+    try:
+        result = datafusion_insert_delta(
+            ctx,
+            table_name,
+            f"SELECT * FROM {temp_name}",
+            options=resolved,
+        )
+    finally:
+        # Deregister temp view
+        with contextlib.suppress(RuntimeError, TypeError, ValueError):
+            ctx.deregister_table(temp_name)
+
+    return result
+
+
+def _uuid_short() -> str:
+    """Generate a short UUID for temporary table names.
+
+    Returns
+    -------
+    str
+        Short hexadecimal UUID segment.
+    """
+    return uuid.uuid4().hex[:8]
+
+
+def df_from_sqlglot_ast(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions | None = None,
+) -> DataFrame:
+    """Create DataFrame from SQLGlot AST without string serialization.
+
+    When Substrait is not used, this provides an alternative path that
+    maintains AST fidelity by using raw_sql with Expression objects.
+
+    Note: This requires an Ibis DataFusion backend as intermediary.
+    For direct DataFusion execution, SQL string generation is still needed.
+
+    Parameters
+    ----------
+    ctx : SessionContext
+        DataFusion session context.
+    expr : Expression
+        SQLGlot expression to execute.
+    options : DataFusionCompileOptions | None
+        Compilation options controlling dialect and SQL generation.
+
+    Returns
+    -------
+    DataFrame
+        DataFusion DataFrame for the expression.
+    """
+    resolved = options or DataFusionCompileOptions()
+    _ensure_dialect(resolved.dialect)
+
+    # Generate SQL from AST with explicit dialect
+    sql = expr.sql(dialect=resolved.dialect, unsupported_level=ErrorLevel.RAISE)
+    sql_options = _sql_options_for_options(resolved)
+    return ctx.sql_with_options(sql, sql_options)
+
+
 __all__ = [
+    "AstExecutionResult",
     "CopyToOptions",
     "DataFusionCompileOptions",
     "DataFusionDmlOptions",
     "DataFusionPlanArtifacts",
     "DataFusionSqlPolicy",
+    "DeltaInsertOptions",
+    "DeltaInsertResult",
     "DualLaneCompilationResult",
     "IbisCompilerBackend",
     "MaterializationPolicy",
@@ -2079,6 +2441,8 @@ __all__ = [
     "copy_to_path",
     "copy_to_statement",
     "datafusion_from_arrow",
+    "datafusion_insert_delta",
+    "datafusion_insert_from_dataframe",
     "datafusion_partitioned_readers",
     "datafusion_to_async_batches",
     "datafusion_to_reader",
@@ -2087,13 +2451,16 @@ __all__ = [
     "datafusion_write_options",
     "datafusion_write_parquet",
     "df_from_sql",
+    "df_from_sqlglot_ast",
     "execute_dml",
     "execute_prepared_statement",
     "execute_sql",
+    "execute_sqlglot_ast",
     "ibis_plan_to_datafusion",
     "ibis_plan_to_reader",
     "ibis_plan_to_table",
     "ibis_to_datafusion",
+    "ibis_to_datafusion_ast_path",
     "ibis_to_datafusion_dual_lane",
     "merge_format_options",
     "prepare_statement",

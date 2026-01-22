@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import cache
 
 from arrowdsl.core.interop import SchemaLike
-from normalize.registry_specs import dataset_contract, dataset_schema, dataset_spec
+from normalize.registry_runtime import dataset_contract, dataset_schema, dataset_spec
 from schema_spec.system import Contract, DatasetSpec
 
 NORMALIZE_EVIDENCE_NAME = "normalize_evidence_v1"

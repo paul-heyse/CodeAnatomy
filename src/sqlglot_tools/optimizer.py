@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import math
@@ -12,6 +13,7 @@ from enum import StrEnum
 from typing import Final, Literal, TypedDict, Unpack, cast
 
 import pyarrow as pa
+import sqlglot
 from sqlglot.errors import SqlglotError
 from sqlglot.generator import Generator as SqlGlotGenerator
 from sqlglot.optimizer import RULES, optimize
@@ -44,7 +46,7 @@ from sqlglot.transforms import (
 )
 
 from registry_common.arrow_payloads import payload_hash
-from sqlglot_tools.compat import Dialect, ErrorLevel, Expression, exp, parse_one
+from sqlglot_tools.compat import Dialect, DialectType, ErrorLevel, Expression, exp, parse_one
 
 type SchemaMappingNode = Mapping[str, str] | Mapping[str, SchemaMappingNode]
 type SchemaMapping = Mapping[str, SchemaMappingNode]
@@ -195,7 +197,7 @@ class GeneratorInitKwargs(TypedDict, total=False):
     leading_comma: bool
     max_text_width: int
     comments: bool
-    dialect: Dialect | str | type[Dialect] | None
+    dialect: DialectType | str | type[DialectType] | None
 
 
 @dataclass(frozen=True)
@@ -717,18 +719,27 @@ def _generator_kwargs(policy: SqlGlotPolicy) -> GeneratorInitKwargs:
 def canonical_ast_fingerprint(expr: Expression) -> str:
     """Return a stable fingerprint for a SQLGlot expression.
 
+    Uses SQLGlot's serde.dump to serialize the AST to JSON,
+    then hashes for a stable fingerprint.
+
     Returns
     -------
     str
-        SHA-256 fingerprint for the canonical SQL text payload.
+        SHA-256 fingerprint for the canonical AST.
     """
-    sql_text = expr.sql(dialect=DEFAULT_WRITE_DIALECT)
-    payload = {
-        "version": HASH_PAYLOAD_VERSION,
-        "dialect": DEFAULT_WRITE_DIALECT,
-        "sql": sql_text,
-    }
-    return payload_hash(payload, _AST_HASH_SCHEMA)
+    try:
+        payload = dump(expr)
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode()).hexdigest()
+    except (SqlglotError, TypeError, ValueError):
+        # Fallback to SQL text hash
+        sql_text = expr.sql(dialect=DEFAULT_WRITE_DIALECT)
+        payload_dict = {
+            "version": HASH_PAYLOAD_VERSION,
+            "dialect": DEFAULT_WRITE_DIALECT,
+            "sql": sql_text,
+        }
+        return payload_hash(payload_dict, _AST_HASH_SCHEMA)
 
 
 def apply_transforms(
@@ -767,6 +778,43 @@ def sqlglot_sql(
     generator["dialect"] = policy.write_dialect
     generator["unsupported_level"] = policy.unsupported_level
     return expr.sql(**cast("GeneratorInitKwargs", generator))
+
+
+def transpile_sql(
+    sql: str,
+    *,
+    policy: SqlGlotPolicy | None = None,
+) -> str:
+    """Return transpiled SQL using policy read/write dialects.
+
+    Returns
+    -------
+    str
+        SQL string transpiled into the policy write dialect.
+
+    Raises
+    ------
+    ValueError
+        Raised when transpilation fails or yields multiple statements.
+    """
+    policy = policy or default_sqlglot_policy()
+    try:
+        results = sqlglot.transpile(
+            sql,
+            read=policy.read_dialect,
+            write=policy.write_dialect,
+            error_level=policy.error_level,
+        )
+    except (SqlglotError, TypeError, ValueError) as exc:
+        msg = f"SQLGlot transpile failed: {exc}"
+        raise ValueError(msg) from exc
+    if not results:
+        msg = "SQLGlot transpile returned no statements."
+        raise ValueError(msg)
+    if len(results) > 1:
+        msg = "SQLGlot transpile returned multiple statements."
+        raise ValueError(msg)
+    return results[0]
 
 
 def normalize_ddl_sql(sql: str, *, surface: SqlGlotSurface = SqlGlotSurface.DATAFUSION_DDL) -> str:
@@ -1600,10 +1648,14 @@ def artifact_to_ast(artifact: AstArtifact) -> Expression:
     """
     try:
         ast_data = json.loads(artifact.ast_json)
-        return load(ast_data)
+        result = load(ast_data)
     except (SqlglotError, TypeError, ValueError) as exc:
         msg = f"Failed to deserialize AST: {exc}"
         raise ValueError(msg) from exc
+    if result is None:
+        msg = "Failed to deserialize AST: result was None."
+        raise ValueError(msg)
+    return result
 
 
 def rewrite_expr(
@@ -1872,4 +1924,5 @@ __all__ = [
     "sqlglot_policy_snapshot_for",
     "sqlglot_sql",
     "sqlglot_surface_policy",
+    "transpile_sql",
 ]

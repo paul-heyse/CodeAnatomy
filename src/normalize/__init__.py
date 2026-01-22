@@ -6,12 +6,26 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from datafusion_engine.normalize_ids import (
+        DEF_USE_EVENT_ID_SPEC,
+        DIAG_ID_SPEC,
+        REACH_EDGE_ID_SPEC,
+        TYPE_EXPR_ID_SPEC,
+        TYPE_ID_SPEC,
+        hash_spec,
+    )
+    from datafusion_engine.schema_registry import (
+        DIAG_DETAIL_STRUCT,
+        DIAG_DETAILS_TYPE,
+        DIAG_TAGS_TYPE,
+    )
     from normalize.contracts import (
         NORMALIZE_EVIDENCE_NAME,
         normalize_evidence_contract,
         normalize_evidence_schema,
         normalize_evidence_spec,
     )
+    from normalize.dataset_fields import field, field_name, fields
     from normalize.ibis_api import (
         DiagnosticsSources,
         add_ast_byte_spans,
@@ -28,23 +42,7 @@ if TYPE_CHECKING:
         normalize_types,
         run_reaching_defs,
     )
-    from normalize.registry_fields import (
-        DIAG_DETAIL_STRUCT,
-        DIAG_DETAILS_TYPE,
-        DIAG_TAGS_TYPE,
-        field,
-        field_name,
-        fields,
-    )
-    from normalize.registry_ids import (
-        DEF_USE_EVENT_ID_SPEC,
-        DIAG_ID_SPEC,
-        REACH_EDGE_ID_SPEC,
-        TYPE_EXPR_ID_SPEC,
-        TYPE_ID_SPEC,
-        hash_spec,
-    )
-    from normalize.registry_specs import (
+    from normalize.registry_runtime import (
         dataset_contract,
         dataset_input_columns,
         dataset_input_schema,
@@ -73,15 +71,15 @@ if TYPE_CHECKING:
     from relspec.rules.definitions import EvidenceSpec, ExecutionMode
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
-    "DEF_USE_EVENT_ID_SPEC": ("normalize.registry_ids", "DEF_USE_EVENT_ID_SPEC"),
-    "DIAG_DETAILS_TYPE": ("normalize.registry_fields", "DIAG_DETAILS_TYPE"),
-    "DIAG_DETAIL_STRUCT": ("normalize.registry_fields", "DIAG_DETAIL_STRUCT"),
-    "DIAG_ID_SPEC": ("normalize.registry_ids", "DIAG_ID_SPEC"),
-    "DIAG_TAGS_TYPE": ("normalize.registry_fields", "DIAG_TAGS_TYPE"),
+    "DEF_USE_EVENT_ID_SPEC": ("datafusion_engine.normalize_ids", "DEF_USE_EVENT_ID_SPEC"),
+    "DIAG_DETAILS_TYPE": ("datafusion_engine.schema_registry", "DIAG_DETAILS_TYPE"),
+    "DIAG_DETAIL_STRUCT": ("datafusion_engine.schema_registry", "DIAG_DETAIL_STRUCT"),
+    "DIAG_ID_SPEC": ("datafusion_engine.normalize_ids", "DIAG_ID_SPEC"),
+    "DIAG_TAGS_TYPE": ("datafusion_engine.schema_registry", "DIAG_TAGS_TYPE"),
     "NORMALIZE_EVIDENCE_NAME": ("normalize.contracts", "NORMALIZE_EVIDENCE_NAME"),
-    "REACH_EDGE_ID_SPEC": ("normalize.registry_ids", "REACH_EDGE_ID_SPEC"),
-    "TYPE_EXPR_ID_SPEC": ("normalize.registry_ids", "TYPE_EXPR_ID_SPEC"),
-    "TYPE_ID_SPEC": ("normalize.registry_ids", "TYPE_ID_SPEC"),
+    "REACH_EDGE_ID_SPEC": ("datafusion_engine.normalize_ids", "REACH_EDGE_ID_SPEC"),
+    "TYPE_EXPR_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_EXPR_ID_SPEC"),
+    "TYPE_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_ID_SPEC"),
     "AmbiguityPolicy": ("relspec.model", "AmbiguityPolicy"),
     "ConfidencePolicy": ("relspec.model", "ConfidencePolicy"),
     "DiagnosticsSources": ("normalize.ibis_api", "DiagnosticsSources"),
@@ -101,23 +99,23 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "build_def_use_events": ("normalize.ibis_api", "build_def_use_events"),
     "collect_diags": ("normalize.ibis_api", "collect_diags"),
     "compile_normalize_plans_ibis": ("normalize.runner", "compile_normalize_plans_ibis"),
-    "dataset_contract": ("normalize.registry_specs", "dataset_contract"),
-    "dataset_input_columns": ("normalize.registry_specs", "dataset_input_columns"),
-    "dataset_input_schema": ("normalize.registry_specs", "dataset_input_schema"),
-    "dataset_metadata_spec": ("normalize.registry_specs", "dataset_metadata_spec"),
-    "dataset_names": ("normalize.registry_specs", "dataset_names"),
-    "dataset_schema": ("normalize.registry_specs", "dataset_schema"),
-    "dataset_schema_policy": ("normalize.registry_specs", "dataset_schema_policy"),
-    "dataset_spec": ("normalize.registry_specs", "dataset_spec"),
-    "dataset_specs": ("normalize.registry_specs", "dataset_specs"),
-    "dataset_table_spec": ("normalize.registry_specs", "dataset_table_spec"),
+    "dataset_contract": ("normalize.registry_runtime", "dataset_contract"),
+    "dataset_input_columns": ("normalize.registry_runtime", "dataset_input_columns"),
+    "dataset_input_schema": ("normalize.registry_runtime", "dataset_input_schema"),
+    "dataset_metadata_spec": ("normalize.registry_runtime", "dataset_metadata_spec"),
+    "dataset_names": ("normalize.registry_runtime", "dataset_names"),
+    "dataset_schema": ("normalize.registry_runtime", "dataset_schema"),
+    "dataset_schema_policy": ("normalize.registry_runtime", "dataset_schema_policy"),
+    "dataset_spec": ("normalize.registry_runtime", "dataset_spec"),
+    "dataset_specs": ("normalize.registry_runtime", "dataset_specs"),
+    "dataset_table_spec": ("normalize.registry_runtime", "dataset_table_spec"),
     "ensure_canonical": ("normalize.runner", "ensure_canonical"),
     "ensure_execution_context": ("normalize.runner", "ensure_execution_context"),
     "resolve_normalize_rules": ("normalize.runner", "resolve_normalize_rules"),
-    "field": ("normalize.registry_fields", "field"),
-    "field_name": ("normalize.registry_fields", "field_name"),
-    "fields": ("normalize.registry_fields", "fields"),
-    "hash_spec": ("normalize.registry_ids", "hash_spec"),
+    "field": ("normalize.dataset_fields", "field"),
+    "field_name": ("normalize.dataset_fields", "field_name"),
+    "fields": ("normalize.dataset_fields", "fields"),
+    "hash_spec": ("datafusion_engine.normalize_ids", "hash_spec"),
     "normalize_cst_callsites_spans": (
         "normalize.ibis_api",
         "normalize_cst_callsites_spans",

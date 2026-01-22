@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 import libcst as cst
+import libcst.matchers as m
 from libcst import helpers
 from libcst.metadata import (
     BaseMetadataProvider,
@@ -41,13 +43,15 @@ from extract.helpers import (
     attrs_map,
     bytes_from_file_ctx,
     file_identity_row,
+    ibis_plan_from_row_batches,
     ibis_plan_from_rows,
-    iter_contexts,
     materialize_extract_plan,
     span_dict,
 )
+from extract.parallel import parallel_map, supports_fork
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
+from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -88,6 +92,8 @@ class CSTExtractOptions:
     compute_fully_qualified_names: bool = True
     compute_scope: bool = True
     compute_type_inference: bool = False
+    matcher_templates: tuple[str, ...] = ()
+    batch_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -252,6 +258,8 @@ def _parse_module(
     except cst.ParserSyntaxError as exc:
         raw_line = int(getattr(exc, "raw_line", 0) or 0)
         raw_column = int(getattr(exc, "raw_column", 0) or 0)
+        editor_line = int(getattr(exc, "editor_line", raw_line) or raw_line)
+        editor_column = int(getattr(exc, "editor_column", raw_column) or raw_column)
         context = getattr(exc, "context", None)
         return (
             None,
@@ -261,8 +269,8 @@ def _parse_module(
                 "message": str(exc),
                 "raw_line": raw_line,
                 "raw_column": raw_column,
-                "editor_line": raw_line,
-                "editor_column": raw_column,
+                "editor_line": editor_line,
+                "editor_column": editor_column,
                 "context": context,
                 "line_base": CST_LINE_BASE,
                 "col_unit": CST_COL_UNIT,
@@ -270,6 +278,8 @@ def _parse_module(
                 "meta": {
                     "raw_line": str(raw_line),
                     "raw_column": str(raw_column),
+                    "editor_line": str(editor_line),
+                    "editor_column": str(editor_column),
                 },
             },
         )
@@ -418,6 +428,38 @@ def _resolve_metadata_maps(
 
 def _row_map(row: Mapping[str, object]) -> dict[str, object]:
     return dict(row)
+
+
+def _parse_matcher_template(
+    template: str,
+    config: cst.PartialParserConfig,
+) -> cst.CSTNode | None:
+    try:
+        return cst.parse_expression(template, config=config)
+    except (TypeError, cst.ParserSyntaxError):
+        pass
+    try:
+        return cst.parse_statement(template, config=config)
+    except (TypeError, cst.ParserSyntaxError):
+        return None
+
+
+def _matcher_counts(module: cst.Module, options: CSTExtractOptions) -> dict[str, str]:
+    if not options.matcher_templates:
+        return {}
+    config = module.config_for_parsing
+    counts: dict[str, str] = {}
+    for template in options.matcher_templates:
+        parsed = _parse_matcher_template(template, config)
+        if parsed is None:
+            continue
+        def _match(node: cst.CSTNode, *, tmpl: cst.CSTNode = parsed) -> bool:
+            return node.deep_equals(tmpl)
+
+        matcher = m.MatchIfTrue(_match)
+        matches = m.findall(module, matcher)
+        counts[f"matcher_template:{template}"] = str(len(matches))
+    return counts
 
 
 def _iter_cst_children(
@@ -1301,9 +1343,47 @@ def _build_repo_manager(
     if not rel_paths:
         return None
     rel_paths_str = sorted(str(path) for path in rel_paths)
-    manager = FullRepoManager(options.repo_root, rel_paths_str, providers)
+    manager = FullRepoManager(
+        options.repo_root,
+        rel_paths_str,
+        providers,
+        use_pyproject_toml=True,
+    )
     manager.resolve_cache()
     return manager
+
+
+_CST_WORKER_STATE: dict[str, FullRepoManager | None] = {"repo_manager": None}
+
+
+def _set_worker_repo_manager(repo_manager: FullRepoManager | None) -> None:
+    _CST_WORKER_STATE["repo_manager"] = repo_manager
+
+
+def _resolve_worker_repo_manager(repo_manager: FullRepoManager | None) -> FullRepoManager | None:
+    if repo_manager is not None:
+        return repo_manager
+    return _CST_WORKER_STATE["repo_manager"]
+
+
+def _warm_cst_parser() -> None:
+    with contextlib.suppress(cst.ParserSyntaxError):
+        cst.parse_module(b"pass\n")
+
+
+def _cst_row_worker(
+    file_ctx: FileContext,
+    *,
+    options: CSTExtractOptions,
+    evidence_plan: EvidencePlan | None,
+) -> dict[str, object] | None:
+    repo_manager = _resolve_worker_repo_manager(None)
+    return _cst_file_row(
+        file_ctx,
+        options=options,
+        evidence_plan=evidence_plan,
+        repo_manager=repo_manager,
+    )
 
 
 def _cst_file_row(
@@ -1327,10 +1407,12 @@ def _cst_file_row(
     edges: list[dict[str, object]] = []
     if module is not None:
         nodes, edges = _collect_cst_nodes_edges(module)
+    matcher_counts = _matcher_counts(module, options) if module is not None else {}
     return {
         "repo": options.repo_id,
         "path": file_ctx.path,
         "file_id": file_ctx.file_id,
+        "file_sha256": file_ctx.file_sha256,
         "nodes": nodes,
         "edges": edges,
         "parse_manifest": [_row_map(row) for row in ctx.manifest_rows],
@@ -1343,7 +1425,7 @@ def _cst_file_row(
         "docstrings": [_row_map(row) for row in ctx.docstring_rows],
         "decorators": [_row_map(row) for row in ctx.decorator_rows],
         "call_args": [_row_map(row) for row in ctx.call_arg_rows],
-        "attrs": attrs_map({"file_sha256": file_ctx.file_sha256}),
+        "attrs": attrs_map(matcher_counts),
     }
 
 
@@ -1353,10 +1435,32 @@ def _collect_cst_file_rows(
     *,
     options: CSTExtractOptions,
     evidence_plan: EvidencePlan | None,
+    ctx: ExecutionContext | None,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    contexts = list(iter_contexts(repo_files, file_contexts))
+    contexts = list(
+        iter_worklist_contexts(
+            repo_files,
+            output_table="libcst_files_v1",
+            ctx=ctx,
+            file_contexts=file_contexts,
+        )
+    )
     repo_manager = _build_repo_manager(options, contexts)
+    if not contexts:
+        return rows
+    use_parallel = True
+    if repo_manager is not None and not supports_fork():
+        use_parallel = False
+    if use_parallel:
+        _warm_cst_parser()
+        _set_worker_repo_manager(repo_manager)
+        runner = partial(_cst_row_worker, options=options, evidence_plan=evidence_plan)
+        try:
+            rows.extend(row for row in parallel_map(contexts, runner) if row is not None)
+        finally:
+            _set_worker_repo_manager(None)
+        return rows
     for file_ctx in contexts:
         row = _cst_file_row(
             file_ctx,
@@ -1370,12 +1474,16 @@ def _collect_cst_file_rows(
 
 
 def _build_cst_file_plan(
-    rows: list[dict[str, object]],
+    rows: list[dict[str, object]] | None,
     *,
+    row_batches: Iterable[Sequence[Mapping[str, object]]] | None,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
 ) -> IbisPlan:
-    raw = ibis_plan_from_rows("libcst_files_v1", rows)
+    if row_batches is not None:
+        raw = ibis_plan_from_row_batches("libcst_files_v1", row_batches)
+    else:
+        raw = ibis_plan_from_rows("libcst_files_v1", rows or [])
     return apply_query_and_project(
         "libcst_files_v1",
         raw.expr,
@@ -1383,6 +1491,90 @@ def _build_cst_file_plan(
         evidence_plan=evidence_plan,
         repo_id=normalize.repo_id,
     )
+
+
+@dataclass(frozen=True)
+class _CstBatchContext:
+    repo_files: TableLike
+    file_contexts: Iterable[FileContext] | None
+    options: CSTExtractOptions
+    evidence_plan: EvidencePlan | None
+    ctx: ExecutionContext | None
+    batch_size: int
+
+
+def _iter_cst_row_batches(
+    context: _CstBatchContext,
+) -> Iterable[Sequence[Mapping[str, object]]]:
+    contexts = list(
+        iter_worklist_contexts(
+            context.repo_files,
+            output_table="libcst_files_v1",
+            ctx=context.ctx,
+            file_contexts=context.file_contexts,
+        )
+    )
+    if not contexts:
+        return
+    repo_manager = _build_repo_manager(context.options, contexts)
+    yield from _iter_cst_batches_for_contexts(
+        contexts,
+        repo_manager=repo_manager,
+        options=context.options,
+        evidence_plan=context.evidence_plan,
+        batch_size=context.batch_size,
+    )
+
+
+def _iter_cst_batches_for_contexts(
+    contexts: Sequence[FileContext],
+    *,
+    repo_manager: FullRepoManager | None,
+    options: CSTExtractOptions,
+    evidence_plan: EvidencePlan | None,
+    batch_size: int,
+) -> Iterable[Sequence[Mapping[str, object]]]:
+    batch: list[dict[str, object]] = []
+    use_parallel = repo_manager is None or supports_fork()
+    if use_parallel:
+        _warm_cst_parser()
+        _set_worker_repo_manager(repo_manager)
+        runner = partial(_cst_row_worker, options=options, evidence_plan=evidence_plan)
+        try:
+            for row in parallel_map(contexts, runner):
+                if row is None:
+                    continue
+                batch.append(row)
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+        finally:
+            _set_worker_repo_manager(None)
+    else:
+        for file_ctx in contexts:
+            row = _cst_file_row(
+                file_ctx,
+                options=options,
+                evidence_plan=evidence_plan,
+                repo_manager=repo_manager,
+            )
+            if row is None:
+                continue
+            batch.append(row)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+    if batch:
+        yield batch
+
+
+def _resolve_batch_size(options: CSTExtractOptions) -> int | None:
+    if options.batch_size is None:
+        return None
+    if options.batch_size <= 0:
+        msg = "batch_size must be a positive integer."
+        raise ValueError(msg)
+    return options.batch_size
 
 
 def extract_cst(
@@ -1405,14 +1597,31 @@ def extract_cst(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
     )
-    rows = _collect_cst_file_rows(
-        repo_files,
-        exec_context.file_contexts,
-        options=normalized_options,
-        evidence_plan=exec_context.evidence_plan,
-    )
+    rows: list[dict[str, object]] | None = None
+    row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
+    batch_size = _resolve_batch_size(normalized_options)
+    if batch_size is None:
+        rows = _collect_cst_file_rows(
+            repo_files,
+            exec_context.file_contexts,
+            options=normalized_options,
+            evidence_plan=exec_context.evidence_plan,
+            ctx=exec_context.ctx,
+        )
+    else:
+        row_batches = _iter_cst_row_batches(
+            _CstBatchContext(
+                repo_files=repo_files,
+                file_contexts=exec_context.file_contexts,
+                options=normalized_options,
+                evidence_plan=exec_context.evidence_plan,
+                ctx=exec_context.ctx,
+                batch_size=batch_size,
+            )
+        )
     plan = _build_cst_file_plan(
         rows,
+        row_batches=row_batches,
         normalize=normalize,
         evidence_plan=exec_context.evidence_plan,
     )
@@ -1448,15 +1657,32 @@ def extract_cst_plans(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
     )
-    rows = _collect_cst_file_rows(
-        repo_files,
-        exec_context.file_contexts,
-        options=normalized_options,
-        evidence_plan=exec_context.evidence_plan,
-    )
+    rows: list[dict[str, object]] | None = None
+    row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
+    batch_size = _resolve_batch_size(normalized_options)
+    if batch_size is None:
+        rows = _collect_cst_file_rows(
+            repo_files,
+            exec_context.file_contexts,
+            options=normalized_options,
+            evidence_plan=exec_context.evidence_plan,
+            ctx=exec_context.ctx,
+        )
+    else:
+        row_batches = _iter_cst_row_batches(
+            _CstBatchContext(
+                repo_files=repo_files,
+                file_contexts=exec_context.file_contexts,
+                options=normalized_options,
+                evidence_plan=exec_context.evidence_plan,
+                ctx=exec_context.ctx,
+                batch_size=batch_size,
+            )
+        )
     return {
         "libcst_files": _build_cst_file_plan(
             rows,
+            row_batches=row_batches,
             normalize=normalize,
             evidence_plan=exec_context.evidence_plan,
         ),

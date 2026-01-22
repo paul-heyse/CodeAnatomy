@@ -1,4 +1,4 @@
-"""Build per-file line index tables from repo files."""
+"""Build per-file line index tables from repo file blobs."""
 
 from __future__ import annotations
 
@@ -11,11 +11,11 @@ from datafusion_engine.extract_registry import dataset_schema
 
 
 def build_line_index_table(
-    repo_files: TableLike,
+    repo_file_blobs: TableLike,
     *,
     ctx: object | None = None,
 ) -> TableLike:
-    """Build a file line index table from repo files.
+    """Build a file line index table from repo file blobs.
 
     Returns
     -------
@@ -32,11 +32,11 @@ def build_line_index_table(
     newline_kinds: list[str] = []
 
     arrays = [
-        column_or_null(repo_files, "file_id", pa.string()),
-        column_or_null(repo_files, "path", pa.string()),
-        column_or_null(repo_files, "encoding", pa.string()),
-        column_or_null(repo_files, "text", pa.string()),
-        column_or_null(repo_files, "bytes", pa.binary()),
+        column_or_null(repo_file_blobs, "file_id", pa.string()),
+        column_or_null(repo_file_blobs, "path", pa.string()),
+        column_or_null(repo_file_blobs, "encoding", pa.string()),
+        column_or_null(repo_file_blobs, "text", pa.string()),
+        column_or_null(repo_file_blobs, "bytes", pa.binary()),
     ]
     for file_id, path, encoding, text_value, bytes_value in iter_arrays(arrays):
         if not isinstance(file_id, str) or not isinstance(path, str):

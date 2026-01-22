@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import pyarrow as pa
 
-from cpg.kinds_ultimate import EdgeKind
+from cpg.kind_catalog import EdgeKindId
 from cpg.specs import EdgeEmitSpec, EdgePlanSpec
 from relspec.rules.definitions import RelationshipPayload, RuleDefinition
 from relspec.rules.spec_tables import rule_definitions_from_table
@@ -31,7 +31,7 @@ def edge_plan_specs_from_definitions(
         if edge is None:
             continue
         emit = EdgeEmitSpec(
-            edge_kind=EdgeKind(edge.edge_kind),
+            edge_kind=EdgeKindId(edge.edge_kind),
             src_cols=edge.src_cols,
             dst_cols=edge.dst_cols,
             path_cols=edge.path_cols,

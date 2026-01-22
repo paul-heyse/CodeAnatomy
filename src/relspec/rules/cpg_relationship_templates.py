@@ -4,17 +4,35 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.spec.expr_ir import ExprIR
-from cpg.kinds_ultimate import (
+from cpg.kind_catalog import (
+    EDGE_KIND_HAS_ANNOTATION,
+    EDGE_KIND_HAS_DIAGNOSTIC,
+    EDGE_KIND_INFERRED_TYPE,
+    EDGE_KIND_PY_CALLS_SYMBOL,
+    EDGE_KIND_PY_DEFINES_SYMBOL,
+    EDGE_KIND_PY_IMPORTS_SYMBOL,
+    EDGE_KIND_PY_READS_SYMBOL,
+    EDGE_KIND_PY_REFERENCES_SYMBOL,
+    EDGE_KIND_PY_WRITES_SYMBOL,
+    EDGE_KIND_RT_HAS_MEMBER,
+    EDGE_KIND_RT_HAS_PARAM,
+    EDGE_KIND_RT_HAS_SIGNATURE,
+    EDGE_KIND_SCIP_SYMBOL_DEFINITION,
+    EDGE_KIND_SCIP_SYMBOL_IMPLEMENTATION,
+    EDGE_KIND_SCIP_SYMBOL_REFERENCE,
+    EDGE_KIND_SCIP_SYMBOL_TYPE_DEFINITION,
+)
+from cpg.scip_roles import (
     SCIP_ROLE_DEFINITION,
     SCIP_ROLE_IMPORT,
     SCIP_ROLE_READ,
     SCIP_ROLE_WRITE,
-    EdgeKind,
 )
 from relspec.contracts import RELATION_OUTPUT_NAME
 from relspec.model import (
@@ -29,12 +47,15 @@ from relspec.model import (
     WinnerSelectConfig,
 )
 
+if TYPE_CHECKING:
+    from cpg.kind_catalog import EdgeKindId
+
 
 @dataclass(frozen=True)
 class EdgeDefinitionSpec:
     """Edge emission definition tied to a relationship rule."""
 
-    edge_kind: EdgeKind
+    edge_kind: EdgeKindId
     src_cols: tuple[str, ...]
     dst_cols: tuple[str, ...]
     origin: str
@@ -164,16 +185,16 @@ def _symbol_role_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, .
             "symbol_role_defines",
             SCIP_ROLE_DEFINITION,
             False,
-            EdgeKind.PY_DEFINES_SYMBOL,
+            EDGE_KIND_PY_DEFINES_SYMBOL,
         ),
         (
             "symbol_role_references",
             SCIP_ROLE_DEFINITION,
             True,
-            EdgeKind.PY_REFERENCES_SYMBOL,
+            EDGE_KIND_PY_REFERENCES_SYMBOL,
         ),
-        ("symbol_role_reads", SCIP_ROLE_READ, False, EdgeKind.PY_READS_SYMBOL),
-        ("symbol_role_writes", SCIP_ROLE_WRITE, False, EdgeKind.PY_WRITES_SYMBOL),
+        ("symbol_role_reads", SCIP_ROLE_READ, False, EDGE_KIND_PY_READS_SYMBOL),
+        ("symbol_role_writes", SCIP_ROLE_WRITE, False, EDGE_KIND_PY_WRITES_SYMBOL),
     )
     return tuple(
         RuleDefinitionSpec(
@@ -204,25 +225,25 @@ def _scip_symbol_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, .
         (
             "scip_symbol_reference",
             "is_reference",
-            EdgeKind.SCIP_SYMBOL_REFERENCE,
+            EDGE_KIND_SCIP_SYMBOL_REFERENCE,
             "SCIP_SYMBOL_REFERENCE",
         ),
         (
             "scip_symbol_implementation",
             "is_implementation",
-            EdgeKind.SCIP_SYMBOL_IMPLEMENTATION,
+            EDGE_KIND_SCIP_SYMBOL_IMPLEMENTATION,
             "SCIP_SYMBOL_IMPLEMENTATION",
         ),
         (
             "scip_symbol_type_definition",
             "is_type_definition",
-            EdgeKind.SCIP_SYMBOL_TYPE_DEFINITION,
+            EDGE_KIND_SCIP_SYMBOL_TYPE_DEFINITION,
             "SCIP_SYMBOL_TYPE_DEFINITION",
         ),
         (
             "scip_symbol_definition",
             "is_definition",
-            EdgeKind.SCIP_SYMBOL_DEFINITION,
+            EDGE_KIND_SCIP_SYMBOL_DEFINITION,
             "SCIP_SYMBOL_DEFINITION",
         ),
     )
@@ -258,7 +279,7 @@ def _type_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, ...]:
     confidence_policy = _param_str(spec, "confidence_policy")
     option_flag = _required_param_str(spec, "option_flag")
     annotation_edge = EdgeDefinitionSpec(
-        edge_kind=EdgeKind.HAS_ANNOTATION,
+        edge_kind=EDGE_KIND_HAS_ANNOTATION,
         src_cols=("owner_def_id",),
         dst_cols=("type_expr_id",),
         origin="annotation",
@@ -266,7 +287,7 @@ def _type_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, ...]:
         option_flag=option_flag,
     )
     inferred_edge = EdgeDefinitionSpec(
-        edge_kind=EdgeKind.INFERRED_TYPE,
+        edge_kind=EDGE_KIND_INFERRED_TYPE,
         src_cols=("owner_def_id",),
         dst_cols=("type_id",),
         origin="inferred",
@@ -326,7 +347,7 @@ def _runtime_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, ...]:
             post_kernels=base_kernels,
             confidence_policy=confidence_policy,
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.RT_HAS_SIGNATURE,
+                edge_kind=EDGE_KIND_RT_HAS_SIGNATURE,
                 src_cols=("rt_id",),
                 dst_cols=("sig_id",),
                 origin="inspect",
@@ -342,7 +363,7 @@ def _runtime_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, ...]:
             post_kernels=base_kernels,
             confidence_policy=confidence_policy,
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.RT_HAS_PARAM,
+                edge_kind=EDGE_KIND_RT_HAS_PARAM,
                 src_cols=("sig_id",),
                 dst_cols=("param_id",),
                 origin="inspect",
@@ -358,7 +379,7 @@ def _runtime_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, ...]:
             post_kernels=base_kernels,
             confidence_policy=confidence_policy,
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.RT_HAS_MEMBER,
+                edge_kind=EDGE_KIND_RT_HAS_MEMBER,
                 src_cols=("rt_id",),
                 dst_cols=("member_id",),
                 origin="inspect",
@@ -394,7 +415,7 @@ def _import_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, ...]:
             ),
             confidence_policy=confidence_policy,
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.PY_IMPORTS_SYMBOL,
+                edge_kind=EDGE_KIND_PY_IMPORTS_SYMBOL,
                 src_cols=("import_alias_id", "import_id"),
                 dst_cols=("symbol",),
                 path_cols=("path",),
@@ -430,7 +451,7 @@ def _call_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, ...]:
             ),
             confidence_policy=confidence_policy,
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.PY_CALLS_SYMBOL,
+                edge_kind=EDGE_KIND_PY_CALLS_SYMBOL,
                 src_cols=("call_id",),
                 dst_cols=("symbol",),
                 path_cols=("path",),
@@ -462,7 +483,7 @@ def _diagnostic_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, ..
             inputs=(input_name,),
             project=project,
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.HAS_DIAGNOSTIC,
+                edge_kind=EDGE_KIND_HAS_DIAGNOSTIC,
                 src_cols=("file_id",),
                 dst_cols=("diag_id",),
                 origin="diagnostic",

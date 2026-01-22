@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import fnmatch
 import hashlib
-import io
-import tokenize
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, overload
@@ -22,11 +19,22 @@ from extract.helpers import (
     ibis_plan_from_rows,
     materialize_extract_plan,
 )
+from extract.repo_scan_fs import iter_repo_files_fs
+from extract.repo_scan_git import iter_repo_files_git
 from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec
 
 SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class RepoFileFingerprint:
+    """Stable fingerprint metadata for cached repo files."""
+
+    size_bytes: int
+    mtime_ns: int
+    file_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -49,10 +57,10 @@ class RepoScanOptions:
     )
     exclude_globs: Sequence[str] = ()
     follow_symlinks: bool = False
-    include_bytes: bool = True
-    include_text: bool = True
+    include_sha256: bool = True
     max_file_bytes: int | None = None
     max_files: int | None = 200_000
+    hash_index: Mapping[str, RepoFileFingerprint] | None = None
 
 
 def default_repo_scan_options() -> RepoScanOptions:
@@ -91,42 +99,9 @@ def repo_files_query(repo_id: str | None) -> IbisQuerySpec:
     return dataset_query("repo_files_v1", repo_id=repo_id)
 
 
-def _is_excluded_dir(rel_path: Path, exclude_dirs: Sequence[str]) -> bool:
-    parts = set(rel_path.parts)
-    return any(d in parts for d in exclude_dirs)
-
-
-def _matches_any_glob(path_posix: str, globs: Sequence[str]) -> bool:
-    return any(fnmatch.fnmatch(path_posix, g) for g in globs)
-
-
-def _sha256_hex(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _detect_encoding_and_decode(data: bytes) -> tuple[str, str | None]:
-    """Detect encoding using tokenize rules and decode best-effort.
-
-    Parameters
-    ----------
-    data:
-        Raw file bytes.
-
-    Returns
-    -------
-    tuple[str, str | None]
-        Detected encoding and decoded text (if available).
-    """
-    try:
-        encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
-    except (LookupError, SyntaxError):
-        encoding = "utf-8"
-    try:
-        text = data.decode(encoding, errors="replace")
-    except (LookupError, UnicodeError):
-        return encoding, None
-    else:
-        return encoding, text
+def _sha256_path(path: Path) -> str:
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def iter_repo_files(repo_root: Path, options: RepoScanOptions) -> Iterator[Path]:
@@ -145,26 +120,24 @@ def iter_repo_files(repo_root: Path, options: RepoScanOptions) -> Iterator[Path]
         Relative paths for matching files.
     """
     repo_root = repo_root.resolve()
-    seen: set[str] = set()
-
-    for pat in options.include_globs:
-        for path in repo_root.glob(pat):
-            if path.is_dir():
-                continue
-            if not options.follow_symlinks and path.is_symlink():
-                continue
-
-            rel = path.relative_to(repo_root)
-            if _is_excluded_dir(rel, options.exclude_dirs):
-                continue
-
-            rel_posix = rel.as_posix()
-            if options.exclude_globs and _matches_any_glob(rel_posix, options.exclude_globs):
-                continue
-
-            if rel_posix not in seen:
-                seen.add(rel_posix)
-                yield rel
+    include_globs, exclude_globs = repo_scan_globs_from_options(options)
+    git_files = iter_repo_files_git(
+        repo_root,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        exclude_dirs=options.exclude_dirs,
+        follow_symlinks=options.follow_symlinks,
+    )
+    if git_files is not None:
+        yield from git_files
+        return
+    yield from iter_repo_files_fs(
+        repo_root,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        exclude_dirs=options.exclude_dirs,
+        follow_symlinks=options.follow_symlinks,
+    )
 
 
 def _build_repo_file_row(
@@ -175,31 +148,75 @@ def _build_repo_file_row(
 ) -> dict[str, object] | None:
     abs_path = (repo_root / rel).resolve()
     rel_posix = rel.as_posix()
-
     try:
-        data = abs_path.read_bytes()
+        stat = abs_path.stat()
     except OSError:
         return None
-
-    if options.max_file_bytes is not None and len(data) > options.max_file_bytes:
+    size_bytes = int(stat.st_size)
+    if options.max_file_bytes is not None and size_bytes > options.max_file_bytes:
         return None
-
-    file_sha256 = _sha256_hex(data)
-    encoding = "utf-8"
-    text: str | None = None
-    if options.include_text:
-        encoding, text = _detect_encoding_and_decode(data)
+    mtime_ns = int(stat.st_mtime_ns)
+    file_sha256: str | None = None
+    if options.include_sha256:
+        file_sha256 = _reuse_sha256(rel_posix, size_bytes, mtime_ns, options)
+        if file_sha256 is None:
+            try:
+                file_sha256 = _sha256_path(abs_path)
+            except OSError:
+                return None
 
     return {
         "file_id": None,
         "path": rel_posix,
         "abs_path": str(abs_path),
-        "size_bytes": len(data),
+        "size_bytes": size_bytes,
+        "mtime_ns": mtime_ns,
         "file_sha256": file_sha256,
-        "encoding": encoding,
-        "text": text,
-        "bytes": data if options.include_bytes else None,
     }
+
+
+def _reuse_sha256(
+    path: str,
+    size_bytes: int,
+    mtime_ns: int,
+    options: RepoScanOptions,
+) -> str | None:
+    if options.hash_index is None:
+        return None
+    fingerprint = options.hash_index.get(path)
+    if fingerprint is None:
+        return None
+    if fingerprint.size_bytes != size_bytes or fingerprint.mtime_ns != mtime_ns:
+        return None
+    return fingerprint.file_sha256
+
+
+def repo_scan_hash_index(repo_files: TableLike) -> dict[str, RepoFileFingerprint]:
+    """Build a path keyed hash index from a repo_files table.
+
+    Returns
+    -------
+    dict[str, RepoFileFingerprint]
+        Mapping from repo-relative path to cached hash fingerprint.
+    """
+    from arrowdsl.core.array_iter import iter_table_rows
+
+    index: dict[str, RepoFileFingerprint] = {}
+    for row in iter_table_rows(repo_files):
+        path = row.get("path")
+        size_bytes = row.get("size_bytes")
+        mtime_ns = row.get("mtime_ns")
+        file_sha256 = row.get("file_sha256")
+        if not isinstance(path, str):
+            continue
+        if not isinstance(size_bytes, int) or not isinstance(mtime_ns, int):
+            continue
+        index[path] = RepoFileFingerprint(
+            size_bytes=size_bytes,
+            mtime_ns=mtime_ns,
+            file_sha256=file_sha256 if isinstance(file_sha256, str) else None,
+        )
+    return index
 
 
 @overload

@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import ast
 import json
+import re
+import tomllib
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
+from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
@@ -21,12 +25,13 @@ from extract.helpers import (
     attrs_map,
     ibis_plan_from_row_batches,
     ibis_plan_from_rows,
-    iter_contexts,
     materialize_extract_plan,
     span_dict,
     text_from_file_ctx,
 )
+from extract.parallel import gil_disabled, parallel_map
 from extract.schema_ops import ExtractNormalizeOptions
+from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -42,7 +47,7 @@ class ASTExtractOptions:
     mode: Literal["exec", "eval", "single", "func_type"] = "exec"
     optimize: Literal[-1, 0, 1, 2] | None = None
     allow_top_level_await: bool = False
-    dont_inherit: bool = False
+    dont_inherit: bool = True
     batch_size: int | None = None
     max_bytes: int | None = 50_000_000
     max_nodes: int | None = 1_000_000
@@ -55,6 +60,88 @@ class ASTExtractResult:
     """Hold extracted AST tables for nodes, edges, and errors."""
 
     ast_files: TableLike
+
+
+_PYTHON_VERSION_RE = re.compile(r"(\\d+)\\.(\\d+)")
+
+
+def _parse_requires_python(spec: str) -> tuple[int, int] | None:
+    match = _PYTHON_VERSION_RE.search(spec)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _feature_version_from_pyproject(repo_root: Path) -> tuple[int, int] | None:
+    pyproject = repo_root / "pyproject.toml"
+    if not pyproject.exists():
+        return None
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    project = data.get("project")
+    if isinstance(project, Mapping):
+        requires = project.get("requires-python")
+        if isinstance(requires, str):
+            parsed = _parse_requires_python(requires)
+            if parsed is not None:
+                return parsed
+    tool = data.get("tool")
+    if isinstance(tool, Mapping):
+        poetry = tool.get("poetry")
+        if isinstance(poetry, Mapping):
+            dependencies = poetry.get("dependencies")
+            if isinstance(dependencies, Mapping):
+                requires = dependencies.get("python")
+                if isinstance(requires, str):
+                    return _parse_requires_python(requires)
+    return None
+
+
+def _infer_repo_root(contexts: Sequence[FileContext]) -> Path | None:
+    for ctx in contexts:
+        if not ctx.abs_path or not ctx.path:
+            continue
+        rel_path = Path(ctx.path)
+        if rel_path.is_absolute():
+            continue
+        abs_path = Path(ctx.abs_path).resolve()
+        rel_parts = rel_path.parts
+        if len(rel_parts) == 0:
+            continue
+        if abs_path.parts[-len(rel_parts) :] != rel_parts:
+            continue
+        return abs_path.parents[len(rel_parts) - 1]
+    return None
+
+
+def _resolve_feature_version(
+    options: ASTExtractOptions,
+    contexts: Sequence[FileContext],
+) -> ASTExtractOptions:
+    if options.feature_version is not None:
+        return options
+    repo_root = _infer_repo_root(contexts)
+    if repo_root is None:
+        return options
+    feature_version = _feature_version_from_pyproject(repo_root)
+    if feature_version is None:
+        return options
+    resolved = replace(options, feature_version=feature_version)
+    if resolved.dont_inherit:
+        resolved = replace(resolved, dont_inherit=False)
+    if resolved.allow_top_level_await:
+        resolved = replace(resolved, allow_top_level_await=False)
+    return resolved
+
+
+def _format_feature_version(value: tuple[int, int] | int | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, tuple):
+        return f"{value[0]}.{value[1]}"
+    return str(value)
 
 
 @dataclass(frozen=True)
@@ -208,14 +295,43 @@ def _docstring_row(
     }
 
 
+def _segment_list(source: str, nodes: Sequence[ast.AST]) -> list[str]:
+    segments: list[str] = []
+    for node in nodes:
+        segment = ast.get_source_segment(source, node, padded=False)
+        if segment is None:
+            continue
+        segments.append(segment)
+    return segments
+
+
+def _annotation_nodes(args: ast.arguments) -> list[ast.expr]:
+    nodes: list[ast.expr] = [
+        item.annotation
+        for item in args.posonlyargs + args.args + args.kwonlyargs
+        if item.annotation is not None
+    ]
+    if args.vararg is not None and args.vararg.annotation is not None:
+        nodes.append(args.vararg.annotation)
+    if args.kwarg is not None and args.kwarg.annotation is not None:
+        nodes.append(args.kwarg.annotation)
+    return nodes
+
+
 def _def_row(
     node: ast.AST,
     *,
     ast_id: int,
     parent_ast_id: int | None,
+    source: str,
 ) -> dict[str, object] | None:
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         type_params = getattr(node, "type_params", None)
+        decorator_segments = _segment_list(source, node.decorator_list)
+        default_nodes = [default for default in node.args.defaults if default is not None]
+        default_nodes += [default for default in node.args.kw_defaults if default is not None]
+        default_segments = _segment_list(source, default_nodes)
+        annotation_segments = _segment_list(source, _annotation_nodes(node.args))
         attrs: dict[str, object] = {
             "decorator_count": len(node.decorator_list),
             "arg_count": len(node.args.args),
@@ -224,14 +340,30 @@ def _def_row(
             "type_params_count": len(type_params) if isinstance(type_params, list) else None,
             "is_async": isinstance(node, ast.AsyncFunctionDef),
         }
+        if decorator_segments:
+            attrs["decorator_sources"] = json.dumps(decorator_segments)
+        if default_segments:
+            attrs["default_sources"] = json.dumps(default_segments)
+        if annotation_segments:
+            attrs["annotation_sources"] = json.dumps(annotation_segments)
+        if node.returns is not None:
+            returns_segment = ast.get_source_segment(source, node.returns, padded=False)
+            if returns_segment is not None:
+                attrs["returns_source"] = returns_segment
     elif isinstance(node, ast.ClassDef):
         type_params = getattr(node, "type_params", None)
+        decorator_segments = _segment_list(source, node.decorator_list)
+        base_segments = _segment_list(source, node.bases)
         attrs = {
             "decorator_count": len(node.decorator_list),
             "base_count": len(node.bases),
             "keyword_count": len(node.keywords),
             "type_params_count": len(type_params) if isinstance(type_params, list) else None,
         }
+        if decorator_segments:
+            attrs["decorator_sources"] = json.dumps(decorator_segments)
+        if base_segments:
+            attrs["base_sources"] = json.dumps(base_segments)
     else:
         return None
     return {
@@ -314,6 +446,10 @@ def _syntax_error_row(exc: SyntaxError) -> dict[str, object]:
     offset = _maybe_int(getattr(exc, "offset", None))
     end_lineno = _maybe_int(getattr(exc, "end_lineno", None))
     end_offset = _maybe_int(getattr(exc, "end_offset", None))
+    text = getattr(exc, "text", None)
+    attrs: dict[str, object] = {}
+    if isinstance(text, str) and text:
+        attrs["text"] = text
     return {
         "error_type": "SyntaxError",
         "message": str(exc),
@@ -327,7 +463,7 @@ def _syntax_error_row(exc: SyntaxError) -> dict[str, object]:
                 col_unit=AST_COL_UNIT,
             )
         ),
-        "attrs": attrs_map({}),
+        "attrs": attrs_map(attrs),
     }
 
 
@@ -487,6 +623,16 @@ def _cache_key(file_ctx: FileContext, *, options: ASTExtractOptions) -> tuple[ob
     )
 
 
+_AST_WORKER_CACHE: dict[tuple[object, ...], _AstWalkResult] = {}
+
+
+def _ast_row_worker(
+    file_ctx: FileContext, *, options: ASTExtractOptions
+) -> dict[str, object] | None:
+    cache = _AST_WORKER_CACHE if options.cache_by_sha and not gil_disabled() else None
+    return _extract_ast_for_context(file_ctx, options=options, cache=cache)
+
+
 def _ast_row_from_walk(
     file_ctx: FileContext,
     *,
@@ -494,10 +640,21 @@ def _ast_row_from_walk(
     walk: _AstWalkResult | None,
     errors: list[dict[str, object]],
 ) -> dict[str, object]:
+    parse_manifest = [
+        {
+            "parse_mode": options.mode,
+            "feature_version": _format_feature_version(options.feature_version),
+            "optimize": options.optimize,
+            "type_comments": options.type_comments,
+            "allow_top_level_await": options.allow_top_level_await,
+            "dont_inherit": options.dont_inherit,
+        }
+    ]
     return {
         "repo": options.repo_id,
         "path": file_ctx.path,
         "file_id": file_ctx.file_id,
+        "file_sha256": file_ctx.file_sha256,
         "nodes": walk.nodes if walk is not None else [],
         "edges": walk.edges if walk is not None else [],
         "errors": errors,
@@ -506,9 +663,9 @@ def _ast_row_from_walk(
         "defs": walk.defs if walk is not None else [],
         "calls": walk.calls if walk is not None else [],
         "type_ignores": walk.type_ignores if walk is not None else [],
+        "parse_manifest": parse_manifest,
         "attrs": attrs_map(
             {
-                "file_sha256": file_ctx.file_sha256,
                 "parse_mode": options.mode,
                 "feature_version": options.feature_version,
                 "optimize": options.optimize,
@@ -606,8 +763,9 @@ def _append_def(
     *,
     ast_id: int,
     parent_ast_id: int | None,
+    source: str,
 ) -> None:
-    row = _def_row(node, ast_id=ast_id, parent_ast_id=parent_ast_id)
+    row = _def_row(node, ast_id=ast_id, parent_ast_id=parent_ast_id, source=source)
     if row is not None:
         rows.defs.append(row)
 
@@ -680,7 +838,7 @@ def _walk_ast(
             rows.edges.append(edge)
         _append_docstring(rows, node, ast_id=ast_id, source=source)
         rows.imports.extend(_import_rows(node, ast_id=ast_id, parent_ast_id=parent_idx))
-        _append_def(rows, node, ast_id=ast_id, parent_ast_id=parent_idx)
+        _append_def(rows, node, ast_id=ast_id, parent_ast_id=parent_idx, source=source)
         _append_call(rows, node, ast_id=ast_id, parent_ast_id=parent_idx)
         _append_type_ignore(rows, node, ast_id=ast_id)
 
@@ -812,11 +970,13 @@ def extract_ast_plans(
     batch_size = _resolve_batch_size(normalized_options)
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
     rows: list[dict[str, object]] | None = None
+    ctx = exec_context.ctx
     if batch_size is None:
         rows = _collect_ast_rows(
             repo_files,
             file_contexts=exec_context.file_contexts,
             options=normalized_options,
+            ctx=ctx,
         )
     else:
         row_batches = _iter_ast_row_batches(
@@ -824,6 +984,7 @@ def extract_ast_plans(
             file_contexts=exec_context.file_contexts,
             options=normalized_options,
             batch_size=batch_size,
+            ctx=ctx,
         )
     evidence_plan = exec_context.evidence_plan
     return {
@@ -842,8 +1003,16 @@ def _collect_ast_rows(
     *,
     file_contexts: Iterable[FileContext] | None,
     options: ASTExtractOptions,
+    ctx: ExecutionContext | None,
 ) -> list[dict[str, object]]:
-    return list(_iter_ast_rows(repo_files, file_contexts=file_contexts, options=options))
+    return list(
+        _iter_ast_rows(
+            repo_files,
+            file_contexts=file_contexts,
+            options=options,
+            ctx=ctx,
+        )
+    )
 
 
 def _iter_ast_row_batches(
@@ -852,9 +1021,15 @@ def _iter_ast_row_batches(
     file_contexts: Iterable[FileContext] | None,
     options: ASTExtractOptions,
     batch_size: int,
+    ctx: ExecutionContext | None,
 ) -> Iterable[list[dict[str, object]]]:
     batch: list[dict[str, object]] = []
-    for row in _iter_ast_rows(repo_files, file_contexts=file_contexts, options=options):
+    for row in _iter_ast_rows(
+        repo_files,
+        file_contexts=file_contexts,
+        options=options,
+        ctx=ctx,
+    ):
         batch.append(row)
         if len(batch) >= batch_size:
             yield batch
@@ -868,12 +1043,23 @@ def _iter_ast_rows(
     *,
     file_contexts: Iterable[FileContext] | None,
     options: ASTExtractOptions,
+    ctx: ExecutionContext | None,
 ) -> Iterable[dict[str, object]]:
-    cache: dict[tuple[object, ...], _AstWalkResult] | None = None
-    if options.cache_by_sha:
-        cache = {}
-    for file_ctx in iter_contexts(repo_files, file_contexts):
-        row = _extract_ast_for_context(file_ctx, options=options, cache=cache)
+    contexts = list(
+        iter_worklist_contexts(
+            repo_files,
+            output_table="ast_files_v1",
+            ctx=ctx,
+            file_contexts=file_contexts,
+        )
+    )
+    if not contexts:
+        return
+    resolved_options = _resolve_feature_version(options, contexts)
+    if resolved_options.cache_by_sha:
+        _AST_WORKER_CACHE.clear()
+    runner = partial(_ast_row_worker, options=resolved_options)
+    for row in parallel_map(contexts, runner):
         if row is not None:
             yield row
 

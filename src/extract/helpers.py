@@ -16,6 +16,7 @@ from arrowdsl.core.execution_context import ExecutionContext, execution_context_
 from arrowdsl.core.interop import ScalarLike, TableLike
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import empty_table, table_from_rows
+from arrowdsl.schema.schema import align_table, unify_schemas_core
 from datafusion_engine.extract_extractors import (
     ExtractorSpec,
     extractor_specs,
@@ -23,7 +24,7 @@ from datafusion_engine.extract_extractors import (
     select_extractors_for_outputs,
 )
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
-from engine.materialize import write_ast_outputs
+from engine.materialize_extract_outputs import write_extract_outputs
 from extract.evidence_plan import EvidencePlan
 from extract.schema_ops import ExtractNormalizeOptions, normalize_extract_output
 from extract.spec_helpers import plan_requires_row, rule_execution_options
@@ -376,7 +377,27 @@ def ibis_plan_from_row_batches(
         tables.append(aligned)
     if not tables:
         return empty_ibis_plan(name, ctx=ctx, backend=resolved, profile=profile)
-    combined = pa.concat_tables(tables, promote=True)
+    if len(tables) == 1:
+        combined = tables[0]
+    else:
+        merged_schema = unify_schemas_core([table.schema for table in tables])
+        aligned_tables = [
+            cast(
+                "pa.Table",
+                align_table(
+                    table,
+                    schema=merged_schema,
+                    keep_extra_columns=True,
+                    safe_cast=True,
+                ),
+            )
+            for table in tables
+        ]
+        batches = [batch for table in aligned_tables for batch in table.to_batches()]
+        combined = pa.Table.from_batches(
+            batches,
+            schema=cast("pa.Schema", merged_schema),
+        )
     plan = register_ibis_table(
         combined,
         options=SourceToIbisOptions(
@@ -463,7 +484,7 @@ def materialize_extract_plan(
         normalize=resolved.normalize,
         apply_post_kernels=resolved.apply_post_kernels,
     )
-    write_ast_outputs(name, normalized, ctx=ctx)
+    write_extract_outputs(name, normalized, ctx=ctx)
     if resolved.prefer_reader:
         if isinstance(normalized, pa.Table):
             table = cast("pa.Table", normalized)

@@ -118,6 +118,43 @@ def settings_snapshot_table(
     return _table_for_query(ctx, query, sql_options=sql_options)
 
 
+def tables_snapshot_table(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> pa.Table:
+    """Return table inventory rows as a pyarrow.Table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Table inventory from information_schema.tables.
+    """
+    query = (
+        "SELECT table_catalog, table_schema, table_name, table_type FROM information_schema.tables"
+    )
+    return _table_for_query(ctx, query, sql_options=sql_options)
+
+
+def routines_snapshot_table(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> pa.Table:
+    """Return information_schema.routines as a pyarrow.Table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Routine inventory from information_schema.routines.
+    """
+    query = (
+        "SELECT routine_catalog, routine_schema, routine_name, routine_type "
+        "FROM information_schema.routines"
+    )
+    return _table_for_query(ctx, query, sql_options=sql_options)
+
+
 def table_constraint_rows(
     ctx: SessionContext,
     *,
@@ -452,20 +489,6 @@ class SchemaIntrospector:
         )
         return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
-    def tables_snapshot_table(self) -> pa.Table:
-        """Return table inventory rows as a pyarrow.Table.
-
-        Returns
-        -------
-        pyarrow.Table
-            Table inventory from information_schema.tables.
-        """
-        query = (
-            "SELECT table_catalog, table_schema, table_name, table_type "
-            "FROM information_schema.tables"
-        )
-        return _table_for_query(self.ctx, query, sql_options=self.sql_options)
-
     def catalogs_snapshot(self) -> list[dict[str, object]]:
         """Return catalog inventory rows from information_schema.
 
@@ -600,6 +623,24 @@ class SchemaIntrospector:
             "FROM information_schema.parameters"
         )
         return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+
+    def parameters_snapshot_table(self) -> pa.Table | None:
+        """Return information_schema.parameters as Arrow table if available.
+
+        Returns
+        -------
+        pyarrow.Table | None
+            Parameter inventory from information_schema.parameters, or None if unavailable.
+        """
+        query = (
+            "SELECT specific_name, routine_name, parameter_name, parameter_mode, "
+            "data_type, ordinal_position "
+            "FROM information_schema.parameters"
+        )
+        try:
+            return _table_for_query(self.ctx, query, sql_options=self.sql_options)
+        except (RuntimeError, TypeError, ValueError, KeyError):
+            return None
 
     def function_catalog_snapshot(
         self, *, include_parameters: bool = False
@@ -891,4 +932,6 @@ __all__ = [
     "ExternalTableDDLBuilder",
     "SchemaIntrospector",
     "find_struct_field_keys",
+    "routines_snapshot_table",
+    "tables_snapshot_table",
 ]

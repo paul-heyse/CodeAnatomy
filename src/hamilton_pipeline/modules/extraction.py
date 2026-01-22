@@ -32,12 +32,11 @@ from extract.helpers import (
     ExtractExecutionContext as ExtractRunContext,
 )
 from extract.helpers import (
-    FileContext,
-    iter_file_contexts,
     template_outputs,
 )
 from extract.line_index import build_line_index_table
-from extract.repo_scan import RepoScanOptions, scan_repo
+from extract.repo_blobs import RepoBlobOptions, scan_repo_blobs
+from extract.repo_scan import RepoScanOptions, repo_scan_hash_index, scan_repo
 from extract.runtime_inspect_extract import RuntimeInspectOptions, extract_runtime_tables
 from extract.schema_ops import validate_extract_output
 from extract.scip_extract import (
@@ -65,6 +64,8 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
     ScipIndexInputs,
 )
+from incremental.snapshot import read_repo_snapshot
+from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig, IncrementalImpact
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers import ExtractRuleCompilation, default_rule_handlers
@@ -157,10 +158,9 @@ def extract_execution_context(
 def repo_files(
     repo_scan_config: RepoScanConfig,
     *,
-    repo_include_text: bool,
-    repo_include_bytes: bool,
     cache_salt: str,
     ctx: ExecutionContext,
+    incremental_state_store: StateStore | None,
 ) -> TableLike:
     """Scan the repo and produce the repo_files table.
 
@@ -176,14 +176,37 @@ def repo_files(
         Repository file metadata table.
     """
     _ = cache_salt
+    hash_index = None
+    if incremental_state_store is not None:
+        snapshot = read_repo_snapshot(incremental_state_store)
+        if snapshot is not None:
+            hash_index = repo_scan_hash_index(snapshot)
     options = RepoScanOptions(
         include_globs=repo_scan_config.include_globs,
         exclude_globs=repo_scan_config.exclude_globs,
         max_files=repo_scan_config.max_files,
-        include_text=bool(repo_include_text),
-        include_bytes=bool(repo_include_bytes),
+        hash_index=hash_index,
     )
     return scan_repo(repo_root=repo_scan_config.repo_root, options=options, ctx=ctx)
+
+
+@cache(format="delta")
+@tag(layer="extract", artifact="repo_file_blobs", kind="table")
+def repo_file_blobs(
+    repo_files_extract: TableLike,
+    cache_salt: str,
+    ctx: ExecutionContext,
+) -> TableLike:
+    """Load repo file blobs (bytes/text) for extraction workloads.
+
+    Returns
+    -------
+    TableLike
+        Repo file blob table keyed by file_id.
+    """
+    _ = cache_salt
+    options = RepoBlobOptions()
+    return scan_repo_blobs(repo_files_extract, options=options, ctx=ctx)
 
 
 def _filter_repo_files_by_ids(
@@ -220,11 +243,11 @@ def repo_files_extract(
 @cache(format="delta")
 @tag(layer="extract", artifact="file_line_index", kind="table")
 def file_line_index(
-    repo_files_extract: TableLike,
+    repo_file_blobs: TableLike,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
-    """Build a per-file line index table from repo files.
+    """Build a per-file line index table from repo file blobs.
 
     Returns
     -------
@@ -234,26 +257,7 @@ def file_line_index(
     _ = ctx
     if evidence_plan is not None and not evidence_plan.requires_dataset("file_line_index"):
         return empty_table(dataset_schema("file_line_index_v1"))
-    return build_line_index_table(repo_files_extract, ctx=ctx)
-
-
-@cache()
-@tag(layer="extract", artifact="file_contexts", kind="object")
-def file_contexts(
-    repo_files_extract: TableLike,
-    cache_salt: str,
-    ctx: ExecutionContext,
-) -> Sequence[FileContext]:
-    """Build file contexts from the repo_files table.
-
-    Returns
-    -------
-    Sequence[FileContext]
-        File contexts for each repo file row.
-    """
-    _ = ctx
-    _ = cache_salt
-    return tuple(iter_file_contexts(repo_files_extract))
+    return build_line_index_table(repo_file_blobs, ctx=ctx)
 
 
 def _empty_registry_table(name: str) -> TableLike:
@@ -500,7 +504,6 @@ def extract_rule_compilations(
 def cst_bundle(
     repo_root: str,
     repo_files_extract: TableLike,
-    file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
     """Build the LibCST extraction bundle.
@@ -526,7 +529,6 @@ def cst_bundle(
     tables = extract_cst_tables(
         repo_files=repo_files_extract,
         options=options,
-        file_contexts=file_contexts,
         evidence_plan=evidence_plan,
         ctx=extract_execution_context.ctx,
     )
@@ -544,7 +546,6 @@ def cst_bundle(
 def ast_bundle(
     repo_root: str,
     repo_files_extract: TableLike,
-    file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
     """Build the Python AST extraction bundle.
@@ -560,7 +561,6 @@ def ast_bundle(
         return _empty_bundle(AST_BUNDLE_OUTPUTS)
     tables = extract_ast_tables(
         repo_files=repo_files_extract,
-        file_contexts=file_contexts,
         evidence_plan=evidence_plan,
         ctx=extract_execution_context.ctx,
     )
@@ -873,7 +873,6 @@ def _run_scip_test(
 def symtables(
     repo_root: str,
     repo_files_extract: TableLike,
-    file_contexts: Sequence[FileContext],
     evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> TableLike:
@@ -894,7 +893,6 @@ def symtables(
     )
     return extract_symtables_table(
         repo_files=repo_files_extract,
-        file_contexts=file_contexts,
         options=options,
         evidence_plan=evidence_plan,
         ctx=ctx,
@@ -906,7 +904,6 @@ def symtables(
 def bytecode(
     repo_root: str,
     repo_files_extract: TableLike,
-    file_contexts: Sequence[FileContext],
     evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> TableLike:
@@ -922,7 +919,6 @@ def bytecode(
         return empty_table(dataset_schema("bytecode_files_v1"))
     return extract_bytecode_table(
         repo_files=repo_files_extract,
-        file_contexts=file_contexts,
         options=_options_for_template(
             "bytecode",
             plan=evidence_plan,
@@ -939,7 +935,6 @@ def bytecode(
 def bytecode_bundle(
     repo_root: str,
     repo_files_extract: TableLike,
-    file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
     """Extract bytecode tables as a bundle.
@@ -962,7 +957,6 @@ def bytecode_bundle(
         repo_files_extract,
         options=options,
         context=ExtractRunContext(
-            file_contexts=file_contexts,
             evidence_plan=evidence_plan,
             ctx=extract_execution_context.ctx,
         ),
@@ -985,7 +979,6 @@ def tree_sitter_bundle(
     *,
     enable_tree_sitter: bool,
     repo_files_extract: TableLike,
-    file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
     """Extract tree-sitter nodes and diagnostics when enabled.
@@ -1000,7 +993,6 @@ def tree_sitter_bundle(
         return _empty_bundle(TREE_SITTER_BUNDLE_OUTPUTS)
     tables = extract_ts_tables(
         repo_files=repo_files_extract,
-        file_contexts=file_contexts,
         options=_options_for_template(
             "tree_sitter",
             plan=evidence_plan,

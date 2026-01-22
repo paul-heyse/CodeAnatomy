@@ -10,17 +10,203 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from datafusion_engine.builtin_function_map import BUILTIN_FUNCTION_MAP, BuiltinFunctionSpec
+import pyarrow as pa
+
+from datafusion_engine.schema_introspection import routines_snapshot_table
 
 if TYPE_CHECKING:
+    from datafusion_engine.schema_introspection import SchemaIntrospector
     from datafusion_engine.udf_registry import DataFusionUdfSpec
 
 # UdfTier type - must match udf_registry.py definition
 UdfTier = Literal["builtin", "pyarrow", "pandas", "python"]
 
+BuiltinCategory = Literal[
+    "math",
+    "string",
+    "aggregate",
+    "window",
+    "comparison",
+    "logical",
+    "datetime",
+]
+
 # Performance tier ordering from fastest to slowest
 # Note: Uses "pandas" tier to align with existing DataFusionUdfSpec.udf_tier values
 UDF_TIER_LADDER: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
+
+
+@dataclass(frozen=True)
+class BuiltinFunctionSpec:
+    """Specification for a DataFusion builtin function mapping."""
+
+    func_id: str
+    datafusion_name: str
+    category: BuiltinCategory
+    input_types: tuple[pa.DataType, ...]
+    return_type: pa.DataType
+    volatility: str = "immutable"
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class FunctionSignature:
+    """Function signature from information_schema."""
+
+    function_name: str
+    function_type: str  # FUNCTION, AGGREGATE, WINDOW
+    input_types: tuple[str, ...]
+    return_type: str | None
+    volatility: str | None
+
+
+@dataclass(frozen=True)
+class FunctionCatalog:
+    """Runtime function catalog built from information_schema."""
+
+    function_names: frozenset[str]
+    functions_by_category: Mapping[str, frozenset[str]]
+    function_signatures: Mapping[str, FunctionSignature]
+    _source: str = "information_schema"
+
+    @classmethod
+    def from_information_schema(
+        cls,
+        routines: pa.Table,
+        parameters: pa.Table | None,
+        *,
+        parameters_available: bool,
+    ) -> FunctionCatalog:
+        """Build catalog from information_schema routines/parameters snapshots.
+
+        Parameters
+        ----------
+        routines:
+            Arrow table from information_schema.routines query.
+        parameters:
+            Arrow table from information_schema.parameters query, or None if unavailable.
+        parameters_available:
+            Whether parameters table is available in the DataFusion version.
+
+        Returns
+        -------
+        FunctionCatalog
+            Immutable catalog of runtime functions.
+        """
+        # Parse routine names
+        routine_names = routines.column("routine_name").to_pylist()
+        function_names = frozenset(str(name) for name in routine_names if name is not None)
+
+        # Group by routine_type (FUNCTION, AGGREGATE, WINDOW)
+        functions_by_category: dict[str, set[str]] = {}
+        routine_types = routines.column("routine_type").to_pylist()
+        for name, rtype in zip(routine_names, routine_types, strict=False):
+            if name is None:
+                continue
+            category = str(rtype).lower() if rtype else "unknown"
+            if category not in functions_by_category:
+                functions_by_category[category] = set()
+            functions_by_category[category].add(str(name))
+
+        # Build signatures if parameters available
+        function_signatures: dict[str, FunctionSignature] = {}
+        if parameters_available and parameters is not None:
+            # Group parameters by routine_name, build signatures
+            param_groups: dict[str, list[tuple[int, str]]] = {}
+            routine_col = parameters.column("routine_name").to_pylist()
+            dtype_col = parameters.column("data_type").to_pylist()
+            ordinal_col = parameters.column("ordinal_position").to_pylist()
+
+            for routine, dtype, ordinal in zip(routine_col, dtype_col, ordinal_col, strict=False):
+                if routine is None:
+                    continue
+                key = str(routine)
+                if key not in param_groups:
+                    param_groups[key] = []
+                param_groups[key].append(
+                    (int(ordinal) if ordinal else 0, str(dtype) if dtype else "unknown")
+                )
+
+            # Build signatures from grouped parameters
+            for name in function_names:
+                params = param_groups.get(name, [])
+                params.sort(key=lambda x: x[0])
+                input_types = tuple(p[1] for p in params)
+                function_signatures[name] = FunctionSignature(
+                    function_name=name,
+                    function_type="function",  # Could be enhanced from routines
+                    input_types=input_types,
+                    return_type=None,  # DataFusion info_schema doesn't expose this reliably
+                    volatility=None,
+                )
+
+        return cls(
+            function_names=function_names,
+            functions_by_category={k: frozenset(v) for k, v in functions_by_category.items()},
+            function_signatures=function_signatures,
+        )
+
+    def is_builtin(self, func_id: str) -> bool:
+        """Check if function is in the runtime catalog.
+
+        Parameters
+        ----------
+        func_id:
+            Function identifier to check.
+
+        Returns
+        -------
+        bool
+            True if function exists in the runtime catalog.
+        """
+        return func_id.lower() in self.function_names or func_id in self.function_names
+
+
+def _builtin_spec_from_signature(func_id: str, sig: FunctionSignature) -> BuiltinFunctionSpec:
+    """Convert FunctionSignature to BuiltinFunctionSpec.
+
+    Parameters
+    ----------
+    func_id:
+        Function identifier.
+    sig:
+        Function signature from information_schema.
+
+    Returns
+    -------
+    BuiltinFunctionSpec
+        Builtin function specification.
+    """
+    category = "aggregate" if "aggregate" in sig.function_type.lower() else "math"
+    return BuiltinFunctionSpec(
+        func_id=func_id,
+        datafusion_name=func_id,
+        category=category,
+        input_types=(),  # Type info from info_schema is limited
+        return_type=pa.null(),
+    )
+
+
+def _default_builtin_spec(func_id: str) -> BuiltinFunctionSpec:
+    """Create a default BuiltinFunctionSpec for a function without signature info.
+
+    Parameters
+    ----------
+    func_id:
+        Function identifier.
+
+    Returns
+    -------
+    BuiltinFunctionSpec
+        Default builtin function specification.
+    """
+    return BuiltinFunctionSpec(
+        func_id=func_id,
+        datafusion_name=func_id,
+        category="math",  # Default category
+        input_types=(),
+        return_type=pa.null(),
+    )
 
 
 @dataclass(frozen=True)
@@ -123,6 +309,7 @@ class UdfCatalog:
         """
         self._tier_policy = tier_policy or UdfTierPolicy()
         self._udf_specs = dict(udf_specs) if udf_specs else {}
+        self._runtime_catalog: FunctionCatalog | None = None
 
     def register_udf(self, spec: DataFusionUdfSpec) -> None:
         """Register a UDF specification in the catalog.
@@ -133,6 +320,47 @@ class UdfCatalog:
             UDF specification to register.
         """
         self._udf_specs[spec.func_id] = spec
+
+    def refresh_from_session(self, introspector: SchemaIntrospector) -> None:
+        """Refresh builtin knowledge from session information_schema.
+
+        Parameters
+        ----------
+        introspector:
+            Schema introspector for the DataFusion session.
+        """
+        routines = routines_snapshot_table(
+            introspector.ctx,
+            sql_options=introspector.sql_options,
+        )
+        parameters = introspector.parameters_snapshot_table()
+        self._runtime_catalog = FunctionCatalog.from_information_schema(
+            routines=routines,
+            parameters=parameters,
+            parameters_available=parameters is not None,
+        )
+
+    def _require_runtime_catalog(self) -> FunctionCatalog:
+        if self._runtime_catalog is None:
+            msg = "UdfCatalog requires refresh_from_session before builtin resolution."
+            raise RuntimeError(msg)
+        return self._runtime_catalog
+
+    def is_builtin_from_runtime(self, func_id: str) -> bool:
+        """Check if function is a DataFusion builtin using runtime catalog.
+
+        Parameters
+        ----------
+        func_id:
+            Function identifier to check.
+
+        Returns
+        -------
+        bool
+            True if function exists in runtime catalog.
+        """
+        catalog = self._require_runtime_catalog()
+        return catalog.is_builtin(func_id)
 
     def resolve_function(
         self,
@@ -154,16 +382,21 @@ class UdfCatalog:
         ResolvedFunction | None
             Resolved function if found, None otherwise.
         """
-        # Check if builtin function exists
-        builtin_spec = BUILTIN_FUNCTION_MAP.get(func_id)
-
-        # If we require builtins and one exists, use it
-        if builtin_spec and (prefer_builtin or self._tier_policy.require_builtin_when_available):
+        catalog = self._require_runtime_catalog()
+        builtin_available = catalog.is_builtin(func_id)
+        if builtin_available and (
+            prefer_builtin or self._tier_policy.require_builtin_when_available
+        ):
+            sig = catalog.function_signatures.get(func_id)
+            if sig is None:
+                sig = catalog.function_signatures.get(func_id.lower())
             return ResolvedFunction(
                 func_id=func_id,
-                resolved_name=builtin_spec.datafusion_name,
+                resolved_name=func_id,
                 tier="builtin",
-                spec=builtin_spec,
+                spec=_builtin_spec_from_signature(func_id, sig)
+                if sig
+                else _default_builtin_spec(func_id),
                 is_builtin=True,
             )
 
@@ -179,12 +412,17 @@ class UdfCatalog:
             )
 
         # Fallback to builtin if we didn't prefer it earlier
-        if builtin_spec:
+        if builtin_available:
+            sig = catalog.function_signatures.get(func_id)
+            if sig is None:
+                sig = catalog.function_signatures.get(func_id.lower())
             return ResolvedFunction(
                 func_id=func_id,
-                resolved_name=builtin_spec.datafusion_name,
+                resolved_name=func_id,
                 tier="builtin",
-                spec=builtin_spec,
+                spec=_builtin_spec_from_signature(func_id, sig)
+                if sig
+                else _default_builtin_spec(func_id),
                 is_builtin=True,
             )
 
@@ -234,7 +472,8 @@ class UdfCatalog:
             Tuple of function IDs in the specified tier.
         """
         if tier == "builtin":
-            return tuple(BUILTIN_FUNCTION_MAP.keys())
+            catalog = self._require_runtime_catalog()
+            return tuple(sorted(catalog.function_names))
 
         return tuple(func_id for func_id, spec in self._udf_specs.items() if spec.udf_tier == tier)
 
@@ -246,8 +485,9 @@ class UdfCatalog:
         Mapping[str, int]
             Mapping of tier names to function counts.
         """
+        catalog = self._require_runtime_catalog()
         stats: dict[str, int] = {
-            "builtin": len(BUILTIN_FUNCTION_MAP),
+            "builtin": len(catalog.function_names),
             "pandas": 0,
             "pyarrow": 0,
             "python": 0,
@@ -334,6 +574,10 @@ def create_strict_catalog(
 
 __all__ = [
     "UDF_TIER_LADDER",
+    "BuiltinCategory",
+    "BuiltinFunctionSpec",
+    "FunctionCatalog",
+    "FunctionSignature",
     "ResolvedFunction",
     "UdfCatalog",
     "UdfPerformancePolicy",

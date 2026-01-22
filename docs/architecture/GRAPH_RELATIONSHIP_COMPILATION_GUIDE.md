@@ -757,11 +757,12 @@ Given relationship `(syntax_id → symbol, symbol_roles)`:
 
 # 8) Validation & contracts: how we prevent semantic drift
 
-## 8.1 Single source of truth: Ultimate kind registry
-`cpg/kinds_ultimate.py` defines:
-- NodeKind/EdgeKind enums
-- required properties per kind
-- derivation manifest (expected extractor / join keys / id recipe / confidence)
+## 8.1 Kind catalog + dataset contracts
+`cpg/kind_catalog.py` defines:
+- stable node/edge kind identifiers used by CPG builders
+- required relation-output props per edge kind (validation)
+`cpg/prop_catalog.py` defines:
+- canonical property keys and value types
 
 ## 8.2 Contract validation at relationship compilation time
 The relspec compiler includes a validator hook that enforces:

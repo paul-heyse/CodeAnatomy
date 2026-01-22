@@ -107,6 +107,17 @@ class DataFusionCacheEvent:
 
 
 @dataclass(frozen=True)
+class DataFusionSubstraitFallbackEvent:
+    """Diagnostics payload for Substrait fallback decisions."""
+
+    reason: str
+    expr_type: str
+    plan_hash: str | None = None
+    profile_hash: str | None = None
+    run_id: str | None = None
+
+
+@dataclass(frozen=True)
 class DataFusionDmlOptions:
     """Options for DataFusion DML execution."""
 
@@ -151,6 +162,7 @@ class DataFusionCompileOptions:
     explain_hook: Callable[[str, ExplainRows], None] | None = None
     capture_plan_artifacts: bool = False
     plan_artifacts_hook: Callable[[Mapping[str, object]], None] | None = None
+    substrait_fallback_hook: Callable[[DataFusionSubstraitFallbackEvent], None] | None = None
     substrait_validation: bool = False
     plan_cache: PlanCache | None = None
     plan_hash: str | None = None

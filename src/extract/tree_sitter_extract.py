@@ -6,7 +6,7 @@ import ast
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import cache
+from functools import cache, partial
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 import tree_sitter_python
@@ -33,14 +33,16 @@ from extract.helpers import (
     apply_query_and_project,
     attrs_map,
     bytes_from_file_ctx,
+    ibis_plan_from_row_batches,
     ibis_plan_from_rows,
-    iter_contexts,
     materialize_extract_plan,
     span_dict,
 )
+from extract.parallel import parallel_map
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.tree_sitter_cache import TreeSitterCache, TreeSitterParseResult
 from extract.tree_sitter_queries import TreeSitterQueryPack, compile_query_pack
+from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -75,6 +77,7 @@ class TreeSitterExtractOptions:
     incremental: bool = False
     incremental_cache_size: int = 256
     repo_id: str | None = None
+    batch_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -316,6 +319,21 @@ def _default_cache(max_entries: int) -> TreeSitterCache:
 @cache
 def _query_pack() -> TreeSitterQueryPack:
     return compile_query_pack(PY_LANGUAGE)
+
+
+@dataclass(frozen=True)
+class _TsWorkerState:
+    parser: Parser
+    cache: TreeSitterCache | None
+    query_pack: TreeSitterQueryPack | None
+
+
+@cache
+def _worker_state(options: TreeSitterExtractOptions) -> _TsWorkerState:
+    parser = _parser(options)
+    cache = _default_cache(options.incremental_cache_size) if options.incremental else None
+    query_pack = _query_pack() if _should_run_queries(options) else None
+    return _TsWorkerState(parser=parser, cache=cache, query_pack=query_pack)
 
 
 def _should_parse(file_ctx: FileContext, options: TreeSitterExtractOptions) -> bool:
@@ -833,16 +851,30 @@ def extract_ts_plans(
     normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
     exec_context = context or ExtractExecutionContext()
     normalize = ExtractNormalizeOptions(options=normalized_options)
-    rows = _collect_ts_rows(
-        repo_files,
-        options=normalized_options,
-        file_contexts=exec_context.file_contexts,
-    )
+    rows: list[Row] | None = None
+    row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
+    batch_size = _resolve_batch_size(normalized_options)
+    if batch_size is None:
+        rows = _collect_ts_rows(
+            repo_files,
+            options=normalized_options,
+            file_contexts=exec_context.file_contexts,
+            ctx=exec_context.ctx,
+        )
+    else:
+        row_batches = _iter_ts_row_batches(
+            repo_files,
+            options=normalized_options,
+            file_contexts=exec_context.file_contexts,
+            ctx=exec_context.ctx,
+            batch_size=batch_size,
+        )
     evidence_plan = exec_context.evidence_plan
     return {
         "tree_sitter_files": _build_ts_plan(
             "tree_sitter_files_v1",
             rows,
+            row_batches=row_batches,
             normalize=normalize,
             evidence_plan=evidence_plan,
         ),
@@ -854,22 +886,73 @@ def _collect_ts_rows(
     *,
     options: TreeSitterExtractOptions,
     file_contexts: Iterable[FileContext] | None,
+    ctx: ExecutionContext | None,
 ) -> list[Row]:
-    parser = _parser(options)
-    cache = _default_cache(options.incremental_cache_size) if options.incremental else None
-    query_pack = _query_pack() if _should_run_queries(options) else None
     rows: list[Row] = []
-    for file_ctx in iter_contexts(repo_files, file_contexts):
-        row = _extract_ts_file_row(
-            file_ctx,
-            parser=parser,
-            cache=cache,
-            options=options,
-            query_pack=query_pack,
+    contexts = list(
+        iter_worklist_contexts(
+            repo_files,
+            output_table="tree_sitter_files_v1",
+            ctx=ctx,
+            file_contexts=file_contexts,
         )
-        if row is not None:
-            rows.append(row)
+    )
+    if not contexts:
+        return rows
+    runner = partial(_ts_row_worker, options=options)
+    rows.extend(row for row in parallel_map(contexts, runner) if row is not None)
     return rows
+
+
+def _iter_ts_row_batches(
+    repo_files: TableLike,
+    *,
+    options: TreeSitterExtractOptions,
+    file_contexts: Iterable[FileContext] | None,
+    ctx: ExecutionContext | None,
+    batch_size: int,
+) -> Iterable[Sequence[Mapping[str, object]]]:
+    batch: list[Row] = []
+    contexts = list(
+        iter_worklist_contexts(
+            repo_files,
+            output_table="tree_sitter_files_v1",
+            ctx=ctx,
+            file_contexts=file_contexts,
+        )
+    )
+    if not contexts:
+        return
+    runner = partial(_ts_row_worker, options=options)
+    for row in parallel_map(contexts, runner):
+        if row is None:
+            continue
+        batch.append(row)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def _ts_row_worker(file_ctx: FileContext, *, options: TreeSitterExtractOptions) -> Row | None:
+    state = _worker_state(options)
+    return _extract_ts_file_row(
+        file_ctx,
+        parser=state.parser,
+        cache=state.cache,
+        options=options,
+        query_pack=state.query_pack,
+    )
+
+
+def _resolve_batch_size(options: TreeSitterExtractOptions) -> int | None:
+    if options.batch_size is None:
+        return None
+    if options.batch_size <= 0:
+        msg = "batch_size must be a positive integer."
+        raise ValueError(msg)
+    return options.batch_size
 
 
 def _should_run_queries(options: TreeSitterExtractOptions) -> bool:
@@ -966,7 +1049,7 @@ def _extract_ts_file_row(
             )
         )
     attrs = _file_attrs(
-        file_ctx=file_ctx,
+        _file_ctx=file_ctx,
         query_pack=query_pack,
         parse_stats=parse_stats,
         node_stats=node_stats,
@@ -976,6 +1059,7 @@ def _extract_ts_file_row(
         "repo": options.repo_id,
         "path": file_ctx.path,
         "file_id": file_ctx.file_id,
+        "file_sha256": file_ctx.file_sha256,
         "nodes": node_rows if options.include_nodes else [],
         "edges": edge_rows if options.include_edges else [],
         "errors": error_rows if options.include_errors else [],
@@ -1005,7 +1089,7 @@ def _empty_ts_file_row(
 ) -> Row:
     node_stats = _NodeStats()
     attrs = _file_attrs(
-        file_ctx=file_ctx,
+        _file_ctx=file_ctx,
         query_pack=query_pack,
         parse_stats=parse_stats,
         node_stats=node_stats,
@@ -1015,6 +1099,7 @@ def _empty_ts_file_row(
         "repo": options.repo_id,
         "path": file_ctx.path,
         "file_id": file_ctx.file_id,
+        "file_sha256": file_ctx.file_sha256,
         "nodes": [],
         "edges": [],
         "errors": [],
@@ -1084,14 +1169,13 @@ def _collect_node_rows(
 
 def _file_attrs(
     *,
-    file_ctx: FileContext,
+    _file_ctx: FileContext,
     query_pack: TreeSitterQueryPack | None,
     parse_stats: _ParseStats,
     node_stats: _NodeStats,
     query_stats: _QueryStats | None,
 ) -> dict[str, object]:
     attrs: dict[str, object] = {
-        "file_sha256": file_ctx.file_sha256,
         "language_name": PY_LANGUAGE.name,
         "language_abi_version": PY_LANGUAGE.abi_version,
         "language_semantic_version": _semantic_version(PY_LANGUAGE.semantic_version),
@@ -1142,12 +1226,16 @@ def _stats_row(
 
 def _build_ts_plan(
     name: str,
-    rows: list[Row],
+    rows: list[Row] | None,
     *,
+    row_batches: Iterable[Sequence[Mapping[str, object]]] | None,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
 ) -> IbisPlan:
-    raw = ibis_plan_from_rows(name, rows)
+    if row_batches is not None:
+        raw = ibis_plan_from_row_batches(name, row_batches)
+    else:
+        raw = ibis_plan_from_rows(name, rows or [])
     return apply_query_and_project(
         name,
         raw.expr,

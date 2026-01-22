@@ -18,6 +18,7 @@ from sqlglot_tools.optimizer import (
     parse_sql_strict,
     register_datafusion_dialect,
     sqlglot_sql,
+    transpile_sql,
 )
 
 
@@ -157,7 +158,12 @@ class ViewSpec:
             raise ValueError(msg)
         policy = default_sqlglot_policy()
         register_datafusion_dialect()
-        query = parse_sql_strict(self.sql, dialect=policy.read_dialect)
+        transpiled_sql = transpile_sql(self.sql, policy=policy)
+        query = parse_sql_strict(
+            transpiled_sql,
+            dialect=policy.write_dialect,
+            error_level=policy.error_level,
+        )
         create_expr = exp.Create(
             this=exp.Table(this=exp.Identifier(this=self.name)),
             kind="VIEW",

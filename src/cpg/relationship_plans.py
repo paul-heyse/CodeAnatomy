@@ -31,9 +31,9 @@ from ibis_engine.expr_compiler import (
 )
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
-from ibis_engine.scan_io import DatasetSource
 from ibis_engine.schema_utils import validate_expr_schema
 from ibis_engine.sources import (
+    DatasetSource,
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
     register_ibis_view,

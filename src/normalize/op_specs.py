@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from normalize.registry_specs import dataset_alias, dataset_names
+from normalize.registry_runtime import dataset_alias, dataset_names
 from relspec.rules.definitions import RuleDefinition
 
 
@@ -17,20 +17,22 @@ class NormalizeOpSpec:
     outputs: tuple[str, ...]
 
 
-_NORMALIZE_DATASETS: frozenset[str] = frozenset(dataset_names())
+def _normalize_datasets() -> frozenset[str]:
+    return frozenset(dataset_names())
 
 
-def _maybe_alias(name: str) -> str:
-    if name in _NORMALIZE_DATASETS:
+def _maybe_alias(name: str, normalize_names: frozenset[str]) -> str:
+    if name in normalize_names:
         return dataset_alias(name)
     return name
 
 
 def _rule_op_specs(definitions: tuple[RuleDefinition, ...]) -> tuple[NormalizeOpSpec, ...]:
+    normalize_names = _normalize_datasets()
     specs: list[NormalizeOpSpec] = []
     for rule in definitions:
         output = dataset_alias(rule.output)
-        inputs = tuple(_maybe_alias(name) for name in rule.inputs)
+        inputs = tuple(_maybe_alias(name, normalize_names) for name in rule.inputs)
         specs.append(NormalizeOpSpec(name=output, inputs=inputs, outputs=(output,)))
     return tuple(specs)
 

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from arrowdsl.finalize.finalize import Contract
-from cpg.kinds_ultimate import EDGE_KIND_CONTRACTS
+from cpg.kind_catalog import edge_kind_required_props
 from relspec.model import RelationshipRule
 from relspec.registry import ContractCatalog
 
@@ -59,17 +59,14 @@ class EdgeContractValidationContext:
 
 
 def _load_edge_kind_required_props() -> dict[str, set[str]]:
-    """Load required props from the Ultimate edge-kind contracts.
+    """Load required props from the edge kind catalog.
 
     Returns
     -------
     dict[str, set[str]]
         Mapping of edge kind names to required property names.
     """
-    out: dict[str, set[str]] = {}
-    for edge_kind_enum, contract in EDGE_KIND_CONTRACTS.items():
-        out[str(edge_kind_enum.value)] = set(contract.required_props.keys())
-    return out
+    return edge_kind_required_props()
 
 
 def _stringify_edge_kinds(edge_kinds: Sequence[object]) -> tuple[str, ...]:
@@ -144,7 +141,7 @@ def _validate_edge_kinds(
             if ctx.config.error_on_unknown_edge_kind:
                 errors.append(
                     f"[relspec] Unknown edge kind '{edge_kind}' referenced for '{out_ds}'. "
-                    "Not found in Ultimate EDGE_KIND_CONTRACTS."
+                    "Not found in the edge kind catalog."
                 )
             continue
 

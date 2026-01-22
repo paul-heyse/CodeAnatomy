@@ -20,15 +20,22 @@ from ibis.expr.types import (
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.core.ordering import Ordering
-from arrowdsl.core.ordering_policy import ordering_keys_for_schema
+from arrowdsl.core.ordering import Ordering, OrderingKey
 from arrowdsl.schema.build import empty_table
+from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
 from datafusion_engine.extract_registry import dataset_schema as extract_dataset_schema
 from datafusion_engine.nested_tables import ViewReference
+from datafusion_engine.normalize_ids import (
+    DEF_USE_EVENT_ID_SPEC,
+    DIAG_ID_SPEC,
+    REACH_EDGE_ID_SPEC,
+    TYPE_EXPR_ID_SPEC,
+    TYPE_ID_SPEC,
+)
+from datafusion_engine.schema_registry import DIAG_DETAILS_TYPE
 from ibis_engine.builtin_udfs import col_to_byte
 from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
-from ibis_engine.scan_io import DatasetSource
 from ibis_engine.schema_utils import (
     coalesce_columns,
     ensure_columns,
@@ -36,24 +43,14 @@ from ibis_engine.schema_utils import (
     validate_expr_schema,
 )
 from ibis_engine.sources import (
+    DatasetSource,
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
     register_ibis_table,
     source_to_ibis,
 )
 from normalize.ibis_exprs import position_encoding_norm_expr
-from normalize.registry_fields import DIAG_DETAILS_TYPE
-from normalize.registry_ids import (
-    DEF_USE_EVENT_ID_SPEC,
-    DIAG_ID_SPEC,
-    REACH_EDGE_ID_SPEC,
-    TYPE_EXPR_ID_SPEC,
-    TYPE_ID_SPEC,
-)
-from normalize.registry_specs import (
-    dataset_input_schema,
-    dataset_schema,
-)
+from normalize.registry_runtime import dataset_input_schema, dataset_schema
 from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32
 
 TYPE_EXPRS_NAME = "type_exprs_norm_v1"
@@ -237,7 +234,7 @@ def type_nodes_plan_ibis(
         expected=target_schema,
         allow_extra_columns=ctx.debug,
     )
-    ordering_keys = ordering_keys_for_schema(target_schema)
+    ordering_keys = _ordering_keys_for_schema(target_schema)
     ordering = Ordering.explicit(ordering_keys) if ordering_keys else Ordering.unordered()
     return IbisPlan(expr=combined, ordering=ordering)
 
@@ -260,6 +257,13 @@ def _type_node_columns(ctx: ExecutionContext) -> list[str]:
     if ctx.debug:
         columns.append("type_id_key")
     return columns
+
+
+def _ordering_keys_for_schema(schema: pa.Schema) -> tuple[OrderingKey, ...]:
+    ordering = ordering_from_schema(schema)
+    if ordering.keys:
+        return ordering.keys
+    return infer_ordering_keys(schema.names)
 
 
 def _expr_type_rows(

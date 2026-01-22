@@ -32,6 +32,10 @@ class TableProviderMetadata:
         Partition column names for partitioned tables.
     metadata : dict[str, str]
         Additional key-value metadata for the table.
+    unbounded : bool
+        True if this table represents a streaming/unbounded source.
+    ddl_fingerprint : str | None
+        Stable fingerprint for the DDL statement, if available.
     """
 
     table_name: str
@@ -43,6 +47,8 @@ class TableProviderMetadata:
     file_format: str | None = None
     partition_columns: tuple[str, ...] = field(default_factory=tuple)
     metadata: dict[str, str] = field(default_factory=dict)
+    unbounded: bool = False
+    ddl_fingerprint: str | None = None
 
     def with_ddl(self, ddl: str) -> TableProviderMetadata:
         """Return a copy with updated DDL.
@@ -67,6 +73,8 @@ class TableProviderMetadata:
             file_format=self.file_format,
             partition_columns=self.partition_columns,
             metadata=self.metadata,
+            unbounded=self.unbounded,
+            ddl_fingerprint=self.ddl_fingerprint,
         )
 
     def with_constraints(self, constraints: tuple[str, ...]) -> TableProviderMetadata:
@@ -92,6 +100,8 @@ class TableProviderMetadata:
             file_format=self.file_format,
             partition_columns=self.partition_columns,
             metadata=self.metadata,
+            unbounded=self.unbounded,
+            ddl_fingerprint=self.ddl_fingerprint,
         )
 
     def with_schema_fingerprint(self, fingerprint: str) -> TableProviderMetadata:
@@ -117,6 +127,8 @@ class TableProviderMetadata:
             file_format=self.file_format,
             partition_columns=self.partition_columns,
             metadata=self.metadata,
+            unbounded=self.unbounded,
+            ddl_fingerprint=self.ddl_fingerprint,
         )
 
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import time
 import importlib
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -323,6 +323,13 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
     >>> ctx = SessionContext()
     >>> register_cache_introspection_functions(ctx)
     # Future: ctx.sql("SELECT * FROM list_files_cache()").collect()
+
+    Raises
+    ------
+    ImportError
+        Raised when the datafusion_ext module is unavailable.
+    TypeError
+        Raised when datafusion_ext does not provide register_cache_tables.
     """
     introspector = SchemaIntrospector(ctx, sql_options=None)
     settings = introspector.settings_snapshot()

@@ -590,6 +590,41 @@ def coerce_table_like(
     raise TypeError(msg)
 
 
+def concat_readers(readers: Sequence[RecordBatchReaderLike]) -> RecordBatchReaderLike:
+    """Return a RecordBatchReader that concatenates reader batches in order.
+
+    Parameters
+    ----------
+    readers
+        Sequence of RecordBatchReader inputs to concatenate.
+
+    Returns
+    -------
+    RecordBatchReaderLike
+        Reader yielding batches from each input reader in order.
+
+    Raises
+    ------
+    ValueError
+        Raised when readers are empty or schema mismatches are detected.
+    """
+    if not readers:
+        msg = "concat_readers requires at least one reader."
+        raise ValueError(msg)
+    first = cast("pa.RecordBatchReader", readers[0])
+    schema = first.schema
+
+    def _batches() -> Iterator[pa.RecordBatch]:
+        for reader in readers:
+            resolved = cast("pa.RecordBatchReader", reader)
+            if resolved.schema != schema:
+                msg = "RecordBatchReader schema mismatch in concat_readers."
+                raise ValueError(msg)
+            yield from resolved
+
+    return cast("RecordBatchReaderLike", pa.RecordBatchReader.from_batches(schema, _batches()))
+
+
 class ComputeModule(Protocol):
     """Protocol for the subset of pyarrow.compute used in this repo."""
 
@@ -765,6 +800,7 @@ __all__ = [
     "bool_",
     "call_expression_function",
     "coerce_table_like",
+    "concat_readers",
     "concat_tables",
     "dictionary",
     "ensure_expression",

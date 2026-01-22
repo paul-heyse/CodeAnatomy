@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
@@ -22,14 +23,15 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.bridge import (
     IbisCompilerBackend,
     datafusion_to_async_batches,
-    ibis_plan_to_datafusion,
-    ibis_plan_to_reader,
-    ibis_plan_to_table,
+    datafusion_to_reader,
+    datafusion_to_table,
+    ibis_to_datafusion_dual_lane,
 )
 from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
 from ibis_engine.plan import IbisPlan
+from obs.datafusion_runs import tracked_run
 
 
 def _portable_plan(plan: IbisPlan) -> IbisPlan:
@@ -39,6 +41,56 @@ def _portable_plan(plan: IbisPlan) -> IbisPlan:
         if isinstance(unbound, Table):
             return IbisPlan(expr=unbound, ordering=plan.ordering)
     return plan
+
+
+def _datafusion_run_label(
+    execution: DataFusionExecutionOptions,
+    *,
+    operation: str,
+) -> str:
+    label = execution.execution_label
+    if label is None:
+        return f"datafusion_{operation}"
+    base = label.output_dataset or label.rule_name
+    if base:
+        return f"{base}_{operation}"
+    return f"datafusion_{operation}"
+
+
+def _datafusion_run_metadata(
+    execution: DataFusionExecutionOptions,
+    *,
+    operation: str,
+) -> Mapping[str, object]:
+    label = execution.execution_label
+    payload: dict[str, object] = {"operation": operation}
+    if label is not None:
+        payload["rule"] = label.rule_name
+        payload["output"] = label.output_dataset
+    return payload
+
+
+def _record_tracing_snapshot(
+    execution: DataFusionExecutionOptions,
+    *,
+    run_id: str,
+) -> None:
+    runtime_profile = execution.runtime_profile
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    from datafusion_engine.runtime import collect_datafusion_traces
+
+    traces = collect_datafusion_traces(runtime_profile)
+    if traces is None:
+        return
+    runtime_profile.diagnostics_sink.record_artifact(
+        "datafusion_traces_v1",
+        {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "run_id": run_id,
+            "traces": dict(traces),
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -135,12 +187,12 @@ def _materialize_plan_datafusion(
     )
     portable_plan = _portable_plan(plan)
     if _force_bridge(options):
-        return ibis_plan_to_table(
+        df = plan_to_datafusion(
             portable_plan,
-            backend=execution.backend,
-            ctx=execution.ctx,
-            options=options,
+            execution=execution,
+            params=params,
         )
+        return datafusion_to_table(df, ordering=portable_plan.ordering)
     missing = _missing_ops(
         plan,
         execution=execution,
@@ -284,12 +336,12 @@ def _stream_plan_datafusion(
     )
     portable_plan = _portable_plan(plan)
     if _force_bridge(options):
-        return ibis_plan_to_reader(
+        df = plan_to_datafusion(
             portable_plan,
-            backend=execution.backend,
-            ctx=execution.ctx,
-            options=options,
+            execution=execution,
+            params=params,
         )
+        return datafusion_to_reader(df, ordering=portable_plan.ordering)
     missing = _missing_ops(plan, execution=execution)
     if missing:
         msg = f"Unsupported Ibis operations: {', '.join(missing)}."
@@ -315,12 +367,31 @@ def plan_to_datafusion(
         execution=execution,
         params=params,
     )
-    return ibis_plan_to_datafusion(
-        plan,
-        backend=execution.backend,
-        ctx=execution.ctx,
-        options=options,
-    )
+    portable_plan = _portable_plan(plan)
+    runtime_profile = execution.runtime_profile
+    if (
+        runtime_profile is None
+        or runtime_profile.diagnostics_sink is None
+        or options.run_id is not None
+    ):
+        result = ibis_to_datafusion_dual_lane(
+            portable_plan.expr,
+            backend=execution.backend,
+            ctx=execution.ctx,
+            options=options,
+        )
+        return result.df
+    label = _datafusion_run_label(execution, operation="compile")
+    metadata = _datafusion_run_metadata(execution, operation="compile")
+    with tracked_run(label=label, sink=runtime_profile.diagnostics_sink, metadata=metadata) as run:
+        result = ibis_to_datafusion_dual_lane(
+            portable_plan.expr,
+            backend=execution.backend,
+            ctx=execution.ctx,
+            options=replace(options, run_id=run.run_id),
+        )
+        _record_tracing_snapshot(execution, run_id=run.run_id)
+        return result.df
 
 
 def _resolve_options(

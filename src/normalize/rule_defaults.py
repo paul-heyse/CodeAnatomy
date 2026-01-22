@@ -13,7 +13,7 @@ from normalize.policies import (
     confidence_policy_from_schema,
     default_tie_breakers,
 )
-from normalize.registry_specs import dataset_schema
+from normalize.registry_runtime import dataset_schema
 from relspec.model import AmbiguityPolicy, ConfidencePolicy
 from relspec.policies import PolicyRegistry
 from relspec.rules.definitions import EvidenceOutput, EvidenceSpec, RuleDefinition

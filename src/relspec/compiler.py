@@ -22,11 +22,11 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec, ScalarValue
 from arrowdsl.core.interop import RecordBatchReaderLike, ScalarLike, SchemaLike, TableLike
-from arrowdsl.core.ordering import Ordering
-from arrowdsl.core.ordering_policy import require_explicit_ordering
+from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
+from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from datafusion_engine.kernel_registry import resolve_kernel
 from engine.materialize import build_plan_product
@@ -130,6 +130,14 @@ def runtime_telemetry_for_ctx(ctx: ExecutionContext) -> Mapping[str, object]:
     if profile is None:
         return {}
     return {"datafusion": profile.telemetry_payload_v1()}
+
+
+def _require_explicit_ordering(schema: SchemaLike, *, label: str) -> tuple[tuple[str, str], ...]:
+    ordering = ordering_from_schema(schema)
+    if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
+        msg = f"{label} requires explicit ordering metadata."
+        raise ValueError(msg)
+    return ordering.keys
 
 
 def _rule_signature_for_output(rule: RelationshipRule) -> str:
@@ -1926,7 +1934,7 @@ def _materialize_output_table(
     backend = options.ibis_backend
     if backend is None:
         return
-    require_explicit_ordering(result.good.schema, label=output_dataset)
+    _require_explicit_ordering(result.good.schema, label=output_dataset)
     recorder = namespace_recorder_from_ctx(ctx)
     plan = register_ibis_table(
         result.good,
@@ -1956,7 +1964,7 @@ def _enforce_output_ordering(
 ) -> None:
     if ctx.determinism != DeterminismTier.CANONICAL:
         return
-    require_explicit_ordering(schema, label=label)
+    _require_explicit_ordering(schema, label=label)
 
 
 __all__ = [

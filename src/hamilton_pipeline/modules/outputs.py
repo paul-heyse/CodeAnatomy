@@ -22,7 +22,7 @@ from arrowdsl.core.metrics import (
     empty_scan_telemetry_table,
     scan_telemetry_table,
 )
-from arrowdsl.core.ordering_policy import require_explicit_ordering
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.core.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.schema.build import table_from_rows
@@ -37,6 +37,8 @@ from datafusion_engine.registry_bridge import cached_dataset_names, register_dat
 from datafusion_engine.runtime import (
     DataFusionRuntimeProfile,
     catalog_snapshot_for_profile,
+    collect_datafusion_metrics,
+    collect_datafusion_traces,
     dataset_spec_from_context,
     diagnostics_dml_hook,
     function_catalog_snapshot_for_profile,
@@ -208,6 +210,13 @@ def cpg_bundle(
 
 def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
+
+
+def _require_explicit_ordering(schema: pa.Schema, *, label: str) -> None:
+    ordering = ordering_from_schema(schema)
+    if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
+        msg = f"{label} requires explicit ordering metadata."
+        raise ValueError(msg)
 
 
 def _delta_commit_metadata(dataset_name: str, schema: pa.Schema) -> dict[str, str]:
@@ -557,8 +566,8 @@ def _datafusion_runtime_artifacts(
     profile = ctx.runtime.datafusion
     if profile is None:
         return None, None
-    metrics = _json_mapping(profile.collect_metrics())
-    traces = _json_mapping(profile.collect_traces())
+    metrics = _json_mapping(collect_datafusion_metrics(profile))
+    traces = _json_mapping(collect_datafusion_traces(profile))
     return metrics, traces
 
 
@@ -1168,6 +1177,13 @@ def _datafusion_plan_row(
         "substrait_validation_datafusion_hash": validation_fields["datafusion_hash"],
         "substrait_validation_substrait_rows": validation_fields["substrait_rows"],
         "substrait_validation_substrait_hash": validation_fields["substrait_hash"],
+        "sqlglot_ast": entry.get("sqlglot_ast"),
+        "read_dialect": entry.get("read_dialect"),
+        "write_dialect": entry.get("write_dialect"),
+        "canonical_fingerprint": entry.get("canonical_fingerprint"),
+        "lineage_tables": entry.get("lineage_tables"),
+        "lineage_columns": entry.get("lineage_columns"),
+        "lineage_scopes": entry.get("lineage_scopes"),
         "unparsed_sql": entry.get("unparsed_sql"),
         "unparse_error": entry.get("unparse_error"),
         "logical_plan": entry.get("logical_plan"),
@@ -1175,6 +1191,7 @@ def _datafusion_plan_row(
         "physical_plan": entry.get("physical_plan"),
         "graphviz": entry.get("graphviz"),
         "partition_count": entry.get("partition_count"),
+        "join_operators": entry.get("join_operators"),
     }
 
 
@@ -1829,7 +1846,7 @@ def write_cpg_nodes_delta(
     _ensure_dir(output_path)
     good_override = cpg_nodes_final if context.incremental_config.enabled else None
     finalize = _override_finalize_good(cpg_nodes_finalize.finalize, good=good_override)
-    require_explicit_ordering(finalize.good.schema, label="cpg_nodes_final")
+    _require_explicit_ordering(finalize.good.schema, label="cpg_nodes_final")
     delta_context = _resolve_delta_write_context(
         "cpg_nodes",
         DeltaWriteOptions(
@@ -1925,7 +1942,7 @@ def write_cpg_edges_delta(
     _ensure_dir(output_path)
     good_override = cpg_edges_final if context.incremental_config.enabled else None
     finalize = _override_finalize_good(cpg_edges_finalize.finalize, good=good_override)
-    require_explicit_ordering(finalize.good.schema, label="cpg_edges_final")
+    _require_explicit_ordering(finalize.good.schema, label="cpg_edges_final")
     delta_context = _resolve_delta_write_context(
         "cpg_edges",
         DeltaWriteOptions(
@@ -1979,7 +1996,7 @@ def write_cpg_props_delta(
     _ensure_dir(output_path)
     good_override = cpg_props_final if context.incremental_config.enabled else None
     finalize = _override_finalize_good(cpg_props_finalize.finalize, good=good_override)
-    require_explicit_ordering(finalize.good.schema, label="cpg_props_final")
+    _require_explicit_ordering(finalize.good.schema, label="cpg_props_final")
     delta_context = _resolve_delta_write_context(
         "cpg_props",
         DeltaWriteOptions(

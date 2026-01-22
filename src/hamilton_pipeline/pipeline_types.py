@@ -16,7 +16,7 @@ from relspec.registry import ContractCatalog, DatasetLocation, RelspecSnapshot
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
-    from ibis_engine.scan_io import DatasetSource
+    from ibis_engine.sources import DatasetSource
 
 
 @dataclass(frozen=True)

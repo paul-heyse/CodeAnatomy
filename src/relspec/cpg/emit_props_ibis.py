@@ -114,7 +114,7 @@ def _emit_props_ibis(
     if context.include_node_kind and context.spec.node_kind is not None:
         node_field = PropFieldSpec(
             prop_key="node_kind",
-            literal=context.spec.node_kind.value,
+            literal=str(context.spec.node_kind),
             value_type="string",
         )
         plans.append(

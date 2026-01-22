@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import pyarrow as pa
+
 from arrowdsl.core import interop
 from registry_common.registry_rows import ContractRow
 from schema_spec.specs import ArrowFieldSpec
@@ -214,6 +216,13 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ArrowFieldSpec(name="substrait_validation_datafusion_hash", dtype=interop.string()),
             ArrowFieldSpec(name="substrait_validation_substrait_rows", dtype=interop.int64()),
             ArrowFieldSpec(name="substrait_validation_substrait_hash", dtype=interop.string()),
+            ArrowFieldSpec(name="sqlglot_ast", dtype=interop.string()),
+            ArrowFieldSpec(name="read_dialect", dtype=interop.string()),
+            ArrowFieldSpec(name="write_dialect", dtype=interop.string()),
+            ArrowFieldSpec(name="canonical_fingerprint", dtype=interop.string()),
+            ArrowFieldSpec(name="lineage_tables", dtype=pa.list_(pa.string())),
+            ArrowFieldSpec(name="lineage_columns", dtype=pa.list_(pa.string())),
+            ArrowFieldSpec(name="lineage_scopes", dtype=pa.list_(pa.string())),
             ArrowFieldSpec(name="unparsed_sql", dtype=interop.string()),
             ArrowFieldSpec(name="unparse_error", dtype=interop.string()),
             ArrowFieldSpec(name="logical_plan", dtype=interop.string()),
@@ -221,6 +230,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ArrowFieldSpec(name="physical_plan", dtype=interop.string()),
             ArrowFieldSpec(name="graphviz", dtype=interop.string()),
             ArrowFieldSpec(name="partition_count", dtype=interop.int64()),
+            ArrowFieldSpec(name="join_operators", dtype=pa.list_(pa.string())),
         ),
         constraints=TableSpecConstraints(
             required_non_null=("plan_hash", "sql"),

@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
-import uuid
 from collections.abc import Sequence
 from typing import cast
 
 import pyarrow as pa
-from datafusion import SessionContext
 
 from arrowdsl.core.interop import RecordBatchReaderLike, Scalar, TableLike, coerce_table_like
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_as_reader
+from datafusion_engine.runtime import read_delta_as_reader
+from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
@@ -69,32 +67,9 @@ _DIAGNOSTIC_HASH_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
 )
 
 
-def _session_profile() -> DataFusionRuntimeProfile:
-    return DataFusionRuntimeProfile()
-
-
-def _session_context(profile: DataFusionRuntimeProfile) -> SessionContext:
-    return profile.session_context()
-
-
-def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
-    name = f"__scip_snapshot_{prefix}_{uuid.uuid4().hex}"
-    ctx.register_record_batches(name, table.to_batches())
-    return name
-
-
-def _deregister_table(ctx: SessionContext, name: str | None) -> None:
-    if name is None:
-        return
-    deregister = getattr(ctx, "deregister_table", None)
-    if callable(deregister):
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            deregister(name)
-
-
 def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
+    escaped = name.replace("\"", "\"\"")
+    return f"\"{escaped}\""
 
 
 def _stringify_expr(column: str) -> str:
@@ -130,6 +105,8 @@ def build_scip_snapshot(
     scip_documents: TableLike,
     scip_occurrences: TableLike,
     scip_diagnostics: TableLike,
+    *,
+    runtime: IncrementalRuntime,
 ) -> pa.Table:
     """Return a document-level SCIP snapshot table.
 
@@ -138,16 +115,15 @@ def build_scip_snapshot(
     pa.Table
         Snapshot table keyed by document_id with fingerprints and counts.
     """
-    profile = _session_profile()
-    ctx = _session_context(profile)
-    sql_options = profile.sql_options()
+    ctx = runtime.session_context()
+    sql_options = runtime.profile.sql_options()
     docs_table = _as_table(scip_documents)
     occs_table = _as_table(scip_occurrences)
     diags_table = _as_table(scip_diagnostics)
-    docs_name = _register_table(ctx, docs_table, prefix="docs")
-    occs_name = _register_table(ctx, occs_table, prefix="occ")
-    diags_name = _register_table(ctx, diags_table, prefix="diag")
-    try:
+    with TempTableRegistry(ctx) as registry:
+        docs_name = registry.register_table(docs_table, prefix="docs")
+        occs_name = registry.register_table(occs_table, prefix="occ")
+        diags_name = registry.register_table(diags_table, prefix="diag")
         doc_hash = _row_hash_expr("scip_doc", _DOC_HASH_COLUMNS)
         occ_hash = _row_hash_expr("scip_occ", _OCCURRENCE_HASH_COLUMNS)
         diag_hash = _row_hash_expr("scip_diag", _DIAGNOSTIC_HASH_COLUMNS)
@@ -217,10 +193,6 @@ def build_scip_snapshot(
         LEFT JOIN diag_counts ON docs.document_id = diag_counts.document_id
         """
         return ctx.sql_with_options(sql, sql_options).to_arrow_table()
-    finally:
-        _deregister_table(ctx, docs_name)
-        _deregister_table(ctx, occs_name)
-        _deregister_table(ctx, diags_name)
 
 
 def _snapshot_added_sql(cur_table: str) -> str:
@@ -258,7 +230,12 @@ def _snapshot_diff_sql(cur_table: str, prev_table: str) -> str:
     """
 
 
-def diff_scip_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
+def diff_scip_snapshots(
+    prev: pa.Table | None,
+    cur: pa.Table,
+    *,
+    runtime: IncrementalRuntime,
+) -> pa.Table:
     """Diff two SCIP snapshots and return a change table.
 
     Returns
@@ -266,29 +243,26 @@ def diff_scip_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
     pa.Table
         Change records with per-document deltas.
     """
-    profile = _session_profile()
-    ctx = _session_context(profile)
-    sql_options = profile.sql_options()
+    ctx = runtime.session_context()
+    sql_options = runtime.profile.sql_options()
     cur_table = _as_table(cur)
-    cur_name = _register_table(ctx, cur_table, prefix="snapshot_cur")
-    prev_name: str | None = None
-    try:
+    with TempTableRegistry(ctx) as registry:
+        cur_name = registry.register_table(cur_table, prefix="snapshot_cur")
         if prev is None:
             return ctx.sql_with_options(_snapshot_added_sql(cur_name), sql_options).to_arrow_table()
         prev_table = _as_table(prev)
-        prev_name = _register_table(ctx, prev_table, prefix="snapshot_prev")
+        prev_name = registry.register_table(prev_table, prefix="snapshot_prev")
         return ctx.sql_with_options(
             _snapshot_diff_sql(cur_name, prev_name),
             sql_options,
         ).to_arrow_table()
-    finally:
-        _deregister_table(ctx, cur_name)
-        _deregister_table(ctx, prev_name)
 
 
 def scip_changed_file_ids(
     diff: pa.Table | None,
     repo_snapshot: pa.Table | None,
+    *,
+    runtime: IncrementalRuntime,
 ) -> tuple[str, ...]:
     """Return repo file_ids impacted by SCIP document changes.
 
@@ -299,12 +273,11 @@ def scip_changed_file_ids(
     """
     if diff is None or repo_snapshot is None or diff.num_rows == 0:
         return ()
-    profile = _session_profile()
-    ctx = _session_context(profile)
-    sql_options = profile.sql_options()
-    diff_name = _register_table(ctx, diff, prefix="diff")
-    repo_name = _register_table(ctx, repo_snapshot, prefix="repo")
-    try:
+    ctx = runtime.session_context()
+    sql_options = runtime.profile.sql_options()
+    with TempTableRegistry(ctx) as registry:
+        diff_name = registry.register_table(diff, prefix="diff")
+        repo_name = registry.register_table(repo_snapshot, prefix="repo")
         sql = f"""
         WITH changed AS (
           SELECT DISTINCT path
@@ -322,9 +295,6 @@ def scip_changed_file_ids(
             value for value in table["file_id"].to_pylist() if isinstance(value, str) and value
         ]
         return tuple(sorted(set(values)))
-    finally:
-        _deregister_table(ctx, diff_name)
-        _deregister_table(ctx, repo_name)
 
 
 def read_scip_snapshot(store: StateStore) -> pa.Table | None:

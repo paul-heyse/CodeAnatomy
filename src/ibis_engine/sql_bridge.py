@@ -24,6 +24,7 @@ from sqlglot_tools.optimizer import (
     parse_sql_strict,
     sqlglot_policy_snapshot_for,
     sqlglot_sql,
+    transpile_sql,
 )
 
 
@@ -193,13 +194,18 @@ def _normalize_ingest_expr(
     schema_map: SchemaMapping,
     policy: SqlGlotPolicy,
 ) -> Expression:
-    expr = parse_sql_strict(sql, dialect=policy.read_dialect, error_level=policy.error_level)
+    transpiled_sql = transpile_sql(sql, policy=policy)
+    expr = parse_sql_strict(
+        transpiled_sql,
+        dialect=policy.write_dialect,
+        error_level=policy.error_level,
+    )
     return normalize_expr(
         expr,
         options=NormalizeExprOptions(
             schema=schema_map,
             policy=policy,
-            sql=sql,
+            sql=transpiled_sql,
         ),
     )
 

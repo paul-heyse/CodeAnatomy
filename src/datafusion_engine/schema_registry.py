@@ -20,6 +20,7 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
+from arrowdsl.schema.build import list_view_type, struct_type
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from arrowdsl.schema.semantic_types import (
     SEMANTIC_TYPE_META,
@@ -38,7 +39,7 @@ from datafusion_engine.table_provider_metadata import (
     record_table_provider_metadata,
 )
 from registry_common.metadata import metadata_list_bytes
-from schema_spec.view_specs import ViewSpec
+from schema_spec.view_specs import ViewSpec, view_spec_from_builder
 from sqlglot_tools.optimizer import default_sqlglot_policy, parse_sql_strict
 
 BYTE_SPAN_T = byte_span_type()
@@ -59,6 +60,17 @@ BYTECODE_ATTR_VALUE_T = pa.union(
     mode="sparse",
 )
 BYTECODE_ATTRS_T = pa.map_(pa.string(), BYTECODE_ATTR_VALUE_T)
+
+DIAG_TAGS_TYPE = list_view_type(pa.string(), large=True)
+DIAG_DETAIL_STRUCT = struct_type(
+    {
+        "detail_kind": pa.string(),
+        "error_type": pa.string(),
+        "source": pa.string(),
+        "tags": DIAG_TAGS_TYPE,
+    }
+)
+DIAG_DETAILS_TYPE = list_view_type(DIAG_DETAIL_STRUCT, large=True)
 
 
 def _sql_options() -> SQLOptions:
@@ -463,6 +475,7 @@ LIBCST_FILES_SCHEMA = pa.schema(
         ("repo", pa.string()),
         pa.field("path", pa.string(), nullable=False),
         pa.field("file_id", pa.string(), nullable=False),
+        ("file_sha256", pa.string()),
         ("nodes", pa.list_(CST_NODE_T)),
         ("edges", pa.list_(CST_EDGE_T)),
         ("parse_manifest", pa.list_(CST_PARSE_MANIFEST_T)),
@@ -588,6 +601,7 @@ AST_FILES_SCHEMA = pa.schema(
         ("repo", pa.string()),
         pa.field("path", pa.string(), nullable=False),
         pa.field("file_id", pa.string(), nullable=False),
+        ("file_sha256", pa.string()),
         ("nodes", pa.list_(AST_NODE_T)),
         ("edges", pa.list_(AST_EDGE_T)),
         ("errors", pa.list_(AST_ERROR_T)),
@@ -738,6 +752,7 @@ TREE_SITTER_FILES_SCHEMA = pa.schema(
         ("repo", pa.string()),
         ("path", pa.string()),
         ("file_id", pa.string()),
+        ("file_sha256", pa.string()),
         ("nodes", pa.list_(TREE_SITTER_NODE_T)),
         ("edges", pa.list_(TREE_SITTER_EDGE_T)),
         ("errors", pa.list_(TREE_SITTER_ERROR_T)),
@@ -822,6 +837,7 @@ SYMTABLE_FILES_SCHEMA = pa.schema(
         ("repo", pa.string()),
         ("path", pa.string()),
         ("file_id", pa.string()),
+        ("file_sha256", pa.string()),
         ("blocks", pa.list_(SYM_BLOCK_T)),
         _attrs_field(),
     ]
@@ -1013,6 +1029,7 @@ BYTECODE_FILES_SCHEMA = pa.schema(
         pa.field("repo", pa.string()),
         pa.field("path", pa.string(), nullable=False),
         pa.field("file_id", pa.string(), nullable=False),
+        pa.field("file_sha256", pa.string()),
         pa.field("code_objects", pa.list_(BYTECODE_CODE_OBJ_T)),
         pa.field("errors", pa.list_(BYTECODE_ERROR_T)),
         _bytecode_attrs_field(),
@@ -1268,6 +1285,12 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("substrait_b64", pa.string(), nullable=True),
             pa.field("substrait_validation_status", pa.string(), nullable=True),
             pa.field("sqlglot_ast", pa.string(), nullable=True),
+            pa.field("read_dialect", pa.string(), nullable=True),
+            pa.field("write_dialect", pa.string(), nullable=True),
+            pa.field("canonical_fingerprint", pa.string(), nullable=True),
+            pa.field("lineage_tables", pa.list_(pa.string()), nullable=True),
+            pa.field("lineage_columns", pa.list_(pa.string()), nullable=True),
+            pa.field("lineage_scopes", pa.list_(pa.string()), nullable=True),
             pa.field("unparsed_sql", pa.string(), nullable=True),
             pa.field("unparse_error", pa.string(), nullable=True),
             pa.field("logical_plan", pa.string(), nullable=True),
@@ -2841,6 +2864,76 @@ def nested_view_specs(*, table: str | None = None) -> tuple[ViewSpec, ...]:
     return tuple(nested_view_spec(name, table=table) for name in nested_dataset_names())
 
 
+def symtable_derived_view_specs(ctx: SessionContext) -> tuple[ViewSpec, ...]:
+    """Return ViewSpecs for symtable-derived views.
+
+    Returns
+    -------
+    tuple[ViewSpec, ...]
+        View specifications for symtable-derived views.
+    """
+    from datafusion_engine.symtable_views import (
+        symtable_bindings_df,
+        symtable_def_sites_df,
+        symtable_type_param_edges_df,
+        symtable_type_params_df,
+        symtable_use_sites_df,
+    )
+
+    return (
+        view_spec_from_builder(
+            ctx,
+            name="symtable_bindings",
+            builder=symtable_bindings_df,
+            sql=None,
+        ),
+        view_spec_from_builder(
+            ctx,
+            name="symtable_def_sites",
+            builder=symtable_def_sites_df,
+            sql=None,
+        ),
+        view_spec_from_builder(
+            ctx,
+            name="symtable_use_sites",
+            builder=symtable_use_sites_df,
+            sql=None,
+        ),
+        view_spec_from_builder(
+            ctx,
+            name="symtable_type_params",
+            builder=symtable_type_params_df,
+            sql=None,
+        ),
+        view_spec_from_builder(
+            ctx,
+            name="symtable_type_param_edges",
+            builder=symtable_type_param_edges_df,
+            sql=None,
+        ),
+    )
+
+
+def symtable_binding_resolution_view_specs(ctx: SessionContext) -> tuple[ViewSpec, ...]:
+    """Return ViewSpecs for symtable binding resolution views.
+
+    Returns
+    -------
+    tuple[ViewSpec, ...]
+        View specifications for binding resolution views.
+    """
+    from datafusion_engine.symtable_views import symtable_binding_resolutions_df
+
+    return (
+        view_spec_from_builder(
+            ctx,
+            name="symtable_binding_resolutions",
+            builder=symtable_binding_resolutions_df,
+            sql=None,
+        ),
+    )
+
+
 def validate_schema_metadata(schema: pa.Schema) -> None:
     """Validate required schema metadata tags.
 
@@ -4178,6 +4271,9 @@ __all__ = [
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
     "CST_VIEW_NAMES",
+    "DIAG_DETAILS_TYPE",
+    "DIAG_DETAIL_STRUCT",
+    "DIAG_TAGS_TYPE",
     "ENGINE_REQUIRED_FUNCTIONS",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
@@ -4224,6 +4320,8 @@ __all__ = [
     "schema_names",
     "schema_registry",
     "struct_for_path",
+    "symtable_binding_resolution_view_specs",
+    "symtable_derived_view_specs",
     "validate_ast_views",
     "validate_bytecode_views",
     "validate_cst_views",

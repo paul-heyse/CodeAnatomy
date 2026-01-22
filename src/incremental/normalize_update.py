@@ -8,7 +8,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
-from normalize.registry_specs import dataset_name_from_alias
+from normalize.registry_runtime import dataset_name_from_alias
 from storage.deltalake import (
     DeltaUpsertOptions,
     DeltaWriteOptions,

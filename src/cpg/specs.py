@@ -4,18 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from ibis.expr.types import Value
 
 from arrowdsl.core.interop import TableLike
-from cpg.kinds_ultimate import EdgeKind, EntityKind, NodeKind
+from cpg.kind_catalog import EntityKind
 from cpg.prop_transforms import (
     expr_context_expr,
     expr_context_value,
     flag_to_bool,
     flag_to_bool_expr,
 )
+
+if TYPE_CHECKING:
+    from cpg.kind_catalog import EdgeKindId, NodeKindId
 
 type TableFilter = Callable[[TableLike], TableLike]
 type PropValueType = Literal["string", "int", "float", "bool", "json"]
@@ -160,7 +163,7 @@ def resolve_edge_filter(filter_id: str | None) -> TableFilter | None:
 class EdgeEmitSpec:
     """Mapping for emitting edges from a relation table."""
 
-    edge_kind: EdgeKind
+    edge_kind: EdgeKindId
     src_cols: tuple[str, ...]
     dst_cols: tuple[str, ...]
     origin: str
@@ -185,7 +188,7 @@ class EdgePlanSpec:
 class NodeEmitSpec:
     """Spec for emitting anchored nodes."""
 
-    node_kind: NodeKind
+    node_kind: NodeKindId
     id_cols: tuple[str, ...]
     path_cols: tuple[str, ...] = ("path",)
     bstart_cols: tuple[str, ...] = ("bstart",)
@@ -262,6 +265,6 @@ class PropTableSpec:
     table_ref: str
     entity_kind: EntityKind
     id_cols: tuple[str, ...]
-    node_kind: NodeKind | None = None
+    node_kind: NodeKindId | None = None
     fields: tuple[PropFieldSpec, ...] = field(default_factory=tuple)
     include_if_id: str | None = None

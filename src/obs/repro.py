@@ -30,7 +30,6 @@ from engine.plan_cache import PlanCacheEntry
 from engine.plan_product import PlanProduct
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.params_bridge import ScalarParamSpec
-from obs.parquet_writers import write_obs_dataset
 from registry_common.arrow_payloads import ipc_hash
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
@@ -141,6 +140,20 @@ def collect_repro_info(
 
 def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
+
+
+def _write_obs_dataset(
+    base_dir: Path,
+    *,
+    name: str,
+    table: pa.Table,
+    overwrite: bool,
+) -> str:
+    dataset_dir = base_dir / name
+    mode = "overwrite" if overwrite else "error"
+    options = DeltaWriteOptions(mode=mode, schema_mode="overwrite" if overwrite else None)
+    result = write_dataset_delta(table, str(dataset_dir), options=options)
+    return result.path
 
 
 def _payload_table(payload: JsonValue) -> pa.Table:
@@ -559,7 +572,7 @@ def _write_relspec_snapshots(
     _ensure_dir(relspec_dir)
     if context.rule_table is not None:
         files_written.append(
-            write_obs_dataset(
+            _write_obs_dataset(
                 relspec_dir,
                 name="rules",
                 table=context.rule_table,
@@ -568,7 +581,7 @@ def _write_relspec_snapshots(
         )
     if context.template_table is not None:
         files_written.append(
-            write_obs_dataset(
+            _write_obs_dataset(
                 relspec_dir,
                 name="templates",
                 table=context.template_table,
@@ -577,7 +590,7 @@ def _write_relspec_snapshots(
         )
     if context.template_diagnostics is not None:
         files_written.append(
-            write_obs_dataset(
+            _write_obs_dataset(
                 relspec_dir,
                 name="template_diagnostics",
                 table=context.template_diagnostics,
@@ -586,7 +599,7 @@ def _write_relspec_snapshots(
         )
     if context.rule_diagnostics is not None:
         files_written.append(
-            write_obs_dataset(
+            _write_obs_dataset(
                 relspec_dir,
                 name="rule_diagnostics",
                 table=context.rule_diagnostics,
@@ -678,7 +691,7 @@ def _write_incremental_artifacts(
         if table is None:
             continue
         files_written.append(
-            write_obs_dataset(
+            _write_obs_dataset(
                 incremental_dir,
                 name=name,
                 table=table,
@@ -901,7 +914,7 @@ def _write_runtime_artifacts(
         if table is None:
             continue
         files_written.append(
-            write_obs_dataset(
+            _write_obs_dataset(
                 relspec_dir,
                 name=name,
                 table=table,
@@ -998,7 +1011,7 @@ def _substrait_filename(
 
 
 def _plan_cache_filename(entry: PlanCacheEntry) -> str:
-    base = _safe_label(f"{entry.plan_hash}__{entry.profile_hash}")
+    base = _safe_label(f"{entry.plan_hash}__{entry.profile_hash}__{entry.substrait_hash}")
     return f"{base}.substrait"
 
 
@@ -1030,6 +1043,8 @@ def _write_plan_cache_artifacts(
             {
                 "plan_hash": entry.plan_hash,
                 "profile_hash": entry.profile_hash,
+                "substrait_hash": entry.substrait_hash,
+                "compilation_lane": entry.compilation_lane,
                 "file": str(target.relative_to(relspec_dir)),
             }
         )
@@ -1447,7 +1462,7 @@ def _write_param_table_data(
         return
     for name, artifact in context.param_table_artifacts.items():
         files_written.append(
-            write_obs_dataset(
+            _write_obs_dataset(
                 params_dir,
                 name=name,
                 table=artifact.table,

@@ -50,7 +50,7 @@ from normalize.ibis_spans import (
     normalize_cst_defs_spans_ibis,
     normalize_cst_imports_spans_ibis,
 )
-from normalize.registry_specs import (
+from normalize.registry_runtime import (
     dataset_alias,
     dataset_contract,
     dataset_name_from_alias,

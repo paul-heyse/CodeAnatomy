@@ -33,6 +33,7 @@ from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
     DataFusionSqlPolicy,
+    DataFusionSubstraitFallbackEvent,
     resolve_sql_policy,
 )
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
@@ -42,6 +43,7 @@ from datafusion_engine.schema_introspection import (
     constraint_rows,
     settings_snapshot_table,
     table_constraint_rows,
+    tables_snapshot_table,
 )
 from datafusion_engine.schema_registry import (
     AST_CORE_VIEW_NAMES,
@@ -67,12 +69,18 @@ from datafusion_engine.schema_registry import (
     validate_symtable_views,
     validate_ts_views,
 )
-from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
+from datafusion_engine.table_provider_metadata import table_provider_metadata
+from datafusion_engine.udf_registry import (
+    DataFusionUdfSnapshot,
+    get_default_udf_catalog,
+    register_datafusion_udfs,
+)
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCache
 from registry_common.arrow_payloads import payload_hash
 
 if TYPE_CHECKING:
+    from datafusion_engine.udf_catalog import UdfCatalog
     from ibis_engine.registry import DatasetCatalog, DatasetLocation
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
@@ -192,6 +200,9 @@ _OUTPUT_WRITES_SCHEMA = pa.struct(
     [
         pa.field("cache_enabled", pa.bool_()),
         pa.field("cache_max_columns", pa.int64()),
+        pa.field("minimum_parallel_output_files", pa.int64()),
+        pa.field("soft_max_rows_per_output_file", pa.int64()),
+        pa.field("maximum_parallel_row_group_writers", pa.int64()),
         pa.field("datafusion_write_policy", _WRITE_POLICY_SCHEMA),
     ]
 )
@@ -336,6 +347,9 @@ class DataFusionJoinPolicy:
     enable_sort_merge_join: bool = True
     enable_nested_loop_join: bool = True
     repartition_joins: bool = True
+    enable_round_robin_repartition: bool = True
+    perfect_hash_join_small_build_threshold: int | None = None
+    perfect_hash_join_min_key_density: float | None = None
 
     def settings(self) -> dict[str, str]:
         """Return DataFusion config settings for join preferences.
@@ -345,14 +359,26 @@ class DataFusionJoinPolicy:
         dict[str, str]
             Mapping of DataFusion config keys to string values.
         """
-        return {
+        settings = {
             "datafusion.optimizer.enable_hash_join": str(self.enable_hash_join).lower(),
             "datafusion.optimizer.enable_sort_merge_join": str(self.enable_sort_merge_join).lower(),
             "datafusion.optimizer.enable_nested_loop_join": str(
                 self.enable_nested_loop_join
             ).lower(),
             "datafusion.optimizer.repartition_joins": str(self.repartition_joins).lower(),
+            "datafusion.optimizer.enable_round_robin_repartition": str(
+                self.enable_round_robin_repartition
+            ).lower(),
         }
+        if self.perfect_hash_join_small_build_threshold is not None:
+            settings["datafusion.execution.perfect_hash_join_small_build_threshold"] = str(
+                self.perfect_hash_join_small_build_threshold
+            )
+        if self.perfect_hash_join_min_key_density is not None:
+            settings["datafusion.execution.perfect_hash_join_min_key_density"] = str(
+                self.perfect_hash_join_min_key_density
+            )
+        return settings
 
 
 @dataclass(frozen=True)
@@ -994,6 +1020,20 @@ def _apply_optional_int_config(
     return _apply_config_int(config, method=method, key=key, value=int(value))
 
 
+def _apply_optional_int_setting(
+    config: SessionConfig,
+    *,
+    key: str,
+    value: int | None,
+) -> SessionConfig:
+    if value is None:
+        return config
+    setter = getattr(config, "set", None)
+    if callable(setter):
+        return cast("SessionConfig", setter(key, str(int(value))))
+    return config
+
+
 def _apply_config_policy(
     config: SessionConfig,
     policy: DataFusionConfigPolicy | None,
@@ -1262,7 +1302,7 @@ def catalog_snapshot_for_profile(
     pyarrow.Table
         Table inventory from information_schema.tables.
     """
-    return SchemaIntrospector(ctx, sql_options=profile.sql_options()).tables_snapshot_table()
+    return tables_snapshot_table(ctx, sql_options=profile.sql_options())
 
 
 def function_catalog_snapshot_for_profile(
@@ -1428,6 +1468,20 @@ def _chain_cache_hooks(
     return _hook
 
 
+def _chain_substrait_fallback_hooks(
+    *hooks: Callable[[DataFusionSubstraitFallbackEvent], None] | None,
+) -> Callable[[DataFusionSubstraitFallbackEvent], None] | None:
+    active = [hook for hook in hooks if hook is not None]
+    if not active:
+        return None
+
+    def _hook(event: DataFusionSubstraitFallbackEvent) -> None:
+        for hook in active:
+            hook(event)
+
+    return _hook
+
+
 def labeled_explain_hook(
     label: ExecutionLabel,
     sink: list[dict[str, object]],
@@ -1476,6 +1530,35 @@ def diagnostics_cache_hook(
                     "reason": event.reason,
                     "plan_hash": event.plan_hash,
                     "profile_hash": event.profile_hash,
+                }
+            ],
+        )
+
+    return _hook
+
+
+def diagnostics_substrait_fallback_hook(
+    sink: DiagnosticsSink,
+) -> Callable[[DataFusionSubstraitFallbackEvent], None]:
+    """Return a Substrait fallback hook that records diagnostics rows.
+
+    Returns
+    -------
+    Callable[[DataFusionSubstraitFallbackEvent], None]
+        Hook that records Substrait fallback events in the diagnostics sink.
+    """
+
+    def _hook(event: DataFusionSubstraitFallbackEvent) -> None:
+        sink.record_events(
+            "substrait_fallbacks_v1",
+            [
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "reason": event.reason,
+                    "expr_type": event.expr_type,
+                    "plan_hash": event.plan_hash,
+                    "profile_hash": event.profile_hash,
+                    "run_id": event.run_id,
                 }
             ],
         )
@@ -1615,6 +1698,7 @@ class _ResolvedCompileHooks:
     plan_artifacts_hook: Callable[[Mapping[str, object]], None] | None
     sql_ingest_hook: Callable[[Mapping[str, object]], None] | None
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None
+    substrait_fallback_hook: Callable[[DataFusionSubstraitFallbackEvent], None] | None
 
 
 @dataclass(frozen=True)
@@ -1633,6 +1717,9 @@ class DataFusionRuntimeProfile:
 
     target_partitions: int | None = None
     batch_size: int | None = None
+    minimum_parallel_output_files: int | None = None
+    soft_max_rows_per_output_file: int | None = None
+    maximum_parallel_row_group_writers: int | None = None
     spill_dir: str | None = None
     memory_pool: MemoryPool = "greedy"
     memory_limit_bytes: int | None = None
@@ -1652,7 +1739,6 @@ class DataFusionRuntimeProfile:
         ("repo", pa.string()),
         ("path", pa.string()),
     )
-    ast_external_unbounded: bool = False
     ast_external_schema_force_view_types: bool | None = False
     ast_external_skip_arrow_metadata: bool | None = False
     ast_external_listing_table_factory_infer_partitions: bool | None = True
@@ -1673,7 +1759,6 @@ class DataFusionRuntimeProfile:
     bytecode_external_provider: Literal["listing", "parquet"] | None = None
     bytecode_external_ordering: tuple[str, ...] = ("path", "file_id")
     bytecode_external_partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
-    bytecode_external_unbounded: bool = False
     bytecode_external_schema_force_view_types: bool | None = False
     bytecode_external_skip_arrow_metadata: bool | None = False
     bytecode_external_listing_table_factory_infer_partitions: bool | None = True
@@ -1687,6 +1772,7 @@ class DataFusionRuntimeProfile:
     bytecode_delta_timestamp: str | None = None
     bytecode_delta_constraints: tuple[str, ...] = ()
     bytecode_delta_scan: DeltaScanOptions | None = None
+    extract_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
     scip_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
     enable_information_schema: bool = True
     enable_ident_normalization: bool = False
@@ -1728,6 +1814,7 @@ class DataFusionRuntimeProfile:
     diagnostics_sink: DiagnosticsSink | None = None
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
     plan_cache: PlanCache | None = field(default_factory=PlanCache)
+    udf_catalog_cache: dict[int, UdfCatalog] = field(default_factory=dict, repr=False)
     local_filesystem_root: str | None = None
     input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
     prepared_statements: tuple[PreparedStatementSpec, ...] = ()
@@ -1780,6 +1867,21 @@ class DataFusionRuntimeProfile:
             method="with_batch_size",
             key="datafusion.execution.batch_size",
             value=self.batch_size,
+        )
+        config = _apply_optional_int_setting(
+            config,
+            key="datafusion.execution.minimum_parallel_output_files",
+            value=self.minimum_parallel_output_files,
+        )
+        config = _apply_optional_int_setting(
+            config,
+            key="datafusion.execution.soft_max_rows_per_output_file",
+            value=self.soft_max_rows_per_output_file,
+        )
+        config = _apply_optional_int_setting(
+            config,
+            key="datafusion.execution.maximum_parallel_row_group_writers",
+            value=self.maximum_parallel_row_group_writers,
         )
         catalog_location, catalog_format = self._effective_catalog_autoload()
         config = _apply_catalog_autoload(
@@ -1868,6 +1970,7 @@ class DataFusionRuntimeProfile:
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
+        self._install_delta_table_factory(ctx)
         self._install_udfs(ctx)
         self._install_schema_registry(ctx)
         self._validate_rule_function_allowlist(ctx)
@@ -1875,6 +1978,7 @@ class DataFusionRuntimeProfile:
         self.ensure_delta_plan_codecs(ctx)
         self._install_function_factory(ctx)
         self._install_expr_planners(ctx)
+        self._record_extension_parity_validation()
         self._install_physical_expr_adapter_factory(ctx)
         self._install_tracing(ctx)
         self._install_cache_tables(ctx)
@@ -1957,12 +2061,58 @@ class DataFusionRuntimeProfile:
         if callable(set_default) and catalog_name != self.default_catalog:
             set_default(catalog_name, self.default_schema)
 
+    def _install_delta_table_factory(self, ctx: SessionContext) -> None:
+        """Install Delta TableProviderFactory for DDL registration.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when the DataFusion extension module is unavailable.
+        TypeError
+            Raised when the factory installer is missing in the extension.
+        """
+        if not self.require_delta:
+            return
+        try:
+            module = importlib.import_module("datafusion_ext")
+        except ImportError as exc:
+            msg = "Delta table factory requires datafusion_ext."
+            raise RuntimeError(msg) from exc
+        installer = getattr(module, "install_delta_table_factory", None)
+        if not callable(installer):
+            msg = "datafusion_ext.install_delta_table_factory is unavailable."
+            raise TypeError(msg)
+        installer(ctx, "DELTATABLE")
+
     def _install_udfs(self, ctx: SessionContext) -> None:
         """Install registered UDFs on the session context."""
-        if not self.enable_udfs:
-            return
-        snapshot = register_datafusion_udfs(ctx)
-        self._record_udf_snapshot(snapshot)
+        if self.enable_udfs:
+            snapshot = register_datafusion_udfs(ctx)
+            self._record_udf_snapshot(snapshot)
+        self._refresh_udf_catalog(ctx)
+
+    def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
+        if not self.enable_information_schema:
+            msg = "UdfCatalog requires information_schema to be enabled."
+            raise ValueError(msg)
+        introspector = self._schema_introspector(ctx)
+        catalog = get_default_udf_catalog(introspector=introspector)
+        self.udf_catalog_cache[id(ctx)] = catalog
+
+    def udf_catalog(self, ctx: SessionContext) -> UdfCatalog:
+        """Return the cached UDF catalog for a session context.
+
+        Returns
+        -------
+        UdfCatalog
+            Cached UDF catalog for the session.
+        """
+        cache_key = id(ctx)
+        catalog = self.udf_catalog_cache.get(cache_key)
+        if catalog is None:
+            self._refresh_udf_catalog(ctx)
+            catalog = self.udf_catalog_cache[cache_key]
+        return catalog
 
     def _validate_rule_function_allowlist(self, ctx: SessionContext) -> None:
         """Validate rulepack function demands against information_schema.
@@ -2178,7 +2328,6 @@ class DataFusionRuntimeProfile:
             scan = DataFusionScanOptions(
                 partition_cols=self.ast_external_partition_cols,
                 file_sort_order=self.ast_external_ordering,
-                unbounded=self.ast_external_unbounded,
                 schema_force_view_types=self.ast_external_schema_force_view_types,
                 skip_arrow_metadata=self.ast_external_skip_arrow_metadata,
                 table_schema_contract=TableSchemaContract(
@@ -2273,7 +2422,6 @@ class DataFusionRuntimeProfile:
             scan = DataFusionScanOptions(
                 partition_cols=self.bytecode_external_partition_cols,
                 file_sort_order=self.bytecode_external_ordering,
-                unbounded=self.bytecode_external_unbounded,
                 schema_force_view_types=self.bytecode_external_schema_force_view_types,
                 skip_arrow_metadata=self.bytecode_external_skip_arrow_metadata,
                 table_schema_contract=TableSchemaContract(
@@ -2326,6 +2474,32 @@ class DataFusionRuntimeProfile:
             )
             raise ValueError(msg)
         self._record_bytecode_registration(location=location)
+
+    def bytecode_dataset_location(self) -> DatasetLocation | None:
+        """Return the configured bytecode dataset location, when available.
+
+        Returns
+        -------
+        DatasetLocation | None
+            Bytecode dataset location when configured.
+        """
+        return self._bytecode_dataset_location()
+
+    def extract_dataset_location(self, name: str) -> DatasetLocation | None:
+        """Return a configured extract dataset location for the dataset name.
+
+        Returns
+        -------
+        DatasetLocation | None
+            Extract dataset location when configured.
+        """
+        if name in self.extract_dataset_locations:
+            return self.extract_dataset_locations[name]
+        if name == "ast_files_v1":
+            return self._ast_dataset_location()
+        if name == "bytecode_files_v1":
+            return self._bytecode_dataset_location()
+        return self.scip_dataset_locations.get(name)
 
     def _register_scip_datasets(self, ctx: SessionContext) -> None:
         if not self.scip_dataset_locations:
@@ -2811,6 +2985,11 @@ class DataFusionRuntimeProfile:
         *,
         fragment_views: Sequence[ViewSpec],
     ) -> set[str]:
+        from datafusion_engine.schema_registry import (
+            symtable_binding_resolution_view_specs,
+            symtable_derived_view_specs,
+        )
+
         fragment_names = {view.name for view in fragment_views}
         if fragment_views:
             register_view_specs(
@@ -2826,6 +3005,22 @@ class DataFusionRuntimeProfile:
             register_view_specs(
                 ctx,
                 views=nested_views,
+                runtime_profile=self,
+                validate=True,
+            )
+        symtable_views = symtable_derived_view_specs(ctx)
+        if symtable_views:
+            register_view_specs(
+                ctx,
+                views=symtable_views,
+                runtime_profile=self,
+                validate=True,
+            )
+        symtable_resolution_views = symtable_binding_resolution_view_specs(ctx)
+        if symtable_resolution_views:
+            register_view_specs(
+                ctx,
+                views=symtable_resolution_views,
                 runtime_profile=self,
                 validate=True,
             )
@@ -3026,6 +3221,18 @@ class DataFusionRuntimeProfile:
                 "physical_codec": self.delta_plan_codec_physical,
                 "logical_codec": self.delta_plan_codec_logical,
             },
+        )
+
+    def _record_extension_parity_validation(self) -> None:
+        if self.diagnostics_sink is None:
+            return
+        payload = dict(self.validate_named_args_extension_parity())
+        payload["event_time_unix_ms"] = int(time.time() * 1000)
+        payload["profile_name"] = self.config_policy_name
+        payload["settings_hash"] = self.settings_hash()
+        self.diagnostics_sink.record_artifact(
+            "datafusion_extension_parity_v1",
+            payload,
         )
 
     def _record_cache_diagnostics(self, ctx: SessionContext) -> None:
@@ -3260,6 +3467,7 @@ class DataFusionRuntimeProfile:
             plan_artifacts_hook = self.plan_collector.hook
         sql_ingest_hook = resolved.sql_ingest_hook
         cache_event_hook = resolved.cache_event_hook
+        substrait_fallback_hook = resolved.substrait_fallback_hook
         if self.diagnostics_sink is not None:
             if capture_explain or explain_hook is not None:
                 explain_hook = _chain_explain_hooks(
@@ -3282,11 +3490,16 @@ class DataFusionRuntimeProfile:
                 cache_event_hook,
                 diagnostics_cache_hook(self.diagnostics_sink),
             )
+            substrait_fallback_hook = _chain_substrait_fallback_hooks(
+                substrait_fallback_hook,
+                diagnostics_substrait_fallback_hook(self.diagnostics_sink),
+            )
         return _ResolvedCompileHooks(
             explain_hook=explain_hook,
             plan_artifacts_hook=plan_artifacts_hook,
             sql_ingest_hook=sql_ingest_hook,
             cache_event_hook=cache_event_hook,
+            substrait_fallback_hook=substrait_fallback_hook,
         )
 
     def _resolve_sql_policy(
@@ -3365,6 +3578,7 @@ class DataFusionRuntimeProfile:
             hooks.plan_artifacts_hook == resolved.plan_artifacts_hook,
             hooks.sql_ingest_hook == resolved.sql_ingest_hook,
             hooks.cache_event_hook == resolved.cache_event_hook,
+            hooks.substrait_fallback_hook == resolved.substrait_fallback_hook,
             sql_policy == resolved.sql_policy,
             sql_policy_name == resolved.sql_policy_name,
             param_allowlist == resolved.param_identifier_allowlist,
@@ -3386,6 +3600,7 @@ class DataFusionRuntimeProfile:
             plan_artifacts_hook=hooks.plan_artifacts_hook,
             sql_ingest_hook=hooks.sql_ingest_hook,
             cache_event_hook=hooks.cache_event_hook,
+            substrait_fallback_hook=hooks.substrait_fallback_hook,
             sql_policy=sql_policy,
             sql_policy_name=sql_policy_name,
         )
@@ -3515,7 +3730,7 @@ class DataFusionRuntimeProfile:
         pyarrow.Table
             Table inventory from information_schema.tables.
         """
-        return self._schema_introspector(ctx).tables_snapshot_table()
+        return tables_snapshot_table(ctx, sql_options=self._sql_options())
 
     def _function_catalog_snapshot(
         self,
@@ -3559,6 +3774,18 @@ class DataFusionRuntimeProfile:
         payload["datafusion.sql_parser.enable_ident_normalization"] = str(
             self.enable_ident_normalization
         ).lower()
+        if self.minimum_parallel_output_files is not None:
+            payload["datafusion.execution.minimum_parallel_output_files"] = str(
+                self.minimum_parallel_output_files
+            )
+        if self.soft_max_rows_per_output_file is not None:
+            payload["datafusion.execution.soft_max_rows_per_output_file"] = str(
+                self.soft_max_rows_per_output_file
+            )
+        if self.maximum_parallel_row_group_writers is not None:
+            payload["datafusion.execution.maximum_parallel_row_group_writers"] = str(
+                self.maximum_parallel_row_group_writers
+            )
         if self.settings_overrides:
             payload.update({str(key): str(value) for key, value in self.settings_overrides.items()})
         catalog_location, catalog_format = self._effective_catalog_autoload()
@@ -3622,7 +3849,6 @@ class DataFusionRuntimeProfile:
             "ast_external_provider": self.ast_external_provider,
             "ast_external_ordering": list(self.ast_external_ordering),
             "ast_external_partitions": ast_partitions or None,
-            "ast_external_unbounded": self.ast_external_unbounded,
             "ast_external_schema_force_view_types": self.ast_external_schema_force_view_types,
             "ast_external_skip_arrow_metadata": self.ast_external_skip_arrow_metadata,
             "ast_external_listing_table_factory_infer_partitions": (
@@ -3647,7 +3873,6 @@ class DataFusionRuntimeProfile:
             "bytecode_external_provider": self.bytecode_external_provider,
             "bytecode_external_ordering": list(self.bytecode_external_ordering),
             "bytecode_external_partitions": bytecode_partitions or None,
-            "bytecode_external_unbounded": self.bytecode_external_unbounded,
             "bytecode_external_schema_force_view_types": (
                 self.bytecode_external_schema_force_view_types
             ),
@@ -3675,6 +3900,9 @@ class DataFusionRuntimeProfile:
             "enable_url_table": self.enable_url_table,
             "cache_enabled": self.cache_enabled,
             "cache_max_columns": self.cache_max_columns,
+            "minimum_parallel_output_files": self.minimum_parallel_output_files,
+            "soft_max_rows_per_output_file": self.soft_max_rows_per_output_file,
+            "maximum_parallel_row_group_writers": self.maximum_parallel_row_group_writers,
             "cache_manager_enabled": self.enable_cache_manager,
             "cache_manager_factory": bool(self.cache_manager_factory),
             "function_factory_enabled": self.enable_function_factory,
@@ -3807,6 +4035,9 @@ class DataFusionRuntimeProfile:
             "output_writes": {
                 "cache_enabled": self.cache_enabled,
                 "cache_max_columns": self.cache_max_columns,
+                "minimum_parallel_output_files": self.minimum_parallel_output_files,
+                "soft_max_rows_per_output_file": self.soft_max_rows_per_output_file,
+                "maximum_parallel_row_group_writers": self.maximum_parallel_row_group_writers,
                 "datafusion_write_policy": _datafusion_write_policy_payload(self.write_policy),
             },
         }
@@ -3821,29 +4052,6 @@ class DataFusionRuntimeProfile:
         """
         return payload_hash(self._telemetry_payload_row(), _TELEMETRY_SCHEMA)
 
-    def collect_metrics(self) -> Mapping[str, object] | None:
-        """Return optional DataFusion metrics payload.
-
-        Returns
-        -------
-        Mapping[str, object] | None
-            Metrics payload when enabled and available.
-        """
-        if not self.enable_metrics or self.metrics_collector is None:
-            return None
-        return self.metrics_collector()
-
-    def collect_traces(self) -> Mapping[str, object] | None:
-        """Return optional DataFusion tracing payload.
-
-        Returns
-        -------
-        Mapping[str, object] | None
-            Tracing payload when enabled and available.
-        """
-        if not self.enable_tracing or self.tracing_collector is None:
-            return None
-        return self.tracing_collector()
 
     def _resolved_config_policy(self) -> DataFusionConfigPolicy | None:
         if self.config_policy is not None:
@@ -3927,6 +4135,9 @@ class DataFusionRuntimeProfile:
             "output_writes": {
                 "cache_enabled": self.cache_enabled,
                 "cache_max_columns": self.cache_max_columns,
+                "minimum_parallel_output_files": self.minimum_parallel_output_files,
+                "soft_max_rows_per_output_file": self.soft_max_rows_per_output_file,
+                "maximum_parallel_row_group_writers": self.maximum_parallel_row_group_writers,
                 "datafusion_write_policy": write_policy_payload,
             },
         }
@@ -3955,6 +4166,36 @@ class DataFusionRuntimeProfile:
         if not self.share_context:
             return
         _SESSION_CONTEXT_CACHE[self._cache_key()] = ctx
+
+
+def collect_datafusion_metrics(
+    profile: DataFusionRuntimeProfile,
+) -> Mapping[str, object] | None:
+    """Return optional DataFusion metrics payload.
+
+    Returns
+    -------
+    Mapping[str, object] | None
+        Metrics payload when enabled and available.
+    """
+    if not profile.enable_metrics or profile.metrics_collector is None:
+        return None
+    return profile.metrics_collector()
+
+
+def collect_datafusion_traces(
+    profile: DataFusionRuntimeProfile,
+) -> Mapping[str, object] | None:
+    """Return optional DataFusion tracing payload.
+
+    Returns
+    -------
+    Mapping[str, object] | None
+        Tracing payload when enabled and available.
+    """
+    if not profile.enable_tracing or profile.tracing_collector is None:
+        return None
+    return profile.tracing_collector()
 
 
 def _rulepack_parameter_counts(rows: Sequence[Mapping[str, object]]) -> dict[str, int]:
@@ -4356,6 +4597,25 @@ def align_table_to_schema(
     )
 
 
+def assert_schema_metadata(
+    table: TableLike | RecordBatchReaderLike,
+    *,
+    schema: SchemaLike,
+) -> None:
+    """Raise when schema metadata does not match the target schema.
+
+    Raises
+    ------
+    ValueError
+        Raised when the schema metadata does not match.
+    """
+    table_schema = pa.schema(table.schema)
+    expected_schema = pa.schema(schema)
+    if not table_schema.equals(expected_schema, check_metadata=True):
+        msg = "Schema metadata mismatch after finalize."
+        raise ValueError(msg)
+
+
 def dataset_schema_from_context(name: str) -> SchemaLike:
     """Return the dataset schema from the DataFusion SessionContext.
 
@@ -4378,10 +4638,38 @@ def dataset_schema_from_context(name: str) -> SchemaLike:
         return nested_schema_for(name, allow_derived=True)
     ctx = DataFusionRuntimeProfile().session_context()
     try:
-        return ctx.table(name).schema()
+        schema = ctx.table(name).schema()
     except (KeyError, RuntimeError, TypeError, ValueError) as exc:
         msg = f"Dataset schema not registered in DataFusion: {name!r}."
         raise KeyError(msg) from exc
+    metadata = table_provider_metadata(id(ctx), table_name=name)
+    if metadata is None or not metadata.metadata:
+        return schema
+    return _schema_with_table_metadata(schema, metadata=metadata.metadata)
+
+
+def _schema_with_table_metadata(
+    schema: SchemaLike,
+    *,
+    metadata: Mapping[str, str],
+) -> SchemaLike:
+    if not metadata:
+        return schema
+    if isinstance(schema, pa.Schema):
+        merged = dict(schema.metadata or {})
+        for key, value in metadata.items():
+            merged.setdefault(key.encode("utf-8"), str(value).encode("utf-8"))
+        return schema.with_metadata(merged)
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            resolved_schema = cast("pa.Schema", resolved)
+            merged = dict(resolved_schema.metadata or {})
+            for key, value in metadata.items():
+                merged.setdefault(key.encode("utf-8"), str(value).encode("utf-8"))
+            return resolved_schema.with_metadata(merged)
+    return schema
 
 
 def read_delta_as_reader(
@@ -4462,6 +4750,9 @@ __all__ = [
     "align_table_to_schema",
     "apply_execution_label",
     "apply_execution_policy",
+    "assert_schema_metadata",
+    "collect_datafusion_metrics",
+    "collect_datafusion_traces",
     "dataset_schema_from_context",
     "dataset_spec_from_context",
     "diagnostics_arrow_ingest_hook",

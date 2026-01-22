@@ -34,7 +34,7 @@ def emit_nodes_ibis(
     bstart = _coalesce_cast(expr, spec.bstart_cols, dtype=pa.int64())
     bend = _coalesce_cast(expr, spec.bend_cols, dtype=pa.int64())
     file_id = _coalesce_cast(expr, spec.file_id_cols, dtype=pa.string())
-    node_kind = ibis.literal(spec.node_kind.value)
+    node_kind = ibis.literal(str(spec.node_kind))
     output = expr.select(
         node_id=node_id,
         node_kind=node_kind,

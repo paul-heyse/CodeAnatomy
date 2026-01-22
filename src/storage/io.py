@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Literal
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from arrowdsl.io.ipc import read_table_ipc_file, write_table_ipc_file, write_table_ipc_stream
-from arrowdsl.io.parquet import read_table_parquet
 from core_types import PathLike, ensure_path
 from ibis_engine.io_bridge import (
     IbisWriteInput,
@@ -90,6 +90,18 @@ def open_compressed_output(
     """
     target = ensure_path(path)
     return pa.CompressedOutputStream(pa.output_stream(str(target)), compression)
+
+
+def read_table_parquet(path: PathLike) -> pa.Table:
+    """Return a Parquet file as an Arrow table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Table loaded from the Parquet file.
+    """
+    target = ensure_path(path)
+    return pq.read_table(str(target))
 
 
 __all__ = [

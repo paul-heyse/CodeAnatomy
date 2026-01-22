@@ -35,7 +35,7 @@ def emit_edges_ibis(
     expr = rel.expr if isinstance(rel, IbisPlan) else rel
     normalized = _normalized_relation_expr(expr, spec=spec)
     edge_id = _edge_id_expr(normalized, spec=spec)
-    edge_kind = ibis.literal(spec.edge_kind.value)
+    edge_kind = ibis.literal(str(spec.edge_kind))
     output = normalized.mutate(edge_id=edge_id, edge_kind=edge_kind)
     if include_keys:
         edge_key = _edge_key_expr(normalized, spec=spec)
@@ -67,7 +67,7 @@ def emit_edges_ibis(
 
 
 def _edge_id_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
-    edge_kind = spec.edge_kind.value
+    edge_kind = str(spec.edge_kind)
     base_id = stable_id_expr("edge", edge_kind, rel.src, rel.dst)
     span_id = stable_id_expr(
         "edge",
@@ -84,7 +84,7 @@ def _edge_id_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
 
 
 def _edge_key_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
-    edge_kind = spec.edge_kind.value
+    edge_kind = str(spec.edge_kind)
     base_key = stable_key_expr(
         edge_kind,
         rel.src,

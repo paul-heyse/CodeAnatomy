@@ -4713,7 +4713,7 @@ Below is a **concrete, drop‑in validator hook** that makes your **relspec comp
 This is the missing enforcement link between:
 
 * your **relationship registry + contracts**, and
-* your **CPG edge_kind contracts** in `cpg/kinds_ultimate.py`.
+* your **CPG edge kind requirements** in `cpg/kind_catalog.py`.
 
 ---
 
@@ -4761,7 +4761,7 @@ class Contract:
 
 This module:
 
-* loads `EDGE_KIND_CONTRACTS` from `cpg/kinds_ultimate.py`,
+* loads edge kind requirements from `cpg/kind_catalog.py`,
 * maps relationship output datasets → edge kinds,
 * validates output contracts against required edge props.
 
@@ -4816,18 +4816,14 @@ class EdgeContractValidationConfig:
 
 def _load_edge_kind_required_props() -> Dict[str, Set[str]]:
     """
-    Loads EDGE_KIND_CONTRACTS from codeintel_cpg.cpg.kinds_ultimate.
+    Load edge kind requirements from codeintel_cpg.cpg.kind_catalog.
 
     Returns:
       { "EDGE_KIND_NAME": {"required_prop_a", ...}, ... }
     """
-    from codeintel_cpg.cpg.kinds_ultimate import EDGE_KIND_CONTRACTS  # lazy import
+    from codeintel_cpg.cpg.kind_catalog import edge_kind_required_props
 
-    out: Dict[str, Set[str]] = {}
-    for edge_kind_enum, contract in EDGE_KIND_CONTRACTS.items():
-        # edge_kind_enum is an Enum value; contract.required_props is dict prop->PropSpec
-        out[str(edge_kind_enum.value)] = set(contract.required_props.keys())
-    return out
+    return edge_kind_required_props()
 
 
 def _stringify_edge_kinds(edge_kinds: Sequence[Any]) -> Tuple[str, ...]:
@@ -4955,7 +4951,7 @@ def validate_relationship_output_contracts_for_edge_kinds(
                 if cfg.error_on_unknown_edge_kind:
                     errors.append(
                         f"[relspec] Unknown edge kind '{ek}' referenced by dataset_to_edge_kinds for '{out_ds}'. "
-                        f"Not found in Ultimate EDGE_KIND_CONTRACTS."
+                        "Not found in the edge kind catalog."
                     )
                 continue
 
@@ -5098,11 +5094,11 @@ Now the DAG fails early if a contract drifts from what your CPG edge kinds requi
 
 ## What this gives you (why it’s “the final enforcement link”)
 
-* Your **Ultimate CPG registry** (`EDGE_KIND_CONTRACTS`) becomes *enforced*, not aspirational.
+* Your **edge kind catalog** (required props) becomes *enforced*, not aspirational.
 * Any refactor that removes a column like `symbol_roles` or forgets to declare `origin` as virtual will fail at the relationship compilation boundary—**before** graph build.
 * This keeps the pipeline inference-driven but still contract-safe.
 
 ---
 
-If you want the next tightening step: I can extend this validator to also check **type correctness** (e.g., `symbol_roles` must be int, `score` float) by comparing `EDGE_KIND_CONTRACTS[prop].type` against `pyarrow.Schema.field(prop).type`, and to validate that your edge emission stage actually injects every declared `virtual_fields` (so “virtual” can’t silently become “missing”).
+If you want the next tightening step: I can extend this validator to also check **type correctness** (e.g., `symbol_roles` must be int, `score` float) by comparing `prop_catalog` value types against `pyarrow.Schema.field(prop).type`, and to validate that your edge emission stage actually injects every declared `virtual_fields` (so “virtual” can’t silently become “missing”).
 

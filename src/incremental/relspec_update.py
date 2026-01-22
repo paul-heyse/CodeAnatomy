@@ -28,10 +28,10 @@ from ibis_engine.query_compiler import (
     dataset_query_for_file_ids,
 )
 from ibis_engine.registry import ReadDatasetParams, read_dataset
-from ibis_engine.scan_io import plan_from_source
+from ibis_engine.sources import plan_from_source
 from incremental.invalidations import validate_schema_identity
 from incremental.types import IncrementalFileChanges, IncrementalImpact
-from normalize.registry_specs import dataset_name_from_alias
+from normalize.registry_runtime import dataset_name_from_alias
 from relspec.engine import PlanResolver
 from relspec.incremental import incremental_spec
 from storage.deltalake import (
@@ -42,7 +42,6 @@ from storage.deltalake import (
 )
 
 if TYPE_CHECKING:
-
     from arrowdsl.core.scan_telemetry import ScanTelemetry
     from relspec.model import DatasetRef
 
@@ -200,8 +199,6 @@ def _partition_specs(
     values: Sequence[str],
 ) -> tuple[dict[str, str], ...]:
     return tuple({column: value} for value in values)
-
-
 
 
 def _relspec_state_dataset_name(name: str) -> str | None:

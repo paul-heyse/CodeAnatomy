@@ -12,7 +12,7 @@ from ibis.expr.types import Table as IbisTable
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from ibis_engine.plan import IbisPlan
-from ibis_engine.scan_io import DatasetSource
+from ibis_engine.sources import DatasetSource
 from relspec.rules.definitions import EvidenceSpec, RuleDefinition
 
 

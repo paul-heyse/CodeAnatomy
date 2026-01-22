@@ -79,6 +79,9 @@ use datafusion_python::context::PySessionContext;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule};
+use deltalake::delta_datafusion::{DeltaTableFactory, DeltaCdfTableProvider, DeltaScanConfig};
+use deltalake::operations::DeltaOps;
+use chrono::{DateTime, Utc};
 
 const ENC_UTF8: i32 = 1;
 const ENC_UTF16: i32 = 2;
@@ -1252,6 +1255,205 @@ fn add_actions_for_paths(
     Ok(adds)
 }
 
+// Scope 1: Delta SQL DDL registration via DeltaTableFactory
+#[pyfunction]
+fn install_delta_table_factory(ctx: PyRef<PySessionContext>, alias: String) -> PyResult<()> {
+    let mut state = ctx.ctx.state_ref().write();
+    let factories = state.table_factories_mut();
+    factories.insert(alias, Arc::new(DeltaTableFactory {}));
+    Ok(())
+}
+
+// Scope 8: Native Delta CDF TableProvider integration
+#[pyclass]
+#[derive(Clone)]
+struct DeltaCdfOptions {
+    #[pyo3(get, set)]
+    starting_version: Option<i64>,
+    #[pyo3(get, set)]
+    ending_version: Option<i64>,
+    #[pyo3(get, set)]
+    starting_timestamp: Option<String>,
+    #[pyo3(get, set)]
+    ending_timestamp: Option<String>,
+    #[pyo3(get, set)]
+    allow_out_of_range: bool,
+}
+
+#[pymethods]
+impl DeltaCdfOptions {
+    #[new]
+    fn new() -> Self {
+        Self {
+            starting_version: None,
+            ending_version: None,
+            starting_timestamp: None,
+            ending_timestamp: None,
+            allow_out_of_range: false,
+        }
+    }
+}
+
+#[pyfunction]
+fn delta_cdf_table_provider(
+    py: Python<'_>,
+    table_uri: String,
+    storage_options: Option<Vec<(String, String)>>,
+    options: DeltaCdfOptions,
+) -> PyResult<PyObject> {
+    let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
+        PyValueError::new_err(format!("Invalid Delta table URI {table_uri:?}: {err}"))
+    })?;
+
+    let mut builder = DeltaTableBuilder::from_url(table_url).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta table: {err}"))
+    })?;
+
+    if let Some(opts) = storage_options {
+        let opts: HashMap<String, String> = opts.into_iter().collect();
+        builder = builder.with_storage_options(opts);
+    }
+
+    let runtime = Runtime::new().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}"))
+    })?;
+
+    let table = runtime.block_on(builder.load()).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to load Delta table: {err}"))
+    })?;
+
+    // Build CdfLoadBuilder with version/timestamp options using DeltaOps
+    let ops = DeltaOps::from(table);
+    let mut cdf_builder = ops.load_cdf();
+
+    if let Some(version) = options.starting_version {
+        cdf_builder = cdf_builder.with_starting_version(version);
+    }
+
+    if let Some(version) = options.ending_version {
+        cdf_builder = cdf_builder.with_ending_version(version);
+    }
+
+    if let Some(timestamp) = options.starting_timestamp {
+        let dt = DateTime::parse_from_rfc3339(&timestamp)
+            .map_err(|err| PyValueError::new_err(format!("Invalid starting timestamp: {err}")))?
+            .with_timezone(&Utc);
+        cdf_builder = cdf_builder.with_starting_timestamp(dt);
+    }
+
+    if let Some(timestamp) = options.ending_timestamp {
+        let dt = DateTime::parse_from_rfc3339(&timestamp)
+            .map_err(|err| PyValueError::new_err(format!("Invalid ending timestamp: {err}")))?
+            .with_timezone(&Utc);
+        cdf_builder = cdf_builder.with_ending_timestamp(dt);
+    }
+
+    if options.allow_out_of_range {
+        cdf_builder = cdf_builder.with_allow_out_of_range();
+    }
+
+    // Create DeltaCdfTableProvider
+    let provider = DeltaCdfTableProvider::try_new(cdf_builder).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta CDF table provider: {err}"))
+    })?;
+
+    let ffi_provider = FFI_TableProvider::new(Arc::new(provider), true, None);
+    let name = CString::new("datafusion_table_provider")
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
+    let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
+    Ok(capsule.into_py(py))
+}
+
+// Scope 9: DeltaScanConfig derived from session settings
+#[pyfunction]
+fn delta_table_provider_from_session(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    table_uri: String,
+    storage_options: Option<Vec<(String, String)>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    // Override options applied after session defaults
+    file_column_name: Option<String>,
+    enable_parquet_pushdown: Option<bool>,
+    schema_force_view_types: Option<bool>,
+    wrap_partition_values: Option<bool>,
+    schema_ipc: Option<Vec<u8>>,
+) -> PyResult<PyObject> {
+    let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
+        PyValueError::new_err(format!("Invalid Delta table URI {table_uri:?}: {err}"))
+    })?;
+
+    let mut builder = DeltaTableBuilder::from_url(table_url).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta table: {err}"))
+    })?;
+
+    if let Some(options) = storage_options {
+        let options: HashMap<String, String> = options.into_iter().collect();
+        builder = builder.with_storage_options(options);
+    }
+
+    if let Some(version) = version {
+        builder = builder.with_version(version);
+    }
+
+    if let Some(timestamp) = timestamp {
+        builder = builder.with_datestring(timestamp).map_err(|err| {
+            PyValueError::new_err(format!("Invalid Delta timestamp: {err}"))
+        })?;
+    }
+
+    let runtime = Runtime::new().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}"))
+    })?;
+
+    let table = runtime.block_on(builder.load()).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to load Delta table: {err}"))
+    })?;
+
+    let snapshot = table.snapshot().map_err(|err| {
+        PyRuntimeError::new_err(format!("Delta table snapshot unavailable: {err}"))
+    })?;
+    let snapshot = snapshot.snapshot().clone();
+    let log_store = table.log_store();
+
+    // 1. Use DeltaScanConfig::new_from_session(&ctx.ctx.state()) as base config
+    let state_ref = ctx.ctx.state();
+    let mut scan_config = DeltaScanConfig::new_from_session(state_ref.as_ref());
+
+    // 2. Apply overrides on top
+    if let Some(name) = file_column_name {
+        scan_config.file_column_name = Some(name);
+    }
+
+    if let Some(pushdown) = enable_parquet_pushdown {
+        scan_config.enable_parquet_pushdown = pushdown;
+    }
+
+    if let Some(force_view) = schema_force_view_types {
+        scan_config.schema_force_view_types = force_view;
+    }
+
+    if let Some(wrap) = wrap_partition_values {
+        scan_config.wrap_partition_values = wrap;
+    }
+
+    if let Some(schema_ipc) = schema_ipc {
+        let schema = schema_from_ipc(schema_ipc)?;
+        scan_config.schema = Some(schema);
+    }
+
+    let provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta table provider: {err}"))
+    })?;
+
+    let ffi_provider = FFI_TableProvider::new(Arc::new(provider), true, None);
+    let name = CString::new("datafusion_table_provider")
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
+    let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
+    Ok(capsule.into_py(py))
+}
+
 fn normalize_position_encoding(value: &str) -> i32 {
     let upper = value.trim().to_uppercase();
     if upper.is_empty() {
@@ -1671,5 +1873,9 @@ fn datafusion_ext(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(table_dfschema_tree, module)?)?;
     module.add_function(wrap_pyfunction!(install_schema_evolution_adapter_factory, module)?)?;
     module.add_function(wrap_pyfunction!(registry_catalog_provider_factory, module)?)?;
+    module.add_class::<DeltaCdfOptions>()?;
+    module.add_function(wrap_pyfunction!(install_delta_table_factory, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_cdf_table_provider, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_table_provider_from_session, module)?)?;
     Ok(())
 }

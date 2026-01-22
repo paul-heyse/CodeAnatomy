@@ -1,1 +1,1 @@
-"""ArrowDSL IO helpers for Parquet and IPC."""
+"""ArrowDSL IO helpers for IPC."""

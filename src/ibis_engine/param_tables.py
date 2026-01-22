@@ -154,11 +154,7 @@ class ParamTableRegistry:
         """
         tables: dict[str, Table] = {}
         for logical_name in self.artifacts:
-            table_name = param_table_name(self.policy, logical_name)
-            tables[logical_name] = ibis.memtable(
-                self.artifacts[logical_name].table,
-                name=table_name,
-            )
+            tables[logical_name] = ibis.memtable(self.artifacts[logical_name].table)
         return tables
 
 

@@ -385,6 +385,26 @@ def read_dataset(
     ibis.expr.types.Table
         Ibis table expression for the dataset.
     """
+    if params.filesystem is not None and hasattr(backend, "register_filesystem"):
+        backend_fs = cast("FilesystemBackend", backend)
+        backend_fs.register_filesystem(params.filesystem)
+    if params.dataset_format == "delta":
+        from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
+
+        options = dict(params.read_options or {})
+        table_name = params.table_name or options.pop("table_name", None)
+        storage_options = params.storage_options or options.pop("storage_options", None)
+        version = options.pop("version", None)
+        return read_delta_ibis(
+            backend,
+            params.path,
+            options=IbisDeltaReadOptions(
+                table_name=table_name,
+                storage_options=storage_options,
+                version=version if isinstance(version, int) else None,
+                options=options or None,
+            ),
+        )
     options = dict(params.read_options or {})
     if params.table_name is not None:
         options.setdefault("table_name", params.table_name)
@@ -396,9 +416,6 @@ def read_dataset(
         and params.partitioning.lower() == "hive"
     ):
         options.setdefault("hive_partitioning", True)
-    if params.filesystem is not None and hasattr(backend, "register_filesystem"):
-        backend_fs = cast("FilesystemBackend", backend)
-        backend_fs.register_filesystem(params.filesystem)
     reader = _resolve_reader(backend, params.dataset_format)
     return reader(params.path, **options)
 

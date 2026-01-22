@@ -16,7 +16,7 @@ from arrowdsl.schema.metadata import ordering_from_schema
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
-from ibis_engine.scan_io import plan_from_source
+from ibis_engine.sources import plan_from_source
 from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 
 

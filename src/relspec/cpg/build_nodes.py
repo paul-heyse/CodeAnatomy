@@ -26,10 +26,11 @@ from arrowdsl.schema.schema import empty_table
 from cpg.constants import CpgBuildArtifacts, concat_quality_tables, quality_from_ids
 from cpg.spec_registry import node_plan_specs
 from cpg.specs import NodePlanSpec
-from cpg.table_utils import align_table_to_schema, assert_schema_metadata
 from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.runtime import (
     AdapterExecutionPolicy,
+    align_table_to_schema,
+    assert_schema_metadata,
     dataset_schema_from_context,
     dataset_spec_from_context,
 )
@@ -38,9 +39,9 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
-from ibis_engine.scan_io import DatasetSource
 from ibis_engine.schema_utils import ibis_null_literal
 from ibis_engine.sources import (
+    DatasetSource,
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
     register_ibis_table,

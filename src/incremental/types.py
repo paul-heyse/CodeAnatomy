@@ -21,7 +21,7 @@ class IncrementalImpact:
 
 @dataclass(frozen=True)
 class IncrementalFileChanges:
-    """File change sets derived from snapshot diffs."""
+    """File change sets derived from Delta CDF updates."""
 
     changed_file_ids: tuple[str, ...] = ()
     deleted_file_ids: tuple[str, ...] = ()

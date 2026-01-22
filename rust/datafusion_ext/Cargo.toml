@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 arrow = "57.1.0"
 arrow-ipc = "57.1.0"
 blake2 = "0.10"
+chrono = "0.4"
 datafusion = { version = "51.0.0", default-features = false, features = ["parquet"] }
 datafusion-catalog-listing = "51.0.0"
 datafusion-common = "51.0.0"

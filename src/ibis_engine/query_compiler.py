@@ -141,10 +141,7 @@ def dataset_query_for_file_ids(
         )
     if len(file_ids) >= resolved_options.param_table_threshold:
         key_column = resolved_options.param_key_column or resolved_options.file_id_column
-        table_name = resolved_options.param_table_name or (
-            f"{resolved_options.param_table_prefix}{key_column}"
-        )
-        param_table = ibis.memtable({key_column: list(file_ids)}, name=table_name)
+        param_table = ibis.memtable({key_column: list(file_ids)})
         return IbisQuerySpec(
             projection=IbisProjectionSpec(base=tuple(columns)),
             macros=(

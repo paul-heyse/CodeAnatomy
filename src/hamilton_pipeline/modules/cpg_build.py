@@ -27,14 +27,6 @@ from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.constants import CpgBuildArtifacts
-from cpg.symtable_resolution import build_binding_resolution_table
-from cpg.symtable_views import (
-    symtable_bindings_df,
-    symtable_def_sites_df,
-    symtable_type_param_edges_df,
-    symtable_type_params_df,
-    symtable_use_sites_df,
-)
 from datafusion_engine.extract_ids import repo_file_id_spec
 from datafusion_engine.nested_tables import (
     ViewReference,
@@ -48,6 +40,14 @@ from datafusion_engine.runtime import (
     record_view_definition,
 )
 from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_engine.symtable_views import (
+    symtable_binding_resolutions_df,
+    symtable_bindings_df,
+    symtable_def_sites_df,
+    symtable_type_param_edges_df,
+    symtable_type_params_df,
+    symtable_use_sites_df,
+)
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import (
@@ -79,7 +79,7 @@ from ibis_engine.param_tables import (
 from ibis_engine.params_bridge import IbisParamRegistry, registry_from_specs, specs_from_rel_ops
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import datafusion_context
-from ibis_engine.scan_io import DatasetSource
+from ibis_engine.sources import DatasetSource
 from incremental.publish import (
     publish_cpg_edges,
     publish_cpg_nodes,
@@ -1995,42 +1995,21 @@ def cpg_extra_inputs(
 def symtable_binding_resolutions(
     cpg_base_inputs: CpgBaseInputs,
     engine_session: EngineSession,
-) -> TableLike:
+) -> ViewReference:
     """Resolve symtable binding references to outer scopes.
 
     Returns
     -------
-    TableLike
-        Binding resolution edges with ambiguity grouping.
+    ViewReference
+        Binding resolution view with ambiguity grouping.
     """
-    backend = engine_session.ibis_backend
-    sym_inputs = cpg_base_inputs.symtable_build_inputs
-    scopes = _materialize_symtable_source(
-        sym_inputs.symtable_scopes,
-        backend=backend,
+    _ = cpg_base_inputs.symtable_build_inputs
+    return _register_view_reference(
+        engine_session.ibis_backend,
+        name="symtable_binding_resolutions",
+        builder=symtable_binding_resolutions_df,
+        runtime_profile=engine_session.df_profile,
     )
-    scope_edges = _materialize_symtable_source(
-        sym_inputs.symtable_scope_edges,
-        backend=backend,
-    )
-    bindings = _materialize_symtable_source(
-        sym_inputs.symtable_bindings,
-        backend=backend,
-    )
-    return build_binding_resolution_table(scopes, scope_edges, bindings)
-
-
-def _materialize_symtable_source(
-    source: TableLike | DatasetSource | ViewReference,
-    *,
-    backend: BaseBackend | None,
-) -> TableLike:
-    if isinstance(source, ViewReference):
-        return materialize_view_reference(backend, source)
-    coerced = coerce_table_like(source)
-    if isinstance(coerced, RecordBatchReaderLike):
-        return coerced.read_all()
-    return coerced
 
 
 @tag(layer="cpg", artifact="cpg_node_inputs", kind="bundle")
@@ -2082,7 +2061,7 @@ def cpg_edge_inputs(
     relationship_output_tables: RelationshipOutputTables,
     cpg_base_inputs: CpgBaseInputs,
     cpg_extra_inputs: CpgExtraInputs,
-    symtable_binding_resolutions: TableLike,
+    symtable_binding_resolutions: TableLike | DatasetSource | ViewReference,
 ) -> EdgeBuildInputs:
     """Build edge input tables from base and optional inputs.
 

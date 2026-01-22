@@ -22,12 +22,12 @@ from extract.helpers import (
     attrs_map,
     file_identity_row,
     ibis_plan_from_rows,
-    iter_contexts,
     materialize_extract_plan,
     span_dict,
     text_from_file_ctx,
 )
 from extract.schema_ops import ExtractNormalizeOptions
+from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -462,10 +462,10 @@ def _symtable_file_row(
         "repo": options.repo_id,
         "path": file_ctx.path,
         "file_id": file_ctx.file_id,
+        "file_sha256": file_ctx.file_sha256,
         "blocks": blocks,
         "attrs": attrs_map(
             {
-                "file_sha256": file_ctx.file_sha256,
                 "compile_type": options.compile_type,
             }
         ),
@@ -581,8 +581,16 @@ def _collect_symtable_file_rows(
     file_contexts: Iterable[FileContext] | None,
     *,
     options: SymtableExtractOptions,
+    ctx: ExecutionContext | None,
 ) -> list[dict[str, object]]:
-    contexts = list(iter_contexts(repo_files, file_contexts))
+    contexts = list(
+        iter_worklist_contexts(
+            repo_files,
+            output_table="symtable_files_v1",
+            ctx=ctx,
+            file_contexts=file_contexts,
+        )
+    )
     max_workers = _effective_max_workers(options)
     if max_workers <= 1:
         return [
@@ -636,6 +644,7 @@ def extract_symtable(
         repo_files,
         exec_context.file_contexts,
         options=normalized_options,
+        ctx=exec_context.ctx,
     )
     plan = _build_symtable_file_plan(
         rows,
@@ -679,6 +688,7 @@ def extract_symtable_plans(
         repo_files,
         exec_context.file_contexts,
         options=normalized_options,
+        ctx=exec_context.ctx,
     )
     return {
         "symtable_files": _build_symtable_file_plan(

@@ -11,6 +11,7 @@ class PlanCacheKey:
 
     plan_hash: str
     profile_hash: str
+    substrait_hash: str
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class PlanCacheEntry:
 
     plan_hash: str
     profile_hash: str
+    substrait_hash: str
     plan_bytes: bytes
     compilation_lane: str | None = None
 
@@ -30,7 +32,11 @@ class PlanCacheEntry:
         PlanCacheKey
             Cache key derived from the entry hashes.
         """
-        return PlanCacheKey(plan_hash=self.plan_hash, profile_hash=self.profile_hash)
+        return PlanCacheKey(
+            plan_hash=self.plan_hash,
+            profile_hash=self.profile_hash,
+            substrait_hash=self.substrait_hash,
+        )
 
 
 @dataclass

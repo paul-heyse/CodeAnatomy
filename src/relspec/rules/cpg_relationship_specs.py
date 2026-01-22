@@ -6,7 +6,15 @@ from collections.abc import Mapping
 from functools import cache
 
 from arrowdsl.spec.expr_ir import ExprIR
-from cpg.kinds_ultimate import EdgeKind
+from cpg.kind_catalog import (
+    EDGE_KIND_BINDING_RESOLVES_TO,
+    EDGE_KIND_DEF_SITE_OF,
+    EDGE_KIND_PY_CALLS_QNAME,
+    EDGE_KIND_SCOPE_BINDS,
+    EDGE_KIND_SCOPE_PARENT,
+    EDGE_KIND_TYPE_PARAM_OF,
+    EDGE_KIND_USE_SITE_OF,
+)
 from relspec.model import HashJoinConfig, ProjectConfig, RuleKind
 from relspec.rules.cpg_relationship_templates import (
     EdgeDefinitionSpec,
@@ -119,7 +127,7 @@ def _base_definition_specs() -> tuple[RuleDefinitionSpec, ...]:
             confidence_policy="qname_fallback",
             ambiguity_policy="qname_fallback",
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.PY_CALLS_QNAME,
+                edge_kind=EDGE_KIND_PY_CALLS_QNAME,
                 src_cols=("call_id",),
                 dst_cols=("qname_id",),
                 origin="qnp",
@@ -136,7 +144,7 @@ def _base_definition_specs() -> tuple[RuleDefinitionSpec, ...]:
             inputs=("symtable_scope_edges",),
             project=ProjectConfig(select=("child_scope_id", "parent_scope_id", "path")),
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.SCOPE_PARENT,
+                edge_kind=EDGE_KIND_SCOPE_PARENT,
                 src_cols=("child_scope_id",),
                 dst_cols=("parent_scope_id",),
                 origin="symtable",
@@ -151,7 +159,7 @@ def _base_definition_specs() -> tuple[RuleDefinitionSpec, ...]:
             inputs=("symtable_bindings",),
             project=ProjectConfig(select=("scope_id", "binding_id", "path", "binding_kind")),
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.SCOPE_BINDS,
+                edge_kind=EDGE_KIND_SCOPE_BINDS,
                 src_cols=("scope_id",),
                 dst_cols=("binding_id",),
                 origin="symtable",
@@ -176,7 +184,7 @@ def _base_definition_specs() -> tuple[RuleDefinitionSpec, ...]:
                 )
             ),
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.BINDING_RESOLVES_TO,
+                edge_kind=EDGE_KIND_BINDING_RESOLVES_TO,
                 src_cols=("binding_id",),
                 dst_cols=("outer_binding_id",),
                 origin="symtable",
@@ -202,7 +210,7 @@ def _base_definition_specs() -> tuple[RuleDefinitionSpec, ...]:
                 exprs={"confidence": ExprIR(op="field", name="anchor_confidence")},
             ),
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.DEF_SITE_OF,
+                edge_kind=EDGE_KIND_DEF_SITE_OF,
                 src_cols=("def_site_id",),
                 dst_cols=("binding_id",),
                 origin="symtable",
@@ -230,7 +238,7 @@ def _base_definition_specs() -> tuple[RuleDefinitionSpec, ...]:
                 exprs={"confidence": ExprIR(op="field", name="anchor_confidence")},
             ),
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.USE_SITE_OF,
+                edge_kind=EDGE_KIND_USE_SITE_OF,
                 src_cols=("use_site_id",),
                 dst_cols=("binding_id",),
                 origin="symtable",
@@ -247,7 +255,7 @@ def _base_definition_specs() -> tuple[RuleDefinitionSpec, ...]:
             inputs=("symtable_type_param_edges",),
             project=ProjectConfig(select=("type_param_id", "owner_scope_id", "path", "scope_type")),
             edge=EdgeDefinitionSpec(
-                edge_kind=EdgeKind.TYPE_PARAM_OF,
+                edge_kind=EDGE_KIND_TYPE_PARAM_OF,
                 src_cols=("type_param_id",),
                 dst_cols=("owner_scope_id",),
                 origin="symtable",
@@ -485,7 +493,7 @@ def _edge_emit_payload(edge: EdgeDefinitionSpec | None) -> EdgeEmitPayload | Non
     if edge is None:
         return None
     return EdgeEmitPayload(
-        edge_kind=edge.edge_kind.value,
+        edge_kind=str(edge.edge_kind),
         src_cols=edge.src_cols,
         dst_cols=edge.dst_cols,
         origin=edge.origin,

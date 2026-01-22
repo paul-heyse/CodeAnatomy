@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
+from cpg import kind_catalog
 from cpg.constants import ROLE_FLAG_SPECS
-from cpg.contract_map import PropFieldInput, prop_fields_from_contract
-from cpg.kinds_ultimate import EntityKind, NodeKind
+from cpg.contract_map import prop_fields_from_catalog
+from cpg.kind_catalog import EntityKind
 from cpg.specs import (
     INCLUDE_HEAVY_JSON,
     TRANSFORM_EXPR_CONTEXT,
@@ -17,17 +20,21 @@ from cpg.specs import (
     PropTableSpec,
 )
 
+if TYPE_CHECKING:
+    from cpg.contract_map import PropFieldInput
+    from cpg.kind_catalog import NodeKindId
+
 
 @dataclass(frozen=True)
 class EntityFamilySpec:
     """Spec for a node/prop family with shared identity columns."""
 
     name: str
-    node_kind: NodeKind
+    node_kind: NodeKindId
     id_cols: tuple[str, ...]
     node_table: str | None
     node_option_flag: str | None
-    prop_fields: tuple[PropFieldSpec, ...] = ()
+    prop_source_map: Mapping[str, PropFieldInput] = field(default_factory=dict)
     prop_option_flag: str | None = "include_node_props"
     prop_table: str | None = None
     node_name: str | None = None
@@ -62,8 +69,17 @@ class EntityFamilySpec:
             ),
         )
 
-    def to_prop_table(self) -> PropTableSpec | None:
+    def to_prop_table(
+        self,
+        *,
+        source_columns: Sequence[str] | None = None,
+    ) -> PropTableSpec | None:
         """Return a PropTableSpec for this family when configured.
+
+        Parameters
+        ----------
+        source_columns:
+            Optional list of available source columns for validation.
 
         Returns
         -------
@@ -73,6 +89,10 @@ class EntityFamilySpec:
         table = self.prop_table or self.node_table
         if table is None or self.prop_option_flag is None:
             return None
+        prop_fields = prop_fields_from_catalog(
+            source_map=self.prop_source_map,
+            source_columns=source_columns,
+        )
         return PropTableSpec(
             name=self.prop_name or self.name,
             option_flag=self.prop_option_flag,
@@ -80,27 +100,28 @@ class EntityFamilySpec:
             entity_kind=EntityKind.NODE,
             id_cols=self.id_cols,
             node_kind=self.node_kind,
-            fields=self.prop_fields,
+            fields=prop_fields,
             include_if_id=self.prop_include_if_id,
         )
 
 
-def _fields(
-    node_kind: NodeKind,
-    source_map: dict[str, PropFieldInput],
-) -> tuple[PropFieldSpec, ...]:
-    return prop_fields_from_contract(node_kind=node_kind, source_map=source_map)
+def _prop_source_map(
+    node_kind: NodeKindId,
+    source_map: Mapping[str, PropFieldInput],
+) -> Mapping[str, PropFieldInput]:
+    _ = node_kind
+    return dict(source_map)
 
 
 ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     EntityFamilySpec(
         name="file",
-        node_kind=NodeKind.PY_FILE,
+        node_kind=kind_catalog.NODE_KIND_PY_FILE,
         id_cols=("file_id",),
         node_table="repo_files_nodes",
         node_option_flag="include_file_nodes",
-        prop_fields=_fields(
-            NodeKind.PY_FILE,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_PY_FILE,
             {
                 "path": "path",
                 "size_bytes": "size_bytes",
@@ -116,12 +137,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="ref",
-        node_kind=NodeKind.CST_REF,
+        node_kind=kind_catalog.NODE_KIND_CST_REF,
         id_cols=("ref_id",),
         node_table="cst_refs",
         node_option_flag="include_ref_nodes",
-        prop_fields=_fields(
-            NodeKind.CST_REF,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_CST_REF,
             {
                 "ref_text": "ref_text",
                 "ref_kind": "ref_kind",
@@ -144,12 +165,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="import_alias",
-        node_kind=NodeKind.CST_IMPORT_ALIAS,
+        node_kind=kind_catalog.NODE_KIND_CST_IMPORT_ALIAS,
         id_cols=("import_alias_id", "import_id"),
         node_table="cst_imports",
         node_option_flag="include_import_alias_nodes",
-        prop_fields=_fields(
-            NodeKind.CST_IMPORT_ALIAS,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_CST_IMPORT_ALIAS,
             {
                 "import_kind": "kind",
                 "module": "module",
@@ -167,12 +188,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="callsite",
-        node_kind=NodeKind.CST_CALLSITE,
+        node_kind=kind_catalog.NODE_KIND_CST_CALLSITE,
         id_cols=("call_id",),
         node_table="cst_callsites",
         node_option_flag="include_callsite_nodes",
-        prop_fields=_fields(
-            NodeKind.CST_CALLSITE,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_CST_CALLSITE,
             {
                 "callee_shape": "callee_shape",
                 "callee_text": "callee_text",
@@ -198,12 +219,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="definition",
-        node_kind=NodeKind.CST_DEF,
+        node_kind=kind_catalog.NODE_KIND_CST_DEF,
         id_cols=("def_id",),
         node_table="cst_defs",
         node_option_flag="include_def_nodes",
-        prop_fields=_fields(
-            NodeKind.CST_DEF,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_CST_DEF,
             {
                 "def_kind": "def_kind_norm",
                 "name": "name",
@@ -230,12 +251,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="sym_scope",
-        node_kind=NodeKind.SYM_SCOPE,
+        node_kind=kind_catalog.NODE_KIND_SYM_SCOPE,
         id_cols=("scope_id",),
         node_table="symtable_scopes",
         node_option_flag="include_sym_scope_nodes",
-        prop_fields=_fields(
-            NodeKind.SYM_SCOPE,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_SYM_SCOPE,
             {
                 "scope_id": "scope_id",
                 "scope_type": "scope_type",
@@ -260,12 +281,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="sym_symbol",
-        node_kind=NodeKind.SYM_SYMBOL,
+        node_kind=kind_catalog.NODE_KIND_SYM_SYMBOL,
         id_cols=("sym_symbol_id",),
         node_table="symtable_symbols",
         node_option_flag="include_sym_symbol_nodes",
-        prop_fields=_fields(
-            NodeKind.SYM_SYMBOL,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_SYM_SYMBOL,
             {
                 "scope_id": "scope_id",
                 "name": "symbol_name",
@@ -292,12 +313,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="py_scope",
-        node_kind=NodeKind.PY_SCOPE,
+        node_kind=kind_catalog.NODE_KIND_PY_SCOPE,
         id_cols=("scope_id",),
         node_table="symtable_scopes",
         node_option_flag="include_py_scope_nodes",
-        prop_fields=_fields(
-            NodeKind.PY_SCOPE,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_PY_SCOPE,
             {
                 "scope_id": "scope_id",
                 "scope_type": "scope_type",
@@ -309,12 +330,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="py_binding",
-        node_kind=NodeKind.PY_BINDING,
+        node_kind=kind_catalog.NODE_KIND_PY_BINDING,
         id_cols=("binding_id",),
         node_table="symtable_bindings",
         node_option_flag="include_py_binding_nodes",
-        prop_fields=_fields(
-            NodeKind.PY_BINDING,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_PY_BINDING,
             {
                 "binding_id": "binding_id",
                 "scope_id": "scope_id",
@@ -331,12 +352,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="py_def_site",
-        node_kind=NodeKind.PY_DEF_SITE,
+        node_kind=kind_catalog.NODE_KIND_PY_DEF_SITE,
         id_cols=("def_site_id",),
         node_table="symtable_def_sites",
         node_option_flag="include_py_def_site_nodes",
-        prop_fields=_fields(
-            NodeKind.PY_DEF_SITE,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_PY_DEF_SITE,
             {
                 "binding_id": "binding_id",
                 "name": "name",
@@ -353,12 +374,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="py_use_site",
-        node_kind=NodeKind.PY_USE_SITE,
+        node_kind=kind_catalog.NODE_KIND_PY_USE_SITE,
         id_cols=("use_site_id",),
         node_table="symtable_use_sites",
         node_option_flag="include_py_use_site_nodes",
-        prop_fields=_fields(
-            NodeKind.PY_USE_SITE,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_PY_USE_SITE,
             {
                 "binding_id": "binding_id",
                 "name": "name",
@@ -375,12 +396,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="type_param",
-        node_kind=NodeKind.TYPE_PARAM,
+        node_kind=kind_catalog.NODE_KIND_TYPE_PARAM,
         id_cols=("type_param_id",),
         node_table="symtable_type_params",
         node_option_flag="include_type_param_nodes",
-        prop_fields=_fields(
-            NodeKind.TYPE_PARAM,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_TYPE_PARAM,
             {
                 "name": "name",
                 "variance": "variance",
@@ -391,12 +412,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="qualified_name",
-        node_kind=NodeKind.PY_QUALIFIED_NAME,
+        node_kind=kind_catalog.NODE_KIND_PY_QUALIFIED_NAME,
         id_cols=("qname_id",),
         node_table="dim_qualified_names",
         node_option_flag="include_qname_nodes",
-        prop_fields=_fields(
-            NodeKind.PY_QUALIFIED_NAME,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_PY_QUALIFIED_NAME,
             {"qname": "qname"},
         ),
         path_cols=("path",),
@@ -405,12 +426,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="scip_symbol",
-        node_kind=NodeKind.SCIP_SYMBOL,
+        node_kind=kind_catalog.NODE_KIND_SCIP_SYMBOL,
         id_cols=("symbol",),
         node_table="scip_symbols",
         node_option_flag="include_symbol_nodes",
-        prop_fields=_fields(
-            NodeKind.SCIP_SYMBOL,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_SCIP_SYMBOL,
             {
                 "symbol": "symbol",
                 "display_name": "display_name",
@@ -437,12 +458,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="scip_external_symbol",
-        node_kind=NodeKind.SCIP_SYMBOL,
+        node_kind=kind_catalog.NODE_KIND_SCIP_SYMBOL,
         id_cols=("symbol",),
         node_table=None,
         node_option_flag=None,
-        prop_fields=_fields(
-            NodeKind.SCIP_SYMBOL,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_SCIP_SYMBOL,
             {
                 "symbol": "symbol",
                 "display_name": "display_name",
@@ -470,12 +491,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="tree_sitter_node",
-        node_kind=NodeKind.TS_NODE,
+        node_kind=kind_catalog.NODE_KIND_TS_NODE,
         id_cols=("ts_node_id",),
         node_table="ts_nodes",
         node_option_flag="include_tree_sitter_nodes",
-        prop_fields=_fields(
-            NodeKind.TS_NODE,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_TS_NODE,
             {
                 "ts_type": "ts_type",
                 "ts_kind_id": "ts_kind_id",
@@ -497,12 +518,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="tree_sitter_error",
-        node_kind=NodeKind.TS_ERROR,
+        node_kind=kind_catalog.NODE_KIND_TS_ERROR,
         id_cols=("ts_error_id",),
         node_table="ts_errors",
         node_option_flag="include_tree_sitter_nodes",
-        prop_fields=_fields(
-            NodeKind.TS_ERROR,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_TS_ERROR,
             {
                 "ts_type": "ts_type",
                 "is_error": "is_error",
@@ -515,12 +536,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="tree_sitter_missing",
-        node_kind=NodeKind.TS_MISSING,
+        node_kind=kind_catalog.NODE_KIND_TS_MISSING,
         id_cols=("ts_missing_id",),
         node_table="ts_missing",
         node_option_flag="include_tree_sitter_nodes",
-        prop_fields=_fields(
-            NodeKind.TS_MISSING,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_TS_MISSING,
             {
                 "ts_type": "ts_type",
                 "is_missing": "is_missing",
@@ -533,12 +554,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="type_expr",
-        node_kind=NodeKind.TYPE_EXPR,
+        node_kind=kind_catalog.NODE_KIND_TYPE_EXPR,
         id_cols=("type_expr_id",),
         node_table="type_exprs_norm",
         node_option_flag="include_type_nodes",
-        prop_fields=_fields(
-            NodeKind.TYPE_EXPR,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_TYPE_EXPR,
             {
                 "expr_text": "expr_text",
                 "expr_kind": "expr_kind",
@@ -553,12 +574,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="type",
-        node_kind=NodeKind.TYPE,
+        node_kind=kind_catalog.NODE_KIND_TYPE,
         id_cols=("type_id",),
         node_table="types_norm",
         node_option_flag="include_type_nodes",
-        prop_fields=_fields(
-            NodeKind.TYPE,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_TYPE,
             {
                 "type_repr": "type_repr",
                 "type_form": "type_form",
@@ -572,12 +593,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="diagnostic",
-        node_kind=NodeKind.DIAG,
+        node_kind=kind_catalog.NODE_KIND_DIAG,
         id_cols=("diag_id",),
         node_table="diagnostics_norm",
         node_option_flag="include_diagnostic_nodes",
-        prop_fields=_fields(
-            NodeKind.DIAG,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_DIAG,
             {
                 "severity": "severity",
                 "message": "message",
@@ -593,12 +614,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="runtime_object",
-        node_kind=NodeKind.RT_OBJECT,
+        node_kind=kind_catalog.NODE_KIND_RT_OBJECT,
         id_cols=("rt_id",),
         node_table="rt_objects",
         node_option_flag="include_runtime_nodes",
-        prop_fields=_fields(
-            NodeKind.RT_OBJECT,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_RT_OBJECT,
             {
                 "rt_id": "rt_id",
                 "module": "module",
@@ -612,12 +633,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="runtime_signature",
-        node_kind=NodeKind.RT_SIGNATURE,
+        node_kind=kind_catalog.NODE_KIND_RT_SIGNATURE,
         id_cols=("sig_id",),
         node_table="rt_signatures",
         node_option_flag="include_runtime_nodes",
-        prop_fields=_fields(
-            NodeKind.RT_SIGNATURE,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_RT_SIGNATURE,
             {
                 "sig_id": "sig_id",
                 "signature": "signature",
@@ -627,12 +648,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="runtime_param",
-        node_kind=NodeKind.RT_SIGNATURE_PARAM,
+        node_kind=kind_catalog.NODE_KIND_RT_SIGNATURE_PARAM,
         id_cols=("param_id",),
         node_table="rt_signature_params",
         node_option_flag="include_runtime_nodes",
-        prop_fields=_fields(
-            NodeKind.RT_SIGNATURE_PARAM,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_RT_SIGNATURE_PARAM,
             {
                 "param_id": "param_id",
                 "name": "name",
@@ -645,12 +666,12 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
     ),
     EntityFamilySpec(
         name="runtime_member",
-        node_kind=NodeKind.RT_MEMBER,
+        node_kind=kind_catalog.NODE_KIND_RT_MEMBER,
         id_cols=("member_id",),
         node_table="rt_members",
         node_option_flag="include_runtime_nodes",
-        prop_fields=_fields(
-            NodeKind.RT_MEMBER,
+        prop_source_map=_prop_source_map(
+            kind_catalog.NODE_KIND_RT_MEMBER,
             {
                 "member_id": "member_id",
                 "name": "name",
@@ -680,8 +701,16 @@ def node_plan_specs() -> tuple[NodePlanSpec, ...]:
     return tuple(specs)
 
 
-def prop_table_specs() -> tuple[PropTableSpec, ...]:
+def prop_table_specs(
+    *,
+    source_columns_lookup: Callable[[str], Sequence[str] | None] | None = None,
+) -> tuple[PropTableSpec, ...]:
     """Return prop table specs for all prop-emitting families.
+
+    Parameters
+    ----------
+    source_columns_lookup:
+        Optional function returning source columns for a table name.
 
     Returns
     -------
@@ -690,7 +719,11 @@ def prop_table_specs() -> tuple[PropTableSpec, ...]:
     """
     specs: list[PropTableSpec] = []
     for spec in ENTITY_FAMILY_SPECS:
-        table = spec.to_prop_table()
+        table_name = spec.prop_table or spec.node_table
+        source_columns = None
+        if table_name is not None and source_columns_lookup is not None:
+            source_columns = source_columns_lookup(table_name)
+        table = spec.to_prop_table(source_columns=source_columns)
         if table is not None:
             specs.append(table)
     return tuple(specs)

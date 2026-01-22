@@ -24,8 +24,8 @@ from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
-from ibis_engine.scan_io import DatasetSource
 from ibis_engine.sources import (
+    DatasetSource,
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
     register_ibis_view,
@@ -34,10 +34,15 @@ from ibis_engine.sources import (
 )
 from normalize.ibis_bridge import resolve_plan_builder_ibis
 from normalize.ibis_plan_builders import IbisPlanCatalog
-from normalize.registry_specs import dataset_schema
-from normalize.registry_validation import validate_rule_specs
+from normalize.registry_runtime import (
+    NORMALIZE_ALIAS_META,
+    NORMALIZE_STAGE_META,
+    dataset_alias,
+    dataset_schema,
+)
 from normalize.rule_defaults import resolve_rule_defaults
 from normalize.rule_factories import build_rule_definitions_from_specs
+from normalize.runtime_validation import validate_rule_specs
 from relspec.graph import RuleSelectors, order_rules_by_evidence
 from relspec.model import AmbiguityPolicy, ConfidencePolicy
 from relspec.normalize.rule_registry_specs import rule_family_specs
@@ -394,6 +399,14 @@ def _normalize_output_schema(rule: ResolvedNormalizeRule) -> SchemaLike | None:
         return None
 
 
+def _normalize_table_metadata(output: str) -> Mapping[str, str]:
+    return {
+        NORMALIZE_STAGE_META: "normalize",
+        NORMALIZE_ALIAS_META: dataset_alias(output),
+        "normalize_dataset": output,
+    }
+
+
 def compile_normalize_plans_ibis(
     catalog: IbisPlanCatalog,
     *,
@@ -437,6 +450,7 @@ def compile_normalize_plans_ibis(
                 backend=options.backend,
                 name=view_name,
                 ordering=plan.ordering,
+                table_metadata=_normalize_table_metadata(rule.output),
             ),
         )
         if rule.output in materialize:
@@ -448,6 +462,7 @@ def compile_normalize_plans_ibis(
                     name=view_name,
                     ordering=plan.ordering,
                     overwrite=True,
+                    table_metadata=_normalize_table_metadata(rule.output),
                 ),
             )
         plans[rule.output] = plan

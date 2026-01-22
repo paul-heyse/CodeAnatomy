@@ -14,6 +14,7 @@ import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
@@ -28,12 +29,12 @@ from extract.helpers import (
     attrs_map,
     file_identity_row,
     ibis_plan_from_rows,
-    iter_contexts,
     materialize_extract_plan,
     span_dict,
     text_from_file_ctx,
 )
 from extract.schema_ops import ExtractNormalizeOptions
+from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -552,6 +553,11 @@ def _estimate_context_bytes(file_ctx: FileContext) -> int | None:
     if file_ctx.text is not None:
         # Approximate bytes using decoded text length to avoid extra I/O.
         return len(file_ctx.text)
+    if file_ctx.abs_path:
+        try:
+            return int(Path(file_ctx.abs_path).stat().st_size)
+        except OSError:
+            return None
     return None
 
 
@@ -590,11 +596,11 @@ def _bytecode_row_payload(
         "repo": options.repo_id,
         "path": file_ctx.path,
         "file_id": file_ctx.file_id,
+        "file_sha256": file_ctx.file_sha256,
         "code_objects": code_objects,
         "errors": errors,
         "attrs": attrs_map(
             {
-                "file_sha256": file_ctx.file_sha256,
                 "python_version": PYTHON_VERSION,
                 "python_magic": PYTHON_MAGIC,
                 "optimize": options.optimize,
@@ -1441,8 +1447,16 @@ def _collect_bytecode_file_rows(
     file_contexts: Iterable[FileContext] | None,
     *,
     options: BytecodeExtractOptions,
+    ctx: ExecutionContext | None,
 ) -> list[dict[str, object]]:
-    contexts = list(iter_contexts(repo_files, file_contexts))
+    contexts = list(
+        iter_worklist_contexts(
+            repo_files,
+            output_table="bytecode_files_v1",
+            ctx=ctx,
+            file_contexts=file_contexts,
+        )
+    )
     if not contexts:
         return []
     max_workers = _effective_max_workers(options)
@@ -1531,6 +1545,7 @@ def extract_bytecode(
         repo_files,
         exec_context.file_contexts,
         options=normalized_options,
+        ctx=exec_context.ctx,
     )
     plan = _build_bytecode_file_plan(
         rows,
@@ -1572,6 +1587,7 @@ def extract_bytecode_plans(
         repo_files,
         exec_context.file_contexts,
         options=normalized_options,
+        ctx=exec_context.ctx,
     )
     return {
         "bytecode_files": _build_bytecode_file_plan(

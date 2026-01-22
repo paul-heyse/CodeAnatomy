@@ -46,12 +46,13 @@ from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
-from ibis_engine.scan_io import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
+from ibis_engine.sources import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
 from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.specs import (
     ArrowFieldSpec,
     DerivedFieldSpec,
     ExternalTableConfig,
+    ExternalTableConfigOverrides,
     FieldBundle,
     TableSchemaSpec,
 )
@@ -462,6 +463,61 @@ class DatasetSpec:
         if not specs and is_nested_dataset(self.name):
             return (nested_view_spec(self.name),)
         return tuple(specs)
+
+    @property
+    def is_streaming(self) -> bool:
+        """Return True if this dataset represents a streaming source.
+
+        Returns
+        -------
+        bool
+            True if the dataset has unbounded DataFusion scan options.
+        """
+        if self.datafusion_scan is not None:
+            return self.datafusion_scan.unbounded
+        return False
+
+    def external_table_config_with_streaming(
+        self,
+        *,
+        location: str,
+        file_format: str,
+        overrides: ExternalTableConfigOverrides | None = None,
+    ) -> ExternalTableConfig:
+        """Return ExternalTableConfig with streaming flag from scan options.
+
+        This method creates an ExternalTableConfig that respects the unbounded
+        flag from DataFusionScanOptions, enabling proper DDL generation for
+        streaming sources.
+
+        Parameters
+        ----------
+        location : str
+            Storage location for the external table.
+        file_format : str
+            File format (e.g., 'parquet', 'delta').
+        overrides : ExternalTableConfigOverrides | None
+            Optional configuration overrides. If unbounded is explicitly set
+            in overrides, it takes precedence over the scan options.
+
+        Returns
+        -------
+        ExternalTableConfig
+            Configuration with unbounded flag properly set.
+        """
+        resolved = overrides or ExternalTableConfigOverrides()
+        unbounded = resolved.unbounded if resolved.unbounded is not None else self.is_streaming
+        return ExternalTableConfig(
+            location=location,
+            file_format=file_format,
+            table_name=resolved.table_name or self.name,
+            dialect=resolved.dialect,
+            options=resolved.options,
+            partitioned_by=resolved.partitioned_by,
+            file_sort_order=resolved.file_sort_order,
+            compression=resolved.compression,
+            unbounded=unbounded,
+        )
 
     def external_table_sql(self, config: ExternalTableConfig) -> str:
         """Return a CREATE EXTERNAL TABLE statement for this dataset.

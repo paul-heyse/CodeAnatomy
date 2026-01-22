@@ -14,6 +14,11 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_rows
 from datafusion_engine.schema_registry import schema_for
 
+try:
+    from sqlglot_tools.lineage import LineagePayload
+except ImportError:
+    LineagePayload = None  # type: ignore[misc, assignment]
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -405,6 +410,13 @@ def datafusion_plan_artifacts_table(
         Diagnostics table aligned to DATAFUSION_PLAN_ARTIFACTS_V1.
     """
     now = _now_ms()
+    def _string_list(value: object | None) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return [str(item) for item in value]
+        return [str(value)]
+
     rows: list[dict[str, object]] = []
     for artifact in artifacts:
         explain = artifact.get("explain")
@@ -418,10 +430,10 @@ def datafusion_plan_artifacts_table(
         join_ops = artifact.get("join_operators")
         join_ops_list = None
         if join_ops:
-            if isinstance(join_ops, Sequence) and not isinstance(join_ops, (str, bytes)):
-                join_ops_list = [str(op) for op in join_ops]
-            else:
-                join_ops_list = [str(join_ops)]
+            join_ops_list = _string_list(join_ops)
+        lineage_tables = _string_list(artifact.get("lineage_tables"))
+        lineage_columns = _string_list(artifact.get("lineage_columns"))
+        lineage_scopes = _string_list(artifact.get("lineage_scopes"))
         rows.append(
             {
                 "event_time_unix_ms": _coerce_event_time(
@@ -453,6 +465,24 @@ def datafusion_plan_artifacts_table(
                     if artifact.get("sqlglot_ast") is not None
                     else None
                 ),
+                "read_dialect": (
+                    str(artifact.get("read_dialect"))
+                    if artifact.get("read_dialect") is not None
+                    else None
+                ),
+                "write_dialect": (
+                    str(artifact.get("write_dialect"))
+                    if artifact.get("write_dialect") is not None
+                    else None
+                ),
+                "canonical_fingerprint": (
+                    str(artifact.get("canonical_fingerprint"))
+                    if artifact.get("canonical_fingerprint") is not None
+                    else None
+                ),
+                "lineage_tables": lineage_tables,
+                "lineage_columns": lineage_columns,
+                "lineage_scopes": lineage_scopes,
                 "unparsed_sql": (
                     str(artifact.get("unparsed_sql"))
                     if artifact.get("unparsed_sql") is not None
@@ -553,9 +583,7 @@ def build_file_pruning_diagnostics_row(spec: FilePruningDiagnosticsSpec) -> dict
     """
     now = _now_ms()
     pruned_count = spec.total_files - spec.candidate_count
-    pruned_percentage = (
-        (pruned_count / spec.total_files * 100.0) if spec.total_files > 0 else 0.0
-    )
+    pruned_percentage = (pruned_count / spec.total_files * 100.0) if spec.total_files > 0 else 0.0
 
     return {
         "event_time_unix_ms": spec.event_time_unix_ms or now,
@@ -617,6 +645,53 @@ def file_pruning_diagnostics_table(
     return table_from_rows(schema, rows)
 
 
+def lineage_diagnostics_row(
+    payload: object,
+    query_id: str,
+    timestamp_ms: int,
+) -> dict[str, object]:
+    """Build diagnostics row for lineage artifact.
+
+    Parameters
+    ----------
+    payload : LineagePayload
+        Lineage metadata from extraction.
+    query_id : str
+        Unique query identifier.
+    timestamp_ms : int
+        Unix timestamp in milliseconds.
+
+    Returns
+    -------
+    dict[str, object]
+        Row data for lineage diagnostics table.
+
+    Raises
+    ------
+    ImportError
+        Raised when LineagePayload type is unavailable.
+    TypeError
+        Raised when payload is not a LineagePayload instance.
+    """
+    if LineagePayload is None:
+        msg = "LineagePayload not available; sqlglot_tools.lineage not imported"
+        raise ImportError(msg)
+
+    if not isinstance(payload, LineagePayload):
+        msg = f"Expected LineagePayload, got {type(payload).__name__}"
+        raise TypeError(msg)
+
+    return {
+        "query_id": query_id,
+        "timestamp_ms": timestamp_ms,
+        "tables": list(payload.tables),
+        "columns": list(payload.columns),
+        "scopes": list(payload.scopes),
+        "canonical_fingerprint": payload.canonical_fingerprint,
+        "qualified_sql": payload.qualified_sql,
+    }
+
+
 __all__ = [
     "FilePruningDiagnostics",
     "FilePruningDiagnosticsSpec",
@@ -630,4 +705,5 @@ __all__ = [
     "datafusion_schema_registry_validation_table",
     "feature_state_table",
     "file_pruning_diagnostics_table",
+    "lineage_diagnostics_row",
 ]

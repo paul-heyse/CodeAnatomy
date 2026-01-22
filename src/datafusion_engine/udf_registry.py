@@ -34,8 +34,8 @@ else:
 
 from arrowdsl.core.array_iter import iter_array_values
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike
-from datafusion_engine.builtin_function_map import is_builtin_function
 from datafusion_engine.hash_utils import hash64_from_text, hash128_from_text
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.udf_catalog import (
     UdfCatalog,
     UdfPerformancePolicy,
@@ -1539,10 +1539,6 @@ def validate_udf_performance(
     tuple[bool, str | None]
         Tuple of (is_valid, reason). If invalid, reason contains explanation.
     """
-    # Check if this is actually a builtin (shouldn't be in custom UDF specs)
-    if is_builtin_function(func_id):
-        return True, None
-
     # Validate tier permissions
     return policy.is_udf_allowed(func_id, spec.udf_tier)
 
@@ -1593,18 +1589,20 @@ def _warn_python_udf(
     )
 
 
-def get_default_udf_catalog() -> UdfCatalog:
-    """Get a default UDF catalog with all registered DataFusion UDFs.
+def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
+    """Get a default UDF catalog with runtime builtin introspection.
 
     Returns
     -------
     UdfCatalog
         Default catalog with standard tier policy.
     """
-    return create_udf_catalog_from_specs()
+    catalog = create_udf_catalog_from_specs()
+    catalog.refresh_from_session(introspector)
+    return catalog
 
 
-def get_strict_udf_catalog() -> UdfCatalog:
+def get_strict_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
     """Get a strict UDF catalog that prefers builtins only.
 
     Returns
@@ -1614,7 +1612,9 @@ def get_strict_udf_catalog() -> UdfCatalog:
     """
     specs = datafusion_udf_specs()
     spec_map = {spec.func_id: spec for spec in specs}
-    return create_strict_catalog(udf_specs=spec_map)
+    catalog = create_strict_catalog(udf_specs=spec_map)
+    catalog.refresh_from_session(introspector)
+    return catalog
 
 
 __all__ = [
@@ -1635,7 +1635,6 @@ __all__ = [
     "datafusion_udf_specs",
     "get_default_udf_catalog",
     "get_strict_udf_catalog",
-    "is_builtin_function",
     "load_udf_from_capsule",
     "register_datafusion_udfs",
     "register_datafusion_udfs_with_policy",

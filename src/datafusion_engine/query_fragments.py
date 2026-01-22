@@ -89,4 +89,82 @@ def _normalize_fragment_expr(
     )
 
 
-__all__ = ["fragment_view_specs"]
+def _fragment_sql(name: str) -> str:
+    return FRAGMENT_SQL[name]
+
+
+def cst_callsites_attrs_sql() -> str:
+    """Return SQL for CST callsite attribute fragments.
+
+    Returns
+    -------
+    str
+        SQL fragment for CST callsite attributes.
+    """
+    return _fragment_sql("cst_callsites_attrs")
+
+
+def cst_defs_attrs_sql() -> str:
+    """Return SQL for CST definition attribute fragments.
+
+    Returns
+    -------
+    str
+        SQL fragment for CST definition attributes.
+    """
+    return _fragment_sql("cst_defs_attrs")
+
+
+def cst_edges_attrs_sql() -> str:
+    """Return SQL for CST edge attribute fragments.
+
+    Returns
+    -------
+    str
+        SQL fragment for CST edge attributes.
+    """
+    return _fragment_sql("cst_edges_attrs")
+
+
+def cst_imports_attrs_sql() -> str:
+    """Return SQL for CST import attribute fragments.
+
+    Returns
+    -------
+    str
+        SQL fragment for CST import attributes.
+    """
+    return _fragment_sql("cst_imports_attrs")
+
+
+def cst_nodes_attrs_sql() -> str:
+    """Return SQL for CST node attribute fragments.
+
+    Returns
+    -------
+    str
+        SQL fragment for CST node attributes.
+    """
+    return _fragment_sql("cst_nodes_attrs")
+
+
+def cst_refs_attrs_sql() -> str:
+    """Return SQL for CST ref attribute fragments.
+
+    Returns
+    -------
+    str
+        SQL fragment for CST ref attributes.
+    """
+    return _fragment_sql("cst_refs_attrs")
+
+
+__all__ = [
+    "cst_callsites_attrs_sql",
+    "cst_defs_attrs_sql",
+    "cst_edges_attrs_sql",
+    "cst_imports_attrs_sql",
+    "cst_nodes_attrs_sql",
+    "cst_refs_attrs_sql",
+    "fragment_view_specs",
+]

@@ -2,24 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Generator
 from pathlib import Path
-from uuid import uuid4
 
 import pyarrow as pa
-from datafusion import SessionContext
 
-from arrowdsl.schema.build import rows_from_table
-from datafusion_engine.registry_bridge import (
-    DeltaCdfRegistrationOptions,
-    register_delta_cdf_df,
-)
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from incremental.diff import diff_snapshots_with_cdf
+from incremental.cdf_cursors import CdfCursor, CdfCursorStore
+from incremental.changes import file_changes_from_cdf
+from incremental.diff import diff_snapshots_with_delta_cdf
 from incremental.snapshot import write_repo_snapshot
 from incremental.state_store import StateStore
-from storage.deltalake import DeltaCdfOptions
 
 
 def _snapshot_table(rows: list[tuple[str, str, str, int, int]]) -> pa.Table:
@@ -34,32 +25,6 @@ def _snapshot_table(rows: list[tuple[str, str, str, int, int]]) -> pa.Table:
     )
 
 
-@contextlib.contextmanager
-def _cdf_table_ref(
-    path: str,
-    options: DeltaCdfOptions,
-) -> Generator[tuple[SessionContext, str]]:
-    profile = DataFusionRuntimeProfile()
-    ctx = profile.session_context()
-    table_name = f"cdf_{uuid4().hex}"
-    df = register_delta_cdf_df(
-        ctx,
-        name=table_name,
-        path=path,
-        options=DeltaCdfRegistrationOptions(
-            cdf_options=options,
-            runtime_profile=profile,
-        ),
-    )
-    _ = df
-    try:
-        yield ctx, table_name
-    finally:
-        deregister = getattr(ctx, "deregister_table", None)
-        if callable(deregister):
-            deregister(table_name)
-
-
 def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     """Compare snapshot diffs using Delta change data feed."""
     store = StateStore(tmp_path)
@@ -69,7 +34,8 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
             ("file_b", "src/b.py", "sha2", 20, 200),
         ]
     )
-    write_repo_snapshot(store, snapshot_one)
+    result_one = write_repo_snapshot(store, snapshot_one)
+    assert result_one.version is not None
 
     snapshot_two = _snapshot_table(
         [
@@ -77,22 +43,21 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
             ("file_c", "src/c.py", "sha4", 30, 300),
         ]
     )
-    result = write_repo_snapshot(store, snapshot_two)
-    assert result.version is not None
-
-    cdf_options = DeltaCdfOptions(
-        starting_version=1,
-        ending_version=result.version,
-        allow_out_of_range=True,
+    cursor_store = CdfCursorStore(cursors_path=store.cdf_cursors_path())
+    cursor_store.save_cursor(
+        CdfCursor(dataset_name="repo_snapshot", last_version=result_one.version)
     )
-    with _cdf_table_ref(str(store.repo_snapshot_path()), cdf_options) as (cdf_ctx, cdf_name):
-        diff = diff_snapshots_with_cdf(
-            snapshot_one,
-            snapshot_two,
-            ctx=cdf_ctx,
-            cdf_table=cdf_name,
-        )
-    change_map = {row["file_id"]: row["change_kind"] for row in rows_from_table(diff)}
-    assert change_map["file_a"] == "modified"
-    assert change_map["file_b"] == "deleted"
-    assert change_map["file_c"] == "added"
+    result_two = write_repo_snapshot(store, snapshot_two)
+    assert result_two.version is not None
+
+    cdf_table = diff_snapshots_with_delta_cdf(
+        dataset_path=str(store.repo_snapshot_path()),
+        cursor_store=cursor_store,
+        dataset_name="repo_snapshot",
+        filter_policy=None,
+    )
+    assert cdf_table is not None
+    changes = file_changes_from_cdf(cdf_table)
+    assert changes.full_refresh is False
+    assert changes.changed_file_ids == ("file_a", "file_c")
+    assert changes.deleted_file_ids == ("file_b",)

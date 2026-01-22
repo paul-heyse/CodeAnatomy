@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from normalize.registry_fields import DIAG_DETAIL_STRUCT, DIAG_DETAILS_TYPE
-from normalize.registry_rows import SCHEMA_VERSION
-from normalize.registry_specs import (
+from datafusion_engine.schema_registry import DIAG_DETAIL_STRUCT, DIAG_DETAILS_TYPE
+from normalize.dataset_rows import SCHEMA_VERSION
+from normalize.registry_runtime import (
     dataset_contract,
     dataset_query,
     dataset_schema,

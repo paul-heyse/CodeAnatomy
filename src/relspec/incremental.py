@@ -11,7 +11,7 @@ import pyarrow as pa
 from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
 from ibis_engine.param_tables import ParamTableSpec
 from normalize.op_specs import normalize_op_specs
-from normalize.registry_specs import dataset_name_from_alias
+from normalize.registry_runtime import dataset_name_from_alias
 from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.definitions import RelationshipPayload, RuleDefinition
 from relspec.schema_context import RelspecSchemaContext

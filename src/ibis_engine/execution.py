@@ -10,10 +10,16 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value as IbisValue
 
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.core.ordering_policy import apply_canonical_sort, ordering_metadata_for_plan
-from arrowdsl.schema.metadata import merge_metadata_specs
+from arrowdsl.core.ordering import Ordering, OrderingKey, OrderingLevel
+from arrowdsl.schema.metadata import (
+    infer_ordering_keys,
+    merge_metadata_specs,
+    ordering_from_schema,
+    ordering_metadata_spec,
+)
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from engine.runtime_profile import runtime_profile_snapshot
 
@@ -128,15 +134,15 @@ def _apply_ordering_metadata(
     ctx: ExecutionContext,
 ) -> TableLike | RecordBatchReaderLike:
     if isinstance(result, RecordBatchReaderLike):
-        ordering_spec = ordering_metadata_for_plan(
+        ordering_spec = _ordering_metadata_for_plan(
             plan.ordering,
             schema=result.schema,
             determinism=ctx.determinism,
         )
         combined = merge_metadata_specs(ordering_spec)
         return _apply_metadata_spec(result, metadata_spec=combined)
-    table, canonical_keys = apply_canonical_sort(result, determinism=ctx.determinism)
-    ordering_spec = ordering_metadata_for_plan(
+    table, canonical_keys = _apply_canonical_sort(result, determinism=ctx.determinism)
+    ordering_spec = _ordering_metadata_for_plan(
         plan.ordering,
         schema=table.schema,
         canonical_keys=canonical_keys,
@@ -176,6 +182,52 @@ def _apply_metadata_spec(
         return pa.RecordBatchReader.from_batches(schema, result)
     table = cast("TableLike", result)
     return table.cast(schema)
+
+
+def _ordering_keys_for_schema(schema: pa.Schema) -> tuple[OrderingKey, ...]:
+    ordering = ordering_from_schema(schema)
+    if ordering.keys:
+        return ordering.keys
+    return infer_ordering_keys(schema.names)
+
+
+def _apply_canonical_sort(
+    table: TableLike,
+    *,
+    determinism: DeterminismTier,
+) -> tuple[TableLike, tuple[OrderingKey, ...]]:
+    if determinism != DeterminismTier.CANONICAL:
+        return table, ()
+    keys = _ordering_keys_for_schema(table.schema)
+    if not keys:
+        return table, ()
+    if not isinstance(table, pa.Table):
+        return table, ()
+    table_cast = cast("pa.Table", table)
+    sorted_table = table_cast.sort_by(list(keys))
+    return cast("TableLike", sorted_table), tuple(keys)
+
+
+def _ordering_metadata_for_plan(
+    ordering: Ordering,
+    *,
+    schema: pa.Schema,
+    canonical_keys: tuple[OrderingKey, ...] | None = None,
+    determinism: DeterminismTier | None = None,
+) -> SchemaMetadataSpec:
+    level = ordering.level
+    keys: tuple[OrderingKey, ...] = ()
+    if canonical_keys:
+        level = OrderingLevel.EXPLICIT
+        keys = canonical_keys
+    elif ordering.level == OrderingLevel.EXPLICIT and ordering.keys:
+        keys = ordering.keys
+    elif ordering.level == OrderingLevel.IMPLICIT:
+        keys = _ordering_keys_for_schema(schema)
+    extra: dict[bytes, bytes] | None = None
+    if determinism is not None:
+        extra = {b"determinism_tier": determinism.value.encode("utf-8")}
+    return ordering_metadata_spec(level, keys=keys, extra=extra)
 
 
 __all__ = ["IbisExecutionContext", "materialize_ibis_plan", "stream_ibis_plan"]

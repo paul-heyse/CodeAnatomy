@@ -161,7 +161,9 @@ It should be boring and deterministic:
 
 Also contains:
 
-* `kinds_ultimate.py` — the **single source of truth** for `NodeKind`, `EdgeKind`, and their contracts/derivations.
+* `kind_catalog.py` / `prop_catalog.py` — the **single source of truth** for CPG kind IDs and property typing.
+* Symtable-derived view builders now live in `datafusion_engine/symtable_views.py` and are
+  registered as DataFusion views; CPG consumes them via view references.
 
 ### `src/codeintel_cpg/hamilton/`
 
@@ -260,19 +262,19 @@ This avoids the “it worked before, now it silently produces incomplete edges�
 
 ---
 
-## 7) The Ultimate CPG registry (`cpg/kinds_ultimate.py`) as the single source of truth
+## 7) Kind + property catalogs as the single source of truth
 
-This registry file provides:
+The catalog modules provide:
 
-* master enums for node/edge kinds
-* per-kind contracts (required props & types)
-* derivation manifest (where each kind comes from)
-* validation utilities
+* stable node/edge kind identifiers (`cpg/kind_catalog.py`)
+* required relation-output props per edge kind (for validation)
+* canonical property keys and value types (`cpg/prop_catalog.py`)
+* validation utilities tied to dataset contracts
 
 **Functional intent:** every design change should be expressible as:
 
-* adding/modifying a kind contract, and/or
-* adding/modifying a derivation spec, and/or
+* adding/modifying edge kind requirements, and/or
+* adding/modifying property catalog entries, and/or
 * adding/modifying relationship rules and their output contracts.
 
 That means an LLM agent can:
@@ -291,13 +293,13 @@ We added a validator hook so that:
 
 **Why this matters:**
 
-* It turns the Ultimate registry into an enforced interface contract.
+* It turns the kind catalog into an enforced interface contract.
 * It prevents “relationship dataset drift” from quietly breaking edge emission.
 
 **Key callout for refactors:**
 If you add a new edge kind or change required props, you must update:
 
-* `kinds_ultimate.py` edge contracts
+* `kind_catalog.py` edge requirements
 * relationship output contracts (schema or virtual_fields)
 * the dataset→edge mapping used by the validator (if new dataset feeds edges)
 
@@ -381,9 +383,9 @@ Ask:
 
 For semantic changes:
 
-* add/update NodeKind/EdgeKind contracts in `kinds_ultimate.py`
-* update derivations (implemented/planned)
-* run registry completeness checks
+* update kind requirements in `kind_catalog.py`
+* update property catalog entries in `prop_catalog.py`
+* run edge requirement validation against relation output schema
 
 ### C) Make the smallest schema changes possible
 

@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 import uuid
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from typing import Protocol, cast
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import Literal, Protocol, cast
 
 import pyarrow as pa
+from deltalake import CommitProperties, WriterProperties
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.ordering import Ordering
+from datafusion_engine.table_provider_metadata import (
+    TableProviderMetadata,
+    record_table_provider_metadata,
+    table_provider_metadata,
+)
 from ibis_engine.plan import IbisPlan
+from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
+from ibis_engine.registry import datafusion_context
 from ibis_engine.schema_utils import ibis_schema_from_arrow
 from obs.diagnostics import DiagnosticsCollector
 
@@ -75,6 +85,30 @@ class SourceToIbisOptions:
     ordering: Ordering | None = None
     overwrite: bool = True
     namespace_recorder: Callable[[Mapping[str, object]], None] | None = None
+    table_metadata: Mapping[str, str] | None = None
+
+
+class DatasetSpecLike(Protocol):
+    """Protocol for dataset specs used in Ibis plan compilation."""
+
+    def query(self) -> IbisQuerySpec:
+        """Return the query spec for the dataset."""
+        ...
+
+    def ordering(self) -> Ordering:
+        """Return the ordering metadata for the dataset."""
+        ...
+
+
+@dataclass(frozen=True)
+class DatasetSource:
+    """Dataset + dataset spec pairing for Ibis plan compilation."""
+
+    dataset: TableLike | RecordBatchReaderLike | IbisTable
+    spec: DatasetSpecLike
+
+
+type PlanSource = IbisPlan | IbisTable | TableLike | RecordBatchReaderLike | DatasetSource
 
 
 def table_to_ibis(
@@ -129,6 +163,7 @@ def register_ibis_table(
         registered = backend.table(table_name)
     else:
         registered = backend.table(table_name, database=database_hint)
+    _record_table_metadata(options, table_name)
     return IbisPlan(expr=registered, ordering=options.ordering or Ordering.unordered())
 
 
@@ -174,7 +209,22 @@ def register_ibis_view(
             overwrite=options.overwrite,
         )
         registered = options.backend.table(view_name, database=database)
+    _record_table_metadata(options, view_name)
     return IbisPlan(expr=registered, ordering=options.ordering or Ordering.unordered())
+
+
+def _record_table_metadata(options: SourceToIbisOptions, table_name: str) -> None:
+    if not options.table_metadata:
+        return
+    with contextlib.suppress(ValueError, TypeError):
+        ctx = datafusion_context(options.backend)
+        existing = table_provider_metadata(id(ctx), table_name=table_name)
+        base = existing or TableProviderMetadata(table_name=table_name)
+        merged = dict(base.metadata)
+        for key, value in options.table_metadata.items():
+            merged[str(key)] = str(value)
+        metadata = replace(base, metadata=merged)
+        record_table_provider_metadata(id(ctx), metadata=metadata)
 
 
 def source_to_ibis(
@@ -205,10 +255,78 @@ def source_to_ibis(
     )
 
 
+def plan_from_dataset(
+    dataset: TableLike | RecordBatchReaderLike | IbisTable,
+    *,
+    spec: DatasetSpecLike,
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+    name: str | None = None,
+) -> IbisPlan:
+    """Return an Ibis plan for a dataset spec.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan with the query spec applied.
+    """
+    plan = _plan_from_source(dataset, ctx=ctx, backend=backend, name=name)
+    expr = apply_query_spec(plan.expr, spec=spec.query())
+    return IbisPlan(expr=expr, ordering=spec.ordering())
+
+
+def plan_from_source(
+    source: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+    name: str | None = None,
+) -> IbisPlan:
+    """Return an Ibis plan for a source value.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan for the source.
+    """
+    if isinstance(source, DatasetSource):
+        return plan_from_dataset(
+            source.dataset,
+            spec=source.spec,
+            ctx=ctx,
+            backend=backend,
+            name=name,
+        )
+    return _plan_from_source(source, ctx=ctx, backend=backend, name=name)
+
+
 def _ensure_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
     if isinstance(value, RecordBatchReaderLike):
         return value.read_all()
     return value
+
+
+def _plan_from_source(
+    source: IbisPlan | IbisTable | TableLike | RecordBatchReaderLike,
+    *,
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+    name: str | None,
+) -> IbisPlan:
+    ordering = _ordering_for_ctx(ctx)
+    options = SourceToIbisOptions(
+        backend=backend,
+        name=name,
+        ordering=ordering,
+        namespace_recorder=namespace_recorder_from_ctx(ctx),
+    )
+    return source_to_ibis(source, options=options)
+
+
+def _ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
+    if ctx.runtime.scan.implicit_ordering:
+        return Ordering.implicit()
+    return Ordering.unordered()
 
 
 def _as_pyarrow_table(value: TableLike) -> pa.Table:
@@ -359,14 +477,187 @@ def resolve_database_hint(name: str | None) -> tuple[DatabaseHint, str | None]:
     return _parse_database_hint(name)
 
 
+@dataclass(frozen=True)
+class IbisDeltaReadOptions:
+    """Options for Ibis Delta table reads."""
+
+    table_name: str | None = None
+    storage_options: Mapping[str, str] | None = None
+    version: int | None = None
+    options: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class IbisDeltaWriteOptions:
+    """Options for Ibis Delta table writes."""
+
+    mode: Literal["append", "overwrite", "error", "ignore"] = "append"
+    overwrite_schema: bool = False
+    schema_mode: Literal["merge", "overwrite"] | None = None
+    predicate: str | None = None
+    partition_by: Sequence[str] | None = None
+    configuration: Mapping[str, str | None] | None = None
+    commit_metadata: Mapping[str, str] | None = None
+    target_file_size: int | None = None
+    writer_properties: WriterProperties | None = None
+    storage_options: Mapping[str, str] | None = None
+
+
+def read_delta_ibis(
+    backend: BaseBackend,
+    path: str,
+    *,
+    options: IbisDeltaReadOptions | None = None,
+) -> IbisTable:
+    """Read Delta table through Ibis DataFusion backend.
+
+    Uses the backend's native read_delta() method which provides
+    efficient Delta table access without separate DeltaTable construction.
+
+    Parameters
+    ----------
+    backend : BaseBackend
+        Ibis backend (typically DataFusion backend).
+    path : str
+        Path to Delta table.
+    options : IbisDeltaReadOptions | None
+        Read options including table name and storage options.
+
+    Returns
+    -------
+    IbisTable
+        Ibis table expression for the Delta table.
+
+    Raises
+    ------
+    TypeError
+        Raised when backend doesn't support read_delta.
+    """
+    resolved = options or IbisDeltaReadOptions()
+
+    read_delta = getattr(backend, "read_delta", None)
+    if not callable(read_delta):
+        msg = f"Backend {type(backend).__name__} does not support read_delta"
+        raise TypeError(msg)
+
+    kwargs = dict(resolved.options) if resolved.options is not None else {}
+    if resolved.table_name is not None:
+        kwargs["table_name"] = resolved.table_name
+    if resolved.storage_options is not None:
+        kwargs["storage_options"] = dict(resolved.storage_options)
+    if resolved.version is not None:
+        kwargs["version"] = resolved.version
+
+    result = read_delta(path, **kwargs)
+    return cast("IbisTable", result)
+
+
+def write_delta_ibis(
+    backend: BaseBackend,
+    expr: IbisTable,
+    path: str,
+    *,
+    options: IbisDeltaWriteOptions | None = None,
+) -> None:
+    """Write Ibis expression to Delta via backend to_delta.
+
+    Uses the backend's native to_delta() method for efficient writes.
+
+    Parameters
+    ----------
+    backend : BaseBackend
+        Ibis backend (typically DataFusion backend).
+    expr : IbisTable
+        Ibis table expression to write.
+    path : str
+        Path for Delta table output.
+    options : IbisDeltaWriteOptions | None
+        Write options including mode and schema handling.
+
+    Raises
+    ------
+    TypeError
+        Raised when backend doesn't support to_delta.
+    """
+    resolved = options or IbisDeltaWriteOptions()
+
+    to_delta = getattr(backend, "to_delta", None)
+    if not callable(to_delta):
+        msg = f"Backend {type(backend).__name__} does not support to_delta"
+        raise TypeError(msg)
+
+    if resolved.predicate is not None and resolved.mode != "overwrite":
+        msg = "Predicate filters require overwrite mode for Delta writes."
+        raise ValueError(msg)
+
+    schema_mode = resolved.schema_mode
+    if schema_mode is None and resolved.overwrite_schema:
+        schema_mode = "overwrite"
+    config = None
+    if resolved.configuration is not None:
+        config = {key: value for key, value in resolved.configuration.items() if value is not None}
+        if not config:
+            config = None
+    commit_properties = (
+        CommitProperties(custom_metadata=dict(resolved.commit_metadata))
+        if resolved.commit_metadata is not None
+        else None
+    )
+    kwargs: dict[str, object] = {
+        "mode": resolved.mode,
+    }
+    if schema_mode is not None:
+        kwargs["schema_mode"] = schema_mode
+    if resolved.partition_by is not None:
+        kwargs["partition_by"] = list(resolved.partition_by)
+    if config is not None:
+        kwargs["configuration"] = config
+    if commit_properties is not None:
+        kwargs["commit_properties"] = commit_properties
+    if resolved.predicate is not None:
+        kwargs["predicate"] = resolved.predicate
+    if resolved.target_file_size is not None:
+        kwargs["target_file_size"] = resolved.target_file_size
+    if resolved.writer_properties is not None:
+        kwargs["writer_properties"] = resolved.writer_properties
+    if resolved.storage_options is not None:
+        kwargs["storage_options"] = dict(resolved.storage_options)
+
+    to_delta(expr, path, **kwargs)
+
+
+def plan_to_delta_ibis(
+    plan: IbisPlan,
+    path: str,
+    *,
+    backend: BaseBackend,
+    options: IbisDeltaWriteOptions | None = None,
+) -> None:
+    """Write an IbisPlan to Delta via backend to_delta.
+
+    Convenience wrapper for writing IbisPlan results to Delta.
+    """
+    write_delta_ibis(backend, plan.expr, path, options=options)
+
+
 __all__ = [
     "DatabaseHint",
+    "DatasetSource",
+    "DatasetSpecLike",
+    "IbisDeltaReadOptions",
+    "IbisDeltaWriteOptions",
+    "PlanSource",
     "SourceToIbisOptions",
     "namespace_recorder_from_ctx",
+    "plan_from_dataset",
+    "plan_from_source",
+    "plan_to_delta_ibis",
+    "read_delta_ibis",
     "record_namespace_action",
     "register_ibis_table",
     "register_ibis_view",
     "resolve_database_hint",
     "source_to_ibis",
     "table_to_ibis",
+    "write_delta_ibis",
 ]

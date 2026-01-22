@@ -13,8 +13,7 @@ from hamilton.execution import executors
 from hamilton.lifecycle import base as lifecycle_base
 
 from core_types import JsonValue
-from cpg.kinds_ultimate import validate_derivation_extractors, validate_registry_completeness
-from hamilton_pipeline.arrow_adapters import register_arrow_delta_adapters
+from cpg.kind_catalog import validate_edge_kind_requirements
 from hamilton_pipeline.modules import ALL_MODULES
 from registry_common.arrow_payloads import ipc_hash
 
@@ -141,8 +140,7 @@ def build_driver(
     """
     modules = list(modules) if modules is not None else default_modules()
 
-    validate_registry_completeness()
-    validate_derivation_extractors(allow_planned=False)
+    validate_edge_kind_requirements()
 
     b = driver.Builder().with_modules(*modules).with_config(dict(config))
 
@@ -162,7 +160,6 @@ def build_driver(
 
     cache_path = config.get("cache_path")
     if isinstance(cache_path, str) and cache_path:
-        register_arrow_delta_adapters()
         cache_opt_in = bool(config.get("cache_opt_in", True))
         if cache_opt_in:
             # cache only nodes annotated for caching

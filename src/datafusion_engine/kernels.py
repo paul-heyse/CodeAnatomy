@@ -37,6 +37,7 @@ from datafusion_engine.udf_registry import _register_kernel_udfs, register_dataf
 type KernelFn = Callable[..., TableLike]
 
 _SPAN_NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
+MIN_JOIN_PARTITIONS: int = 2
 
 
 def _session_context(ctx: ExecutionContext | None) -> SessionContext:
@@ -88,6 +89,32 @@ def _arrow_ingest_hook(
     if diagnostics is None:
         return None
     return diagnostics_arrow_ingest_hook(diagnostics)
+
+
+def _repartition_for_join(
+    df: DataFrame,
+    *,
+    keys: Sequence[str],
+    exec_ctx: ExecutionContext | None,
+) -> DataFrame:
+    if not keys or exec_ctx is None or exec_ctx.runtime.datafusion is None:
+        return df
+    profile = exec_ctx.runtime.datafusion
+    target_partitions = profile.target_partitions
+    if target_partitions is None or target_partitions < MIN_JOIN_PARTITIONS:
+        return df
+    join_policy = profile.join_policy
+    if join_policy is not None and not join_policy.repartition_joins:
+        return df
+    repartition_by_hash = getattr(df, "repartition_by_hash", None)
+    if not callable(repartition_by_hash):
+        return df
+    exprs = [col(key) for key in keys]
+    try:
+        result = repartition_by_hash(*exprs, num=target_partitions)
+    except (RuntimeError, TypeError, ValueError):
+        return df
+    return result if isinstance(result, DataFrame) else df
 
 
 def _existing_table_names(ctx: SessionContext) -> set[str]:
@@ -584,6 +611,7 @@ def _interval_join_frames(
     *,
     ctx: SessionContext,
     batch_size: int | None = None,
+    exec_ctx: ExecutionContext | None = None,
 ) -> tuple[DataFrame, DataFrame, Mapping[str, str]]:
     left_df = _df_from_table(
         ctx,
@@ -623,6 +651,16 @@ def _interval_join_frames(
     right_df = right_df.with_column(
         prepared.right_key_col,
         col(right_path_col).cast(pa.string()),
+    )
+    left_df = _repartition_for_join(
+        left_df,
+        keys=[prepared.left_key_col],
+        exec_ctx=exec_ctx,
+    )
+    right_df = _repartition_for_join(
+        right_df,
+        keys=[prepared.right_key_col],
+        exec_ctx=exec_ctx,
     )
     right_key_col = prepared.right_key_col
     joined = left_df.join(
@@ -756,7 +794,11 @@ def interval_align_kernel(
     """
     prepared = _prepare_interval_tables(left, right, cfg)
     ctx = _session_context(_ctx)
-    left_df, joined, right_name_map = _interval_join_frames(prepared, ctx=ctx)
+    left_df, joined, right_name_map = _interval_join_frames(
+        prepared,
+        ctx=ctx,
+        exec_ctx=_ctx,
+    )
     best = _interval_best_matches(
         joined,
         prepared=prepared,

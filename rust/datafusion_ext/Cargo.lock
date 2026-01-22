@@ -1756,6 +1756,7 @@ dependencies = [
  "arrow",
  "arrow-ipc",
  "blake2",
+ "chrono",
  "datafusion",
  "datafusion-catalog-listing",
  "datafusion-common",

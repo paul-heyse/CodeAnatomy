@@ -12,7 +12,7 @@ from arrowdsl.schema.metadata import (
     ENCODING_META,
     encoding_policy_from_schema,
 )
-from normalize.registry_ids import (
+from datafusion_engine.normalize_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
     REACH_EDGE_ID_SPEC,

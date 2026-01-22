@@ -93,7 +93,9 @@ class CSTExtractOptions:
     compute_scope: bool = True
     compute_type_inference: bool = False
     matcher_templates: tuple[str, ...] = ()
-    batch_size: int | None = None
+    batch_size: int | None = 512
+    parallel: bool = True
+    max_workers: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1449,7 +1451,7 @@ def _collect_cst_file_rows(
     repo_manager = _build_repo_manager(options, contexts)
     if not contexts:
         return rows
-    use_parallel = True
+    use_parallel = options.parallel
     if repo_manager is not None and not supports_fork():
         use_parallel = False
     if use_parallel:
@@ -1457,7 +1459,11 @@ def _collect_cst_file_rows(
         _set_worker_repo_manager(repo_manager)
         runner = partial(_cst_row_worker, options=options, evidence_plan=evidence_plan)
         try:
-            rows.extend(row for row in parallel_map(contexts, runner) if row is not None)
+            rows.extend(
+                row
+                for row in parallel_map(contexts, runner, max_workers=options.max_workers)
+                if row is not None
+            )
         finally:
             _set_worker_repo_manager(None)
         return rows
@@ -1535,13 +1541,13 @@ def _iter_cst_batches_for_contexts(
     batch_size: int,
 ) -> Iterable[Sequence[Mapping[str, object]]]:
     batch: list[dict[str, object]] = []
-    use_parallel = repo_manager is None or supports_fork()
+    use_parallel = options.parallel and (repo_manager is None or supports_fork())
     if use_parallel:
         _warm_cst_parser()
         _set_worker_repo_manager(repo_manager)
         runner = partial(_cst_row_worker, options=options, evidence_plan=evidence_plan)
         try:
-            for row in parallel_map(contexts, runner):
+            for row in parallel_map(contexts, runner, max_workers=options.max_workers):
                 if row is None:
                     continue
                 batch.append(row)

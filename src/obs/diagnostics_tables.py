@@ -483,6 +483,16 @@ def datafusion_plan_artifacts_table(
                 "lineage_tables": lineage_tables,
                 "lineage_columns": lineage_columns,
                 "lineage_scopes": lineage_scopes,
+                "param_signature": (
+                    str(artifact.get("param_signature"))
+                    if artifact.get("param_signature") is not None
+                    else None
+                ),
+                "projection_map": (
+                    str(artifact.get("projection_map"))
+                    if artifact.get("projection_map") is not None
+                    else None
+                ),
                 "unparsed_sql": (
                     str(artifact.get("unparsed_sql"))
                     if artifact.get("unparsed_sql") is not None
@@ -520,6 +530,68 @@ def datafusion_plan_artifacts_table(
             }
         )
     schema = schema_for("datafusion_plan_artifacts_v1")
+    return table_from_rows(schema, rows)
+
+
+def datafusion_udf_validation_table(
+    records: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build a DataFusion UDF validation diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to DATAFUSION_UDF_VALIDATION_V1.
+    """
+    now = _now_ms()
+    rows = [
+        {
+            "event_time_unix_ms": _coerce_event_time(
+                record.get("event_time_unix_ms"),
+                default=now,
+            ),
+            "udf_catalog_policy": str(record.get("udf_catalog_policy") or "default"),
+            "missing_udfs": _coerce_str_list(record.get("missing_udfs")),
+            "missing_count": (
+                _coerce_int(record.get("missing_count"), default=0)
+                if record.get("missing_count") is not None
+                else None
+            ),
+        }
+        for record in records
+    ]
+    schema = schema_for("datafusion_udf_validation_v1")
+    return table_from_rows(schema, rows)
+
+
+def datafusion_object_stores_table(
+    records: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build a DataFusion object store diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to DATAFUSION_OBJECT_STORES_V1.
+    """
+    now = _now_ms()
+    rows = [
+        {
+            "event_time_unix_ms": _coerce_event_time(
+                record.get("event_time_unix_ms"),
+                default=now,
+            ),
+            "scheme": str(record.get("scheme") or ""),
+            "host": str(record.get("host")) if record.get("host") is not None else None,
+            "store_type": (
+                str(record.get("store_type"))
+                if record.get("store_type") is not None
+                else None
+            ),
+        }
+        for record in records
+    ]
+    schema = schema_for("datafusion_object_stores_v1")
     return table_from_rows(schema, rows)
 
 
@@ -699,10 +771,12 @@ __all__ = [
     "datafusion_cache_state_table",
     "datafusion_ddl_fingerprints_table",
     "datafusion_explains_table",
+    "datafusion_object_stores_table",
     "datafusion_plan_artifacts_table",
     "datafusion_runs_table",
     "datafusion_schema_map_fingerprints_table",
     "datafusion_schema_registry_validation_table",
+    "datafusion_udf_validation_table",
     "feature_state_table",
     "file_pruning_diagnostics_table",
     "lineage_diagnostics_row",

@@ -3,24 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-import ibis
 import pyarrow as pa
-from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
 from ibis_engine.sources import SourceToIbisOptions, source_to_ibis
+from incremental.ibis_exec import ibis_expr_to_table
 from incremental.registry_specs import dataset_schema
+from incremental.runtime import IncrementalRuntime
+
+if TYPE_CHECKING:
+    from ibis.backends import BaseBackend
 
 
 def build_exported_defs_index(
     cst_defs_norm: TableLike,
     *,
-    backend: BaseBackend | None = None,
+    runtime: IncrementalRuntime,
     rel_def_symbol: TableLike | None = None,
 ) -> pa.Table:
     """Build the exported definitions index for top-level defs.
@@ -30,9 +33,7 @@ def build_exported_defs_index(
     pa.Table
         Exported definitions table with qname and optional symbol bindings.
     """
-    if backend is None:
-        backend = ibis.datafusion.connect()
-    backend = cast("BaseBackend", backend)
+    backend = runtime.ibis_backend()
     _require_datafusion_backend(backend)
     schema = dataset_schema("dim_exported_defs_v1")
     plan = source_to_ibis(
@@ -48,7 +49,8 @@ def build_exported_defs_index(
             options=SourceToIbisOptions(backend=backend, name="rel_def_symbol_v1"),
         )
     result = _build_exported_defs_base(
-        backend,
+        runtime,
+        backend=backend,
         has_rel_def_symbol=rel_def_symbol is not None,
         has_container_def_id="container_def_id" in schema_names,
     )
@@ -56,8 +58,9 @@ def build_exported_defs_index(
 
 
 def _build_exported_defs_base(
-    backend: BaseBackend,
+    runtime: IncrementalRuntime,
     *,
+    backend: BaseBackend,
     has_rel_def_symbol: bool,
     has_container_def_id: bool,
 ) -> pa.Table:
@@ -65,7 +68,11 @@ def _build_exported_defs_base(
         has_rel_def_symbol=has_rel_def_symbol,
         has_container_def_id=has_container_def_id,
     )
-    table = _sql_expr(backend, sql).to_pyarrow()
+    table = ibis_expr_to_table(
+        _sql_expr(backend, sql),
+        runtime=runtime,
+        name="exported_defs_index",
+    )
     if table.num_rows == 0:
         return _empty_exported_defs(dataset_schema("dim_exported_defs_v1"))
     return table

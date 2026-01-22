@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import ibis
+import ibis.expr.datatypes as dt
 from ibis.expr.types import BooleanValue, Table, Value
 
 from ibis_engine.param_tables import scalar_param_signature
@@ -35,6 +36,16 @@ class ScalarParamSpec:
     dtype: str
     default: object | None = None
     required: bool = True
+
+    def sql_type(self) -> str:
+        """Return the DataFusion SQL type for the parameter.
+
+        Returns
+        -------
+        str
+            SQL type string suitable for PREPARE statements.
+        """
+        return _sql_type_from_dtype(ibis.dtype(self.dtype))
 
 
 @dataclass
@@ -172,6 +183,45 @@ def registry_from_ops(ops: Sequence[RelOpT]) -> IbisParamRegistry:
         Registry populated with parameter specs.
     """
     return registry_from_specs(specs_from_rel_ops(ops))
+
+
+def param_sql_types(specs: Iterable[ScalarParamSpec]) -> dict[str, str]:
+    """Return SQL type mappings for parameter specs.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of parameter name to SQL type string.
+    """
+    return {spec.name: spec.sql_type() for spec in specs}
+
+
+def param_types_from_bindings(
+    values: Mapping[str, object] | Mapping[Value, object],
+) -> dict[str, str]:
+    """Return SQL types inferred from parameter bindings.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of parameter name to SQL type string.
+
+    Raises
+    ------
+    ValueError
+        Raised when a parameter name cannot be resolved.
+    """
+    resolved: dict[str, str] = {}
+    for key, value in values.items():
+        if isinstance(key, str):
+            resolved[key] = _sql_type_from_value(value)
+            continue
+        name = _param_name(key)
+        if not name:
+            msg = "Parameter expression is missing a stable name."
+            raise ValueError(msg)
+        resolved[name] = _sql_type_from_dtype(key.type())
+    return resolved
 
 
 def datafusion_param_bindings(
@@ -317,6 +367,58 @@ def _param_name(param: Value) -> str:
     return ""
 
 
+def _sql_type_from_dtype(dtype: dt.DataType) -> str:
+    if dtype.is_boolean():
+        return "BOOLEAN"
+    if dtype.is_int8():
+        return "TINYINT"
+    if dtype.is_int16():
+        return "SMALLINT"
+    if dtype.is_int32():
+        return "INT"
+    if dtype.is_int64():
+        return "BIGINT"
+    if dtype.is_uint8():
+        return "TINYINT UNSIGNED"
+    if dtype.is_uint16():
+        return "SMALLINT UNSIGNED"
+    if dtype.is_uint32():
+        return "INT UNSIGNED"
+    if dtype.is_uint64():
+        return "BIGINT UNSIGNED"
+    if dtype.is_float32():
+        return "FLOAT"
+    if dtype.is_float64():
+        return "DOUBLE"
+    if dtype.is_string():
+        return "VARCHAR"
+    if dtype.is_timestamp():
+        return "TIMESTAMP"
+    if dtype.is_date():
+        return "DATE"
+    if dtype.is_time():
+        return "TIME"
+    if dtype.is_decimal():
+        precision = dtype.precision or 38
+        scale = dtype.scale or 0
+        return f"DECIMAL({precision},{scale})"
+    return str(dtype).upper()
+
+
+def _sql_type_from_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "BOOLEAN"
+    if isinstance(value, int):
+        return "BIGINT"
+    if isinstance(value, float):
+        return "DOUBLE"
+    if isinstance(value, str):
+        return "VARCHAR"
+    if value is None:
+        return "VARCHAR"
+    return "VARCHAR"
+
+
 ParamSpec = ScalarParamSpec
 
 
@@ -330,6 +432,8 @@ __all__ = [
     "list_param_names_from_rel_ops",
     "param_binding_mode",
     "param_binding_signature",
+    "param_sql_types",
+    "param_types_from_bindings",
     "registry_from_ops",
     "registry_from_specs",
     "specs_from_rel_ops",

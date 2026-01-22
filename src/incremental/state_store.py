@@ -138,5 +138,45 @@ class StateStore:
         """
         return self.metadata_dir() / "cdf_cursors"
 
+    def incremental_metadata_path(self) -> Path:
+        """Return the Delta path for incremental runtime metadata.
+
+        Returns
+        -------
+        Path
+            Metadata Delta table path.
+        """
+        return self.metadata_dir() / "incremental_metadata"
+
+    def cdf_cursor_snapshot_path(self) -> Path:
+        """Return the Delta path for CDF cursor snapshots.
+
+        Returns
+        -------
+        Path
+            CDF cursor snapshot Delta table path.
+        """
+        return self.metadata_dir() / "cdf_cursor_snapshot"
+
+    def pruning_metrics_path(self) -> Path:
+        """Return the Delta path for pruning metrics.
+
+        Returns
+        -------
+        Path
+            Pruning metrics Delta table path.
+        """
+        return self.metadata_dir() / "incremental_pruning_metrics"
+
+    def sqlglot_artifacts_path(self) -> Path:
+        """Return the Delta path for SQLGlot plan artifacts.
+
+        Returns
+        -------
+        Path
+            SQLGlot plan artifact Delta table path.
+        """
+        return self.metadata_dir() / "incremental_sqlglot_plan_artifacts"
+
 
 __all__ = ["StateStore"]

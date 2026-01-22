@@ -1,0 +1,154 @@
+"""Incremental metadata and diagnostics artifact persistence."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+
+import pyarrow as pa
+
+from arrowdsl.schema.build import table_from_schema
+from incremental.cdf_cursors import CdfCursorStore
+from incremental.runtime import IncrementalRuntime
+from incremental.state_store import StateStore
+from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
+from storage.deltalake import DeltaWriteOptions, enable_delta_features, write_table_delta
+
+_CDF_CURSOR_SCHEMA = pa.schema(
+    [
+        pa.field("dataset_name", pa.string(), nullable=False),
+        pa.field("last_version", pa.int64(), nullable=False),
+    ]
+)
+
+
+def write_incremental_metadata(
+    state_store: StateStore,
+    *,
+    runtime: IncrementalRuntime,
+) -> str:
+    """Persist runtime + SQLGlot policy metadata to the state store.
+
+    Returns
+    -------
+    str
+        Delta table path for the metadata snapshot.
+    """
+    state_store.ensure_dirs()
+    snapshot = sqlglot_policy_snapshot_for(runtime.sqlglot_policy)
+    payload = {
+        "datafusion_settings_hash": runtime.profile.settings_hash(),
+        "sqlglot_policy_hash": snapshot.policy_hash,
+        "sqlglot_policy": snapshot.payload(),
+    }
+    table = pa.Table.from_pylist([payload])
+    path = state_store.incremental_metadata_path()
+    result = write_table_delta(
+        table,
+        str(path),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"snapshot_kind": "incremental_metadata"},
+        ),
+    )
+    enable_delta_features(result.path)
+    return result.path
+
+
+def write_cdf_cursor_snapshot(
+    state_store: StateStore,
+    *,
+    cursor_store: CdfCursorStore,
+) -> str:
+    """Persist the current CDF cursor snapshot to the state store.
+
+    Returns
+    -------
+    str
+        Delta table path for the cursor snapshot.
+    """
+    state_store.ensure_dirs()
+    cursors = cursor_store.list_cursors()
+    if cursors:
+        rows = [cursor.to_dict() for cursor in cursors]
+        table = pa.Table.from_pylist(rows, schema=_CDF_CURSOR_SCHEMA)
+    else:
+        table = table_from_schema(_CDF_CURSOR_SCHEMA, columns={}, num_rows=0)
+    path = state_store.cdf_cursor_snapshot_path()
+    result = write_table_delta(
+        table,
+        str(path),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"snapshot_kind": "cdf_cursor_snapshot"},
+        ),
+    )
+    enable_delta_features(result.path)
+    return result.path
+
+
+def write_incremental_artifacts(
+    state_store: StateStore,
+    *,
+    runtime: IncrementalRuntime,
+) -> dict[str, str]:
+    """Persist selected incremental diagnostics artifacts to Delta.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of artifact names to Delta table paths.
+    """
+    updated: dict[str, str] = {}
+    artifact_map = {
+        "incremental_file_pruning_v1": state_store.pruning_metrics_path(),
+        "incremental_sqlglot_plan_v1": state_store.sqlglot_artifacts_path(),
+    }
+    for name, path in artifact_map.items():
+        result = _write_artifact_table(
+            name=name,
+            path=path,
+            runtime=runtime,
+        )
+        if result is not None:
+            updated[name] = result
+    return updated
+
+
+def _write_artifact_table(
+    *,
+    name: str,
+    path: Path,
+    runtime: IncrementalRuntime,
+) -> str | None:
+    sink = runtime.profile.diagnostics_sink
+    if sink is None:
+        return None
+    artifacts = sink.artifacts_snapshot().get(name)
+    if not artifacts:
+        return None
+    table = _artifacts_to_table(artifacts)
+    result = write_table_delta(
+        table,
+        str(path),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"artifact_name": name},
+        ),
+    )
+    enable_delta_features(result.path)
+    return result.path
+
+
+def _artifacts_to_table(artifacts: Sequence[Mapping[str, object]]) -> pa.Table:
+    return pa.Table.from_pylist([dict(row) for row in artifacts])
+
+
+__all__ = [
+    "write_cdf_cursor_snapshot",
+    "write_incremental_artifacts",
+    "write_incremental_metadata",
+]

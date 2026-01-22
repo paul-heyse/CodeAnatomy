@@ -73,6 +73,7 @@ from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_registry import (
     DataFusionUdfSnapshot,
     get_default_udf_catalog,
+    get_strict_udf_catalog,
     register_datafusion_udfs,
 )
 from engine.function_registry import default_function_registry
@@ -1791,6 +1792,7 @@ class DataFusionRuntimeProfile:
     schema_adapter_factories: Mapping[str, object] = field(default_factory=dict)
     enable_schema_evolution_adapter: bool = True
     enable_udfs: bool = True
+    udf_catalog_policy: Literal["default", "strict"] = "default"
     require_delta: bool = True
     enable_delta_plan_codecs: bool = False
     delta_plan_codec_physical: str = "delta_physical"
@@ -2096,8 +2098,48 @@ class DataFusionRuntimeProfile:
             msg = "UdfCatalog requires information_schema to be enabled."
             raise ValueError(msg)
         introspector = self._schema_introspector(ctx)
-        catalog = get_default_udf_catalog(introspector=introspector)
+        if self.udf_catalog_policy == "strict":
+            catalog = get_strict_udf_catalog(introspector=introspector)
+        else:
+            catalog = get_default_udf_catalog(introspector=introspector)
+        self._validate_ibis_udf_specs(catalog)
         self.udf_catalog_cache[id(ctx)] = catalog
+
+    def _validate_ibis_udf_specs(self, catalog: UdfCatalog) -> None:
+        """Validate Ibis builtin UDFs against the runtime catalog.
+
+        Raises
+        ------
+        ValueError
+            Raised when builtin Ibis UDFs are missing from DataFusion.
+        """
+        missing: list[str] = []
+        from datafusion_engine.udf_registry import datafusion_udf_specs
+        from ibis_engine.builtin_udfs import ibis_udf_specs
+
+        registered_udfs = {spec.engine_name for spec in datafusion_udf_specs()}
+        for spec in ibis_udf_specs():
+            if spec.engine_name in registered_udfs:
+                continue
+            try:
+                if catalog.is_builtin_from_runtime(spec.engine_name):
+                    continue
+            except (RuntimeError, TypeError, ValueError):
+                pass
+            missing.append(spec.engine_name)
+        if missing:
+            if self.diagnostics_sink is not None:
+                self.diagnostics_sink.record_artifact(
+                    "datafusion_udf_validation_v1",
+                    {
+                        "event_time_unix_ms": int(time.time() * 1000),
+                        "udf_catalog_policy": self.udf_catalog_policy,
+                        "missing_udfs": sorted(missing),
+                        "missing_count": len(missing),
+                    },
+                )
+            msg = f"Ibis builtin UDFs missing in DataFusion: {sorted(missing)}."
+            raise ValueError(msg)
 
     def udf_catalog(self, ctx: SessionContext) -> UdfCatalog:
         """Return the cached UDF catalog for a session context.
@@ -2124,7 +2166,17 @@ class DataFusionRuntimeProfile:
         """
         if not self.enable_information_schema:
             return
-        required, required_counts, required_signatures = _rulepack_required_functions()
+        try:
+            function_catalog = function_catalog_snapshot_for_profile(
+                self,
+                ctx,
+                include_routines=True,
+            )
+        except (RuntimeError, TypeError, ValueError):
+            function_catalog = None
+        required, required_counts, required_signatures = _rulepack_required_functions(
+            datafusion_function_catalog=function_catalog
+        )
         if not required:
             return
         errors = _rulepack_function_errors(
@@ -2500,6 +2552,7 @@ class DataFusionRuntimeProfile:
         if name == "bytecode_files_v1":
             return self._bytecode_dataset_location()
         return self.scip_dataset_locations.get(name)
+
 
     def _register_scip_datasets(self, ctx: SessionContext) -> None:
         if not self.scip_dataset_locations:
@@ -3544,6 +3597,16 @@ class DataFusionRuntimeProfile:
             if resolved.param_identifier_allowlist is not None
             else tuple(self.param_identifier_allowlist) or None
         )
+        prepared_param_types = resolved.prepared_param_types
+        prepared_statements = resolved.prepared_statements
+        dynamic_projection = resolved.dynamic_projection
+        if prepared_param_types is None and prepared_statements and resolved_params:
+            from ibis_engine.params_bridge import param_types_from_bindings
+
+            try:
+                prepared_param_types = param_types_from_bindings(resolved_params)
+            except ValueError:
+                prepared_param_types = None
         capture_explain = resolved.capture_explain or self.capture_explain
         explain_analyze = resolved.explain_analyze or self.explain_analyze
         substrait_validation = resolved.substrait_validation or self.substrait_validation
@@ -3582,6 +3645,9 @@ class DataFusionRuntimeProfile:
             sql_policy == resolved.sql_policy,
             sql_policy_name == resolved.sql_policy_name,
             param_allowlist == resolved.param_identifier_allowlist,
+            prepared_param_types == resolved.prepared_param_types,
+            prepared_statements == resolved.prepared_statements,
+            dynamic_projection == resolved.dynamic_projection,
         )
         if all(unchanged) and execution_policy is None and execution_label is None:
             return resolved
@@ -3603,6 +3669,7 @@ class DataFusionRuntimeProfile:
             substrait_fallback_hook=hooks.substrait_fallback_hook,
             sql_policy=sql_policy,
             sql_policy_name=sql_policy_name,
+            prepared_param_types=prepared_param_types,
         )
         if execution_label is not None:
             updated = apply_execution_label(
@@ -4315,7 +4382,10 @@ def _merge_signature_errors(
     return merged
 
 
-def _rulepack_required_functions() -> tuple[
+def _rulepack_required_functions(
+    *,
+    datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None,
+) -> tuple[
     dict[str, set[str]],
     dict[str, int],
     dict[str, set[tuple[str, ...]]],
@@ -4324,7 +4394,9 @@ def _rulepack_required_functions() -> tuple[
     from relspec.rules.coverage import collect_rule_demands
 
     demands = collect_rule_demands(rule_definitions_cached(), include_extract_queries=True)
-    registry = default_function_registry()
+    registry = default_function_registry(
+        datafusion_function_catalog=datafusion_function_catalog
+    )
     required: dict[str, set[str]] = {}
     required_counts: dict[str, int] = {}
     required_signatures: dict[str, set[tuple[str, ...]]] = {}
@@ -4333,7 +4405,7 @@ def _rulepack_required_functions() -> tuple[
             spec = registry.specs.get(name)
             engine_name = spec.engine_name if spec is not None else name
             required.setdefault(engine_name, set()).update(rules)
-            if spec is not None:
+            if spec is not None and spec.input_types:
                 required_counts.setdefault(engine_name, len(spec.input_types))
                 signature = _rulepack_signature_for_spec(spec)
                 if signature is not None:

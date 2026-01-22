@@ -199,7 +199,20 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     arrow_payload = runtime.arrow_resource_snapshot().to_payload()
     ibis_payload = runtime.ibis_options_payload()
     sqlglot_snapshot = sqlglot_policy_snapshot()
-    function_registry = default_function_registry()
+    function_catalog = None
+    if runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
+        try:
+            from datafusion_engine.runtime import function_catalog_snapshot_for_profile
+
+            session = runtime.datafusion.session_context()
+            function_catalog = function_catalog_snapshot_for_profile(
+                runtime.datafusion,
+                session,
+                include_routines=True,
+            )
+        except (RuntimeError, TypeError, ValueError):
+            function_catalog = None
+    function_registry = default_function_registry(datafusion_function_catalog=function_catalog)
     function_registry_hash = function_registry.fingerprint()
     datafusion_payload = (
         runtime.datafusion.telemetry_payload_v1() if runtime.datafusion is not None else None

@@ -48,10 +48,12 @@ class ASTExtractOptions:
     optimize: Literal[-1, 0, 1, 2] | None = None
     allow_top_level_await: bool = False
     dont_inherit: bool = True
-    batch_size: int | None = None
+    batch_size: int | None = 512
     max_bytes: int | None = 50_000_000
     max_nodes: int | None = 1_000_000
     cache_by_sha: bool = True
+    parallel: bool = True
+    max_workers: int | None = None
     repo_id: str | None = None
 
 
@@ -1058,8 +1060,14 @@ def _iter_ast_rows(
     resolved_options = _resolve_feature_version(options, contexts)
     if resolved_options.cache_by_sha:
         _AST_WORKER_CACHE.clear()
+    if not resolved_options.parallel:
+        for file_ctx in contexts:
+            row = _ast_row_worker(file_ctx, options=resolved_options)
+            if row is not None:
+                yield row
+        return
     runner = partial(_ast_row_worker, options=resolved_options)
-    for row in parallel_map(contexts, runner):
+    for row in parallel_map(contexts, runner, max_workers=resolved_options.max_workers):
         if row is not None:
             yield row
 

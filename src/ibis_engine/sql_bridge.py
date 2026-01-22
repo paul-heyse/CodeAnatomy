@@ -44,6 +44,7 @@ class SqlIngestSpec:
     dialect: str | None = None
     backend: IbisCompilerBackend | None = None
     artifacts_hook: Callable[[Mapping[str, object]], None] | None = None
+    sqlglot_expr: Expression | None = None
 
 
 @dataclass(frozen=True)
@@ -126,17 +127,13 @@ def parse_sql_table(spec: SqlIngestSpec) -> Table:
         dialect=policy.write_dialect,
     )
     try:
-        normalized_expr = _normalize_ingest_expr(
-            spec.sql,
+        normalized_expr = _resolve_ingest_expr(
+            spec,
             schema_map=schema_map,
             policy=policy,
         )
     except (ParseError, TypeError, ValueError) as exc:
-        _emit_sql_ingest_failure(
-            spec,
-            error=exc,
-            context=context,
-        )
+        _emit_sql_ingest_failure(spec, error=exc, context=context)
         msg = f"SQLGlot normalization failed: {exc}"
         raise ValueError(msg) from exc
     normalized_sql = sqlglot_sql(normalized_expr, policy=policy)
@@ -210,6 +207,40 @@ def _normalize_ingest_expr(
     )
 
 
+def _normalize_ingest_expr_from_expr(
+    expr: Expression,
+    *,
+    schema_map: SchemaMapping,
+    policy: SqlGlotPolicy,
+) -> Expression:
+    return normalize_expr(
+        expr.copy(),
+        options=NormalizeExprOptions(
+            schema=schema_map,
+            policy=policy,
+        ),
+    )
+
+
+def _resolve_ingest_expr(
+    spec: SqlIngestSpec,
+    *,
+    schema_map: SchemaMapping,
+    policy: SqlGlotPolicy,
+) -> Expression:
+    if spec.sqlglot_expr is not None:
+        return _normalize_ingest_expr_from_expr(
+            spec.sqlglot_expr,
+            schema_map=schema_map,
+            policy=policy,
+        )
+    return _normalize_ingest_expr(
+        spec.sql,
+        schema_map=schema_map,
+        policy=policy,
+    )
+
+
 def _emit_sql_ingest_failure(
     spec: SqlIngestSpec,
     *,
@@ -247,8 +278,14 @@ def _schema_map_from_catalog(
 def _sqlglot_policy_for_spec(spec: SqlIngestSpec) -> SqlGlotPolicy:
     policy = default_sqlglot_policy()
     if spec.dialect is None:
-        return policy
-    return replace(policy, read_dialect=spec.dialect, write_dialect=spec.dialect)
+        return replace(policy, validate_qualify_columns=True, identify=True)
+    return replace(
+        policy,
+        read_dialect=spec.dialect,
+        write_dialect=spec.dialect,
+        validate_qualify_columns=True,
+        identify=True,
+    )
 
 
 def decompile_expr(expr: Table | Value) -> str:

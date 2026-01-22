@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import mmap
 import time
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from functools import cache, partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 import tree_sitter_python
@@ -16,6 +19,7 @@ from tree_sitter import (
     Language,
     Node,
     Parser,
+    Point,
     QueryCursor,
     Range,
     TreeCursor,
@@ -32,7 +36,6 @@ from extract.helpers import (
     SpanSpec,
     apply_query_and_project,
     attrs_map,
-    bytes_from_file_ctx,
     ibis_plan_from_row_batches,
     ibis_plan_from_rows,
     materialize_extract_plan,
@@ -49,6 +52,7 @@ if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
 
 type Row = dict[str, object]
+type SourceBuffer = bytes | bytearray | memoryview
 
 PY_LANGUAGE = Language(tree_sitter_python.language())
 SEMVER_PARTS = 3
@@ -77,7 +81,12 @@ class TreeSitterExtractOptions:
     incremental: bool = False
     incremental_cache_size: int = 256
     repo_id: str | None = None
-    batch_size: int | None = None
+    batch_size: int | None = 512
+    parallel: bool = True
+    max_workers: int | None = None
+    included_ranges: tuple[tuple[int, int], ...] | None = None
+    parse_callback_threshold_bytes: int | None = 5_000_000
+    parse_callback_chunk_size: int = 65_536
 
 
 @dataclass(frozen=True)
@@ -137,9 +146,18 @@ class _ImportInfo:
 
 
 @dataclass(frozen=True)
+class _ParseContext:
+    parser: Parser
+    data: SourceBuffer
+    cache: TreeSitterCache | None
+    cache_key: str
+    use_callback: bool
+
+
+@dataclass(frozen=True)
 class _QueryContext:
     root: Node
-    data: bytes
+    data: SourceBuffer
     file_ctx: FileContext
     options: TreeSitterExtractOptions
     query_pack: TreeSitterQueryPack
@@ -149,7 +167,7 @@ class _QueryContext:
 @dataclass
 class _QueryCollector:
     file_ctx: FileContext
-    data: bytes
+    data: SourceBuffer
     options: TreeSitterExtractOptions
     captures: list[Row] = field(default_factory=list)
     defs: list[Row] = field(default_factory=list)
@@ -343,6 +361,66 @@ def _should_parse(file_ctx: FileContext, options: TreeSitterExtractOptions) -> b
     return any(path.endswith(ext) for ext in options.extensions)
 
 
+@contextlib.contextmanager
+def _source_buffer(
+    file_ctx: FileContext,
+    options: TreeSitterExtractOptions,
+) -> Iterator[tuple[SourceBuffer | None, bool]]:
+    data = file_ctx.data
+    if data is not None:
+        yield data, False
+        return
+    if file_ctx.text is not None:
+        encoding = file_ctx.encoding or "utf-8"
+        yield file_ctx.text.encode(encoding, errors="replace"), False
+        return
+    if not file_ctx.abs_path:
+        yield None, False
+        return
+    path = Path(file_ctx.abs_path)
+    try:
+        size_bytes = path.stat().st_size
+    except OSError:
+        yield None, False
+        return
+    threshold = options.parse_callback_threshold_bytes
+    use_callback = False
+    if _resolve_parse_callback_options(options):
+        if threshold is None:
+            msg = "parse_callback_threshold_bytes must be configured for parse callbacks."
+            raise ValueError(msg)
+        use_callback = size_bytes >= threshold
+    if use_callback:
+        with path.open("rb") as handle:
+            mm = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+            view = memoryview(mm)
+            try:
+                yield view, True
+            finally:
+                view.release()
+                mm.close()
+        return
+    try:
+        yield path.read_bytes(), False
+    except OSError:
+        yield None, False
+
+
+def _parse_callback(
+    data: SourceBuffer,
+    *,
+    chunk_size: int,
+) -> Callable[[int, Point], bytes]:
+    def _callback(byte_offset: int, _point: Point) -> bytes:
+        start = max(0, int(byte_offset))
+        if start >= len(data):
+            return b""
+        end = min(len(data), start + chunk_size)
+        return bytes(data[start:end])
+
+    return _callback
+
+
 def _maybe_int(value: object) -> int | None:
     return value if isinstance(value, int) else None
 
@@ -351,6 +429,41 @@ def _point_parts(point: object | None) -> tuple[int | None, int | None]:
     if point is None:
         return None, None
     return _maybe_int(getattr(point, "row", None)), _maybe_int(getattr(point, "column", None))
+
+
+def _point_from_byte(data: SourceBuffer, byte_offset: int) -> Point:
+    if byte_offset <= 0:
+        return Point(0, 0)
+    offset = min(byte_offset, len(data))
+    prefix = bytes(data[:offset])
+    row = prefix.count(b"\n")
+    last_newline = prefix.rfind(b"\n")
+    col = offset if last_newline == -1 else offset - last_newline - 1
+    return Point(int(row), int(col))
+
+
+def _included_ranges(
+    data: SourceBuffer,
+    options: TreeSitterExtractOptions,
+) -> tuple[Range, ...] | None:
+    ranges = options.included_ranges
+    if not ranges:
+        return None
+    resolved: list[Range] = []
+    for start, end in ranges:
+        start_byte = min(len(data), max(0, int(start)))
+        end_byte = min(len(data), max(start_byte, int(end)))
+        if end_byte == start_byte:
+            continue
+        resolved.append(
+            Range(
+                _point_from_byte(data, start_byte),
+                _point_from_byte(data, end_byte),
+                start_byte,
+                end_byte,
+            )
+        )
+    return tuple(resolved) if resolved else None
 
 
 def _span_spec(node: Node) -> SpanSpec:
@@ -377,7 +490,7 @@ def _node_id(file_ctx: FileContext, node: Node) -> str:
 def _node_text(
     node: Node,
     *,
-    data: bytes,
+    data: SourceBuffer,
     max_bytes: int,
     allow_non_leaf: bool = False,
 ) -> tuple[str | None, bool]:
@@ -391,7 +504,7 @@ def _node_text(
     end = int(node.end_byte)
     if end <= start:
         return None, False
-    text_bytes = data[start:end]
+    text_bytes = bytes(data[start:end])
     truncated = False
     if len(text_bytes) > max_bytes:
         text_bytes = text_bytes[:max_bytes]
@@ -402,7 +515,7 @@ def _node_text(
 def _node_text_value(
     node: Node | None,
     *,
-    data: bytes,
+    data: SourceBuffer,
     options: TreeSitterExtractOptions,
     allow_non_leaf: bool = True,
 ) -> str | None:
@@ -422,7 +535,7 @@ def _resolve_import_module(
     module_node: Node | None,
     from_node: Node | None,
     relative_node: Node | None,
-    data: bytes,
+    data: SourceBuffer,
     options: TreeSitterExtractOptions,
 ) -> tuple[str, str | None, int | None]:
     kind = "Import"
@@ -463,7 +576,7 @@ def _node_entry(
     node: Node,
     *,
     file_ctx: FileContext,
-    data: bytes,
+    data: SourceBuffer,
     options: TreeSitterExtractOptions,
     parent: Node | None,
 ) -> Row:
@@ -543,7 +656,7 @@ def _capture_entry(
     node: Node,
     *,
     file_ctx: FileContext,
-    data: bytes,
+    data: SourceBuffer,
     options: TreeSitterExtractOptions,
     info: _CaptureInfo,
 ) -> Row:
@@ -599,7 +712,7 @@ def _call_row(
     *,
     file_ctx: FileContext,
     callee: Node,
-    data: bytes,
+    data: SourceBuffer,
     options: TreeSitterExtractOptions,
 ) -> Row:
     callee_text, _ = _node_text(
@@ -652,7 +765,7 @@ def _docstring_row(
     owner: Node,
     doc_node: Node,
     file_ctx: FileContext,
-    data: bytes,
+    data: SourceBuffer,
     options: TreeSitterExtractOptions,
 ) -> Row:
     raw_text, truncated = _node_text(
@@ -811,6 +924,8 @@ def extract_ts(
         Extracted tree-sitter file table.
     """
     normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
+    normalized_options = _normalize_ts_options(normalized_options)
+    normalized_options = _normalize_ts_options(normalized_options)
     exec_context = context or ExtractExecutionContext()
     exec_ctx = exec_context.ensure_ctx()
     normalize = ExtractNormalizeOptions(options=normalized_options)
@@ -849,6 +964,7 @@ def extract_ts_plans(
         Ibis plan bundle keyed by ``tree_sitter_files``.
     """
     normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
+    normalized_options = _normalize_ts_options(normalized_options)
     exec_context = context or ExtractExecutionContext()
     normalize = ExtractNormalizeOptions(options=normalized_options)
     rows: list[Row] | None = None
@@ -899,9 +1015,25 @@ def _collect_ts_rows(
     )
     if not contexts:
         return rows
-    runner = partial(_ts_row_worker, options=options)
-    rows.extend(row for row in parallel_map(contexts, runner) if row is not None)
+    rows.extend(_iter_ts_rows_for_contexts(contexts, options=options))
     return rows
+
+
+def _iter_ts_rows_for_contexts(
+    contexts: Sequence[FileContext],
+    *,
+    options: TreeSitterExtractOptions,
+) -> Iterator[Row]:
+    if not options.parallel:
+        for file_ctx in contexts:
+            row = _ts_row_worker(file_ctx, options=options)
+            if row is not None:
+                yield row
+        return
+    runner = partial(_ts_row_worker, options=options)
+    for row in parallel_map(contexts, runner, max_workers=options.max_workers):
+        if row is not None:
+            yield row
 
 
 def _iter_ts_row_batches(
@@ -923,10 +1055,7 @@ def _iter_ts_row_batches(
     )
     if not contexts:
         return
-    runner = partial(_ts_row_worker, options=options)
-    for row in parallel_map(contexts, runner):
-        if row is None:
-            continue
+    for row in _iter_ts_rows_for_contexts(contexts, options=options):
         batch.append(row)
         if len(batch) >= batch_size:
             yield batch
@@ -955,6 +1084,28 @@ def _resolve_batch_size(options: TreeSitterExtractOptions) -> int | None:
     return options.batch_size
 
 
+def _normalize_ts_options(options: TreeSitterExtractOptions) -> TreeSitterExtractOptions:
+    ranges = options.included_ranges
+    if ranges is None:
+        return options
+    normalized = tuple((int(start), int(end)) for start, end in ranges)
+    if normalized == ranges:
+        return options
+    return replace(options, included_ranges=normalized)
+
+
+def _resolve_parse_callback_options(options: TreeSitterExtractOptions) -> bool:
+    if options.parse_callback_threshold_bytes is None:
+        return False
+    if options.parse_callback_threshold_bytes <= 0:
+        msg = "parse_callback_threshold_bytes must be a positive integer."
+        raise ValueError(msg)
+    if options.parse_callback_chunk_size <= 0:
+        msg = "parse_callback_chunk_size must be a positive integer."
+        raise ValueError(msg)
+    return True
+
+
 def _should_run_queries(options: TreeSitterExtractOptions) -> bool:
     return (
         options.include_captures
@@ -966,26 +1117,48 @@ def _should_run_queries(options: TreeSitterExtractOptions) -> bool:
 
 
 def _parse_tree(
+    context: _ParseContext,
     *,
-    parser: Parser,
-    data: bytes,
     options: TreeSitterExtractOptions,
-    cache: TreeSitterCache | None,
-    cache_key: str,
 ) -> tuple[TreeSitterParseResult, _ParseStats]:
     start = time.monotonic()
-    if options.incremental and cache is not None:
-        parse_result = cache.parse(parser=parser, key=cache_key, source=data)
-        tree = parse_result.tree
-        used_incremental = parse_result.used_incremental
-    else:
-        tree = parser.parse(data)
-        used_incremental = False
-        parse_result = TreeSitterParseResult(
-            tree=tree,
-            changed_ranges=(),
-            used_incremental=False,
-        )
+    data = context.data
+    parser = context.parser
+    cache = context.cache
+    ranges = _included_ranges(data, options)
+    if ranges is not None:
+        parser.included_ranges = list(ranges)
+    try:
+        if (
+            cache is not None
+            and options.incremental
+            and ranges is None
+            and not context.use_callback
+            and isinstance(data, (bytes, bytearray))
+        ):
+            source = data if isinstance(data, bytes) else bytes(data)
+            parse_result = cache.parse(
+                parser=parser,
+                key=context.cache_key,
+                source=source,
+            )
+            tree = parse_result.tree
+            used_incremental = parse_result.used_incremental
+        else:
+            if context.use_callback:
+                callback = _parse_callback(data, chunk_size=options.parse_callback_chunk_size)
+                tree = parser.parse(callback)
+            else:
+                tree = parser.parse(data)
+            used_incremental = False
+            parse_result = TreeSitterParseResult(
+                tree=tree,
+                changed_ranges=(),
+                used_incremental=False,
+            )
+    finally:
+        if ranges is not None:
+            parser.included_ranges = []
     parse_ms = int((time.monotonic() - start) * 1000)
     parse_timed_out = tree is None
     if parse_timed_out:
@@ -1009,45 +1182,48 @@ def _extract_ts_file_row(
         return None
     if not _should_parse(file_ctx, options):
         return None
-    data = bytes_from_file_ctx(file_ctx)
-    if data is None:
-        return None
     cache_key = file_ctx.file_id or file_ctx.path
-    parse_result, parse_stats = _parse_tree(
-        parser=parser,
-        data=data,
-        options=options,
-        cache=cache,
-        cache_key=cache_key,
-    )
-    tree = parse_result.tree if parse_result is not None else None
-    if tree is None:
-        return _empty_ts_file_row(
-            file_ctx=file_ctx,
-            options=options,
-            query_pack=query_pack,
-            parse_stats=parse_stats,
-        )
-    root = tree.root_node
-    node_rows, edge_rows, error_rows, missing_rows, node_stats = _collect_node_rows(
-        root,
-        file_ctx=file_ctx,
-        data=data,
-        options=options,
-    )
-    query_rows = None
-    query_ranges = parse_result.changed_ranges if options.incremental else ()
-    if query_pack is not None:
-        query_rows = _collect_queries(
-            _QueryContext(
-                root=root,
+    with _source_buffer(file_ctx, options) as (data, use_callback):
+        if data is None:
+            return None
+        parse_result, parse_stats = _parse_tree(
+            _ParseContext(
+                parser=parser,
                 data=data,
+                cache=cache,
+                cache_key=cache_key,
+                use_callback=use_callback,
+            ),
+            options=options,
+        )
+        tree = parse_result.tree if parse_result is not None else None
+        if tree is None:
+            return _empty_ts_file_row(
                 file_ctx=file_ctx,
                 options=options,
                 query_pack=query_pack,
-                ranges=query_ranges,
+                parse_stats=parse_stats,
             )
+        root = tree.root_node
+        node_rows, edge_rows, error_rows, missing_rows, node_stats = _collect_node_rows(
+            root,
+            file_ctx=file_ctx,
+            data=data,
+            options=options,
         )
+        query_rows = None
+        query_ranges = parse_result.changed_ranges if options.incremental else ()
+        if query_pack is not None:
+            query_rows = _collect_queries(
+                _QueryContext(
+                    root=root,
+                    data=data,
+                    file_ctx=file_ctx,
+                    options=options,
+                    query_pack=query_pack,
+                    ranges=query_ranges,
+                )
+            )
     attrs = _file_attrs(
         _file_ctx=file_ctx,
         query_pack=query_pack,
@@ -1124,7 +1300,7 @@ def _collect_node_rows(
     root: Node,
     *,
     file_ctx: FileContext,
-    data: bytes,
+    data: SourceBuffer,
     options: TreeSitterExtractOptions,
 ) -> tuple[list[Row], list[Row], list[Row], list[Row], _NodeStats]:
     node_rows: list[Row] = []
@@ -1312,6 +1488,7 @@ def extract_ts_tables(
         kwargs.get("options"),
         TreeSitterExtractOptions,
     )
+    normalized_options = _normalize_ts_options(normalized_options)
     context = kwargs.get("context")
     if context is None:
         context = ExtractExecutionContext(

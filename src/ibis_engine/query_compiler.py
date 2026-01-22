@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import cast
 
 import ibis
+import pyarrow as pa
 from ibis.expr.types import BooleanValue, Table, Value
 
 from arrowdsl.core.expr_types import ScalarValue
@@ -19,6 +20,7 @@ from ibis_engine.expr_compiler import (
     expr_ir_to_ibis,
 )
 from ibis_engine.macros import IbisMacroSpec, apply_macros
+from ibis_engine.param_tables import ParamTablePolicy, ParamTableRegistry, ParamTableSpec
 
 FILE_ID_PARAM_THRESHOLD = 500
 
@@ -141,7 +143,21 @@ def dataset_query_for_file_ids(
         )
     if len(file_ids) >= resolved_options.param_table_threshold:
         key_column = resolved_options.param_key_column or resolved_options.file_id_column
-        param_table = ibis.memtable({key_column: list(file_ids)})
+        logical_name = resolved_options.param_table_name or "file_id_params"
+        schema = pa.schema([pa.field(key_column, pa.string())])
+        registry = ParamTableRegistry(
+            specs={
+                logical_name: ParamTableSpec(
+                    logical_name=logical_name,
+                    key_col=key_column,
+                    schema=schema,
+                    distinct=True,
+                )
+            },
+            policy=ParamTablePolicy(prefix=resolved_options.param_table_prefix),
+        )
+        artifact = registry.register_values(logical_name, list(file_ids))
+        param_table = ibis.memtable(artifact.table)
         return IbisQuerySpec(
             projection=IbisProjectionSpec(base=tuple(columns)),
             macros=(

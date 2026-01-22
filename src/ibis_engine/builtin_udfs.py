@@ -56,6 +56,18 @@ def stable_hash128(value: Value) -> Value:
     return value.cast("string")
 
 
+@ibis.udf.scalar.builtin(signature=((dt.string,), dt.string), name="sha256")
+def sha256(value: Value) -> Value:
+    """Return a SHA-256 hash for string inputs.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        SHA-256 hash expression.
+    """
+    return value.cast("string")
+
+
 @ibis.udf.scalar.builtin(signature=((dt.string, dt.string), dt.string), name="prefixed_hash64")
 def prefixed_hash64(_prefix: Value, value: Value) -> Value:
     """Return a prefixed stable 64-bit hash for string inputs.
@@ -106,6 +118,16 @@ IBIS_UDF_SPECS: tuple[IbisUdfSpec, ...] = (
     IbisUdfSpec(
         func_id="stable_hash128",
         engine_name="stable_hash128",
+        kind="scalar",
+        input_types=(pa.string(),),
+        return_type=pa.string(),
+        arg_names=("value",),
+        lanes=("ibis_builtin",),
+        rewrite_tags=("hash",),
+    ),
+    IbisUdfSpec(
+        func_id="sha256",
+        engine_name="sha256",
         kind="scalar",
         input_types=(pa.string(),),
         return_type=pa.string(),

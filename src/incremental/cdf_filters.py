@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
+
+import ibis
+
+if TYPE_CHECKING:
+    from ibis.expr.types import Value
 
 
 class CdfChangeType(Enum):
@@ -124,6 +130,36 @@ class CdfFilterPolicy:
             return f"_change_type = {included_types[0]}"
 
         return f"_change_type IN ({', '.join(included_types)})"
+
+    def to_ibis_predicate(self, table: ibis.Table) -> Value | None:
+        """Return an Ibis predicate for filtering CDF change types.
+
+        Parameters
+        ----------
+        table : ibis.Table
+            CDF table expression containing the _change_type column.
+
+        Returns
+        -------
+        ibis.expr.types.Value | None
+            Predicate to apply, or None when all change types are included.
+        """
+        if self.include_insert and self.include_update_postimage and self.include_delete:
+            return None
+        included_types: list[str] = []
+        if self.include_insert:
+            included_types.append(CdfChangeType.INSERT.to_cdf_column_value())
+        if self.include_update_postimage:
+            included_types.append(CdfChangeType.UPDATE_POSTIMAGE.to_cdf_column_value())
+        if self.include_delete:
+            included_types.append(CdfChangeType.DELETE.to_cdf_column_value())
+        if not included_types:
+            return ibis.literal(value=False).cast("boolean")
+        change_type_col = table["_change_type"]
+        if len(included_types) == 1:
+            return change_type_col == ibis.literal(included_types[0])
+        values = [ibis.literal(value) for value in included_types]
+        return change_type_col.isin(values)
 
     @classmethod
     def include_all(cls) -> CdfFilterPolicy:

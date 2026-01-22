@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
-import pyarrow as pa
 from arro3.core.types import ArrowArrayExportable, ArrowStreamExportable
 from deltalake import CommitProperties, DeltaTable, WriterProperties, write_deltalake
 from deltalake._internal import Transaction
@@ -1331,6 +1330,35 @@ def _record_delta_write_artifact(
     runtime_profile.diagnostics_sink.record_artifact("datafusion_table_providers_v1", payload)
 
 
+def _delta_cdf_table_provider(
+    table_path: str,
+    *,
+    storage_options: StorageOptions | None,
+    options: DeltaCdfOptions | None,
+) -> object | None:
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError:
+        return None
+    provider_factory = getattr(module, "delta_cdf_table_provider", None)
+    options_type = getattr(module, "DeltaCdfOptions", None)
+    if not callable(provider_factory) or options_type is None:
+        return None
+    resolved = options or DeltaCdfOptions()
+    ext_options = options_type()
+    if resolved.starting_version is not None:
+        ext_options.starting_version = resolved.starting_version
+    if resolved.ending_version is not None:
+        ext_options.ending_version = resolved.ending_version
+    if resolved.starting_timestamp is not None:
+        ext_options.starting_timestamp = resolved.starting_timestamp
+    if resolved.ending_timestamp is not None:
+        ext_options.ending_timestamp = resolved.ending_timestamp
+    ext_options.allow_out_of_range = resolved.allow_out_of_range
+    storage = list(storage_options.items()) if storage_options else None
+    return provider_factory(table_path, storage, ext_options)
+
+
 def read_delta_cdf(
     table_path: str,
     *,
@@ -1358,50 +1386,32 @@ def read_delta_cdf(
     ValueError
         If CDF is not enabled on the Delta table.
     """
-    storage = _storage_dict(storage_options)
-    dt = DeltaTable(table_path, storage_options=storage)
-
-    # Check if CDF is enabled
-    metadata = dt.metadata()
-    configuration = metadata.configuration or {}
-    cdf_enabled = configuration.get("delta.enableChangeDataFeed", "false").lower() == "true"
-    if not cdf_enabled:
-        msg = f"Change data feed is not enabled on Delta table at {table_path}"
-        raise ValueError(msg)
-
-    # Prepare CDF options
     resolved_options = cdf_options or DeltaCdfOptions()
+    provider = _delta_cdf_table_provider(
+        table_path,
+        storage_options=storage_options,
+        options=resolved_options,
+    )
+    if provider is None:
+        msg = "Delta CDF provider requires datafusion_ext.delta_cdf_table_provider."
+        raise ValueError(msg)
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
-    # Load CDF data
+    ctx = DataFusionRuntimeProfile().session_context()
+    name = f"__delta_cdf_{uuid.uuid4().hex}"
+    select_columns = "*"
+    if resolved_options.columns:
+        select_columns = ", ".join(resolved_options.columns)
+    predicate = resolved_options.predicate
     try:
-        cdf_data = dt.load_cdf(
-            starting_version=resolved_options.starting_version,
-            ending_version=resolved_options.ending_version,
-            starting_timestamp=resolved_options.starting_timestamp,
-            ending_timestamp=resolved_options.ending_timestamp,
-            columns=resolved_options.columns,
-        )
-    except Exception as exc:
-        msg = f"Failed to load CDF from Delta table at {table_path}: {exc}"
-        raise ValueError(msg) from exc
-
-    # Convert to Arrow Table
-    if isinstance(cdf_data, pa.Table):
-        return cast("TableLike", cdf_data)
-    read_all = getattr(cdf_data, "read_all", None)
-    if callable(read_all):
-        # RecordBatchReader
-        return cast("TableLike", read_all())
-    to_arrow = getattr(cdf_data, "to_arrow", None)
-    if callable(to_arrow):
-        # Polars DataFrame
-        return cast("TableLike", to_arrow())
-    to_pyarrow_table = getattr(cdf_data, "to_pyarrow_table", None)
-    if callable(to_pyarrow_table):
-        # Other formats
-        return cast("TableLike", to_pyarrow_table())
-    # Fallback: try to convert using PyArrow
-    return cast("TableLike", pa.table(cdf_data))
+        ctx.register_table(name, provider)
+        sql = f"SELECT {select_columns} FROM {name}"
+        if predicate:
+            sql = f"{sql} WHERE {predicate}"
+        df = ctx.sql(sql)
+        return cast("TableLike", df.to_arrow_table())
+    finally:
+        ctx.deregister_table(name)
 
 
 __all__ = [

@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
+import ibis
 import pyarrow as pa
 
-from arrowdsl.core.interop import RecordBatchReaderLike, Scalar, TableLike, coerce_table_like
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.runtime import read_delta_as_reader
-from incremental.runtime import IncrementalRuntime, TempTableRegistry
+from ibis_engine.builtin_udfs import sha256, stable_hash64
+from incremental.ibis_exec import ibis_expr_to_table
+from incremental.ibis_utils import ibis_table_from_arrow
+from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
+from incremental.streaming_writes import StreamingWriteOptions, stream_table_to_delta
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
@@ -20,8 +25,12 @@ from storage.deltalake import (
     write_table_delta,
 )
 
+if TYPE_CHECKING:
+    from ibis.expr.types import StringValue, Value
+
 _HASH_NULL_SENTINEL = "None"
 _HASH_SEPARATOR = "\x1f"
+_STREAMING_ROW_THRESHOLD = 250_000
 
 _DOC_HASH_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
     ("document_id", pa.string()),
@@ -67,21 +76,26 @@ _DIAGNOSTIC_HASH_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
 )
 
 
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace("\"", "\"\"")
-    return f"\"{escaped}\""
+def _concat_with_sep(parts: Sequence[StringValue], sep: str) -> StringValue:
+    if not parts:
+        msg = "Expected at least one string part."
+        raise ValueError(msg)
+    result = parts[0]
+    for part in parts[1:]:
+        result = result.concat(sep, part)
+    return result
 
 
-def _stringify_expr(column: str) -> str:
-    col_name = _sql_identifier(column)
-    return f"COALESCE(CAST({col_name} AS STRING), '{_HASH_NULL_SENTINEL}')"
-
-
-def _row_hash_expr(prefix: str, columns: Sequence[tuple[str, pa.DataType]]) -> str:
-    parts = [f"'{prefix}'"]
-    parts.extend(_stringify_expr(name) for name, _dtype in columns)
-    joined = ", ".join(parts)
-    return f"stable_hash64(concat_ws('{_HASH_SEPARATOR}', {joined}))"
+def _row_hash_expr(
+    prefix: str,
+    table: ibis.Table,
+    columns: Sequence[tuple[str, pa.DataType]],
+) -> Value:
+    parts: list[StringValue] = [ibis.literal(prefix).cast("string")]
+    for name, _dtype in columns:
+        value = table[name].cast("string")
+        parts.append(ibis.coalesce(value, ibis.literal(_HASH_NULL_SENTINEL)).cast("string"))
+    return stable_hash64(_concat_with_sep(parts, _HASH_SEPARATOR))
 
 
 def _as_table(table: TableLike) -> pa.Table:
@@ -92,13 +106,30 @@ def _as_table(table: TableLike) -> pa.Table:
     return cast("pa.Table", resolved)
 
 
-def _as_py_value(value: object) -> object:
-    if isinstance(value, Scalar):
-        return value.as_py()
-    as_py = getattr(value, "as_py", None)
-    if callable(as_py):
-        return as_py()
-    return value
+def _filter_document_id(table: ibis.Table) -> ibis.Table:
+    doc_id = cast("StringValue", table.document_id)
+    return table.filter(ibis.and_(doc_id.notnull(), doc_id != ibis.literal("")))
+
+
+def _hash_rows(
+    table: ibis.Table,
+    *,
+    prefix: str,
+    columns: Sequence[tuple[str, pa.DataType]],
+    include_path: bool,
+) -> ibis.Table:
+    row_hash = _row_hash_expr(prefix, table, columns).cast("string")
+    result = table.select(
+        document_id=table.document_id,
+        row_hash=row_hash,
+    )
+    if include_path:
+        result = result.mutate(path=table.path)
+    return result
+
+
+def _count_by_document(table: ibis.Table, *, column_name: str) -> ibis.Table:
+    return table.group_by("document_id").aggregate(**{column_name: table.document_id.count()})
 
 
 def build_scip_snapshot(
@@ -110,124 +141,75 @@ def build_scip_snapshot(
 ) -> pa.Table:
     """Return a document-level SCIP snapshot table.
 
+    Parameters
+    ----------
+    scip_documents:
+        SCIP document table.
+    scip_occurrences:
+        SCIP occurrence table.
+    scip_diagnostics:
+        SCIP diagnostic table.
+    runtime : IncrementalRuntime
+        Shared incremental runtime for DataFusion execution.
+
     Returns
     -------
     pa.Table
         Snapshot table keyed by document_id with fingerprints and counts.
     """
-    ctx = runtime.session_context()
-    sql_options = runtime.profile.sql_options()
-    docs_table = _as_table(scip_documents)
-    occs_table = _as_table(scip_occurrences)
-    diags_table = _as_table(scip_diagnostics)
-    with TempTableRegistry(ctx) as registry:
-        docs_name = registry.register_table(docs_table, prefix="docs")
-        occs_name = registry.register_table(occs_table, prefix="occ")
-        diags_name = registry.register_table(diags_table, prefix="diag")
-        doc_hash = _row_hash_expr("scip_doc", _DOC_HASH_COLUMNS)
-        occ_hash = _row_hash_expr("scip_occ", _OCCURRENCE_HASH_COLUMNS)
-        diag_hash = _row_hash_expr("scip_diag", _DIAGNOSTIC_HASH_COLUMNS)
-        sql = f"""
-        WITH docs AS (
-          SELECT
-            document_id,
-            path,
-            {doc_hash} AS row_hash
-          FROM {docs_name}
-          WHERE document_id IS NOT NULL AND document_id <> ''
-        ),
-        occ AS (
-          SELECT
-            document_id,
-            {occ_hash} AS row_hash
-          FROM {occs_name}
-          WHERE document_id IS NOT NULL AND document_id <> ''
-        ),
-        diag AS (
-          SELECT
-            document_id,
-            {diag_hash} AS row_hash
-          FROM {diags_name}
-          WHERE document_id IS NOT NULL AND document_id <> ''
-        ),
-        hashes AS (
-          SELECT document_id, CAST(row_hash AS STRING) AS row_hash FROM docs
-          UNION ALL
-          SELECT document_id, CAST(row_hash AS STRING) AS row_hash FROM occ
-          UNION ALL
-          SELECT document_id, CAST(row_hash AS STRING) AS row_hash FROM diag
-        ),
-        fingerprints AS (
-          SELECT
-            document_id,
-            sha256(
-              array_to_string(
-                array_sort(array_distinct(array_agg(row_hash))),
-                '{_HASH_SEPARATOR}'
-              )
-            ) AS fingerprint
-          FROM hashes
-          GROUP BY document_id
-        ),
-        occ_counts AS (
-          SELECT document_id, COUNT(*) AS occurrence_count
-          FROM {occs_name}
-          WHERE document_id IS NOT NULL AND document_id <> ''
-          GROUP BY document_id
-        ),
-        diag_counts AS (
-          SELECT document_id, COUNT(*) AS diagnostic_count
-          FROM {diags_name}
-          WHERE document_id IS NOT NULL AND document_id <> ''
-          GROUP BY document_id
+    backend = runtime.ibis_backend()
+    docs = _filter_document_id(ibis_table_from_arrow(backend, _as_table(scip_documents)))
+    occs = _filter_document_id(ibis_table_from_arrow(backend, _as_table(scip_occurrences)))
+    diags = _filter_document_id(ibis_table_from_arrow(backend, _as_table(scip_diagnostics)))
+
+    docs_hashes = _hash_rows(
+        docs,
+        prefix="scip_doc",
+        columns=_DOC_HASH_COLUMNS,
+        include_path=True,
+    )
+    occ_hashes = _hash_rows(
+        occs,
+        prefix="scip_occ",
+        columns=_OCCURRENCE_HASH_COLUMNS,
+        include_path=False,
+    )
+    diag_hashes = _hash_rows(
+        diags,
+        prefix="scip_diag",
+        columns=_DIAGNOSTIC_HASH_COLUMNS,
+        include_path=False,
+    )
+    hashes = ibis.union(
+        docs_hashes.select("document_id", "row_hash"),
+        occ_hashes.select("document_id", "row_hash"),
+        diag_hashes.select("document_id", "row_hash"),
+        distinct=False,
+    ).distinct()
+
+    fingerprints = hashes.group_by("document_id").aggregate(
+        fingerprint=sha256(
+            hashes.row_hash.group_concat(
+                sep=_HASH_SEPARATOR,
+                order_by=hashes.row_hash,
+            )
         )
-        SELECT
-          docs.document_id AS document_id,
-          docs.path AS path,
-          fingerprints.fingerprint AS fingerprint,
-          COALESCE(occ_counts.occurrence_count, 0) AS occurrence_count,
-          COALESCE(diag_counts.diagnostic_count, 0) AS diagnostic_count
-        FROM docs
-        LEFT JOIN fingerprints ON docs.document_id = fingerprints.document_id
-        LEFT JOIN occ_counts ON docs.document_id = occ_counts.document_id
-        LEFT JOIN diag_counts ON docs.document_id = diag_counts.document_id
-        """
-        return ctx.sql_with_options(sql, sql_options).to_arrow_table()
-
-
-def _snapshot_added_sql(cur_table: str) -> str:
-    return f"""
-    SELECT
-      cur.document_id AS document_id,
-      cur.path AS path,
-      'added' AS change_kind,
-      CAST(NULL AS STRING) AS prev_path,
-      cur.path AS cur_path,
-      CAST(NULL AS STRING) AS prev_fingerprint,
-      cur.fingerprint AS cur_fingerprint
-    FROM {cur_table} AS cur
-    """
-
-
-def _snapshot_diff_sql(cur_table: str, prev_table: str) -> str:
-    return f"""
-    SELECT
-      COALESCE(cur.document_id, prev.document_id) AS document_id,
-      COALESCE(cur.path, prev.path) AS path,
-      CASE
-        WHEN cur.path IS NULL THEN 'deleted'
-        WHEN prev.path IS NULL THEN 'added'
-        WHEN cur.fingerprint <> prev.fingerprint THEN 'modified'
-        ELSE 'unchanged'
-      END AS change_kind,
-      prev.path AS prev_path,
-      cur.path AS cur_path,
-      prev.fingerprint AS prev_fingerprint,
-      cur.fingerprint AS cur_fingerprint
-    FROM {cur_table} AS cur
-    FULL OUTER JOIN {prev_table} AS prev
-      ON cur.document_id = prev.document_id
-    """
+    )
+    occ_counts = _count_by_document(occs, column_name="occurrence_count")
+    diag_counts = _count_by_document(diags, column_name="diagnostic_count")
+    joined = (
+        docs.left_join(fingerprints, ["document_id"])
+        .left_join(occ_counts, ["document_id"])
+        .left_join(diag_counts, ["document_id"])
+    )
+    result = joined.select(
+        document_id=joined.document_id,
+        path=joined.path,
+        fingerprint=joined.fingerprint,
+        occurrence_count=ibis.coalesce(joined.occurrence_count, ibis.literal(0)),
+        diagnostic_count=ibis.coalesce(joined.diagnostic_count, ibis.literal(0)),
+    )
+    return ibis_expr_to_table(result, runtime=runtime, name="scip_snapshot")
 
 
 def diff_scip_snapshots(
@@ -238,24 +220,64 @@ def diff_scip_snapshots(
 ) -> pa.Table:
     """Diff two SCIP snapshots and return a change table.
 
+    Parameters
+    ----------
+    prev:
+        Previous snapshot table, if available.
+    cur:
+        Current snapshot table.
+    runtime : IncrementalRuntime
+        Shared incremental runtime for DataFusion execution.
+
     Returns
     -------
     pa.Table
         Change records with per-document deltas.
     """
-    ctx = runtime.session_context()
-    sql_options = runtime.profile.sql_options()
+    backend = runtime.ibis_backend()
     cur_table = _as_table(cur)
-    with TempTableRegistry(ctx) as registry:
-        cur_name = registry.register_table(cur_table, prefix="snapshot_cur")
-        if prev is None:
-            return ctx.sql_with_options(_snapshot_added_sql(cur_name), sql_options).to_arrow_table()
-        prev_table = _as_table(prev)
-        prev_name = registry.register_table(prev_table, prefix="snapshot_prev")
-        return ctx.sql_with_options(
-            _snapshot_diff_sql(cur_name, prev_name),
-            sql_options,
-        ).to_arrow_table()
+    cur_expr = ibis_table_from_arrow(backend, cur_table)
+    if prev is None:
+        result = cur_expr.select(
+            document_id=cur_expr.document_id,
+            path=cur_expr.path,
+            change_kind=ibis.literal("added"),
+            prev_path=ibis.null("string"),
+            cur_path=cur_expr.path,
+            prev_fingerprint=ibis.null("string"),
+            cur_fingerprint=cur_expr.fingerprint,
+        )
+        return ibis_expr_to_table(result, runtime=runtime, name="scip_diff_added")
+    prev_table = _as_table(prev)
+    prev_expr = ibis_table_from_arrow(backend, prev_table)
+    joined = cur_expr.outer_join(
+        prev_expr,
+        predicates=[cur_expr.document_id == prev_expr.document_id],
+        rname="{name}_prev",
+    )
+    change_kind = ibis.ifelse(
+        joined.path.isnull(),
+        "deleted",
+        ibis.ifelse(
+            joined.path_prev.isnull(),
+            "added",
+            ibis.ifelse(
+                joined.fingerprint != joined.fingerprint_prev,
+                "modified",
+                "unchanged",
+            ),
+        ),
+    )
+    result = joined.select(
+        document_id=ibis.coalesce(joined.document_id, joined.document_id_prev),
+        path=ibis.coalesce(joined.path, joined.path_prev),
+        change_kind=change_kind,
+        prev_path=joined.path_prev,
+        cur_path=joined.path,
+        prev_fingerprint=joined.fingerprint_prev,
+        cur_fingerprint=joined.fingerprint,
+    )
+    return ibis_expr_to_table(result, runtime=runtime, name="scip_diff")
 
 
 def scip_changed_file_ids(
@@ -266,6 +288,15 @@ def scip_changed_file_ids(
 ) -> tuple[str, ...]:
     """Return repo file_ids impacted by SCIP document changes.
 
+    Parameters
+    ----------
+    diff:
+        Snapshot diff table.
+    repo_snapshot:
+        Repo snapshot table mapping paths to file ids.
+    runtime : IncrementalRuntime
+        Shared incremental runtime for DataFusion execution.
+
     Returns
     -------
     tuple[str, ...]
@@ -273,28 +304,25 @@ def scip_changed_file_ids(
     """
     if diff is None or repo_snapshot is None or diff.num_rows == 0:
         return ()
-    ctx = runtime.session_context()
-    sql_options = runtime.profile.sql_options()
-    with TempTableRegistry(ctx) as registry:
-        diff_name = registry.register_table(diff, prefix="diff")
-        repo_name = registry.register_table(repo_snapshot, prefix="repo")
-        sql = f"""
-        WITH changed AS (
-          SELECT DISTINCT path
-          FROM {diff_name}
-          WHERE change_kind <> 'unchanged'
-            AND path IS NOT NULL
-            AND path <> ''
-        )
-        SELECT DISTINCT repo.file_id AS file_id
-        FROM {repo_name} AS repo
-        JOIN changed ON repo.path = changed.path
-        """
-        table = ctx.sql_with_options(sql, sql_options).to_arrow_table()
-        values = [
-            value for value in table["file_id"].to_pylist() if isinstance(value, str) and value
-        ]
-        return tuple(sorted(set(values)))
+    backend = runtime.ibis_backend()
+    diff_expr = ibis_table_from_arrow(backend, diff)
+    repo_expr = ibis_table_from_arrow(backend, repo_snapshot)
+    path_expr = cast("StringValue", diff_expr.path)
+    changed_filter = ibis.and_(
+        diff_expr.change_kind != ibis.literal("unchanged"),
+        path_expr.notnull(),
+        path_expr != ibis.literal(""),
+    )
+    changed = diff_expr.filter(changed_filter)
+    changed_paths = changed.select(path=changed.path).distinct()
+    joined = repo_expr.inner_join(
+        changed_paths,
+        predicates=[repo_expr.path == changed_paths.path],
+    )
+    result = joined.select(file_id=repo_expr.file_id).distinct()
+    table = ibis_expr_to_table(result, runtime=runtime, name="scip_changed_file_ids")
+    values = [value for value in table["file_id"].to_pylist() if isinstance(value, str) and value]
+    return tuple(sorted(set(values)))
 
 
 def read_scip_snapshot(store: StateStore) -> pa.Table | None:
@@ -323,18 +351,27 @@ def write_scip_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResu
     store.ensure_dirs()
     target = store.scip_snapshot_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    result = write_table_delta(
-        snapshot,
-        str(target),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata={
-                "snapshot_kind": "scip_snapshot",
-                "schema_fingerprint": schema_fingerprint(snapshot.schema),
-            },
-        ),
+    options = DeltaWriteOptions(
+        mode="overwrite",
+        schema_mode="overwrite",
+        commit_metadata={
+            "snapshot_kind": "scip_snapshot",
+            "schema_fingerprint": schema_fingerprint(snapshot.schema),
+        },
     )
+    if snapshot.num_rows >= _STREAMING_ROW_THRESHOLD:
+        stream_table_to_delta(
+            snapshot,
+            str(target),
+            options=StreamingWriteOptions(),
+            write_options=options,
+        )
+        result = DeltaWriteResult(
+            path=str(target),
+            version=delta_table_version(str(target)),
+        )
+    else:
+        result = write_table_delta(snapshot, str(target), options=options)
     enable_delta_features(result.path)
     return result
 
@@ -350,18 +387,27 @@ def write_scip_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:
     store.ensure_dirs()
     target = store.scip_diff_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    result = write_table_delta(
-        diff,
-        str(target),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata={
-                "snapshot_kind": "scip_diff",
-                "schema_fingerprint": schema_fingerprint(diff.schema),
-            },
-        ),
+    options = DeltaWriteOptions(
+        mode="overwrite",
+        schema_mode="overwrite",
+        commit_metadata={
+            "snapshot_kind": "scip_diff",
+            "schema_fingerprint": schema_fingerprint(diff.schema),
+        },
     )
+    if diff.num_rows >= _STREAMING_ROW_THRESHOLD:
+        stream_table_to_delta(
+            diff,
+            str(target),
+            options=StreamingWriteOptions(),
+            write_options=options,
+        )
+        result = DeltaWriteResult(
+            path=str(target),
+            version=delta_table_version(str(target)),
+        )
+    else:
+        result = write_table_delta(diff, str(target), options=options)
     enable_delta_features(result.path)
     return result
 

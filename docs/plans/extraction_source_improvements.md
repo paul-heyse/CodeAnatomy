@@ -23,6 +23,22 @@ The key design primitives we’ll introduce:
 
 ---
 
+## Status update (current repo)
+
+Completed
+- [x] Repo manifest-first scan (git-first listing, os.walk pruning, file_digest, mtime/size, hash reuse).
+- [x] DataFusion worklists with streaming `FileContext` batches across extractors.
+- [x] Batch sizing for AST/CST/tree-sitter plus shared row-batch helpers.
+- [x] Unified extract writer (`write_extract_outputs`) and runtime dataset location dispatcher.
+- [x] Process-first `parallel_map` with LibCST repo-manager cache pre-resolve and tree-sitter worker state.
+- [x] Tree-sitter advanced parsing controls (included ranges, parse callbacks for large files).
+- [x] Per-extractor `parallel`/`max_workers` toggles for AST/CST/tree-sitter.
+- [x] Convenience `extract_dataset_location_or_raise()` for guarded write paths.
+
+Remaining
+- [ ] Avoid table concatenation in `ibis_plan_from_row_batches` so row-batch emitters can stay streaming end-to-end (writer path now streams, plan registration still materializes).
+- [ ] Optional: unify dataset-location lookup across all datasets in the DataFusion runtime (general dispatcher beyond extract-only).
+
 # 1) Refactor `repo_scan`: git-aware listing + `os.walk` pruning + `hashlib.file_digest` + don’t store bytes/text by default
 
 ## 1.1 What changes (design)
@@ -652,28 +668,28 @@ Worker initializes its own `Parser` and `Language` (or uses module-level cached 
 
 * **`src/extract/repo_scan.py`**
 
-  * change defaults: `include_bytes=False`, `include_text=False`
-  * use `hashlib.file_digest` for sha256 ([Python documentation][3])
-  * only call `tokenize.detect_encoding` if `include_text=True` ([Python documentation][4])
-  * replace `glob("**/*.py")` path walk with:
+  * [x] remove bytes/text from repo_scan outputs (blob table handles text/bytes).
+  * [x] use `hashlib.file_digest` for sha256 ([Python documentation][3]).
+  * [x] replace `glob("**/*.py")` path walk with:
 
-    * Git mode using `git ls-files -z --cached --others --exclude-standard` ([Git][1])
-    * fallback `os.walk` pruning (`dirnames[:] = ...`) ([Python documentation][2])
+    * [x] Git mode using `git ls-files -z --cached --others --exclude-standard` ([Git][1]).
+    * [x] fallback `os.walk` pruning (`dirnames[:] = ...`) ([Python documentation][2]).
 * **new files**
 
-  * `src/extract/repo_scan_git.py`
-  * `src/extract/repo_scan_fs.py`
+  * [x] `src/extract/repo_scan_git.py`
+  * [x] `src/extract/repo_scan_fs.py`
 
 ## PR-EXTRACT-02: exemplar extractor (tree-sitter) batch + parallel skeleton
 
 * **`src/extract/tree_sitter_extract.py`**
 
-  * add `batch_size`, `max_workers`, `parallel` flags to `TreeSitterExtractOptions`
-  * refactor `_collect_ts_rows` → `_iter_ts_rows` + `_iter_ts_row_batches`
-  * optionally use `parallel_map` for per-file row extraction
+  * [x] add `batch_size` to `TreeSitterExtractOptions`.
+  * [x] refactor `_collect_ts_rows` → `_iter_ts_row_batches` (row batching).
+  * [x] use `parallel_map` for per-file row extraction.
+  * [x] add explicit `max_workers` / `parallel` toggles (still defaulting to executor defaults).
 * **new file**
 
-  * `src/extract/parallel.py`
+  * [x] `src/extract/parallel.py`
 
 ---
 
@@ -1220,19 +1236,20 @@ But for LibCST **with FullRepoManager**, I’d still default to process+fork unl
 
 1. `src/datafusion_engine/runtime.py`
 
-   * add `dataset_location()` and `dataset_location_or_raise()`
+   * [x] add dataset location dispatcher (`extract_dataset_location`).
+   * [ ] add `dataset_location_or_raise()` convenience.
 
 2. `src/engine/materialize_extract_outputs.py`
 
-   * add the unified writer module
+   * [x] add the unified writer module
 
 3. `src/extract/helpers.py`
 
-   * replace `write_ast_outputs(...)` with `write_extract_outputs(...)`
+   * [x] replace `write_ast_outputs(...)` with `write_extract_outputs(...)`
 
 4. `src/extract/cst_extract.py`
 
-   * add the safe parallel collector (fork-only when FullRepoManager is required)
+   * [x] add the safe parallel collector (fork-only when FullRepoManager is required)
 
 
 [1]: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.write_dataset.html?utm_source=chatgpt.com "pyarrow.dataset.write_dataset — Apache Arrow v22.0.0"

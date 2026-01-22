@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ibis_engine.backend import build_backend as build_backend
     from ibis_engine.config import IbisBackendConfig as IbisBackendConfig
+    from ibis_engine.config import ObjectStoreConfig as ObjectStoreConfig
     from ibis_engine.param_tables import (
         ListParamSpec as ListParamSpec,
     )
@@ -29,6 +30,7 @@ __all__ = [
     "IbisBackendConfig",
     "IbisPlan",
     "ListParamSpec",
+    "ObjectStoreConfig",
     "ParamTableArtifact",
     "ParamTablePolicy",
     "ParamTableRegistry",
@@ -40,6 +42,7 @@ __all__ = [
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "build_backend": ("ibis_engine.backend", "build_backend"),
     "IbisBackendConfig": ("ibis_engine.config", "IbisBackendConfig"),
+    "ObjectStoreConfig": ("ibis_engine.config", "ObjectStoreConfig"),
     "IbisPlan": ("ibis_engine.plan", "IbisPlan"),
     "ListParamSpec": ("ibis_engine.param_tables", "ListParamSpec"),
     "ParamTableArtifact": ("ibis_engine.param_tables", "ParamTableArtifact"),

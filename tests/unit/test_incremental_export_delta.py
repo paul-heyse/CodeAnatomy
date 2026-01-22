@@ -2,25 +2,22 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from ibis.backends import BaseBackend
 
 from arrowdsl.schema.build import rows_from_table
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
 from incremental.deltas import compute_changed_exports
 from incremental.registry_specs import dataset_schema
+from incremental.runtime import IncrementalRuntime
 from storage.deltalake import DeltaWriteOptions, write_table_delta
 from tests.utils import values_as_list
 
 
 def test_compute_changed_exports_added_removed(tmp_path: Path) -> None:
     """Only changed files should emit added/removed export rows."""
-    backend = _build_backend_or_skip()
+    runtime = _build_runtime_or_skip()
     prev_exports = pa.table(
         {
             "file_id": pa.array(["file_1", "file_1", "file_2"], type=pa.string()),
@@ -48,7 +45,7 @@ def test_compute_changed_exports_added_removed(tmp_path: Path) -> None:
 
     changed_files = pa.table({"file_id": pa.array(["file_1"], type=pa.string())})
     result = compute_changed_exports(
-        backend=backend,
+        runtime=runtime,
         prev_exports=str(prev_path),
         curr_exports=curr_exports,
         changed_files=changed_files,
@@ -60,13 +57,16 @@ def test_compute_changed_exports_added_removed(tmp_path: Path) -> None:
     assert result.schema == dataset_schema("inc_changed_exports_v1")
 
 
-def _build_backend_or_skip() -> BaseBackend:
+def _build_runtime_or_skip() -> IncrementalRuntime:
     try:
-        module = import_module("datafusion_engine.runtime")
+        runtime = IncrementalRuntime.build()
+        _ = runtime.ibis_backend()
     except ImportError as exc:
         pytest.skip(str(exc))
-    profile = module.DataFusionRuntimeProfile()
-    return build_backend(IbisBackendConfig(datafusion_profile=profile))
+    else:
+        return runtime
+    msg = "Incremental runtime unavailable."
+    raise RuntimeError(msg)
 
 
 def _result_files(result: pa.Table) -> set[str]:

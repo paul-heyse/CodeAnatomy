@@ -53,3 +53,17 @@ def test_parse_sql_validates_schema() -> None:
     )
     table = parse_sql_table(spec)
     assert table.schema().names == ("a",)
+
+
+def test_parse_sql_accepts_sqlglot_expr() -> None:
+    """Accept a SQLGlot AST as SQL ingestion input."""
+    expr = parse_one("SELECT id FROM events")
+    spec = SqlIngestSpec(
+        sql="SELECT id FROM events",
+        sqlglot_expr=expr,
+        catalog={"events": ibis.schema({"id": "int64"})},
+        schema=ibis.schema({"id": "int64"}),
+        dialect="datafusion",
+    )
+    table = parse_sql_table(spec)
+    assert table.schema().names == ("id",)

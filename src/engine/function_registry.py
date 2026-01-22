@@ -8,13 +8,11 @@ from typing import Literal, TypeVar, cast
 
 import pyarrow as pa
 
-from datafusion_engine.builtin_registry import (
-    DataFusionBuiltinSpec,
+from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
+from datafusion_engine.sql_expression_registry import (
     DataFusionSqlExpressionSpec,
-    datafusion_builtin_specs,
     datafusion_sql_expression_specs,
 )
-from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
 from datafusion_engine.udf_registry import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
 from engine.pyarrow_registry import pyarrow_compute_functions
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
@@ -195,6 +193,7 @@ def build_function_registry(
     primitives: tuple[RulePrimitive, ...] = DEFAULT_RULE_PRIMITIVES,
     datafusion_specs: tuple[DataFusionUdfSpec, ...] | None = None,
     ibis_specs: tuple[IbisUdfSpec, ...] | None = None,
+    datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None,
     lane_precedence: tuple[ExecutionLane, ...] = DEFAULT_LANE_PRECEDENCE,
 ) -> FunctionRegistry:
     """Build the default function registry.
@@ -205,8 +204,6 @@ def build_function_registry(
         Registry configured from the provided primitives.
     """
     specs: dict[str, FunctionSpec] = {}
-    for spec in datafusion_builtin_specs():
-        _merge_spec(specs, _spec_from_datafusion_builtin(spec, lane_precedence=lane_precedence))
     for spec in datafusion_sql_expression_specs():
         _merge_spec(specs, _spec_from_sql_expression(spec, lane_precedence=lane_precedence))
     for spec in datafusion_specs or datafusion_udf_specs():
@@ -215,6 +212,12 @@ def build_function_registry(
         _merge_spec(specs, _spec_from_ibis(spec, lane_precedence=lane_precedence))
     for primitive in primitives:
         _merge_spec(specs, _spec_from_primitive(primitive, lane_precedence=lane_precedence))
+    if datafusion_function_catalog:
+        _merge_datafusion_builtins(
+            specs,
+            catalog=datafusion_function_catalog,
+            lane_precedence=lane_precedence,
+        )
     return FunctionRegistry(
         specs=specs,
         lane_precedence=lane_precedence,
@@ -223,7 +226,10 @@ def build_function_registry(
     )
 
 
-def default_function_registry() -> FunctionRegistry:
+def default_function_registry(
+    *,
+    datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None,
+) -> FunctionRegistry:
     """Return the default cross-lane function registry.
 
     Returns
@@ -231,7 +237,7 @@ def default_function_registry() -> FunctionRegistry:
     FunctionRegistry
         Default cross-lane registry instance.
     """
-    return build_function_registry()
+    return build_function_registry(datafusion_function_catalog=datafusion_function_catalog)
 
 
 def _pycapsule_ids(specs: Mapping[str, FunctionSpec]) -> tuple[str, ...]:
@@ -277,25 +283,6 @@ def _spec_from_datafusion(
     )
 
 
-def _spec_from_datafusion_builtin(
-    spec: DataFusionBuiltinSpec,
-    *,
-    lane_precedence: tuple[ExecutionLane, ...],
-) -> FunctionSpec:
-    return FunctionSpec(
-        func_id=spec.func_id,
-        engine_name=spec.engine_name,
-        kind=spec.kind,
-        input_types=spec.input_types,
-        return_type=spec.return_type,
-        volatility=spec.volatility,
-        arg_names=spec.arg_names,
-        lanes=("df_rust",),
-        lane_precedence=lane_precedence,
-        udf_tier=None,
-    )
-
-
 def _spec_from_sql_expression(
     spec: DataFusionSqlExpressionSpec,
     *,
@@ -313,6 +300,111 @@ def _spec_from_sql_expression(
         lane_precedence=lane_precedence,
         udf_tier=None,
     )
+
+
+def _merge_datafusion_builtins(
+    specs: dict[str, FunctionSpec],
+    *,
+    catalog: Sequence[Mapping[str, object]],
+    lane_precedence: tuple[ExecutionLane, ...],
+) -> None:
+    builtins = _datafusion_runtime_specs(
+        catalog,
+        lane_precedence=lane_precedence,
+        existing=specs,
+    )
+    for spec in builtins:
+        if spec.func_id in specs:
+            continue
+        specs[spec.func_id] = spec
+
+
+def _datafusion_runtime_specs(
+    catalog: Sequence[Mapping[str, object]],
+    *,
+    lane_precedence: tuple[ExecutionLane, ...],
+    existing: Mapping[str, FunctionSpec],
+) -> list[FunctionSpec]:
+    names: set[str] = set()
+    kinds: dict[str, FunctionKind] = {}
+    volatilities: dict[str, str] = {}
+    for entry in catalog:
+        name = _catalog_function_name(entry)
+        if name is None:
+            continue
+        names.add(name)
+        routine_type = _catalog_function_type(entry)
+        if routine_type is None:
+            continue
+        kind = _function_kind_from_type(routine_type)
+        kinds[name] = _prefer_function_kind(kinds.get(name), kind)
+        volatility = entry.get("volatility")
+        if isinstance(volatility, str) and volatility:
+            volatilities[name] = volatility.lower()
+    if not names:
+        return []
+    specs: list[FunctionSpec] = []
+    for name in sorted(names):
+        if name in existing:
+            continue
+        specs.append(
+            FunctionSpec(
+                func_id=name,
+                engine_name=name,
+                kind=kinds.get(name, "scalar"),
+                input_types=(),
+                return_type=pa.null(),
+                volatility=volatilities.get(name, "stable"),
+                arg_names=None,
+                lanes=("df_rust",),
+                lane_precedence=lane_precedence,
+                udf_tier=None,
+            )
+        )
+    return specs
+
+
+def _catalog_function_name(entry: Mapping[str, object]) -> str | None:
+    for key in ("function_name", "routine_name", "name"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _catalog_function_type(entry: Mapping[str, object]) -> str | None:
+    for key in ("function_type", "routine_type"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _function_kind_from_type(value: str) -> FunctionKind:
+    lowered = value.lower()
+    if "window" in lowered:
+        return "window"
+    if "aggregate" in lowered:
+        return "aggregate"
+    if "table" in lowered:
+        return "table"
+    return "scalar"
+
+
+def _prefer_function_kind(
+    current: FunctionKind | None, incoming: FunctionKind
+) -> FunctionKind:
+    if current is None:
+        return incoming
+    ranking: dict[FunctionKind, int] = {
+        "scalar": 0,
+        "table": 1,
+        "aggregate": 2,
+        "window": 3,
+    }
+    if ranking[incoming] > ranking[current]:
+        return incoming
+    return current
 
 
 def _spec_from_ibis(

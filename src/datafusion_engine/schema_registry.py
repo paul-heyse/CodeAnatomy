@@ -1291,6 +1291,8 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("lineage_tables", pa.list_(pa.string()), nullable=True),
             pa.field("lineage_columns", pa.list_(pa.string()), nullable=True),
             pa.field("lineage_scopes", pa.list_(pa.string()), nullable=True),
+            pa.field("param_signature", pa.string(), nullable=True),
+            pa.field("projection_map", pa.string(), nullable=True),
             pa.field("unparsed_sql", pa.string(), nullable=True),
             pa.field("unparse_error", pa.string(), nullable=True),
             pa.field("logical_plan", pa.string(), nullable=True),
@@ -1299,6 +1301,30 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("graphviz", pa.string(), nullable=True),
             pa.field("partition_count", pa.int64(), nullable=True),
             pa.field("join_operators", pa.list_(pa.string()), nullable=True),
+        ]
+    ),
+)
+
+DATAFUSION_UDF_VALIDATION_SCHEMA = _schema_with_metadata(
+    "datafusion_udf_validation_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("udf_catalog_policy", pa.string(), nullable=False),
+            pa.field("missing_udfs", pa.list_(pa.string()), nullable=True),
+            pa.field("missing_count", pa.int32(), nullable=True),
+        ]
+    ),
+)
+
+DATAFUSION_OBJECT_STORES_SCHEMA = _schema_with_metadata(
+    "datafusion_object_stores_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("scheme", pa.string(), nullable=False),
+            pa.field("host", pa.string(), nullable=True),
+            pa.field("store_type", pa.string(), nullable=True),
         ]
     ),
 )

@@ -8,12 +8,11 @@ from pathlib import Path
 
 import pyarrow as pa
 from hamilton.function_modifiers import tag
-from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import empty_table
-from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_as_reader
+from datafusion_engine.runtime import read_delta_as_reader
 from hamilton_pipeline.pipeline_types import (
     IncrementalDatasetUpdates,
     IncrementalImpactUpdates,
@@ -22,12 +21,19 @@ from hamilton_pipeline.pipeline_types import (
 )
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.changes import file_changes_from_cdf
+from incremental.delta_updates import (
+    upsert_cpg_edges,
+    upsert_cpg_nodes,
+    upsert_exported_defs,
+    upsert_extract_outputs,
+    upsert_imports_resolved,
+    upsert_module_index,
+    upsert_normalize_outputs,
+    write_overwrite_dataset,
+)
 from incremental.deltas import compute_changed_exports
 from incremental.diff import diff_snapshots_with_delta_cdf, write_incremental_diff
-from incremental.edges_update import upsert_cpg_edges
 from incremental.exports import build_exported_defs_index
-from incremental.exports_update import upsert_exported_defs
-from incremental.extract_update import upsert_extract_outputs
 from incremental.fingerprint_changes import read_dataset_fingerprints
 from incremental.impact import (
     ImpactedFileInputs,
@@ -37,23 +43,21 @@ from incremental.impact import (
     import_closure_only_from_changed_exports,
     merge_impacted_files,
 )
-from incremental.impact_update import (
-    write_impacted_callers,
-    write_impacted_files,
-    write_impacted_importers,
-)
 from incremental.imports_resolved import resolve_imports
-from incremental.index_update import upsert_imports_resolved, upsert_module_index
 from incremental.invalidations import (
     InvalidationOutcome,
     check_state_store_invalidation_with_diff,
 )
+from incremental.metadata import (
+    write_cdf_cursor_snapshot,
+    write_incremental_artifacts,
+    write_incremental_metadata,
+)
 from incremental.module_index import build_module_index
-from incremental.nodes_update import upsert_cpg_nodes
-from incremental.normalize_update import upsert_normalize_outputs
-from incremental.props_update import upsert_cpg_props
+from incremental.props import upsert_cpg_props
 from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from incremental.relspec_update import upsert_relationship_outputs
+from incremental.runtime import IncrementalRuntime
 from incremental.scip_snapshot import (
     build_scip_snapshot,
     diff_scip_snapshots,
@@ -98,6 +102,22 @@ class IncrementalImpactClosureInputs:
 
 
 @tag(layer="incremental", kind="object")
+def incremental_runtime(
+    incremental_config: IncrementalConfig,
+) -> IncrementalRuntime | None:
+    """Build the shared incremental runtime when enabled.
+
+    Returns
+    -------
+    IncrementalRuntime | None
+        Shared runtime for incremental execution.
+    """
+    if not incremental_config.enabled:
+        return None
+    return IncrementalRuntime.build()
+
+
+@tag(layer="incremental", kind="object")
 def incremental_state_store(
     incremental_config: IncrementalConfig,
     repo_root: str,
@@ -119,6 +139,7 @@ def incremental_state_store(
 def incremental_invalidation(
     incremental_state_store: StateStore | None,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> InvalidationOutcome | None:
     """Validate incremental state signatures and reset on mismatch.
 
@@ -127,12 +148,21 @@ def incremental_invalidation(
     InvalidationOutcome | None
         Invalidation outcome with diff payload, or None when disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
-    schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
+    schema_context = RelspecSchemaContext.from_session(incremental_runtime.session_context())
+    write_incremental_metadata(
+        incremental_state_store,
+        runtime=incremental_runtime,
+    )
     return check_state_store_invalidation_with_diff(
         state_store=incremental_state_store,
         schema_context=schema_context,
+        runtime=incremental_runtime,
     )
 
 
@@ -213,8 +243,8 @@ def incremental_imports_resolved(
 def incremental_exported_defs(
     cst_defs_norm: TableLike,
     incremental_state_store: StateStore | None,
-    ibis_backend: BaseBackend,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> pa.Table | None:
     """Build the exported definitions index when incremental mode is enabled.
 
@@ -223,7 +253,7 @@ def incremental_exported_defs(
     pa.Table | None
         Exported definitions table when incremental mode is enabled.
     """
-    if not incremental_config.enabled:
+    if not incremental_config.enabled or incremental_runtime is None:
         return None
     rel_def_symbol: pa.Table | None = None
     if incremental_state_store is not None:
@@ -232,7 +262,7 @@ def incremental_exported_defs(
             rel_def_symbol = read_delta_as_reader(str(rel_def_dir)).read_all()
     return build_exported_defs_index(
         cst_defs_norm,
-        backend=ibis_backend,
+        runtime=incremental_runtime,
         rel_def_symbol=rel_def_symbol,
     )
 
@@ -242,8 +272,8 @@ def incremental_changed_exports(
     incremental_exported_defs: pa.Table | None,
     incremental_state_store: StateStore | None,
     incremental_file_changes: IncrementalFileChanges,
-    ibis_backend: BaseBackend,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> pa.Table | None:
     """Compute export deltas for changed files.
 
@@ -252,7 +282,7 @@ def incremental_changed_exports(
     pa.Table | None
         Export delta table when incremental mode is enabled.
     """
-    if not incremental_config.enabled:
+    if not incremental_config.enabled or incremental_runtime is None:
         return None
     if incremental_exported_defs is None or incremental_state_store is None:
         return None
@@ -261,7 +291,7 @@ def incremental_changed_exports(
     prev_path = incremental_state_store.dataset_dir("dim_exported_defs_v1")
     prev_exports = str(prev_path) if prev_path.exists() else None
     return compute_changed_exports(
-        backend=ibis_backend,
+        runtime=incremental_runtime,
         prev_exports=prev_exports,
         curr_exports=incremental_exported_defs,
         changed_files=_changed_files_table(incremental_file_changes.changed_file_ids),
@@ -272,8 +302,8 @@ def incremental_changed_exports(
 def incremental_impacted_callers(
     incremental_changed_exports: pa.Table | None,
     incremental_state_store: StateStore | None,
-    ibis_backend: BaseBackend,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> pa.Table | None:
     """Compute impacted caller files from prior relationship outputs.
 
@@ -282,7 +312,11 @@ def incremental_impacted_callers(
     pa.Table | None
         Impacted caller table when incremental mode is enabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if incremental_changed_exports is None:
         return empty_table(incremental_dataset_schema("inc_impacted_callers_v1"))
@@ -291,7 +325,7 @@ def incremental_impacted_callers(
     prev_qname = str(rel_qname_dir) if rel_qname_dir.exists() else None
     prev_symbol = str(rel_symbol_dir) if rel_symbol_dir.exists() else None
     return impacted_callers_from_changed_exports(
-        backend=ibis_backend,
+        runtime=incremental_runtime,
         changed_exports=incremental_changed_exports,
         prev_rel_callsite_qname=prev_qname,
         prev_rel_callsite_symbol=prev_symbol,
@@ -302,8 +336,8 @@ def incremental_impacted_callers(
 def incremental_impacted_importers(
     incremental_changed_exports: pa.Table | None,
     incremental_state_store: StateStore | None,
-    ibis_backend: BaseBackend,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> pa.Table | None:
     """Compute impacted importers from resolved imports.
 
@@ -312,14 +346,18 @@ def incremental_impacted_importers(
     pa.Table | None
         Impacted importer table when incremental mode is enabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if incremental_changed_exports is None:
         return empty_table(incremental_dataset_schema("inc_impacted_importers_v1"))
     imports_dir = incremental_state_store.dataset_dir("py_imports_resolved_v1")
     prev_imports = str(imports_dir) if imports_dir.exists() else None
     return impacted_importers_from_changed_exports(
-        backend=ibis_backend,
+        runtime=incremental_runtime,
         changed_exports=incremental_changed_exports,
         prev_imports_resolved=prev_imports,
     )
@@ -373,8 +411,8 @@ def incremental_impact_closure_inputs(
 def incremental_impacted_files(
     incremental_impact_base_inputs: IncrementalImpactBaseInputs,
     incremental_impact_closure_inputs: IncrementalImpactClosureInputs,
-    ibis_backend: BaseBackend,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> pa.Table | None:
     """Compute the final impacted file set for incremental runs.
 
@@ -383,7 +421,7 @@ def incremental_impacted_files(
     pa.Table | None
         Impacted file diagnostics table when incremental mode is enabled.
     """
-    if not incremental_config.enabled:
+    if not incremental_config.enabled or incremental_runtime is None:
         return None
     changed_table = changed_file_impact_table(
         file_changes=incremental_impact_base_inputs.file_changes,
@@ -402,12 +440,12 @@ def incremental_impacted_files(
         )
         prev_imports = str(imports_dir) if imports_dir.exists() else None
         import_closure_only = import_closure_only_from_changed_exports(
-            backend=ibis_backend,
+            runtime=incremental_runtime,
             changed_exports=incremental_impact_closure_inputs.changed_exports,
             prev_imports_resolved=prev_imports,
         )
     return merge_impacted_files(
-        ibis_backend,
+        incremental_runtime,
         ImpactedFileInputs(
             changed_files=changed_table,
             callers=incremental_impact_closure_inputs.impacted_callers,
@@ -424,6 +462,7 @@ def incremental_scip_snapshot(
     scip_occurrences: TableLike,
     scip_diagnostics: TableLike,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> pa.Table | None:
     """Build the SCIP snapshot when incremental is enabled.
 
@@ -432,12 +471,13 @@ def incremental_scip_snapshot(
     pa.Table | None
         SCIP snapshot table when incremental mode is enabled.
     """
-    if not incremental_config.enabled:
+    if not incremental_config.enabled or incremental_runtime is None:
         return None
     return build_scip_snapshot(
         scip_documents=scip_documents,
         scip_occurrences=scip_occurrences,
         scip_diagnostics=scip_diagnostics,
+        runtime=incremental_runtime,
     )
 
 
@@ -446,6 +486,7 @@ def incremental_scip_diff(
     incremental_scip_snapshot: pa.Table | None,
     incremental_state_store: StateStore | None,
     incremental_invalidation: InvalidationOutcome | None,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> pa.Table | None:
     """Compute and persist the SCIP diff for the latest snapshot.
 
@@ -454,13 +495,17 @@ def incremental_scip_diff(
     pa.Table | None
         SCIP diff table when a snapshot and state store are available.
     """
-    if incremental_state_store is None or incremental_scip_snapshot is None:
+    if (
+        incremental_state_store is None
+        or incremental_scip_snapshot is None
+        or incremental_runtime is None
+    ):
         return None
     if incremental_invalidation is not None and incremental_invalidation.result.full_refresh:
         prev = None
     else:
         prev = read_scip_snapshot(incremental_state_store)
-    diff = diff_scip_snapshots(prev, incremental_scip_snapshot)
+    diff = diff_scip_snapshots(prev, incremental_scip_snapshot, runtime=incremental_runtime)
     write_scip_snapshot(incremental_state_store, incremental_scip_snapshot)
     write_scip_diff(incremental_state_store, diff)
     return diff
@@ -471,6 +516,7 @@ def incremental_scip_changed_file_ids(
     incremental_scip_diff: pa.Table | None,
     incremental_repo_snapshot: pa.Table | None,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> tuple[str, ...]:
     """Return file_ids impacted by SCIP document changes.
 
@@ -479,9 +525,13 @@ def incremental_scip_changed_file_ids(
     tuple[str, ...]
         File-id values derived from SCIP document changes.
     """
-    if not incremental_config.enabled:
+    if not incremental_config.enabled or incremental_runtime is None:
         return ()
-    return scip_changed_file_ids(incremental_scip_diff, incremental_repo_snapshot)
+    return scip_changed_file_ids(
+        incremental_scip_diff,
+        incremental_repo_snapshot,
+        runtime=incremental_runtime,
+    )
 
 
 @tag(layer="incremental", kind="table")
@@ -489,6 +539,7 @@ def incremental_diff(
     incremental_repo_snapshot: pa.Table | None,
     incremental_state_store: StateStore | None,
     incremental_invalidation: InvalidationOutcome | None,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> pa.Table | None:
     """Compute and persist the incremental diff for the latest snapshot.
 
@@ -497,7 +548,11 @@ def incremental_diff(
     pa.Table | None
         Diff table when a snapshot and state store are available.
     """
-    if incremental_state_store is None or incremental_repo_snapshot is None:
+    if (
+        incremental_state_store is None
+        or incremental_repo_snapshot is None
+        or incremental_runtime is None
+    ):
         return None
 
     snapshot_path = incremental_state_store.repo_snapshot_path()
@@ -511,11 +566,14 @@ def incremental_diff(
         cursor_store=cursor_store,
         dataset_name="repo_snapshot",
         filter_policy=None,
+        runtime=incremental_runtime,
     )
 
     if cdf_result is None:
+        write_cdf_cursor_snapshot(incremental_state_store, cursor_store=cursor_store)
         return None
     write_incremental_diff(incremental_state_store, cdf_result)
+    write_cdf_cursor_snapshot(incremental_state_store, cursor_store=cursor_store)
     return cdf_result
 
 
@@ -524,6 +582,7 @@ def incremental_file_changes(
     incremental_diff: pa.Table | None,
     incremental_scip_changed_file_ids: tuple[str, ...],
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> IncrementalFileChanges:
     """Derive incremental file change sets from the latest diffs.
 
@@ -532,12 +591,12 @@ def incremental_file_changes(
     IncrementalFileChanges
         File-id changes derived from repo + SCIP diffs.
     """
-    if not incremental_config.enabled:
+    if not incremental_config.enabled or incremental_runtime is None:
         return IncrementalFileChanges()
     if incremental_diff is None:
         changes = IncrementalFileChanges(full_refresh=True)
     else:
-        changes = file_changes_from_cdf(incremental_diff)
+        changes = file_changes_from_cdf(incremental_diff, runtime=incremental_runtime)
     if not incremental_scip_changed_file_ids:
         return changes
     combined = sorted(set(changes.changed_file_ids) | set(incremental_scip_changed_file_ids))
@@ -696,9 +755,12 @@ def incremental_impacted_callers_updates(
         return None
     if incremental_impacted_callers is None:
         return {}
-    return write_impacted_callers(
+    return write_overwrite_dataset(
         incremental_impacted_callers,
+        dataset_name="inc_impacted_callers_v1",
+        schema=incremental_dataset_schema("inc_impacted_callers_v1"),
         state_store=incremental_state_store,
+        commit_metadata={"snapshot_kind": "incremental_impacted_callers"},
     )
 
 
@@ -719,9 +781,12 @@ def incremental_impacted_importers_updates(
         return None
     if incremental_impacted_importers is None:
         return {}
-    return write_impacted_importers(
+    return write_overwrite_dataset(
         incremental_impacted_importers,
+        dataset_name="inc_impacted_importers_v1",
+        schema=incremental_dataset_schema("inc_impacted_importers_v1"),
         state_store=incremental_state_store,
+        commit_metadata={"snapshot_kind": "incremental_impacted_importers"},
     )
 
 
@@ -742,9 +807,12 @@ def incremental_impacted_files_updates(
         return None
     if incremental_impacted_files is None:
         return {}
-    return write_impacted_files(
+    return write_overwrite_dataset(
         incremental_impacted_files,
+        dataset_name="inc_impacted_files_v2",
+        schema=incremental_dataset_schema("inc_impacted_files_v2"),
         state_store=incremental_state_store,
+        commit_metadata={"snapshot_kind": "incremental_impacted_files"},
     )
 
 
@@ -906,6 +974,33 @@ def incremental_relationship_updates(
 
 
 @tag(layer="incremental", kind="object")
+def incremental_diagnostics_artifacts(
+    incremental_relationship_updates: Mapping[str, str] | None,
+    incremental_state_store: StateStore | None,
+    incremental_runtime: IncrementalRuntime | None,
+    incremental_config: IncrementalConfig,
+) -> Mapping[str, str] | None:
+    """Persist incremental diagnostics artifacts to the state store.
+
+    Returns
+    -------
+    Mapping[str, str] | None
+        Updated artifact paths, or None when incremental is disabled.
+    """
+    _ = incremental_relationship_updates
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
+        return None
+    return write_incremental_artifacts(
+        incremental_state_store,
+        runtime=incremental_runtime,
+    )
+
+
+@tag(layer="incremental", kind="object")
 def incremental_cpg_nodes_updates(
     cpg_nodes_delta: TableLike,
     incremental_state_store: StateStore | None,
@@ -981,6 +1076,7 @@ def incremental_cpg_props_updates(
     incremental_state_store: StateStore | None,
     incremental_file_changes: IncrementalFileChanges,
     incremental_config: IncrementalConfig,
+    incremental_runtime: IncrementalRuntime | None,
 ) -> Mapping[str, str] | None:
     """Upsert CPG props into the incremental state store.
 
@@ -989,16 +1085,19 @@ def incremental_cpg_props_updates(
     Mapping[str, str] | None
         Updated dataset paths, or None when incremental is disabled.
     """
-    if not incremental_config.enabled or incremental_state_store is None:
+    if (
+        not incremental_config.enabled
+        or incremental_state_store is None
+        or incremental_runtime is None
+    ):
         return None
     if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     return upsert_cpg_props(
-        incremental_cpg_delta_inputs.props,
-        cpg_nodes=incremental_cpg_delta_inputs.nodes,
-        cpg_edges=incremental_cpg_delta_inputs.edges,
+        incremental_cpg_delta_inputs,
         state_store=incremental_state_store,
         changes=incremental_file_changes,
+        runtime=incremental_runtime,
     )
 
 
@@ -1008,6 +1107,7 @@ __all__ = [
     "incremental_cpg_edges_updates",
     "incremental_cpg_nodes_updates",
     "incremental_cpg_props_updates",
+    "incremental_diagnostics_artifacts",
     "incremental_diff",
     "incremental_exported_defs",
     "incremental_exported_defs_updates",

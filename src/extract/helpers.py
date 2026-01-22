@@ -26,7 +26,12 @@ from datafusion_engine.extract_extractors import (
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
 from engine.materialize_extract_outputs import write_extract_outputs
 from extract.evidence_plan import EvidencePlan
-from extract.schema_ops import ExtractNormalizeOptions, normalize_extract_output
+from extract.schema_ops import (
+    ExtractNormalizeOptions,
+    normalize_extract_output,
+    normalize_extract_reader,
+    schema_policy_for_dataset,
+)
 from extract.spec_helpers import plan_requires_row, rule_execution_options
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
@@ -38,6 +43,8 @@ from relspec.rules.definitions import RuleStage, stage_enabled
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
+
+    from ibis_engine.registry import DatasetLocation
 
 
 @dataclass(frozen=True)
@@ -461,6 +468,34 @@ class ExtractMaterializeOptions:
     apply_post_kernels: bool = False
 
 
+def extract_dataset_location_or_raise(
+    name: str,
+    *,
+    ctx: ExecutionContext,
+) -> DatasetLocation:
+    """Return the extract dataset location, raising when missing.
+
+    Returns
+    -------
+    DatasetLocation
+        Dataset location registered for the extract dataset.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime or dataset location is unavailable.
+    """
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        msg = "DataFusion runtime is required to resolve extract dataset locations."
+        raise ValueError(msg)
+    location = runtime_profile.extract_dataset_location(name)
+    if location is None:
+        msg = f"No extract dataset location configured for {name!r}."
+        raise ValueError(msg)
+    return location
+
+
 def materialize_extract_plan(
     name: str,
     plan: IbisPlan,
@@ -476,21 +511,56 @@ def materialize_extract_plan(
         Materialized and normalized extract output.
     """
     resolved = options or ExtractMaterializeOptions()
+    normalize = resolved.normalize
+    runtime_profile = ctx.runtime.datafusion
+    streaming_supported = True
+    if runtime_profile is None or runtime_profile.extract_dataset_location(name) is None:
+        streaming_supported = False
+    else:
+        policy = schema_policy_for_dataset(
+            name,
+            ctx=ctx,
+            options=normalize.options if normalize is not None else None,
+            repo_id=normalize.repo_id if normalize is not None else None,
+            enable_encoding=normalize.enable_encoding if normalize is not None else True,
+        )
+        if policy.keep_extra_columns:
+            streaming_supported = False
+    wrote_streaming = False
+    if streaming_supported:
+        reader_for_write = normalize_extract_reader(
+            name,
+            plan.to_reader(),
+            ctx=ctx,
+            normalize=normalize,
+            apply_post_kernels=resolved.apply_post_kernels,
+        )
+        write_extract_outputs(name, reader_for_write, ctx=ctx)
+        wrote_streaming = True
+        if resolved.prefer_reader:
+            return normalize_extract_reader(
+                name,
+                plan.to_reader(),
+                ctx=ctx,
+                normalize=normalize,
+                apply_post_kernels=resolved.apply_post_kernels,
+            )
     table = plan.to_table()
     normalized = normalize_extract_output(
         name,
         table,
         ctx=ctx,
-        normalize=resolved.normalize,
+        normalize=normalize,
         apply_post_kernels=resolved.apply_post_kernels,
     )
-    write_extract_outputs(name, normalized, ctx=ctx)
+    if not wrote_streaming:
+        write_extract_outputs(name, normalized, ctx=ctx)
     if resolved.prefer_reader:
         if isinstance(normalized, pa.Table):
-            table = cast("pa.Table", normalized)
+            resolved_table = cast("pa.Table", normalized)
             return pa.RecordBatchReader.from_batches(
-                table.schema,
-                table.to_batches(),
+                resolved_table.schema,
+                resolved_table.to_batches(),
             )
         return normalized
     return normalized
@@ -663,6 +733,7 @@ __all__ = [
     "byte_span_dict",
     "bytes_from_file_ctx",
     "empty_ibis_plan",
+    "extract_dataset_location_or_raise",
     "file_identity_row",
     "ibis_plan_from_row_batches",
     "ibis_plan_from_rows",

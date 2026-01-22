@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -30,23 +30,41 @@ class IncrementalRuntime:
 
     @classmethod
     def build(cls, *, sqlglot_policy: SqlGlotPolicy | None = None) -> IncrementalRuntime:
-        """Create a runtime with default DataFusion profile and SQLGlot policy."""
+        """Create a runtime with default DataFusion profile and SQLGlot policy.
+
+        Returns
+        -------
+        IncrementalRuntime
+            Newly constructed runtime instance.
+        """
         policy = sqlglot_policy or default_sqlglot_policy()
         return cls(profile=DataFusionRuntimeProfile(), sqlglot_policy=policy)
 
     def session_context(self) -> SessionContext:
-        """Return the cached DataFusion SessionContext."""
+        """Return the cached DataFusion SessionContext.
+
+        Returns
+        -------
+        SessionContext
+            Cached or newly created DataFusion session.
+        """
         if self._ctx is None:
             self._ctx = self.profile.session_context()
         return self._ctx
 
     def ibis_backend(self) -> BaseBackend:
-        """Return the cached Ibis backend bound to this runtime."""
-        if self._ibis_backend is None:
-            self._ibis_backend = build_backend(
-                IbisBackendConfig(datafusion_profile=self.profile)
-            )
-        return self._ibis_backend
+        """Return the cached Ibis backend bound to this runtime.
+
+        Returns
+        -------
+        ibis.backends.BaseBackend
+            Cached or newly created Ibis backend.
+        """
+        backend = self._ibis_backend
+        if backend is None:
+            backend = build_backend(IbisBackendConfig(datafusion_profile=self.profile))
+            self._ibis_backend = backend
+        return backend
 
 
 class TempTableRegistry:
@@ -57,17 +75,41 @@ class TempTableRegistry:
         self._names: list[str] = []
 
     def register_table(self, table: pa.Table, *, prefix: str) -> str:
-        """Register an Arrow table and track its name."""
+        """Register an Arrow table and track its name.
+
+        Returns
+        -------
+        str
+            Registered table name.
+        """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
         self._ctx.register_record_batches(name, table.to_batches())
         self._names.append(name)
         return name
 
     def register_batches(self, batches: list[pa.RecordBatch], *, prefix: str) -> str:
-        """Register Arrow record batches and track their name."""
+        """Register Arrow record batches and track their name.
+
+        Returns
+        -------
+        str
+            Registered table name.
+        """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
         self._ctx.register_record_batches(name, batches)
         self._names.append(name)
+        return name
+
+    def track(self, name: str) -> str:
+        """Track a table name registered elsewhere.
+
+        Returns
+        -------
+        str
+            Tracked table name.
+        """
+        if name not in self._names:
+            self._names.append(name)
         return name
 
     def deregister(self, name: str) -> None:
@@ -84,10 +126,18 @@ class TempTableRegistry:
         for name in list(self._names):
             self.deregister(name)
 
-    def __enter__(self) -> TempTableRegistry:
+    def __enter__(self) -> Self:
+        """Enter the context and return self.
+
+        Returns
+        -------
+        TempTableRegistry
+            Context manager instance.
+        """
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Exit the context and cleanup tracked tables."""
         self.close()
 
 

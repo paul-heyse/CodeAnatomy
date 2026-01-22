@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
+import pytest
 
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.changes import file_changes_from_cdf
 from incremental.diff import diff_snapshots_with_delta_cdf
+from incremental.runtime import IncrementalRuntime
 from incremental.snapshot import write_repo_snapshot
 from incremental.state_store import StateStore
 
@@ -27,6 +29,7 @@ def _snapshot_table(rows: list[tuple[str, str, str, int, int]]) -> pa.Table:
 
 def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     """Compare snapshot diffs using Delta change data feed."""
+    runtime = _runtime_or_skip()
     store = StateStore(tmp_path)
     snapshot_one = _snapshot_table(
         [
@@ -55,9 +58,22 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
         cursor_store=cursor_store,
         dataset_name="repo_snapshot",
         filter_policy=None,
+        runtime=runtime,
     )
     assert cdf_table is not None
-    changes = file_changes_from_cdf(cdf_table)
+    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
     assert changes.full_refresh is False
     assert changes.changed_file_ids == ("file_a", "file_c")
     assert changes.deleted_file_ids == ("file_b",)
+
+
+def _runtime_or_skip() -> IncrementalRuntime:
+    try:
+        runtime = IncrementalRuntime.build()
+        _ = runtime.ibis_backend()
+    except ImportError as exc:
+        pytest.skip(str(exc))
+    else:
+        return runtime
+    msg = "Incremental runtime unavailable."
+    raise RuntimeError(msg)

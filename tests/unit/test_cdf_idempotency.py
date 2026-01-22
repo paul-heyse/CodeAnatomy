@@ -11,6 +11,7 @@ from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.cdf_filters import CdfChangeType, CdfFilterPolicy
 from incremental.changes import file_changes_from_cdf
 from incremental.diff import diff_snapshots_with_delta_cdf
+from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from storage.deltalake import DeltaWriteOptions, enable_delta_features, write_table_delta
 
@@ -160,13 +161,14 @@ def test_cdf_change_type_from_column() -> None:
 
 def test_file_changes_from_cdf_empty() -> None:
     """Test deriving changes from empty CDF table."""
+    runtime = _runtime_or_skip()
     cdf_table = pa.table(
         {
             "file_id": pa.array([], type=pa.string()),
             "_change_type": pa.array([], type=pa.string()),
         }
     )
-    changes = file_changes_from_cdf(cdf_table)
+    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
     assert len(changes.changed_file_ids) == 0
     assert len(changes.deleted_file_ids) == 0
     assert not changes.full_refresh
@@ -174,6 +176,7 @@ def test_file_changes_from_cdf_empty() -> None:
 
 def test_file_changes_from_cdf_inserts() -> None:
     """Test deriving changes from CDF with only inserts."""
+    runtime = _runtime_or_skip()
     cdf_table = pa.table(
         {
             "file_id": ["file_a", "file_b", "file_c"],
@@ -181,7 +184,7 @@ def test_file_changes_from_cdf_inserts() -> None:
             "path": ["a.py", "b.py", "c.py"],
         }
     )
-    changes = file_changes_from_cdf(cdf_table)
+    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
     assert set(changes.changed_file_ids) == {"file_a", "file_b", "file_c"}
     assert len(changes.deleted_file_ids) == 0
     assert not changes.full_refresh
@@ -189,6 +192,7 @@ def test_file_changes_from_cdf_inserts() -> None:
 
 def test_file_changes_from_cdf_deletes() -> None:
     """Test deriving changes from CDF with only deletes."""
+    runtime = _runtime_or_skip()
     cdf_table = pa.table(
         {
             "file_id": ["file_x", "file_y"],
@@ -196,7 +200,7 @@ def test_file_changes_from_cdf_deletes() -> None:
             "path": ["x.py", "y.py"],
         }
     )
-    changes = file_changes_from_cdf(cdf_table)
+    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
     assert len(changes.changed_file_ids) == 0
     assert set(changes.deleted_file_ids) == {"file_x", "file_y"}
     assert not changes.full_refresh
@@ -204,6 +208,7 @@ def test_file_changes_from_cdf_deletes() -> None:
 
 def test_file_changes_from_cdf_mixed() -> None:
     """Test deriving changes from CDF with mixed change types."""
+    runtime = _runtime_or_skip()
     cdf_table = pa.table(
         {
             "file_id": ["file_a", "file_b", "file_c", "file_d"],
@@ -211,7 +216,7 @@ def test_file_changes_from_cdf_mixed() -> None:
             "path": ["a.py", "b.py", "c.py", "d.py"],
         }
     )
-    changes = file_changes_from_cdf(cdf_table)
+    changes = file_changes_from_cdf(cdf_table, runtime=runtime)
     # Inserts and updates are both "changed"
     assert set(changes.changed_file_ids) == {"file_a", "file_b", "file_d"}
     assert set(changes.deleted_file_ids) == {"file_c"}
@@ -220,7 +225,8 @@ def test_file_changes_from_cdf_mixed() -> None:
 
 def test_file_changes_from_cdf_none() -> None:
     """Test deriving changes from None CDF table."""
-    changes = file_changes_from_cdf(None)
+    runtime = _runtime_or_skip()
+    changes = file_changes_from_cdf(None, runtime=runtime)
     assert len(changes.changed_file_ids) == 0
     assert len(changes.deleted_file_ids) == 0
     assert not changes.full_refresh
@@ -228,6 +234,7 @@ def test_file_changes_from_cdf_none() -> None:
 
 def test_cdf_idempotency_replay_same_version(tmp_path: Path) -> None:
     """Test that replaying CDF at same version returns no changes."""
+    runtime = _runtime_or_skip()
     dataset_path = tmp_path / "test_dataset"
     dataset_path.mkdir()
 
@@ -249,6 +256,7 @@ def test_cdf_idempotency_replay_same_version(tmp_path: Path) -> None:
         dataset_path=str(dataset_path),
         cursor_store=cursor_store,
         dataset_name="test_dataset",
+        runtime=runtime,
     )
     # First read with no prior cursor returns None
     assert cdf_result is None
@@ -258,12 +266,14 @@ def test_cdf_idempotency_replay_same_version(tmp_path: Path) -> None:
         dataset_path=str(dataset_path),
         cursor_store=cursor_store,
         dataset_name="test_dataset",
+        runtime=runtime,
     )
     assert cdf_result_2 is None
 
 
 def test_cdf_idempotency_no_duplicate_processing(tmp_path: Path) -> None:
     """Test that processed versions are not reprocessed."""
+    runtime = _runtime_or_skip()
     dataset_path = tmp_path / "test_dataset"
     dataset_path.mkdir()
 
@@ -293,6 +303,7 @@ def test_cdf_idempotency_no_duplicate_processing(tmp_path: Path) -> None:
         dataset_path=str(dataset_path),
         cursor_store=cursor_store,
         dataset_name="test_dataset",
+        runtime=runtime,
     )
     assert cdf_result is None  # First read returns None
 
@@ -306,6 +317,7 @@ def test_cdf_idempotency_no_duplicate_processing(tmp_path: Path) -> None:
         dataset_path=str(dataset_path),
         cursor_store=cursor_store,
         dataset_name="test_dataset",
+        runtime=runtime,
     )
     assert cdf_result_2 is None
 
@@ -315,6 +327,18 @@ def test_state_store_cdf_cursors_path(tmp_path: Path) -> None:
     store = StateStore(tmp_path)
     cursors_path = store.cdf_cursors_path()
     assert cursors_path == tmp_path / "metadata" / "cdf_cursors"
+
+
+def _runtime_or_skip() -> IncrementalRuntime:
+    try:
+        runtime = IncrementalRuntime.build()
+        _ = runtime.ibis_backend()
+    except ImportError as exc:
+        pytest.skip(str(exc))
+    else:
+        return runtime
+    msg = "Incremental runtime unavailable."
+    raise RuntimeError(msg)
 
 
 if __name__ == "__main__":

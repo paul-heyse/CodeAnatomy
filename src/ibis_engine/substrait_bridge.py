@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from obs.diagnostics import DiagnosticsCollector
 
 PYARROW_SUBSTRAIT_AVAILABLE = importlib.util.find_spec("pyarrow.substrait") is not None
+IBIS_SUBSTRAIT_AVAILABLE = importlib.util.find_spec("ibis_substrait") is not None
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,14 @@ def _try_ibis_substrait(
     if expr_result is not None:
         return expr_result
 
+    ibis_substrait_result = _try_substrait_from_ibis_substrait(
+        expr,
+        record_gaps=record_gaps,
+        diagnostics_sink=diagnostics_sink,
+    )
+    if ibis_substrait_result is not None:
+        return ibis_substrait_result
+
     if not PYARROW_SUBSTRAIT_AVAILABLE:
         error_msg = "pyarrow.substrait is not available"
         return _substrait_failure(
@@ -226,6 +235,53 @@ def _try_substrait_from_backend(
     return _substrait_failure(
         expr=expr,
         error_msg=error_msg,
+        record_gaps=record_gaps,
+        diagnostics_sink=diagnostics_sink,
+    )
+
+
+def _try_substrait_from_ibis_substrait(
+    expr: IbisTable,
+    *,
+    record_gaps: bool,
+    diagnostics_sink: DiagnosticsCollector | None,
+) -> SubstraitCompilationResult | None:
+    if not IBIS_SUBSTRAIT_AVAILABLE:
+        return None
+    try:
+        from ibis_substrait.compiler.core import SubstraitCompiler
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
+    try:
+        compiler = SubstraitCompiler()
+        plan = compiler.compile(expr)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return _substrait_failure(
+            expr=expr,
+            error_msg=str(exc),
+            record_gaps=record_gaps,
+            diagnostics_sink=diagnostics_sink,
+        )
+    if isinstance(plan, bytes):
+        return SubstraitCompilationResult(
+            plan_bytes=plan,
+            success=True,
+            errors=(),
+            expr_type=type(expr).__name__,
+        )
+    serializer = getattr(plan, "SerializeToString", None)
+    if callable(serializer):
+        plan_bytes = serializer()
+        if isinstance(plan_bytes, bytes) and plan_bytes:
+            return SubstraitCompilationResult(
+                plan_bytes=plan_bytes,
+                success=True,
+                errors=(),
+                expr_type=type(expr).__name__,
+            )
+    return _substrait_failure(
+        expr=expr,
+        error_msg="ibis-substrait returned empty or invalid bytes",
         record_gaps=record_gaps,
         diagnostics_sink=diagnostics_sink,
     )

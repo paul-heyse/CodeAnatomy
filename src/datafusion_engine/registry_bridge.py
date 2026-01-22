@@ -18,7 +18,6 @@ import pyarrow.fs as pafs
 from datafusion import SessionContext, SQLOptions
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
-from deltalake import DeltaTable
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
@@ -28,6 +27,7 @@ from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import ensure_path
 from datafusion_engine.listing_table_provider import (
     ParquetListingTableConfig,
+    TableProviderCapsule,
     parquet_listing_table_provider,
 )
 from datafusion_engine.schema_introspection import (
@@ -50,6 +50,7 @@ from ibis_engine.registry import (
     IbisDatasetRegistry,
     resolve_datafusion_scan_options,
     resolve_dataset_schema,
+    resolve_delta_scan_options,
 )
 from schema_spec.specs import ExternalTableConfigOverrides
 
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
 from schema_spec.system import (
     DataFusionScanOptions,
     DatasetSpec,
+    DeltaScanOptions,
     ParquetColumnOptions,
     TableSchemaContract,
     dataset_spec_from_schema,
@@ -852,6 +854,8 @@ def _build_registration_context(
 def _register_dataset_with_context(context: DataFusionRegistrationContext) -> DataFrame:
     scan = context.options.scan
     if context.location.format == "delta":
+        if _should_register_delta_provider(context):
+            return _register_delta_provider(context)
         if context.external_table_sql is None:
             msg = "Delta registration requires a schema-backed DDL statement."
             raise ValueError(msg)
@@ -865,6 +869,110 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
         return _register_simple(context, method=method)
     msg = f"Unsupported DataFusion dataset format: {context.location.format!r}."
     raise ValueError(msg)
+
+
+def _should_register_delta_provider(context: DataFusionRegistrationContext) -> bool:
+    location = context.location
+    if location.format != "delta":
+        return False
+    if location.delta_version is not None or location.delta_timestamp is not None:
+        return True
+    return resolve_delta_scan_options(location) is not None
+
+
+def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
+    location = context.location
+    delta_scan = resolve_delta_scan_options(location)
+    provider = _delta_table_provider_from_session(
+        context.ctx,
+        path=str(location.path),
+        storage_options=location.storage_options,
+        version=location.delta_version,
+        timestamp=location.delta_timestamp,
+        delta_scan=delta_scan,
+    )
+    register = getattr(context.ctx, "register_table", None)
+    if not callable(register):
+        msg = "DataFusion SessionContext missing register_table."
+        raise TypeError(msg)
+    register(context.name, TableProviderCapsule(provider))
+    _record_table_provider_artifact(
+        context.runtime_profile,
+        name=context.name,
+        provider=provider,
+        provider_kind="delta_table_provider",
+        source=None,
+        details=_delta_provider_artifact_payload(location, delta_scan=delta_scan),
+    )
+    df = context.ctx.table(context.name)
+    return _maybe_cache(context, df)
+
+
+def _delta_table_provider_from_session(
+    ctx: SessionContext,
+    *,
+    path: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    delta_scan: DeltaScanOptions | None,
+) -> object:
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:
+        msg = "Delta table providers require datafusion_ext."
+        raise RuntimeError(msg) from exc
+    provider_factory = getattr(module, "delta_table_provider_from_session", None)
+    if not callable(provider_factory):
+        msg = "datafusion_ext.delta_table_provider_from_session is unavailable."
+        raise TypeError(msg)
+    schema_ipc = _schema_ipc_payload(delta_scan.schema) if delta_scan else None
+    storage_payload = list(storage_options.items()) if storage_options else None
+    return provider_factory(
+        ctx,
+        path,
+        storage_payload,
+        version,
+        timestamp,
+        delta_scan.file_column_name if delta_scan else None,
+        delta_scan.enable_parquet_pushdown if delta_scan else None,
+        delta_scan.schema_force_view_types if delta_scan else None,
+        delta_scan.wrap_partition_values if delta_scan else None,
+        schema_ipc,
+    )
+
+
+def _schema_ipc_payload(schema: pa.Schema | None) -> bytes | None:
+    if schema is None:
+        return None
+    buffer = schema.serialize()
+    return buffer.to_pybytes()
+
+
+def _delta_provider_artifact_payload(
+    location: DatasetLocation,
+    *,
+    delta_scan: DeltaScanOptions | None,
+) -> dict[str, object]:
+    return {
+        "path": str(location.path),
+        "delta_version": location.delta_version,
+        "delta_timestamp": location.delta_timestamp,
+        "delta_scan": _delta_scan_payload(delta_scan),
+    }
+
+
+def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] | None:
+    if options is None:
+        return None
+    schema_payload = schema_to_dict(options.schema) if options.schema is not None else None
+    return {
+        "file_column_name": options.file_column_name,
+        "enable_parquet_pushdown": options.enable_parquet_pushdown,
+        "schema_force_view_types": options.schema_force_view_types,
+        "wrap_partition_values": options.wrap_partition_values,
+        "schema": schema_payload,
+    }
 
 
 def _should_register_external_table(context: DataFusionRegistrationContext) -> bool:
@@ -1202,6 +1310,7 @@ def _record_table_provider_artifact(
     provider: object | None,
     provider_kind: str,
     source: object | None = None,
+    details: Mapping[str, object] | None = None,
 ) -> None:
     if runtime_profile is None or runtime_profile.diagnostics_sink is None:
         return
@@ -1214,6 +1323,8 @@ def _record_table_provider_artifact(
     }
     if provider is not None:
         payload.update(_provider_pushdown_hints(provider))
+    if details:
+        payload.update(details)
     runtime_profile.diagnostics_sink.record_artifact("datafusion_table_providers_v1", payload)
 
 
@@ -1363,6 +1474,37 @@ def _apply_projection_exprs(
 
         record_view_definition(runtime_profile, name=table_name, sql=view_sql)
     return ctx.table(table_name)
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def apply_projection_overrides(
+    ctx: SessionContext,
+    *,
+    projection_map: Mapping[str, Sequence[str]],
+    sql_options: SQLOptions,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> None:
+    """Apply projection overrides for table names when available."""
+    if not projection_map:
+        return
+    for table_name, columns in projection_map.items():
+        if not columns:
+            continue
+        projection_exprs = [_sql_identifier(name) for name in columns]
+        try:
+            _apply_projection_exprs(
+                ctx,
+                table_name=table_name,
+                projection_exprs=projection_exprs,
+                sql_options=sql_options,
+                runtime_profile=runtime_profile,
+            )
+        except (KeyError, RuntimeError, TypeError, ValueError):
+            continue
 
 
 def _apply_scan_settings(
@@ -1919,10 +2061,13 @@ def register_delta_cdf_df(
     cdf_options = resolved.cdf_options
     storage_options = resolved.storage_options
     runtime_profile = resolved.runtime_profile
-    table = DeltaTable(path, storage_options=dict(storage_options) if storage_options else None)
-    provider = _delta_cdf_provider(table, cdf_options)
+    provider = _delta_cdf_table_provider(
+        path=path,
+        storage_options=storage_options,
+        options=cdf_options,
+    )
     if provider is None:
-        msg = f"Delta CDF provider unavailable for {path!r}."
+        msg = "Delta CDF provider requires datafusion_ext.delta_cdf_table_provider."
         raise ValueError(msg)
     ctx.register_table(name, provider)
     _record_table_provider_artifact(
@@ -1942,53 +2087,33 @@ def register_delta_cdf_df(
     return ctx.table(name)
 
 
-def _call_cdf_provider(
-    provider: Callable[..., object],
+def _delta_cdf_table_provider(
     *,
-    args: object | None = None,
-    kwargs: Mapping[str, object] | None = None,
-) -> object | None:
-    try:
-        if kwargs is not None:
-            return provider(**kwargs)
-        if args is None:
-            return provider()
-        return provider(args)
-    except TypeError:
-        return None
-
-
-def _delta_cdf_provider(
-    table: DeltaTable,
+    path: str,
+    storage_options: Mapping[str, str] | None,
     options: DeltaCdfOptions | None,
 ) -> object | None:
-    provider = getattr(table, "cdf_table_provider", None)
-    if not callable(provider):
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError:
         return None
-    result: object | None = None
-    if options is None:
-        return _call_cdf_provider(provider)
-    kwargs = _cdf_provider_kwargs(options)
-    if kwargs:
-        result = _call_cdf_provider(provider, kwargs=kwargs)
-    if result is None:
-        result = _call_cdf_provider(provider, args=options)
-    if result is None:
-        result = _call_cdf_provider(provider)
-    return result
-
-
-def _cdf_provider_kwargs(options: DeltaCdfOptions) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "starting_version": options.starting_version,
-        "ending_version": options.ending_version,
-        "starting_timestamp": options.starting_timestamp,
-        "ending_timestamp": options.ending_timestamp,
-        "columns": options.columns,
-        "predicate": options.predicate,
-        "allow_out_of_range": options.allow_out_of_range,
-    }
-    return {key: value for key, value in payload.items() if value is not None}
+    provider_factory = getattr(module, "delta_cdf_table_provider", None)
+    options_type = getattr(module, "DeltaCdfOptions", None)
+    if not callable(provider_factory) or options_type is None:
+        return None
+    resolved = options or DeltaCdfOptions()
+    ext_options = options_type()
+    if resolved.starting_version is not None:
+        ext_options.starting_version = resolved.starting_version
+    if resolved.ending_version is not None:
+        ext_options.ending_version = resolved.ending_version
+    if resolved.starting_timestamp is not None:
+        ext_options.starting_timestamp = resolved.starting_timestamp
+    if resolved.ending_timestamp is not None:
+        ext_options.ending_timestamp = resolved.ending_timestamp
+    ext_options.allow_out_of_range = resolved.allow_out_of_range
+    storage = list(storage_options.items()) if storage_options else None
+    return provider_factory(path, storage, ext_options)
 
 
 def _record_delta_cdf_artifact(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
@@ -12,6 +12,7 @@ from datafusion import SessionContext
 from ibis.expr.types import Table, Value
 
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
@@ -288,11 +289,24 @@ def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScan
     DataFusionScanOptions | None
         Scan options derived from the dataset location, when present.
     """
-    if location.datafusion_scan is not None:
-        return location.datafusion_scan
-    if location.dataset_spec is not None:
-        return location.dataset_spec.datafusion_scan
-    return None
+    scan = location.datafusion_scan
+    if scan is None and location.dataset_spec is not None:
+        scan = location.dataset_spec.datafusion_scan
+    if scan is None:
+        return None
+    if location.dataset_spec is None:
+        return scan
+    if scan.file_sort_order:
+        return scan
+    ordering = location.dataset_spec.ordering()
+    file_sort_order: tuple[str, ...] = ()
+    if ordering.level == OrderingLevel.EXPLICIT and ordering.keys:
+        file_sort_order = tuple(key for key, _order in ordering.keys)
+    elif location.dataset_spec.table_spec.key_fields:
+        file_sort_order = tuple(location.dataset_spec.table_spec.key_fields)
+    if not file_sort_order:
+        return scan
+    return replace(scan, file_sort_order=file_sort_order)
 
 
 def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | None:
@@ -389,22 +403,16 @@ def read_dataset(
         backend_fs = cast("FilesystemBackend", backend)
         backend_fs.register_filesystem(params.filesystem)
     if params.dataset_format == "delta":
-        from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
-
         options = dict(params.read_options or {})
-        table_name = params.table_name or options.pop("table_name", None)
-        storage_options = params.storage_options or options.pop("storage_options", None)
-        version = options.pop("version", None)
-        return read_delta_ibis(
-            backend,
-            params.path,
-            options=IbisDeltaReadOptions(
-                table_name=table_name,
-                storage_options=storage_options,
-                version=version if isinstance(version, int) else None,
-                options=options or None,
-            ),
-        )
+        if params.table_name is not None:
+            options.setdefault("table_name", params.table_name)
+        if params.storage_options:
+            options.setdefault("storage_options", dict(params.storage_options))
+        version = options.get("version")
+        if version is not None and not isinstance(version, int):
+            options.pop("version", None)
+        reader = _resolve_reader(backend, params.dataset_format)
+        return reader(params.path, **options)
     options = dict(params.read_options or {})
     if params.table_name is not None:
         options.setdefault("table_name", params.table_name)
@@ -461,19 +469,6 @@ def datafusion_context(backend: object) -> SessionContext:
             return ctx
     msg = "Ibis backend does not expose a DataFusion SessionContext."
     raise ValueError(msg)
-
-
-def _datafusion_context(backend: ibis.backends.BaseBackend) -> SessionContext:
-    """Return the DataFusion SessionContext when available.
-
-    Deprecated: use ``datafusion_context`` instead.
-
-    Returns
-    -------
-    object | None
-        SessionContext when detected, otherwise ``None``.
-    """
-    return datafusion_context(backend)
 
 
 def _register_datafusion_dataset(

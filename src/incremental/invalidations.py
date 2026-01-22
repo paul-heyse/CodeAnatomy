@@ -13,7 +13,9 @@ from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import schema_identity_from_metadata
 from datafusion_engine.runtime import read_delta_as_reader
 from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
+from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
+from registry_common.arrow_payloads import payload_hash
 from relspec.graph import rule_graph_signature
 from relspec.registry.snapshot import RelspecSnapshot
 from relspec.rules.cache import (
@@ -24,13 +26,14 @@ from relspec.rules.cache import (
     rule_plan_sql_cached,
 )
 from relspec.schema_context import RelspecSchemaContext
+from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
 from storage.deltalake import (
     DeltaWriteOptions,
     enable_delta_features,
     write_table_delta,
 )
 
-INVALIDATION_SNAPSHOT_VERSION = 2
+INVALIDATION_SNAPSHOT_VERSION = 3
 _RULE_SIGNATURE_ENTRY = pa.struct(
     [
         pa.field("rule_name", pa.string(), nullable=False),
@@ -64,6 +67,13 @@ _INVALIDATION_SCHEMA = pa.schema(
         pa.field("rule_plan_sql", pa.list_(_RULE_SQL_ENTRY), nullable=False),
         pa.field("rule_plan_hashes", pa.list_(_RULE_HASH_ENTRY), nullable=False),
         pa.field("dataset_identities", pa.list_(_DATASET_IDENTITY_ENTRY), nullable=False),
+        pa.field("incremental_metadata_hash", pa.string(), nullable=True),
+    ]
+)
+_INCREMENTAL_METADATA_SCHEMA = pa.schema(
+    [
+        pa.field("datafusion_settings_hash", pa.string(), nullable=False),
+        pa.field("sqlglot_policy_hash", pa.string(), nullable=False),
     ]
 )
 
@@ -85,6 +95,7 @@ class InvalidationSnapshot:
     rule_plan_hashes: dict[str, str]
     rule_graph_signature: str
     dataset_identities: dict[str, SchemaIdentity]
+    incremental_metadata_hash: str | None = None
 
     def to_payload(self) -> dict[str, object]:
         """Return an Arrow-friendly payload for the snapshot.
@@ -101,6 +112,7 @@ class InvalidationSnapshot:
             "rule_plan_sql": _rule_sql_entries(self.rule_plan_sql),
             "rule_plan_hashes": _rule_hash_entries(self.rule_plan_hashes),
             "dataset_identities": _dataset_entries(self.dataset_identities),
+            "incremental_metadata_hash": self.incremental_metadata_hash,
         }
 
 
@@ -124,6 +136,7 @@ def build_invalidation_snapshot(
     schema_context: RelspecSchemaContext,
     *,
     relspec_snapshot: RelspecSnapshot | None = None,
+    runtime: IncrementalRuntime | None = None,
 ) -> InvalidationSnapshot:
     """Build the current invalidation signature snapshot.
 
@@ -143,6 +156,7 @@ def build_invalidation_snapshot(
         rule_plan_hashes=rule_plan_hashes_cached(),
         rule_graph_signature=rule_graph_signature,
         dataset_identities=_dataset_identities(schema_context),
+        incremental_metadata_hash=_incremental_metadata_hash(runtime),
     )
 
 
@@ -201,6 +215,7 @@ def check_state_store_invalidation(
     state_store: StateStore,
     schema_context: RelspecSchemaContext,
     relspec_snapshot: RelspecSnapshot | None = None,
+    runtime: IncrementalRuntime | None = None,
 ) -> InvalidationResult:
     """Check invalidation signatures and reset state store on mismatch.
 
@@ -209,7 +224,11 @@ def check_state_store_invalidation(
     InvalidationResult
         Outcome indicating whether a full refresh is required.
     """
-    current = build_invalidation_snapshot(schema_context, relspec_snapshot=relspec_snapshot)
+    current = build_invalidation_snapshot(
+        schema_context,
+        relspec_snapshot=relspec_snapshot,
+        runtime=runtime,
+    )
     previous = read_invalidation_snapshot(state_store)
     if previous is None:
         write_invalidation_snapshot(state_store, current)
@@ -227,6 +246,7 @@ def check_state_store_invalidation_with_diff(
     state_store: StateStore,
     schema_context: RelspecSchemaContext,
     relspec_snapshot: RelspecSnapshot | None = None,
+    runtime: IncrementalRuntime | None = None,
 ) -> InvalidationOutcome:
     """Check invalidation signatures and return plan diff details.
 
@@ -235,7 +255,11 @@ def check_state_store_invalidation_with_diff(
     InvalidationOutcome
         Outcome containing invalidation result and plan diff table.
     """
-    current = build_invalidation_snapshot(schema_context, relspec_snapshot=relspec_snapshot)
+    current = build_invalidation_snapshot(
+        schema_context,
+        relspec_snapshot=relspec_snapshot,
+        runtime=runtime,
+    )
     previous = read_invalidation_snapshot(state_store)
     diff_table = rule_plan_diff_table(previous, current)
     if previous is None:
@@ -292,6 +316,8 @@ def diff_invalidation_snapshots(
             )
         )
     reasons.extend(_diff_schema_identities(previous.dataset_identities, current.dataset_identities))
+    if previous.incremental_metadata_hash != current.incremental_metadata_hash:
+        reasons.append("incremental_metadata")
     return tuple(reasons)
 
 
@@ -340,6 +366,17 @@ def _dataset_identities(schema_context: RelspecSchemaContext) -> dict[str, Schem
     return identities
 
 
+def _incremental_metadata_hash(runtime: IncrementalRuntime | None) -> str | None:
+    if runtime is None:
+        return None
+    snapshot = sqlglot_policy_snapshot_for(runtime.sqlglot_policy)
+    payload = {
+        "datafusion_settings_hash": runtime.profile.settings_hash(),
+        "sqlglot_policy_hash": snapshot.policy_hash,
+    }
+    return payload_hash(payload, _INCREMENTAL_METADATA_SCHEMA)
+
+
 def _rule_graph_signature_for_snapshot(snapshot: RelspecSnapshot) -> str:
     rules = rule_definitions_cached()
     return rule_graph_signature(
@@ -360,7 +397,7 @@ def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
         else:
             msg = "Invalid invalidation snapshot version."
             raise TypeError(msg)
-        if version_value != INVALIDATION_SNAPSHOT_VERSION:
+        if version_value > INVALIDATION_SNAPSHOT_VERSION:
             msg = "Invalid invalidation snapshot version."
             raise ValueError(msg)
     rule_signatures = _coerce_rule_entries(row.get("rule_plan_signatures"))
@@ -368,12 +405,14 @@ def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
     rule_plan_hashes = _coerce_rule_hash_entries(row.get("rule_plan_hashes"))
     rule_graph_signature = str(row.get("rule_graph_signature", ""))
     dataset_identities = _coerce_dataset_entries(row.get("dataset_identities"))
+    metadata_hash = row.get("incremental_metadata_hash")
     return InvalidationSnapshot(
         rule_plan_signatures=rule_signatures,
         rule_plan_sql=rule_plan_sql,
         rule_plan_hashes=rule_plan_hashes,
         rule_graph_signature=rule_graph_signature,
         dataset_identities=dataset_identities,
+        incremental_metadata_hash=str(metadata_hash) if metadata_hash is not None else None,
     )
 
 

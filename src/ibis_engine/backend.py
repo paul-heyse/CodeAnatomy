@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from dataclasses import replace
 from typing import Protocol, cast
 
@@ -19,23 +20,18 @@ class _IbisDataFusionModule(Protocol):
 
 def _load_ibis_datafusion() -> _IbisDataFusionModule:
     msg = "Ibis datafusion backend is unavailable; install ibis-framework[datafusion]."
-    module_names = ("ibis.datafusion", "ibis.backends.datafusion")
-    for module_name in module_names:
-        try:
-            module = importlib.import_module(module_name)
-        except ModuleNotFoundError as exc:
-            if exc.name == module_name:
-                continue
+    try:
+        module = importlib.import_module("ibis.datafusion")
+    except ModuleNotFoundError as exc:
+        if exc.name == "ibis.datafusion":
             raise ImportError(msg) from exc
-        except ImportError as exc:
-            raise ImportError(msg) from exc
-        connect = getattr(module, "connect", None)
-        if callable(connect):
-            return cast("_IbisDataFusionModule", module)
-        backend_cls = getattr(module, "Backend", None)
-        if callable(backend_cls):
-            return cast("_IbisDataFusionModule", backend_cls())
-        raise ImportError(msg)
+        raise ImportError(msg) from exc
+    except ImportError as exc:
+        raise ImportError(msg) from exc
+    connect = getattr(module, "connect", None)
+    if callable(connect):
+        return cast("_IbisDataFusionModule", module)
+    msg = "Ibis datafusion backend is missing connect()."
     raise ImportError(msg)
 
 
@@ -66,4 +62,24 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
     if profile.default_catalog != "datafusion":
         profile = replace(profile, default_catalog="datafusion")
     ctx = profile.session_context()
+    if cfg.object_stores:
+        register_store = getattr(ctx, "register_object_store", None)
+        if not callable(register_store):
+            msg = "DataFusion SessionContext does not support register_object_store."
+            raise TypeError(msg)
+        for store in cfg.object_stores:
+            if not store.scheme:
+                msg = "ObjectStoreConfig.scheme must be non-empty."
+                raise ValueError(msg)
+            register_store(store.scheme, store.store, store.host)
+            if profile.diagnostics_sink is not None:
+                profile.diagnostics_sink.record_artifact(
+                    "datafusion_object_stores_v1",
+                    {
+                        "event_time_unix_ms": int(time.time() * 1000),
+                        "scheme": store.scheme,
+                        "host": store.host,
+                        "store_type": type(store.store).__name__,
+                    },
+                )
     return ibis_datafusion.connect(ctx)

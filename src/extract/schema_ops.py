@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from typing import cast
+
+import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeContext, FinalizeResult
 from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec, align_table, encode_table
@@ -120,6 +123,62 @@ def normalize_extract_output(
         return aligned
     columns = [field.name for field in schema if field.name in policy.encoding.dictionary_cols]
     return encode_table(aligned, columns=columns)
+
+
+def normalize_extract_reader(
+    name: str,
+    reader: RecordBatchReaderLike,
+    *,
+    ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions | None = None,
+    apply_post_kernels: bool = True,
+) -> RecordBatchReaderLike:
+    """Normalize a RecordBatchReader for extract output streaming.
+
+    Returns
+    -------
+    RecordBatchReaderLike
+        Reader yielding normalized record batches.
+
+    Raises
+    ------
+    ValueError
+        Raised when streaming normalization is incompatible with the dataset policy.
+    """
+    normalize = normalize or ExtractNormalizeOptions()
+    policy = schema_policy_for_dataset(
+        name,
+        ctx=ctx,
+        options=normalize.options,
+        repo_id=normalize.repo_id,
+        enable_encoding=normalize.enable_encoding,
+    )
+    schema = policy.resolved_schema()
+    if policy.keep_extra_columns:
+        msg = f"Streaming normalization does not support keep_extra_columns for {name!r}."
+        raise ValueError(msg)
+    encode_columns = None
+    if policy.encoding is not None and policy.encoding.dictionary_cols:
+        encode_columns = tuple(
+            field.name for field in schema if field.name in policy.encoding.dictionary_cols
+        )
+
+    def _iter_batches() -> Iterator[pa.RecordBatch]:
+        for batch in reader:
+            table = pa.Table.from_batches([batch], schema=batch.schema)
+            processed = apply_pipeline_kernels(name, table) if apply_post_kernels else table
+            aligned = align_table(
+                processed,
+                schema=schema,
+                safe_cast=policy.safe_cast,
+                keep_extra_columns=False,
+                on_error=policy.on_error,
+            )
+            if encode_columns:
+                aligned = encode_table(aligned, columns=encode_columns)
+            yield from cast("pa.Table", aligned).to_batches()
+
+    return pa.RecordBatchReader.from_batches(schema, _iter_batches())
 
 
 def apply_pipeline_kernels(_name: str, table: TableLike) -> TableLike:

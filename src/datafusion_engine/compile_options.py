@@ -146,6 +146,8 @@ class DataFusionCompileOptions:
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None = None
     params: Mapping[str, object] | Mapping[Value, object] | None = None
     param_identifier_allowlist: tuple[str, ...] | None = None
+    prepared_statements: bool = True
+    prepared_param_types: Mapping[str, str] | None = None
     sql_options: SQLOptions | None = None
     sql_policy: DataFusionSqlPolicy | None = None
     sql_policy_name: str | None = None
@@ -172,3 +174,5 @@ class DataFusionCompileOptions:
     run_id: str | None = None
     prefer_substrait: bool = False
     record_substrait_gaps: bool = False
+    force_sql_fallback: bool = False
+    dynamic_projection: bool = True

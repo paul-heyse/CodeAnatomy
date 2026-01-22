@@ -9,9 +9,6 @@ import pyarrow as pa
 import pytest
 
 from arrowdsl.schema.build import table_from_arrays
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
 from incremental.impact import (
     ImpactedFileInputs,
     changed_file_impact_table,
@@ -21,6 +18,7 @@ from incremental.impact import (
     merge_impacted_files,
 )
 from incremental.registry_specs import dataset_schema
+from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
 from storage.deltalake import DeltaWriteOptions, write_dataset_delta
@@ -119,7 +117,8 @@ def _assert_symbol_closure_results(symbol_closure: pa.Table, hybrid: pa.Table) -
 def test_incremental_symbol_closure_smoke(tmp_path: Path) -> None:
     """Ensure impact strategies include expected caller/importer closures."""
     try:
-        backend = build_backend(IbisBackendConfig(datafusion_profile=DataFusionRuntimeProfile()))
+        runtime = IncrementalRuntime.build()
+        _ = runtime.ibis_backend()
     except ImportError as exc:
         pytest.skip(str(exc))
     state_store = StateStore(root=tmp_path / "state")
@@ -129,18 +128,18 @@ def test_incremental_symbol_closure_smoke(tmp_path: Path) -> None:
     paths = _write_symbol_closure_sources(state_store, sources=sources, options=delta_options)
 
     callers = impacted_callers_from_changed_exports(
-        backend=backend,
+        runtime=runtime,
         changed_exports=sources.changed_exports,
         prev_rel_callsite_qname=paths["rel_callsite_qname_v1"],
         prev_rel_callsite_symbol=paths["rel_callsite_symbol_v1"],
     )
     importers = impacted_importers_from_changed_exports(
-        backend=backend,
+        runtime=runtime,
         changed_exports=sources.changed_exports,
         prev_imports_resolved=paths["py_imports_resolved_v1"],
     )
     module_importers = import_closure_only_from_changed_exports(
-        backend=backend,
+        runtime=runtime,
         changed_exports=sources.changed_exports,
         prev_imports_resolved=paths["py_imports_resolved_v1"],
     )
@@ -159,7 +158,7 @@ def test_incremental_symbol_closure_smoke(tmp_path: Path) -> None:
     )
 
     symbol_closure = merge_impacted_files(
-        backend,
+        runtime,
         ImpactedFileInputs(
             changed_files=base,
             callers=callers,
@@ -169,7 +168,7 @@ def test_incremental_symbol_closure_smoke(tmp_path: Path) -> None:
         strategy="symbol_closure",
     )
     hybrid = merge_impacted_files(
-        backend,
+        runtime,
         ImpactedFileInputs(
             changed_files=base,
             callers=callers,

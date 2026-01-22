@@ -2926,7 +2926,9 @@ def manifest_data(
     )
     runtime_artifacts = _manifest_runtime_artifacts(ctx)
     sqlglot_ast_payloads = _sqlglot_ast_payloads(manifest_inputs)
-    function_registry = default_function_registry()
+    function_registry = default_function_registry(
+        datafusion_function_catalog=runtime_artifacts.datafusion_function_catalog
+    )
     dataset_snapshot = _dataset_registry_snapshot(manifest_inputs.relspec_inputs_bundle.locations)
     extract_inputs = manifest_inputs.extract_inputs
     relationship_rules = _relationship_rules_from_snapshots(manifest_inputs)
@@ -3191,15 +3193,17 @@ def _datafusion_function_allowlist_notes(ctx: ExecutionContext) -> JsonDict:
     runtime = ctx.runtime.datafusion
     if runtime is None or not runtime.enable_information_schema:
         return {}
+    introspector = SchemaIntrospector(
+        runtime.session_context(),
+        sql_options=sql_options_for_profile(runtime),
+    )
     try:
-        available = SchemaIntrospector(
-            runtime.session_context(),
-            sql_options=sql_options_for_profile(runtime),
-        ).function_names()
+        available = introspector.function_names()
+        function_catalog = introspector.function_catalog_snapshot(include_parameters=True)
     except (RuntimeError, TypeError, ValueError):
         return {}
     demands = collect_rule_demands(rule_definitions_cached(), include_extract_queries=True)
-    registry = default_function_registry()
+    registry = default_function_registry(datafusion_function_catalog=function_catalog)
     required: dict[str, set[str]] = {}
     for mapping in (demands.expr_calls, demands.aggregate_funcs):
         for name, rules in mapping.items():
@@ -3833,7 +3837,9 @@ def run_bundle_context(
     cache_events = _ibis_cache_events(context_inputs.ctx)
     support_matrix = _ibis_support_matrix(context_inputs.ctx)
     allocator_debug = bool(context_inputs.ctx.debug) if context_inputs.ctx is not None else False
-    function_registry = default_function_registry()
+    function_registry = default_function_registry(
+        datafusion_function_catalog=datafusion_artifacts.function_catalog
+    )
     kernel_registry = kernel_registry_snapshot()
     datafusion_write_policy = (
         _datafusion_write_policy_snapshot(context_inputs.ctx)

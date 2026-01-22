@@ -8,18 +8,20 @@ import pyarrow as pa
 from deltalake import DeltaTable
 
 from arrowdsl.schema.serialization import schema_fingerprint
-from incremental.cdf_cursors import CdfCursor, CdfCursorStore
+from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
-from incremental.runtime import IncrementalRuntime, TempTableRegistry
+from incremental.cdf_runtime import read_cdf_changes
+from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
+from incremental.streaming_writes import StreamingWriteOptions, stream_table_to_delta
 from storage.deltalake import (
-    DeltaCdfOptions,
     DeltaWriteOptions,
     DeltaWriteResult,
     enable_delta_features,
     write_table_delta,
 )
-from storage.deltalake.delta import read_delta_cdf
+
+_STREAMING_ROW_THRESHOLD = 250_000
 
 
 def diff_snapshots_with_delta_cdf(
@@ -45,6 +47,8 @@ def diff_snapshots_with_delta_cdf(
         Name of the dataset for cursor tracking.
     filter_policy : CdfFilterPolicy | None
         Policy for filtering change types. If None, includes all changes.
+    runtime : IncrementalRuntime
+        Shared incremental runtime for DataFusion execution.
 
     Returns
     -------
@@ -59,61 +63,16 @@ def diff_snapshots_with_delta_cdf(
     # Check if it's a Delta table
     if not DeltaTable.is_deltatable(dataset_path):
         return None
-
-    # Get current cursor
-    cursor = cursor_store.load_cursor(dataset_name)
-
-    # Open Delta table to get current version
-    dt = DeltaTable(dataset_path)
-    current_version = dt.version()
-
-    # If no cursor exists, return None to signal full snapshot comparison
-    if cursor is None:
-        # Create initial cursor at current version
-        cursor_store.save_cursor(CdfCursor(dataset_name=dataset_name, last_version=current_version))
-        return None
-
-    # If versions are the same, no changes
-    if cursor.last_version >= current_version:
-        return None
-
-    # Read CDF changes
-    starting_version = cursor.last_version + 1
-    cdf_options = DeltaCdfOptions(
-        starting_version=starting_version,
-        ending_version=current_version,
+    result = read_cdf_changes(
+        runtime,
+        dataset_path=dataset_path,
+        dataset_name=dataset_name,
+        cursor_store=cursor_store,
+        filter_policy=filter_policy,
     )
-
-    try:
-        cdf_table = read_delta_cdf(
-            dataset_path,
-            cdf_options=cdf_options,
-        )
-    except ValueError:
-        # CDF not enabled - fall back to None to signal full comparison
+    if result is None:
         return None
-
-    # Apply filter policy if provided
-    if filter_policy is not None:
-        predicate = filter_policy.to_sql_predicate()
-        if predicate is not None and predicate != "FALSE":
-            ctx = runtime.session_context()
-            sql_options = runtime.profile.sql_options()
-            with TempTableRegistry(ctx) as registry:
-                temp_name = registry.register_table(cdf_table, prefix="cdf_filter")
-                filtered_df = ctx.sql_with_options(
-                    f"SELECT * FROM {temp_name} WHERE {predicate}",
-                    sql_options,
-                )
-                cdf_table = filtered_df.to_arrow_table()
-        elif predicate == "FALSE":
-            # No changes match filter
-            cdf_table = pa.table({}, schema=cdf_table.schema)
-
-    # Update cursor to current version
-    cursor_store.save_cursor(CdfCursor(dataset_name=dataset_name, last_version=current_version))
-
-    return cdf_table
+    return result.table
 
 
 def write_incremental_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:
@@ -127,18 +86,27 @@ def write_incremental_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResul
     store.ensure_dirs()
     target = store.incremental_diff_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    result = write_table_delta(
-        diff,
-        str(target),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata={
-                "snapshot_kind": "incremental_diff",
-                "schema_fingerprint": schema_fingerprint(diff.schema),
-            },
-        ),
+    options = DeltaWriteOptions(
+        mode="overwrite",
+        schema_mode="overwrite",
+        commit_metadata={
+            "snapshot_kind": "incremental_diff",
+            "schema_fingerprint": schema_fingerprint(diff.schema),
+        },
     )
+    if diff.num_rows >= _STREAMING_ROW_THRESHOLD:
+        stream_table_to_delta(
+            diff,
+            str(target),
+            options=StreamingWriteOptions(),
+            write_options=options,
+        )
+        result = DeltaWriteResult(
+            path=str(target),
+            version=DeltaTable(str(target)).version(),
+        )
+    else:
+        result = write_table_delta(diff, str(target), options=options)
     enable_delta_features(result.path)
     return result
 

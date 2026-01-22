@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pyarrow as pa
+import pytest
 
 from arrowdsl.core.ids import prefixed_hash_id
 from incremental.exports import build_exported_defs_index
+from incremental.runtime import IncrementalRuntime
 from tests.utils import values_as_list
 
 _QNAME_TYPE = pa.list_(pa.struct([("name", pa.string()), ("source", pa.string())]))
@@ -14,7 +16,8 @@ _QNAME_TYPE = pa.list_(pa.struct([("name", pa.string()), ("source", pa.string())
 def test_build_exported_defs_index_hashes_qnames() -> None:
     """Top-level defs should emit stable qname hashes."""
     cst_defs = _cst_defs_table()
-    result = build_exported_defs_index(cst_defs)
+    runtime = _runtime_or_skip()
+    result = build_exported_defs_index(cst_defs, runtime=runtime)
 
     expected_qnames = ["pkg.mod.foo", "pkg.mod.foo.Inner"]
     assert result.num_rows == len(expected_qnames)
@@ -28,6 +31,7 @@ def test_build_exported_defs_index_hashes_qnames() -> None:
 def test_build_exported_defs_index_attaches_symbols() -> None:
     """Symbols from rel_def_symbol should attach to exported defs."""
     cst_defs = _cst_defs_table()
+    runtime = _runtime_or_skip()
     rel_def_symbol = pa.table(
         {
             "def_id": pa.array(["def_root"], type=pa.string()),
@@ -37,7 +41,11 @@ def test_build_exported_defs_index_attaches_symbols() -> None:
         }
     )
 
-    result = build_exported_defs_index(cst_defs, rel_def_symbol=rel_def_symbol)
+    result = build_exported_defs_index(
+        cst_defs,
+        runtime=runtime,
+        rel_def_symbol=rel_def_symbol,
+    )
 
     assert values_as_list(result["symbol"]) == ["sym1", "sym1"]
     assert values_as_list(result["symbol_roles"]) == [1, 1]
@@ -67,3 +75,15 @@ def _cst_defs_table() -> pa.Table:
             "qnames": qnames,
         }
     )
+
+
+def _runtime_or_skip() -> IncrementalRuntime:
+    try:
+        runtime = IncrementalRuntime.build()
+        _ = runtime.ibis_backend()
+    except ImportError as exc:
+        pytest.skip(str(exc))
+    else:
+        return runtime
+    msg = "Incremental runtime unavailable."
+    raise RuntimeError(msg)

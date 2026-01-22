@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import ibis
 import pyarrow as pa
-from ibis.backends import BaseBackend
 
 from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.interop import TableLike
@@ -16,8 +15,13 @@ from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table, empty_table
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
+from incremental.ibis_exec import ibis_expr_to_table
 from incremental.registry_specs import dataset_schema
+from incremental.runtime import IncrementalRuntime
 from incremental.types import IncrementalFileChanges
+
+if TYPE_CHECKING:
+    from ibis.backends import BaseBackend
 
 _EXPORT_KEY_SCHEMA = pa.schema(
     [
@@ -30,7 +34,7 @@ _EXPORT_KEY_SCHEMA = pa.schema(
 
 def impacted_callers_from_changed_exports(
     *,
-    backend: BaseBackend,
+    runtime: IncrementalRuntime,
     changed_exports: TableLike,
     prev_rel_callsite_qname: str | None,
     prev_rel_callsite_symbol: str | None,
@@ -42,6 +46,7 @@ def impacted_callers_from_changed_exports(
     pa.Table
         Impacted callers table derived from callsite relationships.
     """
+    backend = runtime.ibis_backend()
     schema = dataset_schema("inc_impacted_callers_v1")
     changed = cast("pa.Table", changed_exports)
     if changed.num_rows == 0:
@@ -82,13 +87,17 @@ def impacted_callers_from_changed_exports(
     if not pieces:
         return empty_table(schema)
     combined = _union_all_tables(pieces).distinct()
-    result = cast("pa.Table", combined.to_pyarrow())
+    result = ibis_expr_to_table(
+        combined,
+        runtime=runtime,
+        name="impacted_callers",
+    )
     return align_table(result, schema=schema, safe_cast=True)
 
 
 def impacted_importers_from_changed_exports(
     *,
-    backend: BaseBackend,
+    runtime: IncrementalRuntime,
     changed_exports: TableLike,
     prev_imports_resolved: str | None,
 ) -> pa.Table:
@@ -99,6 +108,7 @@ def impacted_importers_from_changed_exports(
     pa.Table
         Impacted importers table derived from resolved imports.
     """
+    backend = runtime.ibis_backend()
     schema = dataset_schema("inc_impacted_importers_v1")
     if prev_imports_resolved is None:
         return empty_table(schema)
@@ -138,13 +148,17 @@ def impacted_importers_from_changed_exports(
     )
 
     combined = _union_all_tables([by_name, by_star]).distinct()
-    result = cast("pa.Table", combined.to_pyarrow())
+    result = ibis_expr_to_table(
+        combined,
+        runtime=runtime,
+        name="impacted_importers",
+    )
     return align_table(result, schema=schema, safe_cast=True)
 
 
 def import_closure_only_from_changed_exports(
     *,
-    backend: BaseBackend,
+    runtime: IncrementalRuntime,
     changed_exports: TableLike,
     prev_imports_resolved: str | None,
 ) -> pa.Table:
@@ -155,6 +169,7 @@ def import_closure_only_from_changed_exports(
     pa.Table
         Impacted importers table for module-level imports.
     """
+    backend = runtime.ibis_backend()
     schema = dataset_schema("inc_impacted_importers_v1")
     if prev_imports_resolved is None:
         return empty_table(schema)
@@ -195,7 +210,11 @@ def import_closure_only_from_changed_exports(
     )
 
     combined = _union_all_tables([module_hits, star_hits]).distinct()
-    result = cast("pa.Table", combined.to_pyarrow())
+    result = ibis_expr_to_table(
+        combined,
+        runtime=runtime,
+        name="import_closure_only",
+    )
     return align_table(result, schema=schema, safe_cast=True)
 
 
@@ -210,7 +229,7 @@ class ImpactedFileInputs:
 
 
 def merge_impacted_files(
-    backend: BaseBackend,
+    runtime: IncrementalRuntime,
     inputs: ImpactedFileInputs,
     *,
     strategy: str,
@@ -222,6 +241,7 @@ def merge_impacted_files(
     pa.Table
         Impacted files table aligned to ``inc_impacted_files_v2``.
     """
+    backend = runtime.ibis_backend()
     schema = dataset_schema("inc_impacted_files_v2")
     tables: list[pa.Table] = [align_table(cast("pa.Table", inputs.changed_files), schema=schema)]
 
@@ -241,7 +261,11 @@ def merge_impacted_files(
     if not ibis_tables:
         return empty_table(schema)
     combined = _union_all_tables(ibis_tables).distinct()
-    result = cast("pa.Table", combined.to_pyarrow())
+    result = ibis_expr_to_table(
+        combined,
+        runtime=runtime,
+        name="impacted_files",
+    )
     return align_table(result, schema=schema, safe_cast=True)
 
 

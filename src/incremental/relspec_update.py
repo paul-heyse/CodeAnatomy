@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import ibis
+import pyarrow as pa
+import pyarrow.dataset as ds
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
-from arrowdsl.schema.schema import empty_table
+from arrowdsl.schema.schema import align_table, empty_table
 from datafusion_engine.extract_bundles import dataset_name_for_output
 from datafusion_engine.runtime import dataset_spec_from_context
 from ibis_engine.backend import build_backend
@@ -30,6 +32,7 @@ from ibis_engine.query_compiler import (
 from ibis_engine.registry import ReadDatasetParams, read_dataset
 from ibis_engine.sources import plan_from_source
 from incremental.invalidations import validate_schema_identity
+from incremental.pruning import FileScopePolicy, prune_delta_files, record_pruning_metrics
 from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_runtime import dataset_name_from_alias
 from relspec.engine import PlanResolver
@@ -194,6 +197,16 @@ class _ScopedResolver:
         return self.base.telemetry(ref, ctx=ctx)
 
 
+@dataclass(frozen=True)
+class _PrunedDatasetInputs:
+    dataset_dir: Path
+    dataset_name: str
+    file_id_column: str
+    file_ids: Sequence[str]
+    schema: pa.Schema
+    ctx: ExecutionContext
+
+
 def _partition_specs(
     column: str,
     values: Sequence[str],
@@ -254,6 +267,19 @@ def _read_state_dataset(
     spec = incremental_spec()
     file_id_column = spec.file_id_column_for(dataset_name, columns=dataset_schema.names)
     if file_id_column is not None:
+        if file_ids and len(file_ids) >= FILE_ID_PARAM_THRESHOLD:
+            pruned = _read_state_dataset_pruned(
+                _PrunedDatasetInputs(
+                    dataset_dir=dataset_dir,
+                    dataset_name=dataset_name,
+                    file_id_column=file_id_column,
+                    file_ids=file_ids,
+                    schema=dataset_schema,
+                    ctx=ctx,
+                )
+            )
+            if pruned is not None:
+                return pruned
         param_spec = spec.file_id_param_spec()
         policy = ParamTablePolicy()
         table_name = param_table_name(policy, param_spec.logical_name)
@@ -274,6 +300,30 @@ def _read_state_dataset(
     if schema is None:
         return table.to_pyarrow()
     return empty_table(schema)
+
+
+def _read_state_dataset_pruned(inputs: _PrunedDatasetInputs) -> pa.Table | None:
+    policy = FileScopePolicy(
+        file_id_column=inputs.file_id_column,
+        file_ids=tuple(inputs.file_ids),
+    )
+    result = prune_delta_files(inputs.dataset_dir, policy)
+    diagnostics_sink = (
+        inputs.ctx.runtime.datafusion.diagnostics_sink
+        if inputs.ctx.runtime.datafusion
+        else None
+    )
+    record_pruning_metrics(
+        sink=diagnostics_sink,
+        dataset_name=inputs.dataset_name,
+        result=result,
+    )
+    if not result.candidate_paths:
+        return empty_table(inputs.schema)
+    dataset = ds.dataset(result.candidate_paths, format="parquet")
+    filter_expr = ds.field(inputs.file_id_column).isin(list(inputs.file_ids))
+    table = dataset.to_table(filter=filter_expr)
+    return align_table(table, schema=inputs.schema, safe_cast=True)
 
 
 __all__ = [

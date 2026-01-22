@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import hashlib
+import json
 import logging
 import re
 import time
@@ -58,12 +59,15 @@ from datafusion_engine.compile_options import (
     DataFusionDmlOptions,
     DataFusionSqlPolicy,
     DataFusionSubstraitFallbackEvent,
+    ExplainRows,
     resolve_sql_policy,
 )
 from datafusion_engine.df_builder import TranslationError, df_from_sqlglot
+from datafusion_engine.registry_bridge import apply_projection_overrides
 from datafusion_engine.schema_registry import has_schema, schema_for
 from engine.plan_cache import PlanCacheEntry, PlanCacheKey
-from ibis_engine.params_bridge import datafusion_param_bindings
+from ibis_engine.param_tables import scalar_param_signature
+from ibis_engine.params_bridge import datafusion_param_bindings, param_types_from_bindings
 from ibis_engine.plan import IbisPlan
 from ibis_engine.substrait_bridge import (
     record_substrait_gap,
@@ -86,7 +90,9 @@ from sqlglot_tools.lineage import (
 )
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
+    SchemaMapping,
     ast_to_artifact,
+    bind_params,
     default_sqlglot_policy,
     emit_preflight_diagnostics,
     normalize_expr,
@@ -99,6 +105,8 @@ from sqlglot_tools.optimizer import (
 )
 
 logger = logging.getLogger(__name__)
+
+_PARAM_REGEX = re.compile(r"(?P<prefix>[:@])(?P<name>[A-Za-z_][A-Za-z0-9_]*)")
 
 
 @dataclass(frozen=True)
@@ -437,7 +445,6 @@ def _maybe_store_substrait(
     if options.plan_cache.contains(cache_key):
         return
     _ensure_dialect(options.dialect)
-    policy = options.sqlglot_policy or default_sqlglot_policy()
     sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
     plan_bytes = _substrait_bytes(ctx, sql)
     if plan_bytes is None:
@@ -502,6 +509,14 @@ def df_from_sqlglot_or_sql(
         DataFusion DataFrame representing the expression.
     """
     resolved = options or DataFusionCompileOptions()
+    if resolved.dynamic_projection:
+        projection_map = _projection_requirements(expr)
+        if projection_map:
+            apply_projection_overrides(
+                ctx,
+                projection_map=projection_map,
+                sql_options=_sql_options_for_options(resolved),
+            )
     bound_expr = expr
     replayed = _try_replay_substrait(ctx, bound_expr, options=resolved)
     if replayed is not None:
@@ -581,6 +596,7 @@ def sqlglot_to_datafusion(
     options = options or DataFusionCompileOptions()
     rewritten = _apply_rewrite_hook(expr, options=options)
     _maybe_enforce_preflight(rewritten, options=options)
+    rewritten = _apply_dynamic_projection(rewritten, options=options)
     return df_from_sqlglot_or_sql(
         ctx,
         rewritten,
@@ -629,7 +645,7 @@ def compile_sqlglot_expr(
             ),
         )
     _maybe_enforce_preflight(sg_expr, options=resolved)
-    return sg_expr
+    return _apply_dynamic_projection(sg_expr, options=resolved)
 
 
 def ibis_to_datafusion(
@@ -702,7 +718,9 @@ def ibis_to_datafusion_dual_lane(
     resolved = options or DataFusionCompileOptions()
     fallback_reason = "Substrait lane disabled (prefer_substrait=False)"
 
-    if resolved.prefer_substrait:
+    if resolved.force_sql_fallback:
+        fallback_reason = "Substrait lane disabled (force_sql_fallback=True)"
+    elif resolved.prefer_substrait:
         substrait_result, fallback_reason = _attempt_substrait_lane(
             expr=expr,
             backend=backend,
@@ -1095,6 +1113,161 @@ def _apply_rewrite_hook(expr: Expression, *, options: DataFusionCompileOptions) 
     )
 
 
+def _apply_dynamic_projection(
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> Expression:
+    if not options.dynamic_projection:
+        return expr
+    projection_map = _projection_requirements(expr)
+    if not projection_map:
+        return expr
+    return _rewrite_tables_with_projections(expr, projection_map=projection_map)
+
+
+def _projection_requirements(expr: Expression) -> dict[str, tuple[str, ...]]:
+    alias_map = _alias_to_table_map(expr)
+    required: dict[str, set[str]] = {}
+    for column in expr.find_all(exp.Column):
+        table = column.table
+        name = column.name
+        if not table or not name:
+            continue
+        table_name = alias_map.get(table, table)
+        if table_name is None:
+            continue
+        required.setdefault(table_name, set()).add(name)
+    return {name: tuple(sorted(cols)) for name, cols in required.items()}
+
+
+def _projection_map_payload(
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> str | None:
+    if not options.dynamic_projection:
+        return None
+    projection_map = _projection_requirements(expr)
+    if not projection_map:
+        return None
+    payload = {name: list(columns) for name, columns in projection_map.items()}
+    return json.dumps(payload, sort_keys=True)
+
+
+def _lineage_schema_map(
+    schema_map: SchemaMapping | None,
+) -> Mapping[str, Mapping[str, str]] | None:
+    if schema_map is None:
+        return None
+    normalized: dict[str, dict[str, str]] = {}
+    for table, columns in schema_map.items():
+        if not isinstance(columns, Mapping):
+            continue
+        if not all(isinstance(value, str) for value in columns.values()):
+            continue
+        normalized[table] = {str(key): str(value) for key, value in columns.items()}
+    return normalized or None
+
+
+@dataclass(frozen=True)
+class _PlanArtifactsDetails:
+    df: DataFrame
+    explain_rows: ExplainRows
+    analyze_rows: ExplainRows | None
+    substrait_plan: bytes | None
+    substrait_validation: Mapping[str, object] | None
+    plan_details: Mapping[str, object]
+    unparsed_sql: str | None
+    unparse_error: str | None
+
+
+def _collect_plan_artifacts_details(
+    ctx: SessionContext,
+    *,
+    sql: str,
+    options: DataFusionCompileOptions,
+    df: DataFrame | None,
+) -> _PlanArtifactsDetails:
+    sql_options = _sql_options_for_options(options)
+    plan_df = df or ctx.sql_with_options(sql, sql_options)
+    explain_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN {sql}", sql_options))
+    analyze_rows = None
+    if options.explain_analyze:
+        analyze_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN ANALYZE {sql}", sql_options))
+    substrait_plan = _substrait_bytes(ctx, sql)
+    substrait_validation = None
+    if substrait_plan is not None and options.substrait_validation:
+        substrait_validation = _substrait_validation_payload(
+            substrait_plan,
+            df=plan_df,
+        )
+    plan_details = _df_plan_details(plan_df)
+    unparse_plan = _df_plan(plan_df, "optimized_logical_plan") or _df_plan(
+        plan_df,
+        "logical_plan",
+    )
+    unparsed_sql, unparse_error = _unparse_plan(unparse_plan)
+    return _PlanArtifactsDetails(
+        df=plan_df,
+        explain_rows=explain_rows,
+        analyze_rows=analyze_rows,
+        substrait_plan=substrait_plan,
+        substrait_validation=substrait_validation,
+        plan_details=plan_details,
+        unparsed_sql=unparsed_sql,
+        unparse_error=unparse_error,
+    )
+
+
+def _alias_to_table_map(expr: Expression) -> dict[str, str | None]:
+    alias_map: dict[str, str | None] = {}
+    for table in expr.find_all(exp.Table):
+        alias = table.args.get("alias")
+        alias_name = _table_alias_name(alias)
+        if alias_name:
+            alias_map[alias_name] = table.name
+    for subquery in expr.find_all(exp.Subquery):
+        alias = subquery.args.get("alias")
+        alias_name = _table_alias_name(alias)
+        if alias_name:
+            alias_map.setdefault(alias_name, None)
+    return alias_map
+
+
+def _table_alias_name(alias: Expression | str | None) -> str | None:
+    alias_expr: Expression | str | None = alias
+    if isinstance(alias_expr, exp.TableAlias):
+        alias_expr = alias_expr.this
+    if isinstance(alias_expr, exp.Identifier):
+        return alias_expr.this
+    if isinstance(alias_expr, str):
+        return alias_expr
+    return None
+
+
+def _rewrite_tables_with_projections(
+    expr: Expression,
+    *,
+    projection_map: Mapping[str, tuple[str, ...]],
+) -> Expression:
+    def _rewrite(node: Expression) -> Expression:
+        if not isinstance(node, exp.Table):
+            return node
+        table_name = node.name
+        columns = projection_map.get(table_name)
+        if not columns:
+            return node
+        base = node.copy()
+        alias = base.args.get("alias")
+        base.set("alias", None)
+        projections = [exp.column(name).as_(name) for name in columns]
+        select = exp.select(*projections).from_(base)
+        return exp.Subquery(this=select, alias=alias)
+
+    return expr.transform(_rewrite)
+
+
 def _maybe_enforce_preflight(
     expr: Expression,
     *,
@@ -1218,6 +1391,60 @@ def _validated_param_bindings(
     return bindings
 
 
+def _prepare_positional_params(
+    *,
+    sql: str,
+    bindings: Mapping[str, object],
+    param_types: Mapping[str, str],
+) -> tuple[str, list[object], list[str]]:
+    ordered: list[str] = []
+    for match in _PARAM_REGEX.finditer(sql):
+        name = match.group("name")
+        if name in ordered:
+            continue
+        ordered.append(name)
+    if not ordered:
+        msg = "Prepared statements require named parameters in SQL."
+        raise ValueError(msg)
+    missing = [name for name in ordered if name not in bindings]
+    if missing:
+        msg = f"Missing parameter bindings for: {', '.join(missing)}."
+        raise ValueError(msg)
+    types_missing = [name for name in ordered if name not in param_types]
+    if types_missing:
+        msg = f"Missing SQL types for: {', '.join(types_missing)}."
+        raise ValueError(msg)
+    unused = sorted(name for name in bindings if name not in ordered)
+    if unused:
+        msg = f"Unused parameter bindings: {', '.join(unused)}."
+        raise ValueError(msg)
+    index_map = {name: idx + 1 for idx, name in enumerate(ordered)}
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group("name")
+        return f"${index_map[name]}"
+
+    sql_positional = _PARAM_REGEX.sub(_replace, sql)
+    params = [bindings[name] for name in ordered]
+    types = [param_types[name] for name in ordered]
+    return sql_positional, params, types
+
+
+def _prepared_statement_name(sql: str, *, prefix: str = "pstmt") -> str:
+    digest = hashlib.sha256(sql.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}_{digest}"
+
+
+def _param_types_for_options(
+    *,
+    options: DataFusionCompileOptions,
+    bindings: Mapping[str, object],
+) -> Mapping[str, str]:
+    if options.prepared_param_types is not None:
+        return options.prepared_param_types
+    return param_types_from_bindings(bindings)
+
+
 @dataclass(frozen=True)
 class DataFusionPlanArtifacts:
     """Captured DataFusion plan artifacts for diagnostics."""
@@ -1235,6 +1462,8 @@ class DataFusionPlanArtifacts:
     lineage_tables: tuple[str, ...] | None = None
     lineage_columns: tuple[str, ...] | None = None
     lineage_scopes: tuple[str, ...] | None = None
+    param_signature: str | None = None
+    projection_map: str | None = None
     unparsed_sql: str | None = None
     unparse_error: str | None = None
     logical_plan: str | None = None
@@ -1280,6 +1509,8 @@ class DataFusionPlanArtifacts:
             "lineage_scopes": list(self.lineage_scopes)
             if self.lineage_scopes is not None
             else None,
+            "param_signature": self.param_signature,
+            "projection_map": self.projection_map,
             "unparsed_sql": self.unparsed_sql,
             "unparse_error": self.unparse_error,
             "logical_plan": self.logical_plan,
@@ -1328,6 +1559,8 @@ class DataFusionPlanArtifacts:
             "lineage_scopes": list(self.lineage_scopes)
             if self.lineage_scopes is not None
             else None,
+            "param_signature": self.param_signature,
+            "projection_map": self.projection_map,
             "unparsed_sql": self.unparsed_sql,
             "unparse_error": self.unparse_error,
             "logical_plan": self.logical_plan,
@@ -1366,6 +1599,31 @@ def _df_from_sql(
                 "DataFusion SQL policy violations detected: %s",
                 ", ".join(violations),
             )
+    if bindings and options.prepared_statements:
+        try:
+            param_types = _param_types_for_options(options=options, bindings=bindings)
+            sql_positional, params, types = _prepare_positional_params(
+                sql=sql,
+                bindings=bindings,
+                param_types=param_types,
+            )
+            spec = prepare_statement(
+                ctx,
+                name=_prepared_statement_name(sql_positional),
+                sql=sql_positional,
+                options=PreparedStatementOptions(
+                    param_types=types,
+                    sql_options=policy,
+                ),
+            )
+            return execute_prepared_statement(
+                ctx,
+                name=spec.name,
+                params=params,
+                sql_options=policy,
+            )
+        except (RuntimeError, TypeError, ValueError):
+            return ctx.sql_with_options(sql, sql_options, param_values=bindings)
     return ctx.sql_with_options(sql, sql_options, param_values=bindings)
 
 
@@ -1707,8 +1965,6 @@ def _maybe_collect_plan_artifacts(
         and not options.substrait_validation
     ):
         return
-    if options.params and _contains_params(expr):
-        return
     try:
         artifacts = collect_plan_artifacts(ctx, expr, options=options, df=df, run_id=options.run_id)
     except (RuntimeError, TypeError, ValueError):
@@ -1858,46 +2114,39 @@ def collect_plan_artifacts(
         Plan artifacts derived from EXPLAIN and Substrait serialization.
     """
     _ensure_dialect(options.dialect)
-    sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
-    sql_options = _sql_options_for_options(options)
-    plan_df = df
-    if plan_df is None:
-        plan_df = ctx.sql_with_options(sql, sql_options)
-    explain_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN {sql}", sql_options))
-    analyze_rows = None
-    if options.explain_analyze:
-        analyze_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN ANALYZE {sql}", sql_options))
-    substrait_plan = _substrait_bytes(ctx, sql)
-    substrait_validation: Mapping[str, object] | None = None
-    if substrait_plan is not None and options.substrait_validation and plan_df is not None:
-        substrait_validation = _substrait_validation_payload(
-            substrait_plan,
-            df=plan_df,
-        )
-    plan_details = _df_plan_details(plan_df)
-    unparse_plan = _df_plan(plan_df, "optimized_logical_plan") or _df_plan(
-        plan_df,
-        "logical_plan",
+    bindings = _validated_param_bindings(
+        options.params,
+        allowlist=options.param_identifier_allowlist,
     )
-    unparsed_sql, unparse_error = _unparse_plan(unparse_plan)
+    param_signature = scalar_param_signature(bindings) if bindings else None
+    projection_map = _projection_map_payload(expr, options=options)
+    policy = options.sqlglot_policy or default_sqlglot_policy()
+    resolved_expr = expr
+    if bindings and _contains_params(expr):
+        try:
+            resolved_expr = bind_params(expr, params=bindings)
+        except (KeyError, TypeError, ValueError):
+            resolved_expr = expr
+    sql = resolved_expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    details = _collect_plan_artifacts_details(ctx, sql=sql, options=options, df=df)
     policy_hash = options.sqlglot_policy_hash
     plan_hash = options.plan_hash or plan_fingerprint(
-        expr,
+        resolved_expr,
         dialect=options.dialect,
         policy_hash=policy_hash,
         schema_map_hash=options.schema_map_hash,
     )
     sqlglot_ast: str | None = None
     try:
-        sqlglot_ast = serialize_ast_artifact(ast_to_artifact(expr, sql=sql, policy=policy))
+        sqlglot_ast = serialize_ast_artifact(ast_to_artifact(resolved_expr, sql=sql, policy=policy))
     except (RuntimeError, TypeError, ValueError):
         sqlglot_ast = None
     lineage_payload = None
     try:
         lineage_payload = extract_lineage_payload(
-            expr,
+            resolved_expr,
             options=LineageExtractionOptions(
-                schema=options.schema_map,
+                schema=_lineage_schema_map(options.schema_map),
                 dialect=policy.write_dialect,
             ),
         )
@@ -1906,15 +2155,15 @@ def collect_plan_artifacts(
     canonical_fingerprint = (
         lineage_payload.canonical_fingerprint
         if lineage_payload is not None
-        else canonical_ast_fingerprint(expr)
+        else canonical_ast_fingerprint(resolved_expr)
     )
     return DataFusionPlanArtifacts(
         plan_hash=plan_hash,
         sql=sql,
-        explain=explain_rows,
-        explain_analyze=analyze_rows,
-        substrait_plan=substrait_plan,
-        substrait_validation=substrait_validation,
+        explain=details.explain_rows,
+        explain_analyze=details.analyze_rows,
+        substrait_plan=details.substrait_plan,
+        substrait_validation=details.substrait_validation,
         sqlglot_ast=sqlglot_ast,
         read_dialect=policy.read_dialect,
         write_dialect=policy.write_dialect,
@@ -1922,14 +2171,16 @@ def collect_plan_artifacts(
         lineage_tables=lineage_payload.tables if lineage_payload is not None else None,
         lineage_columns=lineage_payload.columns if lineage_payload is not None else None,
         lineage_scopes=lineage_payload.scopes if lineage_payload is not None else None,
-        unparsed_sql=unparsed_sql,
-        unparse_error=unparse_error,
-        logical_plan=cast("str | None", plan_details.get("logical_plan")),
-        optimized_plan=cast("str | None", plan_details.get("optimized_plan")),
-        physical_plan=cast("str | None", plan_details.get("physical_plan")),
-        graphviz=cast("str | None", plan_details.get("graphviz")),
-        partition_count=cast("int | None", plan_details.get("partition_count")),
-        join_operators=cast("tuple[str, ...] | None", plan_details.get("join_operators")),
+        param_signature=param_signature,
+        projection_map=projection_map,
+        unparsed_sql=details.unparsed_sql,
+        unparse_error=details.unparse_error,
+        logical_plan=cast("str | None", details.plan_details.get("logical_plan")),
+        optimized_plan=cast("str | None", details.plan_details.get("optimized_plan")),
+        physical_plan=cast("str | None", details.plan_details.get("physical_plan")),
+        graphviz=cast("str | None", details.plan_details.get("graphviz")),
+        partition_count=cast("int | None", details.plan_details.get("partition_count")),
+        join_operators=cast("tuple[str, ...] | None", details.plan_details.get("join_operators")),
         run_id=run_id,
     )
 

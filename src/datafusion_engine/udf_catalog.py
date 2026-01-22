@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
+from datafusion import SQLOptions
 
 from datafusion_engine.schema_introspection import routines_snapshot_table
 
@@ -146,6 +147,69 @@ class FunctionCatalog:
             function_signatures=function_signatures,
         )
 
+    @classmethod
+    def from_show_functions(cls, table: pa.Table) -> FunctionCatalog:
+        """Build catalog from SHOW FUNCTIONS output.
+
+        Parameters
+        ----------
+        table:
+            Arrow table from SHOW FUNCTIONS query.
+
+        Returns
+        -------
+        FunctionCatalog
+            Catalog built from SHOW FUNCTIONS output.
+        """
+        column_names = {name.lower(): name for name in table.column_names}
+        name_col = (
+            column_names.get("name")
+            or column_names.get("function_name")
+            or column_names.get("function")
+        )
+        if name_col is None and table.column_names:
+            name_col = table.column_names[0]
+        if name_col is None:
+            return cls(function_names=frozenset(), functions_by_category={}, function_signatures={})
+        names = [value for value in table.column(name_col).to_pylist() if value is not None]
+        function_names = frozenset(str(name) for name in names if str(name))
+        category_col = (
+            column_names.get("type")
+            or column_names.get("function_type")
+            or column_names.get("category")
+        )
+        functions_by_category: dict[str, set[str]] = {}
+        if category_col is not None:
+            categories = table.column(category_col).to_pylist()
+            for name, category in zip(names, categories, strict=False):
+                if name is None:
+                    continue
+                label = str(category).lower() if category else "function"
+                functions_by_category.setdefault(label, set()).add(str(name))
+        if not functions_by_category and function_names:
+            functions_by_category["function"] = set(function_names)
+        return cls(
+            function_names=function_names,
+            functions_by_category={k: frozenset(v) for k, v in functions_by_category.items()},
+            function_signatures={},
+        )
+
+    def merge(self, other: FunctionCatalog) -> FunctionCatalog:
+        """Return a merged catalog with unioned function metadata."""
+        merged_names = frozenset(self.function_names | other.function_names)
+        merged_categories: dict[str, set[str]] = {}
+        for mapping in (self.functions_by_category, other.functions_by_category):
+            for category, names in mapping.items():
+                merged_categories.setdefault(category, set()).update(names)
+        merged_signatures = dict(self.function_signatures)
+        for name, sig in other.function_signatures.items():
+            merged_signatures.setdefault(name, sig)
+        return FunctionCatalog(
+            function_names=merged_names,
+            functions_by_category={k: frozenset(v) for k, v in merged_categories.items()},
+            function_signatures=merged_signatures,
+        )
+
     def is_builtin(self, func_id: str) -> bool:
         """Check if function is in the runtime catalog.
 
@@ -160,6 +224,19 @@ class FunctionCatalog:
             True if function exists in the runtime catalog.
         """
         return func_id.lower() in self.function_names or func_id in self.function_names
+
+
+def _show_functions_table(introspector: SchemaIntrospector) -> pa.Table | None:
+    ctx = introspector.ctx
+    sql_options = introspector.sql_options or SQLOptions()
+    try:
+        df = ctx.sql_with_options("SHOW FUNCTIONS", sql_options)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    try:
+        return df.to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return None
 
 
 def _builtin_spec_from_signature(func_id: str, sig: FunctionSignature) -> BuiltinFunctionSpec:
@@ -334,11 +411,15 @@ class UdfCatalog:
             sql_options=introspector.sql_options,
         )
         parameters = introspector.parameters_snapshot_table()
-        self._runtime_catalog = FunctionCatalog.from_information_schema(
+        catalog = FunctionCatalog.from_information_schema(
             routines=routines,
             parameters=parameters,
             parameters_available=parameters is not None,
         )
+        show_table = _show_functions_table(introspector)
+        if show_table is not None:
+            catalog = catalog.merge(FunctionCatalog.from_show_functions(show_table))
+        self._runtime_catalog = catalog
 
     def _require_runtime_catalog(self) -> FunctionCatalog:
         if self._runtime_catalog is None:

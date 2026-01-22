@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -10,7 +11,7 @@ from dataclasses import dataclass, replace
 from typing import Literal, Protocol, cast
 
 import pyarrow as pa
-from deltalake import CommitProperties, WriterProperties
+from deltalake import CommitProperties, DeltaTable, WriterProperties
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 
@@ -109,6 +110,36 @@ class DatasetSource:
 
 
 type PlanSource = IbisPlan | IbisTable | TableLike | RecordBatchReaderLike | DatasetSource
+type DeltaWriteMode = Literal["error", "append", "overwrite", "ignore"]
+type DeltaSchemaMode = Literal["merge", "overwrite"]
+
+
+@dataclass(frozen=True)
+class IbisDeltaReadOptions:
+    """Options for Delta reads via Ibis backends."""
+
+    table_name: str | None = None
+    storage_options: Mapping[str, str] | None = None
+    version: int | None = None
+    timestamp: str | None = None
+    options: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class IbisDeltaWriteOptions:
+    """Options for Delta writes via Ibis backends."""
+
+    mode: DeltaWriteMode = "append"
+    schema_mode: DeltaSchemaMode | None = None
+    predicate: str | None = None
+    partition_by: Sequence[str] | None = None
+    configuration: Mapping[str, str | None] | None = None
+    commit_metadata: Mapping[str, str] | None = None
+    target_file_size: int | None = None
+    writer_properties: WriterProperties | None = None
+    app_id: str | None = None
+    version: int | None = None
+    storage_options: Mapping[str, str] | None = None
 
 
 def table_to_ibis(
@@ -335,6 +366,116 @@ def _as_pyarrow_table(value: TableLike) -> pa.Table:
     return pa.table(value)
 
 
+def read_delta_ibis(
+    backend: BaseBackend,
+    path: str,
+    *,
+    options: IbisDeltaReadOptions | None = None,
+) -> IbisTable:
+    """Read a Delta table via the backend read_delta method."""
+    read_delta = getattr(backend, "read_delta", None)
+    if not callable(read_delta):
+        msg = f"Backend {type(backend).__name__} does not support read_delta."
+        raise TypeError(msg)
+    resolved = options or IbisDeltaReadOptions()
+    kwargs: dict[str, object] = dict(resolved.options or {})
+    if resolved.table_name is not None:
+        kwargs.setdefault("table_name", resolved.table_name)
+    if resolved.storage_options:
+        kwargs.setdefault("storage_options", dict(resolved.storage_options))
+    if resolved.version is not None:
+        kwargs["version"] = resolved.version
+    if resolved.timestamp is not None:
+        kwargs["timestamp"] = resolved.timestamp
+    return read_delta(path, **_filter_kwargs(read_delta, kwargs))
+
+
+def write_delta_ibis(
+    backend: BaseBackend,
+    expr: IbisTable,
+    path: str,
+    *,
+    options: IbisDeltaWriteOptions | None = None,
+    storage_options: Mapping[str, str] | None = None,
+) -> int | None:
+    """Write a Delta table via the backend to_delta method."""
+    to_delta = getattr(backend, "to_delta", None)
+    if not callable(to_delta):
+        msg = f"Backend {type(backend).__name__} does not support to_delta."
+        raise TypeError(msg)
+    resolved = options or IbisDeltaWriteOptions()
+    if resolved.predicate is not None and resolved.mode != "overwrite":
+        msg = "Delta predicate filters require overwrite mode."
+        raise ValueError(msg)
+    merged_storage = _merge_storage_options(resolved.storage_options, storage_options)
+    kwargs: dict[str, object] = {
+        "mode": resolved.mode,
+        "predicate": resolved.predicate,
+        "partition_by": list(resolved.partition_by) if resolved.partition_by else None,
+        "configuration": dict(resolved.configuration) if resolved.configuration else None,
+        "target_file_size": resolved.target_file_size,
+        "writer_properties": resolved.writer_properties,
+        "storage_options": dict(merged_storage) if merged_storage else None,
+    }
+    if resolved.schema_mode is not None:
+        kwargs["schema_mode"] = resolved.schema_mode
+        if resolved.schema_mode == "overwrite":
+            kwargs["overwrite_schema"] = True
+    commit_properties = _commit_properties(resolved)
+    if commit_properties is not None:
+        kwargs["commit_properties"] = commit_properties
+    to_delta(expr, path, **_filter_kwargs(to_delta, kwargs))
+    return _delta_table_version(path, storage_options=merged_storage)
+
+
+def _commit_properties(options: IbisDeltaWriteOptions) -> CommitProperties | None:
+    custom_metadata = (
+        dict(options.commit_metadata) if options.commit_metadata is not None else None
+    )
+    payload: dict[str, object] = {}
+    if options.app_id is not None:
+        payload["app_id"] = options.app_id
+    if options.version is not None:
+        payload["version"] = options.version
+    if custom_metadata is not None:
+        payload["custom_metadata"] = custom_metadata
+    if not payload:
+        return None
+    return CommitProperties(**payload)
+
+
+def _merge_storage_options(
+    base: Mapping[str, str] | None,
+    overrides: Mapping[str, str] | None,
+) -> Mapping[str, str] | None:
+    merged: dict[str, str] = {}
+    if base:
+        merged.update({str(key): str(value) for key, value in base.items()})
+    if overrides:
+        merged.update({str(key): str(value) for key, value in overrides.items()})
+    return merged or None
+
+
+def _delta_table_version(
+    path: str,
+    *,
+    storage_options: Mapping[str, str] | None,
+) -> int | None:
+    storage = dict(storage_options) if storage_options else None
+    try:
+        return DeltaTable(path, storage_options=storage).version()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _filter_kwargs(
+    fn: Callable[..., object],
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:
+    params = inspect.signature(fn).parameters
+    return {key: value for key, value in kwargs.items() if key in params}
+
+
 def _temporary_table_name() -> str:
     return f"tmp_{uuid.uuid4().hex}"
 
@@ -477,169 +618,6 @@ def resolve_database_hint(name: str | None) -> tuple[DatabaseHint, str | None]:
     return _parse_database_hint(name)
 
 
-@dataclass(frozen=True)
-class IbisDeltaReadOptions:
-    """Options for Ibis Delta table reads."""
-
-    table_name: str | None = None
-    storage_options: Mapping[str, str] | None = None
-    version: int | None = None
-    options: Mapping[str, object] | None = None
-
-
-@dataclass(frozen=True)
-class IbisDeltaWriteOptions:
-    """Options for Ibis Delta table writes."""
-
-    mode: Literal["append", "overwrite", "error", "ignore"] = "append"
-    overwrite_schema: bool = False
-    schema_mode: Literal["merge", "overwrite"] | None = None
-    predicate: str | None = None
-    partition_by: Sequence[str] | None = None
-    configuration: Mapping[str, str | None] | None = None
-    commit_metadata: Mapping[str, str] | None = None
-    target_file_size: int | None = None
-    writer_properties: WriterProperties | None = None
-    storage_options: Mapping[str, str] | None = None
-
-
-def read_delta_ibis(
-    backend: BaseBackend,
-    path: str,
-    *,
-    options: IbisDeltaReadOptions | None = None,
-) -> IbisTable:
-    """Read Delta table through Ibis DataFusion backend.
-
-    Uses the backend's native read_delta() method which provides
-    efficient Delta table access without separate DeltaTable construction.
-
-    Parameters
-    ----------
-    backend : BaseBackend
-        Ibis backend (typically DataFusion backend).
-    path : str
-        Path to Delta table.
-    options : IbisDeltaReadOptions | None
-        Read options including table name and storage options.
-
-    Returns
-    -------
-    IbisTable
-        Ibis table expression for the Delta table.
-
-    Raises
-    ------
-    TypeError
-        Raised when backend doesn't support read_delta.
-    """
-    resolved = options or IbisDeltaReadOptions()
-
-    read_delta = getattr(backend, "read_delta", None)
-    if not callable(read_delta):
-        msg = f"Backend {type(backend).__name__} does not support read_delta"
-        raise TypeError(msg)
-
-    kwargs = dict(resolved.options) if resolved.options is not None else {}
-    if resolved.table_name is not None:
-        kwargs["table_name"] = resolved.table_name
-    if resolved.storage_options is not None:
-        kwargs["storage_options"] = dict(resolved.storage_options)
-    if resolved.version is not None:
-        kwargs["version"] = resolved.version
-
-    result = read_delta(path, **kwargs)
-    return cast("IbisTable", result)
-
-
-def write_delta_ibis(
-    backend: BaseBackend,
-    expr: IbisTable,
-    path: str,
-    *,
-    options: IbisDeltaWriteOptions | None = None,
-) -> None:
-    """Write Ibis expression to Delta via backend to_delta.
-
-    Uses the backend's native to_delta() method for efficient writes.
-
-    Parameters
-    ----------
-    backend : BaseBackend
-        Ibis backend (typically DataFusion backend).
-    expr : IbisTable
-        Ibis table expression to write.
-    path : str
-        Path for Delta table output.
-    options : IbisDeltaWriteOptions | None
-        Write options including mode and schema handling.
-
-    Raises
-    ------
-    TypeError
-        Raised when backend doesn't support to_delta.
-    """
-    resolved = options or IbisDeltaWriteOptions()
-
-    to_delta = getattr(backend, "to_delta", None)
-    if not callable(to_delta):
-        msg = f"Backend {type(backend).__name__} does not support to_delta"
-        raise TypeError(msg)
-
-    if resolved.predicate is not None and resolved.mode != "overwrite":
-        msg = "Predicate filters require overwrite mode for Delta writes."
-        raise ValueError(msg)
-
-    schema_mode = resolved.schema_mode
-    if schema_mode is None and resolved.overwrite_schema:
-        schema_mode = "overwrite"
-    config = None
-    if resolved.configuration is not None:
-        config = {key: value for key, value in resolved.configuration.items() if value is not None}
-        if not config:
-            config = None
-    commit_properties = (
-        CommitProperties(custom_metadata=dict(resolved.commit_metadata))
-        if resolved.commit_metadata is not None
-        else None
-    )
-    kwargs: dict[str, object] = {
-        "mode": resolved.mode,
-    }
-    if schema_mode is not None:
-        kwargs["schema_mode"] = schema_mode
-    if resolved.partition_by is not None:
-        kwargs["partition_by"] = list(resolved.partition_by)
-    if config is not None:
-        kwargs["configuration"] = config
-    if commit_properties is not None:
-        kwargs["commit_properties"] = commit_properties
-    if resolved.predicate is not None:
-        kwargs["predicate"] = resolved.predicate
-    if resolved.target_file_size is not None:
-        kwargs["target_file_size"] = resolved.target_file_size
-    if resolved.writer_properties is not None:
-        kwargs["writer_properties"] = resolved.writer_properties
-    if resolved.storage_options is not None:
-        kwargs["storage_options"] = dict(resolved.storage_options)
-
-    to_delta(expr, path, **kwargs)
-
-
-def plan_to_delta_ibis(
-    plan: IbisPlan,
-    path: str,
-    *,
-    backend: BaseBackend,
-    options: IbisDeltaWriteOptions | None = None,
-) -> None:
-    """Write an IbisPlan to Delta via backend to_delta.
-
-    Convenience wrapper for writing IbisPlan results to Delta.
-    """
-    write_delta_ibis(backend, plan.expr, path, options=options)
-
-
 __all__ = [
     "DatabaseHint",
     "DatasetSource",
@@ -651,7 +629,6 @@ __all__ = [
     "namespace_recorder_from_ctx",
     "plan_from_dataset",
     "plan_from_source",
-    "plan_to_delta_ibis",
     "read_delta_ibis",
     "record_namespace_action",
     "register_ibis_table",

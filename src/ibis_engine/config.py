@@ -18,3 +18,13 @@ class IbisBackendConfig:
     default_limit: int | None = None
     default_dialect: str | None = None
     interactive: bool | None = None
+    object_stores: tuple[ObjectStoreConfig, ...] = ()
+
+
+@dataclass(frozen=True)
+class ObjectStoreConfig:
+    """DataFusion object store registration entry."""
+
+    scheme: str
+    store: object
+    host: str | None = None

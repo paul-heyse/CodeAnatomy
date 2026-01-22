@@ -14,6 +14,7 @@ from sqlglot.errors import ParseError
 from sqlglot.serde import dump
 
 from ibis_engine.schema_utils import validate_expr_schema
+from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
@@ -40,6 +41,7 @@ class SqlIngestSpec:
     catalog: Mapping[str, _SchemaProtocol]
     schema: _SchemaProtocol | None = None
     dialect: str | None = None
+    backend: IbisCompilerBackend | None = None
     artifacts_hook: Callable[[Mapping[str, object]], None] | None = None
 
 
@@ -54,6 +56,7 @@ class SqlIngestArtifacts:
     sqlglot_sql: str | None = None
     normalized_sql: str | None = None
     sqlglot_ast: object | None = None
+    ibis_sqlglot_ast: object | None = None
     sqlglot_policy_hash: str | None = None
     sqlglot_policy_snapshot: Mapping[str, object] | None = None
 
@@ -73,6 +76,7 @@ class SqlIngestArtifacts:
             "sqlglot_sql": self.sqlglot_sql,
             "normalized_sql": self.normalized_sql,
             "sqlglot_ast": self.sqlglot_ast,
+            "ibis_sqlglot_ast": self.ibis_sqlglot_ast,
             "sqlglot_policy_hash": self.sqlglot_policy_hash,
             "sqlglot_policy_snapshot": (
                 dict(self.sqlglot_policy_snapshot)
@@ -87,6 +91,7 @@ class SqlIngestSqlGlotContext:
     """SQLGlot metadata captured during SQL ingestion."""
 
     sqlglot_expr: Expression | None = None
+    ibis_sqlglot_expr: Expression | None = None
     normalized_sql: str | None = None
     policy_hash: str | None = None
     policy_snapshot: Mapping[str, object] | None = None
@@ -156,6 +161,12 @@ def parse_sql_table(spec: SqlIngestSpec) -> Table:
         )
         msg = f"SQL ingestion schema mismatch: {exc}"
         raise ValueError(msg) from exc
+    if spec.backend is not None:
+        try:
+            ibis_expr = ibis_to_sqlglot(expr, backend=spec.backend, params=None)
+        except (TypeError, ValueError):
+            ibis_expr = None
+        context = replace(context, ibis_sqlglot_expr=ibis_expr)
     if spec.artifacts_hook is not None:
         spec.artifacts_hook(
             sql_ingest_artifacts(
@@ -272,6 +283,7 @@ def sql_ingest_artifacts(
         sqlglot_sql=_sql_text(context.sqlglot_expr, dialect=context.dialect),
         normalized_sql=context.normalized_sql,
         sqlglot_ast=_sqlglot_ast_payload(context.sqlglot_expr),
+        ibis_sqlglot_ast=_sqlglot_ast_payload(context.ibis_sqlglot_expr),
         sqlglot_policy_hash=context.policy_hash,
         sqlglot_policy_snapshot=context.policy_snapshot,
     )

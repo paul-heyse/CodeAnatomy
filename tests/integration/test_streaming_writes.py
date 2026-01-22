@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
 import duckdb
 import ibis
@@ -11,10 +10,9 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.bridge import datafusion_to_reader
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_table_from_path
 from ibis_engine.io_bridge import IbisDatasetWriteOptions, write_ibis_dataset_delta
 from ibis_engine.plan import IbisPlan
-from storage.deltalake import read_table_delta
 
 EXPECTED_ROW_COUNT = 2
 
@@ -35,7 +33,7 @@ def test_ibis_streaming_dataset_write(tmp_path: Path) -> None:
             prefer_reader=True,
         ),
     )
-    table = cast("pa.Table", read_table_delta(result.path))
+    table = read_delta_table_from_path(result.path)
     assert table.num_rows == EXPECTED_ROW_COUNT
 
 
@@ -44,7 +42,7 @@ def test_datafusion_streaming_dataset_write(tmp_path: Path) -> None:
     """Stream DataFusion batches into a dataset write."""
     ctx = DataFusionRuntimeProfile().session_context()
     table = pa.table({"entity_id": [2, 1], "name": ["beta", "alpha"]})
-    ctx.register_record_batches("input_table", [table.to_batches()])
+    ctx.register_record_batches("input_table", [list(table.to_batches())])
     df = ctx.sql("select * from input_table")
     reader = datafusion_to_reader(df)
     output_dir = tmp_path / "df_stream"
@@ -53,5 +51,5 @@ def test_datafusion_streaming_dataset_write(tmp_path: Path) -> None:
         output_dir,
         options=IbisDatasetWriteOptions(prefer_reader=True),
     )
-    table = cast("pa.Table", read_table_delta(result.path))
+    table = read_delta_table_from_path(result.path)
     assert table.num_rows == EXPECTED_ROW_COUNT

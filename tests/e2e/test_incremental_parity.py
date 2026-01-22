@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 from arrowdsl.schema.serialization import schema_fingerprint
+from datafusion_engine.runtime import read_delta_table_from_path
 from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.pipeline_types import ScipIndexConfig
 from incremental.types import IncrementalConfig
-from storage.deltalake import read_table_delta
 
 
 @pytest.mark.e2e
@@ -65,5 +65,5 @@ def _assert_delta_parity(full_path: Path, incremental_path: Path) -> None:
 
 
 def _delta_summary(path: Path) -> tuple[int, str]:
-    table = read_table_delta(str(path))
+    table = read_delta_table_from_path(str(path))
     return int(table.num_rows), schema_fingerprint(table.schema)

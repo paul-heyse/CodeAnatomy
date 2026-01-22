@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
+import hashlib
 import re
 import uuid
 from collections.abc import Mapping, Sequence
@@ -12,13 +12,12 @@ from functools import cache
 from typing import cast
 
 import pyarrow as pa
-from datafusion import SessionContext
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
 from arrowdsl.core.interop import pc
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
+from datafusion_engine.runtime import dataset_schema_from_context
 from registry_common.arrow_payloads import payload_hash
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
@@ -273,30 +272,6 @@ def qualified_param_table_name(
     return f"{policy.catalog}.{schema_name}.{table_name}"
 
 
-def _session_context() -> SessionContext:
-    return DataFusionRuntimeProfile().session_context()
-
-
-def _sql_literal(value: str) -> str:
-    escaped = value.replace("'", "''")
-    return f"'{escaped}'"
-
-
-def _register_values(ctx: SessionContext, values: pa.Array) -> str:
-    name = f"__param_signature_{uuid.uuid4().hex}"
-    ctx.register_record_batches(name, pa.table({"value": values}).to_batches())
-    return name
-
-
-def _deregister_table(ctx: SessionContext, name: str | None) -> None:
-    if name is None:
-        return
-    deregister = getattr(ctx, "deregister_table", None)
-    if callable(deregister):
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            deregister(name)
-
-
 def param_signature_from_array(
     *,
     logical_name: str,
@@ -304,46 +279,23 @@ def param_signature_from_array(
 ) -> str:
     """Return a stable signature for a parameter list from Arrow values.
 
-    Raises
-    ------
-    TypeError
-        Raised when the DataFusion signature query does not return a string.
-
     Returns
     -------
     str
         Hex-encoded signature string.
     """
     normalized = values.combine_chunks() if isinstance(values, pa.ChunkedArray) else values
-    ctx = _session_context()
-    table_name = _register_values(ctx, cast("pa.Array", normalized))
-    try:
-        logical_literal = _sql_literal(logical_name)
-        sql = f"""
-        WITH base AS (
-          SELECT array_sort(array_distinct(array_agg(CAST(value AS STRING)))) AS values
-          FROM {table_name}
-        )
-        SELECT CASE
-          WHEN values IS NULL THEN sha256({logical_literal})
-          ELSE sha256(
-            concat_ws(
-              '{_PARAM_SIGNATURE_SEPARATOR}',
-              {logical_literal},
-              array_to_string(values, '{_PARAM_SIGNATURE_SEPARATOR}')
-            )
-          )
-        END AS signature
-        FROM base
-        """
-        table = ctx.sql(sql).to_arrow_table()
-    finally:
-        _deregister_table(ctx, table_name)
-    value = table["signature"][0].as_py() if table.num_rows else None
-    if not isinstance(value, str):
-        msg = "Param signature query did not return a string signature."
-        raise TypeError(msg)
-    return value
+    resolved = cast("pa.Array", normalized)
+    if resolved.num_rows == 0:
+        payload = logical_name
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    raw_values = [value for value in resolved.to_pylist() if value is not None]
+    if not raw_values:
+        payload = logical_name
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    distinct = sorted({str(value) for value in raw_values})
+    payload = _PARAM_SIGNATURE_SEPARATOR.join([logical_name, *distinct])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def scalar_param_signature(values: Mapping[str, object]) -> str:

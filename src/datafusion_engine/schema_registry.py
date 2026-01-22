@@ -24,7 +24,7 @@ from arrowdsl.schema.semantic_types import (
     byte_span_type,
     span_type,
 )
-from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from registry_common.metadata import metadata_list_bytes
 from schema_spec.view_specs import ViewSpec
 
@@ -1163,6 +1163,33 @@ DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA = _schema_with_metadata(
     ),
 )
 
+DATAFUSION_SCHEMA_MAP_FINGERPRINTS_SCHEMA = _schema_with_metadata(
+    "datafusion_schema_map_fingerprints_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("schema_map_hash", pa.string(), nullable=False),
+            pa.field("schema_map_version", pa.int32(), nullable=False),
+            pa.field("table_count", pa.int64(), nullable=False),
+            pa.field("column_count", pa.int64(), nullable=False),
+        ]
+    ),
+)
+
+DATAFUSION_DDL_FINGERPRINTS_SCHEMA = _schema_with_metadata(
+    "datafusion_ddl_fingerprints_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("table_catalog", pa.string(), nullable=False),
+            pa.field("table_schema", pa.string(), nullable=False),
+            pa.field("table_name", pa.string(), nullable=False),
+            pa.field("table_type", pa.string(), nullable=True),
+            pa.field("ddl_fingerprint", pa.string(), nullable=True),
+        ]
+    ),
+)
+
 FEATURE_STATE_SCHEMA = _schema_with_metadata(
     "feature_state_v1",
     pa.schema(
@@ -1397,7 +1424,9 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
     "callsite_qname_candidates_v1": CALLSITE_QNAME_CANDIDATES_SCHEMA,
     "dataset_fingerprint_v1": DATASET_FINGERPRINT_SCHEMA,
+    "datafusion_ddl_fingerprints_v1": DATAFUSION_DDL_FINGERPRINTS_SCHEMA,
     "datafusion_explains_v1": DATAFUSION_EXPLAINS_SCHEMA,
+    "datafusion_schema_map_fingerprints_v1": DATAFUSION_SCHEMA_MAP_FINGERPRINTS_SCHEMA,
     "datafusion_schema_registry_validation_v1": DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA,
     "dim_qualified_names_v1": DIM_QUALIFIED_NAMES_SCHEMA,
     "feature_state_v1": FEATURE_STATE_SCHEMA,
@@ -3842,7 +3871,7 @@ def registered_table_names(ctx: SessionContext) -> set[str]:
     set[str]
         Set of table names present in the session catalog.
     """
-    return SchemaIntrospector(ctx).table_names_snapshot()
+    return table_names_snapshot(ctx)
 
 
 def missing_schema_names(

@@ -33,6 +33,7 @@ from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_tabl
 from arrowdsl.schema.validation import ArrowValidationOptions
 from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
@@ -298,15 +299,15 @@ def _required_non_null_results(
 ) -> tuple[list[InvariantResult], ArrayLike]:
     """Return invariant results and combined mask for required non-null checks.
 
-    Raises
-    ------
-    TypeError
-        Raised when DataFusion is required but unavailable.
-
     Returns
     -------
     tuple[list[InvariantResult], ArrayLike]
         Invariant results and combined bad-row mask.
+
+    Raises
+    ------
+    TypeError
+        Raised when DataFusion is required but unavailable.
     """
     if not cols:
         return [], pa.array([False] * table.num_rows, type=pa.bool_())
@@ -362,6 +363,11 @@ def _collect_invariant_results(
     -------
     tuple[list[InvariantResult], ArrayLike]
         Invariant results and combined bad-row mask.
+
+    Raises
+    ------
+    TypeError
+        Raised when DataFusion is required but unavailable.
     """
     results, required_bad_any = _required_non_null_results(
         table,
@@ -696,15 +702,11 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
 
 def _supports_error_detail_aggregation(ctx: SessionContext) -> bool:
     try:
-        rows = ctx.sql("SELECT routine_name FROM information_schema.routines").to_arrow_table()
+        names = SchemaIntrospector(ctx).function_names()
     except (RuntimeError, TypeError, ValueError):
         return False
-    names = {
-        str(row.get("routine_name")).lower()
-        for row in rows.to_pylist()
-        if row.get("routine_name") is not None
-    }
-    return "array_agg" in names and "named_struct" in names
+    normalized = {name.lower() for name in names}
+    return "array_agg" in normalized and "named_struct" in normalized
 
 
 def _aggregate_error_detail_lists_df(

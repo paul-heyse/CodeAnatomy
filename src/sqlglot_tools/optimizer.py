@@ -8,7 +8,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Literal, TypedDict, Unpack, cast
+from typing import Final, Literal, TypedDict, Unpack, cast
 
 import pyarrow as pa
 from sqlglot import Dialect, ErrorLevel, Expression, exp, parse_one
@@ -811,12 +811,94 @@ def _array_transform(generator: SqlGlotGenerator, expression: Expression) -> str
     return "ARRAY[" + generator.expressions(expression) + "]"
 
 
+EXTERNAL_TABLE_COMPRESSION_ARG_TYPES: Final[dict[str, bool]] = {"this": True}
+EXTERNAL_TABLE_ORDER_ARG_TYPES: Final[dict[str, bool]] = {"expressions": True}
+EXTERNAL_TABLE_OPTIONS_ARG_TYPES: Final[dict[str, bool]] = {"expressions": True}
+
+
+class ExternalTableCompressionProperty(exp.Property):
+    """Property expression for DataFusion external table compression."""
+
+    arg_types: dict[str, bool] = EXTERNAL_TABLE_COMPRESSION_ARG_TYPES
+
+
+class ExternalTableOrderProperty(exp.Property):
+    """Property expression for DataFusion external table ordering."""
+
+    arg_types: dict[str, bool] = EXTERNAL_TABLE_ORDER_ARG_TYPES
+
+
+class ExternalTableOptionsProperty(exp.Property):
+    """Property expression for DataFusion external table options."""
+
+    arg_types: dict[str, bool] = EXTERNAL_TABLE_OPTIONS_ARG_TYPES
+
+
+def _file_format_property_sql(
+    generator: SqlGlotGenerator,
+    expression: exp.FileFormatProperty,
+) -> str:
+    return f"STORED AS {generator.sql(expression, 'this')}"
+
+
+def _partitioned_by_property_sql(
+    generator: SqlGlotGenerator,
+    expression: exp.PartitionedByProperty,
+) -> str:
+    return f"PARTITIONED BY {generator.sql(expression, 'this')}"
+
+
+def _external_table_order_sql(
+    generator: SqlGlotGenerator,
+    expression: ExternalTableOrderProperty,
+) -> str:
+    order_exprs = generator.expressions(expression, indent=False)
+    return f"WITH ORDER ({order_exprs})"
+
+
+def _external_table_options_sql(
+    generator: SqlGlotGenerator,
+    expression: ExternalTableOptionsProperty,
+) -> str:
+    rendered: list[str] = []
+    for entry in expression.expressions:
+        if isinstance(entry, exp.Tuple):
+            parts = [generator.sql(part) for part in entry.expressions]
+            rendered.append(" ".join(parts))
+        else:
+            rendered.append(generator.sql(entry))
+    return f"OPTIONS ({', '.join(rendered)})"
+
+
+def _external_table_compression_sql(
+    generator: SqlGlotGenerator,
+    expression: ExternalTableCompressionProperty,
+) -> str:
+    return f"COMPRESSION TYPE {generator.sql(expression, 'this')}"
+
+
 class DataFusionGenerator(SqlGlotGenerator):
     """SQL generator overrides for DataFusion."""
 
     def __init__(self, **kwargs: Unpack[GeneratorInitKwargs]) -> None:
         super().__init__(**kwargs)
-        self.TRANSFORMS = {**self.TRANSFORMS, exp.Array: _array_transform}
+        self.PROPERTIES_LOCATION = {
+            **self.PROPERTIES_LOCATION,
+            exp.FileFormatProperty: exp.Properties.Location.POST_SCHEMA,
+            exp.PartitionedByProperty: exp.Properties.Location.POST_SCHEMA,
+            ExternalTableCompressionProperty: exp.Properties.Location.POST_SCHEMA,
+            ExternalTableOrderProperty: exp.Properties.Location.POST_SCHEMA,
+            ExternalTableOptionsProperty: exp.Properties.Location.POST_SCHEMA,
+        }
+        self.TRANSFORMS = {
+            **self.TRANSFORMS,
+            exp.Array: _array_transform,
+            exp.FileFormatProperty: _file_format_property_sql,
+            exp.PartitionedByProperty: _partitioned_by_property_sql,
+            ExternalTableCompressionProperty: _external_table_compression_sql,
+            ExternalTableOrderProperty: _external_table_order_sql,
+            ExternalTableOptionsProperty: _external_table_options_sql,
+        }
 
 
 class DataFusionDialect(Dialect):
@@ -1241,6 +1323,9 @@ def _qualification_failure_payload(
 __all__ = [
     "CanonicalizationRules",
     "DataFusionDialect",
+    "ExternalTableCompressionProperty",
+    "ExternalTableOptionsProperty",
+    "ExternalTableOrderProperty",
     "NormalizationStats",
     "NormalizeExprOptions",
     "NormalizeExprResult",

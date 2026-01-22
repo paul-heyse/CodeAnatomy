@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 import ibis
 import pyarrow as pa
+from ibis import selectors as s
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
@@ -999,7 +1000,7 @@ def _interval_align_metrics(
     total_left = left.count()
     winner_rows = winners.count()
     candidate_rows = matched.count()
-    return metrics.mutate(
+    metrics = metrics.mutate(
         rule_name=ibis.literal(spec.rule_name),
         total_left=total_left,
         candidate_rows=candidate_rows,
@@ -1007,6 +1008,7 @@ def _interval_align_metrics(
         winner_rate=_safe_div(winner_rows, total_left),
         ambiguity_rate=_safe_div(metrics.ambiguous_left, metrics.matched_left),
     )
+    return _fill_numeric_nulls(metrics)
 
 
 def _winner_select_metrics(
@@ -1032,12 +1034,13 @@ def _winner_select_metrics(
         avg_candidates=ibis.mean(candidate_counts.candidate_count),
     )
     winner_rows = winners.count()
-    return metrics.mutate(
+    metrics = metrics.mutate(
         rule_name=ibis.literal(rule_name),
         winner_rows=winner_rows,
         winner_rate=_safe_div(winner_rows, metrics.total_groups),
         ambiguity_rate=_safe_div(metrics.ambiguous_groups, metrics.total_groups),
     )
+    return _fill_numeric_nulls(metrics)
 
 
 def _safe_div(numerator: Value, denominator: Value) -> Value:
@@ -1047,6 +1050,17 @@ def _safe_div(numerator: Value, denominator: Value) -> Value:
         denom == ibis.literal(0),
         ibis.literal(None, type="float64"),
         num / denom,
+    )
+
+
+def _fill_numeric_nulls(table: Table) -> Table:
+    """Fill numeric nulls using selector-driven updates."""
+    return table.mutate(
+        s.across(
+            s.numeric(),
+            lambda col: col.fill_null(0),
+            names="{col}",
+        )
     )
 
 

@@ -755,7 +755,7 @@ def _apply_plan_transforms(
         return plan
     expr = plan.expr
     for fn in transforms:
-        expr = fn(expr, ctx)
+        expr = expr.pipe(fn, ctx)
     return IbisPlan(expr=expr, ordering=plan.ordering)
 
 

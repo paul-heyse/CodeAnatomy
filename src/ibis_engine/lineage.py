@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import cast
 
@@ -16,6 +17,7 @@ from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
+    SchemaMappingNode,
     SqlGlotPolicy,
     default_sqlglot_policy,
     normalize_expr,
@@ -38,9 +40,7 @@ def required_columns_by_table(
         Mapping of table name to required column names.
     """
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
-    schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
-    if schema is None:
-        schema = _schema_map_from_backend(backend)
+    schema = schema_map or _schema_map_from_backend(backend)
     policy = policy or default_sqlglot_policy()
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
@@ -55,11 +55,12 @@ def required_columns_by_table(
     required: dict[str, set[str]] = {}
     _collect_expression_columns(normalized, required)
     output_columns = tuple(cast("tuple[str, ...]", expr.schema().names))
+    lineage_schema = _schema_for_lineage(schema)
     for column in output_columns:
         node = lineage(
             column,
             normalized,
-            schema=schema,
+            schema=lineage_schema,
             dialect=dialect,
             scope=scoped,
             trim_selects=True,
@@ -94,9 +95,7 @@ def lineage_graph_by_output(
         Mapping of output column name to source column references.
     """
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
-    schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
-    if schema is None:
-        schema = _schema_map_from_backend(backend)
+    schema = schema_map or _schema_map_from_backend(backend)
     policy = policy or default_sqlglot_policy()
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
@@ -109,11 +108,12 @@ def lineage_graph_by_output(
     )
     scoped = scope.build_scope(normalized)
     lineage_map: dict[str, tuple[str, ...]] = {}
+    lineage_schema = _schema_for_lineage(schema)
     for column in tuple(cast("tuple[str, ...]", expr.schema().names)):
         node = lineage(
             column,
             normalized,
-            schema=schema,
+            schema=lineage_schema,
             dialect=dialect,
             scope=scoped,
             trim_selects=True,
@@ -162,6 +162,22 @@ def _schema_map_from_backend(backend: IbisCompilerBackend) -> dict[str, dict[str
     except (TypeError, ValueError):
         return None
     return SchemaIntrospector(ctx).schema_map()
+
+
+def _schema_for_lineage(schema: SchemaMapping | None) -> dict[str, object] | None:
+    if schema is None:
+        return None
+    return _schema_node_to_dict(schema)
+
+
+def _schema_node_to_dict(node: SchemaMappingNode) -> dict[str, object]:
+    mapped: dict[str, object] = {}
+    for key, value in node.items():
+        if isinstance(value, Mapping):
+            mapped[str(key)] = _schema_node_to_dict(value)
+        else:
+            mapped[str(key)] = value
+    return mapped
 
 
 __all__ = ["lineage_graph_by_output", "required_columns_by_table"]

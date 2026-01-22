@@ -435,6 +435,8 @@ class RunBundleContext:
     delta_maintenance_reports: Sequence[Mapping[str, object]] | None = None
     datafusion_udf_registry: Sequence[Mapping[str, object]] | None = None
     datafusion_schema_registry_validation: pa.Table | None = None
+    datafusion_schema_map_fingerprints: pa.Table | None = None
+    datafusion_ddl_fingerprints: pa.Table | None = None
     datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None
     datafusion_function_catalog_hash: str | None = None
     datafusion_write_policy: Mapping[str, object] | None = None
@@ -866,6 +868,11 @@ def _write_runtime_artifacts(
             "datafusion_schema_registry_validation_v1",
             context.datafusion_schema_registry_validation,
         ),
+        (
+            "datafusion_schema_map_fingerprints_v1",
+            context.datafusion_schema_map_fingerprints,
+        ),
+        ("datafusion_ddl_fingerprints_v1", context.datafusion_ddl_fingerprints),
         ("feature_state", context.feature_state),
         ("scan_telemetry", context.relspec_scan_telemetry),
         ("rule_exec_events", context.relspec_rule_exec_events),
@@ -1536,6 +1543,8 @@ def write_run_bundle(
         relspec/datafusion_explains/
         relspec/datafusion_plan_artifacts_v1/
         relspec/datafusion_schema_registry_validation_v1/
+        relspec/datafusion_schema_map_fingerprints_v1/
+        relspec/datafusion_ddl_fingerprints_v1/
         relspec/datafusion_input_plugins.delta
         relspec/datafusion_arrow_ingest.delta
         relspec/datafusion_view_registry.delta

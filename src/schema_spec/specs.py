@@ -31,6 +31,9 @@ from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTr
 from registry_common.arrow_payloads import payload_hash
 from registry_common.metadata import metadata_list_bytes
 from sqlglot_tools.optimizer import (
+    ExternalTableCompressionProperty,
+    ExternalTableOptionsProperty,
+    ExternalTableOrderProperty,
     SqlGlotPolicy,
     default_sqlglot_policy,
     normalize_ddl_sql,
@@ -218,29 +221,52 @@ def _sql_literal(value: str) -> str:
     return f"'{escaped}'"
 
 
-def _external_table_options_clause(options: Mapping[str, object] | None) -> str | None:
+def _external_table_options_property(
+    options: Mapping[str, object] | None,
+) -> ExternalTableOptionsProperty | None:
+    """Return the external table options property when options are provided.
+
+    Returns
+    -------
+    ExternalTableOptionsProperty | None
+        Options property when entries are available.
+    """
     if not options:
         return None
-    formatted: list[str] = []
+    entries: list[exp.Expression] = []
     for key, value in options.items():
         if key in {"schema", "table_name"} or value is None:
             continue
-        rendered = _option_literal(value)
+        rendered = _option_literal_value(value)
         if rendered is None:
             continue
-        formatted.append(f"{_sql_literal(str(key))} {rendered}")
-    if not formatted:
+        entries.append(
+            exp.Tuple(
+                expressions=[
+                    exp.Literal.string(str(key)),
+                    exp.Literal.string(rendered),
+                ]
+            )
+        )
+    if not entries:
         return None
-    return f"OPTIONS ({', '.join(formatted)})"
+    return ExternalTableOptionsProperty(expressions=entries)
 
 
-def _option_literal(value: object) -> str | None:
+def _option_literal_value(value: object) -> str | None:
+    """Return a string literal payload for external table options.
+
+    Returns
+    -------
+    str | None
+        Rendered value payload for external options.
+    """
     if isinstance(value, bool):
-        return _sql_literal("true" if value else "false")
+        return "true" if value else "false"
     if isinstance(value, (int, float)):
-        return _sql_literal(str(value))
+        return str(value)
     if isinstance(value, str):
-        return _sql_literal(value)
+        return value
     return None
 
 
@@ -558,25 +584,41 @@ class TableSchemaSpec:
             expressions.append(
                 exp.PrimaryKey(expressions=[exp.to_identifier(field) for field in self.key_fields])
             )
-        columns_sql = ", ".join(expr.sql(dialect=dialect_name) for expr in expressions)
-        create_keyword = (
-            "CREATE UNBOUNDED EXTERNAL TABLE" if config.unbounded else "CREATE EXTERNAL TABLE"
-        )
-        parts = [f"{create_keyword} {name} ({columns_sql})"]
         file_format = config.file_format
         stored_as = "DELTATABLE" if file_format.lower() == "delta" else file_format.upper()
-        parts.append(f"STORED AS {stored_as}")
+        properties: list[exp.Expression] = [
+            exp.FileFormatProperty(this=exp.Var(this=stored_as)),
+            exp.LocationProperty(this=exp.Literal.string(config.location)),
+        ]
         if config.compression:
-            parts.append(f"COMPRESSION TYPE {config.compression}")
-        parts.append(f"LOCATION {_sql_literal(config.location)}")
+            properties.append(
+                ExternalTableCompressionProperty(this=exp.Var(this=config.compression))
+            )
         if config.partitioned_by:
-            parts.append(f"PARTITIONED BY ({', '.join(config.partitioned_by)})")
+            properties.append(
+                exp.PartitionedByProperty(
+                    this=exp.Tuple(
+                        expressions=[exp.Identifier(this=name) for name in config.partitioned_by]
+                    )
+                )
+            )
         if config.file_sort_order:
-            parts.append(f"WITH ORDER ({', '.join(config.file_sort_order)})")
-        options_clause = _external_table_options_clause(config.options)
-        if options_clause:
-            parts.append(options_clause)
-        ddl = "\n".join(parts)
+            properties.append(
+                ExternalTableOrderProperty(
+                    expressions=[exp.Identifier(this=name) for name in config.file_sort_order]
+                )
+            )
+        options_property = _external_table_options_property(config.options)
+        if options_property is not None:
+            properties.append(options_property)
+        kind = "UNBOUNDED EXTERNAL" if config.unbounded else "EXTERNAL"
+        schema_expr = _table_schema_expr(name, expressions=expressions)
+        create_expr = exp.Create(
+            this=schema_expr,
+            kind=kind,
+            properties=exp.Properties(expressions=properties),
+        )
+        ddl = sqlglot_sql(create_expr, policy=_ddl_policy(dialect_name))
         return normalize_ddl_sql(ddl)
 
     @staticmethod

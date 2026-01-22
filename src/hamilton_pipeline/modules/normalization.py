@@ -179,11 +179,11 @@ def _scip_position_encoding_stats(
     if not isinstance(scip_documents, ViewReference):
         msg = "SCIP position encoding stats require a DataFusion view reference."
         raise TypeError(msg)
-    ctx = datafusion_context(backend)
     query = (
         "SELECT position_encoding, COUNT(*) AS doc_count "
         f"FROM {scip_documents.name} GROUP BY position_encoding"
     )
+    ctx = datafusion_context(backend)
     table = ctx.sql(query).to_arrow_table()
     return _posenc_stats_from_rows(table.to_pylist())
 
@@ -248,10 +248,7 @@ def _schema_from_fragment(
 ) -> object | None:
     if backend is None:
         return None
-    ctx = datafusion_context(backend)
-    fragment_sql = f"SELECT * FROM {fragment.name} LIMIT 0"
-    df_ctx = cast("_DatafusionContext", ctx)
-    return df_ctx.sql(fragment_sql).schema()
+    return backend.table(fragment.name).schema()
 
 
 def _sql_identifier(name: str) -> str:
@@ -910,32 +907,34 @@ def _join_callsite_qname_meta(
     base_cols = base.column_names
     if "call_id" not in base_cols or "qname" not in base_cols:
         return base
-    with _temporary_table(ctx, base, name_prefix="qname_base") as base_name:
-        with _temporary_table(ctx, cst_callsites, name_prefix="qname_meta") as meta_name:
-            selections = [
-                "base.call_id AS call_id",
-                "base.qname AS qname",
-            ]
-            if "qname_source" in meta_cols:
-                selections.append(
-                    "COALESCE("
-                    f"{_nullif_empty('base.qname_source')}, "
-                    f"{_nullif_empty('meta.qname_source')}"
-                    ") AS qname_source"
-                )
-            else:
-                selections.append(f"{_nullif_empty('base.qname_source')} AS qname_source")
-            for col in meta_cols:
-                if col in ("call_id", "qname_source"):
-                    continue
-                selections.append(f"meta.{_sql_identifier(col)} AS {_sql_identifier(col)}")
-            sql = (
-                f"SELECT {', '.join(selections)} "
-                f"FROM {_sql_identifier(base_name)} AS base "
-                f"LEFT JOIN {_sql_identifier(meta_name)} AS meta "
-                "ON base.call_id = meta.call_id"
+    with (
+        _temporary_table(ctx, base, name_prefix="qname_base") as base_name,
+        _temporary_table(ctx, cst_callsites, name_prefix="qname_meta") as meta_name,
+    ):
+        selections = [
+            "base.call_id AS call_id",
+            "base.qname AS qname",
+        ]
+        if "qname_source" in meta_cols:
+            selections.append(
+                "COALESCE("
+                f"{_nullif_empty('base.qname_source')}, "
+                f"{_nullif_empty('meta.qname_source')}"
+                ") AS qname_source"
             )
-            return ctx.sql(sql).to_arrow_table()
+        else:
+            selections.append(f"{_nullif_empty('base.qname_source')} AS qname_source")
+        for col in meta_cols:
+            if col in {"call_id", "qname_source"}:
+                continue
+            selections.append(f"meta.{_sql_identifier(col)} AS {_sql_identifier(col)}")
+        sql = (
+            f"SELECT {', '.join(selections)} "
+            f"FROM {_sql_identifier(base_name)} AS base "
+            f"LEFT JOIN {_sql_identifier(meta_name)} AS meta "
+            "ON base.call_id = meta.call_id"
+        )
+        return ctx.sql(sql).to_arrow_table()
 
 
 def _join_callsite_arg_summary(
@@ -953,30 +952,32 @@ def _join_callsite_arg_summary(
         "star_kwarg_count",
         "positional_count",
     )
-    with _temporary_table(ctx, base, name_prefix="qname_base") as base_name:
-        with _temporary_table(ctx, summary, name_prefix="qname_summary") as summary_name:
-            selections: list[str] = []
-            base_cols = base.column_names
-            for col in base_cols:
-                if col in metrics:
-                    continue
-                selections.append(f"base.{_sql_identifier(col)} AS {_sql_identifier(col)}")
-            for metric in metrics:
-                base_has = metric in base_cols
-                summary_has = metric in summary.column_names
-                if summary_has and base_has:
-                    selections.append(f"COALESCE(summary.{metric}, base.{metric}) AS {metric}")
-                elif summary_has:
-                    selections.append(f"summary.{metric} AS {metric}")
-                elif base_has:
-                    selections.append(f"base.{metric} AS {metric}")
-            sql = (
-                f"SELECT {', '.join(selections)} "
-                f"FROM {_sql_identifier(base_name)} AS base "
-                f"LEFT JOIN {_sql_identifier(summary_name)} AS summary "
-                "ON base.call_id = summary.call_id"
-            )
-            return ctx.sql(sql).to_arrow_table()
+    with (
+        _temporary_table(ctx, base, name_prefix="qname_base") as base_name,
+        _temporary_table(ctx, summary, name_prefix="qname_summary") as summary_name,
+    ):
+        selections: list[str] = []
+        base_cols = base.column_names
+        for col in base_cols:
+            if col in metrics:
+                continue
+            selections.append(f"base.{_sql_identifier(col)} AS {_sql_identifier(col)}")
+        for metric in metrics:
+            base_has = metric in base_cols
+            summary_has = metric in summary.column_names
+            if summary_has and base_has:
+                selections.append(f"COALESCE(summary.{metric}, base.{metric}) AS {metric}")
+            elif summary_has:
+                selections.append(f"summary.{metric} AS {metric}")
+            elif base_has:
+                selections.append(f"base.{metric} AS {metric}")
+        sql = (
+            f"SELECT {', '.join(selections)} "
+            f"FROM {_sql_identifier(base_name)} AS base "
+            f"LEFT JOIN {_sql_identifier(summary_name)} AS summary "
+            "ON base.call_id = summary.call_id"
+        )
+        return ctx.sql(sql).to_arrow_table()
 
 
 @cache(format="delta")
@@ -1139,6 +1140,11 @@ def callsite_qname_candidates(
     -------
     TableLike
         Table of callsite qualified name candidates.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion backend is unavailable.
     """
     if not _requires_output(evidence_plan, "callsite_qname_candidates"):
         schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)

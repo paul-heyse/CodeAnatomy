@@ -18,6 +18,7 @@ from datafusion_engine.kernel_registry import KernelCapability
 from relspec.rules.definitions import RuleDomain
 from sqlglot_tools.bridge import SqlGlotDiagnostics, SqlGlotRelationDiff
 from sqlglot_tools.optimizer import (
+    canonical_ast_fingerprint,
     default_sqlglot_policy,
     plan_fingerprint,
     sqlglot_policy_snapshot,
@@ -237,6 +238,8 @@ def _sqlglot_metadata_payload(diagnostics: SqlGlotDiagnostics) -> dict[str, str]
         "optimized_sql": diagnostics.sql_text_optimized,
         "sql_dialect": diagnostics.sql_dialect,
         "ast_repr": diagnostics.ast_repr,
+        "ast_hash_raw": canonical_ast_fingerprint(diagnostics.expression),
+        "ast_hash_optimized": canonical_ast_fingerprint(diagnostics.optimized),
         "plan_fingerprint": plan_fingerprint(diagnostics.optimized, dialect=policy.write_dialect),
         "sqlglot_policy_hash": sqlglot_policy_snapshot().policy_hash,
     }

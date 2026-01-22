@@ -14,13 +14,13 @@ from arrowdsl.schema.metadata import schema_identity_from_metadata
 from datafusion_engine.runtime import read_delta_table_from_path
 from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
 from incremental.state_store import StateStore
-from registry_common.arrow_payloads import payload_hash
 from relspec.graph import rule_graph_signature
 from relspec.registry.snapshot import RelspecSnapshot
 from relspec.rules.cache import (
     relspec_snapshot_cached,
     rule_definitions_cached,
     rule_graph_signature_cached,
+    rule_plan_hashes_cached,
     rule_plan_sql_cached,
 )
 from relspec.schema_context import RelspecSchemaContext
@@ -30,7 +30,7 @@ from storage.deltalake import (
     write_table_delta,
 )
 
-INVALIDATION_SNAPSHOT_VERSION = 1
+INVALIDATION_SNAPSHOT_VERSION = 2
 _RULE_SIGNATURE_ENTRY = pa.struct(
     [
         pa.field("rule_name", pa.string(), nullable=False),
@@ -41,6 +41,12 @@ _RULE_SQL_ENTRY = pa.struct(
     [
         pa.field("rule_name", pa.string(), nullable=False),
         pa.field("sql", pa.string(), nullable=False),
+    ]
+)
+_RULE_HASH_ENTRY = pa.struct(
+    [
+        pa.field("rule_name", pa.string(), nullable=False),
+        pa.field("plan_hash", pa.string(), nullable=False),
     ]
 )
 _DATASET_IDENTITY_ENTRY = pa.struct(
@@ -56,13 +62,8 @@ _INVALIDATION_SCHEMA = pa.schema(
         pa.field("rule_graph_signature", pa.string(), nullable=False),
         pa.field("rule_plan_signatures", pa.list_(_RULE_SIGNATURE_ENTRY), nullable=False),
         pa.field("rule_plan_sql", pa.list_(_RULE_SQL_ENTRY), nullable=False),
+        pa.field("rule_plan_hashes", pa.list_(_RULE_HASH_ENTRY), nullable=False),
         pa.field("dataset_identities", pa.list_(_DATASET_IDENTITY_ENTRY), nullable=False),
-    ]
-)
-_SQL_HASH_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("sql", pa.string(), nullable=False),
     ]
 )
 
@@ -81,6 +82,7 @@ class InvalidationSnapshot:
 
     rule_plan_signatures: dict[str, str]
     rule_plan_sql: dict[str, str]
+    rule_plan_hashes: dict[str, str]
     rule_graph_signature: str
     dataset_identities: dict[str, SchemaIdentity]
 
@@ -97,6 +99,7 @@ class InvalidationSnapshot:
             "rule_graph_signature": self.rule_graph_signature,
             "rule_plan_signatures": _rule_entries(self.rule_plan_signatures),
             "rule_plan_sql": _rule_sql_entries(self.rule_plan_sql),
+            "rule_plan_hashes": _rule_hash_entries(self.rule_plan_hashes),
             "dataset_identities": _dataset_entries(self.dataset_identities),
         }
 
@@ -137,6 +140,7 @@ def build_invalidation_snapshot(
     return InvalidationSnapshot(
         rule_plan_signatures=dict(snapshot.plan_signatures),
         rule_plan_sql=rule_plan_sql_cached(),
+        rule_plan_hashes=rule_plan_hashes_cached(),
         rule_graph_signature=rule_graph_signature,
         dataset_identities=_dataset_identities(schema_context),
     )
@@ -266,7 +270,9 @@ def diff_invalidation_snapshots(
     reasons: list[str] = []
     if previous.rule_graph_signature != current.rule_graph_signature:
         reasons.append("rule_graph_signature")
-    reasons.extend(_diff_rule_plan_sql(previous.rule_plan_sql, current.rule_plan_sql))
+    reasons.extend(_diff_rule_plan_hashes(previous.rule_plan_hashes, current.rule_plan_hashes))
+    if not previous.rule_plan_hashes or not current.rule_plan_hashes:
+        reasons.extend(_diff_rule_plan_sql(previous.rule_plan_sql, current.rule_plan_sql))
     if not previous.rule_plan_sql or not current.rule_plan_sql:
         reasons.extend(
             _diff_mapping(
@@ -349,11 +355,13 @@ def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
             raise ValueError(msg)
     rule_signatures = _coerce_rule_entries(row.get("rule_plan_signatures"))
     rule_plan_sql = _coerce_rule_sql_entries(row.get("rule_plan_sql"))
+    rule_plan_hashes = _coerce_rule_hash_entries(row.get("rule_plan_hashes"))
     rule_graph_signature = str(row.get("rule_graph_signature", ""))
     dataset_identities = _coerce_dataset_entries(row.get("dataset_identities"))
     return InvalidationSnapshot(
         rule_plan_signatures=rule_signatures,
         rule_plan_sql=rule_plan_sql,
+        rule_plan_hashes=rule_plan_hashes,
         rule_graph_signature=rule_graph_signature,
         dataset_identities=dataset_identities,
     )
@@ -374,6 +382,20 @@ def _diff_rule_plan_sql(
         diff = semantic_diff_sql(prev_sql, next_sql)
         if diff.changed:
             reasons.append(f"rule_plan_sql:{name}")
+    return reasons
+
+
+def _diff_rule_plan_hashes(
+    previous: Mapping[str, str],
+    current: Mapping[str, str],
+) -> list[str]:
+    reasons: list[str] = []
+    all_rules = sorted(set(previous) | set(current))
+    for name in all_rules:
+        prev_hash = previous.get(name)
+        cur_hash = current.get(name)
+        if prev_hash != cur_hash:
+            reasons.append(f"rule_plan_hash:{name}")
     return reasons
 
 
@@ -401,7 +423,9 @@ def rule_plan_diff_table(
     )
     prev_sql: dict[str, str] = dict(previous.rule_plan_sql) if previous is not None else {}
     cur_sql = current.rule_plan_sql
-    names = sorted(set(prev_sql) | set(cur_sql))
+    prev_hash_map: dict[str, str] = dict(previous.rule_plan_hashes) if previous is not None else {}
+    cur_hash_map = current.rule_plan_hashes
+    names = sorted(set(prev_sql) | set(cur_sql) | set(prev_hash_map) | set(cur_hash_map))
     if not names:
         return table_from_arrays(schema, columns={}, num_rows=0)
     change_kind: list[str] = []
@@ -413,8 +437,8 @@ def rule_plan_diff_table(
     for name in names:
         prev = prev_sql.get(name)
         cur = cur_sql.get(name)
-        prev_hashes.append(_hash_sql(prev))
-        cur_hashes.append(_hash_sql(cur))
+        prev_hashes.append(prev_hash_map.get(name))
+        cur_hashes.append(cur_hash_map.get(name))
         if prev is None and cur is not None:
             change_kind.append("added")
             diff_types.append(None)
@@ -459,13 +483,6 @@ def rule_plan_diff_table(
     )
 
 
-def _hash_sql(value: str | None) -> str | None:
-    if not value:
-        return None
-    payload = {"version": INVALIDATION_SNAPSHOT_VERSION, "sql": value}
-    return payload_hash(payload, _SQL_HASH_SCHEMA)
-
-
 def _edit_script_payload(script: tuple[DiffOpEntry, ...]) -> str | None:
     if not script:
         return None
@@ -481,6 +498,12 @@ def _rule_entries(values: Mapping[str, str]) -> list[dict[str, str]]:
 
 def _rule_sql_entries(values: Mapping[str, str]) -> list[dict[str, str]]:
     return [{"rule_name": name, "sql": sql} for name, sql in sorted(values.items())]
+
+
+def _rule_hash_entries(values: Mapping[str, str]) -> list[dict[str, str]]:
+    return [
+        {"rule_name": name, "plan_hash": plan_hash} for name, plan_hash in sorted(values.items())
+    ]
 
 
 def _dataset_entries(values: Mapping[str, SchemaIdentity]) -> list[dict[str, object]]:
@@ -515,6 +538,18 @@ def _coerce_rule_sql_entries(value: object) -> dict[str, str]:
         if name is None or sql is None:
             continue
         resolved[str(name)] = str(sql)
+    return resolved
+
+
+def _coerce_rule_hash_entries(value: object) -> dict[str, str]:
+    entries = _coerce_entry_list(value, label="rule_plan_hashes")
+    resolved: dict[str, str] = {}
+    for entry in entries:
+        name = entry.get("rule_name")
+        plan_hash = entry.get("plan_hash")
+        if name is None or plan_hash is None:
+            continue
+        resolved[str(name)] = str(plan_hash)
     return resolved
 
 

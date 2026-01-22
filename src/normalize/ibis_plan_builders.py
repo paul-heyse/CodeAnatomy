@@ -14,7 +14,6 @@ from ibis.expr.types import (
     BooleanValue,
     NumericValue,
     StringValue,
-    StructValue,
     Table,
     Value,
 )
@@ -285,7 +284,7 @@ def _expr_type_rows(
                 null_sentinel=TYPE_ID_SPEC.null_sentinel,
             )
         )
-    return expr_rows.select(*[expr_rows[name] for name in type_node_columns])
+    return expr_rows.select([expr_rows[col] for col in type_node_columns])
 
 
 def _scip_type_rows(
@@ -313,7 +312,7 @@ def _scip_type_rows(
                 null_sentinel=TYPE_ID_SPEC.null_sentinel,
             )
         )
-    return scip_rows.select(*[scip_rows[name] for name in type_node_columns])
+    return scip_rows.select([scip_rows[col] for col in type_node_columns])
 
 
 def _prefer_type_rows(expr_rows: Table, scip_rows: Table | None) -> Table:
@@ -808,24 +807,25 @@ def _symtable_bytecode_join(
 def _symtable_bytecode_base(
     joined: Table,
 ) -> tuple[Table, BooleanValue, BooleanValue]:
-    bstart = joined.sym_line_start_byte.cast("int64")
-    sym_line_text = cast("StringValue", joined.sym_line_text)
+    unpacked = _unpack_symtable_structs(joined)
+    bstart = unpacked.sym_line_start_byte.cast("int64")
+    sym_line_text = cast("StringValue", unpacked.sym_line_text)
     bend = ibis.coalesce(
-        joined.sym_line_end_byte.cast("int64"),
+        unpacked.sym_line_end_byte.cast("int64"),
         bstart + sym_line_text.length().cast("int64"),
     )
-    sym_param_count, bc_param_count = _symtable_param_counts(joined)
+    sym_param_count, bc_param_count = _symtable_param_counts(unpacked)
     _sym_frees, _bc_freevars, sym_free_count, bc_free_count, freevars_mismatch = (
-        _symtable_freevar_counts(joined)
+        _symtable_freevar_counts(unpacked)
     )
     param_mismatch = sym_param_count != bc_param_count
-    base = joined.select(
-        file_id=joined.file_id,
-        path=joined.path,
+    base = unpacked.select(
+        file_id=unpacked.file_id,
+        path=unpacked.path,
         bstart=bstart,
         bend=bend,
-        scope_id=joined.scope_id,
-        code_unit_id=joined.code_unit_id,
+        scope_id=unpacked.scope_id,
+        code_unit_id=unpacked.code_unit_id,
         sym_param_count=sym_param_count,
         bc_param_count=bc_param_count,
         sym_free_count=sym_free_count,
@@ -834,27 +834,37 @@ def _symtable_bytecode_base(
     return base, param_mismatch, freevars_mismatch
 
 
+def _unpack_symtable_structs(joined: Table) -> Table:
+    """Unpack nested symtable struct columns into top-level fields."""
+    expr = joined
+    if "function_partitions" in expr.columns:
+        expr = expr.unpack("function_partitions")
+    if "flags_detail" in expr.columns:
+        expr = expr.unpack("flags_detail")
+    return expr
+
+
 def _symtable_param_counts(
     joined: Table,
 ) -> tuple[NumericValue, NumericValue]:
     empty_list = _empty_string_list()
-    function_partitions = cast("StructValue", joined.function_partitions)
-    sym_params = ibis.coalesce(
-        function_partitions["parameters"],
-        empty_list,
-    )
+    if "parameters" in joined.columns:
+        sym_params = ibis.coalesce(joined.parameters, empty_list)
+    else:
+        sym_params = empty_list
     sym_param_count = cast("ArrayValue", sym_params).length()
     argcount = _coalesce_int64(joined.argcount)
     posonly = _coalesce_int64(joined.posonlyargcount)
     kwonly = _coalesce_int64(joined.kwonlyargcount)
-    flags_detail = cast("StructValue", joined.flags_detail)
-    has_varargs = ibis.coalesce(
-        flags_detail["has_varargs"],
-        ibis.literal(value=False),
+    has_varargs = (
+        ibis.coalesce(joined.has_varargs, ibis.literal(value=False))
+        if "has_varargs" in joined.columns
+        else ibis.literal(value=False)
     )
-    has_varkeywords = ibis.coalesce(
-        flags_detail["has_varkeywords"],
-        ibis.literal(value=False),
+    has_varkeywords = (
+        ibis.coalesce(joined.has_varkeywords, ibis.literal(value=False))
+        if "has_varkeywords" in joined.columns
+        else ibis.literal(value=False)
     )
     var_extra = cast(
         "NumericValue",
@@ -871,11 +881,10 @@ def _symtable_freevar_counts(
     joined: Table,
 ) -> tuple[Value, Value, NumericValue, NumericValue, BooleanValue]:
     empty_list = _empty_string_list()
-    function_partitions = cast("StructValue", joined.function_partitions)
-    sym_frees = ibis.coalesce(
-        function_partitions["frees"],
-        empty_list,
-    )
+    if "frees" in joined.columns:
+        sym_frees = ibis.coalesce(joined.frees, empty_list)
+    else:
+        sym_frees = empty_list
     bc_freevars = ibis.coalesce(joined.freevars, empty_list)
     sym_free_count = cast("ArrayValue", sym_frees).length()
     bc_free_count = cast("ArrayValue", bc_freevars).length()

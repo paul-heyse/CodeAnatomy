@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 import pyarrow as pa
 
+from datafusion_engine.registry_bridge import (
+    DeltaCdfRegistrationOptions,
+    register_delta_cdf_df,
+)
+from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_table_from_path
 from storage.deltalake import (
     DeltaCdfOptions,
     DeltaWriteOptions,
@@ -13,14 +19,33 @@ from storage.deltalake import (
     delta_table_features,
     delta_table_version,
     enable_delta_features,
-    read_delta_cdf,
-    read_table_delta,
     write_table_delta,
 )
 
 
 def _sample_table() -> pa.Table:
     return pa.table({"id": [1, 2], "value": ["a", "b"]})
+
+
+def _read_delta_cdf(path: str, options: DeltaCdfOptions) -> pa.Table:
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    table_name = f"cdf_{uuid4().hex}"
+    df = register_delta_cdf_df(
+        ctx,
+        name=table_name,
+        path=path,
+        options=DeltaCdfRegistrationOptions(
+            cdf_options=options,
+            runtime_profile=profile,
+        ),
+    )
+    try:
+        return df.to_arrow_table()
+    finally:
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            deregister(table_name)
 
 
 def test_delta_write_read_version(tmp_path: Path) -> None:
@@ -33,7 +58,7 @@ def test_delta_write_read_version(tmp_path: Path) -> None:
         options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
     )
     assert result.version == 0
-    read_back = read_table_delta(str(path))
+    read_back = read_delta_table_from_path(str(path))
     assert int(read_back.num_rows) == int(table.num_rows)
 
 
@@ -70,7 +95,7 @@ def test_delta_cdf_and_features(tmp_path: Path) -> None:
     )
     version = delta_table_version(str(path))
     assert version == 1
-    cdf = read_delta_cdf(
+    cdf = _read_delta_cdf(
         str(path),
         options=DeltaCdfOptions(
             starting_version=1,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import cast
 from uuid import uuid4
 
@@ -32,6 +33,15 @@ _PROPS_BY_FILE_DATASET = "cpg_props_by_file_id_v1"
 _PROPS_GLOBAL_DATASET = "cpg_props_global_v1"
 _NODE_KIND = "node"
 _EDGE_KIND = "edge"
+
+
+@dataclass(frozen=True)
+class _AttachFileIdInputs:
+    props_name: str
+    mapping_name: str
+    mapping_id: str
+    mapping_file_id: str
+    kind: str
 
 
 def upsert_cpg_props(
@@ -118,23 +128,27 @@ def split_props_by_file_id(
     try:
         node_file, node_global = _attach_file_id(
             df_ctx,
-            props_name=props_name,
             props=props_table,
-            mapping_name=nodes_name,
             mapping=nodes_table,
-            mapping_id="node_id",
-            mapping_file_id="file_id",
-            kind=_NODE_KIND,
+            inputs=_AttachFileIdInputs(
+                props_name=props_name,
+                mapping_name=nodes_name,
+                mapping_id="node_id",
+                mapping_file_id="file_id",
+                kind=_NODE_KIND,
+            ),
         )
         edge_file, edge_global = _attach_file_id(
             df_ctx,
-            props_name=props_name,
             props=props_table,
-            mapping_name=edges_name,
             mapping=edges_table,
-            mapping_id="edge_id",
-            mapping_file_id="edge_owner_file_id",
-            kind=_EDGE_KIND,
+            inputs=_AttachFileIdInputs(
+                props_name=props_name,
+                mapping_name=edges_name,
+                mapping_id="edge_id",
+                mapping_file_id="edge_owner_file_id",
+                kind=_EDGE_KIND,
+            ),
         )
         other_props = _filter_props_other(df_ctx, props_name=props_name)
         file_props = _concat_tables(
@@ -155,42 +169,41 @@ def split_props_by_file_id(
 def _attach_file_id(
     ctx: SessionContext,
     *,
-    props_name: str,
     props: pa.Table,
-    mapping_name: str,
     mapping: pa.Table,
-    mapping_id: str,
-    mapping_file_id: str,
-    kind: str,
+    inputs: _AttachFileIdInputs,
 ) -> tuple[pa.Table, pa.Table]:
     if props.num_rows == 0:
         return _empty_by_file(), _empty_global()
     if "entity_id" not in props.column_names:
         aligned = align_table(props, schema=CPG_PROPS_GLOBAL_SCHEMA, safe_cast=True)
         return _empty_by_file(), aligned
-    if mapping_id not in mapping.column_names or mapping_file_id not in mapping.column_names:
+    if (
+        inputs.mapping_id not in mapping.column_names
+        or inputs.mapping_file_id not in mapping.column_names
+    ):
         aligned = align_table(
-            _filter_props_kind(ctx, props_name=props_name, kind=kind),
+            _filter_props_kind(ctx, props_name=inputs.props_name, kind=inputs.kind),
             schema=CPG_PROPS_GLOBAL_SCHEMA,
             safe_cast=True,
         )
         return _empty_by_file(), aligned
     mapping_sql = (
-        f"SELECT {_sql_identifier(mapping_id)} AS entity_id, "
-        f"{_sql_identifier(mapping_file_id)} AS file_id "
-        f"FROM {_sql_identifier(mapping_name)}"
+        f"SELECT {_sql_identifier(inputs.mapping_id)} AS entity_id, "
+        f"{_sql_identifier(inputs.mapping_file_id)} AS file_id "
+        f"FROM {_sql_identifier(inputs.mapping_name)}"
     )
-    kind_literal = _sql_literal(kind)
+    kind_literal = _sql_literal(inputs.kind)
     file_sql = (
         "SELECT props.*, mapping.file_id "
-        f"FROM {_sql_identifier(props_name)} AS props "
+        f"FROM {_sql_identifier(inputs.props_name)} AS props "
         f"LEFT JOIN ({mapping_sql}) AS mapping "
         "ON props.entity_id = mapping.entity_id "
         f"WHERE props.entity_kind = {kind_literal} AND mapping.file_id IS NOT NULL"
     )
     global_sql = (
         "SELECT props.* "
-        f"FROM {_sql_identifier(props_name)} AS props "
+        f"FROM {_sql_identifier(inputs.props_name)} AS props "
         f"LEFT JOIN ({mapping_sql}) AS mapping "
         "ON props.entity_id = mapping.entity_id "
         f"WHERE props.entity_kind = {kind_literal} AND mapping.file_id IS NULL"

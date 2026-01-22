@@ -61,6 +61,9 @@ class ArrowDeltaLoader(DataLoader):
         """
         _ = type_
         table = read_delta_table_from_path(self.path)
+        if not isinstance(table, pa.Table):
+            msg = "Delta reader did not return a pyarrow.Table."
+            raise TypeError(msg)
         metadata: dict[str, object] = {
             "delta_version": delta_table_version(self.path),
             "path": self.path,

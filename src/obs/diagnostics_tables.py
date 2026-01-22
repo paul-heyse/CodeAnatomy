@@ -33,6 +33,23 @@ def _coerce_event_time(value: object, *, default: int) -> int:
     return default
 
 
+def _coerce_int(value: object, *, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            try:
+                return int(stripped)
+            except ValueError:
+                return default
+    return default
+
+
 def _coerce_str_list(value: object) -> list[str]:
     if value is None:
         return []
@@ -131,6 +148,72 @@ def datafusion_schema_registry_validation_table(
     return table_from_rows(schema, rows)
 
 
+def datafusion_schema_map_fingerprints_table(
+    records: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build a DataFusion schema map fingerprint diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to DATAFUSION_SCHEMA_MAP_FINGERPRINTS_V1.
+    """
+    now = _now_ms()
+    rows = [
+        {
+            "event_time_unix_ms": _coerce_event_time(
+                record.get("event_time_unix_ms"),
+                default=now,
+            ),
+            "schema_map_hash": str(record.get("schema_map_hash") or ""),
+            "schema_map_version": _coerce_int(
+                record.get("schema_map_version"),
+                default=1,
+            ),
+            "table_count": _coerce_int(record.get("table_count"), default=0),
+            "column_count": _coerce_int(record.get("column_count"), default=0),
+        }
+        for record in records
+    ]
+    schema = schema_for("datafusion_schema_map_fingerprints_v1")
+    return table_from_rows(schema, rows)
+
+
+def datafusion_ddl_fingerprints_table(
+    records: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build a DataFusion DDL fingerprint diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to DATAFUSION_DDL_FINGERPRINTS_V1.
+    """
+    now = _now_ms()
+    rows = [
+        {
+            "event_time_unix_ms": _coerce_event_time(
+                record.get("event_time_unix_ms"),
+                default=now,
+            ),
+            "table_catalog": str(record.get("table_catalog") or ""),
+            "table_schema": str(record.get("table_schema") or ""),
+            "table_name": str(record.get("table_name") or ""),
+            "table_type": (
+                str(record.get("table_type")) if record.get("table_type") is not None else None
+            ),
+            "ddl_fingerprint": (
+                str(record.get("ddl_fingerprint"))
+                if record.get("ddl_fingerprint") is not None
+                else None
+            ),
+        }
+        for record in records
+    ]
+    schema = schema_for("datafusion_ddl_fingerprints_v1")
+    return table_from_rows(schema, rows)
+
+
 def _explain_rows_metadata(rows: object) -> tuple[str | None, str | None, str | None]:
     if isinstance(rows, (RecordBatchReaderLike, TableLike)):
         return None, "ipc_file", _schema_fingerprint(rows.schema)
@@ -174,7 +257,9 @@ def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
 
 
 __all__ = [
+    "datafusion_ddl_fingerprints_table",
     "datafusion_explains_table",
+    "datafusion_schema_map_fingerprints_table",
     "datafusion_schema_registry_validation_table",
     "feature_state_table",
 ]

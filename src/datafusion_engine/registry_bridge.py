@@ -501,10 +501,16 @@ def _apply_runtime_scan_hardening(
     if runtime_profile is None:
         return options
     hardened_scan = _scan_hardening_defaults(options.scan, runtime_profile=runtime_profile)
+    hardened_delta_scan = _delta_scan_hardening_defaults(
+        options.delta_scan,
+        runtime_profile=runtime_profile,
+    )
     require_delta = runtime_profile.require_delta
     updated = options
     if hardened_scan is not options.scan:
         updated = replace(updated, scan=hardened_scan)
+    if hardened_delta_scan is not options.delta_scan:
+        updated = replace(updated, delta_scan=hardened_delta_scan)
     if require_delta != options.require_delta:
         updated = replace(updated, require_delta=require_delta)
     return updated
@@ -528,6 +534,24 @@ def _scan_hardening_defaults(
     runtime_profile: DataFusionRuntimeProfile,
 ) -> DataFusionScanOptions | None:
     if scan is None or scan.schema_force_view_types is not None:
+        return scan
+    enable_view_types = _schema_hardening_view_types(runtime_profile)
+    if not enable_view_types:
+        return scan
+    return replace(scan, schema_force_view_types=True)
+
+
+def _delta_scan_hardening_defaults(
+    scan: DeltaScanOptions | None,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DeltaScanOptions | None:
+    if scan is None:
+        enable_view_types = _schema_hardening_view_types(runtime_profile)
+        if not enable_view_types:
+            return None
+        return DeltaScanOptions(schema_force_view_types=True)
+    if scan.schema_force_view_types:
         return scan
     enable_view_types = _schema_hardening_view_types(runtime_profile)
     if not enable_view_types:
@@ -603,11 +627,16 @@ def _validate_constraints_and_defaults(
         return
     introspector = SchemaIntrospector(context.ctx)
     if key_fields:
-        constraints = introspector.table_constraints(context.name)
-        if not constraints:
-            msg = (
-                f"{context.name} missing DataFusion constraints for key fields {list(key_fields)}."
-            )
+        constraint_rows = introspector.table_constraint_rows(context.name)
+        key_columns = {
+            str(row["column_name"])
+            for row in constraint_rows
+            if row.get("constraint_type") in {"PRIMARY KEY", "UNIQUE"}
+            and row.get("column_name") is not None
+        }
+        missing = [name for name in key_fields if name not in key_columns]
+        if missing:
+            msg = f"{context.name} missing DataFusion constraints for key fields {missing}."
             raise ValueError(msg)
     if expected_defaults:
         column_defaults = introspector.table_column_defaults(context.name)
@@ -1979,6 +2008,9 @@ def _delta_rust_table_provider(
         file_column_name=delta_scan.file_column_name if delta_scan is not None else None,
         enable_parquet_pushdown=(
             delta_scan.enable_parquet_pushdown if delta_scan is not None else None
+        ),
+        schema_force_view_types=(
+            delta_scan.schema_force_view_types if delta_scan is not None else None
         ),
         schema_ipc=schema_ipc,
     )

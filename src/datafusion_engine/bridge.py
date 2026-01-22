@@ -27,7 +27,13 @@ try:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
 except ImportError:
     DataFusionLogicalPlan = None
-from datafusion import DataFrameWriteOptions, ParquetWriterOptions, SessionContext, col
+from datafusion import (
+    DataFrameWriteOptions,
+    ParquetWriterOptions,
+    SessionContext,
+    SQLOptions,
+    col,
+)
 from datafusion.dataframe import DataFrame
 from datafusion.expr import SortExpr
 from ibis.expr.types import Table as IbisTable
@@ -347,6 +353,11 @@ def _merge_sql_policies(*policies: DataFusionSqlPolicy | None) -> DataFusionSqlP
     )
 
 
+def _sql_options_for_options(options: DataFusionCompileOptions) -> SQLOptions:
+    policy = options.sql_policy or _default_sql_policy()
+    return options.sql_options or policy.to_sql_options()
+
+
 def _ensure_dialect(name: str) -> None:
     if name == "datafusion_ext":
         register_datafusion_dialect()
@@ -413,11 +424,15 @@ def validate_table_constraints(
         return []
     ctx.register_record_batches(name, [table.to_batches()])
     violations: list[str] = []
+    sql_options = _default_sql_policy().to_sql_options()
     try:
         for constraint in constraints:
             if not constraint.strip():
                 continue
-            df = ctx.sql(f"SELECT 1 FROM {name} WHERE NOT ({constraint}) LIMIT 1")
+            df = ctx.sql_with_options(
+                f"SELECT 1 FROM {name} WHERE NOT ({constraint}) LIMIT 1",
+                sql_options,
+            )
             if _df_has_rows(df):
                 violations.append(constraint)
     finally:
@@ -1162,7 +1177,8 @@ def _maybe_explain(
     _ensure_dialect(options.dialect)
     sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
     prefix = "EXPLAIN ANALYZE" if options.explain_analyze else "EXPLAIN"
-    explain_df = ctx.sql(f"{prefix} {sql}")
+    sql_options = _sql_options_for_options(options)
+    explain_df = ctx.sql_with_options(f"{prefix} {sql}", sql_options)
     rows = _explain_reader(explain_df)
     if options.explain_hook is not None:
         options.explain_hook(sql, rows)
@@ -1319,13 +1335,14 @@ def collect_plan_artifacts(
     """
     _ensure_dialect(options.dialect)
     sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    sql_options = _sql_options_for_options(options)
     plan_df = df
     if plan_df is None:
-        plan_df = ctx.sql(sql)
-    explain_rows = _collect_reader(ctx.sql(f"EXPLAIN {sql}"))
+        plan_df = ctx.sql_with_options(sql, sql_options)
+    explain_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN {sql}", sql_options))
     analyze_rows = None
     if options.explain_analyze:
-        analyze_rows = _collect_reader(ctx.sql(f"EXPLAIN ANALYZE {sql}"))
+        analyze_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN ANALYZE {sql}", sql_options))
     substrait_plan = _substrait_bytes(ctx, sql)
     substrait_validation: Mapping[str, object] | None = None
     if substrait_plan is not None and options.substrait_validation and plan_df is not None:

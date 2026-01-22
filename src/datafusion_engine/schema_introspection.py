@@ -6,9 +6,11 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
-from datafusion import SessionContext
+from datafusion import SessionContext, SQLOptions
 
+from datafusion_engine.compile_options import DataFusionSqlPolicy
 from registry_common.arrow_payloads import payload_hash
+from sqlglot_tools.optimizer import SchemaMapping, SchemaMappingNode
 
 _TABLE_DEFINITION_OVERRIDES: dict[int, dict[str, str]] = {}
 SCHEMA_MAP_HASH_VERSION: int = 1
@@ -72,7 +74,30 @@ def table_definition_override(ctx: SessionContext, *, name: str) -> str | None:
     return _TABLE_DEFINITION_OVERRIDES.get(id(ctx), {}).get(name)
 
 
-def _rows_for_query(ctx: SessionContext, query: str) -> list[dict[str, object]]:
+def _read_only_sql_options() -> SQLOptions:
+    return DataFusionSqlPolicy().to_sql_options()
+
+
+def _statement_sql_options() -> SQLOptions:
+    return DataFusionSqlPolicy(allow_statements=True).to_sql_options()
+
+
+def _table_for_query(
+    ctx: SessionContext,
+    query: str,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> pa.Table:
+    options = sql_options or _read_only_sql_options()
+    return ctx.sql_with_options(query, options).to_arrow_table()
+
+
+def _rows_for_query(
+    ctx: SessionContext,
+    query: str,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> list[dict[str, object]]:
     """Return a list of row mappings for a SQL query.
 
     Returns
@@ -80,8 +105,45 @@ def _rows_for_query(ctx: SessionContext, query: str) -> list[dict[str, object]]:
     list[dict[str, object]]
         Rows represented as dictionaries keyed by column name.
     """
-    table = ctx.sql(query).to_arrow_table()
+    table = _table_for_query(ctx, query, sql_options=sql_options)
     return [dict(row) for row in table.to_pylist()]
+
+
+def _sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def table_names_snapshot(ctx: SessionContext) -> set[str]:
+    """Return registered table names from information_schema.
+
+    Returns
+    -------
+    set[str]
+        Set of table names registered in the session.
+    """
+    names: set[str] = set()
+    for row in _rows_for_query(ctx, "SELECT table_name FROM information_schema.tables"):
+        value = row.get("table_name")
+        if value is not None:
+            names.add(str(value))
+    return names
+
+
+def settings_snapshot_table(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> pa.Table:
+    """Return session settings as a pyarrow.Table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Table of settings from information_schema.df_settings.
+    """
+    query = "SELECT name, value FROM information_schema.df_settings"
+    return _table_for_query(ctx, query, sql_options=sql_options)
 
 
 @dataclass(frozen=True)
@@ -89,6 +151,7 @@ class SchemaIntrospector:
     """Expose schema reflection across tables, queries, and settings."""
 
     ctx: SessionContext
+    sql_options: SQLOptions | None = None
 
     def describe_query(self, sql: str) -> list[dict[str, object]]:
         """Return the computed output schema for a SQL query.
@@ -98,7 +161,7 @@ class SchemaIntrospector:
         list[dict[str, object]]
             ``DESCRIBE`` rows for the query.
         """
-        return _rows_for_query(self.ctx, f"DESCRIBE {sql}")
+        return _rows_for_query(self.ctx, f"DESCRIBE {sql}", sql_options=self.sql_options)
 
     def table_columns(self, table_name: str) -> list[dict[str, object]]:
         """Return column metadata from information_schema for a table.
@@ -112,9 +175,9 @@ class SchemaIntrospector:
             "SELECT table_catalog, table_schema, table_name, column_name, data_type, "
             "is_nullable, column_default "
             "FROM information_schema.columns "
-            f"WHERE table_name = '{table_name}'"
+            f"WHERE table_name = {_sql_literal(table_name)}"
         )
-        return _rows_for_query(self.ctx, query)
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def table_columns_with_ordinal(self, table_name: str) -> list[dict[str, object]]:
         """Return ordered column metadata rows for a table.
@@ -128,10 +191,77 @@ class SchemaIntrospector:
             "SELECT table_catalog, table_schema, table_name, column_name, data_type, "
             "ordinal_position, is_nullable, column_default "
             "FROM information_schema.columns "
-            f"WHERE table_name = '{table_name}' "
+            f"WHERE table_name = {_sql_literal(table_name)} "
             "ORDER BY ordinal_position"
         )
-        return _rows_for_query(self.ctx, query)
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+
+    def table_constraint_rows(self, table_name: str) -> list[dict[str, object]]:
+        """Return constraint metadata rows for a table when available.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Rows including constraint type and column names where available.
+        """
+        query = (
+            "SELECT "
+            "tc.table_catalog, "
+            "tc.table_schema, "
+            "tc.table_name, "
+            "tc.constraint_name, "
+            "tc.constraint_type, "
+            "kcu.column_name, "
+            "kcu.ordinal_position "
+            "FROM information_schema.table_constraints tc "
+            "LEFT JOIN information_schema.key_column_usage kcu "
+            "ON tc.constraint_name = kcu.constraint_name "
+            "AND tc.table_catalog = kcu.table_catalog "
+            "AND tc.table_schema = kcu.table_schema "
+            "AND tc.table_name = kcu.table_name "
+            f"WHERE tc.table_name = {_sql_literal(table_name)} "
+            "ORDER BY tc.constraint_name, kcu.ordinal_position"
+        )
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+
+    def constraint_rows(
+        self,
+        *,
+        catalog: str | None = None,
+        schema: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Return constraint metadata rows across tables.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Rows including constraint type and column names where available.
+        """
+        filters: list[str] = []
+        if catalog is not None:
+            filters.append(f"tc.table_catalog = {_sql_literal(catalog)}")
+        if schema is not None:
+            filters.append(f"tc.table_schema = {_sql_literal(schema)}")
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        query = (
+            "SELECT "
+            "tc.table_catalog, "
+            "tc.table_schema, "
+            "tc.table_name, "
+            "tc.constraint_name, "
+            "tc.constraint_type, "
+            "kcu.column_name, "
+            "kcu.ordinal_position "
+            "FROM information_schema.table_constraints tc "
+            "LEFT JOIN information_schema.key_column_usage kcu "
+            "ON tc.constraint_name = kcu.constraint_name "
+            "AND tc.table_catalog = kcu.table_catalog "
+            "AND tc.table_schema = kcu.table_schema "
+            "AND tc.table_name = kcu.table_name "
+            f"{where_clause} "
+            "ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position"
+        )
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def tables_snapshot(self) -> list[dict[str, object]]:
         """Return table inventory rows from information_schema.
@@ -145,7 +275,7 @@ class SchemaIntrospector:
             "SELECT table_catalog, table_schema, table_name, table_type "
             "FROM information_schema.tables"
         )
-        return _rows_for_query(self.ctx, query)
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def tables_snapshot_table(self) -> pa.Table:
         """Return table inventory rows as a pyarrow.Table.
@@ -159,22 +289,7 @@ class SchemaIntrospector:
             "SELECT table_catalog, table_schema, table_name, table_type "
             "FROM information_schema.tables"
         )
-        return self.ctx.sql(query).to_arrow_table()
-
-    def table_names_snapshot(self) -> set[str]:
-        """Return registered table names from information_schema.
-
-        Returns
-        -------
-        set[str]
-            Set of table names registered in the session.
-        """
-        names: set[str] = set()
-        for row in self.tables_snapshot():
-            value = row.get("table_name")
-            if value is not None:
-                names.add(str(value))
-        return names
+        return _table_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def catalogs_snapshot(self) -> list[dict[str, object]]:
         """Return catalog inventory rows from information_schema.
@@ -185,7 +300,7 @@ class SchemaIntrospector:
             Catalog inventory rows.
         """
         query = "SELECT DISTINCT catalog_name FROM information_schema.schemata"
-        return _rows_for_query(self.ctx, query)
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def schemata_snapshot(self) -> list[dict[str, object]]:
         """Return schema inventory rows from information_schema.
@@ -196,7 +311,7 @@ class SchemaIntrospector:
             Schema inventory rows including catalog and schema names.
         """
         query = "SELECT catalog_name, schema_name FROM information_schema.schemata"
-        return _rows_for_query(self.ctx, query)
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def columns_snapshot(self) -> list[dict[str, object]]:
         """Return all column metadata rows from information_schema.
@@ -211,18 +326,18 @@ class SchemaIntrospector:
             "is_nullable, column_default "
             "FROM information_schema.columns"
         )
-        return _rows_for_query(self.ctx, query)
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
-    def schema_map(self) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
+    def schema_map(self) -> dict[str, dict[str, str]]:
         """Return a SQLGlot schema mapping derived from information_schema.
 
         Returns
         -------
-        dict[str, dict[str, dict[str, dict[str, str]]]]
-            Mapping of catalog -> schema -> table -> column/type mappings.
+        dict[str, dict[str, str]]
+            Mapping of fully qualified table name to column/type mappings.
         """
         rows = self.columns_snapshot()
-        mapping: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
+        mapping: dict[str, dict[str, str]] = {}
         for row in rows:
             catalog = row.get("table_catalog")
             schema = row.get("table_schema")
@@ -235,9 +350,10 @@ class SchemaIntrospector:
                 continue
             catalog_name = str(catalog) if catalog is not None else "datafusion"
             schema_name = str(schema) if schema is not None else "public"
-            mapping.setdefault(catalog_name, {}).setdefault(schema_name, {}).setdefault(table, {})[
-                column
-            ] = str(dtype) if dtype is not None else "unknown"
+            table_key = f"{catalog_name}.{schema_name}.{table}"
+            mapping.setdefault(table_key, {})[column] = (
+                str(dtype) if dtype is not None else "unknown"
+            )
         return mapping
 
     def schema_map_fingerprint(self) -> str:
@@ -262,7 +378,7 @@ class SchemaIntrospector:
             "SELECT routine_catalog, routine_schema, routine_name, routine_type "
             "FROM information_schema.routines"
         )
-        return _rows_for_query(self.ctx, query)
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def parameters_snapshot(self) -> list[dict[str, object]]:
         """Return routine parameter rows from information_schema.
@@ -277,7 +393,7 @@ class SchemaIntrospector:
             "data_type, ordinal_position "
             "FROM information_schema.parameters"
         )
-        return _rows_for_query(self.ctx, query)
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def function_catalog_snapshot(
         self, *, include_parameters: bool = False
@@ -334,18 +450,7 @@ class SchemaIntrospector:
             Session settings rows with name/value pairs.
         """
         query = "SELECT name, value FROM information_schema.df_settings"
-        return _rows_for_query(self.ctx, query)
-
-    def settings_snapshot_table(self) -> pa.Table:
-        """Return session settings as a pyarrow.Table.
-
-        Returns
-        -------
-        pyarrow.Table
-            Table of settings from information_schema.df_settings.
-        """
-        query = "SELECT name, value FROM information_schema.df_settings"
-        return self.ctx.sql(query).to_arrow_table()
+        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def table_column_defaults(self, table_name: str) -> dict[str, object]:
         """Return column default metadata for a table when available.
@@ -412,7 +517,12 @@ class SchemaIntrospector:
             CREATE TABLE statement when available.
         """
         try:
-            rows = _rows_for_query(self.ctx, f"SHOW CREATE TABLE {table_name}")
+            sql_options = self.sql_options or _statement_sql_options()
+            rows = _rows_for_query(
+                self.ctx,
+                f"SHOW CREATE TABLE {table_name}",
+                sql_options=sql_options,
+            )
         except (RuntimeError, TypeError, ValueError):
             return table_definition_override(self.ctx, name=table_name)
         if not rows:
@@ -440,7 +550,8 @@ class SchemaIntrospector:
                 self.ctx,
                 "SELECT constraint_name, constraint_type, constraint_definition "
                 "FROM information_schema.table_constraints "
-                f"WHERE table_name = '{table_name}'",
+                f"WHERE table_name = {_sql_literal(table_name)}",
+                sql_options=self.sql_options,
             )
         except (RuntimeError, TypeError, ValueError):
             return ()
@@ -455,7 +566,7 @@ class SchemaIntrospector:
         return tuple(constraints)
 
 
-def schema_map_fingerprint_from_mapping(mapping: Mapping[object, object]) -> str:
+def schema_map_fingerprint_from_mapping(mapping: SchemaMapping) -> str:
     """Return a stable fingerprint for a schema mapping.
 
     Returns
@@ -463,77 +574,40 @@ def schema_map_fingerprint_from_mapping(mapping: Mapping[object, object]) -> str
     str
         SHA-256 fingerprint for the schema mapping payload.
     """
-    normalized = _normalize_schema_map(mapping)
+    flat = _flatten_schema_mapping(mapping)
     entries: list[dict[str, object]] = []
-    for catalog_name, schemas in sorted(normalized.items(), key=lambda item: item[0]):
-        for schema_name, tables in sorted(schemas.items(), key=lambda item: item[0]):
-            for table_name, columns in sorted(tables.items(), key=lambda item: item[0]):
-                column_entries = [
-                    {"name": name, "dtype": dtype}
-                    for name, dtype in sorted(columns.items(), key=lambda item: item[0])
-                ]
-                entries.append(
-                    {
-                        "table": f"{catalog_name}.{schema_name}.{table_name}",
-                        "columns": column_entries,
-                    }
-                )
+    for table_name, columns in sorted(flat.items(), key=lambda item: item[0]):
+        column_entries = [
+            {"name": name, "dtype": dtype}
+            for name, dtype in sorted(columns.items(), key=lambda item: item[0])
+        ]
+        entries.append({"table": table_name, "columns": column_entries})
     payload = {"version": SCHEMA_MAP_HASH_VERSION, "entries": entries}
     return payload_hash(payload, _SCHEMA_MAP_HASH_SCHEMA)
 
 
-def _normalize_schema_map(
-    mapping: Mapping[object, object],
-) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
-    normalized: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
+def _is_leaf_schema_node(node: SchemaMappingNode) -> bool:
+    return all(not isinstance(value, Mapping) for value in node.values())
 
-    def _is_column_map(value: Mapping[object, object]) -> bool:
-        return all(not isinstance(item, Mapping) for item in value.values())
 
-    def _store_table(
-        *,
-        catalog: str,
-        schema: str,
-        table: str,
-        columns: Mapping[object, object],
-    ) -> None:
-        column_map = {str(name): str(dtype) for name, dtype in columns.items()}
-        normalized.setdefault(catalog, {}).setdefault(schema, {})[table] = column_map
+def _flatten_schema_mapping(mapping: SchemaMapping) -> dict[str, dict[str, str]]:
+    flat: dict[str, dict[str, str]] = {}
+
+    def _visit(node: SchemaMappingNode, path: list[str]) -> None:
+        if _is_leaf_schema_node(node):
+            table_key = ".".join(path)
+            flat[table_key] = {str(key): str(value) for key, value in node.items()}
+            return
+        for key, value in node.items():
+            if not isinstance(value, Mapping):
+                continue
+            _visit(value, [*path, str(key)])
 
     for key, value in mapping.items():
         if not isinstance(value, Mapping):
             continue
-        if _is_column_map(value):
-            _store_table(
-                catalog="datafusion",
-                schema="public",
-                table=str(key),
-                columns=value,
-            )
-            continue
-        for table_key, table_value in value.items():
-            if not isinstance(table_value, Mapping):
-                continue
-            if _is_column_map(table_value):
-                _store_table(
-                    catalog="datafusion",
-                    schema=str(key),
-                    table=str(table_key),
-                    columns=table_value,
-                )
-                continue
-            for column_key, column_value in table_value.items():
-                if not isinstance(column_value, Mapping):
-                    continue
-                if not _is_column_map(column_value):
-                    continue
-                _store_table(
-                    catalog=str(key),
-                    schema=str(table_key),
-                    table=str(column_key),
-                    columns=column_value,
-                )
-    return normalized
+        _visit(value, [str(key)])
+    return flat
 
 
 def find_struct_field_keys(

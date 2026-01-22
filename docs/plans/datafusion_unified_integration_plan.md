@@ -29,7 +29,7 @@ Phase 5: Legacy cleanup + tests (Legacy decommission list).
 Objective: enable DataFusion auto-loading and treat information_schema as the canonical
 introspection layer for schema, columns, and routines.
 
-Status: [~] Mostly complete (some bespoke info_schema queries remain).
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -74,11 +74,11 @@ Target files
 
 Implementation checklist
 - [x] Add runtime profile settings for catalog autoload and information_schema.
-- [~] Centralize info_schema query helpers and remove bespoke introspection SQL.
+- [x] Centralize info_schema query helpers and remove bespoke introspection SQL.
 - [x] Persist info_schema snapshots to diagnostics for schema drift visibility.
-- [~] Validate expected schema against info_schema for all registered inputs.
+- [x] Validate expected schema against info_schema for all registered inputs.
 - [x] Capture info_schema settings snapshots (`df_settings`) and DataFusion version.
-- [~] Expose routines/parameters inventory for function allowlisting and UDF validation.
+- [x] Expose routines/parameters inventory for function allowlisting and UDF validation.
 - [x] Emit schema_map fingerprints derived from info_schema for compiler gating.
 
 ## Scope 2: Schema DDL via SQLGlot with full DataFusion DDL surface
@@ -142,7 +142,7 @@ Implementation checklist
 Objective: make Ibis IR the only relational builder and DataFusion the only executor,
 with no SQL fallback paths.
 
-Status: [~] Partially complete (rule-template ergonomics and remaining raw SQL usage pending).
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -191,15 +191,15 @@ Implementation checklist
 - [x] Standardize `ibis.param` + `params=` for dynamic rulepack runs.
 - [x] Use `Table.cache()` for shared intermediates with explicit lifecycle control.
 - [x] Remove SQLGlot/Ibis fallback execution branches.
-- [ ] Adopt deferred (`ibis._`) and selector-based rule templates for wide schemas.
+- [x] Adopt deferred (`ibis._`) and selector-based rule templates for wide schemas.
 - [x] Gate rulepack operations with `backend.has_operation` checks.
-- [ ] Replace any remaining raw SQL usage with `Backend.sql` + explicit schemas.
+- [x] Replace any remaining raw SQL usage with `Backend.sql` + explicit schemas.
 
 ## Scope 4: SQLGlot compiler policy hardening
 Objective: enforce schema-aware qualification, stable AST fingerprints, and
 deterministic SQL shape for caching and diffing.
 
-Status: [~] Partially complete (plan-hash gating and required-column artifacts remain).
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -249,17 +249,17 @@ Implementation checklist
 - [x] Build schema maps from info_schema for qualification and type inference.
 - [x] Enforce `qualify_outputs` and `validate_qualify_columns` for all compiled SQL.
 - [x] Persist canonical AST fingerprints and policy snapshots per rule output.
-- [~] Gate incremental rebuilds on semantic diffs and plan hashes.
+- [x] Gate incremental rebuilds on semantic diffs and plan hashes.
 - [x] Normalize identifiers with stored originals for deterministic cache keys.
 - [x] Run type annotation + canonicalization before plan hashing.
 - [x] Apply CNF predicate normalization with distance guardrails.
-- [~] Push down projections/predicates and record required-column artifacts.
+- [x] Push down projections/predicates and record required-column artifacts.
 
 ## Scope 5: Delta Lake + DataFusion provider unification
 Objective: register Delta tables as DataFusion providers (no Arrow dataset fallback)
 and standardize read/write policy alignment.
 
-Status: [~] Partially complete (scan-option wiring and case-sensitivity gating remain).
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -296,18 +296,18 @@ Target files
 
 Implementation checklist
 - [x] Require TableProvider registration for Delta (no dataset fallback).
-- [~] Thread storage options and scan policies through registry/location config.
-- [~] Use DataFusion `INSERT`/`COPY` for append/overwrite and delta-rs for merge/update.
-- [~] Add CDF as a first-class table provider for incremental pipelines.
-- [ ] Map Delta scan knobs (file column, schema override, view types) into registration options.
-- [ ] Enforce case-sensitive identifier toggle in runtime profile with diagnostics snapshots.
-- [ ] Use DataFusion plan outputs + `write_deltalake` for provider writes when insert is unsupported.
+- [x] Thread storage options and scan policies through registry/location config.
+- [x] Use DataFusion `INSERT`/`COPY` for append/overwrite and delta-rs for merge/update.
+- [x] Add CDF as a first-class table provider for incremental pipelines.
+- [x] Map Delta scan knobs (file column, schema override, view types) into registration options.
+- [x] Enforce case-sensitive identifier toggle in runtime profile with diagnostics snapshots.
+- [x] Use DataFusion plan outputs + `write_deltalake` for provider writes when insert is unsupported.
 
 ## Scope 6: Nested schema shaping via DataFusion functions
 Objective: rely on DataFusion built-ins for struct/map/union shaping and Arrow
 metadata inspection so nested outputs are schema-correct without custom logic.
 
-Status: [~] Partially complete (datafusion-native shaping in query fragments done).
+Status: [x] Complete.
 
 Code patterns
 ```sql
@@ -342,8 +342,8 @@ Target files
 - `src/cpg/prop_transforms.py`
 
 Implementation checklist
-- [~] Replace bespoke nested-type projection logic with DataFusion functions.
-- [ ] Validate nested types via `arrow_typeof` and `arrow_metadata` in diagnostics.
+- [x] Replace bespoke nested-type projection logic with DataFusion functions.
+- [x] Validate nested types via `arrow_typeof` and `arrow_metadata` in diagnostics.
 - [x] Standardize struct/map expansion with `unnest` and `get_field`.
 - [x] Use `map_entries`/`map_extract` to normalize attribute bags for analytics.
 - [x] Handle union types with `union_tag`/`union_extract` when present.
@@ -416,7 +416,7 @@ Implementation checklist
 Objective: remove implicit function fallbacks and gate supported functions against
 DataFusion/Ibis inventory.
 
-Status: [~] Partially complete (allowlist artifacts and validation wiring pending).
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -443,8 +443,8 @@ Target files
 Implementation checklist
 - [x] Remove `getattr(ibis, ...)` fallback resolution.
 - [x] Register builtin DataFusion UDFs via `@ibis.udf.scalar.builtin`.
-- [~] Validate rulepack function usage against info_schema routines/parameters.
-- [ ] Publish allowlist inventories as diagnostics artifacts.
+- [x] Validate rulepack function usage against info_schema routines/parameters.
+- [x] Publish allowlist inventories as diagnostics artifacts.
 
 ## Legacy decommission list (post-migration)
 Remove these once the above scopes are complete and tests pass.
@@ -454,7 +454,7 @@ Remove these once the above scopes are complete and tests pass.
   - [x] `src/datafusion_engine/compile_options.py` (fallback policy structures)
   - [x] `src/obs/diagnostics_tables.py` (`datafusion_fallbacks_table`)
   - [x] `src/hamilton_pipeline/modules/outputs.py` (fallback notes export)
-- [~] Ibis fallback execution and SQLGlot bridge fallbacks:
+- [x] Ibis fallback execution and SQLGlot bridge fallbacks:
   - [x] `src/ibis_engine/runner.py` (fallback branches)
   - [x] `src/ibis_engine/execution.py` (`allow_fallback` plumbing)
   - [x] `src/relspec/graph.py` (fallback plan paths)
@@ -473,22 +473,22 @@ Remove these once the above scopes are complete and tests pass.
   - [x] `src/relspec/cpg/build_edges.py`
   - [x] `src/relspec/cpg/build_nodes.py`
   - [x] `src/relspec/cpg/build_props.py`
-- [ ] Implicit Ibis function fallback resolution:
-  - [ ] `src/ibis_engine/expr_compiler.py` (`getattr(ibis, ...)` fallback)
-- [ ] Delta CDF Arrow materialization fallbacks:
-  - [ ] `src/datafusion_engine/registry_bridge.py` (fallback to `read_delta_cdf`)
-  - [ ] `src/storage/deltalake/delta.py` (`read_delta_cdf`)
-  - [ ] `src/storage/io.py` (re-export)
-  - [ ] `src/storage/__init__.py` (re-export)
-- [ ] Direct delta-rs reads used for incremental snapshots:
-  - [ ] `src/incremental/scip_snapshot.py`
-  - [ ] `src/incremental/snapshot.py`
-  - [ ] `src/incremental/invalidations.py`
-- [ ] Bespoke nested-shaping helpers superseded by DataFusion functions:
-  - [ ] `src/arrowdsl/schema/schema.py`
-  - [ ] `src/arrowdsl/spec/codec.py`
-  - [ ] `src/datafusion_engine/query_fragments.py`
-- [ ] Tests/docs that assume fallback execution:
+- [x] Implicit Ibis function fallback resolution:
+  - [x] `src/ibis_engine/expr_compiler.py` (`getattr(ibis, ...)` fallback)
+- [x] Delta CDF Arrow materialization fallbacks:
+  - [x] `src/datafusion_engine/registry_bridge.py` (fallback to `read_delta_cdf`)
+  - [x] `src/storage/deltalake/delta.py` (`read_delta_cdf`)
+  - [x] `src/storage/io.py` (re-export)
+  - [x] `src/storage/__init__.py` (re-export)
+- [x] Direct delta-rs reads used for incremental snapshots:
+  - [x] `src/incremental/scip_snapshot.py`
+  - [x] `src/incremental/snapshot.py`
+  - [x] `src/incremental/invalidations.py`
+- [x] Bespoke nested-shaping helpers superseded by DataFusion functions:
+  - [x] `src/arrowdsl/schema/schema.py`
+  - [x] `src/arrowdsl/spec/codec.py`
+  - [x] `src/datafusion_engine/query_fragments.py`
+- [x] Tests/docs that assume fallback execution:
   - [x] `tests/integration/test_datafusion_fallbacks.py`
 
 ## Quality gates

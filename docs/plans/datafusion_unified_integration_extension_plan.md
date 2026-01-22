@@ -104,7 +104,7 @@ Implementation checklist
 Objective: generate deterministic DDL using SQLGlot ASTs and normalize with the
 SQLGlot policy pipeline.
 
-Status: Partial (AST in place for CREATE TABLE/VIEW; external DDL still string-built).
+Status: Completed.
 
 Code patterns
 ```python
@@ -141,15 +141,15 @@ Target files
 Implementation checklist
 - [x] Replace string-built DDL with SQLGlot ASTs for CREATE TABLE/VIEW.
 - [x] Include `PRIMARY KEY` constraints in column defs.
-- [ ] Include `NOT NULL` and `DEFAULT` constraints in column defs where configured.
-- [ ] Emit `PARTITIONED BY`, `WITH ORDER`, and `UNBOUNDED` via AST properties.
+- [x] Include `NOT NULL` and `DEFAULT` constraints in column defs where configured.
+- [x] Emit `PARTITIONED BY`, `WITH ORDER`, and `UNBOUNDED` via AST properties.
 - [x] Normalize all DDL through `normalize_ddl_sql` before registration.
 
 ## Scope 4: information_schema-derived schema maps for SQLGlot qualification
 Objective: use `information_schema` to build catalog-aware schema maps for
 qualification, type inference, and canonicalization.
 
-Status: Partial (schema map + fingerprints recorded; diagnostics tables pending).
+Status: Completed.
 
 Code patterns
 ```python
@@ -177,7 +177,7 @@ Implementation checklist
 - [x] Pass the mapping into SQLGlot qualification and type annotation phases.
 - [x] Enforce `qualify_outputs` and `validate_qualify_columns` in normalization.
 - [x] Persist schema-map fingerprints in manifest artifacts.
-- [ ] Emit schema-map fingerprints in diagnostics tables for drift detection.
+- [x] Emit schema-map fingerprints in diagnostics tables for drift detection.
 
 ## Scope 5: SQL ingestion policy lane (strict parse + normalize before Ibis)
 Objective: normalize SQL inputs through SQLGlot policy before Ibis parsing and
@@ -220,7 +220,7 @@ Implementation checklist
 Objective: remove implicit fallbacks to `ibis.*` and only allow explicitly
 registered functions and built-in UDF mappings.
 
-Status: Partial (fallback removed; allowlist wiring + diagnostics pending).
+Status: Completed.
 
 Code patterns
 ```python
@@ -244,15 +244,15 @@ Target files
 Implementation checklist
 - [x] Remove `getattr(ibis, name)` fallback resolution.
 - [x] Register builtin DataFusion UDFs via `@ibis.udf.scalar.builtin`.
-- [ ] Require `backend.has_operation` checks for rulepack-only ops.
-- [ ] Document allowed function inventory in diagnostics.
-- [ ] Gate rulepack functions against `information_schema.routines` + `parameters`.
+- [x] Require `backend.has_operation` checks for rulepack-only ops.
+- [x] Document allowed function inventory in diagnostics.
+- [x] Gate rulepack functions against `information_schema.routines` + `parameters`.
 
 ## Scope 7: Diagnostics + artifacts alignment (policy snapshots, info_schema)
 Objective: record schema, policy, and AST fingerprints for deterministic
 incremental rebuilds and debugging.
 
-Status: Partial (schema/policy snapshots recorded; diagnostics drift pending).
+Status: Partial (schema/policy snapshots recorded; per-rule AST hashes pending).
 
 Code patterns
 ```python
@@ -270,7 +270,7 @@ Implementation checklist
 - [x] Persist SQLGlot policy snapshots in runtime + ingest artifacts.
 - [x] Persist `information_schema` snapshots (schema map + function catalog) in manifest artifacts.
 - [ ] Persist per-rule AST hashes alongside diff scripts.
-- [ ] Add diagnostics for schema-map and DDL fingerprints.
+- [x] Add diagnostics for schema-map and DDL fingerprints.
 
 ## Scope 8: DataFusion UDF expansion (UDAF/UDWF/UDTF) + built-in substitution
 Objective: replace bespoke Arrow/Python aggregations and nested builders with
@@ -355,7 +355,7 @@ Implementation checklist
 ## Scope 9: Ibis advanced IR patterns (unpack/selectors/to_parquet_dir)
 Objective: reduce bespoke transforms by adopting Ibis high-level operators.
 
-Status: Partial (AST payloads + diff scripts captured; schema mapping gates pending).
+Status: Remaining.
 
 Code patterns
 ```python
@@ -398,7 +398,7 @@ Implementation checklist
 Objective: persist canonical AST payloads, diff scripts, and schema-aware
 fingerprints for deterministic caching and replay.
 
-Status: Remaining.
+Status: Partial (AST payloads + diff scripts captured; schema mapping gates pending).
 
 Code patterns
 ```python
@@ -428,7 +428,7 @@ Implementation checklist
 Objective: standardize output writes on DataFusion-native DML/DDL surfaces and
 provider-native writes.
 
-Status: Partial (catalog snapshots captured; allowlist enforcement pending).
+Status: Remaining.
 
 Code patterns
 ```python
@@ -460,7 +460,7 @@ Implementation checklist
 Objective: align rulepack function usage with DataFusion’s runtime catalog
 (`SHOW FUNCTIONS` + `information_schema` routines/parameters).
 
-Status: Remaining.
+Status: Partial (allowlist enforcement + diagnostics emitted; signature validation pending).
 
 Code patterns
 ```python
@@ -479,8 +479,8 @@ Target files
 Implementation checklist
 - [x] Persist function catalog snapshots from information_schema routines/parameters.
 - [ ] Join routines + parameters for full signature validation.
-- [ ] Gate rulepack functions against the runtime allowlist.
-- [ ] Emit allowlist inventories as diagnostics artifacts.
+- [x] Gate rulepack functions against the runtime allowlist.
+- [x] Emit allowlist inventories as diagnostics artifacts.
 
 ## Legacy decommission list (post-migration)
 Remove these once the above scopes are complete and tests pass.
@@ -503,7 +503,7 @@ Remove these once the above scopes are complete and tests pass.
   - `src/incremental/invalidations.py`
   - `src/incremental/fingerprint_changes.py`
 - [ ] Bespoke nested builders superseded by DataFusion functions/UDFs:
-  - `src/arrowdsl/schema/nested_builders.py` (list/struct accumulators) ✅
+  - `src/arrowdsl/schema/nested_builders.py` (list/struct accumulators) (done)
   - `src/arrowdsl/spec/codec.py` (nested encode/decode helpers)
   - `src/arrowdsl/schema/schema.py` (custom nested projection helpers)
 - [x] Bespoke Arrow compute paths replaced by DataFusion built-ins:

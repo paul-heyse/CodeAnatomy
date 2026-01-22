@@ -9,7 +9,12 @@ import pyarrow as pa
 import pyarrow.types as patypes
 from datafusion import SessionContext
 
-from arrowdsl.core.interop import DataTypeLike, TableLike, coerce_table_like
+from arrowdsl.core.interop import (
+    DataTypeLike,
+    RecordBatchReaderLike,
+    TableLike,
+    coerce_table_like,
+)
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_DICTIONARY_INDEX_TYPE = pa.int32()
@@ -113,9 +118,11 @@ def _datafusion_context() -> SessionContext:
 
 def _ensure_table(value: TableLike) -> pa.Table:
     resolved = coerce_table_like(value)
-    if isinstance(resolved, pa.RecordBatchReader):
+    if isinstance(resolved, RecordBatchReaderLike):
         return pa.Table.from_batches(list(resolved))
-    return resolved if isinstance(resolved, pa.Table) else pa.table(resolved)
+    if isinstance(resolved, pa.Table):
+        return resolved
+    return pa.table(resolved.to_pydict())
 
 
 def _sql_identifier(name: str) -> str:
@@ -126,7 +133,7 @@ def _sql_identifier(name: str) -> str:
 def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     temp_name = f"_dtype_{uuid.uuid4().hex}"
     table = pa.table({"value": pa.array([None], type=dtype)})
-    ctx.register_record_batches(temp_name, [table.to_batches()])
+    ctx.register_record_batches(temp_name, [list(table.to_batches())])
     try:
         result = ctx.sql(f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}").to_arrow_table()
         value = result["dtype"][0].as_py()

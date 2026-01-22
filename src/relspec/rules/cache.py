@@ -197,6 +197,26 @@ def rule_plan_sql_cached(domain: RuleDomain | None = None) -> dict[str, str]:
 
 
 @cache
+def rule_plan_hashes_cached(domain: RuleDomain | None = None) -> dict[str, str]:
+    """Return plan hashes for rule definitions.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of rule names to plan hashes.
+    """
+    diagnostics = rule_diagnostics_cached(domain)
+    plan_hashes: dict[str, str] = {}
+    for diag in diagnostics:
+        if diag.rule_name is None:
+            continue
+        plan_hash = diag.metadata.get("plan_hash")
+        if plan_hash and diag.rule_name not in plan_hashes:
+            plan_hashes[diag.rule_name] = str(plan_hash)
+    return plan_hashes
+
+
+@cache
 def rule_graph_signature_cached(domain: RuleDomain | None = None) -> str:
     """Return a stable graph signature for rules, optionally filtered by domain.
 
@@ -226,6 +246,7 @@ __all__ = [
     "rule_diagnostics_cached",
     "rule_diagnostics_table_cached",
     "rule_graph_signature_cached",
+    "rule_plan_hashes_cached",
     "rule_plan_signatures_cached",
     "rule_plan_sql_cached",
     "rule_registry_cached",

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
 import ibis
@@ -36,8 +38,11 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.runner import async_stream_plan
 from ibis_engine.sources import (
     DatabaseHint,
+    SourceToIbisOptions,
+    namespace_recorder_from_ctx,
     record_namespace_action,
     resolve_database_hint,
+    source_to_ibis,
 )
 from sqlglot_tools.bridge import IbisCompilerBackend
 from storage.deltalake import (
@@ -123,6 +128,16 @@ class IbisNamedDatasetWriteOptions:
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     storage_options: StorageOptions | None = None
+
+
+@dataclass(frozen=True)
+class IbisParquetWriteOptions:
+    """Options for writing Ibis expressions to parquet directories."""
+
+    execution: IbisExecutionContext
+    overwrite: bool = True
+    partition_by: Sequence[str] | None = None
+    dataset_options: Mapping[str, object] | None = None
 
 
 def ibis_plan_to_reader(
@@ -540,6 +555,90 @@ def _datafusion_df_for_write(
     return df, temp_name
 
 
+def _prepare_parquet_dir(path: Path, *, overwrite: bool) -> None:
+    if overwrite and path.exists():
+        shutil.rmtree(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _coerce_parquet_table(
+    value: IbisWriteInput,
+    *,
+    options: IbisParquetWriteOptions,
+    name: str | None,
+) -> IbisTable:
+    backend = options.execution.ibis_backend
+    if backend is None:
+        msg = "Parquet exports require an Ibis backend."
+        raise ValueError(msg)
+    if isinstance(value, PlanProduct):
+        value = value.materialize_table()
+    if isinstance(value, IbisPlan):
+        return value.expr
+    if isinstance(value, IbisTable):
+        return value
+    plan = source_to_ibis(
+        value,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=name,
+            namespace_recorder=namespace_recorder_from_ctx(options.execution.ctx),
+        ),
+    )
+    return plan.expr
+
+
+def write_ibis_dataset_parquet(
+    data: IbisWriteInput,
+    base_dir: PathLike,
+    *,
+    options: IbisParquetWriteOptions,
+) -> str:
+    """Write an Ibis dataset as a parquet directory.
+
+    Returns
+    -------
+    str
+        Path to the parquet dataset directory.
+    """
+    table = _coerce_parquet_table(data, options=options, name=None)
+    path = Path(base_dir)
+    _prepare_parquet_dir(path, overwrite=options.overwrite)
+    dataset_options = dict(options.dataset_options) if options.dataset_options is not None else {}
+    if options.partition_by is not None:
+        dataset_options.setdefault("partition_by", list(options.partition_by))
+    table.to_parquet_dir(
+        str(path),
+        params=options.execution.params,
+        **dataset_options,
+    )
+    return str(path)
+
+
+def write_ibis_named_datasets_parquet(
+    datasets: Mapping[str, IbisWriteInput],
+    base_dir: PathLike,
+    *,
+    options: IbisParquetWriteOptions,
+) -> dict[str, str]:
+    """Write a mapping of datasets to parquet directories.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of dataset names to parquet directory paths.
+    """
+    results: dict[str, str] = {}
+    for name, value in datasets.items():
+        path = Path(base_dir) / name
+        results[name] = write_ibis_dataset_parquet(
+            value,
+            path,
+            options=options,
+        )
+    return results
+
+
 def _deregister_table(ctx: SessionContext, *, name: str) -> None:
     deregister = getattr(ctx, "deregister_table", None)
     if callable(deregister):
@@ -552,11 +651,14 @@ __all__ = [
     "IbisDatasetWriteOptions",
     "IbisMaterializeOptions",
     "IbisNamedDatasetWriteOptions",
+    "IbisParquetWriteOptions",
     "IbisWriteInput",
     "ibis_plan_to_reader",
     "ibis_table_to_reader",
     "ibis_to_table",
     "materialize_table",
     "write_ibis_dataset_delta",
+    "write_ibis_dataset_parquet",
     "write_ibis_named_datasets_delta",
+    "write_ibis_named_datasets_parquet",
 ]

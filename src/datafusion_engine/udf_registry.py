@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from itertools import repeat
 from typing import TYPE_CHECKING, Literal, Protocol, cast
@@ -32,6 +32,7 @@ else:
 
 
 from arrowdsl.core.array_iter import iter_array_values
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike
 from datafusion_engine.hash_utils import hash64_from_text, hash128_from_text
 
 _KERNEL_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
@@ -260,9 +261,10 @@ class _ListUniqueAccumulator(Accumulator):
 
     def update(self, *values: object) -> None:
         """Update the accumulator with a batch of values."""
-        if not values or not isinstance(values[0], (pa.Array, pa.ChunkedArray)):
+        if not values or not isinstance(values[0], (ArrayLike, ChunkedArrayLike)):
             return
-        for value in iter_array_values(values[0]):
+        array = values[0]
+        for value in iter_array_values(array):
             if value is None:
                 continue
             text = str(value)
@@ -278,8 +280,8 @@ class _ListUniqueAccumulator(Accumulator):
         for entry in iter_array_values(states[0]):
             if entry is None:
                 continue
-            if isinstance(entry, pa.Array):
-                entry_values: Iterable[object] = iter_array_values(entry)
+            if isinstance(entry, (ArrayLike, ChunkedArrayLike)):
+                entry_values = iter_array_values(entry)
             elif isinstance(entry, (list, tuple)):
                 entry_values = entry
             else:
@@ -292,24 +294,55 @@ class _ListUniqueAccumulator(Accumulator):
                 self._values.append(text)
 
     def state(self) -> list[pa.Scalar]:
-        """Return the intermediate state for this accumulator."""
+        """Return the intermediate state for this accumulator.
+
+        Returns
+        -------
+        list[pyarrow.Scalar]
+            Scalar list with current accumulator values.
+        """
         return [pa.scalar(self._values, type=pa.list_(pa.string()))]
 
     def evaluate(self) -> pa.Scalar:
-        """Return the final aggregated list."""
+        """Return the final aggregated list.
+
+        Returns
+        -------
+        pyarrow.Scalar
+            Scalar list containing the aggregated values.
+        """
         return pa.scalar(self._values, type=pa.list_(pa.string()))
 
 
 class _RowIndexEvaluator(WindowEvaluator):
     """Window evaluator that returns 1-based row indices."""
 
-    def evaluate_all(self, values: list[pa.Array], num_rows: int) -> pa.Array:
-        """Return 1-based indices for every row in the partition."""
+    @staticmethod
+    def evaluate_all(values: list[pa.Array], num_rows: int) -> pa.Array:
+        """Return 1-based indices for every row in the partition.
+
+        Returns
+        -------
+        pyarrow.Array
+            1-based row indices for the window partition.
+        """
+        _ = values
         return pa.array(range(1, num_rows + 1), type=pa.int64())
 
 
 def _literal_int(expr: object, *, label: str) -> int:
-    """Return a literal integer value from a DataFusion expression."""
+    """Return a literal integer value from a DataFusion expression.
+
+    Raises
+    ------
+    TypeError
+        Raised when the expression does not resolve to an integer.
+
+    Returns
+    -------
+    int
+        Literal integer value.
+    """
     to_python = getattr(expr, "python_value", None)
     value = to_python() if callable(to_python) else expr
     if isinstance(value, bool) or not isinstance(value, int):
@@ -318,9 +351,23 @@ def _literal_int(expr: object, *, label: str) -> int:
     return value
 
 
+RANGE_TABLE_ARG_COUNT: int = 2
+
+
 def _range_table_udtf(*values: object) -> Table:
-    """Return a table of integer values between start and end."""
-    if len(values) != 2:
+    """Return a table of integer values between start and end.
+
+    Raises
+    ------
+    ValueError
+        Raised when the UDTF receives an unexpected number of arguments.
+
+    Returns
+    -------
+    datafusion.Table
+        Table of integer values between start and end.
+    """
+    if len(values) != RANGE_TABLE_ARG_COUNT:
         msg = "range_table expects exactly two literal arguments."
         raise ValueError(msg)
     start_value = _literal_int(values[0], label="start")

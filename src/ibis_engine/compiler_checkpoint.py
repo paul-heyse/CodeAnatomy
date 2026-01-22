@@ -54,9 +54,7 @@ def compile_checkpoint(
         Checkpoint with normalized AST and plan hash.
     """
     compiled = ibis_to_sqlglot(expr, backend=backend, params=None)
-    schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
-    if schema is None:
-        schema = _schema_map_from_backend(backend)
+    schema = schema_map or _schema_map_from_backend(backend)
     schema_map_hash = schema_map_fingerprint_from_mapping(schema) if schema is not None else None
     policy = default_sqlglot_policy()
     if dialect:

@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import uuid4
 
+import pyarrow as pa
 from datafusion import SessionContext
 
-import arrowdsl.core.interop as pa
+import arrowdsl.core.interop as arrow_pa
 from arrowdsl.core.array_iter import iter_array_values, iter_arrays, iter_table_rows
 from datafusion_engine.hash_utils import (
     hash64_from_text as _hash64_from_text,
@@ -22,7 +23,7 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile
 type MissingPolicy = Literal["raise", "null"]
 
 
-type ArrayOrScalar = pa.ArrayLike | pa.ChunkedArrayLike | pa.ScalarLike
+type ArrayOrScalar = arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike | arrow_pa.ScalarLike
 
 
 _NULL_SEPARATOR = "\x1f"
@@ -35,7 +36,7 @@ def _datafusion_context() -> SessionContext:
 
 def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
     name = f"_{prefix}_{uuid4().hex}"
-    ctx.register_record_batches(name, [table.to_batches()])
+    ctx.register_record_batches(name, [list(table.to_batches())])
     return name
 
 
@@ -105,12 +106,12 @@ def _prefixed_hash_expression(
     return f"concat_ws(':', {_sql_literal(prefix)}, CAST({hash_expr} AS STRING))"
 
 
-def _ensure_table(value: pa.TableLike) -> pa.Table:
-    if isinstance(value, pa.RecordBatchReaderLike):
+def _ensure_table(value: arrow_pa.TableLike) -> pa.Table:
+    if isinstance(value, arrow_pa.RecordBatchReaderLike):
         return pa.Table.from_batches(list(value))
     if isinstance(value, pa.Table):
         return value
-    return pa.Table.from_pydict(dict(value))
+    return pa.Table.from_pydict(value.to_pydict())
 
 
 def hash64_from_text(value: str | None) -> int | None:
@@ -173,12 +174,12 @@ def _hash128_from_parts(
 
 
 def _hash_from_arrays(
-    arrays: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
+    arrays: Sequence[arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike],
     *,
     prefix: str | None,
     null_sentinel: str,
     use_128: bool,
-) -> pa.ArrayLike:
+) -> arrow_pa.ArrayLike:
     if not arrays:
         msg = "hash_from_arrays requires at least one input array."
         raise ValueError(msg)
@@ -202,11 +203,11 @@ def _hash_from_arrays(
 
 
 def hash64_from_arrays(
-    arrays: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
+    arrays: Sequence[arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike],
     *,
     prefix: str | None = None,
     null_sentinel: str = "None",
-) -> pa.ArrayLike:
+) -> arrow_pa.ArrayLike:
     """Compute a hash64 from multiple arrays using a stable separator.
 
     Parameters
@@ -240,12 +241,12 @@ def hash64_from_arrays(
 
 
 def prefixed_hash_id(
-    arrays: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
+    arrays: Sequence[arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike],
     *,
     prefix: str,
     null_sentinel: str = "None",
     use_128: bool = True,
-) -> pa.ArrayLike:
+) -> arrow_pa.ArrayLike:
     """Return a prefixed string ID from hashed array inputs.
 
     Parameters
@@ -292,12 +293,12 @@ def prefixed_hash_id(
 
 
 def _arrays_from_columns(
-    table: pa.TableLike,
+    table: arrow_pa.TableLike,
     *,
     cols: Sequence[str],
     missing: MissingPolicy,
-) -> list[pa.ArrayLike]:
-    arrays: list[pa.ArrayLike] = []
+) -> list[arrow_pa.ArrayLike]:
+    arrays: list[arrow_pa.ArrayLike] = []
     for col in cols:
         if col in table.column_names:
             arrays.append(table[col])
@@ -311,13 +312,13 @@ def _arrays_from_columns(
 
 
 def hash64_from_columns(
-    table: pa.TableLike,
+    table: arrow_pa.TableLike,
     *,
     cols: Sequence[str],
     prefix: str | None = None,
     null_sentinel: str = "None",
     missing: MissingPolicy = "raise",
-) -> pa.ArrayLike:
+) -> arrow_pa.ArrayLike:
     """Compute a hash64 array from table columns.
 
     Parameters
@@ -364,10 +365,10 @@ def hash64_from_columns(
 
 def masked_prefixed_hash(
     prefix: str,
-    arrays: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
+    arrays: Sequence[arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike],
     *,
-    required: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
-) -> pa.ArrayLike | pa.ChunkedArrayLike:
+    required: Sequence[arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike],
+) -> arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike:
     """Return prefixed hash IDs masked by required validity arrays.
 
     Returns
@@ -384,7 +385,7 @@ def masked_prefixed_hash(
         msg = "masked_prefixed_hash requires at least one input array."
         raise ValueError(msg)
     ctx = _datafusion_context()
-    columns: dict[str, pa.ArrayLike | pa.ChunkedArrayLike] = {
+    columns: dict[str, arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike] = {
         f"col_{idx}": value for idx, value in enumerate(arrays)
     }
     required_names: list[str] = []
@@ -422,8 +423,8 @@ def masked_prefixed_hash(
 
 def prefixed_hash64(
     prefix: str,
-    arrays: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
-) -> pa.ArrayLike | pa.ChunkedArrayLike:
+    arrays: Sequence[arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike],
+) -> arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike:
     """Return prefixed hash IDs for the provided arrays.
 
     Returns
@@ -481,7 +482,10 @@ class SpanIdSpec:
     out_col: str = "span_id"
 
 
-def add_span_id_column(table: pa.TableLike, spec: SpanIdSpec | None = None) -> pa.TableLike:
+def add_span_id_column(
+    table: arrow_pa.TableLike,
+    spec: SpanIdSpec | None = None,
+) -> arrow_pa.TableLike:
     """Add a span_id column computed with DataFusion hash UDFs.
 
     Returns
@@ -508,8 +512,7 @@ def add_span_id_column(table: pa.TableLike, spec: SpanIdSpec | None = None) -> p
         mask_expr = " AND ".join(f"{_sql_identifier(col)} IS NOT NULL" for col in columns)
         span_expr = f"CASE WHEN {mask_expr} THEN {hash_expr} ELSE NULL END"
         sql = (
-            f"SELECT *, {span_expr} AS {_sql_identifier(spec.out_col)} "
-            f"FROM {_sql_identifier(name)}"
+            f"SELECT *, {span_expr} AS {_sql_identifier(spec.out_col)} FROM {_sql_identifier(name)}"
         )
         result = ctx.sql(sql).to_arrow_table()
     finally:

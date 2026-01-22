@@ -117,12 +117,12 @@ def _delta_cdf_table(
     start_version: int,
     end_version: int,
     runtime_profile: DataFusionRuntimeProfile | None,
-) -> pa.Table | None:
+) -> tuple[SessionContext, str] | None:
     profile = runtime_profile or DataFusionRuntimeProfile()
     ctx = profile.session_context()
     name = f"__delta_cdf_{uuid.uuid4().hex}"
     try:
-        df = register_delta_cdf_df(
+        register_delta_cdf_df(
             ctx,
             name=name,
             path=str(path),
@@ -135,11 +135,11 @@ def _delta_cdf_table(
                 runtime_profile=profile,
             ),
         )
-        return df.to_arrow_table()
     except (RuntimeError, TypeError, ValueError):
-        return None
-    finally:
         _deregister_table(ctx, name)
+        return None
+    else:
+        return ctx, name
 
 
 @tag(layer="incremental", kind="object")
@@ -559,14 +559,23 @@ def incremental_diff(
     if prev is not None and prev_version is not None and write_result.version is not None:
         start_version = prev_version + 1
         if start_version <= write_result.version:
-            cdf_table = _delta_cdf_table(
+            cdf_ref = _delta_cdf_table(
                 path=snapshot_path,
                 start_version=start_version,
                 end_version=write_result.version,
                 runtime_profile=ctx.runtime.datafusion if ctx is not None else None,
             )
-            if cdf_table is not None:
-                diff = diff_snapshots_with_cdf(prev, incremental_repo_snapshot, cdf_table)
+            if cdf_ref is not None:
+                cdf_ctx, cdf_name = cdf_ref
+                try:
+                    diff = diff_snapshots_with_cdf(
+                        prev,
+                        incremental_repo_snapshot,
+                        ctx=cdf_ctx,
+                        cdf_table=cdf_name,
+                    )
+                finally:
+                    _deregister_table(cdf_ctx, cdf_name)
     write_incremental_diff(incremental_state_store, diff)
     return diff
 

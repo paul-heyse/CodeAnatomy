@@ -25,7 +25,7 @@ def _session_context() -> SessionContext:
 
 def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
     name = f"__diff_{prefix}_{uuid.uuid4().hex}"
-    ctx.register_record_batches(name, table.to_batches())
+    ctx.register_record_batches(name, [list(table.to_batches())])
     return name
 
 
@@ -106,7 +106,9 @@ def diff_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
 def diff_snapshots_with_cdf(
     prev: pa.Table | None,
     cur: pa.Table,
-    cdf: pa.Table,
+    *,
+    ctx: SessionContext,
+    cdf_table: str,
 ) -> pa.Table:
     """Diff snapshots using CDF to limit the compared rows.
 
@@ -115,16 +117,14 @@ def diff_snapshots_with_cdf(
     pa.Table
         Change records derived from the filtered snapshot diff.
     """
-    ctx = _session_context()
     cur_name = _register_table(ctx, cur, prefix="cur")
-    cdf_name = _register_table(ctx, cdf, prefix="cdf")
     prev_name: str | None = None
     try:
         if prev is None:
             sql = (
                 "WITH cur AS ("
                 f"SELECT * FROM {cur_name} "
-                f"WHERE file_id IN (SELECT DISTINCT file_id FROM {cdf_name})"
+                f"WHERE file_id IN (SELECT DISTINCT file_id FROM {cdf_table})"
                 ") " + _added_sql("cur")
             )
             return ctx.sql(sql).to_arrow_table()
@@ -132,17 +132,16 @@ def diff_snapshots_with_cdf(
         sql = (
             "WITH cur AS ("
             f"SELECT * FROM {cur_name} "
-            f"WHERE file_id IN (SELECT DISTINCT file_id FROM {cdf_name})"
+            f"WHERE file_id IN (SELECT DISTINCT file_id FROM {cdf_table})"
             "), prev AS ("
             f"SELECT * FROM {prev_name} "
-            f"WHERE file_id IN (SELECT DISTINCT file_id FROM {cdf_name})"
+            f"WHERE file_id IN (SELECT DISTINCT file_id FROM {cdf_table})"
             ") " + _diff_sql("cur", "prev")
         )
         return ctx.sql(sql).to_arrow_table()
     finally:
         _deregister_table(ctx, cur_name)
         _deregister_table(ctx, prev_name)
-        _deregister_table(ctx, cdf_name)
 
 
 def write_incremental_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:

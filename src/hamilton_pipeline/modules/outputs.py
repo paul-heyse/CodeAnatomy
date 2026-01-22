@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -38,7 +39,7 @@ from datafusion_engine.runtime import (
     dataset_spec_from_context,
     read_delta_table_from_path,
 )
-from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.schema_introspection import SCHEMA_MAP_HASH_VERSION, SchemaIntrospector
 from datafusion_engine.schema_registry import is_nested_dataset
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
@@ -59,7 +60,9 @@ from hamilton_pipeline.pipeline_types import (
 from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.io_bridge import (
     IbisNamedDatasetWriteOptions,
+    IbisParquetWriteOptions,
     write_ibis_named_datasets_delta,
+    write_ibis_named_datasets_parquet,
 )
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.params_bridge import IbisParamRegistry, ScalarParamSpec
@@ -77,7 +80,9 @@ from normalize.runner import NormalizeRuleCompilation
 from normalize.utils import encoding_policy_from_schema
 from obs.diagnostics import DiagnosticsCollector
 from obs.diagnostics_tables import (
+    datafusion_ddl_fingerprints_table,
     datafusion_explains_table,
+    datafusion_schema_map_fingerprints_table,
     datafusion_schema_registry_validation_table,
     feature_state_table,
 )
@@ -99,11 +104,18 @@ from relspec.registry import (
     DatasetLocation,
     build_relspec_snapshot,
 )
+from relspec.rules.cache import rule_definitions_cached
+from relspec.rules.coverage import collect_rule_demands
 from relspec.rules.diagnostics import rule_diagnostics_from_table
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.spec_tables import rule_definitions_from_table
 from relspec.runtime import RelspecRuntime
-from schema_spec.system import DatasetSpec, dataset_spec_from_schema, make_dataset_spec
+from schema_spec.system import (
+    DatasetSpec,
+    dataset_spec_from_schema,
+    ddl_fingerprint_from_definition,
+    make_dataset_spec,
+)
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 from storage.dataset_sources import (
     DatasetDiscoveryOptions,
@@ -789,6 +801,68 @@ def _datafusion_schema_registry_validation(
     if not entries:
         return None
     return datafusion_schema_registry_validation_table(entries)
+
+
+def _datafusion_schema_map_fingerprints(
+    ctx: ExecutionContext,
+) -> pa.Table | None:
+    runtime = ctx.runtime.datafusion
+    if runtime is None or not runtime.enable_information_schema:
+        return None
+    introspector = SchemaIntrospector(runtime.session_context())
+    try:
+        schema_map = introspector.schema_map()
+        schema_map_hash = introspector.schema_map_fingerprint()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    payload = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "schema_map_hash": schema_map_hash,
+        "schema_map_version": SCHEMA_MAP_HASH_VERSION,
+        "table_count": len(schema_map),
+        "column_count": sum(len(columns) for columns in schema_map.values()),
+    }
+    return datafusion_schema_map_fingerprints_table([payload])
+
+
+def _datafusion_ddl_fingerprints(ctx: ExecutionContext) -> pa.Table | None:
+    runtime = ctx.runtime.datafusion
+    if runtime is None or not runtime.enable_information_schema:
+        return None
+    introspector = SchemaIntrospector(runtime.session_context())
+    try:
+        tables = introspector.tables_snapshot()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    now = int(time.time() * 1000)
+    rows: list[dict[str, object]] = []
+    for row in tables:
+        schema = row.get("table_schema")
+        if schema is not None and str(schema) == "information_schema":
+            continue
+        table_name = row.get("table_name")
+        if not isinstance(table_name, str) or not table_name:
+            continue
+        catalog_name = row.get("table_catalog")
+        table_schema = str(schema) if schema is not None else runtime.default_schema
+        table_catalog = str(catalog_name) if catalog_name is not None else runtime.default_catalog
+        table_type = row.get("table_type")
+        table_ref = f"{table_schema}.{table_name}" if table_schema else table_name
+        ddl = introspector.table_definition(table_ref)
+        ddl_fingerprint = ddl_fingerprint_from_definition(ddl) if ddl is not None else None
+        rows.append(
+            {
+                "event_time_unix_ms": now,
+                "table_catalog": table_catalog,
+                "table_schema": table_schema,
+                "table_name": table_name,
+                "table_type": str(table_type) if table_type is not None else None,
+                "ddl_fingerprint": ddl_fingerprint,
+            }
+        )
+    if not rows:
+        return None
+    return datafusion_ddl_fingerprints_table(rows)
 
 
 def _datafusion_table_providers(
@@ -1484,6 +1558,28 @@ def _build_normalized_inputs_write_context(
     )
 
 
+def _write_parquet_exports(
+    datasets: Mapping[str, TableLike | RecordBatchReaderLike | IbisPlan],
+    out_dir: Path,
+    *,
+    options: NormalizedInputsWriteOptions,
+) -> None:
+    """Optionally export datasets as parquet directories."""
+    if not options.output_config.output_storage_policy.allow_parquet_exports:
+        return
+    execution = options.ibis_execution
+    if execution is None or execution.ibis_backend is None:
+        return
+    write_ibis_named_datasets_parquet(
+        datasets,
+        out_dir / "parquet_exports",
+        options=IbisParquetWriteOptions(
+            execution=execution,
+            overwrite=options.output_config.overwrite_intermediate_datasets,
+        ),
+    )
+
+
 def _write_normalized_inputs(
     input_datasets: Mapping[str, TableLike | RecordBatchReaderLike | IbisPlan],
     out_dir: Path,
@@ -1497,7 +1593,7 @@ def _write_normalized_inputs(
     )
     storage_options = options.output_config.delta_storage_options
     if any(isinstance(table, IbisPlan) for table in input_datasets.values()):
-        return write_ibis_named_datasets_delta(
+        results = write_ibis_named_datasets_delta(
             input_datasets,
             str(out_dir),
             options=IbisNamedDatasetWriteOptions(
@@ -1510,6 +1606,8 @@ def _write_normalized_inputs(
                 storage_options=storage_options,
             ),
         )
+        _write_parquet_exports(input_datasets, out_dir, options=options)
+        return results
     converted: dict[str, TableLike | RecordBatchReaderLike] = {}
     for name, table in input_datasets.items():
         if isinstance(table, IbisPlan):
@@ -1527,6 +1625,7 @@ def _write_normalized_inputs(
     if options.reporter is not None:
         for result in results.values():
             options.reporter(result)
+    _write_parquet_exports(converted, out_dir, options=options)
     return results
 
 
@@ -2961,6 +3060,8 @@ def _manifest_notes(
     notes.update(_runtime_telemetry_notes(manifest_inputs))
     notes.update(_datafusion_notes(ctx))
     notes.update(_rule_plan_hash_notes(manifest_inputs))
+    notes.update(_datafusion_required_columns_notes(manifest_inputs, ctx))
+    notes.update(_datafusion_function_allowlist_notes(ctx))
     if manifest_inputs.materialization_reports:
         notes["materialization_reports"] = manifest_inputs.materialization_reports
     return notes
@@ -2976,6 +3077,93 @@ def _rule_plan_hash_notes(manifest_inputs: ManifestInputs) -> JsonDict:
         if plan_hash:
             hashes[diagnostic.rule_name] = plan_hash
     return {"rule_plan_hashes": hashes} if hashes else {}
+
+
+def _datafusion_required_columns_notes(
+    manifest_inputs: ManifestInputs,
+    ctx: ExecutionContext,
+) -> JsonDict:
+    runtime = ctx.runtime.datafusion
+    if runtime is None or runtime.diagnostics_sink is None:
+        return {}
+    diagnostics = manifest_inputs.relspec_snapshots.registry_snapshot.rule_diagnostics
+    entries = _required_columns_entries(diagnostics)
+    if not entries:
+        return {}
+    payload = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "entries": entries,
+    }
+    runtime.diagnostics_sink.record_artifact("relspec_required_columns_v1", payload)
+    return {}
+
+
+def _required_columns_entries(rule_diagnostics: pa.Table) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    for diagnostic in rule_diagnostics_from_table(rule_diagnostics):
+        if diagnostic.rule_name is None:
+            continue
+        for key, value in diagnostic.metadata.items():
+            if not key.startswith("required_columns:"):
+                continue
+            table_name = key.split(":", maxsplit=1)[1]
+            columns = tuple(col for col in value.split(",") if col)
+            if not columns:
+                continue
+            entry_key = (diagnostic.rule_name, table_name, columns)
+            if entry_key in seen:
+                continue
+            seen.add(entry_key)
+            entries.append(
+                {
+                    "rule_name": diagnostic.rule_name,
+                    "table_name": table_name,
+                    "columns": list(columns),
+                }
+            )
+    entries.sort(key=lambda entry: (str(entry["rule_name"]), str(entry["table_name"])))
+    return entries
+
+
+def _datafusion_function_allowlist_notes(ctx: ExecutionContext) -> JsonDict:
+    runtime = ctx.runtime.datafusion
+    if runtime is None or not runtime.enable_information_schema:
+        return {}
+    try:
+        available = SchemaIntrospector(runtime.session_context()).function_names()
+    except (RuntimeError, TypeError, ValueError):
+        return {}
+    demands = collect_rule_demands(rule_definitions_cached(), include_extract_queries=True)
+    registry = default_function_registry()
+    required: dict[str, set[str]] = {}
+    for mapping in (demands.expr_calls, demands.aggregate_funcs):
+        for name, rules in mapping.items():
+            spec = registry.specs.get(name)
+            engine_name = spec.engine_name if spec is not None else name
+            required.setdefault(engine_name, set()).update(rules)
+    if not required:
+        return {}
+    available_lower = {name.lower() for name in available}
+    missing_by_function = {
+        name: sorted(rules)
+        for name, rules in required.items()
+        if name.lower() not in available_lower
+    }
+    payload: dict[str, object] = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "required_functions": sorted(required),
+        "missing_functions": sorted(missing_by_function),
+        "missing_by_function": missing_by_function or None,
+    }
+    sink = runtime.diagnostics_sink
+    if sink is not None:
+        sink.record_artifact("datafusion_function_allowlist_v1", payload)
+    if not missing_by_function:
+        return {}
+    return {
+        "datafusion_function_allowlist_missing": sorted(missing_by_function),
+    }
 
 
 def _normalize_notes(
@@ -3438,6 +3626,8 @@ class _RunBundleDatafusionArtifacts:
     delta_tables: Sequence[Mapping[str, object]] | None
     udf_registry: Sequence[Mapping[str, object]] | None
     schema_registry_validation: pa.Table | None
+    schema_map_fingerprints: pa.Table | None
+    ddl_fingerprints: pa.Table | None
     table_providers: Sequence[Mapping[str, object]] | None
     function_catalog: Sequence[Mapping[str, object]] | None
     function_catalog_hash: str | None
@@ -3480,6 +3670,8 @@ def _run_bundle_datafusion_artifacts(
             delta_tables=None,
             udf_registry=None,
             schema_registry_validation=None,
+            schema_map_fingerprints=None,
+            ddl_fingerprints=None,
             table_providers=None,
             function_catalog=None,
             function_catalog_hash=None,
@@ -3514,6 +3706,8 @@ def _run_bundle_datafusion_artifacts(
         delta_tables=_datafusion_delta_tables(ctx),
         udf_registry=_datafusion_udf_registry(ctx),
         schema_registry_validation=_datafusion_schema_registry_validation(ctx),
+        schema_map_fingerprints=_datafusion_schema_map_fingerprints(ctx),
+        ddl_fingerprints=_datafusion_ddl_fingerprints(ctx),
         table_providers=_datafusion_table_providers(ctx),
         function_catalog=function_catalog,
         function_catalog_hash=function_catalog_hash,
@@ -3613,6 +3807,8 @@ def run_bundle_context(
         delta_maintenance_reports=delta_maintenance_reports,
         datafusion_udf_registry=datafusion_artifacts.udf_registry,
         datafusion_schema_registry_validation=datafusion_artifacts.schema_registry_validation,
+        datafusion_schema_map_fingerprints=datafusion_artifacts.schema_map_fingerprints,
+        datafusion_ddl_fingerprints=datafusion_artifacts.ddl_fingerprints,
         datafusion_table_providers=datafusion_artifacts.table_providers,
         datafusion_function_catalog=datafusion_artifacts.function_catalog,
         datafusion_function_catalog_hash=datafusion_artifacts.function_catalog_hash,

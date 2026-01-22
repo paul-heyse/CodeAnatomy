@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from incremental.changes import file_changes_from_diff
     from incremental.deltas import compute_changed_exports
-    from incremental.diff import diff_snapshots, write_incremental_diff
+    from incremental.diff import (
+        diff_snapshots_with_cdf,
+        diff_snapshots_with_delta_cdf,
+        write_incremental_diff,
+    )
     from incremental.edges_update import upsert_cpg_edges
     from incremental.exports import build_exported_defs_index
     from incremental.exports_update import upsert_exported_defs
@@ -86,7 +90,8 @@ __all__ = [
     "compute_changed_exports",
     "diff_invalidation_snapshots",
     "diff_scip_snapshots",
-    "diff_snapshots",
+    "diff_snapshots_with_cdf",
+    "diff_snapshots_with_delta_cdf",
     "file_changes_from_diff",
     "impacted_callers_from_changed_exports",
     "impacted_file_ids",
@@ -145,7 +150,8 @@ _LAZY_IMPORTS: dict[str, str] = {
     "compute_changed_exports": "incremental.deltas",
     "diff_invalidation_snapshots": "incremental.invalidations",
     "diff_scip_snapshots": "incremental.scip_snapshot",
-    "diff_snapshots": "incremental.diff",
+    "diff_snapshots_with_cdf": "incremental.diff",
+    "diff_snapshots_with_delta_cdf": "incremental.diff",
     "file_changes_from_diff": "incremental.changes",
     "impacted_callers_from_changed_exports": "incremental.impact",
     "impacted_file_ids": "incremental.relspec_update",

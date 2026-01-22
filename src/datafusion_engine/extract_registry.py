@@ -24,6 +24,7 @@ from datafusion_engine.extract_metadata import (
     extract_metadata_specs,
 )
 from datafusion_engine.extract_templates import config as extractor_config
+from datafusion_engine.runtime import sql_options_for_profile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from extract.evidence_specs import evidence_metadata_spec as extract_evidence_metadata_spec
 from ibis_engine.query_compiler import IbisQuerySpec
@@ -280,7 +281,7 @@ def validate_registry(*, repo_id: str | None = None) -> None:
         Raised when extract datasets are missing from information_schema views.
     """
     ctx = _resolve_session_context(None)
-    introspector = SchemaIntrospector(ctx)
+    introspector = SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None))
     tables = {
         row["table_name"]
         for row in introspector.tables_snapshot()

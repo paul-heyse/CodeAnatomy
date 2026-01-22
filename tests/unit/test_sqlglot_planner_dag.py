@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from sqlglot import parse_one
 from sqlglot.optimizer.canonicalize import canonicalize
 
+from sqlglot_tools.compat import parse_one
 from sqlglot_tools.optimizer import planner_dag_snapshot, register_datafusion_dialect
 
 

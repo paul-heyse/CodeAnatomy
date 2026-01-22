@@ -27,15 +27,25 @@ from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec, apply_encoding
 from arrowdsl.schema.normalize import NormalizePolicy
-from datafusion_engine.runtime import align_table_to_schema as datafusion_align_table_to_schema
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 
 
-def _cast_expr(
-    expr: ComputeExpression, dtype: DataTypeLike, *, safe: bool = True
-) -> ComputeExpression:
-    return ensure_expression(pc.cast(expr, dtype, safe=safe))
+def _datafusion_align_table_to_schema(
+    table: TableLike,
+    *,
+    schema: SchemaLike,
+    keep_extra_columns: bool = False,
+) -> pa.Table:
+    """Deferred import wrapper for datafusion_engine.runtime.align_table_to_schema.
+
+    Returns
+    -------
+        Aligned PyArrow table.
+    """
+    from datafusion_engine.runtime import align_table_to_schema
+
+    return align_table_to_schema(table, schema=schema, keep_extra_columns=keep_extra_columns)
 
 
 def _or_exprs(exprs: Sequence[ComputeExpression]) -> ComputeExpression:
@@ -159,7 +169,7 @@ def align_to_schema(
         if name in input_cols
         and resolved_table.schema.field(name).type != resolved_schema.field(name).type
     ]
-    aligned = datafusion_align_table_to_schema(
+    aligned = _datafusion_align_table_to_schema(
         resolved_table,
         schema=resolved_schema,
         keep_extra_columns=keep_extra_columns,
@@ -525,59 +535,6 @@ def encode_expression(column: str) -> ComputeExpression:
     return ensure_expression(encoded)
 
 
-def projection_for_schema(
-    schema: SchemaLike,
-    *,
-    available: Sequence[str] | None = None,
-    safe_cast: bool = True,
-) -> tuple[list[ComputeExpression], list[str]]:
-    """Return projection expressions to align with a schema.
-
-    Returns
-    -------
-    tuple[list[ComputeExpression], list[str]]
-        Expressions and names aligned to the schema.
-    """
-    available_set = set(available or schema.names)
-    expressions: list[ComputeExpression] = []
-    names: list[str] = []
-    for schema_field in schema:
-        if patypes.is_list_view(schema_field.type) or patypes.is_large_list_view(schema_field.type):
-            if schema_field.name in available_set:
-                expr = ensure_expression(pc.field(schema_field.name))
-            else:
-                expr = ensure_expression(pc.scalar(pa.scalar(None, type=schema_field.type)))
-        elif schema_field.name in available_set:
-            expr = _cast_expr(pc.field(schema_field.name), schema_field.type, safe=safe_cast)
-        else:
-            expr = _cast_expr(pc.scalar(None), schema_field.type, safe=safe_cast)
-        expressions.append(ensure_expression(expr))
-        names.append(schema_field.name)
-    return expressions, names
-
-
-def encoding_projection(
-    columns: Sequence[str],
-    *,
-    available: Sequence[str],
-) -> tuple[list[ComputeExpression], list[str]]:
-    """Return projection expressions to apply dictionary encoding.
-
-    Returns
-    -------
-    tuple[list[ComputeExpression], list[str]]
-        Expressions and column names for encoding projection.
-    """
-    encode_set = set(columns)
-    expressions: list[ComputeExpression] = []
-    names: list[str] = []
-    for name in available:
-        expr = encode_expression(name) if name in encode_set else pc.field(name)
-        expressions.append(expr)
-        names.append(name)
-    return expressions, names
-
-
 def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
     """Return columns marked for dictionary encoding via field metadata.
 
@@ -790,10 +747,8 @@ __all__ = [
     "encode_expression",
     "encode_table",
     "encoding_columns_from_metadata",
-    "encoding_projection",
     "extension_types_from_schema",
     "missing_key_fields",
-    "projection_for_schema",
     "register_extension_types",
     "register_schema_extensions",
     "required_field_names",

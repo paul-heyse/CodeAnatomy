@@ -128,5 +128,15 @@ class StateStore:
         """
         return self.metadata_dir() / "scip_index_fingerprint.txt"
 
+    def cdf_cursors_path(self) -> Path:
+        """Return the directory for CDF cursors.
+
+        Returns
+        -------
+        Path
+            CDF cursors directory path.
+        """
+        return self.metadata_dir() / "cdf_cursors"
+
 
 __all__ = ["StateStore"]

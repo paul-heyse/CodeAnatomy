@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import RuntimeProfile
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.plan_policy import ExecutionSurfacePolicy
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import IbisDatasetRegistry
 from obs.diagnostics import DiagnosticsCollector
 

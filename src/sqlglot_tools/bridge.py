@@ -6,11 +6,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-import sqlglot
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value
-from sqlglot import Expression
 
+from sqlglot_tools.compat import Expression, diff
 from sqlglot_tools.lineage import (
     referenced_columns,
     referenced_identifiers,
@@ -184,7 +183,7 @@ def _sql_text(expr: Expression, *, dialect: str) -> str:
 
 def _ast_diff_summary(left: Expression, right: Expression) -> dict[str, int]:
     summary: dict[str, int] = {}
-    for op in sqlglot.diff(left, right):
+    for op in diff(left, right):
         key = op.__class__.__name__.lower()
         summary[key] = summary.get(key, 0) + 1
     return summary

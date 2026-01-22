@@ -91,6 +91,31 @@ class RulePrimitive:
 
 
 @dataclass(frozen=True)
+class UdafSpecInput:
+    """Inputs needed to build a UDAF rule primitive."""
+
+    name: str
+    accumulator_class: type
+    input_types: tuple[pa.DataType, ...]
+    return_type: pa.DataType
+    state_type: pa.DataType | None = None
+    volatility: UdfVolatility = "stable"
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class UdwfSpecInput:
+    """Inputs needed to build a UDWF rule primitive."""
+
+    name: str
+    evaluator_class: type
+    input_types: tuple[pa.DataType, ...]
+    return_type: pa.DataType
+    volatility: UdfVolatility = "stable"
+    description: str | None = None
+
+
+@dataclass(frozen=True)
 class FunctionFactoryPolicy:
     """Policy options for FunctionFactory registration."""
 
@@ -270,12 +295,78 @@ def function_factory_payloads(
     return resolved.to_payload()
 
 
+def create_udaf_spec(spec: UdafSpecInput) -> RulePrimitive:
+    """Create a rule primitive specification for a UDAF (User-Defined Aggregate Function).
+
+    This helper function creates a standardized RulePrimitive for aggregate functions
+    that can be registered in the FunctionFactory policy.
+
+    Parameters
+    ----------
+    spec:
+        UDAF specification input describing the aggregate function.
+
+    Returns
+    -------
+    RulePrimitive
+        Rule primitive specification for the UDAF.
+    """
+    _ = spec.accumulator_class, spec.state_type  # Reserved for future metadata extraction
+    params = tuple(
+        FunctionParameter(name=f"arg{i}", dtype=str(dtype))
+        for i, dtype in enumerate(spec.input_types)
+    )
+    return RulePrimitive(
+        name=spec.name,
+        params=params,
+        return_type=str(spec.return_type),
+        volatility=spec.volatility,
+        description=spec.description or f"User-defined aggregate function: {spec.name}",
+        supports_named_args=True,
+    )
+
+
+def create_udwf_spec(spec: UdwfSpecInput) -> RulePrimitive:
+    """Create a rule primitive specification for a UDWF (User-Defined Window Function).
+
+    This helper function creates a standardized RulePrimitive for window functions
+    that can be registered in the FunctionFactory policy.
+
+    Parameters
+    ----------
+    spec:
+        UDWF specification input describing the window function.
+
+    Returns
+    -------
+    RulePrimitive
+        Rule primitive specification for the UDWF.
+    """
+    _ = spec.evaluator_class  # Reserved for future metadata extraction
+    params = tuple(
+        FunctionParameter(name=f"arg{i}", dtype=str(dtype))
+        for i, dtype in enumerate(spec.input_types)
+    )
+    return RulePrimitive(
+        name=spec.name,
+        params=params,
+        return_type=str(spec.return_type),
+        volatility=spec.volatility,
+        description=spec.description or f"User-defined window function: {spec.name}",
+        supports_named_args=True,
+    )
+
+
 __all__ = [
     "DEFAULT_RULE_PRIMITIVES",
     "FunctionFactoryPolicy",
     "FunctionParameter",
     "RulePrimitive",
+    "UdafSpecInput",
     "UdfVolatility",
+    "UdwfSpecInput",
+    "create_udaf_spec",
+    "create_udwf_spec",
     "default_function_factory_policy",
     "function_factory_payloads",
     "install_function_factory",

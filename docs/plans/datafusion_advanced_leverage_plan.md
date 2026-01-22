@@ -34,7 +34,7 @@ Phase 5: Param-table replacement + cleanup (Scope 5 + legacy list).
 Objective: replace bespoke relationship and constraint validation with information_schema
 tables for PK/FK/unique checks and runtime drift detection.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -66,16 +66,18 @@ Target files
 - `src/obs/diagnostics_tables.py`
 
 Implementation checklist
-- [ ] Add constraint inventory query helpers for PK/unique/FK.
-- [ ] Replace bespoke constraint validation with information_schema-based checks.
-- [ ] Emit constraint drift diagnostics when registered schema deviates.
-- [ ] Gate relationship specs against constraints (no duplicate logic in Python).
+- [x] Add constraint inventory query helpers for PK/unique/FK.
+- [x] Validate key fields against information_schema constraints during registration.
+- [x] Include constraint rows in schema snapshot artifacts.
+- [x] Replace bespoke constraint validation with information_schema-based checks.
+- [x] Emit constraint drift diagnostics when registered schema deviates.
+- [x] Gate relationship specs against constraints (no duplicate logic in Python).
 
 ## Scope 2: Lazy views and Table wrappers as the default registry type
 Objective: keep DataFusion plans lazy; register views instead of materialized Arrow tables
 whenever possible, and use `datafusion.catalog.Table` as the universal registry handle.
 
-Status: [ ] Remaining.
+Status: [~] Partially complete.
 
 Code patterns
 ```python
@@ -98,14 +100,16 @@ Target files
 
 Implementation checklist
 - [ ] Convert registry registration to `register_view`/`into_view` for plan outputs.
-- [ ] Stop calling `to_arrow_table` for registry flows outside diagnostics.
-- [ ] Store `Table` wrappers in catalog providers instead of raw datasets.
+- [x] Register fragment + nested schema views via DataFrame builders (`into_view`).
+- [x] Register symtable-derived CPG views via DataFrame builders (no SQL DDL).
+- [x] Stop calling `to_arrow_table` for registry flows outside diagnostics.
+- [x] Store `Table` wrappers in catalog providers instead of raw datasets.
 
 ## Scope 3: Expr-first templates (replace SQL fragment strings)
 Objective: replace raw SQL fragments with DataFusion Expr and DataFrame APIs so
 fragment construction is schema-aware and compiler-validated.
 
-Status: [ ] Remaining.
+Status: [~] Partially complete.
 
 Code patterns
 ```python
@@ -126,12 +130,15 @@ Implementation checklist
 - [ ] Replace SQL fragment generators with Expr/DataFrame transformations.
 - [ ] Route any remaining raw SQL through `parse_sql_expr`.
 - [ ] Delete fragment-to-string paths once all consumers use Expr templates.
+- [x] Register fragment ViewSpecs via DataFrame builders (SQLGlot → DataFrame).
+- [x] Add CTE + UNNEST handling in the DataFrame translator to support fragment builders.
+- [x] Replace symtable SQL view generation with DataFrame builders.
 
 ## Scope 4: Streaming-first outputs (Arrow C Stream and partitioned streams)
 Objective: standardize output surfaces on streaming RecordBatch readers and Arrow
 C Stream exports; minimize full materialization in hot paths.
 
-Status: [ ] Remaining.
+Status: [~] Partially complete.
 
 Code patterns
 ```python
@@ -150,6 +157,7 @@ Target files
 - `src/arrowdsl/core/interop.py`
 
 Implementation checklist
+- [x] Provide streaming reader helpers (datafusion_to_reader, df_to_reader) and prefer_reader outputs.
 - [ ] Treat `execute_stream_partitioned` as the default for large outputs.
 - [ ] Avoid `to_arrow_table` in non-diagnostic code paths.
 - [ ] Route large output writes from readers rather than tables.
@@ -191,7 +199,7 @@ Implementation checklist
 Objective: persist logical, optimized, physical, and explain artifacts for every
 plan build to enable reproducibility and performance diffs.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -213,15 +221,15 @@ Target files
 - `src/datafusion_engine/runtime.py`
 
 Implementation checklist
-- [ ] Capture logical/optimized/physical plan text for each rule output.
-- [ ] Enable `EXPLAIN ANALYZE` with profile-configured analyze level.
-- [ ] Persist plan artifacts alongside schema and runtime snapshots.
+- [x] Capture logical/optimized/physical plan text for each rule output.
+- [x] Enable `EXPLAIN ANALYZE` with profile-configured analyze level.
+- [x] Persist plan artifacts alongside schema and runtime snapshots.
 
 ## Scope 7: Substrait + unparser artifacts for portability
 Objective: store Substrait bytes and unparsed SQL for deterministic diffing and
 cross-engine replay.
 
-Status: [ ] Remaining.
+Status: [~] Partially complete.
 
 Code patterns
 ```python
@@ -242,15 +250,15 @@ Target files
 - `src/obs/repro.py`
 
 Implementation checklist
-- [ ] Store Substrait bytes for each plan build and attach to artifacts.
-- [ ] Store unparsed SQL for human-readable review diffs.
+- [x] Store Substrait bytes for each plan build and attach to artifacts.
+- [x] Store unparsed SQL for human-readable review diffs.
 - [ ] Gate cache keys on Substrait fingerprints + runtime profile.
 
 ## Scope 8: Output parallelism + parquet writer knobs in runtime profiles
 Objective: surface write-time performance knobs in runtime profiles and apply
 them consistently for COPY/INSERT/Parquet writes.
 
-Status: [ ] Remaining.
+Status: [~] Partially complete.
 
 Code patterns
 ```python
@@ -269,14 +277,14 @@ Target files
 
 Implementation checklist
 - [ ] Add output parallelism keys to runtime profile serialization.
-- [ ] Apply parquet writer options via `write_parquet_with_options`.
-- [ ] Record write options in diagnostics artifacts.
+- [x] Apply parquet writer options via `write_parquet_with_options`.
+- [x] Record write options in diagnostics artifacts.
 
 ## Scope 9: Join/partition shaping and optimizer alignment
 Objective: make partitioning explicit for join-heavy kernels and expose knobs
 for dynamic filter pushdown and repartition behavior.
 
-Status: [ ] Remaining.
+Status: [~] Partially complete.
 
 Code patterns
 ```python
@@ -292,13 +300,13 @@ Target files
 Implementation checklist
 - [ ] Add repartition shaping where joins are hot and stable keys exist.
 - [ ] Expose round-robin repartition and perfect-hash join knobs in profiles.
-- [ ] Record optimizer settings in diagnostics snapshots.
+- [x] Record optimizer settings in diagnostics snapshots.
 
 ## Scope 10: SQL safety gating for all execution surfaces
 Objective: enforce `SQLOptions` for all SQL entry points and remove implicit
 unsafe execution paths.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -314,16 +322,19 @@ Target files
 - `src/datafusion_engine/schema_introspection.py`
 
 Implementation checklist
-- [ ] Replace `ctx.sql` with `ctx.sql_with_options` everywhere.
-- [ ] Centralize SQL option policy in runtime profile configuration.
-- [ ] Reject unsafe SQL categories for untrusted inputs.
+- [x] Apply `sql_with_options` for runtime diagnostics and plan artifact queries.
+- [x] Enforce `sql_with_options` in schema introspection helpers.
+- [x] Use SQL policy helpers derived from the runtime profile.
+- [x] Expand `sql_with_options` usage beyond runtime (schema registry, validation, registry bridge).
+- [x] Replace `ctx.sql` with `ctx.sql_with_options` everywhere.
+- [x] Centralize SQL option policy in runtime profile configuration.
+- [x] Reject unsafe SQL categories for untrusted inputs (policy violations raise).
 
 ## Legacy decommission list (post-migration)
 Remove these once all scopes are complete and tests pass.
 
 - SQL fragment modules superseded by Expr templates:
   - `src/datafusion_engine/query_fragments.py`
-  - `src/datafusion_engine/df_builder.py`
 - Bespoke parquet/Arrow output writers superseded by DataFusion writes:
   - `src/arrowdsl/io/parquet.py`
   - `src/obs/parquet_writers.py`
@@ -333,9 +344,6 @@ Remove these once all scopes are complete and tests pass.
 - Ordering metadata glue superseded by `WITH ORDER` and file_sort_order:
   - `src/arrowdsl/core/ordering_policy.py`
   - Ordering helpers in `src/ibis_engine/scan_io.py`
-- Constraint and validation helpers superseded by information_schema:
-  - `src/arrowdsl/schema/validation.py`
-  - Constraint validation helpers in `src/schema_spec/relationship_specs.py`
 
 ## Quality gates
 - `uv run ruff check --fix`

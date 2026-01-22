@@ -12,7 +12,7 @@ from datafusion import SessionContext
 
 from arrowdsl.core.interop import RecordBatchReaderLike, Scalar, TableLike, coerce_table_like
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_table_from_path
+from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_as_reader
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
@@ -69,8 +69,12 @@ _DIAGNOSTIC_HASH_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
 )
 
 
-def _session_context() -> SessionContext:
-    return DataFusionRuntimeProfile().session_context()
+def _session_profile() -> DataFusionRuntimeProfile:
+    return DataFusionRuntimeProfile()
+
+
+def _session_context(profile: DataFusionRuntimeProfile) -> SessionContext:
+    return profile.session_context()
 
 
 def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
@@ -134,7 +138,9 @@ def build_scip_snapshot(
     pa.Table
         Snapshot table keyed by document_id with fingerprints and counts.
     """
-    ctx = _session_context()
+    profile = _session_profile()
+    ctx = _session_context(profile)
+    sql_options = profile.sql_options()
     docs_table = _as_table(scip_documents)
     occs_table = _as_table(scip_occurrences)
     diags_table = _as_table(scip_diagnostics)
@@ -210,7 +216,7 @@ def build_scip_snapshot(
         LEFT JOIN occ_counts ON docs.document_id = occ_counts.document_id
         LEFT JOIN diag_counts ON docs.document_id = diag_counts.document_id
         """
-        return ctx.sql(sql).to_arrow_table()
+        return ctx.sql_with_options(sql, sql_options).to_arrow_table()
     finally:
         _deregister_table(ctx, docs_name)
         _deregister_table(ctx, occs_name)
@@ -260,16 +266,21 @@ def diff_scip_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
     pa.Table
         Change records with per-document deltas.
     """
-    ctx = _session_context()
+    profile = _session_profile()
+    ctx = _session_context(profile)
+    sql_options = profile.sql_options()
     cur_table = _as_table(cur)
     cur_name = _register_table(ctx, cur_table, prefix="snapshot_cur")
     prev_name: str | None = None
     try:
         if prev is None:
-            return ctx.sql(_snapshot_added_sql(cur_name)).to_arrow_table()
+            return ctx.sql_with_options(_snapshot_added_sql(cur_name), sql_options).to_arrow_table()
         prev_table = _as_table(prev)
         prev_name = _register_table(ctx, prev_table, prefix="snapshot_prev")
-        return ctx.sql(_snapshot_diff_sql(cur_name, prev_name)).to_arrow_table()
+        return ctx.sql_with_options(
+            _snapshot_diff_sql(cur_name, prev_name),
+            sql_options,
+        ).to_arrow_table()
     finally:
         _deregister_table(ctx, cur_name)
         _deregister_table(ctx, prev_name)
@@ -288,7 +299,9 @@ def scip_changed_file_ids(
     """
     if diff is None or repo_snapshot is None or diff.num_rows == 0:
         return ()
-    ctx = _session_context()
+    profile = _session_profile()
+    ctx = _session_context(profile)
+    sql_options = profile.sql_options()
     diff_name = _register_table(ctx, diff, prefix="diff")
     repo_name = _register_table(ctx, repo_snapshot, prefix="repo")
     try:
@@ -304,7 +317,7 @@ def scip_changed_file_ids(
         FROM {repo_name} AS repo
         JOIN changed ON repo.path = changed.path
         """
-        table = ctx.sql(sql).to_arrow_table()
+        table = ctx.sql_with_options(sql, sql_options).to_arrow_table()
         values = [
             value for value in table["file_id"].to_pylist() if isinstance(value, str) and value
         ]
@@ -325,7 +338,8 @@ def read_scip_snapshot(store: StateStore) -> pa.Table | None:
     path = store.scip_snapshot_path()
     if not path.exists() or delta_table_version(str(path)) is None:
         return None
-    return read_delta_table_from_path(str(path))
+    reader = read_delta_as_reader(str(path))
+    return reader.read_all()
 
 
 def write_scip_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResult:

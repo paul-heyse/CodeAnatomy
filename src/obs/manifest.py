@@ -8,7 +8,6 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, TypeVar, cast
 
 import pyarrow as pa
-from sqlglot import parse_one
 from sqlglot.errors import ParseError
 
 from arrowdsl.core.interop import SchemaLike, TableLike
@@ -22,6 +21,7 @@ from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
 from ibis_engine.param_tables import ParamTableArtifact
 from obs.repro import collect_repro_info
 from schema_spec.system import dataset_table_ddl_fingerprint
+from sqlglot_tools.compat import parse_one
 from sqlglot_tools.optimizer import planner_dag_snapshot
 from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 from storage.io import (

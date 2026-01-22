@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import ibis
-import sqlglot
 
 from ibis_engine.sql_bridge import SqlIngestSpec, parse_sql_table
+from sqlglot_tools.compat import parse_one
 
 SQL_SELECT_ID = "SELECT id FROM events"
 SQL_SELECT_FILTER = "SELECT id, label FROM events WHERE id > 1"
@@ -41,7 +41,7 @@ def test_sql_ingest_golden_select() -> None:
         schema=ibis.schema({"id": "int64"}),
         catalog_schema=ibis.schema({"id": "int64", "label": "string"}),
     )
-    expected = sqlglot.parse_one(SQL_SELECT_ID).sql()
+    expected = parse_one(SQL_SELECT_ID).sql()
     assert payload.get("sqlglot_sql") == expected
 
 
@@ -52,5 +52,5 @@ def test_sql_ingest_golden_select_filter() -> None:
         schema=ibis.schema({"id": "int64", "label": "string"}),
         catalog_schema=ibis.schema({"id": "int64", "label": "string"}),
     )
-    expected = sqlglot.parse_one(SQL_SELECT_FILTER).sql()
+    expected = parse_one(SQL_SELECT_FILTER).sql()
     assert payload.get("sqlglot_sql") == expected

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pyarrow as pa
 import pytest
-from sqlglot import exp, parse_one
 
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.plan_diff import semantic_diff_sql
+from sqlglot_tools.compat import exp, parse_one
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SqlGlotQualificationError,

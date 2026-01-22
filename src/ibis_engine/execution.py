@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast, overload
+from typing import TYPE_CHECKING, cast, overload
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
@@ -15,8 +15,10 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.ordering_policy import apply_canonical_sort, ordering_metadata_for_plan
 from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.runtime_profile import runtime_profile_snapshot
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.plan import IbisPlan
 from ibis_engine.runner import (
     DataFusionExecutionOptions,

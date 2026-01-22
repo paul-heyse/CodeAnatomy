@@ -23,8 +23,9 @@ from sqlglot.errors import ParseError
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
 from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
+from arrowdsl.schema.metadata import schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.catalog_provider import register_registry_catalogs
+from datafusion_engine.cache_introspection import capture_cache_diagnostics
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -33,9 +34,12 @@ from datafusion_engine.compile_options import (
 )
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
-from datafusion_engine.query_fragments import fragment_view_specs
-from datafusion_engine.registry_bridge import register_dataset_df
-from datafusion_engine.schema_introspection import SchemaIntrospector, settings_snapshot_table
+from datafusion_engine.schema_introspection import (
+    SchemaIntrospector,
+    constraint_rows,
+    settings_snapshot_table,
+    table_constraint_rows,
+)
 from datafusion_engine.schema_registry import (
     AST_CORE_VIEW_NAMES,
     AST_OPTIONAL_VIEW_NAMES,
@@ -63,10 +67,10 @@ from datafusion_engine.schema_registry import (
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCache
-from ibis_engine.registry import DatasetCatalog, DatasetLocation
 from registry_common.arrow_payloads import payload_hash
-from relspec.rules.cache import rule_definitions_cached
-from relspec.rules.coverage import collect_rule_demands
+
+if TYPE_CHECKING:
+    from ibis_engine.registry import DatasetCatalog, DatasetLocation
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
     DataFusionScanOptions,
@@ -801,6 +805,118 @@ def _collect_view_sql_parse_errors(
     return errors or None
 
 
+def _constraint_key_fields(rows: Sequence[Mapping[str, object]]) -> list[str]:
+    constraints: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for row in rows:
+        constraint_type = row.get("constraint_type")
+        if not isinstance(constraint_type, str):
+            continue
+        constraint_kind = constraint_type.upper()
+        if constraint_kind not in {"PRIMARY KEY", "UNIQUE"}:
+            continue
+        constraint_name = row.get("constraint_name")
+        column_name = row.get("column_name")
+        if not isinstance(constraint_name, str) or not constraint_name:
+            continue
+        if not isinstance(column_name, str) or not column_name:
+            continue
+        ordinal = row.get("ordinal_position")
+        position = int(ordinal) if isinstance(ordinal, (int, float)) else 0
+        constraints.setdefault((constraint_kind, constraint_name), []).append(
+            (position, column_name)
+        )
+    if not constraints:
+        return []
+    for kind in ("PRIMARY KEY", "UNIQUE"):
+        candidates = {key: values for key, values in constraints.items() if key[0] == kind}
+        if not candidates:
+            continue
+        _, values = sorted(candidates.items(), key=lambda item: item[0][1])[0]
+        return [name for _, name in sorted(values, key=lambda item: item[0])]
+    return []
+
+
+def _is_nullable(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"no", "false", "0"}:
+            return False
+        if normalized in {"yes", "true", "1"}:
+            return True
+    return True
+
+
+def _constraint_drift_entries(
+    introspector: SchemaIntrospector,
+    *,
+    names: Sequence[str],
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for name in names:
+        schema = schema_for(name)
+        expected_required, expected_keys = schema_constraints_from_metadata(schema.metadata)
+        expected_required_set = set(expected_required)
+        expected_keys_set = set(expected_keys)
+        try:
+            columns = introspector.table_columns(name)
+            constraint_rows = table_constraint_rows(
+                introspector.ctx,
+                table_name=name,
+                sql_options=introspector.sql_options,
+            )
+        except (RuntimeError, TypeError, ValueError):
+            continue
+        observed_required = {
+            str(row["column_name"])
+            for row in columns
+            if row.get("column_name") is not None and not _is_nullable(row.get("is_nullable"))
+        }
+        observed_keys = set(_constraint_key_fields(constraint_rows))
+        missing_required = sorted(expected_required_set - observed_required)
+        extra_required = sorted(observed_required - expected_required_set)
+        missing_keys = sorted(expected_keys_set - observed_keys)
+        extra_keys = sorted(observed_keys - expected_keys_set)
+        if not missing_required and not extra_required and not missing_keys and not extra_keys:
+            continue
+        entries.append(
+            {
+                "schema_name": name,
+                "expected_required_non_null": sorted(expected_required_set) or None,
+                "observed_required_non_null": sorted(observed_required) or None,
+                "missing_required_non_null": missing_required or None,
+                "extra_required_non_null": extra_required or None,
+                "expected_key_fields": list(expected_keys) or None,
+                "observed_key_fields": sorted(observed_keys) or None,
+                "missing_key_fields": missing_keys or None,
+                "extra_key_fields": extra_keys or None,
+            }
+        )
+    return entries
+
+
+def _relationship_constraint_errors(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions,
+) -> Mapping[str, object] | None:
+    try:
+        module = importlib.import_module("schema_spec.relationship_specs")
+    except ImportError:
+        return None
+    errors = getattr(module, "relationship_constraint_errors", None)
+    if not callable(errors):
+        return None
+    try:
+        result = errors(ctx, sql_options=sql_options)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if isinstance(result, Mapping) and result:
+        return result
+    return None
+
+
 def register_view_specs(
     ctx: SessionContext,
     *,
@@ -822,11 +938,13 @@ def register_view_specs(
         Whether to validate view schemas after registration.
     """
     record_view = None
+    sql_options = None
     if runtime_profile is not None:
         profile = runtime_profile
+        sql_options = statement_sql_options_for_profile(profile)
 
         def _record_view(name: str, sql: str | None) -> None:
-            profile.record_view_definition(name=name, sql=sql)
+            record_view_definition(profile, name=name, sql=sql)
 
         record_view = _record_view
     for view in views:
@@ -834,6 +952,7 @@ def register_view_specs(
             ctx,
             record_view=record_view,
             validate=validate,
+            sql_options=sql_options,
         )
 
 
@@ -1091,6 +1210,88 @@ def _sql_with_options(
     return ctx.sql_with_options(sql, options)
 
 
+def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
+    """Return SQL options derived from a runtime profile.
+
+    Returns
+    -------
+    datafusion.SQLOptions
+        SQL options based on the runtime policy or read-only defaults.
+    """
+    if profile is None:
+        return _read_only_sql_options()
+    return profile.sql_options()
+
+
+def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
+    """Return SQL options that allow statement execution.
+
+    Returns
+    -------
+    datafusion.SQLOptions
+        SQL options that allow statements, with fallback defaults.
+    """
+    if profile is None:
+        return DataFusionSqlPolicy(allow_statements=True).to_sql_options()
+    return profile.statement_sql_options()
+
+
+def settings_snapshot_for_profile(
+    profile: DataFusionRuntimeProfile, ctx: SessionContext
+) -> pa.Table:
+    """Return a DataFusion settings snapshot for a runtime profile.
+
+    Returns
+    -------
+    pyarrow.Table
+        Table of settings from information_schema.df_settings.
+    """
+    return settings_snapshot_table(ctx, sql_options=profile.sql_options())
+
+
+def catalog_snapshot_for_profile(
+    profile: DataFusionRuntimeProfile, ctx: SessionContext
+) -> pa.Table:
+    """Return a DataFusion catalog snapshot for a runtime profile.
+
+    Returns
+    -------
+    pyarrow.Table
+        Table inventory from information_schema.tables.
+    """
+    return SchemaIntrospector(ctx, sql_options=profile.sql_options()).tables_snapshot_table()
+
+
+def function_catalog_snapshot_for_profile(
+    profile: DataFusionRuntimeProfile,
+    ctx: SessionContext,
+    *,
+    include_routines: bool = False,
+) -> list[dict[str, object]]:
+    """Return a function catalog snapshot for a runtime profile.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Sorted function catalog entries from information_schema.
+    """
+    return SchemaIntrospector(ctx, sql_options=profile.sql_options()).function_catalog_snapshot(
+        include_parameters=include_routines,
+    )
+
+
+def record_view_definition(
+    profile: DataFusionRuntimeProfile,
+    *,
+    name: str,
+    sql: str | None,
+) -> None:
+    """Record a view definition for diagnostics snapshots."""
+    if profile.view_registry is None:
+        return
+    profile.view_registry.record(name=name, sql=sql)
+
+
 def _datafusion_version(ctx: SessionContext) -> str | None:
     try:
         table = _sql_with_options(ctx, "SELECT version() AS version").to_arrow_table()
@@ -1105,7 +1306,7 @@ def _datafusion_version(ctx: SessionContext) -> str | None:
 
 def _datafusion_function_names(ctx: SessionContext) -> set[str]:
     try:
-        names = SchemaIntrospector(ctx).function_names()
+        names = SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None)).function_names()
     except (RuntimeError, TypeError, ValueError):
         return set()
     return {name.lower() for name in names}
@@ -1359,6 +1560,31 @@ def diagnostics_arrow_ingest_hook(
     return _hook
 
 
+def diagnostics_dml_hook(
+    sink: DiagnosticsSink,
+) -> Callable[[Mapping[str, object]], None]:
+    """Return a DML hook that records diagnostics payloads.
+
+    Returns
+    -------
+    Callable[[Mapping[str, object]], None]
+        Hook that records DML statement payloads in the diagnostics sink.
+    """
+
+    def _hook(payload: Mapping[str, object]) -> None:
+        sink.record_events(
+            "datafusion_dml_statements_v1",
+            [
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    **dict(payload),
+                }
+            ],
+        )
+
+    return _hook
+
+
 def _attach_cache_manager(
     builder: RuntimeEnvBuilder,
     *,
@@ -1469,8 +1695,8 @@ class DataFusionRuntimeProfile:
     enable_function_factory: bool = True
     function_factory_hook: Callable[[SessionContext], None] | None = None
     enable_schema_registry: bool = True
-    enable_expr_planners: bool = False
-    expr_planner_names: tuple[str, ...] = ()
+    enable_expr_planners: bool = True
+    expr_planner_names: tuple[str, ...] = ("codeanatomy_domain",)
     expr_planner_hook: Callable[[SessionContext], None] | None = None
     physical_expr_adapter_factory: object | None = None
     schema_adapter_factories: Mapping[str, object] = field(default_factory=dict)
@@ -1647,6 +1873,7 @@ class DataFusionRuntimeProfile:
         self._install_expr_planners(ctx)
         self._install_physical_expr_adapter_factory(ctx)
         self._install_tracing()
+        self._record_cache_diagnostics(ctx)
         if self.session_context_hook is not None:
             ctx = self.session_context_hook(ctx)
         self._cache_context(ctx)
@@ -1666,6 +1893,41 @@ class DataFusionRuntimeProfile:
             return True
         return bool(self.expr_planner_names)
 
+    def validate_named_args_extension_parity(self) -> dict[str, object]:
+        """Validate that named-arg support aligns with extension capabilities.
+
+        This method checks whether the Python-side configuration for named arguments
+        is consistent with the available Rust extension capabilities.
+
+        Returns
+        -------
+        dict[str, object]
+            Validation report with status and details.
+        """
+        warnings: list[str] = []
+
+        # Check if function factory is enabled but expr planners are not
+        if self.enable_function_factory and not self.enable_expr_planners:
+            warnings.append(
+                "FunctionFactory enabled without ExprPlanners; "
+                "named arguments may not be supported in SQL."
+            )
+
+        # Check if expr planners are configured
+        valid = True
+        if self.enable_expr_planners and not self.expr_planner_names and not self.expr_planner_hook:
+            valid = False
+            warnings.append("ExprPlanners enabled but no planner names or hook configured.")
+
+        return {
+            "valid": valid,
+            "enable_function_factory": self.enable_function_factory,
+            "enable_expr_planners": self.enable_expr_planners,
+            "expr_planner_names": list(self.expr_planner_names),
+            "named_args_supported": self.named_args_supported(),
+            "warnings": warnings,
+        }
+
     def _install_input_plugins(self, ctx: SessionContext) -> None:
         """Install input plugins on the session context."""
         for plugin in self.input_plugins:
@@ -1675,6 +1937,10 @@ class DataFusionRuntimeProfile:
         """Install registry-backed catalog providers on the session context."""
         if not self.registry_catalogs:
             return
+        from datafusion_engine.catalog_provider import (
+            register_registry_catalogs,
+        )
+
         catalog_name = self.registry_catalog_name or self.default_catalog
         register_registry_catalogs(
             ctx,
@@ -1703,14 +1969,15 @@ class DataFusionRuntimeProfile:
         """
         if not self.enable_information_schema:
             return
-        required, required_counts = _rulepack_required_functions()
+        required, required_counts, required_signatures = _rulepack_required_functions()
         if not required:
             return
         errors = _rulepack_function_errors(
             ctx,
             required=required,
             required_counts=required_counts,
-            sql_options=self.sql_options(),
+            required_signatures=required_signatures,
+            sql_options=self._sql_options(),
         )
         if errors:
             msg = f"Rulepack function validation failed: {errors}."
@@ -1735,13 +2002,32 @@ class DataFusionRuntimeProfile:
                 validate_nested_types(ctx, name)
             except (RuntimeError, TypeError, ValueError) as exc:
                 type_errors[name] = str(exc)
-        if not missing and not type_errors and not view_errors:
+        introspector = self._schema_introspector(ctx)
+        constraint_drift = _constraint_drift_entries(
+            introspector,
+            names=tuple(sorted(expected_names)),
+        )
+        relationship_errors = _relationship_constraint_errors(
+            ctx,
+            sql_options=self._sql_options(),
+        )
+        if (
+            not missing
+            and not type_errors
+            and not view_errors
+            and not constraint_drift
+            and relationship_errors is None
+        ):
             return
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
             "missing": list(missing),
             "type_errors": type_errors,
             "view_errors": dict(view_errors) if view_errors else None,
+            "constraint_drift": constraint_drift or None,
+            "relationship_constraint_errors": dict(relationship_errors)
+            if relationship_errors
+            else None,
         }
         if tree_sitter_checks is not None:
             payload["tree_sitter_checks"] = dict(tree_sitter_checks)
@@ -1843,7 +2129,7 @@ class DataFusionRuntimeProfile:
             table = _sql_with_options(
                 ctx,
                 "SELECT * FROM ast_span_metadata",
-                sql_options=self.sql_options(),
+                sql_options=self._sql_options(),
             ).to_arrow_table()
             rows = table.to_pylist()
             schema = schema_for("ast_files_v1")
@@ -1867,6 +2153,8 @@ class DataFusionRuntimeProfile:
                 delta_scan = DeltaScanOptions(schema=expected_schema)
             elif delta_scan.schema is None:
                 delta_scan = replace(delta_scan, schema=expected_schema)
+            from ibis_engine.registry import DatasetLocation
+
             return DatasetLocation(
                 path=self.ast_delta_location,
                 format="delta",
@@ -1876,6 +2164,8 @@ class DataFusionRuntimeProfile:
                 delta_scan=delta_scan,
             )
         if self.ast_external_location:
+            from ibis_engine.registry import DatasetLocation
+
             if self.ast_external_format == "delta":
                 msg = "AST external format must not be 'delta'."
                 raise ValueError(msg)
@@ -1927,6 +2217,8 @@ class DataFusionRuntimeProfile:
         if callable(deregister):
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 deregister("ast_files_v1")
+        from datafusion_engine.registry_bridge import register_dataset_df
+
         df = register_dataset_df(
             ctx,
             name="ast_files_v1",
@@ -1956,6 +2248,8 @@ class DataFusionRuntimeProfile:
                 delta_scan = DeltaScanOptions(schema=expected_schema)
             elif delta_scan.schema is None:
                 delta_scan = replace(delta_scan, schema=expected_schema)
+            from ibis_engine.registry import DatasetLocation
+
             return DatasetLocation(
                 path=self.bytecode_delta_location,
                 format="delta",
@@ -1965,6 +2259,8 @@ class DataFusionRuntimeProfile:
                 delta_scan=delta_scan,
             )
         if self.bytecode_external_location:
+            from ibis_engine.registry import DatasetLocation
+
             if self.bytecode_external_format == "delta":
                 msg = "Bytecode external format must not be 'delta'."
                 raise ValueError(msg)
@@ -2006,6 +2302,8 @@ class DataFusionRuntimeProfile:
         if callable(deregister):
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 deregister("bytecode_files_v1")
+        from datafusion_engine.registry_bridge import register_dataset_df
+
         df = register_dataset_df(
             ctx,
             name="bytecode_files_v1",
@@ -2053,6 +2351,10 @@ class DataFusionRuntimeProfile:
             if callable(deregister):
                 with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                     deregister(schema_name)
+            from datafusion_engine.registry_bridge import (
+                register_dataset_df,
+            )
+
             df = register_dataset_df(
                 ctx,
                 name=schema_name,
@@ -2242,7 +2544,7 @@ class DataFusionRuntimeProfile:
             table = _sql_with_options(
                 ctx,
                 "SELECT * FROM cst_schema_diagnostics",
-                sql_options=self.sql_options(),
+                sql_options=self._sql_options(),
             ).to_arrow_table()
             rows = table.to_pylist()
             schema = schema_for("libcst_files_v1")
@@ -2270,7 +2572,7 @@ class DataFusionRuntimeProfile:
             table = _sql_with_options(
                 ctx,
                 "SELECT * FROM ts_stats",
-                sql_options=self.sql_options(),
+                sql_options=self._sql_options(),
             ).to_arrow_table()
             rows = table.to_pylist()
             schema = schema_for("tree_sitter_files_v1")
@@ -2342,7 +2644,7 @@ class DataFusionRuntimeProfile:
                         "SELECT COUNT(*) AS row_count, "
                         "SUM(CASE WHEN mismatch THEN 1 ELSE 0 END) AS mismatch_count "
                         f"FROM {name}",
-                        sql_options=self.sql_options(),
+                        sql_options=self._sql_options(),
                     )
                     .to_arrow_table()
                     .to_pylist()
@@ -2368,7 +2670,7 @@ class DataFusionRuntimeProfile:
                         _sql_with_options(
                             ctx,
                             f"SELECT * FROM {name} WHERE mismatch LIMIT 25",
-                            sql_options=self.sql_options(),
+                            sql_options=self._sql_options(),
                         )
                         .to_arrow_table()
                         .to_pylist()
@@ -2443,7 +2745,7 @@ class DataFusionRuntimeProfile:
             table = _sql_with_options(
                 ctx,
                 "SELECT * FROM py_bc_metadata",
-                sql_options=self.sql_options(),
+                sql_options=self._sql_options(),
             ).to_arrow_table()
             rows = table.to_pylist()
             schema = schema_for("bytecode_files_v1")
@@ -2474,12 +2776,17 @@ class DataFusionRuntimeProfile:
                     "schemata": introspector.schemata_snapshot(),
                     "tables": introspector.tables_snapshot(),
                     "columns": introspector.columns_snapshot(),
-                    "constraints": introspector.constraint_rows(),
+                    "constraints": constraint_rows(
+                        ctx,
+                        sql_options=self._sql_options(),
+                    ),
                     "routines": introspector.routines_snapshot(),
                     "parameters": introspector.parameters_snapshot(),
                     "settings": introspector.settings_snapshot(),
-                    "functions": self.function_catalog_snapshot(
-                        ctx, include_routines=self.enable_information_schema
+                    "functions": function_catalog_snapshot_for_profile(
+                        self,
+                        ctx,
+                        include_routines=self.enable_information_schema,
                     ),
                 }
             )
@@ -2610,6 +2917,8 @@ class DataFusionRuntimeProfile:
         if bytecode_registration:
             self._register_bytecode_dataset(ctx)
         self._register_scip_datasets(ctx)
+        from datafusion_engine.query_fragments import fragment_view_specs
+
         fragment_views = fragment_view_specs(ctx, exclude=ast_optional_disabled)
         self._register_schema_views(ctx, fragment_views=fragment_views)
         self._validate_catalog_autoloads(
@@ -2645,7 +2954,7 @@ class DataFusionRuntimeProfile:
             _sql_with_options(
                 ctx,
                 _prepare_statement_sql(statement),
-                sql_options=self.statement_sql_options(),
+                sql_options=self._statement_sql_options(),
             )
             self._record_prepared_statement(statement)
 
@@ -2713,6 +3022,28 @@ class DataFusionRuntimeProfile:
                 "logical_codec": self.delta_plan_codec_logical,
             },
         )
+
+    def _record_cache_diagnostics(self, ctx: SessionContext) -> None:
+        """Record cache configuration and state diagnostics.
+
+        Parameters
+        ----------
+        ctx
+            DataFusion session context to introspect.
+        """
+        if self.diagnostics_sink is None:
+            return
+        cache_diag = capture_cache_diagnostics(ctx)
+        self.diagnostics_sink.record_artifact(
+            "datafusion_cache_config_v1",
+            cache_diag.get("config", {}),
+        )
+        cache_snapshots = cache_diag.get("cache_snapshots", [])
+        if cache_snapshots:
+            self.diagnostics_sink.record_events(
+                "datafusion_cache_state_v1",
+                cache_snapshots,
+            )
 
     def _build_session_context(self) -> SessionContext:
         """Create the SessionContext base for this runtime profile.
@@ -3063,6 +3394,16 @@ class DataFusionRuntimeProfile:
         """
         return self._resolved_sql_policy().to_sql_options()
 
+    def sql_options(self) -> SQLOptions:
+        """Return SQLOptions derived from the resolved SQL policy.
+
+        Returns
+        -------
+        datafusion.SQLOptions
+            SQL options derived from the profile policy.
+        """
+        return self._sql_options()
+
     def _statement_sql_options(self) -> SQLOptions:
         """Return SQLOptions that allow statement execution.
 
@@ -3078,7 +3419,17 @@ class DataFusionRuntimeProfile:
             allow_statements=True,
         ).to_sql_options()
 
-    def record_view_definition(self, *, name: str, sql: str | None) -> None:
+    def statement_sql_options(self) -> SQLOptions:
+        """Return SQLOptions that allow statement execution.
+
+        Returns
+        -------
+        datafusion.SQLOptions
+            SQL options with statement execution enabled.
+        """
+        return self._statement_sql_options()
+
+    def _record_view_definition(self, *, name: str, sql: str | None) -> None:
         """Record a view definition for diagnostics snapshots.
 
         Parameters
@@ -3112,9 +3463,9 @@ class DataFusionRuntimeProfile:
         SchemaIntrospector
             Introspector bound to the provided SessionContext.
         """
-        return SchemaIntrospector(ctx, sql_options=self.sql_options())
+        return SchemaIntrospector(ctx, sql_options=self._sql_options())
 
-    def settings_snapshot(self, ctx: SessionContext) -> pa.Table:
+    def _settings_snapshot(self, ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion settings when information_schema is enabled.
 
         Returns
@@ -3122,9 +3473,9 @@ class DataFusionRuntimeProfile:
         pyarrow.Table
             Table of settings from information_schema.df_settings.
         """
-        return settings_snapshot_table(ctx, sql_options=self.sql_options())
+        return settings_snapshot_table(ctx, sql_options=self._sql_options())
 
-    def catalog_snapshot(self, ctx: SessionContext) -> pa.Table:
+    def _catalog_snapshot(self, ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion catalog tables when available.
 
         Returns
@@ -3134,7 +3485,7 @@ class DataFusionRuntimeProfile:
         """
         return self._schema_introspector(ctx).tables_snapshot_table()
 
-    def function_catalog_snapshot(
+    def _function_catalog_snapshot(
         self,
         ctx: SessionContext,
         *,
@@ -3590,6 +3941,46 @@ def _rulepack_parameter_counts(rows: Sequence[Mapping[str, object]]) -> dict[str
     return counts
 
 
+def _rulepack_parameter_signatures(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, set[tuple[str, ...]]]:
+    signatures: dict[str, dict[str, list[tuple[int, str]]]] = {}
+    for row in rows:
+        name = _rulepack_row_value(row, ("routine_name", "specific_name", "function_name", "name"))
+        if name is None:
+            continue
+        data_type = _rulepack_row_value(row, ("data_type",))
+        if data_type is None:
+            continue
+        ordinal = row.get("ordinal_position")
+        if (isinstance(ordinal, (int, float)) and not isinstance(ordinal, bool)) or (
+            isinstance(ordinal, str) and ordinal.isdigit()
+        ):
+            position = int(ordinal)
+        else:
+            continue
+        specific = _rulepack_row_value(row, ("specific_name",)) or name
+        routine_key = name.lower()
+        specific_key = specific.lower()
+        signatures.setdefault(routine_key, {}).setdefault(specific_key, []).append(
+            (position, data_type.lower())
+        )
+    resolved: dict[str, set[tuple[str, ...]]] = {}
+    for routine_name, specifics in signatures.items():
+        for values in specifics.values():
+            ordered = tuple(dtype for _, dtype in sorted(values, key=lambda item: item[0]))
+            resolved.setdefault(routine_name, set()).add(ordered)
+    return resolved
+
+
+def _rulepack_row_value(row: Mapping[str, object], keys: Sequence[str]) -> str | None:
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
 def _rulepack_signature_errors(
     required: Mapping[str, int],
     counts: Mapping[str, int],
@@ -3611,11 +4002,59 @@ def _rulepack_signature_errors(
     return details
 
 
-def _rulepack_required_functions() -> tuple[dict[str, set[str]], dict[str, int]]:
+def _rulepack_signature_type_errors(
+    required: Mapping[str, set[tuple[str, ...]]],
+    parameters: Sequence[Mapping[str, object]],
+) -> dict[str, list[str]]:
+    if not required:
+        return {}
+    available = _rulepack_parameter_signatures(parameters)
+    missing: list[str] = []
+    mismatched: list[str] = []
+    for name, expected_signatures in required.items():
+        actual = available.get(name.lower())
+        if not actual:
+            missing.append(name)
+            continue
+        for expected in expected_signatures:
+            if expected not in actual:
+                sig = ", ".join(expected)
+                mismatched.append(f"{name} ({sig})")
+    details: dict[str, list[str]] = {}
+    if missing:
+        details["missing_types"] = missing
+    if mismatched:
+        details["type_mismatch"] = mismatched
+    return details
+
+
+def _merge_signature_errors(
+    counts: Mapping[str, Sequence[str]],
+    types: Mapping[str, Sequence[str]],
+) -> dict[str, list[str]] | None:
+    merged: dict[str, list[str]] = {}
+    for errors in (counts, types):
+        for key, values in errors.items():
+            if values:
+                merged.setdefault(key, []).extend(values)
+    if not merged:
+        return None
+    return merged
+
+
+def _rulepack_required_functions() -> tuple[
+    dict[str, set[str]],
+    dict[str, int],
+    dict[str, set[tuple[str, ...]]],
+]:
+    from relspec.rules.cache import rule_definitions_cached
+    from relspec.rules.coverage import collect_rule_demands
+
     demands = collect_rule_demands(rule_definitions_cached(), include_extract_queries=True)
     registry = default_function_registry()
     required: dict[str, set[str]] = {}
     required_counts: dict[str, int] = {}
+    required_signatures: dict[str, set[tuple[str, ...]]] = {}
     for mapping in (demands.expr_calls, demands.aggregate_funcs):
         for name, rules in mapping.items():
             spec = registry.specs.get(name)
@@ -3623,7 +4062,20 @@ def _rulepack_required_functions() -> tuple[dict[str, set[str]], dict[str, int]]
             required.setdefault(engine_name, set()).update(rules)
             if spec is not None:
                 required_counts.setdefault(engine_name, len(spec.input_types))
-    return required, required_counts
+                signature = _rulepack_signature_for_spec(spec)
+                if signature is not None:
+                    required_signatures.setdefault(engine_name, set()).add(signature)
+    return required, required_counts, required_signatures
+
+
+def _rulepack_signature_for_spec(spec: object) -> tuple[str, ...] | None:
+    input_types = getattr(spec, "input_types", None)
+    if not isinstance(input_types, tuple):
+        return None
+    try:
+        return tuple(_datafusion_type_name(dtype).lower() for dtype in input_types)
+    except (RuntimeError, TypeError, ValueError):
+        return None
 
 
 def _rulepack_function_errors(
@@ -3631,6 +4083,7 @@ def _rulepack_function_errors(
     *,
     required: Mapping[str, set[str]],
     required_counts: Mapping[str, int],
+    required_signatures: Mapping[str, set[tuple[str, ...]]],
     sql_options: SQLOptions | None = None,
 ) -> dict[str, str]:
     errors: dict[str, str] = {}
@@ -3641,6 +4094,7 @@ def _rulepack_function_errors(
     signature_errors = _rulepack_signature_validation(
         ctx,
         required_counts,
+        required_signatures,
         errors,
         sql_options=sql_options,
     )
@@ -3677,11 +4131,12 @@ def _rulepack_missing_functions(
 def _rulepack_signature_validation(
     ctx: SessionContext,
     required_counts: Mapping[str, int],
+    required_signatures: Mapping[str, set[tuple[str, ...]]],
     errors: dict[str, str],
     *,
     sql_options: SQLOptions | None = None,
 ) -> dict[str, list[str]] | None:
-    if not required_counts:
+    if not required_counts and not required_signatures:
         return None
     try:
         parameters = SchemaIntrospector(ctx, sql_options=sql_options).parameters_snapshot()
@@ -3689,7 +4144,9 @@ def _rulepack_signature_validation(
         errors["function_parameters"] = str(exc)
         return None
     counts = _rulepack_parameter_counts(parameters)
-    return _rulepack_signature_errors(required_counts, counts)
+    count_errors = _rulepack_signature_errors(required_counts, counts)
+    type_errors = _rulepack_signature_type_errors(required_signatures, parameters)
+    return _merge_signature_errors(count_errors, type_errors)
 
 
 def apply_execution_label(
@@ -3895,22 +4352,26 @@ def dataset_schema_from_context(name: str) -> SchemaLike:
         raise KeyError(msg) from exc
 
 
-def read_delta_table_from_path(
+def read_delta_as_reader(
     path: str,
     *,
     storage_options: Mapping[str, str] | None = None,
     delta_scan: DeltaScanOptions | None = None,
-) -> pa.Table:
-    """Return a Delta table snapshot using DataFusion providers.
+) -> pa.RecordBatchReader:
+    """Return a streaming Delta table snapshot using DataFusion providers.
 
     Returns
     -------
-    pyarrow.Table
-        Arrow table read via DataFusion's Delta table provider.
+    pyarrow.RecordBatchReader
+        Streaming reader for the Delta table via DataFusion's Delta table provider.
     """
     runtime = DataFusionRuntimeProfile()
     ctx = runtime.session_context()
     temp_name = f"__delta_read_{uuid.uuid4().hex}"
+    from datafusion_engine.bridge import datafusion_to_reader
+    from datafusion_engine.registry_bridge import register_dataset_df
+    from ibis_engine.registry import DatasetLocation
+
     location = DatasetLocation(
         path=path,
         format="delta",
@@ -3925,7 +4386,7 @@ def read_delta_table_from_path(
         runtime_profile=runtime,
     )
     try:
-        return df.to_arrow_table()
+        return datafusion_to_reader(df)
     finally:
         _deregister_table(ctx, name=temp_name)
 
@@ -3972,8 +4433,11 @@ __all__ = [
     "dataset_schema_from_context",
     "dataset_spec_from_context",
     "diagnostics_arrow_ingest_hook",
+    "diagnostics_dml_hook",
     "feature_state_snapshot",
-    "read_delta_table_from_path",
+    "read_delta_as_reader",
     "register_view_specs",
     "snapshot_plans",
+    "sql_options_for_profile",
+    "statement_sql_options_for_profile",
 ]

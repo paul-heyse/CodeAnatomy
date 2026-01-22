@@ -18,6 +18,11 @@ from datafusion.catalog import (
 from datafusion.dataframe import DataFrame
 from deltalake import DeltaTable
 
+from datafusion_engine.table_provider_metadata import (
+    TableProviderMetadata,
+    record_table_provider_metadata,
+    table_provider_metadata,
+)
 from ibis_engine.registry import (
     DatasetCatalog,
     DatasetLocation,
@@ -43,8 +48,7 @@ def _table_from_dataset(dataset: object) -> Table:
     if isinstance(dataset, ds.Dataset):
         return Table(dataset)
     if isinstance(dataset, DataFrame):
-        arrow_table = dataset.to_arrow_table()
-        return Table(ds.dataset(arrow_table))
+        return Table(dataset)
     return Table(ds.dataset(dataset))
 
 
@@ -78,6 +82,7 @@ class RegistrySchemaProvider(SchemaProvider):
 
     catalog: DatasetCatalog
     schema_name: str = "public"
+    ctx: SessionContext | None = None
 
     def __post_init__(self) -> None:
         """Initialize the schema provider cache."""
@@ -105,6 +110,14 @@ class RegistrySchemaProvider(SchemaProvider):
         """
         key = _normalize_dataset_name(name)
         self._tables[key] = _table_from_dataset(table)
+        if self.ctx is not None and self.catalog.has(key):
+            location = self.catalog.get(key)
+            metadata = TableProviderMetadata(
+                table_name=key,
+                storage_location=str(location.path),
+                file_format=location.format or "unknown",
+            )
+            record_table_provider_metadata(id(self.ctx), metadata=metadata)
 
     def deregister_table(self, name: str, cascade: object) -> None:
         """Remove a table from the schema provider.
@@ -142,7 +155,32 @@ class RegistrySchemaProvider(SchemaProvider):
         location = self.catalog.get(key)
         table = _table_from_dataset(_dataset_from_location(location))
         self._tables[key] = table
+        if self.ctx is not None:
+            metadata = TableProviderMetadata(
+                table_name=key,
+                storage_location=str(location.path),
+                file_format=location.format or "unknown",
+            )
+            record_table_provider_metadata(id(self.ctx), metadata=metadata)
         return table
+
+    def table_metadata(self, name: str) -> TableProviderMetadata | None:
+        """Return metadata for a registered table.
+
+        Parameters
+        ----------
+        name:
+            Table name to look up.
+
+        Returns
+        -------
+        TableProviderMetadata | None
+            Metadata when available.
+        """
+        if self.ctx is None:
+            return None
+        key = _normalize_dataset_name(name)
+        return table_provider_metadata(id(self.ctx), table_name=key)
 
     def table_exist(self, name: str) -> bool:
         """Return whether a table exists in the schema provider.
@@ -177,6 +215,7 @@ class RegistryCatalogProvider(CatalogProvider):
 
     catalog: DatasetCatalog
     schema_name: str = "public"
+    ctx: SessionContext | None = None
 
     def __post_init__(self) -> None:
         """Initialize the catalog provider state."""
@@ -184,6 +223,7 @@ class RegistryCatalogProvider(CatalogProvider):
             RegistrySchemaProvider(
                 self.catalog,
                 schema_name=self.schema_name,
+                ctx=self.ctx,
             )
         )
 
@@ -255,11 +295,12 @@ class MultiRegistryCatalogProvider(CatalogProvider):
 
     catalogs: Mapping[str, DatasetCatalog]
     default_schema: str = "public"
+    ctx: SessionContext | None = None
 
     def __post_init__(self) -> None:
         """Initialize schema providers for registered catalogs."""
         self._schema_providers: dict[str, SchemaProvider] = {
-            name: RegistrySchemaProvider(catalog, schema_name=name)
+            name: RegistrySchemaProvider(catalog, schema_name=name, ctx=self.ctx)
             for name, catalog in self.catalogs.items()
         }
         self._external_schemas: dict[str, SchemaProvider | SchemaProviderExportable | Schema] = {}
@@ -351,7 +392,7 @@ def register_registry_catalog(
         Registered catalog provider.
     """
     dataset_catalog = registry.catalog if isinstance(registry, IbisDatasetRegistry) else registry
-    provider = RegistryCatalogProvider(dataset_catalog, schema_name=schema_name)
+    provider = RegistryCatalogProvider(dataset_catalog, schema_name=schema_name, ctx=ctx)
     ctx.register_catalog_provider(catalog_name, provider)
     return provider
 
@@ -381,7 +422,9 @@ def register_registry_catalogs(
     MultiRegistryCatalogProvider
         Registered catalog provider.
     """
-    provider = MultiRegistryCatalogProvider(catalogs=catalogs, default_schema=default_schema)
+    provider = MultiRegistryCatalogProvider(
+        catalogs=catalogs, default_schema=default_schema, ctx=ctx
+    )
     ctx.register_catalog_provider(catalog_name, provider)
     return provider
 

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import (
+        AdapterExecutionPolicy,
+        DataFusionRuntimeProfile,
+        ExecutionLabel,
+    )
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -20,13 +27,6 @@ from datafusion_engine.bridge import (
     ibis_plan_to_table,
 )
 from datafusion_engine.compile_options import DataFusionCompileOptions
-from datafusion_engine.runtime import (
-    AdapterExecutionPolicy,
-    DataFusionRuntimeProfile,
-    ExecutionLabel,
-    apply_execution_label,
-    apply_execution_policy,
-)
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
 from ibis_engine.plan import IbisPlan
@@ -329,6 +329,12 @@ def _resolve_options(
     execution: DataFusionExecutionOptions,
     params: Mapping[Value, object] | None,
 ) -> DataFusionCompileOptions:
+    from datafusion_engine.runtime import (
+        apply_execution_label,
+        apply_execution_policy,
+        sql_options_for_profile,
+    )
+
     resolved = options
     if resolved is None:
         if execution.runtime_profile is not None:
@@ -365,7 +371,10 @@ def _resolve_options(
         and execution.runtime_profile is not None
         and execution.runtime_profile.enable_information_schema
     ):
-        introspector = SchemaIntrospector(execution.ctx)
+        introspector = SchemaIntrospector(
+            execution.ctx,
+            sql_options=sql_options_for_profile(execution.runtime_profile),
+        )
         schema_map = introspector.schema_map()
         schema_map_hash: str | None = None
         try:

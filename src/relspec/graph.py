@@ -14,7 +14,6 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
-from datafusion_engine.runtime import dataset_schema_from_context
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.expr_compiler import align_set_op_tables, union_tables
 from ibis_engine.plan import IbisPlan
@@ -470,6 +469,10 @@ def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
         if rule.contract_name == RELATION_OUTPUT_NAME:
             return relation_output_schema()
         try:
+            from datafusion_engine.runtime import (
+                dataset_schema_from_context,
+            )
+
             return dataset_schema_from_context(rule.contract_name)
         except KeyError:
             return None

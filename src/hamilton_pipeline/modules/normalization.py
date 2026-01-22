@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import ibis
 import pyarrow as pa
+from datafusion import SQLOptions
 from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
@@ -33,6 +34,7 @@ from datafusion_engine.runtime import (
     align_table_to_schema,
     dataset_schema_from_context,
 )
+from datafusion_engine.sql_options import sql_options_for_profile
 from extract.evidence_plan import EvidencePlan
 from ibis_engine.builtin_udfs import prefixed_hash64
 from ibis_engine.registry import datafusion_context
@@ -171,6 +173,10 @@ def _coerce_int(value: object | None) -> int:
     return 0
 
 
+def _sql_options() -> SQLOptions:
+    return sql_options_for_profile(None)
+
+
 def _scip_position_encoding_stats(
     scip_documents: TableLike | ViewReference,
     *,
@@ -184,7 +190,7 @@ def _scip_position_encoding_stats(
         f"FROM {scip_documents.name} GROUP BY position_encoding"
     )
     ctx = datafusion_context(backend)
-    table = ctx.sql(query).to_arrow_table()
+    table = ctx.sql_with_options(query, _sql_options()).to_arrow_table()
     return _posenc_stats_from_rows(table.to_pylist())
 
 
@@ -235,6 +241,8 @@ class _DatafusionQuery(Protocol):
 
 class _DatafusionContext(Protocol):
     def sql(self, query: str) -> _DatafusionQuery: ...
+
+    def sql_with_options(self, query: str, options: object) -> _DatafusionQuery: ...
 
     def register_record_batches(self, name: str, batches: list[list[pa.RecordBatch]]) -> None: ...
 
@@ -842,7 +850,7 @@ def _callsite_arg_summary(call_args: TableLike, *, ctx: _DatafusionContext) -> T
             "WHERE call_id IS NOT NULL "
             "GROUP BY call_id"
         )
-        grouped = ctx.sql(sql).to_arrow_table()
+        grouped = ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
     if grouped.num_rows == 0:
         return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
     return grouped
@@ -863,7 +871,7 @@ def _callsite_qname_base_table(exploded: TableLike, *, ctx: _DatafusionContext) 
             "SELECT call_id, qname, qname_source "
             "FROM base WHERE call_id IS NOT NULL AND qname IS NOT NULL"
         )
-        return ctx.sql(sql).to_arrow_table()
+        return ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
 
 
 def _callsite_fqn_base_table(exploded: TableLike, *, ctx: _DatafusionContext) -> TableLike:
@@ -881,7 +889,7 @@ def _callsite_fqn_base_table(exploded: TableLike, *, ctx: _DatafusionContext) ->
             "SELECT call_id, qname, qname_source "
             "FROM base WHERE call_id IS NOT NULL AND qname IS NOT NULL"
         )
-        return ctx.sql(sql).to_arrow_table()
+        return ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
 
 
 def _join_callsite_qname_meta(
@@ -934,7 +942,7 @@ def _join_callsite_qname_meta(
             f"LEFT JOIN {_sql_identifier(meta_name)} AS meta "
             "ON base.call_id = meta.call_id"
         )
-        return ctx.sql(sql).to_arrow_table()
+        return ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
 
 
 def _join_callsite_arg_summary(
@@ -977,7 +985,7 @@ def _join_callsite_arg_summary(
             f"LEFT JOIN {_sql_identifier(summary_name)} AS summary "
             "ON base.call_id = summary.call_id"
         )
-        return ctx.sql(sql).to_arrow_table()
+        return ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
 
 
 @cache(format="delta")
@@ -1667,7 +1675,8 @@ def scip_occurrences_norm_bundle(
         invalid_values = _stats_list(stats, "invalid_position_encoding_values")
         if missing or invalid or len(encodings) > 1:
             LOGGER.warning(
-                "SCIP position encoding guard: missing=%d invalid=%d encodings=%s invalid_values=%s",
+                "SCIP position encoding guard: missing=%d invalid=%d encodings=%s "
+                "invalid_values=%s",
                 missing,
                 invalid,
                 encodings,

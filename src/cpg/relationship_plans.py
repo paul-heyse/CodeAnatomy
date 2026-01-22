@@ -1054,14 +1054,18 @@ def _safe_div(numerator: Value, denominator: Value) -> Value:
 
 
 def _fill_numeric_nulls(table: Table) -> Table:
-    """Fill numeric nulls using selector-driven updates."""
-    return table.mutate(
-        s.across(
-            s.numeric(),
-            lambda col: col.fill_null(0),
-            names="{col}",
-        )
+    """Fill numeric nulls using selector-driven updates.
+
+    Returns
+    -------
+        Updated table with numeric nulls replaced by zeros.
+    """
+    expr = s.across(
+        s.numeric(),
+        lambda col: col.fill_null(0),
+        names="{col}",
     )
+    return table.mutate(cast("Value", expr))
 
 
 def _left_id_window(table: Table, cfg: IntervalAlignConfig) -> object:

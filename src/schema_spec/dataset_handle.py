@@ -10,12 +10,11 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from arrowdsl.core.interop import SchemaLike
-from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.schema_registry import is_nested_dataset
-from ibis_engine.registry import DatasetLocation, resolve_datafusion_scan_options
 from schema_spec.specs import ExternalTableConfigOverrides
 
 if TYPE_CHECKING:
+    from ibis_engine.registry import DatasetLocation
     from schema_spec.system import DatasetSpec
     from schema_spec.view_specs import ViewSpec
 
@@ -132,6 +131,8 @@ class DatasetHandle:
         str
             CREATE EXTERNAL TABLE statement using the location metadata.
         """
+        from ibis_engine.registry import resolve_datafusion_scan_options
+
         scan = resolve_datafusion_scan_options(location)
         partitioned_by = None
         file_sort_order = None
@@ -174,6 +175,8 @@ class DatasetHandle:
         datafusion.dataframe.DataFrame
             Registered DataFrame for the dataset location.
         """
+        from datafusion_engine.registry_bridge import register_dataset_df
+
         return register_dataset_df(ctx, name=self.spec.name, location=location)
 
     def register_views(

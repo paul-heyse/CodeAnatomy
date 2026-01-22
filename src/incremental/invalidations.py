@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -11,7 +11,7 @@ import pyarrow as pa
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import schema_identity_from_metadata
-from datafusion_engine.runtime import read_delta_table_from_path
+from datafusion_engine.runtime import read_delta_as_reader
 from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
 from incremental.state_store import StateStore
 from relspec.graph import rule_graph_signature
@@ -162,7 +162,8 @@ def read_invalidation_snapshot(state_store: StateStore) -> InvalidationSnapshot 
     path = state_store.invalidation_snapshot_path()
     if not path.exists():
         return None
-    table = read_delta_table_from_path(str(path))
+    reader = read_delta_as_reader(str(path))
+    table = reader.read_all()
     rows = table.to_pylist()
     if not rows:
         return None
@@ -270,8 +271,17 @@ def diff_invalidation_snapshots(
     reasons: list[str] = []
     if previous.rule_graph_signature != current.rule_graph_signature:
         reasons.append("rule_graph_signature")
-    reasons.extend(_diff_rule_plan_hashes(previous.rule_plan_hashes, current.rule_plan_hashes))
-    if not previous.rule_plan_hashes or not current.rule_plan_hashes:
+    hash_changes = _rule_plan_hash_changes(previous.rule_plan_hashes, current.rule_plan_hashes)
+    if hash_changes:
+        reasons.extend(
+            _diff_rule_plan_sql(
+                previous.rule_plan_sql,
+                current.rule_plan_sql,
+                names=hash_changes,
+                missing_prefix="rule_plan_hash",
+            )
+        )
+    elif not previous.rule_plan_hashes or not current.rule_plan_hashes:
         reasons.extend(_diff_rule_plan_sql(previous.rule_plan_sql, current.rule_plan_sql))
     if not previous.rule_plan_sql or not current.rule_plan_sql:
         reasons.extend(
@@ -370,14 +380,17 @@ def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
 def _diff_rule_plan_sql(
     previous: Mapping[str, str],
     current: Mapping[str, str],
+    *,
+    names: Sequence[str] | None = None,
+    missing_prefix: str = "rule_plan_sql",
 ) -> list[str]:
     reasons: list[str] = []
-    all_rules = sorted(set(previous) | set(current))
+    all_rules = sorted(names) if names is not None else sorted(set(previous) | set(current))
     for name in all_rules:
         prev_sql = previous.get(name)
         next_sql = current.get(name)
         if not prev_sql or not next_sql:
-            reasons.append(f"rule_plan_sql:{name}")
+            reasons.append(f"{missing_prefix}:{name}")
             continue
         diff = semantic_diff_sql(prev_sql, next_sql)
         if diff.changed:
@@ -385,18 +398,18 @@ def _diff_rule_plan_sql(
     return reasons
 
 
-def _diff_rule_plan_hashes(
+def _rule_plan_hash_changes(
     previous: Mapping[str, str],
     current: Mapping[str, str],
 ) -> list[str]:
-    reasons: list[str] = []
+    changed: list[str] = []
     all_rules = sorted(set(previous) | set(current))
     for name in all_rules:
         prev_hash = previous.get(name)
         cur_hash = current.get(name)
         if prev_hash != cur_hash:
-            reasons.append(f"rule_plan_hash:{name}")
-    return reasons
+            changed.append(name)
+    return changed
 
 
 def rule_plan_diff_table(

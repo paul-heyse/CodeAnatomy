@@ -19,6 +19,7 @@ from datafusion_engine.hash_utils import (
     hash128_from_text as _hash128_from_text,
 )
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.sql_options import sql_options_for_profile
 
 type MissingPolicy = Literal["raise", "null"]
 
@@ -32,6 +33,10 @@ _NULL_SEPARATOR = "\x1f"
 def _datafusion_context() -> SessionContext:
     profile = DataFusionRuntimeProfile()
     return profile.session_context()
+
+
+def _sql_table(ctx: SessionContext, sql: str) -> pa.Table:
+    return ctx.sql_with_options(sql, sql_options_for_profile(None)).to_arrow_table()
 
 
 def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
@@ -196,7 +201,7 @@ def _hash_from_arrays(
             use_128=use_128,
         )
         sql = f"SELECT {hash_expr} AS hash_value FROM {_sql_identifier(name)}"
-        result = ctx.sql(sql).to_arrow_table()
+        result = _sql_table(ctx, sql)
     finally:
         _deregister_table(ctx, name)
     return result["hash_value"]
@@ -286,7 +291,7 @@ def prefixed_hash_id(
             use_128=use_128,
         )
         sql = f"SELECT {hash_expr} AS hash_value FROM {_sql_identifier(name)}"
-        result = ctx.sql(sql).to_arrow_table()
+        result = _sql_table(ctx, sql)
     finally:
         _deregister_table(ctx, name)
     return result["hash_value"]
@@ -415,7 +420,7 @@ def masked_prefixed_hash(
             "ELSE NULL END AS hash_value "
             f"FROM {_sql_identifier(name)}"
         )
-        result = ctx.sql(sql).to_arrow_table()
+        result = _sql_table(ctx, sql)
     finally:
         _deregister_table(ctx, name)
     return result["hash_value"]
@@ -514,7 +519,7 @@ def add_span_id_column(
         sql = (
             f"SELECT *, {span_expr} AS {_sql_identifier(spec.out_col)} FROM {_sql_identifier(name)}"
         )
-        result = ctx.sql(sql).to_arrow_table()
+        result = _sql_table(ctx, sql)
     finally:
         _deregister_table(ctx, name)
     return result

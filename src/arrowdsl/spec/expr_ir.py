@@ -26,7 +26,7 @@ from arrowdsl.schema.build import (
     union_array_from_values,
 )
 from arrowdsl.schema.dictionary import normalize_dictionaries
-from arrowdsl.spec.codec import (
+from arrowdsl.spec.literals import (
     decode_options_payload,
     decode_scalar_payload,
     decode_scalar_union,

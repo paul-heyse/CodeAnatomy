@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.runtime import (
+    DataFusionRuntimeProfile,
+    function_catalog_snapshot_for_profile,
+)
 
 pytest.importorskip("datafusion")
 
@@ -13,7 +16,7 @@ def test_function_catalog_snapshot_sorted() -> None:
     """Sort function catalog snapshots deterministically."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    snapshot = profile.function_catalog_snapshot(ctx)
+    snapshot = function_catalog_snapshot_for_profile(profile, ctx)
     assert snapshot
     names = [
         str(row.get("function_name")) for row in snapshot if row.get("function_name") is not None
@@ -25,7 +28,11 @@ def test_function_catalog_snapshot_routines_optional() -> None:
     """Include information_schema routines when enabled."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
-    snapshot = profile.function_catalog_snapshot(ctx, include_routines=True)
+    snapshot = function_catalog_snapshot_for_profile(
+        profile,
+        ctx,
+        include_routines=True,
+    )
     assert snapshot
     names = [
         str(row.get("function_name")) for row in snapshot if row.get("function_name") is not None

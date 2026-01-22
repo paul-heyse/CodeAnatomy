@@ -11,7 +11,7 @@ from datafusion_engine.registry_bridge import (
     DeltaCdfRegistrationOptions,
     register_delta_cdf_df,
 )
-from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_table_from_path
+from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_as_reader
 from storage.deltalake import (
     DeltaCdfOptions,
     DeltaWriteOptions,
@@ -58,7 +58,7 @@ def test_delta_write_read_version(tmp_path: Path) -> None:
         options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
     )
     assert result.version == 0
-    read_back = read_delta_table_from_path(str(path))
+    read_back = read_delta_as_reader(str(path)).read_all()
     assert int(read_back.num_rows) == int(table.num_rows)
 
 

@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Protocol
 
 import pyarrow as pa
 
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.param_tables import ParamTableSpec
 from relspec.config import RelspecConfig
 from relspec.rules.bundles import RuleBundle
@@ -193,6 +192,8 @@ class RuleRegistry:
         return self.config or RelspecConfig()
 
     def _resolved_schema_context(self) -> RelspecSchemaContext:
+        from datafusion_engine.runtime import DataFusionRuntimeProfile
+
         if self.schema_context is not None:
             return self.schema_context
         if self.engine_session is not None:

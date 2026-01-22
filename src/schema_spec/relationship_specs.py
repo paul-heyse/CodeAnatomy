@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from functools import cache
 
+from datafusion import SessionContext, SQLOptions
+
 from datafusion_engine.runtime import dataset_spec_from_context
+from datafusion_engine.schema_introspection import table_constraint_rows
 from schema_spec.system import (
     ContractCatalogSpec,
     DatasetSpec,
@@ -210,6 +214,78 @@ def relationship_contract_spec() -> ContractCatalogSpec:
     )
 
 
+def _constraint_key_sets(rows: Sequence[Mapping[str, object]]) -> list[tuple[str, ...]]:
+    constraints: dict[str, list[tuple[int, str]]] = {}
+    for row in rows:
+        constraint_type = row.get("constraint_type")
+        if not isinstance(constraint_type, str):
+            continue
+        if constraint_type.upper() not in {"PRIMARY KEY", "UNIQUE"}:
+            continue
+        constraint_name = row.get("constraint_name")
+        column_name = row.get("column_name")
+        if not isinstance(constraint_name, str) or not constraint_name:
+            continue
+        if not isinstance(column_name, str) or not column_name:
+            continue
+        ordinal = row.get("ordinal_position")
+        position = int(ordinal) if isinstance(ordinal, (int, float)) else 0
+        constraints.setdefault(constraint_name, []).append((position, column_name))
+    return [
+        tuple(name for _, name in sorted(columns, key=lambda item: item[0]))
+        for _, columns in sorted(constraints.items(), key=lambda item: item[0])
+    ]
+
+
+def _expected_dedupe_keys() -> dict[str, tuple[str, ...]]:
+    contracts = relationship_contract_spec().contracts
+    return {
+        name: contract.dedupe.keys
+        for name, contract in contracts.items()
+        if contract.dedupe is not None and contract.dedupe.keys
+    }
+
+
+def relationship_constraint_errors(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> dict[str, object]:
+    """Validate relationship dataset constraints via information_schema.
+
+    Returns
+    -------
+    dict[str, object]
+        Mapping of dataset name to constraint error details.
+    """
+    expected = _expected_dedupe_keys()
+    if not expected:
+        return {}
+    errors: dict[str, object] = {}
+    for name, keys in expected.items():
+        try:
+            rows = table_constraint_rows(
+                ctx,
+                table_name=name,
+                sql_options=sql_options,
+            )
+        except (RuntimeError, TypeError, ValueError) as exc:
+            errors[name] = {"error": str(exc), "expected_keys": list(keys)}
+            continue
+        observed_sets = _constraint_key_sets(rows)
+        if not observed_sets:
+            errors[name] = {"expected_keys": list(keys), "observed_keys": []}
+            continue
+        expected_set = set(keys)
+        if any(set(observed) == expected_set for observed in observed_sets):
+            continue
+        errors[name] = {
+            "expected_keys": list(keys),
+            "observed_keys": [list(observed) for observed in observed_sets],
+        }
+    return errors
+
+
 __all__ = [
     "RELATIONSHIP_SCHEMA_VERSION",
     "rel_callsite_qname_spec",
@@ -217,6 +293,7 @@ __all__ = [
     "rel_def_symbol_spec",
     "rel_import_symbol_spec",
     "rel_name_symbol_spec",
+    "relationship_constraint_errors",
     "relationship_contract_spec",
     "relationship_dataset_specs",
 ]

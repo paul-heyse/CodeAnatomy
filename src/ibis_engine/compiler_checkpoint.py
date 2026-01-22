@@ -6,7 +6,6 @@ from dataclasses import dataclass, replace
 from typing import cast
 
 from ibis.expr.types import Table as IbisTable
-from sqlglot import Expression
 
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
@@ -14,6 +13,7 @@ from datafusion_engine.schema_introspection import (
 )
 from ibis_engine.registry import datafusion_context
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
+from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
@@ -89,11 +89,13 @@ def compile_checkpoint(
 
 
 def _schema_map_from_backend(backend: IbisCompilerBackend) -> dict[str, dict[str, str]] | None:
+    from datafusion_engine.runtime import sql_options_for_profile
+
     try:
         ctx = datafusion_context(backend)
     except (TypeError, ValueError):
         return None
-    return SchemaIntrospector(ctx).schema_map()
+    return SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None)).schema_map()
 
 
 def try_plan_hash(

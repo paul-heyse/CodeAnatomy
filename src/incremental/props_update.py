@@ -8,7 +8,7 @@ from typing import cast
 from uuid import uuid4
 
 import pyarrow as pa
-from datafusion import SessionContext
+from datafusion import SessionContext, SQLOptions
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_schema
@@ -19,6 +19,7 @@ from cpg.schemas import (
     CPG_PROPS_GLOBAL_SCHEMA,
 )
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.sql_options import sql_options_for_profile
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
 from storage.deltalake import (
@@ -208,15 +209,16 @@ def _attach_file_id(
         "ON props.entity_id = mapping.entity_id "
         f"WHERE props.entity_kind = {kind_literal} AND mapping.file_id IS NULL"
     )
-    file_props = ctx.sql(file_sql).to_arrow_table()
-    global_props = ctx.sql(global_sql).to_arrow_table()
+    sql_options = _sql_options()
+    file_props = ctx.sql_with_options(file_sql, sql_options).to_arrow_table()
+    global_props = ctx.sql_with_options(global_sql, sql_options).to_arrow_table()
     return file_props, global_props
 
 
 def _filter_props_kind(ctx: SessionContext, *, props_name: str, kind: str) -> pa.Table:
     kind_literal = _sql_literal(kind)
     sql = f"SELECT * FROM {_sql_identifier(props_name)} WHERE entity_kind = {kind_literal}"
-    return ctx.sql(sql).to_arrow_table()
+    return ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
 
 
 def _filter_props_other(ctx: SessionContext, *, props_name: str) -> pa.Table:
@@ -224,7 +226,7 @@ def _filter_props_other(ctx: SessionContext, *, props_name: str) -> pa.Table:
         f"SELECT * FROM {_sql_identifier(props_name)} "
         f"WHERE entity_kind IS NULL OR entity_kind NOT IN ('{_NODE_KIND}', '{_EDGE_KIND}')"
     )
-    return ctx.sql(sql).to_arrow_table()
+    return ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
 
 
 def _concat_tables(
@@ -251,6 +253,10 @@ def _ensure_table(value: TableLike | RecordBatchReaderLike) -> pa.Table:
 def _datafusion_context() -> SessionContext:
     profile = DataFusionRuntimeProfile()
     return profile.session_context()
+
+
+def _sql_options() -> SQLOptions:
+    return sql_options_for_profile(None)
 
 
 def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import logging
 import re
+import time
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, TypedDict, cast
@@ -38,7 +39,6 @@ from datafusion.dataframe import DataFrame
 from datafusion.expr import SortExpr
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
-from sqlglot import ErrorLevel, Expression, exp
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from arrowdsl.core.ordering import Ordering, OrderingLevel
@@ -57,20 +57,67 @@ from datafusion_engine.schema_registry import has_schema, schema_for
 from engine.plan_cache import PlanCacheEntry, PlanCacheKey
 from ibis_engine.params_bridge import datafusion_param_bindings
 from ibis_engine.plan import IbisPlan
+from ibis_engine.substrait_bridge import (
+    record_substrait_gap,
+    try_ibis_to_substrait_bytes,
+)
 from obs.diagnostics import PreparedStatementSpec
 from schema_spec.policies import DataFusionWritePolicy
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
+from sqlglot_tools.compat import ErrorLevel, Expression, exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     default_sqlglot_policy,
     normalize_expr,
     parse_sql_strict,
     plan_fingerprint,
+    preflight_sql,
     register_datafusion_dialect,
     rewrite_expr,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class MaterializationPolicy:
+    """Policy controlling when full materialization is allowed.
+
+    Attributes
+    ----------
+    allow_full_materialization : bool
+        Whether to allow calling to_arrow_table() for full materialization.
+    max_rows_for_table : int | None
+        Maximum row count allowed for table materialization. None means no limit.
+    debug_mode : bool
+        Whether to allow table materialization in debug/diagnostic contexts.
+    """
+
+    allow_full_materialization: bool = False
+    max_rows_for_table: int | None = None
+    debug_mode: bool = False
+
+
+@dataclass(frozen=True)
+class DualLaneCompilationResult:
+    """Result of dual-lane compilation attempt.
+
+    Attributes
+    ----------
+    df : DataFrame
+        Compiled DataFusion DataFrame.
+    lane : str
+        Compilation lane used: 'substrait' or 'sql'.
+    substrait_bytes : bytes | None
+        Substrait plan bytes when Substrait lane was used, otherwise ``None``.
+    fallback_reason : str | None
+        Reason for SQL fallback when Substrait lane failed, otherwise ``None``.
+    """
+
+    df: DataFrame
+    lane: str
+    substrait_bytes: bytes | None = None
+    fallback_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +136,8 @@ class CopyToOptions:
     session_defaults: Mapping[str, object] | None = None
     table_options: Mapping[str, object] | None = None
     statement_overrides: Mapping[str, object] | None = None
+    file_format: str | None = None
+    partition_by: Sequence[str] = ()
     dml: DataFusionDmlOptions | None = None
     allow_file_output: bool = False
 
@@ -334,6 +383,7 @@ def _maybe_store_substrait(
         plan_hash=cache_key.plan_hash,
         profile_hash=cache_key.profile_hash,
         plan_bytes=plan_bytes,
+        compilation_lane="sql",
     )
     options.plan_cache.put(entry)
 
@@ -354,7 +404,10 @@ def _merge_sql_policies(*policies: DataFusionSqlPolicy | None) -> DataFusionSqlP
 
 
 def _sql_options_for_options(options: DataFusionCompileOptions) -> SQLOptions:
-    policy = options.sql_policy or _default_sql_policy()
+    policy = options.sql_policy or resolve_sql_policy(
+        options.sql_policy_name,
+        fallback=_default_sql_policy(),
+    )
     return options.sql_options or policy.to_sql_options()
 
 
@@ -509,6 +562,7 @@ def compile_sqlglot_expr(
                 policy=policy,
             ),
         )
+    _maybe_enforce_preflight(sg_expr, options=resolved)
     return sg_expr
 
 
@@ -537,6 +591,137 @@ def ibis_to_datafusion(
     return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
 
 
+def ibis_to_datafusion_dual_lane(
+    expr: IbisTable,
+    *,
+    backend: IbisCompilerBackend,
+    ctx: SessionContext,
+    options: DataFusionCompileOptions | None = None,
+) -> DualLaneCompilationResult:
+    """Compile an Ibis expression using dual-lane strategy.
+
+    This function attempts Substrait compilation first when enabled, falling back
+    to SQL generation if Substrait compilation fails. The result includes metadata
+    about which compilation lane was used.
+
+    Parameters
+    ----------
+    expr : IbisTable
+        Ibis table expression to compile.
+    backend : IbisCompilerBackend
+        Backend providing SQLGlot compilation support.
+    ctx : SessionContext
+        DataFusion session context for execution.
+    options : DataFusionCompileOptions | None, optional
+        Compilation options controlling dual-lane behavior.
+
+    Returns
+    -------
+    DualLaneCompilationResult
+        Result containing the compiled DataFrame and compilation lane metadata.
+
+    Examples
+    --------
+    >>> from datafusion import SessionContext
+    >>> from ibis_engine.backends import get_backend
+    >>> from datafusion_engine.bridge import ibis_to_datafusion_dual_lane
+    >>> from datafusion_engine.compile_options import DataFusionCompileOptions
+    >>> ctx = SessionContext()
+    >>> backend = get_backend()
+    >>> expr = backend.table("my_table").select("col1", "col2")
+    >>> opts = DataFusionCompileOptions(prefer_substrait=True)
+    >>> result = ibis_to_datafusion_dual_lane(expr, backend=backend, ctx=ctx, options=opts)
+    >>> print(result.lane)  # 'substrait' or 'sql'
+    """
+    resolved = options or DataFusionCompileOptions()
+    fallback_reason = "Substrait lane disabled (prefer_substrait=False)"
+
+    if resolved.prefer_substrait:
+        substrait_result, fallback_reason = _attempt_substrait_lane(
+            expr=expr,
+            backend=backend,
+            ctx=ctx,
+            options=resolved,
+        )
+        if substrait_result is not None:
+            return substrait_result
+
+    # SQL fallback lane
+    df = ibis_to_datafusion(expr, backend=backend, ctx=ctx, options=resolved)
+
+    return DualLaneCompilationResult(
+        df=df,
+        lane="sql",
+        substrait_bytes=None,
+        fallback_reason=fallback_reason if resolved.prefer_substrait else None,
+    )
+
+
+def _attempt_substrait_lane(
+    *,
+    expr: IbisTable,
+    backend: IbisCompilerBackend,
+    ctx: SessionContext,
+    options: DataFusionCompileOptions,
+) -> tuple[DualLaneCompilationResult | None, str]:
+    fallback_reason = "Substrait lane disabled (prefer_substrait=False)"
+    try:
+        plan_bytes = try_ibis_to_substrait_bytes(expr, diagnostics_sink=None)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        fallback_reason = f"Substrait lane error: {exc}"
+        logger.info("Substrait lane error, falling back to SQL: %s", fallback_reason)
+        _record_substrait_gap_if_enabled(expr=expr, options=options, reason=fallback_reason)
+        return None, fallback_reason
+
+    if plan_bytes is None:
+        fallback_reason = "Substrait compilation not supported for this expression"
+        logger.debug("Substrait lane unavailable, using SQL: %s", fallback_reason)
+        return None, fallback_reason
+
+    try:
+        df = replay_substrait_bytes(ctx, plan_bytes)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        fallback_reason = f"Substrait replay failed: {exc}"
+        logger.info("Substrait lane failed, falling back to SQL: %s", fallback_reason)
+        _record_substrait_gap_if_enabled(expr=expr, options=options, reason=fallback_reason)
+        return None, fallback_reason
+
+    if options.substrait_validation:
+        validation_result = validate_substrait_plan(plan_bytes, df=df)
+        if validation_result.get("status") == "mismatch":
+            logger.warning("Substrait validation mismatch detected: %s", validation_result)
+
+    sg_expr = compile_sqlglot_expr(expr, backend=backend, options=options)
+    resolved_cached, cache_reason = _resolve_cache_policy(sg_expr, options=options)
+    cached_df = (
+        df.cache() if _should_cache_df(df, options=resolved_cached, reason=cache_reason) else df
+    )
+    return (
+        DualLaneCompilationResult(
+            df=cached_df,
+            lane="substrait",
+            substrait_bytes=plan_bytes,
+            fallback_reason=None,
+        ),
+        fallback_reason,
+    )
+
+
+def _record_substrait_gap_if_enabled(
+    *,
+    expr: IbisTable,
+    options: DataFusionCompileOptions,
+    reason: str,
+) -> None:
+    if not options.record_substrait_gaps:
+        return
+    record_substrait_gap(
+        expr_type=type(expr).__name__,
+        reason=reason,
+        sink=None,
+    )
+
+
 def ibis_plan_to_datafusion(
     plan: IbisPlan,
     *,
@@ -558,15 +743,52 @@ def datafusion_to_table(
     df: DataFrame,
     *,
     ordering: Ordering | None = None,
+    policy: MaterializationPolicy | None = None,
 ) -> TableLike:
     """Materialize a DataFusion DataFrame with optional ordering metadata.
+
+    Full materialization is gated by policy checks to enforce streaming-first
+    design. Use datafusion_to_reader() for streaming access.
+
+    Parameters
+    ----------
+    df : DataFrame
+        DataFusion DataFrame to materialize.
+    ordering : Ordering | None
+        Optional ordering metadata to apply to the result.
+    policy : MaterializationPolicy | None
+        Policy controlling materialization behavior. If None, uses permissive defaults.
 
     Returns
     -------
     TableLike
         Arrow table with ordering metadata applied when provided.
+
+    Raises
+    ------
+    ValueError
+        Raised when materialization is blocked by policy.
     """
-    table = df.to_arrow_table()
+    resolved_policy = policy or MaterializationPolicy(allow_full_materialization=True)
+    if not resolved_policy.allow_full_materialization and not resolved_policy.debug_mode:
+        msg = (
+            "Full materialization is disabled. Use datafusion_to_reader() for streaming access "
+            "or enable debug_mode in MaterializationPolicy."
+        )
+        raise ValueError(msg)
+    if resolved_policy.max_rows_for_table is not None:
+        reader = datafusion_to_reader(df, ordering=ordering)
+        row_count = sum(batch.num_rows for batch in reader)
+        if row_count > resolved_policy.max_rows_for_table:
+            msg = (
+                f"Row count {row_count} exceeds max_rows_for_table limit "
+                f"({resolved_policy.max_rows_for_table}). Use datafusion_to_reader() instead."
+            )
+            raise ValueError(msg)
+        reader = datafusion_to_reader(df, ordering=ordering)
+        table = reader.read_all()
+    else:
+        table = df.to_arrow_table()
     if ordering is None or ordering.level == OrderingLevel.UNORDERED:
         return table
     spec = ordering_metadata_spec(ordering.level, keys=ordering.keys)
@@ -580,20 +802,27 @@ def datafusion_to_reader(
 ) -> pa.RecordBatchReader:
     """Return a RecordBatchReader for a DataFusion DataFrame.
 
+    Prefers the __arrow_c_stream__ protocol when available to enable
+    zero-copy streaming from DataFusion.
+
     Returns
     -------
     pyarrow.RecordBatchReader
         Record batch reader for the DataFusion results.
     """
-    try:
-        reader = pa.RecordBatchReader.from_stream(df)
-        return _apply_ordering(reader, ordering=ordering)
-    except (TypeError, ValueError):
-        pass
+    if hasattr(df, "__arrow_c_stream__"):
+        try:
+            reader = pa.RecordBatchReader.from_stream(df)
+            return _apply_ordering(reader, ordering=ordering)
+        except (TypeError, ValueError, AttributeError):
+            pass
     stream = getattr(df, "execute_stream", None)
     if callable(stream):
-        reader = stream()
-        return _apply_ordering(reader, ordering=ordering)
+        try:
+            reader = stream()
+            return _apply_ordering(reader, ordering=ordering)
+        except (TypeError, ValueError, RuntimeError):
+            pass
     to_batches = getattr(df, "to_arrow_batches", None)
     if callable(to_batches):
         batch_iter = cast("Iterable[pa.RecordBatch]", to_batches())
@@ -743,6 +972,41 @@ def _apply_rewrite_hook(expr: Expression, *, options: DataFusionCompileOptions) 
     )
 
 
+def _maybe_enforce_preflight(
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> None:
+    """Enforce preflight qualification when enabled.
+
+    Parameters
+    ----------
+    expr
+        SQLGlot expression to validate.
+    options
+        Compilation options with preflight enforcement flag.
+
+    Raises
+    ------
+    ValueError
+        Raised when preflight enforcement is enabled and validation fails.
+    """
+    if not options.enforce_preflight:
+        return
+    policy = options.sqlglot_policy or default_sqlglot_policy()
+    sql_text = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    result = preflight_sql(
+        sql_text,
+        schema=options.schema_map,
+        dialect=options.dialect,
+        strict=True,
+        policy=policy,
+    )
+    if result.errors:
+        msg = f"Preflight validation failed: {'; '.join(result.errors)}"
+        raise ValueError(msg)
+
+
 def _policy_violations(expr: Expression, policy: DataFusionSqlPolicy) -> tuple[str, ...]:
     violations: list[str] = []
     if not policy.allow_ddl and _contains_ddl(expr):
@@ -844,6 +1108,7 @@ class DataFusionPlanArtifacts:
     graphviz: str | None = None
     partition_count: int | None = None
     join_operators: tuple[str, ...] | None = None
+    run_id: str | None = None
 
     def payload(self) -> dict[str, object]:
         """Return a payload for plan artifacts.
@@ -877,6 +1142,39 @@ class DataFusionPlanArtifacts:
             "join_operators": list(self.join_operators)
             if self.join_operators is not None
             else None,
+            "run_id": self.run_id,
+        }
+
+    def structured_explain_payload(self) -> dict[str, object]:
+        """Return a structured payload suitable for diagnostics table builders.
+
+        Returns
+        -------
+        dict[str, object]
+            Payload structured for datafusion_plan_artifacts_table.
+        """
+        substrait_b64 = (
+            base64.b64encode(self.substrait_plan).decode("utf-8")
+            if self.substrait_plan is not None
+            else None
+        )
+        return {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "run_id": self.run_id,
+            "plan_hash": self.plan_hash,
+            "sql": self.sql,
+            "explain": self.explain,
+            "explain_analyze": self.explain_analyze,
+            "substrait_b64": substrait_b64,
+            "substrait_validation": self.substrait_validation,
+            "unparsed_sql": self.unparsed_sql,
+            "unparse_error": self.unparse_error,
+            "logical_plan": self.logical_plan,
+            "optimized_plan": self.optimized_plan,
+            "physical_plan": self.physical_plan,
+            "graphviz": self.graphviz,
+            "partition_count": self.partition_count,
+            "join_operators": self.join_operators,
         }
 
 
@@ -892,12 +1190,17 @@ def _df_from_sql(
         options.params,
         allowlist=options.param_identifier_allowlist,
     )
-    policy = options.sql_policy or _default_sql_policy()
+    policy = options.sql_policy or resolve_sql_policy(
+        options.sql_policy_name,
+        fallback=_default_sql_policy(),
+    )
     sql_options = options.sql_options or policy.to_sql_options()
-    violations = ()
-    if options.sql_options is None or options.sql_policy is not None:
-        violations = _policy_violations(expr, policy)
-        if violations:
+    violations = _policy_violations(expr, policy)
+    if violations:
+        if options.enforce_sql_policy:
+            msg = f"DataFusion SQL policy violations: {', '.join(violations)}."
+            raise ValueError(msg)
+        if options.sql_options is None or options.sql_policy is not None or options.sql_policy_name:
             logger.warning(
                 "DataFusion SQL policy violations detected: %s",
                 ", ".join(violations),
@@ -1004,11 +1307,38 @@ def copy_to_path(
     -------
     datafusion.dataframe.DataFrame
         DataFrame representing the COPY statement.
+    """
+    statement = copy_to_statement(sql, path=path, options=options)
+    resolved = options or CopyToOptions()
+    return execute_dml(ctx, statement, options=resolved.dml)
+
+
+def copy_to_statement(
+    sql: str,
+    *,
+    path: str,
+    options: CopyToOptions | None = None,
+) -> str:
+    """Return a COPY statement for the provided query and path.
+
+    Parameters
+    ----------
+    sql
+        SQL query to wrap in the COPY statement.
+    path
+        Output path for the COPY destination.
+    options
+        COPY statement options and DML configuration.
+
+    Returns
+    -------
+    str
+        COPY statement assembled from the provided options.
 
     Raises
     ------
     ValueError
-        Raised when file outputs are disabled.
+        Raised when COPY output is disabled.
     """
     resolved = options or CopyToOptions()
     if not resolved.allow_file_output:
@@ -1020,8 +1350,27 @@ def copy_to_path(
         statement_overrides=resolved.statement_overrides,
     )
     clause = _copy_options_clause(merged)
-    statement = f"COPY ({sql}) TO {_sql_literal(path)}{clause}"
-    return execute_dml(ctx, statement, options=resolved.dml)
+    format_clause = _copy_format_clause(resolved.file_format)
+    partition_clause = _copy_partition_clause(resolved.partition_by)
+    return f"COPY ({sql}) TO {_sql_literal(path)}{format_clause}{partition_clause}{clause}"
+
+
+def _copy_format_clause(file_format: str | None) -> str:
+    if not file_format:
+        return ""
+    return f" STORED AS {file_format.upper()}"
+
+
+def _copy_partition_clause(partition_by: Sequence[str]) -> str:
+    if not partition_by:
+        return ""
+    cols = ", ".join(_sql_identifier(name) for name in partition_by)
+    return f" PARTITIONED BY ({cols})"
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
 
 
 def prepare_statement(
@@ -1200,11 +1549,11 @@ def _maybe_collect_plan_artifacts(
     if options.params and _contains_params(expr):
         return
     try:
-        artifacts = collect_plan_artifacts(ctx, expr, options=options, df=df)
+        artifacts = collect_plan_artifacts(ctx, expr, options=options, df=df, run_id=options.run_id)
     except (RuntimeError, TypeError, ValueError):
         return
     if options.plan_artifacts_hook is not None:
-        options.plan_artifacts_hook(artifacts.payload())
+        options.plan_artifacts_hook(artifacts.structured_explain_payload())
 
 
 def _explain_reader(df: DataFrame) -> pa.RecordBatchReader:
@@ -1325,8 +1674,22 @@ def collect_plan_artifacts(
     *,
     options: DataFusionCompileOptions,
     df: DataFrame | None = None,
+    run_id: str | None = None,
 ) -> DataFusionPlanArtifacts:
     """Collect plan artifacts for diagnostics.
+
+    Parameters
+    ----------
+    ctx:
+        DataFusion session context.
+    expr:
+        SQLGlot expression to collect artifacts for.
+    options:
+        Compilation options controlling artifact collection.
+    df:
+        Optional pre-compiled DataFrame to avoid re-execution.
+    run_id:
+        Optional correlation ID for run tracking.
 
     Returns
     -------
@@ -1378,6 +1741,7 @@ def collect_plan_artifacts(
         graphviz=cast("str | None", plan_details.get("graphviz")),
         partition_count=cast("int | None", plan_details.get("partition_count")),
         join_operators=cast("tuple[str, ...] | None", plan_details.get("join_operators")),
+        run_id=run_id,
     )
 
 
@@ -1687,10 +2051,13 @@ __all__ = [
     "DataFusionDmlOptions",
     "DataFusionPlanArtifacts",
     "DataFusionSqlPolicy",
+    "DualLaneCompilationResult",
     "IbisCompilerBackend",
+    "MaterializationPolicy",
     "collect_plan_artifacts",
     "compile_sqlglot_expr",
     "copy_to_path",
+    "copy_to_statement",
     "datafusion_from_arrow",
     "datafusion_partitioned_readers",
     "datafusion_to_async_batches",
@@ -1707,6 +2074,7 @@ __all__ = [
     "ibis_plan_to_reader",
     "ibis_plan_to_table",
     "ibis_to_datafusion",
+    "ibis_to_datafusion_dual_lane",
     "merge_format_options",
     "prepare_statement",
     "rehydrate_plan_artifacts",

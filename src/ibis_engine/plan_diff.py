@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from ibis.expr.types import Table as IbisTable
-from sqlglot import ErrorLevel, exp
 from sqlglot.diff import Insert, Keep, diff
 
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
+from sqlglot_tools.compat import ErrorLevel, exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SqlGlotPolicy,
@@ -154,7 +154,9 @@ def _semantic_diff_from_exprs(
     changes = [change for change in diff(left, right) if not isinstance(change, Keep)]
     edit_script = tuple(_diff_entry(change, dialect=policy.write_dialect) for change in changes)
     labels = [change.__class__.__name__.lower() for change in changes]
-    window_changed = _window_signature(left, policy=policy) != _window_signature(right, policy=policy)
+    window_changed = _window_signature(left, policy=policy) != _window_signature(
+        right, policy=policy
+    )
     join_changed = _join_signature(left, policy=policy) != _join_signature(right, policy=policy)
     if window_changed:
         labels.append("window_change")

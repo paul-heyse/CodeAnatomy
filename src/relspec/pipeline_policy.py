@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from arrowdsl.kernel.registry import KernelLane
 from datafusion_engine.compile_options import DataFusionSqlPolicy
 from ibis_engine.param_tables import ParamTablePolicy
-from relspec.config import RelspecConfig
 from relspec.list_filter_gate import ListFilterGatePolicy
+
+if TYPE_CHECKING:
+    from relspec.config import RelspecConfig
 from relspec.policies import PolicyRegistry
 
 
@@ -54,6 +57,8 @@ class PipelinePolicy:
         RelspecConfig
             Configuration payload for relspec registry wiring.
         """
+        from relspec.config import RelspecConfig
+
         return RelspecConfig(
             param_table_policy=self.param_table_policy,
             list_filter_gate_policy=self.list_filter_gate_policy,

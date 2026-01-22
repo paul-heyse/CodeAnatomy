@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
-from datafusion import SessionContext
+from datafusion import SessionContext, SQLOptions
 from hamilton.function_modifiers import tag
 
 from arrowdsl.core.execution_context import ExecutionContext
@@ -36,8 +36,13 @@ from datafusion_engine.bridge import validate_table_constraints
 from datafusion_engine.registry_bridge import cached_dataset_names, register_dataset_df
 from datafusion_engine.runtime import (
     DataFusionRuntimeProfile,
+    catalog_snapshot_for_profile,
     dataset_spec_from_context,
-    read_delta_table_from_path,
+    diagnostics_dml_hook,
+    function_catalog_snapshot_for_profile,
+    read_delta_as_reader,
+    settings_snapshot_for_profile,
+    sql_options_for_profile,
 )
 from datafusion_engine.schema_introspection import SCHEMA_MAP_HASH_VERSION, SchemaIntrospector
 from datafusion_engine.schema_registry import is_nested_dataset
@@ -59,10 +64,10 @@ from hamilton_pipeline.pipeline_types import (
 )
 from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.io_bridge import (
+    IbisCopyWriteOptions,
     IbisNamedDatasetWriteOptions,
-    IbisParquetWriteOptions,
+    write_ibis_named_datasets_copy,
     write_ibis_named_datasets_delta,
-    write_ibis_named_datasets_parquet,
 )
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.params_bridge import IbisParamRegistry, ScalarParamSpec
@@ -392,7 +397,7 @@ def _datafusion_settings_snapshot(
     if profile is None or not profile.enable_information_schema:
         return None
     session = profile.session_context()
-    table = profile.settings_snapshot(session)
+    table = settings_snapshot_for_profile(profile, session)
     snapshot: list[dict[str, str]] = []
     columns = table.to_pydict()
     names = columns.get("name", [])
@@ -425,7 +430,7 @@ def _datafusion_catalog_snapshot(
     if profile is None or not profile.enable_information_schema:
         return None
     session = profile.session_context()
-    table = profile.catalog_snapshot(session)
+    table = catalog_snapshot_for_profile(profile, session)
     snapshot: list[dict[str, str]] = []
     columns = table.to_pydict()
     catalogs = columns.get("table_catalog", [])
@@ -455,7 +460,8 @@ def _datafusion_function_catalog_snapshot(
     if profile is None:
         return None, None
     session = profile.session_context()
-    snapshot = profile.function_catalog_snapshot(
+    snapshot = function_catalog_snapshot_for_profile(
+        profile,
         session,
         include_routines=profile.enable_information_schema,
     )
@@ -472,7 +478,10 @@ def _datafusion_schema_map_snapshot(
     if profile is None or not profile.enable_information_schema:
         return None, None
     session = profile.session_context()
-    introspector = SchemaIntrospector(session)
+    introspector = SchemaIntrospector(
+        session,
+        sql_options=sql_options_for_profile(profile),
+    )
     schema_map = introspector.schema_map()
     schema_hash = introspector.schema_map_fingerprint()
     return schema_map, schema_hash
@@ -809,7 +818,10 @@ def _datafusion_schema_map_fingerprints(
     runtime = ctx.runtime.datafusion
     if runtime is None or not runtime.enable_information_schema:
         return None
-    introspector = SchemaIntrospector(runtime.session_context())
+    introspector = SchemaIntrospector(
+        runtime.session_context(),
+        sql_options=sql_options_for_profile(runtime),
+    )
     try:
         schema_map = introspector.schema_map()
         schema_map_hash = introspector.schema_map_fingerprint()
@@ -829,7 +841,10 @@ def _datafusion_ddl_fingerprints(ctx: ExecutionContext) -> pa.Table | None:
     runtime = ctx.runtime.datafusion
     if runtime is None or not runtime.enable_information_schema:
         return None
-    introspector = SchemaIntrospector(runtime.session_context())
+    introspector = SchemaIntrospector(
+        runtime.session_context(),
+        sql_options=sql_options_for_profile(runtime),
+    )
     try:
         tables = introspector.tables_snapshot()
     except (RuntimeError, TypeError, ValueError):
@@ -1570,12 +1585,26 @@ def _write_parquet_exports(
     execution = options.ibis_execution
     if execution is None or execution.ibis_backend is None:
         return
-    write_ibis_named_datasets_parquet(
+    runtime_profile = execution.ctx.runtime.datafusion
+    record_hook = None
+    if runtime_profile is not None and runtime_profile.diagnostics_sink is not None:
+        base_hook = diagnostics_dml_hook(runtime_profile.diagnostics_sink)
+
+        def _hook(payload: Mapping[str, object]) -> None:
+            merged = dict(payload)
+            merged["statement_type"] = "COPY"
+            merged["file_format"] = "parquet"
+            base_hook(merged)
+
+        record_hook = _hook
+    write_ibis_named_datasets_copy(
         datasets,
         out_dir / "parquet_exports",
-        options=IbisParquetWriteOptions(
+        options=IbisCopyWriteOptions(
             execution=execution,
+            file_format="parquet",
             overwrite=options.output_config.overwrite_intermediate_datasets,
+            record_hook=record_hook,
         ),
     )
 
@@ -1632,8 +1661,11 @@ def _write_normalized_inputs(
 def _normalized_input_row_count(path: str | None) -> int | None:
     if not path:
         return None
-    table = read_delta_table_from_path(path)
-    return int(table.num_rows)
+    reader = read_delta_as_reader(path)
+    row_count = 0
+    for batch in reader:
+        row_count += batch.num_rows
+    return row_count
 
 
 def _normalized_input_metrics(
@@ -2448,7 +2480,11 @@ def _datafusion_scan_telemetry(inputs: _ScanTelemetryInputs) -> ScanTelemetry:
         runtime_profile=runtime_profile,
     )
     try:
-        count_rows = _datafusion_count_rows(session, table_name)
+        count_rows = _datafusion_count_rows(
+            session,
+            table_name,
+            sql_options=sql_options_for_profile(runtime_profile),
+        )
         schema = session.table(table_name).schema()
     finally:
         with suppress(KeyError, RuntimeError, TypeError, ValueError):
@@ -2507,7 +2543,12 @@ def _datafusion_schema_for_location(
             session.deregister_table(table_name)
 
 
-def _datafusion_count_rows(ctx: SessionContext, table_name: str) -> int | None:
+def _datafusion_count_rows(
+    ctx: SessionContext,
+    table_name: str,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> int | None:
     """Return a COUNT(*) for a registered table.
 
     Returns
@@ -2515,7 +2556,10 @@ def _datafusion_count_rows(ctx: SessionContext, table_name: str) -> int | None:
     int | None
         Count value when rows are present, otherwise ``None``.
     """
-    table = ctx.sql(f"SELECT COUNT(*) AS count_rows FROM {table_name}").to_arrow_table()
+    table = ctx.sql_with_options(
+        f"SELECT COUNT(*) AS count_rows FROM {table_name}",
+        sql_options or sql_options_for_profile(None),
+    ).to_arrow_table()
     if table.num_rows < 1:
         return None
     value = table["count_rows"][0].as_py()
@@ -3131,7 +3175,10 @@ def _datafusion_function_allowlist_notes(ctx: ExecutionContext) -> JsonDict:
     if runtime is None or not runtime.enable_information_schema:
         return {}
     try:
-        available = SchemaIntrospector(runtime.session_context()).function_names()
+        available = SchemaIntrospector(
+            runtime.session_context(),
+            sql_options=sql_options_for_profile(runtime),
+        ).function_names()
     except (RuntimeError, TypeError, ValueError):
         return {}
     demands = collect_rule_demands(rule_definitions_cached(), include_extract_queries=True)

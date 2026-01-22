@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from datafusion_engine.registry_bridge import register_dataset_df
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.runtime import DataFusionRuntimeProfile, settings_snapshot_for_profile
 from ibis_engine.registry import DatasetLocation
 from schema_spec.system import DataFusionScanOptions, table_spec_from_schema
 
@@ -43,7 +43,7 @@ def test_scan_policy_applies_stats_settings(tmp_path: Path) -> None:
         ),
         runtime_profile=profile,
     )
-    settings = profile.settings_snapshot(ctx).to_pydict()
+    settings = settings_snapshot_for_profile(profile, ctx).to_pydict()
     values = dict(zip(settings.get("name", []), settings.get("value", []), strict=False))
     assert values.get("datafusion.execution.collect_statistics") == "false"
     assert values.get("datafusion.execution.meta_fetch_concurrency") == "8"
@@ -72,7 +72,7 @@ def test_scan_policy_applies_listing_cache_and_projection(tmp_path: Path) -> Non
         ),
         runtime_profile=profile,
     )
-    settings = profile.settings_snapshot(ctx).to_pydict()
+    settings = settings_snapshot_for_profile(profile, ctx).to_pydict()
     values = dict(zip(settings.get("name", []), settings.get("value", []), strict=False))
     assert values.get("datafusion.runtime.list_files_cache_limit") == "1024"
     assert values.get("datafusion.runtime.list_files_cache_ttl") == "30s"

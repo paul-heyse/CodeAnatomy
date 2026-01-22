@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlglot import Expression, exp
-
 from ibis_engine.param_tables import ParamTablePolicy
+from sqlglot_tools.compat import Expression, exp
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING, Protocol, cast
 import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
+from ibis.expr.types import Scalar
 from ibis.expr.types import Table as IbisTable
+from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.interop import (
     RecordBatchReaderLike,
@@ -23,7 +25,12 @@ from arrowdsl.core.interop import (
 from arrowdsl.core.streaming import to_reader
 from core_types import PathLike
 from datafusion_engine.bridge import (
+    CopyToOptions,
+    DataFusionDmlOptions,
+    copy_to_path,
+    copy_to_statement,
     datafusion_from_arrow,
+    datafusion_view_sql,
     ibis_plan_to_datafusion,
     ibis_to_datafusion,
 )
@@ -51,7 +58,6 @@ from storage.deltalake import (
     StorageOptions,
     apply_delta_write_policies,
     write_datafusion_delta,
-    write_table_delta,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
@@ -59,6 +65,7 @@ type IbisWriteInput = TableLike | RecordBatchReaderLike | IbisPlan | IbisTable |
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
 
 
 class TableMaterializeBackend(Protocol):
@@ -138,6 +145,29 @@ class IbisParquetWriteOptions:
     overwrite: bool = True
     partition_by: Sequence[str] | None = None
     dataset_options: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class IbisCopyWriteOptions:
+    """Options for writing Ibis expressions via DataFusion COPY."""
+
+    execution: IbisExecutionContext
+    file_format: str
+    overwrite: bool = True
+    partition_by: Sequence[str] | None = None
+    statement_overrides: Mapping[str, object] | None = None
+    record_hook: Callable[[Mapping[str, object]], None] | None = None
+
+
+@dataclass(frozen=True)
+class IbisCopyWriteResult:
+    """Summary of a DataFusion COPY write."""
+
+    path: str
+    sql: str
+    file_format: str
+    partition_by: tuple[str, ...]
+    statement_overrides: Mapping[str, object] | None
 
 
 def ibis_plan_to_reader(
@@ -360,29 +390,6 @@ def _resolve_writer_strategy(
     return "datafusion"
 
 
-def _resolve_delta_write_input(
-    data: IbisWriteInput,
-    *,
-    execution: IbisExecutionContext | None,
-    batch_size: int | None,
-    prefer_reader: bool,
-) -> TableLike | RecordBatchReaderLike:
-    if isinstance(data, PlanProduct):
-        data = data.materialize_table()
-    if isinstance(data, IbisPlan):
-        if execution is None:
-            msg = "Delta writes for Ibis plans require an execution context."
-            raise ValueError(msg)
-        if prefer_reader:
-            return ibis_plan_to_reader(data, batch_size=batch_size, execution=execution)
-        return ibis_to_table(data, execution=execution)
-    if isinstance(data, IbisTable):
-        if prefer_reader:
-            return ibis_table_to_reader(data, batch_size=batch_size)
-        return ibis_to_table(data, execution=execution)
-    return coerce_table_like(data)
-
-
 def write_ibis_dataset_delta(
     data: IbisWriteInput,
     base_dir: PathLike,
@@ -414,44 +421,32 @@ def write_ibis_dataset_delta(
     if writer_strategy != "datafusion":
         msg = "Delta writes require the DataFusion writer strategy."
         raise ValueError(msg)
-    datafusion_result: DeltaWriteResult | None = None
-    if isinstance(data, (IbisPlan, IbisTable)):
-        if options.execution is None:
-            msg = "DataFusion writer requires an execution context for Ibis inputs."
-            raise ValueError(msg)
-        runtime_profile = options.execution.ctx.runtime.datafusion
-        if runtime_profile is None or options.execution.ibis_backend is None:
-            msg = "DataFusion writer requires a runtime profile and Ibis backend."
-            raise ValueError(msg)
-        df_ctx = runtime_profile.session_context()
-        backend = cast("IbisCompilerBackend", options.execution.ibis_backend)
-        df = (
-            ibis_plan_to_datafusion(data, backend=backend, ctx=df_ctx)
-            if isinstance(data, IbisPlan)
-            else ibis_to_datafusion(data, backend=backend, ctx=df_ctx)
-        )
-        try:
-            datafusion_result = write_datafusion_delta(
-                df,
-                base_dir=str(base_dir),
-                options=delta_options,
-                storage_options=options.storage_options,
-            )
-        except (TypeError, ValueError):
-            datafusion_result = None
-    if datafusion_result is None:
-        delta_input = _resolve_delta_write_input(
-            data,
-            execution=options.execution,
-            batch_size=options.batch_size,
-            prefer_reader=options.prefer_reader,
-        )
-        datafusion_result = write_table_delta(
-            delta_input,
-            str(base_dir),
+    if options.execution is None:
+        msg = "DataFusion writer requires an execution context for Ibis inputs."
+        raise ValueError(msg)
+    runtime_profile = options.execution.ctx.runtime.datafusion
+    if runtime_profile is None or options.execution.ibis_backend is None:
+        msg = "DataFusion writer requires a runtime profile and Ibis backend."
+        raise ValueError(msg)
+    df_ctx = runtime_profile.session_context()
+    backend = cast("IbisCompilerBackend", options.execution.ibis_backend)
+    df, temp_name = _datafusion_df_for_write(
+        name="dataset",
+        value=data,
+        backend=backend,
+        ctx=df_ctx,
+        batch_size=options.batch_size,
+    )
+    try:
+        datafusion_result = write_datafusion_delta(
+            df,
+            base_dir=str(base_dir),
             options=delta_options,
             storage_options=options.storage_options,
         )
+    finally:
+        if temp_name is not None:
+            _deregister_table(df_ctx, name=temp_name)
     if options.delta_reporter is not None:
         options.delta_reporter(datafusion_result)
     return datafusion_result
@@ -505,26 +500,12 @@ def write_ibis_named_datasets_delta(
             batch_size=options.batch_size,
         )
         try:
-            try:
-                result = write_datafusion_delta(
-                    df,
-                    base_dir=f"{str(base_dir).rstrip('/')}/{name}",
-                    options=delta_options,
-                    storage_options=options.storage_options,
-                )
-            except (TypeError, ValueError):
-                delta_input = _resolve_delta_write_input(
-                    value,
-                    execution=options.execution,
-                    batch_size=options.batch_size,
-                    prefer_reader=options.prefer_reader,
-                )
-                result = write_table_delta(
-                    delta_input,
-                    f"{str(base_dir).rstrip('/')}/{name}",
-                    options=delta_options,
-                    storage_options=options.storage_options,
-                )
+            result = write_datafusion_delta(
+                df,
+                base_dir=f"{str(base_dir).rstrip('/')}/{name}",
+                options=delta_options,
+                storage_options=options.storage_options,
+            )
         finally:
             if temp_name is not None:
                 _deregister_table(df_ctx, name=temp_name)
@@ -607,12 +588,149 @@ def write_ibis_dataset_parquet(
     dataset_options = dict(options.dataset_options) if options.dataset_options is not None else {}
     if options.partition_by is not None:
         dataset_options.setdefault("partition_by", list(options.partition_by))
-    table.to_parquet_dir(
-        str(path),
-        params=options.execution.params,
-        **dataset_options,
-    )
+    params = _parquet_params(options.execution.params)
+    table.to_parquet_dir(str(path), params=params, **dataset_options)
     return str(path)
+
+
+def write_ibis_dataset_copy(
+    data: IbisWriteInput,
+    base_dir: PathLike,
+    *,
+    options: IbisCopyWriteOptions,
+) -> IbisCopyWriteResult:
+    """Write an Ibis dataset via DataFusion COPY.
+
+    Returns
+    -------
+    IbisCopyWriteResult
+        COPY write metadata.
+    """
+    results = write_ibis_named_datasets_copy(
+        {"dataset": data},
+        base_dir,
+        options=options,
+    )
+    return results["dataset"]
+
+
+def write_ibis_named_datasets_copy(
+    datasets: Mapping[str, IbisWriteInput],
+    base_dir: PathLike,
+    *,
+    options: IbisCopyWriteOptions,
+) -> dict[str, IbisCopyWriteResult]:
+    """Write a mapping of datasets via DataFusion COPY.
+
+    Returns
+    -------
+    dict[str, IbisCopyWriteResult]
+        Mapping of dataset names to COPY write metadata.
+
+    Raises
+    ------
+    ValueError
+        If the runtime profile or Ibis backend is unavailable.
+    """
+    from datafusion_engine.runtime import statement_sql_options_for_profile
+
+    runtime_profile = options.execution.ctx.runtime.datafusion
+    if runtime_profile is None or options.execution.ibis_backend is None:
+        msg = "COPY writer requires a runtime profile and Ibis backend."
+        raise ValueError(msg)
+    df_ctx = runtime_profile.session_context()
+    backend = cast("IbisCompilerBackend", options.execution.ibis_backend)
+    results: dict[str, IbisCopyWriteResult] = {}
+    for name, value in datasets.items():
+        df_obj, temp_name = _datafusion_df_for_write(
+            name=name,
+            value=value,
+            backend=backend,
+            ctx=df_ctx,
+            batch_size=None,
+        )
+        df = cast("DataFrame", df_obj)
+        target_path = Path(base_dir) / name
+        _prepare_copy_dir(target_path, overwrite=options.overwrite)
+        partition_by = _copy_partition_by(options.partition_by, df)
+        copy_options = CopyToOptions(
+            file_format=options.file_format,
+            partition_by=partition_by,
+            statement_overrides=options.statement_overrides,
+            allow_file_output=True,
+            dml=DataFusionDmlOptions(
+                sql_options=statement_sql_options_for_profile(runtime_profile),
+                record_hook=options.record_hook,
+            ),
+        )
+        copy_sql: str | None = None
+        try:
+            select_sql = _copy_select_sql(df, temp_name=temp_name)
+            copy_sql = copy_to_statement(select_sql, path=str(target_path), options=copy_options)
+            copy_to_path(
+                df_ctx, sql=select_sql, path=str(target_path), options=copy_options
+            ).collect()
+        finally:
+            if temp_name is not None:
+                _deregister_table(df_ctx, name=temp_name)
+        if copy_sql is None:
+            msg = "COPY writer failed to produce a SQL statement."
+            raise ValueError(msg)
+        results[name] = IbisCopyWriteResult(
+            path=str(target_path),
+            sql=copy_sql,
+            file_format=options.file_format,
+            partition_by=partition_by,
+            statement_overrides=options.statement_overrides,
+        )
+    return results
+
+
+def _prepare_copy_dir(path: Path, *, overwrite: bool) -> None:
+    if overwrite and path.exists():
+        shutil.rmtree(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _copy_select_sql(df: DataFrame, *, temp_name: str | None) -> str:
+    sql = datafusion_view_sql(df)
+    if sql is not None:
+        return sql
+    if temp_name is None:
+        msg = "COPY writer requires SQL for the DataFusion DataFrame."
+        raise ValueError(msg)
+    return f"SELECT * FROM {_sql_identifier(temp_name)}"
+
+
+def _copy_partition_by(
+    partition_by: Sequence[str] | None,
+    df: DataFrame,
+) -> tuple[str, ...]:
+    if not partition_by:
+        return ()
+    schema = df.schema()
+    if isinstance(schema, pa.Schema):
+        names = schema.names
+    else:
+        names = getattr(schema, "names", None)
+        if names is None:
+            return tuple(partition_by)
+    available = set(names)
+    return tuple(name for name in partition_by if name in available)
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _parquet_params(
+    params: Mapping[IbisValue, object] | None,
+) -> Mapping[Scalar, object] | None:
+    if params is None:
+        return None
+    resolved = {key: value for key, value in params.items() if isinstance(key, Scalar)}
+    return resolved or None
 
 
 def write_ibis_named_datasets_parquet(
@@ -648,6 +766,8 @@ def _deregister_table(ctx: SessionContext, *, name: str) -> None:
 __all__ = [
     "DeltaWriteOptions",
     "DeltaWriteResult",
+    "IbisCopyWriteOptions",
+    "IbisCopyWriteResult",
     "IbisDatasetWriteOptions",
     "IbisMaterializeOptions",
     "IbisNamedDatasetWriteOptions",
@@ -657,8 +777,10 @@ __all__ = [
     "ibis_table_to_reader",
     "ibis_to_table",
     "materialize_table",
+    "write_ibis_dataset_copy",
     "write_ibis_dataset_delta",
     "write_ibis_dataset_parquet",
+    "write_ibis_named_datasets_copy",
     "write_ibis_named_datasets_delta",
     "write_ibis_named_datasets_parquet",
 ]

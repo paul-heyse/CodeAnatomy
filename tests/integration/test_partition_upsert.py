@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from datafusion_engine.runtime import read_delta_table_from_path
+from datafusion_engine.runtime import read_delta_as_reader
 from storage.deltalake import (
     DeltaUpsertOptions,
     upsert_dataset_partitions_delta,
@@ -15,7 +15,7 @@ from tests.utils import values_as_list
 
 
 def _read_partition(base_dir: Path, file_id: str) -> pa.Table:
-    table = read_delta_table_from_path(str(base_dir))
+    table = read_delta_as_reader(str(base_dir)).read_all()
     mask = table["file_id"] == pa.scalar(file_id)
     return table.filter(mask)
 

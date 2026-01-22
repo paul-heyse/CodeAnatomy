@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
-from datafusion import SessionContext, col
+from datafusion import SessionContext, SQLOptions, col
 from datafusion import functions as f
 
 from arrowdsl.core.array_iter import iter_array_values
@@ -31,7 +31,6 @@ from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_table
 from arrowdsl.schema.validation import ArrowValidationOptions
-from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from schema_spec.specs import TableSchemaSpec
@@ -332,7 +331,7 @@ def _required_non_null_results(
             f"SELECT {', '.join(mask_exprs)}, {combined_expr} AS bad_any "
             f"FROM {_sql_identifier(table_name)}"
         )
-        result = df_ctx.sql(sql).to_arrow_table()
+        result = df_ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
@@ -410,7 +409,7 @@ def _combine_masks_df(
         parts = [f"COALESCE(mask_{idx}, FALSE)" for idx in range(len(masks))]
         combined_expr = " OR ".join(parts) if parts else "FALSE"
         sql = f"SELECT {combined_expr} AS bad_any FROM {_sql_identifier(table_name)}"
-        result = ctx.sql(sql).to_arrow_table()
+        result = ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
     finally:
         deregister = getattr(ctx, "deregister_table", None)
         if callable(deregister):
@@ -436,7 +435,7 @@ def _filter_good_rows(
         columns = [name for name in resolved.schema.names if name != "_bad_any"]
         select_cols = ", ".join(_sql_identifier(name) for name in columns)
         sql = f"SELECT {select_cols} FROM {_sql_identifier(table_name)} WHERE NOT _bad_any"
-        return df_ctx.sql(sql).to_arrow_table()
+        return df_ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
@@ -492,11 +491,12 @@ def _raise_on_errors_if_strict(
 
 
 def _error_code_counts_table(errors: TableLike) -> pa.Table:
+    from datafusion_engine.bridge import datafusion_from_arrow
+
     ctx = SessionContext()
     datafusion_from_arrow(ctx, name="errors", value=errors)
-    table = ctx.sql(
-        "SELECT error_code, COUNT(*) AS count FROM errors GROUP BY error_code"
-    ).to_arrow_table()
+    sql = "SELECT error_code, COUNT(*) AS count FROM errors GROUP BY error_code"
+    table = ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
     return cast("pa.Table", table)
 
 
@@ -594,7 +594,7 @@ def _row_id_for_errors(
             prefix = f"{contract.name}:row"
             row_sql = _row_id_sql(prefix, key_cols)
             sql = f"SELECT {row_sql} AS row_id FROM {_sql_identifier(table_name)}"
-            result = df_ctx.sql(sql).to_arrow_table()
+            result = df_ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
         finally:
             deregister = getattr(df_ctx, "deregister_table", None)
             if callable(deregister):
@@ -666,6 +666,12 @@ def _datafusion_context(ctx: ExecutionContext) -> SessionContext | None:
         return None
 
 
+def _sql_options() -> SQLOptions:
+    from datafusion_engine.runtime import sql_options_for_profile
+
+    return sql_options_for_profile(None)
+
+
 def _register_temp_table(
     ctx: SessionContext,
     table: TableLike,
@@ -688,7 +694,8 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     table = pa.table({"value": pa.array([None], type=dtype)})
     ctx.register_record_batches(temp_name, [table.to_batches()])
     try:
-        result = ctx.sql(f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}").to_arrow_table()
+        sql = f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}"
+        result = ctx.sql_with_options(sql, _sql_options()).to_arrow_table()
         value = result["dtype"][0].as_py()
     finally:
         deregister = getattr(ctx, "deregister_table", None)
@@ -701,8 +708,10 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
 
 
 def _supports_error_detail_aggregation(ctx: SessionContext) -> bool:
+    from datafusion_engine.runtime import sql_options_for_profile
+
     try:
-        names = SchemaIntrospector(ctx).function_names()
+        names = SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None)).function_names()
     except (RuntimeError, TypeError, ValueError):
         return False
     normalized = {name.lower() for name in names}
@@ -724,13 +733,13 @@ def _aggregate_error_detail_lists_df(
             if patypes.is_dictionary(field.type):
                 dict_type = cast("pa.DictionaryType", field.type)
                 value_name = _arrow_type_name(ctx, dict_type.value_type)
-                selections.append(
-                    f"arrow_cast({_sql_identifier(name)}, '{value_name}') AS {_sql_identifier(name)}"
-                )
+                source = _sql_identifier(name)
+                alias = _sql_identifier(name)
+                selections.append(f"arrow_cast({source}, '{value_name}') AS {alias}")
             else:
                 selections.append(_sql_identifier(name))
         select_sql = f"SELECT {', '.join(selections)} FROM {_sql_identifier(table_name)}"
-        df = ctx.sql(select_sql)
+        df = ctx.sql_with_options(select_sql, _sql_options())
         struct_expr = f.named_struct([(name, col(name)) for name in detail_field_names])
         aggregated = df.aggregate(
             group_by=list(group_cols),

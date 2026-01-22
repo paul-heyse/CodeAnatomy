@@ -9,7 +9,8 @@ import ibis
 import ibis.expr.datatypes as dt
 import pyarrow as pa
 from ibis.expr.types import Table, Value
-from sqlglot import Expression
+
+from sqlglot_tools.compat import Expression
 
 
 def _normalize_arrow_dtype(dtype: pa.DataType) -> pa.DataType:

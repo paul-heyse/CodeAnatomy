@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.spec.codec import parse_scalar_value
+from arrowdsl.spec.literals import parse_scalar_value
 from registry_common.metadata import (
     decode_metadata_list,
     decode_metadata_map,

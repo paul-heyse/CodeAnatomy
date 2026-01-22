@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -12,11 +13,11 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr, SortExpr
-from sqlglot import Expression, exp
 
 from datafusion_engine.registry_bridge import DataFusionCachePolicy, register_dataset_df
 from datafusion_engine.udf_registry import datafusion_scalar_udf_map
 from ibis_engine.registry import DatasetLocation
+from sqlglot_tools.compat import Expression, exp
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -89,6 +90,7 @@ def df_from_sqlglot(ctx: SessionContext, expr: Expression) -> DataFrame:
         Raised when the expression cannot be translated.
     """
     expr = _resolve_table_aliases(expr)
+    expr = _apply_ctes(ctx, expr)
     if isinstance(expr, exp.Subquery):
         return df_from_sqlglot(ctx, expr.this)
     if isinstance(expr, exp.Select):
@@ -130,13 +132,80 @@ def _resolve_table_aliases(expr: Expression) -> Expression:
 
 
 def _table_alias_name(alias: Expression | str | None) -> str | None:
-    if isinstance(alias, exp.TableAlias):
-        alias = alias.this
-    if isinstance(alias, exp.Identifier):
-        return alias.this
-    if isinstance(alias, str):
-        return alias
+    alias_expr: Expression | str | None = alias
+    if isinstance(alias_expr, exp.TableAlias):
+        alias_expr = alias_expr.this
+    if isinstance(alias_expr, exp.Identifier):
+        return alias_expr.this
+    if isinstance(alias_expr, str):
+        return alias_expr
     return None
+
+
+def _apply_ctes(ctx: SessionContext, expr: Expression) -> Expression:
+    ctes, base_expr = _extract_ctes(expr)
+    if not ctes:
+        return expr
+    mapping = {name: _cte_table_name(name) for name in (_cte_alias_name(cte) for cte in ctes)}
+
+    def _rewrite(node: Expression) -> Expression:
+        if isinstance(node, exp.Table) and node.name in mapping:
+            updated = node.copy()
+            updated.set("this", exp.Identifier(this=mapping[node.name]))
+            return updated
+        if isinstance(node, exp.Column) and node.table in mapping:
+            return exp.column(node.name, table=mapping[node.table])
+        return node
+
+    rewritten = base_expr.transform(_rewrite)
+    for cte in ctes:
+        name = _cte_alias_name(cte)
+        cte_expr = _rewrite_cte_tables(cte.this, mapping)
+        df = df_from_sqlglot(ctx, cte_expr)
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                deregister(mapping[name])
+        ctx.register_table(mapping[name], df)
+    return rewritten
+
+
+def _extract_ctes(expr: Expression) -> tuple[tuple[exp.CTE, ...], Expression]:
+    if isinstance(expr, exp.With):
+        if expr.this is None:
+            return (), expr
+        return tuple(expr.expressions), expr.this
+    with_expr = expr.args.get("with")
+    if isinstance(with_expr, exp.With):
+        stripped = expr.copy()
+        stripped.set("with", None)
+        return tuple(with_expr.expressions), stripped
+    return (), expr
+
+
+def _rewrite_cte_tables(expr: Expression, mapping: Mapping[str, str]) -> Expression:
+    def _rewrite(node: Expression) -> Expression:
+        if isinstance(node, exp.Table) and node.name in mapping:
+            updated = node.copy()
+            updated.set("this", exp.Identifier(this=mapping[node.name]))
+            return updated
+        if isinstance(node, exp.Column) and node.table in mapping:
+            return exp.column(node.name, table=mapping[node.table])
+        return node
+
+    return expr.transform(_rewrite)
+
+
+def _cte_alias_name(cte: exp.CTE) -> str:
+    alias = cte.alias_or_name
+    if alias:
+        return alias
+    msg = "CTE name is required for DataFrame translation."
+    raise TranslationError(msg)
+
+
+def _cte_table_name(name: str) -> str:
+    return f"__cte_{name}"
 
 
 def register_dataset(
@@ -177,12 +246,13 @@ def _select_to_df(ctx: SessionContext, select: exp.Select) -> DataFrame:
     from_expr = select.args.get("from") or select.args.get("from_")
     source = _from_expr(ctx, from_expr)
     df = _apply_joins(ctx, source, select.args.get("joins"))
+    df, select_exprs = _apply_select_unnests(df, select.expressions)
     if select.args.get("where") is not None:
         df = df.filter(_expr_to_df(select.args["where"].this))
     if select.args.get("group") is not None or _has_aggregate(select.expressions):
         df = _apply_aggregate(df, select)
     else:
-        df = df.select(*_select_exprs(select.expressions))
+        df = df.select(*_select_exprs(select_exprs))
     if select.args.get("having") is not None:
         df = df.filter(_expr_to_df(select.args["having"].this))
     if select.args.get("distinct") is not None:
@@ -195,6 +265,50 @@ def _select_to_df(ctx: SessionContext, select: exp.Select) -> DataFrame:
         offset = _int_value(limit.args.get("offset"))
         df = df.limit(count, offset=offset)
     return df
+
+
+def _apply_select_unnests(
+    df: DataFrame,
+    expressions: Sequence[Expression],
+) -> tuple[DataFrame, list[Expression]]:
+    updated: list[Expression] = []
+    for expr in expressions:
+        alias_name = None
+        unnest_expr = None
+        if isinstance(expr, exp.Alias) and isinstance(expr.this, exp.Unnest):
+            alias_name = expr.alias
+            unnest_expr = expr.this
+        elif isinstance(expr, exp.Unnest):
+            unnest_expr = expr
+        if unnest_expr is None:
+            updated.append(expr)
+            continue
+        name = alias_name or _unnest_select_name(unnest_expr)
+        df = _apply_select_unnest(df, unnest_expr, name=name)
+        updated.append(exp.column(name))
+    return df, updated
+
+
+def _apply_select_unnest(df: DataFrame, unnest_expr: exp.Unnest, *, name: str) -> DataFrame:
+    expressions = list(unnest_expr.args.get("expressions") or [])
+    if not expressions and unnest_expr.this is not None:
+        expressions = [unnest_expr.this]
+    if len(expressions) != 1:
+        msg = "UNNEST in select requires a single expression."
+        raise TranslationError(msg)
+    expr = expressions[0]
+    if isinstance(expr, exp.Column) and name == expr.name:
+        return df.unnest_columns(name)
+    df = df.with_column(name, _expr_to_df(expr))
+    return df.unnest_columns(name)
+
+
+def _unnest_select_name(unnest_expr: exp.Unnest) -> str:
+    alias = unnest_expr.args.get("alias")
+    if isinstance(alias, exp.TableAlias) and alias.this is not None:
+        return alias.this.name
+    msg = "UNNEST expressions must be aliased in select lists."
+    raise TranslationError(msg)
 
 
 def _from_expr(ctx: SessionContext, from_expr: exp.From | None) -> DataFrame:
@@ -224,6 +338,9 @@ def _apply_joins(
     if not joins:
         return df
     for join in joins:
+        if _is_unnest_join(join):
+            df = _apply_unnest_join(df, join)
+            continue
         right = _join_source(ctx, join.this)
         how = _join_type(join)
         left_schema = tuple(df.schema().names)
@@ -239,6 +356,53 @@ def _apply_joins(
             coalesce_duplicate_keys=True,
         )
     return df
+
+
+def _is_unnest_join(join: exp.Join) -> bool:
+    target = join.this
+    return isinstance(target, exp.Unnest) or (
+        isinstance(target, exp.Lateral) and isinstance(target.this, exp.Unnest)
+    )
+
+
+def _apply_unnest_join(df: DataFrame, join: exp.Join) -> DataFrame:
+    target = join.this
+    if isinstance(target, exp.Lateral):
+        target = target.this
+    if not isinstance(target, exp.Unnest):
+        return df
+    expressions = list(target.args.get("expressions") or [])
+    if not expressions and target.this is not None:
+        expressions = [target.this]
+    if not expressions:
+        msg = "UNNEST requires at least one expression."
+        raise TranslationError(msg)
+    if (join.args.get("kind") or "cross").lower() != "cross":
+        msg = "Only CROSS JOIN is supported for UNNEST translation."
+        raise TranslationError(msg)
+    names = _unnest_column_names(target, expressions)
+    for name, expr in zip(names, expressions, strict=True):
+        if isinstance(expr, exp.Column) and name == expr.name:
+            continue
+        df = df.with_column(name, _expr_to_df(expr))
+    return df.unnest_columns(*names)
+
+
+def _unnest_column_names(unnest: exp.Unnest, expressions: Sequence[Expression]) -> list[str]:
+    alias = unnest.args.get("alias")
+    if isinstance(alias, exp.TableAlias):
+        columns = alias.args.get("columns")
+        if columns and len(columns) == len(expressions):
+            return [column.name for column in columns]
+        if alias.this is not None and len(expressions) == 1:
+            return [alias.this.name]
+    names: list[str] = []
+    for idx, expr in enumerate(expressions):
+        if isinstance(expr, exp.Column):
+            names.append(expr.name)
+        else:
+            names.append(f"__unnest_{idx}")
+    return names
 
 
 def _join_source(ctx: SessionContext, node: Expression) -> DataFrame:
@@ -326,7 +490,9 @@ def _using_exprs(using: object) -> list[Expression]:
     if isinstance(using, list):
         return [expr for expr in using if isinstance(expr, Expression)]
     if isinstance(using, Expression):
-        return list(using.expressions)
+        expressions = getattr(using, "expressions", None)
+        if isinstance(expressions, list):
+            return [expr for expr in expressions if isinstance(expr, Expression)]
     return []
 
 

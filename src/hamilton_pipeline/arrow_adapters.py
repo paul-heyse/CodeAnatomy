@@ -10,7 +10,7 @@ import pyarrow as pa
 from hamilton.io.data_adapters import DataLoader, DataSaver
 from hamilton.registry import register_adapter
 
-from datafusion_engine.runtime import read_delta_table_from_path
+from datafusion_engine.runtime import read_delta_as_reader
 from storage.deltalake import (
     DeltaWriteOptions,
     delta_table_version,
@@ -60,7 +60,8 @@ class ArrowDeltaLoader(DataLoader):
             Raised when the Delta reader does not return a pyarrow.Table.
         """
         _ = type_
-        table = read_delta_table_from_path(self.path)
+        reader = read_delta_as_reader(self.path)
+        table = reader.read_all()
         if not isinstance(table, pa.Table):
             msg = "Delta reader did not return a pyarrow.Table."
             raise TypeError(msg)

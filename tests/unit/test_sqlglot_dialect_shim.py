@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from sqlglot import exp
-
 from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionDmlOptions
+from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
     SqlGlotSurface,
     default_sqlglot_policy,

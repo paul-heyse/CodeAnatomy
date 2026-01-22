@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pyarrow.types as patypes
-from datafusion import SessionContext
+from datafusion import SessionContext, SQLOptions
 
 from arrowdsl.core.interop import (
     DataTypeLike,
@@ -15,7 +16,9 @@ from arrowdsl.core.interop import (
     TableLike,
     coerce_table_like,
 )
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_DICTIONARY_INDEX_TYPE = pa.int32()
 
@@ -84,6 +87,7 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     table_name = f"_encoding_{uuid.uuid4().hex}"
     df_ctx.register_record_batches(table_name, [resolved.to_batches()])
     try:
+        sql_options = _sql_options_for_profile(None)
         selections: list[str] = []
         for field in resolved.schema:
             name = field.name
@@ -104,7 +108,7 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
             )
             selections.append(f"arrow_cast({identifier}, '{dict_type}') AS {identifier}")
         sql = f"SELECT {', '.join(selections)} FROM {table_name}"
-        return df_ctx.sql(sql).to_arrow_table()
+        return df_ctx.sql_with_options(sql, sql_options).to_arrow_table()
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
@@ -112,8 +116,16 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
 
 
 def _datafusion_context() -> SessionContext:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
     profile = DataFusionRuntimeProfile()
     return profile.session_context()
+
+
+def _sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
+    from datafusion_engine.sql_options import sql_options_for_profile
+
+    return sql_options_for_profile(profile)
 
 
 def _ensure_table(value: TableLike) -> pa.Table:
@@ -135,7 +147,8 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     table = pa.table({"value": pa.array([None], type=dtype)})
     ctx.register_record_batches(temp_name, [list(table.to_batches())])
     try:
-        result = ctx.sql(f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}").to_arrow_table()
+        sql = f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}"
+        result = ctx.sql_with_options(sql, _sql_options_for_profile(None)).to_arrow_table()
         value = result["dtype"][0].as_py()
     finally:
         deregister = getattr(ctx, "deregister_table", None)

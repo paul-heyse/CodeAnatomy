@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import cast
 
 import pyarrow as pa
@@ -108,4 +110,58 @@ def to_reader(obj: object, *, schema: pa.Schema | None = None) -> pa.RecordBatch
     return _reader_from_table(coerced, schema=schema)
 
 
-__all__ = ["to_reader"]
+@dataclass(frozen=True)
+class StreamDiagnostics:
+    """Diagnostics captured from streaming a RecordBatchReader.
+
+    Attributes
+    ----------
+    batch_count : int
+        Number of batches processed.
+    row_count : int
+        Total number of rows processed.
+    """
+
+    batch_count: int
+    row_count: int
+
+
+def emit_stream_diagnostics(
+    reader: pa.RecordBatchReader,
+    *,
+    reporter: Callable[[StreamDiagnostics], None] | None = None,
+) -> pa.RecordBatchReader:
+    """Wrap a RecordBatchReader to emit batch and row count diagnostics.
+
+    Parameters
+    ----------
+    reader : RecordBatchReader
+        Source reader to wrap.
+    reporter : Callable[[StreamDiagnostics], None] | None
+        Optional callback to receive diagnostics when streaming completes.
+
+    Returns
+    -------
+    pa.RecordBatchReader
+        Wrapped reader that tracks batch and row counts.
+    """
+    if reporter is None:
+        return reader
+
+    callback = reporter
+
+    def _batches() -> Iterable[pa.RecordBatch]:
+        batch_count = 0
+        row_count = 0
+        try:
+            for batch in reader:
+                batch_count += 1
+                row_count += batch.num_rows
+                yield batch
+        finally:
+            callback(StreamDiagnostics(batch_count=batch_count, row_count=row_count))
+
+    return pa.RecordBatchReader.from_batches(reader.schema, _batches())
+
+
+__all__ = ["StreamDiagnostics", "emit_stream_diagnostics", "to_reader"]

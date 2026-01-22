@@ -1169,6 +1169,33 @@ def write_named_datasets_parquet(
     return out
 
 
+def write_parquet_stream(
+    reader: RecordBatchReaderLike,
+    path: PathLike,
+    *,
+    opts: ParquetWriteOptions | None = None,
+) -> str:
+    """Write a RecordBatchReader to a Parquet file using streaming.
+
+    This is an alias for write_table_parquet that emphasizes streaming usage.
+
+    Parameters
+    ----------
+    reader : RecordBatchReaderLike
+        Streaming reader to write.
+    path : PathLike
+        Output path for the Parquet file.
+    opts : ParquetWriteOptions | None
+        Optional Parquet write options.
+
+    Returns
+    -------
+    str
+        Path to the written Parquet file.
+    """
+    return write_table_parquet(reader, path, opts=opts, overwrite=True)
+
+
 __all__ = [
     "DatasetWriteConfig",
     "DatasetWriteInput",
@@ -1183,6 +1210,7 @@ __all__ = [
     "write_finalize_result_parquet",
     "write_named_datasets_parquet",
     "write_parquet_metadata_sidecars",
+    "write_parquet_stream",
     "write_partitioned_dataset_parquet",
     "write_table_parquet",
 ]

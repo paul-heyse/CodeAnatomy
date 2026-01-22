@@ -5,7 +5,10 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 
 import ibis
 import pyarrow as pa
@@ -26,12 +29,6 @@ from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from datafusion_engine.kernel_registry import resolve_kernel
-from datafusion_engine.runtime import (
-    AdapterExecutionPolicy,
-    ExecutionLabel,
-    dataset_schema_from_context,
-    dataset_spec_from_context,
-)
 from engine.materialize import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.compiler_checkpoint import try_plan_hash
@@ -755,7 +752,7 @@ def _apply_plan_transforms(
         return plan
     expr = plan.expr
     for fn in transforms:
-        expr = expr.pipe(fn, ctx)
+        expr = fn(expr, ctx)
     return IbisPlan(expr=expr, ordering=plan.ordering)
 
 
@@ -817,6 +814,8 @@ def _schema_for_contract(contract: Contract) -> SchemaLike:
     KeyError
         Raised when the contract schema is not registered in DataFusion.
     """
+    from datafusion_engine.runtime import dataset_schema_from_context
+
     try:
         return dataset_schema_from_context(contract.name)
     except KeyError as exc:
@@ -843,6 +842,8 @@ def _schema_for_rule(
     SchemaLike | None
         Schema for the rule contract when available.
     """
+    from datafusion_engine.runtime import dataset_schema_from_context
+
     if rule.contract_name is None:
         return None
     if contracts is not None:
@@ -1089,6 +1090,8 @@ class CompiledRule:
         ValueError
             Raised when no Ibis backend is configured.
         """
+        from datafusion_engine.runtime import ExecutionLabel
+
         options = options or RuleExecutionOptions()
         label = ExecutionLabel(
             rule_name=self.rule.name,
@@ -1515,6 +1518,8 @@ class RelationshipRuleCompiler:
             TableLike
                 Interval-aligned output table.
             """
+            from datafusion_engine.runtime import ExecutionLabel
+
             left_ref, right_ref = rule.inputs
             left_plan = resolver.resolve(left_ref, ctx=ctx2)
             right_plan = resolver.resolve(right_ref, ctx=ctx2)
@@ -1578,6 +1583,8 @@ class RelationshipRuleCompiler:
             TableLike
                 Winner-selected output table.
             """
+            from datafusion_engine.runtime import ExecutionLabel
+
             src_exec = rule.inputs[0]
             plan_exec = resolver.resolve(src_exec, ctx=ctx2)
             label = ExecutionLabel(
@@ -1869,6 +1876,8 @@ def _finalize_output_tables(
         result = finalize_ctx.run(unioned, ctx=ctx)
         _enforce_output_ordering(result.good.schema, ctx=ctx, label=output_dataset)
         return result
+
+    from datafusion_engine.runtime import dataset_spec_from_context
 
     contract = contracts.get(contract_name)
     try:

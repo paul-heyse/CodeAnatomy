@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
+from datafusion.dataframe import DataFrame
 from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value as IbisValue
@@ -26,12 +28,12 @@ from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.constants import CpgBuildArtifacts
 from cpg.symtable_resolution import build_binding_resolution_table
-from cpg.symtable_sql import (
-    symtable_bindings_sql,
-    symtable_def_sites_sql,
-    symtable_type_param_edges_sql,
-    symtable_type_params_sql,
-    symtable_use_sites_sql,
+from cpg.symtable_views import (
+    symtable_bindings_df,
+    symtable_def_sites_df,
+    symtable_type_param_edges_df,
+    symtable_type_params_df,
+    symtable_use_sites_df,
 )
 from datafusion_engine.extract_ids import repo_file_id_spec
 from datafusion_engine.nested_tables import (
@@ -39,7 +41,13 @@ from datafusion_engine.nested_tables import (
     materialize_view_reference,
     register_nested_table,
 )
-from datafusion_engine.runtime import AdapterExecutionPolicy, dataset_spec_from_context
+from datafusion_engine.runtime import (
+    AdapterExecutionPolicy,
+    DataFusionRuntimeProfile,
+    dataset_spec_from_context,
+    record_view_definition,
+)
+from datafusion_engine.sql_options import sql_options_for_profile
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import (
@@ -553,9 +561,10 @@ def _register_view_reference(
     backend: BaseBackend | None,
     *,
     name: str,
-    sql: str,
+    builder: Callable[[SessionContext], DataFrame],
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> ViewReference:
-    """Register a view SQL statement and return its reference.
+    """Register a view DataFrame builder and return its reference.
 
     Returns
     -------
@@ -571,7 +580,14 @@ def _register_view_reference(
         msg = f"View {name!r} requires an Ibis backend."
         raise TypeError(msg)
     ctx = datafusion_context(backend)
-    ctx.sql(f"CREATE OR REPLACE VIEW {name} AS {sql}").collect()
+    view = builder(ctx).into_view(temporary=False)
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            deregister(name)
+    ctx.register_table(name, view)
+    if runtime_profile is not None:
+        record_view_definition(runtime_profile, name=name, sql=None)
     return ViewReference(name)
 
 
@@ -769,7 +785,8 @@ def symtable_bindings(
     return _register_view_reference(
         engine_session.ibis_backend,
         name="symtable_bindings",
-        sql=symtable_bindings_sql(),
+        builder=symtable_bindings_df,
+        runtime_profile=engine_session.df_profile,
     )
 
 
@@ -800,7 +817,8 @@ def symtable_def_sites(
     return _register_view_reference(
         engine_session.ibis_backend,
         name="symtable_def_sites",
-        sql=symtable_def_sites_sql(),
+        builder=symtable_def_sites_df,
+        runtime_profile=engine_session.df_profile,
     )
 
 
@@ -831,7 +849,8 @@ def symtable_use_sites(
     return _register_view_reference(
         engine_session.ibis_backend,
         name="symtable_use_sites",
-        sql=symtable_use_sites_sql(),
+        builder=symtable_use_sites_df,
+        runtime_profile=engine_session.df_profile,
     )
 
 
@@ -856,7 +875,8 @@ def symtable_type_params(
     return _register_view_reference(
         engine_session.ibis_backend,
         name="symtable_type_params",
-        sql=symtable_type_params_sql(),
+        builder=symtable_type_params_df,
+        runtime_profile=engine_session.df_profile,
     )
 
 
@@ -881,7 +901,8 @@ def symtable_type_param_edges(
     return _register_view_reference(
         engine_session.ibis_backend,
         name="symtable_type_param_edges",
-        sql=symtable_type_param_edges_sql(),
+        builder=symtable_type_param_edges_df,
+        runtime_profile=engine_session.df_profile,
     )
 
 
@@ -1552,7 +1573,8 @@ def _add_edge_owner_file_id(
             f"SELECT *, {expr_sql} AS {_sql_identifier(spec.out_col)} "
             f"FROM {_sql_identifier(table_name)}"
         )
-        updated = df_ctx.sql(sql).to_arrow_table()
+        sql_options = sql_options_for_profile(ctx.runtime.datafusion)
+        updated = df_ctx.sql_with_options(sql, sql_options).to_arrow_table()
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):

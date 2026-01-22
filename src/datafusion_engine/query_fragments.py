@@ -5,17 +5,21 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 from datafusion import SessionContext
+from datafusion.dataframe import DataFrame
 
+from datafusion_engine.df_builder import df_from_sqlglot
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import nested_base_sql, schema_for
-from schema_spec.view_specs import ViewSpec, view_spec_from_sql
+from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_engine.udf_registry import register_datafusion_udfs
+from schema_spec.view_specs import ViewSpec, view_spec_from_builder
+from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
     default_sqlglot_policy,
     normalize_expr,
     parse_sql_strict,
-    sqlglot_sql,
 )
 
 
@@ -3391,21 +3395,34 @@ def fragment_view_specs(
     """
     excluded = set(exclude or ())
     names = sorted(name for name in _FRAGMENT_SQL_BUILDERS if name not in excluded)
-    schema_map = SchemaIntrospector(ctx).schema_map()
-    return tuple(
-        view_spec_from_sql(
-            ctx,
-            name=name,
-            sql=_normalize_fragment_sql(
-                _FRAGMENT_SQL_BUILDERS[name](),
-                schema_map=schema_map,
-            ),
+    sql_options = sql_options_for_profile(None)
+    schema_map = SchemaIntrospector(ctx, sql_options=sql_options).schema_map()
+    specs: list[ViewSpec] = []
+    for name in names:
+        expr = _normalize_fragment_expr(
+            _FRAGMENT_SQL_BUILDERS[name](),
+            schema_map=schema_map,
         )
-        for name in names
-    )
+        specs.append(
+            view_spec_from_builder(
+                ctx,
+                name=name,
+                builder=_fragment_df_builder(expr),
+                sql=None,
+            )
+        )
+    return tuple(specs)
 
 
-def _normalize_fragment_sql(sql: str, *, schema_map: SchemaMapping | None) -> str:
+def _fragment_df_builder(expr: Expression) -> Callable[[SessionContext], DataFrame]:
+    def _build(ctx: SessionContext) -> DataFrame:
+        register_datafusion_udfs(ctx)
+        return df_from_sqlglot(ctx, expr.copy())
+
+    return _build
+
+
+def _normalize_fragment_expr(sql: str, *, schema_map: SchemaMapping | None) -> Expression:
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
     normalized = normalize_expr(
@@ -3416,7 +3433,7 @@ def _normalize_fragment_sql(sql: str, *, schema_map: SchemaMapping | None) -> st
             sql=sql,
         ),
     )
-    return sqlglot_sql(normalized, policy=policy)
+    return normalized
 
 
 __all__ = [

@@ -6,14 +6,16 @@ import base64
 import importlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.substrait import Serde
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
-from sqlglot import ErrorLevel
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
@@ -23,7 +25,6 @@ from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.extract_bundles import bundle
 from datafusion_engine.extract_pipelines import post_kernels_for_postprocess
 from datafusion_engine.kernel_registry import kernel_capability
-from datafusion_engine.runtime import DataFusionRuntimeProfile, snapshot_plans
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from engine.session import EngineSession
 from ibis_engine.compiler_checkpoint import compile_checkpoint
@@ -76,6 +77,7 @@ from sqlglot_tools.bridge import (
     relation_diff,
     sqlglot_diagnostics,
 )
+from sqlglot_tools.compat import ErrorLevel
 from sqlglot_tools.lineage import TableRef, extract_table_refs
 from sqlglot_tools.optimizer import (
     SqlGlotQualificationError,
@@ -285,6 +287,8 @@ def validate_sqlglot_columns(
     ValueError
         Raised when DataFusion cannot compute the query schema.
     """
+    from datafusion_engine.runtime import sql_options_for_profile
+
     diagnostics = sqlglot_diagnostics(
         expr,
         backend=backend,
@@ -297,7 +301,10 @@ def validate_sqlglot_columns(
     session = profile.session_context()
     sql_text = sanitize_templated_sql(diagnostics.sql_text_optimized)
     try:
-        describe_rows = SchemaIntrospector(session).describe_query(sql_text)
+        describe_rows = SchemaIntrospector(
+            session,
+            sql_options=sql_options_for_profile(profile),
+        ).describe_query(sql_text)
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"DataFusion DESCRIBE failed for SQLGlot validation: {exc}"
         raise ValueError(msg) from exc
@@ -469,6 +476,8 @@ def _resolve_schema_context(
     RelspecSchemaContext
         Resolved DataFusion schema context.
     """
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
     if config.schema_context is not None:
         return config.schema_context
     if config.engine_session is not None:
@@ -781,6 +790,8 @@ def _contract_schema_drift_diagnostic(
     RuleDiagnostic | None
         Diagnostic describing schema drift when detected.
     """
+    from datafusion_engine.runtime import sql_options_for_profile
+
     payload = rule_ctx.rule.payload
     if not isinstance(payload, RelationshipPayload) or payload.contract_name is None:
         return None
@@ -792,7 +803,10 @@ def _contract_schema_drift_diagnostic(
         return None
     sql_text = sanitize_templated_sql(sql)
     try:
-        rows = SchemaIntrospector(profile.session_context()).describe_query(sql_text)
+        rows = SchemaIntrospector(
+            profile.session_context(),
+            sql_options=sql_options_for_profile(profile),
+        ).describe_query(sql_text)
     except (RuntimeError, TypeError, ValueError) as exc:
         return RuleDiagnostic(
             domain=rule_ctx.rule.domain,
@@ -1258,6 +1272,12 @@ def _datafusion_debug_metadata(
     sanitized_sql: str,
     profile: DataFusionRuntimeProfile,
 ) -> dict[str, str]:
+    from datafusion_engine.runtime import (
+        settings_snapshot_for_profile,
+        snapshot_plans,
+        sql_options_for_profile,
+    )
+
     metadata: dict[str, str] = {}
     try:
         options = profile.compile_options(options=DataFusionCompileOptions())
@@ -1270,29 +1290,37 @@ def _datafusion_debug_metadata(
         metadata["dfschema_tree"] = str(df.schema())
     except (RuntimeError, TypeError, ValueError) as exc:
         metadata["df_plan_error"] = str(exc)
+    sql_options = sql_options_for_profile(profile)
     _try_add_metadata(
         metadata,
         key="df_explain",
         build=lambda: _stable_repr(
-            session.sql(f"EXPLAIN {sanitized_sql}").to_arrow_table().to_pylist()
+            session.sql_with_options(
+                f"EXPLAIN {sanitized_sql}",
+                sql_options,
+            )
+            .to_arrow_table()
+            .to_pylist()
         ),
     )
     _try_add_metadata(
         metadata,
         key="df_describe",
         build=lambda: _describe_snapshot_payload(
-            SchemaIntrospector(session).describe_query(sanitized_sql)
+            SchemaIntrospector(session, sql_options=sql_options).describe_query(sanitized_sql)
         ),
     )
     _try_add_metadata(
         metadata,
         key="df_parameters",
-        build=lambda: _stable_repr(SchemaIntrospector(session).parameters_snapshot()),
+        build=lambda: _stable_repr(
+            SchemaIntrospector(session, sql_options=sql_options).parameters_snapshot()
+        ),
     )
     _try_add_metadata(
         metadata,
         key="df_settings",
-        build=lambda: _settings_snapshot_payload(profile.settings_snapshot(session)),
+        build=lambda: _settings_snapshot_payload(settings_snapshot_for_profile(profile, session)),
     )
     _try_add_metadata(
         metadata,

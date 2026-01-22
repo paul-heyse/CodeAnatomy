@@ -252,7 +252,7 @@ Implementation checklist
 Objective: record schema, policy, and AST fingerprints for deterministic
 incremental rebuilds and debugging.
 
-Status: Partial (schema/policy snapshots recorded; per-rule AST hashes pending).
+Status: Completed.
 
 Code patterns
 ```python
@@ -269,7 +269,7 @@ Implementation checklist
 - [x] Expand `information_schema` introspection helpers and function catalogs.
 - [x] Persist SQLGlot policy snapshots in runtime + ingest artifacts.
 - [x] Persist `information_schema` snapshots (schema map + function catalog) in manifest artifacts.
-- [ ] Persist per-rule AST hashes alongside diff scripts.
+- [x] Persist per-rule AST hashes alongside diff scripts.
 - [x] Add diagnostics for schema-map and DDL fingerprints.
 
 ## Scope 8: DataFusion UDF expansion (UDAF/UDWF/UDTF) + built-in substitution
@@ -355,7 +355,7 @@ Implementation checklist
 ## Scope 9: Ibis advanced IR patterns (unpack/selectors/to_parquet_dir)
 Objective: reduce bespoke transforms by adopting Ibis high-level operators.
 
-Status: Remaining.
+Status: Completed.
 
 Code patterns
 ```python
@@ -388,17 +388,17 @@ Target files
 - `src/relspec/rules/validation.py`
 
 Implementation checklist
-- [ ] Replace struct field projections with `.unpack(...)`.
-- [ ] Use selector-driven transforms for wide schema updates.
-- [ ] Standardize dataset writes via `to_parquet_dir` where appropriate.
-- [ ] Capture SQLGlot ASTs via `backend.compiler.to_sqlglot`.
-- [ ] Prefer `.pipe(...)`/`.substitute(...)` for composable rule templates.
+- [x] Replace struct field projections with `.unpack(...)`.
+- [x] Use selector-driven transforms for wide schema updates.
+- [x] Standardize dataset writes via `to_parquet_dir` where appropriate.
+- [x] Capture SQLGlot ASTs via `backend.compiler.to_sqlglot`.
+- [x] Prefer `.pipe(...)`/`.substitute(...)` for composable rule templates.
 
 ## Scope 10: SQLGlot AST serialization + semantic diff artifacts
 Objective: persist canonical AST payloads, diff scripts, and schema-aware
 fingerprints for deterministic caching and replay.
 
-Status: Partial (AST payloads + diff scripts captured; schema mapping gates pending).
+Status: Completed.
 
 Code patterns
 ```python
@@ -421,14 +421,14 @@ Target files
 Implementation checklist
 - [x] Persist AST payloads via `sqlglot.serde.dump` in diagnostics/manifest artifacts.
 - [x] Store semantic diff scripts between canonicalization phases.
-- [ ] Use SQLGlot schema objects (`MappingSchema`) for stable identifier normalization.
-- [ ] Gate incremental rebuilds on semantic diffs + plan hashes.
+- [x] Use SQLGlot schema objects (`MappingSchema`) for stable identifier normalization.
+- [x] Gate incremental rebuilds on semantic diffs + plan hashes.
 
 ## Scope 11: Output materialization via DataFusion COPY/INSERT
 Objective: standardize output writes on DataFusion-native DML/DDL surfaces and
 provider-native writes.
 
-Status: Remaining.
+Status: Completed.
 
 Code patterns
 ```python
@@ -451,16 +451,16 @@ Target files
 - `src/ibis_engine/io_bridge.py`
 
 Implementation checklist
-- [ ] Route non-Delta dataset writes through `COPY` for Parquet/CSV/JSON outputs.
-- [ ] Use `INSERT` for TableProvider-backed sinks when supported.
-- [ ] Use delta-rs only for merge/update operations.
-- [ ] Record write SQL + options in diagnostics.
+- [x] Route non-Delta dataset writes through `COPY` for Parquet/CSV/JSON outputs.
+- [x] Use `INSERT` for TableProvider-backed sinks when supported.
+- [x] Use delta-rs only for merge/update operations.
+- [x] Record write SQL + options in diagnostics.
 
 ## Scope 12: Function catalog inventory + allowlist enforcement
 Objective: align rulepack function usage with DataFusion’s runtime catalog
 (`SHOW FUNCTIONS` + `information_schema` routines/parameters).
 
-Status: Partial (allowlist enforcement + diagnostics emitted; signature validation pending).
+Status: Completed.
 
 Code patterns
 ```python
@@ -478,7 +478,7 @@ Target files
 
 Implementation checklist
 - [x] Persist function catalog snapshots from information_schema routines/parameters.
-- [ ] Join routines + parameters for full signature validation.
+- [x] Join routines + parameters for full signature validation.
 - [x] Gate rulepack functions against the runtime allowlist.
 - [x] Emit allowlist inventories as diagnostics artifacts.
 
@@ -504,14 +504,14 @@ Remove these once the above scopes are complete and tests pass.
   - `src/incremental/fingerprint_changes.py`
 - [ ] Bespoke nested builders superseded by DataFusion functions/UDFs:
   - `src/arrowdsl/schema/nested_builders.py` (list/struct accumulators) (done)
-  - `src/arrowdsl/spec/codec.py` (nested encode/decode helpers)
-  - `src/arrowdsl/schema/schema.py` (custom nested projection helpers)
+  - `src/arrowdsl/spec/codec.py` (nested encode/decode helpers) (done)
+  - `src/arrowdsl/schema/schema.py` (custom nested projection helpers) (done)
 - [x] Bespoke Arrow compute paths replaced by DataFusion built-ins:
   - `src/arrowdsl/core/ids.py` (binary join + hash assembly)
   - `src/arrowdsl/finalize/finalize.py` (row hashing/filters)
   - `src/hamilton_pipeline/modules/normalization.py` (mask/merge logic)
-- [ ] Tests/docs that assume fallback execution:
-  - `tests/integration/test_datafusion_fallbacks.py`
+- [x] Tests/docs that assume fallback execution:
+  - `tests/integration/test_datafusion_fallbacks.py` (removed)
 
 ## Quality gates
 - `uv run ruff check --fix`

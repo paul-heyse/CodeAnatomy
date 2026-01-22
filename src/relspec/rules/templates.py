@@ -1,4 +1,37 @@
-"""Centralized template catalog for rule definitions."""
+"""Centralized template catalog for rule definitions.
+
+Integration with Ibis IR Accelerators
+--------------------------------------
+This module integrates with ibis_engine.selector_utils and ibis_engine.macros
+to provide selector-based column transformations in rule templates.
+
+Example usage patterns:
+
+    # Using ColumnSelector for multi-column transformations
+    from ibis_engine.selector_utils import ColumnSelector
+    from ibis_engine.macros import apply_across
+
+    cs = ColumnSelector()
+    # Apply normalization across all numeric columns
+    normalized = apply_across(table, cs.numeric(), lambda col: (col - col.mean()) / col.std())
+
+    # Using deferred expressions for computed columns
+    from ibis_engine.selector_utils import deferred_hash_column, deferred_concat_columns
+    from ibis_engine.macros import with_deferred
+
+    table_with_ids = with_deferred(
+        table,
+        entity_hash=deferred_hash_column("entity_id"),
+        qualified_name=deferred_concat_columns("namespace", "name", separator="::")
+    )
+
+    # Using across_columns for custom transformations
+    from ibis_engine.selector_utils import SelectorPattern, across_columns
+
+    # Select and transform all string columns matching a pattern
+    pattern = SelectorPattern(name="id_columns", regex_pattern=".*_id$")
+    id_hashes = across_columns(table, pattern, lambda col: col.hash())
+"""
 
 from __future__ import annotations
 
@@ -7,8 +40,8 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
-from arrowdsl.spec.codec import parse_string_tuple
 from arrowdsl.spec.io import rows_from_table, table_from_rows
+from arrowdsl.spec.literals import parse_string_tuple
 from relspec.rules.definitions import RuleDomain
 from relspec.rules.diagnostics import RuleDiagnostic
 

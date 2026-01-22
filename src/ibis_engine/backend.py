@@ -8,7 +8,6 @@ from typing import Protocol, cast
 
 import ibis
 
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.config import IbisBackendConfig
 
 
@@ -58,7 +57,12 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
         ibis.options.sql.default_dialect = cfg.default_dialect
     if cfg.interactive is not None:
         ibis.options.interactive = cfg.interactive
-    profile = cfg.datafusion_profile or DataFusionRuntimeProfile()
+    if cfg.datafusion_profile is not None:
+        profile = cfg.datafusion_profile
+    else:
+        from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+        profile = DataFusionRuntimeProfile()
     if profile.default_catalog != "datafusion":
         profile = replace(profile, default_catalog="datafusion")
     ctx = profile.session_context()

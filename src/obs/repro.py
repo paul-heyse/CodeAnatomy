@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
-from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
@@ -42,6 +41,7 @@ from schema_spec.system import (
     dataset_table_ddl_fingerprint,
     dataset_table_definition,
 )
+from sqlglot_tools.compat import exp, parse_one
 from sqlglot_tools.optimizer import planner_dag_snapshot, register_datafusion_dialect
 from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 

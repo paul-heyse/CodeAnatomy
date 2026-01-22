@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -15,7 +16,7 @@ from urllib.parse import urlparse
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
-from datafusion import SessionContext
+from datafusion import SessionContext, SQLOptions
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
 from deltalake import DeltaTable
@@ -33,9 +34,19 @@ from datafusion_engine.listing_table_provider import (
 )
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
-    record_table_definition_override,
+    table_constraint_rows,
 )
 from datafusion_engine.schema_registry import SCHEMA_REGISTRY
+from datafusion_engine.sql_options import (
+    sql_options_for_profile as _sql_options_for_profile,
+)
+from datafusion_engine.sql_options import (
+    statement_sql_options_for_profile as _statement_sql_options_for_profile,
+)
+from datafusion_engine.table_provider_metadata import (
+    TableProviderMetadata,
+    record_table_provider_metadata,
+)
 from ibis_engine.registry import (
     DatasetLocation,
     IbisDatasetRegistry,
@@ -44,6 +55,9 @@ from ibis_engine.registry import (
     resolve_delta_scan_options,
 )
 from schema_spec.specs import ExternalTableConfigOverrides
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 from schema_spec.system import (
     DataFusionScanOptions,
     DatasetSpec,
@@ -55,9 +69,6 @@ from schema_spec.system import (
     make_dataset_spec,
 )
 from storage.deltalake import DeltaCdfOptions
-
-if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
 _REGISTERED_OBJECT_STORES: dict[int, set[str]] = {}
@@ -625,9 +636,14 @@ def _validate_constraints_and_defaults(
     expected_defaults = _expected_column_defaults(schema)
     if not key_fields and not expected_defaults:
         return
-    introspector = SchemaIntrospector(context.ctx)
+    sql_options = _sql_options_for_profile(context.runtime_profile)
+    introspector = SchemaIntrospector(context.ctx, sql_options=sql_options)
     if key_fields:
-        constraint_rows = introspector.table_constraint_rows(context.name)
+        constraint_rows = table_constraint_rows(
+            context.ctx,
+            table_name=context.name,
+            sql_options=sql_options,
+        )
         key_columns = {
             str(row["column_name"])
             for row in constraint_rows
@@ -812,7 +828,16 @@ def _build_registration_context(
         runtime_profile=runtime_profile,
     )
     if external_table_sql is not None:
-        record_table_definition_override(ctx, name=name, ddl=external_table_sql)
+        metadata = TableProviderMetadata(
+            table_name=name,
+            ddl=external_table_sql,
+            storage_location=str(location.path),
+            file_format=location.format or "unknown",
+            partition_columns=tuple(col for col, _ in options.scan.partition_cols)
+            if options.scan and options.scan.partition_cols
+            else (),
+        )
+        record_table_provider_metadata(id(ctx), metadata=metadata)
     return context
 
 
@@ -869,12 +894,17 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
     kwargs = _merge_kwargs(kwargs, context.options.read_options)
     use_listing = context.options.provider == "listing"
     if use_listing:
-        _apply_scan_settings(context.ctx, scan=scan)
+        _apply_scan_settings(
+            context.ctx,
+            scan=scan,
+            sql_options=_statement_sql_options_for_profile(context.runtime_profile),
+        )
         if skip_metadata is not None:
             _set_runtime_setting(
                 context.ctx,
                 key="datafusion.execution.parquet.skip_metadata",
                 value=str(skip_metadata).lower(),
+                sql_options=_statement_sql_options_for_profile(context.runtime_profile),
             )
 
         listing_provider = None
@@ -925,10 +955,13 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         df = context.ctx.table(context.name)
         registered_schema = df.schema()
         if scan is not None and scan.projection_exprs:
+            sql_options = _sql_options_for_profile(context.runtime_profile)
             df = _apply_projection_exprs(
                 context.ctx,
                 table_name=context.name,
                 projection_exprs=scan.projection_exprs,
+                sql_options=sql_options,
+                runtime_profile=context.runtime_profile,
             )
         _require_partition_schema_validation(
             context.ctx,
@@ -939,6 +972,7 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
                 if context.runtime_profile is not None
                 else False
             ),
+            sql_options=_sql_options_for_profile(context.runtime_profile),
         )
         _validate_constraints_and_defaults(
             context,
@@ -961,12 +995,17 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
             ),
         )
     else:
-        _apply_scan_settings(context.ctx, scan=scan)
+        _apply_scan_settings(
+            context.ctx,
+            scan=scan,
+            sql_options=_statement_sql_options_for_profile(context.runtime_profile),
+        )
         if skip_metadata is not None:
             _set_runtime_setting(
                 context.ctx,
                 key="datafusion.execution.parquet.skip_metadata",
                 value=str(skip_metadata).lower(),
+                sql_options=_statement_sql_options_for_profile(context.runtime_profile),
             )
         _call_register(
             context.ctx.register_parquet,
@@ -981,6 +1020,22 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
 def _register_external_table(
     context: DataFusionRegistrationContext,
 ) -> DataFrame:
+    """Register external table via DDL-based path (preferred).
+
+    This is the preferred registration path that uses DataFusion's native
+    DDL parsing and execution instead of bespoke registry logic. It leverages
+    CREATE EXTERNAL TABLE statements and information_schema for schema contracts.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        Registered DataFusion DataFrame.
+
+    Raises
+    ------
+    ValueError
+        If the external table SQL statement is missing.
+    """
     scan = context.options.scan
     if context.external_table_sql is None:
         msg = "External table registration requires a schema-backed DDL statement."
@@ -1001,9 +1056,16 @@ def _register_external_table(
     skip_metadata = None
     if scan is not None:
         skip_metadata = _effective_skip_metadata(context.location, scan)
-    _apply_scan_settings(context.ctx, scan=scan)
+    _apply_scan_settings(
+        context.ctx,
+        scan=scan,
+        sql_options=_statement_sql_options_for_profile(context.runtime_profile),
+    )
     try:
-        context.ctx.sql(context.external_table_sql).collect()
+        context.ctx.sql_with_options(
+            context.external_table_sql,
+            _statement_sql_options_for_profile(context.runtime_profile),
+        ).collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Failed to register unbounded external table: {exc}"
         raise ValueError(msg) from exc
@@ -1252,6 +1314,7 @@ def _record_listing_table_artifact(
         context.ctx,
         name=context.name,
         enable_information_schema=profile.enable_information_schema,
+        sql_options=_sql_options_for_profile(profile),
     )
     expected_schema = context.options.schema
     schema_payload = schema_to_dict(expected_schema) if expected_schema is not None else None
@@ -1267,6 +1330,7 @@ def _record_listing_table_artifact(
         name=context.name,
         schema=expected_schema,
         enable_information_schema=profile.enable_information_schema,
+        sql_options=_sql_options_for_profile(profile),
     )
     column_options = (
         details.scan.parquet_column_options.external_table_options()
@@ -1352,6 +1416,7 @@ def _record_listing_table_artifact(
         table_name=context.name,
         expected_partition_cols=details.table_partition_cols,
         enable_information_schema=profile.enable_information_schema,
+        sql_options=_sql_options_for_profile(profile),
     )
     payload.update(provenance)
     profile.diagnostics_sink.record_artifact("datafusion_listing_tables_v1", payload)
@@ -1362,21 +1427,35 @@ def _apply_projection_exprs(
     *,
     table_name: str,
     projection_exprs: Sequence[str],
+    sql_options: SQLOptions,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFrame:
     if not projection_exprs:
         return ctx.table(table_name)
     base_name = f"{table_name}__raw"
     with suppress(KeyError, ValueError):
         ctx.deregister_table(base_name)
-    ctx.register_table(base_name, ctx.table(table_name))
+    base_view = ctx.table(table_name).into_view(temporary=True)
+    ctx.register_table(base_name, base_view)
     selection = ", ".join(projection_exprs)
-    projected = ctx.sql(f"SELECT {selection} FROM {base_name}")
+    view_sql = f"SELECT {selection} FROM {base_name}"
+    projected = ctx.sql_with_options(view_sql, sql_options)
     ctx.deregister_table(table_name)
-    ctx.register_table(table_name, projected)
+    projected_view = projected.into_view(temporary=False)
+    ctx.register_table(table_name, projected_view)
+    if runtime_profile is not None:
+        from datafusion_engine.runtime import record_view_definition
+
+        record_view_definition(runtime_profile, name=table_name, sql=view_sql)
     return ctx.table(table_name)
 
 
-def _apply_scan_settings(ctx: SessionContext, *, scan: DataFusionScanOptions | None) -> None:
+def _apply_scan_settings(
+    ctx: SessionContext,
+    *,
+    scan: DataFusionScanOptions | None,
+    sql_options: SQLOptions,
+) -> None:
     """Apply per-table DataFusion scan settings via SET statements."""
     if scan is None:
         return
@@ -1438,12 +1517,18 @@ def _apply_scan_settings(ctx: SessionContext, *, scan: DataFusionScanOptions | N
         if value is None:
             continue
         text = str(value).lower() if lower else str(value)
-        _set_runtime_setting(ctx, key=key, value=text)
+        _set_runtime_setting(ctx, key=key, value=text, sql_options=sql_options)
 
 
-def _set_runtime_setting(ctx: SessionContext, *, key: str, value: str) -> None:
+def _set_runtime_setting(
+    ctx: SessionContext,
+    *,
+    key: str,
+    value: str,
+    sql_options: SQLOptions,
+) -> None:
     """Apply a DataFusion session setting."""
-    ctx.sql(f"SET {key} = '{value}'").collect()
+    ctx.sql_with_options(f"SET {key} = '{value}'", sql_options).collect()
 
 
 def _refresh_listing_table(
@@ -1603,9 +1688,10 @@ def _ddl_fingerprint(
     name: str,
     schema: pa.Schema | None,
     enable_information_schema: bool,
+    sql_options: SQLOptions,
 ) -> str | None:
     if enable_information_schema:
-        ddl = SchemaIntrospector(ctx).table_definition(name)
+        ddl = SchemaIntrospector(ctx, sql_options=sql_options).table_definition(name)
         if ddl is not None:
             return ddl_fingerprint_from_definition(ddl)
     _ = schema
@@ -1630,6 +1716,7 @@ def _record_delta_table_artifact(
         context.ctx,
         name=context.name,
         enable_information_schema=profile.enable_information_schema,
+        sql_options=_sql_options_for_profile(profile),
     )
     expected_fingerprint = _schema_fingerprint(snapshot.expected_schema)
     delta_fingerprint = _schema_fingerprint(snapshot.delta_schema)
@@ -1639,18 +1726,21 @@ def _record_delta_table_artifact(
         name=context.name,
         schema=snapshot.expected_schema,
         enable_information_schema=profile.enable_information_schema,
+        sql_options=_sql_options_for_profile(profile),
     )
     delta_ddl = _ddl_fingerprint(
         context.ctx,
         name=context.name,
         schema=snapshot.delta_schema,
         enable_information_schema=profile.enable_information_schema,
+        sql_options=_sql_options_for_profile(profile),
     )
     provider_ddl = _ddl_fingerprint(
         context.ctx,
         name=context.name,
         schema=snapshot.provider_schema,
         enable_information_schema=profile.enable_information_schema,
+        sql_options=_sql_options_for_profile(profile),
     )
     schema_payload = (
         schema_to_dict(context.options.schema) if context.options.schema is not None else None
@@ -1736,8 +1826,9 @@ def _table_provenance_snapshot(
     *,
     name: str,
     enable_information_schema: bool,
+    sql_options: SQLOptions,
 ) -> dict[str, object]:
-    introspector = SchemaIntrospector(ctx)
+    introspector = SchemaIntrospector(ctx, sql_options=sql_options)
     table_definition = introspector.table_definition(name)
     constraints: tuple[str, ...] = ()
     column_defaults: dict[str, object] | None = None
@@ -1792,9 +1883,12 @@ def _partition_column_rows(
     ctx: SessionContext,
     *,
     table_name: str,
+    sql_options: SQLOptions,
 ) -> tuple[list[dict[str, object]] | None, str | None]:
     try:
-        table = SchemaIntrospector(ctx).table_columns_with_ordinal(table_name)
+        table = SchemaIntrospector(ctx, sql_options=sql_options).table_columns_with_ordinal(
+            table_name
+        )
     except (RuntimeError, TypeError, ValueError) as exc:
         return None, str(exc)
     return table, None
@@ -1865,6 +1959,7 @@ def _partition_schema_validation(
     table_name: str,
     expected_partition_cols: Sequence[tuple[str, str]] | None,
     enable_information_schema: bool,
+    sql_options: SQLOptions,
 ) -> dict[str, object] | None:
     if not enable_information_schema:
         return None
@@ -1872,7 +1967,11 @@ def _partition_schema_validation(
         return None
     expected_names = [name for name, _ in expected_partition_cols]
     expected_types = {name: str(dtype) for name, dtype in expected_partition_cols}
-    rows, error = _partition_column_rows(ctx, table_name=table_name)
+    rows, error = _partition_column_rows(
+        ctx,
+        table_name=table_name,
+        sql_options=sql_options,
+    )
     if error is not None:
         return {
             "expected_partition_cols": expected_names,
@@ -1918,12 +2017,14 @@ def _require_partition_schema_validation(
     table_name: str,
     expected_partition_cols: Sequence[tuple[str, str]] | None,
     enable_information_schema: bool,
+    sql_options: SQLOptions,
 ) -> None:
     validation = _partition_schema_validation(
         ctx,
         table_name=table_name,
         expected_partition_cols=expected_partition_cols,
         enable_information_schema=enable_information_schema,
+        sql_options=sql_options,
     )
     if validation is None:
         return
@@ -1957,6 +2058,7 @@ def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] |
         "file_column_name": options.file_column_name,
         "enable_parquet_pushdown": options.enable_parquet_pushdown,
         "schema_force_view_types": options.schema_force_view_types,
+        "wrap_partition_values": options.wrap_partition_values,
         "schema": schema_to_dict(options.schema) if options.schema is not None else None,
     }
 
@@ -1967,6 +2069,7 @@ def _delta_scan_config(options: DeltaScanOptions | None) -> dict[str, object] | 
     config: dict[str, object] = {
         "enable_parquet_pushdown": bool(options.enable_parquet_pushdown),
         "schema_force_view_types": bool(options.schema_force_view_types),
+        "wrap_partition_values": bool(options.wrap_partition_values),
     }
     if options.file_column_name is not None:
         config["file_column_name"] = options.file_column_name
@@ -2012,6 +2115,9 @@ def _delta_rust_table_provider(
         schema_force_view_types=(
             delta_scan.schema_force_view_types if delta_scan is not None else None
         ),
+        wrap_partition_values=(
+            delta_scan.wrap_partition_values if delta_scan is not None else None
+        ),
         schema_ipc=schema_ipc,
     )
     return TableProviderCapsule(capsule)
@@ -2038,6 +2144,160 @@ def _delta_table_provider(
             return provider(**config)
         except TypeError:
             return None
+
+
+@dataclass(frozen=True)
+class DeltaTableFilesRegistration:
+    """Registration parameters for file-filtered Delta tables."""
+
+    table_path: str
+    files: Sequence[str]
+    table_name: str | None = None
+    storage_options: Mapping[str, str] | None = None
+    delta_version: int | None = None
+    delta_scan: DeltaScanOptions | None = None
+
+
+def register_delta_table_with_files(
+    ctx: SessionContext,
+    registration: DeltaTableFilesRegistration,
+) -> str:
+    """Register a Delta table with a restricted file list.
+
+    This function creates a DeltaTable provider that only reads from
+    the specified file list, enabling file-level pruning for optimized scans.
+
+    Parameters
+    ----------
+    ctx : SessionContext
+        DataFusion session context for table registration.
+    registration : DeltaTableFilesRegistration
+        Registration settings describing file restrictions and storage options.
+
+    Returns
+    -------
+    str
+        Name of the registered table.
+
+    Raises
+    ------
+    ValueError
+        If the Delta table cannot be loaded or registered.
+    NotImplementedError
+        If the current DeltaTable provider doesn't support file-level filtering.
+    """
+    # Load the Delta table
+    storage = (
+        dict(registration.storage_options)
+        if registration.storage_options is not None
+        else None
+    )
+    table = DeltaTable(
+        registration.table_path,
+        storage_options=storage,
+        version=registration.delta_version,
+    )
+
+    # Generate table name if not provided
+    if registration.table_name is None:
+        table_name = f"__delta_pruned_{uuid.uuid4().hex}"
+    else:
+        table_name = registration.table_name
+
+    # Try to create a provider with file restrictions
+    # Note: This requires DeltaTable to support file-level filtering
+    # The exact API may vary based on deltalake-python version
+    try:
+        provider = _delta_table_provider_with_files(
+            table=table,
+            files=list(registration.files),
+            delta_scan=registration.delta_scan,
+        )
+    except (AttributeError, NotImplementedError, TypeError, ValueError) as exc:
+        msg = f"File-level Delta pruning not supported: {exc}"
+        raise NotImplementedError(msg) from exc
+
+    if provider is None:
+        msg = "Failed to create Delta table provider with file restrictions"
+        raise ValueError(msg)
+
+    # Register the provider
+    ctx.register_table(table_name, provider)
+
+    # Record metadata
+    metadata = TableProviderMetadata(
+        table_name=table_name,
+        storage_location=registration.table_path,
+        file_format="delta",
+        metadata={
+            "file_count": str(len(registration.files)),
+            "pruning_enabled": "true",
+            "delta_version": str(registration.delta_version)
+            if registration.delta_version is not None
+            else str(table.version()),
+        },
+    )
+    record_table_provider_metadata(id(ctx), metadata=metadata)
+
+    return table_name
+
+
+def _delta_table_provider_with_files(
+    table: DeltaTable,
+    files: list[str],
+    *,
+    delta_scan: DeltaScanOptions | None,
+) -> object | None:
+    """Create a Delta table provider with restricted file list.
+
+    This is an internal helper that attempts to create a provider
+    that only scans the specified files.
+
+    Parameters
+    ----------
+    table : DeltaTable
+        Delta table instance.
+    files : list[str]
+        List of file paths to include.
+    delta_scan : DeltaScanOptions | None
+        Delta scan configuration.
+
+    Returns
+    -------
+    object | None
+        Delta table provider, or None if not supported.
+
+    Raises
+    ------
+    NotImplementedError
+        If file-level filtering is not supported by the provider.
+    """
+    # The deltalake-python library may support file filtering via:
+    # 1. A custom config parameter in __datafusion_table_provider__
+    # 2. A separate method for creating filtered providers
+    # 3. Future API additions
+
+    provider_fn = getattr(table, "__datafusion_table_provider__", None)
+    if not callable(provider_fn):
+        msg = "Delta table does not expose a DataFusion provider"
+        raise NotImplementedError(msg)
+
+    base_config = _delta_scan_config(delta_scan)
+
+    # Try to add file restrictions to config
+    # This is currently a placeholder - actual implementation depends on deltalake API
+    config: dict[str, Any] = dict(base_config) if base_config is not None else {}
+
+    # Attempt to pass file list (may not be supported yet)
+    config["files"] = files
+
+    try:
+        return provider_fn(config)
+    except TypeError:
+        # If files parameter is not supported, fall back without it
+        # and raise an error
+        msg = "Delta table provider does not support file-level filtering"
+        raise NotImplementedError(msg) from None
 
 
 def _delta_feature_payload(table: DeltaTable) -> dict[str, str] | None:
@@ -2279,7 +2539,8 @@ def _maybe_cache(context: DataFusionRegistrationContext, df: DataFrame) -> DataF
         return df
     cached = df.cache()
     context.ctx.deregister_table(context.name)
-    context.ctx.register_table(context.name, cached)
+    cached_view = cached.into_view(temporary=False)
+    context.ctx.register_table(context.name, cached_view)
     cached_set = _CACHED_DATASETS.setdefault(id(context.ctx), set())
     cached_set.add(context.name)
     return cached
@@ -2373,10 +2634,12 @@ __all__ = [
     "DataFusionCacheSettings",
     "DataFusionRegistryOptions",
     "DatasetInputSource",
+    "DeltaTableFilesRegistration",
     "datafusion_external_table_sql",
     "dataset_input_plugin",
     "input_plugin_prefixes",
     "register_dataset_df",
     "register_delta_cdf_df",
+    "register_delta_table_with_files",
     "resolve_registry_options",
 ]

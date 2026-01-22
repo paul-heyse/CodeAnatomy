@@ -13,8 +13,6 @@ from ibis.expr.types import Table, Value
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
-from datafusion_engine.catalog_provider import register_registry_catalog
-from datafusion_engine.registry_bridge import register_dataset_df
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
     DataFusionScanOptions,
@@ -468,6 +466,8 @@ def _register_datafusion_dataset(
     location: DatasetLocation,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> None:
+    from datafusion_engine.registry_bridge import register_dataset_df
+
     if not isinstance(ctx, SessionContext):
         msg = "DataFusion SessionContext is required for dataset registration."
         raise TypeError(msg)
@@ -537,6 +537,8 @@ def _ensure_registry_catalog_provider(
     if not isinstance(ctx, SessionContext):
         msg = "DataFusion SessionContext is required for registry catalogs."
         raise TypeError(msg)
+    from datafusion_engine.catalog_provider import register_registry_catalog
+
     ctx_id = id(ctx)
     registered = _REGISTERED_REGISTRY_CATALOGS.setdefault(ctx_id, set())
     if catalog_name in registered:

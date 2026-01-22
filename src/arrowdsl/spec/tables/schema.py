@@ -13,7 +13,8 @@ import schema_spec.system as schema_system
 from arrowdsl.core.interop import DataTypeLike
 from arrowdsl.schema.build import iter_rows_from_table, table_from_rows
 from arrowdsl.schema.validation import ArrowValidationOptions
-from arrowdsl.spec.codec import (
+from arrowdsl.spec.infra import DEDUPE_STRUCT, SORT_KEY_STRUCT, VALIDATION_STRUCT
+from arrowdsl.spec.literals import (
     decode_strict,
     encode_strict,
     parse_dedupe_strategy,
@@ -21,7 +22,6 @@ from arrowdsl.spec.codec import (
     parse_sort_order,
     parse_string_tuple,
 )
-from arrowdsl.spec.infra import DEDUPE_STRUCT, SORT_KEY_STRUCT, VALIDATION_STRUCT
 from schema_spec.specs import (
     DICT_STRING,
     ArrowFieldSpec,

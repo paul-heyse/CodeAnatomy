@@ -223,6 +223,7 @@ class DeltaScanOptions:
     file_column_name: str | None = None
     enable_parquet_pushdown: bool = True
     schema_force_view_types: bool = False
+    wrap_partition_values: bool = False
     schema: pa.Schema | None = None
 
 
@@ -1188,8 +1189,10 @@ def dataset_table_definition(name: str) -> str | None:
         CREATE TABLE statement when available.
     """
     module = importlib.import_module("datafusion_engine.runtime")
-    ctx = module.DataFusionRuntimeProfile().session_context()
-    return SchemaIntrospector(ctx).table_definition(name)
+    runtime = module.DataFusionRuntimeProfile()
+    ctx = runtime.session_context()
+    introspector = SchemaIntrospector(ctx, sql_options=module.sql_options_for_profile(runtime))
+    return introspector.table_definition(name)
 
 
 def dataset_table_constraints(name: str) -> tuple[str, ...]:
@@ -1206,8 +1209,10 @@ def dataset_table_constraints(name: str) -> tuple[str, ...]:
         Constraint expressions or identifiers, when available.
     """
     module = importlib.import_module("datafusion_engine.runtime")
-    ctx = module.DataFusionRuntimeProfile().session_context()
-    return SchemaIntrospector(ctx).table_constraints(name)
+    runtime = module.DataFusionRuntimeProfile()
+    ctx = runtime.session_context()
+    introspector = SchemaIntrospector(ctx, sql_options=module.sql_options_for_profile(runtime))
+    return introspector.table_constraints(name)
 
 
 def dataset_table_column_defaults(name: str) -> dict[str, object]:
@@ -1224,8 +1229,10 @@ def dataset_table_column_defaults(name: str) -> dict[str, object]:
         Mapping of column names to default expressions.
     """
     module = importlib.import_module("datafusion_engine.runtime")
-    ctx = module.DataFusionRuntimeProfile().session_context()
-    return SchemaIntrospector(ctx).table_column_defaults(name)
+    runtime = module.DataFusionRuntimeProfile()
+    ctx = runtime.session_context()
+    introspector = SchemaIntrospector(ctx, sql_options=module.sql_options_for_profile(runtime))
+    return introspector.table_column_defaults(name)
 
 
 def dataset_table_logical_plan(name: str) -> str | None:
@@ -1242,8 +1249,10 @@ def dataset_table_logical_plan(name: str) -> str | None:
         Logical plan text when available.
     """
     module = importlib.import_module("datafusion_engine.runtime")
-    ctx = module.DataFusionRuntimeProfile().session_context()
-    return SchemaIntrospector(ctx).table_logical_plan(name)
+    runtime = module.DataFusionRuntimeProfile()
+    ctx = runtime.session_context()
+    introspector = SchemaIntrospector(ctx, sql_options=module.sql_options_for_profile(runtime))
+    return introspector.table_logical_plan(name)
 
 
 def dataset_spec_from_dataset(

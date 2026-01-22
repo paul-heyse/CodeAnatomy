@@ -7,10 +7,12 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 import pyarrow as pa
+from datafusion import SQLOptions
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from datafusion_engine.schema_registry import has_schema, schema_for
+from datafusion_engine.sql_options import sql_options_for_profile
 from ibis_engine.registry import datafusion_context
 
 
@@ -30,7 +32,7 @@ class _DatafusionContext(Protocol):
 
     def register_record_batches(self, name: str, batches: list[list[pa.RecordBatch]]) -> None: ...
 
-    def sql(self, query: str) -> _DatafusionQuery: ...
+    def sql_with_options(self, query: str, options: SQLOptions) -> _DatafusionQuery: ...
 
 
 def register_nested_table(
@@ -79,7 +81,8 @@ def materialize_view_reference(
         raise ValueError(msg)
     ctx = datafusion_context(backend)
     df_ctx = cast("_DatafusionContext", ctx)
-    batches = df_ctx.sql(f"SELECT * FROM {view.name}").collect()
+    sql_options = sql_options_for_profile(None)
+    batches = df_ctx.sql_with_options(f"SELECT * FROM {view.name}", sql_options).collect()
     return pa.Table.from_batches(batches)
 
 

@@ -20,6 +20,7 @@ class PlanCacheEntry:
     plan_hash: str
     profile_hash: str
     plan_bytes: bytes
+    compilation_lane: str | None = None
 
     def key(self) -> PlanCacheKey:
         """Return the cache key for this entry.

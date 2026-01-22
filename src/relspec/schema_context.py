@@ -44,7 +44,12 @@ class RelspecSchemaContext:
         RelspecSchemaContext
             Schema context bound to the provided session.
         """
-        return cls(ctx=ctx, introspector=SchemaIntrospector(ctx))
+        from datafusion_engine.runtime import sql_options_for_profile
+
+        return cls(
+            ctx=ctx,
+            introspector=SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None)),
+        )
 
     @classmethod
     def from_engine_session(cls, engine_session: EngineSession) -> RelspecSchemaContext:

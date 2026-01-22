@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Literal, cast
 
 import ibis
 import pyarrow as pa
-from sqlglot import exp
 
 from arrowdsl.core import interop
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
@@ -26,10 +25,10 @@ from arrowdsl.schema.encoding_metadata import (
     ENCODING_META,
     dict_field_metadata,
 )
-from arrowdsl.schema.metadata import schema_constraints_from_metadata, schema_identity_from_metadata
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 from registry_common.arrow_payloads import payload_hash
 from registry_common.metadata import metadata_list_bytes
+from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
     ExternalTableCompressionProperty,
     ExternalTableOptionsProperty,
@@ -395,6 +394,11 @@ class TableSchemaSpec:
         TableSchemaSpec
             Table schema specification derived from the Arrow schema.
         """
+        from arrowdsl.schema.metadata import (
+            schema_constraints_from_metadata,
+            schema_identity_from_metadata,
+        )
+
         fields: list[ArrowFieldSpec] = []
         for schema_field in schema:
             meta = _decode_metadata(schema_field.metadata)

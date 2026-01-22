@@ -1,4 +1,4 @@
-"""Shared spec-table parsing and literal codec helpers."""
+"""Shared spec-table parsing and literal helpers."""
 
 from __future__ import annotations
 
@@ -117,6 +117,29 @@ def parse_dedupe_strategy(value: object) -> DedupeStrategy:
     raise ValueError(msg)
 
 
+def parse_scalar_value(value: object) -> ScalarValue | None:
+    """Parse a scalar literal value.
+
+    Returns
+    -------
+    ScalarValue | None
+        Parsed scalar literal.
+
+    Raises
+    ------
+    TypeError
+        Raised when the value is not a supported scalar type.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (bool, int, float, str, bytes)):
+        return value
+    if isinstance(value, ScalarLike):
+        return value
+    msg = "Scalar literal must be a supported scalar type."
+    raise TypeError(msg)
+
+
 def encode_strict(*, strict: bool | Literal["filter"]) -> str:
     """Encode strict values for schema spec tables.
 
@@ -154,29 +177,6 @@ def decode_strict(value: str) -> bool | Literal["filter"]:
         return "filter"
     msg = f"Unsupported strict value: {value!r}"
     raise ValueError(msg)
-
-
-def parse_scalar_value(value: object) -> ScalarValue | None:
-    """Parse a scalar literal value.
-
-    Returns
-    -------
-    ScalarValue | None
-        Parsed scalar literal.
-
-    Raises
-    ------
-    TypeError
-        Raised when the value is not a supported scalar type.
-    """
-    if value is None:
-        return None
-    if isinstance(value, (bool, int, float, str, bytes)):
-        return value
-    if isinstance(value, ScalarLike):
-        return value
-    msg = "Scalar literal must be a supported scalar type."
-    raise TypeError(msg)
 
 
 def encode_json_payload(value: object | None) -> object | None:

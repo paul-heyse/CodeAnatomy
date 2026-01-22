@@ -7,13 +7,13 @@ from dataclasses import replace
 from typing import cast
 
 from ibis.expr.types import Table as IbisTable
-from sqlglot import exp
 from sqlglot.lineage import Node, lineage
 from sqlglot.optimizer import scope
 
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from ibis_engine.registry import datafusion_context
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
+from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
@@ -157,11 +157,13 @@ def _collect_leaf_names(node: Node) -> set[str]:
 
 
 def _schema_map_from_backend(backend: IbisCompilerBackend) -> dict[str, dict[str, str]] | None:
+    from datafusion_engine.runtime import sql_options_for_profile
+
     try:
         ctx = datafusion_context(backend)
     except (TypeError, ValueError):
         return None
-    return SchemaIntrospector(ctx).schema_map()
+    return SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None)).schema_map()
 
 
 def _schema_for_lineage(schema: SchemaMapping | None) -> dict[str, object] | None:

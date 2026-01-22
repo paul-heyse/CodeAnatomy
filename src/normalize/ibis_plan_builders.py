@@ -807,6 +807,13 @@ def _symtable_bytecode_join(
 def _symtable_bytecode_base(
     joined: Table,
 ) -> tuple[Table, BooleanValue, BooleanValue]:
+    """Build the symtable/bytecode comparison base table.
+
+    Returns
+    -------
+    tuple[Table, BooleanValue, BooleanValue]
+        Base table plus parameter/freevar mismatch flags.
+    """
     unpacked = _unpack_symtable_structs(joined)
     bstart = unpacked.sym_line_start_byte.cast("int64")
     sym_line_text = cast("StringValue", unpacked.sym_line_text)
@@ -835,7 +842,13 @@ def _symtable_bytecode_base(
 
 
 def _unpack_symtable_structs(joined: Table) -> Table:
-    """Unpack nested symtable struct columns into top-level fields."""
+    """Unpack nested symtable struct columns into top-level fields.
+
+    Returns
+    -------
+    Table
+        Table with nested struct fields unpacked when present.
+    """
     expr = joined
     if "function_partitions" in expr.columns:
         expr = expr.unpack("function_partitions")
@@ -881,10 +894,7 @@ def _symtable_freevar_counts(
     joined: Table,
 ) -> tuple[Value, Value, NumericValue, NumericValue, BooleanValue]:
     empty_list = _empty_string_list()
-    if "frees" in joined.columns:
-        sym_frees = ibis.coalesce(joined.frees, empty_list)
-    else:
-        sym_frees = empty_list
+    sym_frees = ibis.coalesce(joined.frees, empty_list) if "frees" in joined.columns else empty_list
     bc_freevars = ibis.coalesce(joined.freevars, empty_list)
     sym_free_count = cast("ArrayValue", sym_frees).length()
     bc_free_count = cast("ArrayValue", bc_freevars).length()

@@ -12,10 +12,10 @@ from sqlglot_tools.optimizer import SqlGlotSurface, sqlglot_surface_policy
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value
-    from sqlglot import Expression
 
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
     from engine.plan_cache import PlanCache
+    from sqlglot_tools.compat import Expression
     from sqlglot_tools.optimizer import SqlGlotPolicy
 
     ExplainRows = TableLike | RecordBatchReaderLike
@@ -138,6 +138,8 @@ class DataFusionCompileOptions:
     sql_options: SQLOptions | None = None
     sql_policy: DataFusionSqlPolicy | None = None
     sql_policy_name: str | None = None
+    enforce_sql_policy: bool = True
+    enforce_preflight: bool = False
     dialect: str = field(
         default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_COMPILE).dialect
     )
@@ -155,3 +157,6 @@ class DataFusionCompileOptions:
     profile_hash: str | None = None
     sqlglot_policy: SqlGlotPolicy | None = None
     sqlglot_policy_hash: str | None = None
+    run_id: str | None = None
+    prefer_substrait: bool = False
+    record_substrait_gaps: bool = False

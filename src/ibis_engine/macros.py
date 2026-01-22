@@ -54,12 +54,58 @@ def apply_macros(table: Table, *, macros: Sequence[IbisMacroSpec]) -> Table:
 def bind_columns(table: Table, *selectors: object) -> tuple[Value, ...]:
     """Bind deferred/selector expressions to a table.
 
+    Supports SelectorPattern objects, Ibis selectors, deferred expressions,
+    column names (strings), and column indices (integers).
+
+    Parameters
+    ----------
+    table:
+        Table to bind expressions to.
+    *selectors:
+        Column selectors - can be SelectorPattern, Ibis selector,
+        Deferred expression, string column name, or integer column index.
+
     Returns
     -------
     tuple[ibis.expr.types.Value, ...]
         Bound expressions for the selectors.
+
+    Examples
+    --------
+    Bind multiple selector types:
+
+    >>> from ibis_engine.selector_utils import SelectorPattern, ColumnSelector
+    >>> from ibis import _
+    >>> cs = ColumnSelector()
+    >>> # Bind numeric columns, a specific column, and a deferred expression
+    >>> bound = bind_columns(table, cs.numeric(), "id", _.x + 1)
     """
-    bound = table.bind(*selectors)
+    from ibis_engine.selector_utils import SelectorPattern
+
+    # Convert SelectorPattern objects to Ibis selectors
+    converted_selectors: list[object] = []
+    for selector in selectors:
+        if isinstance(selector, SelectorPattern):
+            # Import here to avoid circular dependency
+            import ibis.selectors as s
+
+            if selector.column_type == "numeric":
+                converted_selectors.append(s.numeric())
+            elif selector.column_type == "string":
+                converted_selectors.append(s.of_type("string"))
+            elif selector.column_type == "temporal":
+                # Use individual type selectors combined with OR
+                temporal_sel = s.of_type("timestamp") | s.of_type("date") | s.of_type("time")
+                converted_selectors.append(temporal_sel)
+            elif selector.regex_pattern:
+                converted_selectors.append(s.matches(selector.regex_pattern))
+            else:
+                # Default to all columns
+                converted_selectors.append(s.all())
+        else:
+            converted_selectors.append(selector)
+
+    bound = table.bind(*converted_selectors)
     return cast("tuple[Value, ...]", tuple(bound))
 
 
@@ -127,12 +173,102 @@ def macro_library() -> MacroLibrary:
     return _DEFAULT_MACRO_LIBRARY
 
 
+def apply_across(
+    table: Table,
+    selector: object,
+    fn: Callable[[Value], Value],
+) -> Table:
+    """Apply a transformation across selected columns.
+
+    Parameters
+    ----------
+    table:
+        Table to transform.
+    selector:
+        Column selector - can be SelectorPattern, Ibis selector,
+        or any selector supported by bind_columns.
+    fn:
+        Function to apply to each selected column.
+
+    Returns
+    -------
+    Table
+        Table with transformed columns added.
+
+    Examples
+    --------
+    Normalize all numeric columns:
+
+    >>> from ibis_engine.selector_utils import ColumnSelector
+    >>> cs = ColumnSelector()
+    >>> normalized = apply_across(table, cs.numeric(), lambda col: (col - col.mean()) / col.std())
+
+    Apply transformation with systematic naming:
+
+    >>> import ibis.selectors as s
+    >>> from ibis import _
+    >>> centered = apply_across(table, s.numeric(), lambda col: col - col.mean())
+    """
+    from ibis_engine.selector_utils import SelectorPattern
+
+    # Convert SelectorPattern to Ibis selector if needed
+    if isinstance(selector, SelectorPattern):
+        import ibis.selectors as s
+
+        if selector.column_type == "numeric":
+            selector = s.numeric()
+        elif selector.column_type == "string":
+            selector = s.of_type("string")
+        elif selector.column_type == "temporal":
+            selector = s.of_type("timestamp") | s.of_type("date") | s.of_type("time")
+        elif selector.regex_pattern:
+            selector = s.matches(selector.regex_pattern)
+        else:
+            selector = s.all()
+
+    # Bind selector to get columns, then apply function to each
+    bound_cols = bind_columns(table, selector)
+    mutations: dict[str, Value] = {col.get_name(): fn(col) for col in bound_cols}
+    return table.mutate(**mutations)
+
+
+def with_deferred(table: Table, **named_exprs: object) -> Table:
+    """Add computed columns using deferred expressions.
+
+    Parameters
+    ----------
+    table:
+        Table to add columns to.
+    **named_exprs:
+        Named expressions (deferred or Value) to add as columns.
+
+    Returns
+    -------
+    Table
+        Table with new computed columns.
+
+    Examples
+    --------
+    Add hash and concatenated columns:
+
+    >>> from ibis_engine.selector_utils import deferred_hash_column, deferred_concat_columns
+    >>> table_with_cols = with_deferred(
+    ...     table,
+    ...     id_hash=deferred_hash_column("id"),
+    ...     full_name=deferred_concat_columns("first_name", "last_name", separator=" "),
+    ... )
+    """
+    return table.mutate(**named_exprs)  # type: ignore[arg-type]
+
+
 __all__ = [
     "IbisMacro",
     "IbisMacroRewrite",
     "IbisMacroSpec",
     "MacroLibrary",
+    "apply_across",
     "apply_macros",
     "bind_columns",
     "macro_library",
+    "with_deferred",
 ]

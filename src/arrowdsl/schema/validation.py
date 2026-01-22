@@ -10,7 +10,7 @@ from functools import lru_cache
 from typing import Literal, Protocol, cast
 
 import pyarrow as pa
-from datafusion import SessionContext
+from datafusion import SessionContext, SQLOptions
 from pyarrow import Table as ArrowTable
 
 import arrowdsl.core.interop as arrow_pa
@@ -33,6 +33,7 @@ from arrowdsl.schema.schema import (
     required_field_names,
     required_non_null_mask,
 )
+from datafusion_engine.schema_introspection import table_constraint_rows
 
 
 class _ArrowFieldSpec(Protocol):
@@ -137,6 +138,74 @@ def _session_context(ctx: ExecutionContext) -> SessionContext:
     return runtime.session_context()
 
 
+def _sql_options(ctx: ExecutionContext) -> SQLOptions:
+    from datafusion_engine.runtime import sql_options_for_profile
+
+    return sql_options_for_profile(ctx.runtime.datafusion)
+
+
+def _sql_table(
+    ctx: SessionContext,
+    sql: str,
+    *,
+    sql_options: SQLOptions,
+) -> ArrowTable:
+    return ctx.sql_with_options(sql, sql_options).to_arrow_table()
+
+
+def _constraint_key_fields(rows: Sequence[Mapping[str, object]]) -> list[str]:
+    constraints: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for row in rows:
+        constraint_type = row.get("constraint_type")
+        if not isinstance(constraint_type, str):
+            continue
+        constraint_kind = constraint_type.upper()
+        if constraint_kind not in {"PRIMARY KEY", "UNIQUE"}:
+            continue
+        constraint_name = row.get("constraint_name")
+        column_name = row.get("column_name")
+        if not isinstance(constraint_name, str) or not constraint_name:
+            continue
+        if not isinstance(column_name, str) or not column_name:
+            continue
+        ordinal = row.get("ordinal_position")
+        position = int(ordinal) if isinstance(ordinal, (int, float)) else 0
+        constraints.setdefault((constraint_kind, constraint_name), []).append(
+            (position, column_name)
+        )
+    if not constraints:
+        return []
+    for kind in ("PRIMARY KEY", "UNIQUE"):
+        candidates = {key: values for key, values in constraints.items() if key[0] == kind}
+        if not candidates:
+            continue
+        _, values = sorted(candidates.items(), key=lambda item: item[0][1])[0]
+        return [name for _, name in sorted(values, key=lambda item: item[0])]
+    return []
+
+
+def _resolve_key_fields(
+    ctx: ExecutionContext,
+    *,
+    session: SessionContext,
+    spec: _TableSchemaSpec,
+    sql_options: SQLOptions,
+) -> Sequence[str]:
+    runtime = ctx.runtime.datafusion
+    if runtime is None or not runtime.enable_information_schema:
+        return spec.key_fields
+    try:
+        rows = table_constraint_rows(
+            session,
+            table_name=spec.name,
+            sql_options=sql_options,
+        )
+    except (RuntimeError, TypeError, ValueError):
+        return spec.key_fields
+    resolved = _constraint_key_fields(rows)
+    return resolved or spec.key_fields
+
+
 @lru_cache(maxsize=128)
 def _datafusion_type_name(dtype: DataTypeLike) -> str:
     ctx = SessionContext()
@@ -146,7 +215,10 @@ def _datafusion_type_name(dtype: DataTypeLike) -> str:
     )
     batches = list(table.to_batches())
     ctx.register_record_batches("t", [batches])
-    result = ctx.sql("SELECT arrow_typeof(value) AS dtype FROM t").to_arrow_table()
+    from datafusion_engine.runtime import sql_options_for_profile
+
+    options = sql_options_for_profile(None)
+    result = _sql_table(ctx, "SELECT arrow_typeof(value) AS dtype FROM t", sql_options=options)
     value = result["dtype"][0].as_py()
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
@@ -178,9 +250,19 @@ def _deregister_table(ctx: SessionContext, *, name: str) -> None:
             deregister(name)
 
 
-def _count_rows(ctx: SessionContext, table_name: str, *, where: str | None = None) -> int:
+def _count_rows(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    where: str | None = None,
+    sql_options: SQLOptions,
+) -> int:
     clause = f" WHERE {where}" if where else ""
-    table = ctx.sql(f"SELECT COUNT(*) AS count FROM {table_name}{clause}").to_arrow_table()
+    table = _sql_table(
+        ctx,
+        f"SELECT COUNT(*) AS count FROM {table_name}{clause}",
+        sql_options=sql_options,
+    )
     value = table["count"][0].as_py() if table.num_rows else 0
     return int(value or 0)
 
@@ -214,6 +296,7 @@ def _cast_failure_count(
     table_name: str,
     column: str,
     dtype: DataTypeLike,
+    sql_options: SQLOptions,
 ) -> int:
     dtype_name = _datafusion_type_name(dtype)
     col_name = _sql_identifier(column)
@@ -224,7 +307,7 @@ def _cast_failure_count(
         f"FROM {table_name}"
     )
     try:
-        table = ctx.sql(sql).to_arrow_table()
+        table = _sql_table(ctx, sql, sql_options=sql_options)
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"DataFusion cast check failed for column {column!r}: {exc}."
         raise ValueError(msg) from exc
@@ -237,6 +320,7 @@ def _duplicate_row_count(
     *,
     table_name: str,
     keys: Sequence[str],
+    sql_options: SQLOptions,
 ) -> int:
     if not keys:
         return 0
@@ -246,7 +330,7 @@ def _duplicate_row_count(
         f"SELECT COUNT(*) AS dupe_count FROM {table_name} "
         f"GROUP BY {key_expr} HAVING COUNT(*) > 1)"
     )
-    table = ctx.sql(sql).to_arrow_table()
+    table = _sql_table(ctx, sql, sql_options=sql_options)
     value = table["dupes"][0].as_py() if table.num_rows else 0
     return int(value or 0)
 
@@ -280,6 +364,7 @@ def _coerce_type_mismatch_errors(
     table_name: str,
     table: TableLike,
     spec: _TableSchemaSpec,
+    sql_options: SQLOptions,
 ) -> list[_ValidationErrorEntry]:
     entries: list[_ValidationErrorEntry] = []
     for field in spec.fields:
@@ -292,6 +377,7 @@ def _coerce_type_mismatch_errors(
             table_name=table_name,
             column=field.name,
             dtype=field.dtype,
+            sql_options=sql_options,
         )
         if count:
             entries.append(_ValidationErrorEntry("type_mismatch", field.name, count))
@@ -304,6 +390,7 @@ def _null_violation_results(
     table_name: str,
     required_fields: Sequence[str],
     missing_cols: Sequence[str],
+    sql_options: SQLOptions,
 ) -> tuple[list[_ValidationErrorEntry], str | None]:
     required_present = [name for name in required_fields if name not in missing_cols]
     if not required_present:
@@ -316,7 +403,7 @@ def _null_violation_results(
         col_name = _sql_identifier(name)
         selections.append(f"SUM(CASE WHEN {col_name} IS NULL THEN 1 ELSE 0 END) AS {alias}")
     sql = f"SELECT {', '.join(selections)} FROM {table_name}"
-    table = ctx.sql(sql).to_arrow_table()
+    table = _sql_table(ctx, sql, sql_options=sql_options)
     entries: list[_ValidationErrorEntry] = []
     for name, alias in alias_by_field.items():
         value = table[alias][0].as_py() if table.num_rows else 0
@@ -327,44 +414,72 @@ def _null_violation_results(
     return entries, invalid_expr
 
 
+@dataclass(frozen=True)
+class _RowFilterInputs:
+    ctx: SessionContext
+    table_name: str
+    aligned: TableLike
+    invalid_expr: str | None
+    options: ArrowValidationOptions
+    sql_options: SQLOptions
+
+
 def _row_filter_results(
-    ctx: SessionContext,
-    *,
-    table_name: str,
-    aligned: TableLike,
-    invalid_expr: str | None,
-    options: ArrowValidationOptions,
+    inputs: _RowFilterInputs,
 ) -> tuple[TableLike, TableLike | None, int]:
-    if invalid_expr is None:
-        return aligned, None, 0
+    if inputs.invalid_expr is None:
+        return inputs.aligned, None, 0
     invalid_rows = None
-    if options.emit_invalid_rows or options.strict == "filter":
-        invalid_rows = ctx.sql(f"SELECT * FROM {table_name} WHERE {invalid_expr}").to_arrow_table()
-    invalid_row_count = _count_rows(ctx, table_name, where=invalid_expr)
-    validated = aligned
-    if options.strict == "filter":
-        validated = ctx.sql(
-            f"SELECT * FROM {table_name} WHERE NOT ({invalid_expr})"
-        ).to_arrow_table()
+    if inputs.options.emit_invalid_rows or inputs.options.strict == "filter":
+        invalid_rows = _sql_table(
+            inputs.ctx,
+            f"SELECT * FROM {inputs.table_name} WHERE {inputs.invalid_expr}",
+            sql_options=inputs.sql_options,
+        )
+    invalid_row_count = _count_rows(
+        inputs.ctx,
+        table_name=inputs.table_name,
+        where=inputs.invalid_expr,
+        sql_options=inputs.sql_options,
+    )
+    validated = inputs.aligned
+    if inputs.options.strict == "filter":
+        validated = _sql_table(
+            inputs.ctx,
+            f"SELECT * FROM {inputs.table_name} WHERE NOT ({inputs.invalid_expr})",
+            sql_options=inputs.sql_options,
+        )
     return validated, invalid_rows, invalid_row_count
 
 
+@dataclass(frozen=True)
+class _KeyFieldInputs:
+    ctx: SessionContext
+    table_name: str
+    key_fields: Sequence[str]
+    missing_cols: Sequence[str]
+    row_count: int
+    sql_options: SQLOptions
+
+
 def _key_field_errors(
-    ctx: SessionContext,
-    *,
-    table_name: str,
-    key_fields: Sequence[str],
-    missing_cols: Sequence[str],
-    row_count: int,
+    inputs: _KeyFieldInputs,
 ) -> list[_ValidationErrorEntry]:
-    if not key_fields:
+    if not inputs.key_fields:
         return []
-    missing_keys = missing_key_fields(key_fields, missing_cols=missing_cols)
-    entries = [_ValidationErrorEntry("missing_key_field", key, row_count) for key in missing_keys]
+    missing_keys = missing_key_fields(inputs.key_fields, missing_cols=inputs.missing_cols)
+    entries = [
+        _ValidationErrorEntry("missing_key_field", key, inputs.row_count) for key in missing_keys
+    ]
     if not missing_keys:
-        dup_count = _duplicate_row_count(ctx, table_name=table_name, keys=key_fields)
+        dup_count = _duplicate_row_count(
+            inputs.ctx,
+            table_name=inputs.table_name,
+            keys=inputs.key_fields,
+            sql_options=inputs.sql_options,
+        )
         if dup_count:
-            key_label = ",".join(key_fields)
+            key_label = ",".join(inputs.key_fields)
             entries.append(_ValidationErrorEntry("duplicate_keys", key_label, dup_count))
     return entries
 
@@ -441,6 +556,8 @@ def _collect_validation_results(
     *,
     context: _ValidationContext,
     options: ArrowValidationOptions,
+    key_fields: Sequence[str],
+    sql_options: SQLOptions,
 ) -> tuple[list[_ValidationErrorEntry], TableLike, TableLike | None, int]:
     error_entries: list[_ValidationErrorEntry] = []
     error_entries.extend(_missing_column_errors(context.info, context.row_count))
@@ -453,6 +570,7 @@ def _collect_validation_results(
                 table_name=context.original_name,
                 table=context.original_table,
                 spec=context.spec,
+                sql_options=sql_options,
             )
         )
     else:
@@ -469,22 +587,29 @@ def _collect_validation_results(
         table_name=context.aligned_name,
         required_fields=required_field_names(context.spec),
         missing_cols=context.info["missing_cols"],
+        sql_options=sql_options,
     )
     error_entries.extend(null_entries)
     validated, invalid_rows, invalid_row_count = _row_filter_results(
-        session,
-        table_name=context.aligned_name,
-        aligned=context.aligned_table,
-        invalid_expr=invalid_expr,
-        options=options,
+        _RowFilterInputs(
+            ctx=session,
+            table_name=context.aligned_name,
+            aligned=context.aligned_table,
+            invalid_expr=invalid_expr,
+            options=options,
+            sql_options=sql_options,
+        )
     )
     error_entries.extend(
         _key_field_errors(
-            session,
-            table_name=context.aligned_name,
-            key_fields=context.spec.key_fields,
-            missing_cols=context.info["missing_cols"],
-            row_count=context.row_count,
+            _KeyFieldInputs(
+                ctx=session,
+                table_name=context.aligned_name,
+                key_fields=key_fields,
+                missing_cols=context.info["missing_cols"],
+                row_count=context.row_count,
+                sql_options=sql_options,
+            )
         ),
     )
     return error_entries, validated, invalid_rows, invalid_row_count
@@ -546,11 +671,20 @@ def validate_table(
         spec=spec,
         options=options,
     )
+    sql_options = _sql_options(ctx)
+    key_fields = _resolve_key_fields(
+        ctx,
+        session=session,
+        spec=spec,
+        sql_options=sql_options,
+    )
     try:
         error_entries, validated, invalid_rows, invalid_row_count = _collect_validation_results(
             session,
             context=context,
             options=options,
+            key_fields=key_fields,
+            sql_options=sql_options,
         )
     finally:
         _deregister_table(session, name=aligned_name)

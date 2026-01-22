@@ -8,7 +8,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
-from datafusion_engine.runtime import read_delta_table_from_path
+from datafusion_engine.runtime import read_delta_as_reader
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore
 from storage.deltalake import (
@@ -50,7 +50,8 @@ def read_dataset_fingerprints(state_store: StateStore) -> dict[str, str]:
     path = _fingerprints_path(state_store)
     if not path.exists():
         return {}
-    table = read_delta_table_from_path(str(path))
+    reader = read_delta_as_reader(str(path))
+    table = reader.read_all()
     results: dict[str, str] = {}
     for row in table.to_pylist():
         if not isinstance(row, Mapping):

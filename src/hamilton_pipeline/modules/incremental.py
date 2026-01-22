@@ -18,16 +18,21 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import empty_table
 from datafusion_engine.registry_bridge import DeltaCdfRegistrationOptions, register_delta_cdf_df
-from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_table_from_path
+from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_as_reader
 from hamilton_pipeline.pipeline_types import (
     IncrementalDatasetUpdates,
     IncrementalImpactUpdates,
     RelationshipOutputTables,
     RepoScanConfig,
 )
+from incremental.cdf_cursors import CdfCursorStore
 from incremental.changes import file_changes_from_diff
 from incremental.deltas import compute_changed_exports
-from incremental.diff import diff_snapshots, diff_snapshots_with_cdf, write_incremental_diff
+from incremental.diff import (
+    diff_snapshots_with_cdf,
+    diff_snapshots_with_delta_cdf,
+    write_incremental_diff,
+)
 from incremental.edges_update import upsert_cpg_edges
 from incremental.exports import build_exported_defs_index
 from incremental.exports_update import upsert_exported_defs
@@ -274,7 +279,7 @@ def incremental_exported_defs(
     if incremental_state_store is not None:
         rel_def_dir = incremental_state_store.dataset_dir("rel_def_symbol_v1")
         if rel_def_dir.exists():
-            rel_def_symbol = read_delta_table_from_path(str(rel_def_dir))
+            rel_def_symbol = read_delta_as_reader(str(rel_def_dir)).read_all()
     return build_exported_defs_index(
         cst_defs_norm,
         backend=ibis_backend,
@@ -545,20 +550,27 @@ def incremental_diff(
     """
     if incremental_state_store is None or incremental_repo_snapshot is None:
         return None
+
+    snapshot_path = incremental_state_store.repo_snapshot_path()
     prev: pa.Table | None
     prev_version: int | None = None
-    snapshot_path = incremental_state_store.repo_snapshot_path()
+
+    # Check if we need a full refresh
     if incremental_invalidation is not None and incremental_invalidation.result.full_refresh:
         prev = None
     else:
         prev = read_repo_snapshot(incremental_state_store)
         if prev is not None:
             prev_version = delta_table_version(str(snapshot_path))
+
+    # Write the new snapshot
     write_result = write_repo_snapshot(incremental_state_store, incremental_repo_snapshot)
-    diff = diff_snapshots(prev, incremental_repo_snapshot)
+
+    # Try Delta CDF-driven incremental diff first (primary path)
     if prev is not None and prev_version is not None and write_result.version is not None:
         start_version = prev_version + 1
         if start_version <= write_result.version:
+            # Try to use CDF table registration
             cdf_ref = _delta_cdf_table(
                 path=snapshot_path,
                 start_version=start_version,
@@ -574,10 +586,66 @@ def incremental_diff(
                         ctx=cdf_ctx,
                         cdf_table=cdf_name,
                     )
+                    write_incremental_diff(incremental_state_store, diff)
+                    return diff
                 finally:
                     _deregister_table(cdf_ctx, cdf_name)
-    write_incremental_diff(incremental_state_store, diff)
-    return diff
+
+    # Fallback: Use cursor-based Delta CDF if available
+    cursor_store = CdfCursorStore(cursors_path=incremental_state_store.cdf_cursors_path())
+    cdf_result = diff_snapshots_with_delta_cdf(
+        dataset_path=str(snapshot_path),
+        cursor_store=cursor_store,
+        dataset_name="repo_snapshot",
+        filter_policy=None,
+    )
+
+    # If CDF returns a table, we can use it with diff_snapshots_with_cdf
+    if cdf_result is not None and prev is not None:
+        profile = DataFusionRuntimeProfile()
+        cdf_ctx = profile.session_context()
+        cdf_name = f"__cdf_fallback_{uuid.uuid4().hex}"
+        try:
+            cdf_ctx.register_record_batches(cdf_name, [list(cdf_result.to_batches())])
+            diff = diff_snapshots_with_cdf(
+                prev,
+                incremental_repo_snapshot,
+                ctx=cdf_ctx,
+                cdf_table=cdf_name,
+            )
+            write_incremental_diff(incremental_state_store, diff)
+            return diff
+        finally:
+            _deregister_table(cdf_ctx, cdf_name)
+
+    # Final fallback: Full snapshot comparison (for first run or when CDF unavailable)
+    # Build a minimal diff table for the "added" case (all files in current snapshot)
+    profile = DataFusionRuntimeProfile()
+    cdf_ctx = profile.session_context()
+    sql_options = profile.sql_options()
+    cur_name = f"__snapshot_{uuid.uuid4().hex}"
+    try:
+        cdf_ctx.register_record_batches(cur_name, [list(incremental_repo_snapshot.to_batches())])
+        sql = f"""
+        SELECT
+          cur.file_id AS file_id,
+          cur.path AS path,
+          'added' AS change_kind,
+          CAST(NULL AS STRING) AS prev_path,
+          cur.path AS cur_path,
+          CAST(NULL AS STRING) AS prev_file_sha256,
+          cur.file_sha256 AS cur_file_sha256,
+          CAST(NULL AS BIGINT) AS prev_size_bytes,
+          cur.size_bytes AS cur_size_bytes,
+          CAST(NULL AS BIGINT) AS prev_mtime_ns,
+          cur.mtime_ns AS cur_mtime_ns
+        FROM {cur_name} AS cur
+        """
+        diff = cdf_ctx.sql_with_options(sql, sql_options).to_arrow_table()
+        write_incremental_diff(incremental_state_store, diff)
+        return diff
+    finally:
+        _deregister_table(cdf_ctx, cur_name)
 
 
 @tag(layer="incremental", kind="object")

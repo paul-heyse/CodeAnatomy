@@ -8,6 +8,7 @@ import logging
 from collections.abc import Sequence
 
 from arrowdsl.core.context import DeterminismTier
+
 from graph import GraphProductBuildRequest, build_graph_product
 from hamilton_pipeline.pipeline_types import ScipIndexConfig
 

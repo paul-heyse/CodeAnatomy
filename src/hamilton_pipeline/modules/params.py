@@ -12,7 +12,7 @@ from ibis.expr.types import Table
 
 from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict
-from datafusion_engine.runtime import read_delta_table_from_path
+from datafusion_engine.runtime import read_delta_as_reader
 from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import OutputConfig, ParamBundle
 from ibis_engine.param_tables import (
@@ -347,7 +347,7 @@ def _coerce_list_values(name: str, value: object) -> tuple[object, ...]:
 
 
 def _artifact_from_delta(spec: ParamTableSpec, path: str) -> ParamTableArtifact:
-    table = read_delta_table_from_path(path)
+    table = read_delta_as_reader(path).read_all()
     if table.schema != spec.schema:
         table = table.cast(spec.schema, safe=False)
     if spec.distinct:

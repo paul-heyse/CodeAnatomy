@@ -2,41 +2,135 @@
 
 from __future__ import annotations
 
+from functools import cache
+from typing import TYPE_CHECKING, Any
+
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_schema
-from datafusion_engine.runtime import (
-    dataset_schema_from_context,
-    dataset_spec_from_context,
-)
 
-CPG_NODES_SPEC = dataset_spec_from_context("cpg_nodes_v1")
-CPG_EDGES_SPEC = dataset_spec_from_context("cpg_edges_v1")
-CPG_PROPS_SPEC = dataset_spec_from_context("cpg_props_v1")
-CPG_PROPS_JSON_SPEC = dataset_spec_from_context("cpg_props_json_v1")
-CPG_PROPS_BY_FILE_ID_SPEC = dataset_spec_from_context("cpg_props_by_file_id_v1")
-CPG_PROPS_GLOBAL_SPEC = dataset_spec_from_context("cpg_props_global_v1")
+if TYPE_CHECKING:
+    import pyarrow as pa
 
-CPG_NODES_SCHEMA = dataset_schema_from_context("cpg_nodes_v1")
-CPG_EDGES_SCHEMA = dataset_schema_from_context("cpg_edges_v1")
-CPG_PROPS_SCHEMA = dataset_schema_from_context("cpg_props_v1")
-CPG_PROPS_JSON_SCHEMA = dataset_schema_from_context("cpg_props_json_v1")
-CPG_PROPS_BY_FILE_ID_SCHEMA = dataset_schema_from_context("cpg_props_by_file_id_v1")
-CPG_PROPS_GLOBAL_SCHEMA = dataset_schema_from_context("cpg_props_global_v1")
+    from schema_spec.dataset_handle import DatasetSpec
 
-CPG_NODES_CONTRACT_SPEC = CPG_NODES_SPEC.contract_spec_or_default()
-CPG_EDGES_CONTRACT_SPEC = CPG_EDGES_SPEC.contract_spec_or_default()
-CPG_PROPS_CONTRACT_SPEC = CPG_PROPS_SPEC.contract_spec_or_default()
-CPG_PROPS_JSON_CONTRACT_SPEC = CPG_PROPS_JSON_SPEC.contract_spec_or_default()
-CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC = CPG_PROPS_BY_FILE_ID_SPEC.contract_spec_or_default()
-CPG_PROPS_GLOBAL_CONTRACT_SPEC = CPG_PROPS_GLOBAL_SPEC.contract_spec_or_default()
-
-CPG_NODES_CONTRACT = CPG_NODES_CONTRACT_SPEC.to_contract()
-CPG_EDGES_CONTRACT = CPG_EDGES_CONTRACT_SPEC.to_contract()
-CPG_PROPS_CONTRACT = CPG_PROPS_CONTRACT_SPEC.to_contract()
-CPG_PROPS_JSON_CONTRACT = CPG_PROPS_JSON_CONTRACT_SPEC.to_contract()
-CPG_PROPS_BY_FILE_ID_CONTRACT = CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC.to_contract()
-CPG_PROPS_GLOBAL_CONTRACT = CPG_PROPS_GLOBAL_CONTRACT_SPEC.to_contract()
 SCHEMA_VERSION = 1
+
+# Lazy accessor functions to avoid circular imports
+
+
+@cache
+def _get_dataset_spec(name: str) -> DatasetSpec:
+    from datafusion_engine.runtime import dataset_spec_from_context
+
+    return dataset_spec_from_context(name)
+
+
+@cache
+def _get_dataset_schema(name: str) -> pa.Schema:
+    from datafusion_engine.runtime import dataset_schema_from_context
+
+    return dataset_schema_from_context(name)
+
+
+# Lazy property accessors
+
+
+def _cpg_nodes_spec() -> DatasetSpec:
+    return _get_dataset_spec("cpg_nodes_v1")
+
+
+def _cpg_edges_spec() -> DatasetSpec:
+    return _get_dataset_spec("cpg_edges_v1")
+
+
+def _cpg_props_spec() -> DatasetSpec:
+    return _get_dataset_spec("cpg_props_v1")
+
+
+def _cpg_props_json_spec() -> DatasetSpec:
+    return _get_dataset_spec("cpg_props_json_v1")
+
+
+def _cpg_props_by_file_id_spec() -> DatasetSpec:
+    return _get_dataset_spec("cpg_props_by_file_id_v1")
+
+
+def _cpg_props_global_spec() -> DatasetSpec:
+    return _get_dataset_spec("cpg_props_global_v1")
+
+
+def _cpg_nodes_schema() -> pa.Schema:
+    return _get_dataset_schema("cpg_nodes_v1")
+
+
+def _cpg_edges_schema() -> pa.Schema:
+    return _get_dataset_schema("cpg_edges_v1")
+
+
+def _cpg_props_schema() -> pa.Schema:
+    return _get_dataset_schema("cpg_props_v1")
+
+
+def _cpg_props_json_schema() -> pa.Schema:
+    return _get_dataset_schema("cpg_props_json_v1")
+
+
+def _cpg_props_by_file_id_schema() -> pa.Schema:
+    return _get_dataset_schema("cpg_props_by_file_id_v1")
+
+
+def _cpg_props_global_schema() -> pa.Schema:
+    return _get_dataset_schema("cpg_props_global_v1")
+
+
+# Module-level lazy attribute access
+_LAZY_ATTRS: dict[str, Any] = {
+    "CPG_NODES_SPEC": _cpg_nodes_spec,
+    "CPG_EDGES_SPEC": _cpg_edges_spec,
+    "CPG_PROPS_SPEC": _cpg_props_spec,
+    "CPG_PROPS_JSON_SPEC": _cpg_props_json_spec,
+    "CPG_PROPS_BY_FILE_ID_SPEC": _cpg_props_by_file_id_spec,
+    "CPG_PROPS_GLOBAL_SPEC": _cpg_props_global_spec,
+    "CPG_NODES_SCHEMA": _cpg_nodes_schema,
+    "CPG_EDGES_SCHEMA": _cpg_edges_schema,
+    "CPG_PROPS_SCHEMA": _cpg_props_schema,
+    "CPG_PROPS_JSON_SCHEMA": _cpg_props_json_schema,
+    "CPG_PROPS_BY_FILE_ID_SCHEMA": _cpg_props_by_file_id_schema,
+    "CPG_PROPS_GLOBAL_SCHEMA": _cpg_props_global_schema,
+}
+
+_DERIVED_ATTRS: dict[str, tuple[str, str]] = {
+    "CPG_NODES_CONTRACT_SPEC": ("CPG_NODES_SPEC", "contract_spec_or_default"),
+    "CPG_EDGES_CONTRACT_SPEC": ("CPG_EDGES_SPEC", "contract_spec_or_default"),
+    "CPG_PROPS_CONTRACT_SPEC": ("CPG_PROPS_SPEC", "contract_spec_or_default"),
+    "CPG_PROPS_JSON_CONTRACT_SPEC": ("CPG_PROPS_JSON_SPEC", "contract_spec_or_default"),
+    "CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC": ("CPG_PROPS_BY_FILE_ID_SPEC", "contract_spec_or_default"),
+    "CPG_PROPS_GLOBAL_CONTRACT_SPEC": ("CPG_PROPS_GLOBAL_SPEC", "contract_spec_or_default"),
+}
+
+_CONTRACT_ATTRS: dict[str, str] = {
+    "CPG_NODES_CONTRACT": "CPG_NODES_CONTRACT_SPEC",
+    "CPG_EDGES_CONTRACT": "CPG_EDGES_CONTRACT_SPEC",
+    "CPG_PROPS_CONTRACT": "CPG_PROPS_CONTRACT_SPEC",
+    "CPG_PROPS_JSON_CONTRACT": "CPG_PROPS_JSON_CONTRACT_SPEC",
+    "CPG_PROPS_BY_FILE_ID_CONTRACT": "CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC",
+    "CPG_PROPS_GLOBAL_CONTRACT": "CPG_PROPS_GLOBAL_CONTRACT_SPEC",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_ATTRS:
+        return _LAZY_ATTRS[name]()
+    if name in _DERIVED_ATTRS:
+        base_name, method_name = _DERIVED_ATTRS[name]
+        base = __getattr__(base_name)
+        return getattr(base, method_name)()
+    if name in _CONTRACT_ATTRS:
+        spec_name = _CONTRACT_ATTRS[name]
+        spec = __getattr__(spec_name)
+        return spec.to_contract()
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
 
 
 def empty_nodes() -> TableLike:
@@ -47,7 +141,7 @@ def empty_nodes() -> TableLike:
     pyarrow.Table
         Empty nodes table.
     """
-    return table_from_schema(CPG_NODES_SCHEMA, columns={}, num_rows=0)
+    return table_from_schema(_cpg_nodes_schema(), columns={}, num_rows=0)
 
 
 def empty_edges() -> TableLike:
@@ -58,7 +152,7 @@ def empty_edges() -> TableLike:
     pyarrow.Table
         Empty edges table.
     """
-    return table_from_schema(CPG_EDGES_SCHEMA, columns={}, num_rows=0)
+    return table_from_schema(_cpg_edges_schema(), columns={}, num_rows=0)
 
 
 def empty_props() -> TableLike:
@@ -69,7 +163,7 @@ def empty_props() -> TableLike:
     pyarrow.Table
         Empty props table.
     """
-    return table_from_schema(CPG_PROPS_SCHEMA, columns={}, num_rows=0)
+    return table_from_schema(_cpg_props_schema(), columns={}, num_rows=0)
 
 
 def empty_props_json() -> TableLike:
@@ -80,7 +174,7 @@ def empty_props_json() -> TableLike:
     pyarrow.Table
         Empty JSON props table.
     """
-    return table_from_schema(CPG_PROPS_JSON_SCHEMA, columns={}, num_rows=0)
+    return table_from_schema(_cpg_props_json_schema(), columns={}, num_rows=0)
 
 
 def empty_props_by_file_id() -> TableLike:
@@ -91,7 +185,7 @@ def empty_props_by_file_id() -> TableLike:
     pyarrow.Table
         Empty props-by-file table.
     """
-    return table_from_schema(CPG_PROPS_BY_FILE_ID_SCHEMA, columns={}, num_rows=0)
+    return table_from_schema(_cpg_props_by_file_id_schema(), columns={}, num_rows=0)
 
 
 def empty_props_global() -> TableLike:
@@ -102,4 +196,4 @@ def empty_props_global() -> TableLike:
     pyarrow.Table
         Empty global props table.
     """
-    return table_from_schema(CPG_PROPS_GLOBAL_SCHEMA, columns={}, num_rows=0)
+    return table_from_schema(_cpg_props_global_schema(), columns={}, num_rows=0)

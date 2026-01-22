@@ -8,9 +8,8 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from sqlglot.executor import execute
-
 from arrowdsl.json_factory import json_default
+from sqlglot.executor import execute
 
 
 def _load_text(path: Path) -> str:

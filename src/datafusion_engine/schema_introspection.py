@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
-from datafusion_engine.compile_options import DataFusionSqlPolicy
+from datafusion_engine.sql_options import (
+    sql_options_for_profile,
+    statement_sql_options_for_profile,
+)
+from datafusion_engine.table_provider_metadata import table_provider_metadata
 from registry_common.arrow_payloads import payload_hash
 from sqlglot_tools.optimizer import SchemaMapping, SchemaMappingNode
 
-_TABLE_DEFINITION_OVERRIDES: dict[int, dict[str, str]] = {}
 SCHEMA_MAP_HASH_VERSION: int = 1
 
 _SCHEMA_MAP_COLUMN_SCHEMA = pa.struct(
@@ -35,51 +38,12 @@ _SCHEMA_MAP_HASH_SCHEMA = pa.schema(
 )
 
 
-def record_table_definition_override(
-    ctx: SessionContext,
-    *,
-    name: str,
-    ddl: str,
-) -> None:
-    """Record a CREATE TABLE definition override for a session.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context to scope the override.
-    name
-        Table name associated with the override.
-    ddl
-        CREATE TABLE statement to record for the table.
-    """
-    overrides = _TABLE_DEFINITION_OVERRIDES.setdefault(id(ctx), {})
-    overrides[name] = ddl
-
-
-def table_definition_override(ctx: SessionContext, *, name: str) -> str | None:
-    """Return a recorded table definition override when available.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context that scoped the override.
-    name
-        Table name to look up.
-
-    Returns
-    -------
-    str | None
-        Recorded CREATE TABLE statement when available.
-    """
-    return _TABLE_DEFINITION_OVERRIDES.get(id(ctx), {}).get(name)
-
-
 def _read_only_sql_options() -> SQLOptions:
-    return DataFusionSqlPolicy().to_sql_options()
+    return sql_options_for_profile(None)
 
 
 def _statement_sql_options() -> SQLOptions:
-    return DataFusionSqlPolicy(allow_statements=True).to_sql_options()
+    return statement_sql_options_for_profile(None)
 
 
 def _table_for_query(
@@ -146,6 +110,276 @@ def settings_snapshot_table(
     return _table_for_query(ctx, query, sql_options=sql_options)
 
 
+def table_constraint_rows(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    sql_options: SQLOptions | None = None,
+) -> list[dict[str, object]]:
+    """Return constraint metadata rows for a table when available.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Rows including constraint type and column names where available.
+    """
+    query = (
+        "SELECT "
+        "tc.table_catalog, "
+        "tc.table_schema, "
+        "tc.table_name, "
+        "tc.constraint_name, "
+        "tc.constraint_type, "
+        "kcu.column_name, "
+        "kcu.ordinal_position "
+        "FROM information_schema.table_constraints tc "
+        "LEFT JOIN information_schema.key_column_usage kcu "
+        "ON tc.constraint_name = kcu.constraint_name "
+        "AND tc.table_catalog = kcu.table_catalog "
+        "AND tc.table_schema = kcu.table_schema "
+        "AND tc.table_name = kcu.table_name "
+        f"WHERE tc.table_name = {_sql_literal(table_name)} "
+        "ORDER BY tc.constraint_name, kcu.ordinal_position"
+    )
+    return _rows_for_query(ctx, query, sql_options=sql_options)
+
+
+def constraint_rows(
+    ctx: SessionContext,
+    *,
+    catalog: str | None = None,
+    schema: str | None = None,
+    sql_options: SQLOptions | None = None,
+) -> list[dict[str, object]]:
+    """Return constraint metadata rows across tables.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Rows including constraint type and column names where available.
+    """
+    filters: list[str] = []
+    if catalog is not None:
+        filters.append(f"tc.table_catalog = {_sql_literal(catalog)}")
+    if schema is not None:
+        filters.append(f"tc.table_schema = {_sql_literal(schema)}")
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    query = (
+        "SELECT "
+        "tc.table_catalog, "
+        "tc.table_schema, "
+        "tc.table_name, "
+        "tc.constraint_name, "
+        "tc.constraint_type, "
+        "kcu.column_name, "
+        "kcu.ordinal_position "
+        "FROM information_schema.table_constraints tc "
+        "LEFT JOIN information_schema.key_column_usage kcu "
+        "ON tc.constraint_name = kcu.constraint_name "
+        "AND tc.table_catalog = kcu.table_catalog "
+        "AND tc.table_schema = kcu.table_schema "
+        "AND tc.table_name = kcu.table_name "
+        f"{where_clause} "
+        "ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position"
+    )
+    return _rows_for_query(ctx, query, sql_options=sql_options)
+
+
+def _arrow_type_to_sql_type(arrow_type: pa.DataType) -> str:
+    """Convert PyArrow type to DataFusion SQL type string.
+
+    Parameters
+    ----------
+    arrow_type : pa.DataType
+        PyArrow data type to convert.
+
+    Returns
+    -------
+    str
+        SQL type string for CREATE EXTERNAL TABLE DDL.
+    """
+    scalar_type = _arrow_scalar_sql_type(arrow_type)
+    if scalar_type is not None:
+        return scalar_type
+    if pa.types.is_decimal(arrow_type):
+        decimal_type = arrow_type
+        return f"DECIMAL({decimal_type.precision}, {decimal_type.scale})"
+    if pa.types.is_list(arrow_type):
+        value_type = _arrow_type_to_sql_type(arrow_type.value_type)
+        return f"{value_type}[]"
+    if pa.types.is_struct(arrow_type):
+        field_defs = ", ".join(
+            f"{struct_field.name} {_arrow_type_to_sql_type(struct_field.type)}"
+            for struct_field in arrow_type
+        )
+        return f"STRUCT({field_defs})"
+    if pa.types.is_map(arrow_type):
+        key_type = _arrow_type_to_sql_type(arrow_type.key_type)
+        item_type = _arrow_type_to_sql_type(arrow_type.item_type)
+        return f"MAP({key_type}, {item_type})"
+    return "VARCHAR"
+
+
+def _arrow_scalar_sql_type(arrow_type: pa.DataType) -> str | None:
+    checks: tuple[tuple[Callable[[pa.DataType], bool], str], ...] = (
+        (pa.types.is_boolean, "BOOLEAN"),
+        (pa.types.is_int8, "TINYINT"),
+        (pa.types.is_int16, "SMALLINT"),
+        (pa.types.is_int32, "INT"),
+        (pa.types.is_int64, "BIGINT"),
+        (pa.types.is_uint8, "TINYINT UNSIGNED"),
+        (pa.types.is_uint16, "SMALLINT UNSIGNED"),
+        (pa.types.is_uint32, "INT UNSIGNED"),
+        (pa.types.is_uint64, "BIGINT UNSIGNED"),
+        (pa.types.is_float32, "FLOAT"),
+        (pa.types.is_float64, "DOUBLE"),
+        (pa.types.is_string, "VARCHAR"),
+        (pa.types.is_large_string, "VARCHAR"),
+        (pa.types.is_binary, "BYTEA"),
+        (pa.types.is_large_binary, "BYTEA"),
+        (pa.types.is_date32, "DATE"),
+        (pa.types.is_date64, "DATE"),
+        (pa.types.is_timestamp, "TIMESTAMP"),
+        (pa.types.is_duration, "INTERVAL"),
+    )
+    for check, sql_type in checks:
+        if check(arrow_type):
+            return sql_type
+    return None
+
+
+@dataclass(frozen=True)
+class ExternalTableDDLBuilder:
+    """Builder for CREATE EXTERNAL TABLE DDL statements.
+
+    Generates DataFusion-compatible DDL for external tables from PyArrow
+    schemas and storage locations.
+    """
+
+    table_name: str
+    schema: pa.Schema
+    location: str
+    file_format: str = "PARQUET"
+    partition_columns: Sequence[str] = ()
+    options: Mapping[str, str] = field(default_factory=dict)
+
+    def build_ddl(self) -> str:
+        """Build CREATE EXTERNAL TABLE DDL statement.
+
+        Returns
+        -------
+        str
+            DDL statement for registering the external table.
+        """
+        column_defs = []
+        for schema_field in self.schema:
+            if schema_field.name in self.partition_columns:
+                continue
+            sql_type = _arrow_type_to_sql_type(schema_field.type)
+            nullable = "" if schema_field.nullable else " NOT NULL"
+            column_defs.append(f"  {schema_field.name} {sql_type}{nullable}")
+
+        columns_clause = ",\n".join(column_defs)
+
+        stored_as = self.file_format.upper()
+
+        options_clause = ""
+        if self.options:
+            option_items = [f"{k} {_sql_literal(v)}" for k, v in self.options.items()]
+            options_clause = f"\nOPTIONS ({', '.join(option_items)})"
+
+        partitioned_clause = ""
+        if self.partition_columns:
+            partition_cols = ", ".join(self.partition_columns)
+            partitioned_clause = f"\nPARTITIONED BY ({partition_cols})"
+
+        return (
+            f"CREATE EXTERNAL TABLE {self.table_name} (\n"
+            f"{columns_clause}\n"
+            f")\n"
+            f"STORED AS {stored_as}"
+            f"{partitioned_clause}"
+            f"{options_clause}\n"
+            f"LOCATION {_sql_literal(self.location)}"
+        )
+
+    def with_options(self, options: Mapping[str, str]) -> ExternalTableDDLBuilder:
+        """Return a builder with updated options.
+
+        Parameters
+        ----------
+        options : Mapping[str, str]
+            Storage options to include in the DDL.
+
+        Returns
+        -------
+        ExternalTableDDLBuilder
+            New builder instance with updated options.
+        """
+        return ExternalTableDDLBuilder(
+            table_name=self.table_name,
+            schema=self.schema,
+            location=self.location,
+            file_format=self.file_format,
+            partition_columns=self.partition_columns,
+            options=options,
+        )
+
+    def with_partition_columns(self, partition_columns: Sequence[str]) -> ExternalTableDDLBuilder:
+        """Return a builder with updated partition columns.
+
+        Parameters
+        ----------
+        partition_columns : Sequence[str]
+            Partition column names.
+
+        Returns
+        -------
+        ExternalTableDDLBuilder
+            New builder instance with updated partition columns.
+        """
+        return ExternalTableDDLBuilder(
+            table_name=self.table_name,
+            schema=self.schema,
+            location=self.location,
+            file_format=self.file_format,
+            partition_columns=partition_columns,
+            options=self.options,
+        )
+
+
+def _table_name_from_ddl(ddl: str) -> str:
+    """Extract table name from CREATE EXTERNAL TABLE DDL.
+
+    Parameters
+    ----------
+    ddl : str
+        CREATE EXTERNAL TABLE DDL statement.
+
+    Returns
+    -------
+    str
+        Extracted table name.
+
+    Raises
+    ------
+    ValueError
+        If the table name cannot be extracted from the DDL.
+    """
+    lines = ddl.split("\n")
+    for line in lines:
+        if line.strip().upper().startswith("CREATE EXTERNAL TABLE"):
+            parts = line.split()
+            for i, part in enumerate(parts):
+                if part.upper() == "TABLE" and i + 1 < len(parts):
+                    table_name = parts[i + 1].strip()
+                    if table_name.endswith("("):
+                        table_name = table_name[:-1].strip()
+                    return table_name
+    msg = f"Could not extract table name from DDL: {ddl[:100]}"
+    raise ValueError(msg)
+
+
 @dataclass(frozen=True)
 class SchemaIntrospector:
     """Expose schema reflection across tables, queries, and settings."""
@@ -193,73 +427,6 @@ class SchemaIntrospector:
             "FROM information_schema.columns "
             f"WHERE table_name = {_sql_literal(table_name)} "
             "ORDER BY ordinal_position"
-        )
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
-
-    def table_constraint_rows(self, table_name: str) -> list[dict[str, object]]:
-        """Return constraint metadata rows for a table when available.
-
-        Returns
-        -------
-        list[dict[str, object]]
-            Rows including constraint type and column names where available.
-        """
-        query = (
-            "SELECT "
-            "tc.table_catalog, "
-            "tc.table_schema, "
-            "tc.table_name, "
-            "tc.constraint_name, "
-            "tc.constraint_type, "
-            "kcu.column_name, "
-            "kcu.ordinal_position "
-            "FROM information_schema.table_constraints tc "
-            "LEFT JOIN information_schema.key_column_usage kcu "
-            "ON tc.constraint_name = kcu.constraint_name "
-            "AND tc.table_catalog = kcu.table_catalog "
-            "AND tc.table_schema = kcu.table_schema "
-            "AND tc.table_name = kcu.table_name "
-            f"WHERE tc.table_name = {_sql_literal(table_name)} "
-            "ORDER BY tc.constraint_name, kcu.ordinal_position"
-        )
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
-
-    def constraint_rows(
-        self,
-        *,
-        catalog: str | None = None,
-        schema: str | None = None,
-    ) -> list[dict[str, object]]:
-        """Return constraint metadata rows across tables.
-
-        Returns
-        -------
-        list[dict[str, object]]
-            Rows including constraint type and column names where available.
-        """
-        filters: list[str] = []
-        if catalog is not None:
-            filters.append(f"tc.table_catalog = {_sql_literal(catalog)}")
-        if schema is not None:
-            filters.append(f"tc.table_schema = {_sql_literal(schema)}")
-        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
-        query = (
-            "SELECT "
-            "tc.table_catalog, "
-            "tc.table_schema, "
-            "tc.table_name, "
-            "tc.constraint_name, "
-            "tc.constraint_type, "
-            "kcu.column_name, "
-            "kcu.ordinal_position "
-            "FROM information_schema.table_constraints tc "
-            "LEFT JOIN information_schema.key_column_usage kcu "
-            "ON tc.constraint_name = kcu.constraint_name "
-            "AND tc.table_catalog = kcu.table_catalog "
-            "AND tc.table_schema = kcu.table_schema "
-            "AND tc.table_name = kcu.table_name "
-            f"{where_clause} "
-            "ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position"
         )
         return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
@@ -354,6 +521,37 @@ class SchemaIntrospector:
             mapping.setdefault(table_key, {})[column] = (
                 str(dtype) if dtype is not None else "unknown"
             )
+        return mapping
+
+    def _schema_map_for_sqlglot(self) -> SchemaMapping:
+        """Return a SQLGlot-compatible nested schema mapping.
+
+        Returns a nested mapping structure compatible with SQLGlot's SchemaMapping
+        type, which has the form: {catalog: {schema: {table: {column: type}}}}.
+
+        Returns
+        -------
+        SchemaMapping
+            Nested mapping structure for SQLGlot optimizer.
+        """
+        rows = self.columns_snapshot()
+        mapping: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
+        for row in rows:
+            catalog = row.get("table_catalog")
+            schema = row.get("table_schema")
+            table = row.get("table_name")
+            column = row.get("column_name")
+            dtype = row.get("data_type")
+            if not isinstance(table, str) or not isinstance(column, str):
+                continue
+            if not table or not column:
+                continue
+            catalog_name = str(catalog) if catalog is not None else "datafusion"
+            schema_name = str(schema) if schema is not None else "public"
+            dtype_str = str(dtype) if dtype is not None else "unknown"
+            mapping.setdefault(catalog_name, {}).setdefault(schema_name, {}).setdefault(table, {})[
+                column
+            ] = dtype_str
         return mapping
 
     def schema_map_fingerprint(self) -> str:
@@ -524,9 +722,11 @@ class SchemaIntrospector:
                 sql_options=sql_options,
             )
         except (RuntimeError, TypeError, ValueError):
-            return table_definition_override(self.ctx, name=table_name)
+            metadata = table_provider_metadata(id(self.ctx), table_name=table_name)
+            return metadata.ddl if metadata else None
         if not rows:
-            return table_definition_override(self.ctx, name=table_name)
+            metadata = table_provider_metadata(id(self.ctx), table_name=table_name)
+            return metadata.ddl if metadata else None
         first = rows[0]
         if len(first) == 1:
             return str(next(iter(first.values())))
@@ -627,8 +827,8 @@ def find_struct_field_keys(
     KeyError
         Raised when no matching struct field is found in the schema.
     """
-    for field in schema:
-        keys = _find_struct_keys_in_type(field.type, field_names=field_names)
+    for schema_field in schema:
+        keys = _find_struct_keys_in_type(schema_field.type, field_names=field_names)
         if keys is not None:
             return keys
     msg = f"Schema missing struct fields for {tuple(field_names)!r}."
@@ -642,11 +842,11 @@ def _find_struct_keys_in_type(
 ) -> tuple[str, ...] | None:
     if pa.types.is_struct(dtype):
         result: tuple[str, ...] | None = None
-        for field in dtype:
-            if field.name in field_names:
-                result = _extract_struct_keys(field.type)
+        for struct_field in dtype:
+            if struct_field.name in field_names:
+                result = _extract_struct_keys(struct_field.type)
                 break
-            result = _find_struct_keys_in_type(field.type, field_names=field_names)
+            result = _find_struct_keys_in_type(struct_field.type, field_names=field_names)
             if result is not None:
                 break
         return result
@@ -664,7 +864,7 @@ def _find_struct_keys_in_type(
 
 def _extract_struct_keys(dtype: pa.DataType) -> tuple[str, ...] | None:
     if pa.types.is_struct(dtype):
-        return tuple(field.name for field in dtype)
+        return tuple(struct_field.name for struct_field in dtype)
     if pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
         return _extract_struct_keys(dtype.value_type)
     if pa.types.is_list_view(dtype) or pa.types.is_large_list_view(dtype):
@@ -680,8 +880,7 @@ def _function_catalog_sort_key(row: Mapping[str, object]) -> tuple[str, str]:
 
 
 __all__ = [
+    "ExternalTableDDLBuilder",
     "SchemaIntrospector",
     "find_struct_field_keys",
-    "record_table_definition_override",
-    "table_definition_override",
 ]

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ibis
 import pytest
-from sqlglot import parse_one
 
 from ibis_engine.sql_bridge import (
     SqlIngestSpec,
@@ -12,6 +11,7 @@ from ibis_engine.sql_bridge import (
     parse_sql_table,
     sql_ingest_artifacts,
 )
+from sqlglot_tools.compat import parse_one
 
 
 def test_sql_ingest_artifacts_payload() -> None:

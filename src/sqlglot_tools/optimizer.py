@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -11,7 +12,7 @@ from enum import StrEnum
 from typing import Final, Literal, TypedDict, Unpack, cast
 
 import pyarrow as pa
-from sqlglot import Dialect, ErrorLevel, Expression, exp, parse_one
+from sqlglot.errors import SqlglotError
 from sqlglot.generator import Generator as SqlGlotGenerator
 from sqlglot.optimizer import RULES, optimize
 from sqlglot.optimizer.annotate_types import annotate_types
@@ -29,7 +30,9 @@ from sqlglot.optimizer.qualify_columns import (
 )
 from sqlglot.optimizer.simplify import simplify
 from sqlglot.planner import Step
-from sqlglot.serde import dump
+from sqlglot.schema import Schema as SqlGlotSchema
+from sqlglot.schema import ensure_schema
+from sqlglot.serde import dump, load
 from sqlglot.transforms import (
     eliminate_full_outer_join,
     eliminate_qualify,
@@ -41,10 +44,22 @@ from sqlglot.transforms import (
 )
 
 from registry_common.arrow_payloads import payload_hash
+from sqlglot_tools.compat import Dialect, ErrorLevel, Expression, exp, parse_one
 
 type SchemaMappingNode = Mapping[str, str] | Mapping[str, SchemaMappingNode]
 type SchemaMapping = Mapping[str, SchemaMappingNode]
 SqlGlotRewriteLane = Literal["transforms", "dialect_shim"]
+
+
+def _ensure_mapping_schema(
+    schema: SchemaMapping | None,
+    *,
+    dialect: str | None,
+) -> SqlGlotSchema | None:
+    if schema is None:
+        return None
+    schema_map = cast("dict[object, object]", schema)
+    return ensure_schema(schema_map, dialect=dialect)
 
 
 def _schema_requires_quoting(schema: SchemaMapping | None) -> bool:
@@ -321,6 +336,43 @@ class NormalizeExprResult:
 
     expr: Expression
     stats: NormalizationStats
+
+
+@dataclass(frozen=True)
+class AstArtifact:
+    """SQLGlot AST artifact with serialization metadata."""
+
+    sql: str
+    ast_json: str
+    policy_hash: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Return dictionary representation for serialization.
+
+        Returns
+        -------
+        dict[str, str]
+            Dictionary with sql, ast_json, and policy_hash fields.
+        """
+        return {
+            "sql": self.sql,
+            "ast_json": self.ast_json,
+            "policy_hash": self.policy_hash,
+        }
+
+
+@dataclass(frozen=True)
+class PreflightResult:
+    """Result of SQL preflight qualification."""
+
+    original_sql: str
+    qualified_expr: Expression | None
+    annotated_expr: Expression | None
+    canonicalized_expr: Expression | None
+    errors: tuple[str, ...]
+    warnings: tuple[str, ...]
+    policy_hash: str | None
+    schema_map_hash: str | None
 
 
 DEFAULT_READ_DIALECT: str = "datafusion"
@@ -751,9 +803,7 @@ def qualify_strict(
     SqlGlotQualificationError
         Raised when qualification fails or validation errors are detected.
     """
-    schema_map = (
-        cast("dict[object, object]", options.schema) if options.schema is not None else None
-    )
+    schema_map = _ensure_mapping_schema(options.schema, dialect=options.dialect)
     try:
         qualified = qualify(
             expr,
@@ -768,7 +818,7 @@ def qualify_strict(
         return quote_identifiers(qualified, dialect=options.dialect, identify=options.identify)
     except SqlGlotQualificationError:
         raise
-    except Exception as exc:
+    except (SqlglotError, TypeError, ValueError) as exc:
         payload = _qualification_failure_payload(expr, options=options, error=exc)
         msg = "SQLGlot qualification failed."
         raise SqlGlotQualificationError(msg, payload) from exc
@@ -974,7 +1024,7 @@ def qualify_expr(
     """
     if schema is None:
         return qualify(expr, dialect=dialect)
-    schema_map = cast("dict[object, object]", schema)
+    schema_map = _ensure_mapping_schema(schema, dialect=dialect)
     return qualify(expr, schema=schema_map, dialect=dialect)
 
 
@@ -992,7 +1042,7 @@ def optimize_expr(
         Optimized expression tree.
     """
     policy = policy or default_sqlglot_policy()
-    schema_map = cast("dict[object, object]", schema) if schema is not None else None
+    schema_map = _ensure_mapping_schema(schema, dialect=policy.read_dialect)
     return optimize(
         expr,
         schema=schema_map,
@@ -1028,16 +1078,66 @@ def normalize_expr_with_stats(
     NormalizeExprResult
         Normalized expression and predicate normalization stats.
     """
+    policy, identify, schema_map = _normalize_policy_context(options)
+    prepared = _prepare_for_qualification(expr, options=options, policy=policy)
+    qualified = _qualify_expression(
+        prepared,
+        options=options,
+        policy=policy,
+        identify=identify,
+    )
+    annotated = _annotate_expression(
+        qualified,
+        policy=policy,
+        identify=identify,
+        schema_map=schema_map,
+    )
+    simplified = _simplify_expression(annotated, policy=policy)
+    normalized_predicates, stats = _normalize_predicates_with_stats(
+        simplified,
+        max_distance=policy.normalization_distance,
+    )
+    projected = pushdown_projections(
+        normalized_predicates,
+        schema=schema_map,
+        dialect=policy.read_dialect,
+    )
+    expr_out = pushdown_predicates(projected, dialect=policy.read_dialect)
+    return NormalizeExprResult(expr=expr_out, stats=stats)
+
+
+def _normalize_policy_context(
+    options: NormalizeExprOptions,
+) -> tuple[SqlGlotPolicy, bool, SqlGlotSchema | None]:
+    policy = options.policy or default_sqlglot_policy()
+    identify = policy.identify or _schema_requires_quoting(options.schema)
+    schema_map = _ensure_mapping_schema(options.schema, dialect=policy.read_dialect)
+    return policy, identify, schema_map
+
+
+def _prepare_for_qualification(
+    expr: Expression,
+    *,
+    options: NormalizeExprOptions,
+    policy: SqlGlotPolicy,
+) -> Expression:
     canonical = canonicalize_expr(expr, rules=options.rules)
     rewritten = rewrite_expr(
         canonical,
         rewrite_hook=options.rewrite_hook,
         enabled=options.enable_rewrites,
     )
-    policy = options.policy or default_sqlglot_policy()
-    identify = policy.identify or _schema_requires_quoting(options.schema)
     transformed = apply_transforms(rewritten, transforms=policy.transforms)
-    transformed = _normalize_table_aliases(transformed)
+    return _normalize_table_aliases(transformed)
+
+
+def _qualify_expression(
+    expr: Expression,
+    *,
+    options: NormalizeExprOptions,
+    policy: SqlGlotPolicy,
+    identify: bool,
+) -> Expression:
     qualify_options = QualifyStrictOptions(
         schema=options.schema,
         dialect=policy.read_dialect,
@@ -1046,31 +1146,32 @@ def normalize_expr_with_stats(
         validate_columns=policy.validate_qualify_columns and options.schema is not None,
         identify=identify,
     )
-    qualified = qualify_strict(transformed, options=qualify_options)
+    return qualify_strict(expr, options=qualify_options)
+
+
+def _annotate_expression(
+    expr: Expression,
+    *,
+    policy: SqlGlotPolicy,
+    identify: bool,
+    schema_map: SqlGlotSchema | None,
+) -> Expression:
     normalized = normalize_identifiers(
-        qualified,
+        expr,
         dialect=policy.read_dialect,
         store_original_column_identifiers=identify,
     )
-    normalized = quote_identifiers(normalized, dialect=policy.read_dialect, identify=identify)
-    annotated = annotate_types(
-        normalized,
-        schema=cast("dict[object, object]", options.schema) if options.schema else None,
+    quoted = quote_identifiers(normalized, dialect=policy.read_dialect, identify=identify)
+    return annotate_types(
+        quoted,
+        schema=schema_map,
         dialect=policy.read_dialect,
     )
-    canonicalized = canonicalize(annotated, dialect=policy.read_dialect)
-    simplified = simplify_expr(canonicalized, dialect=policy.read_dialect)
-    normalized_predicates, stats = _normalize_predicates_with_stats(
-        simplified,
-        max_distance=policy.normalization_distance,
-    )
-    projected = pushdown_projections(
-        normalized_predicates,
-        schema=cast("dict[object, object]", options.schema) if options.schema else None,
-        dialect=policy.read_dialect,
-    )
-    expr_out = pushdown_predicates(projected, dialect=policy.read_dialect)
-    return NormalizeExprResult(expr=expr_out, stats=stats)
+
+
+def _simplify_expression(expr: Expression, *, policy: SqlGlotPolicy) -> Expression:
+    canonicalized = canonicalize(expr, dialect=policy.read_dialect)
+    return simplify_expr(canonicalized, dialect=policy.read_dialect)
 
 
 def simplify_expr(expr: Expression, *, dialect: str | None = None) -> Expression:
@@ -1100,6 +1201,409 @@ def _normalize_predicates_with_stats(
         max_distance=max_distance,
         applied=False,
     )
+
+
+def preflight_sql(
+    sql: str,
+    *,
+    schema: SchemaMapping | None = None,
+    dialect: str = "datafusion",
+    strict: bool = True,
+    policy: SqlGlotPolicy | None = None,
+) -> PreflightResult:
+    """Preflight SQL through qualify + annotate + canonicalize pipeline.
+
+    Parameters
+    ----------
+    sql
+        SQL text to preflight.
+    schema
+        Schema mapping for qualification.
+    dialect
+        SQLGlot dialect used for parsing.
+    strict
+        Whether to enforce strict qualification (errors on failure).
+    policy
+        SQLGlot policy for normalization.
+
+    Returns
+    -------
+    PreflightResult
+        Result capturing all qualification stages and diagnostics.
+    """
+    # Compute policy and schema hashes
+    policy_obj = policy or default_sqlglot_policy()
+    policy_snapshot = sqlglot_policy_snapshot_for(policy_obj)
+    policy_hash = policy_snapshot.policy_hash
+
+    schema_map_hash: str | None = None
+    if schema is not None:
+        schema_dict = {name: dict(values) for name, values in schema.items()}
+        schema_payload = {
+            "version": HASH_PAYLOAD_VERSION,
+            "schema": json.dumps(schema_dict, sort_keys=True),
+        }
+        schema_map_hash = payload_hash(
+            schema_payload,
+            pa.schema(
+                [
+                    pa.field("version", pa.int32()),
+                    pa.field("schema", pa.string()),
+                ]
+            ),
+        )
+
+    state = PreflightState(
+        original_sql=sql,
+        policy_hash=policy_hash,
+        schema_map_hash=schema_map_hash,
+    )
+    context = PreflightContext(
+        schema=schema,
+        policy=policy_obj,
+        dialect=dialect,
+        strict=strict,
+    )
+
+    expr, result = _preflight_parse(sql, context=context, state=state)
+    if result is None and expr is not None:
+        qualified_expr, result = _preflight_qualify(expr, context=context, state=state)
+        if result is None and qualified_expr is not None:
+            annotated_expr, result = _preflight_annotate(
+                qualified_expr,
+                context=context,
+                state=state,
+            )
+            if result is None and annotated_expr is not None:
+                canonicalized_expr, result = _preflight_canonicalize(
+                    annotated_expr,
+                    context=context,
+                    state=state,
+                )
+                state.canonicalized_expr = canonicalized_expr
+
+    return result or _finalize_preflight(state)
+
+
+@dataclass
+class PreflightState:
+    """Mutable state container for SQL preflight stages."""
+
+    original_sql: str
+    policy_hash: str
+    schema_map_hash: str | None
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    qualified_expr: Expression | None = None
+    annotated_expr: Expression | None = None
+    canonicalized_expr: Expression | None = None
+
+
+@dataclass(frozen=True)
+class PreflightContext:
+    schema: SchemaMapping | None
+    policy: SqlGlotPolicy
+    dialect: str
+    strict: bool
+
+
+def _finalize_preflight(state: PreflightState) -> PreflightResult:
+    return PreflightResult(
+        original_sql=state.original_sql,
+        qualified_expr=state.qualified_expr,
+        annotated_expr=state.annotated_expr,
+        canonicalized_expr=state.canonicalized_expr,
+        errors=tuple(state.errors),
+        warnings=tuple(state.warnings),
+        policy_hash=state.policy_hash,
+        schema_map_hash=state.schema_map_hash,
+    )
+
+
+def _handle_preflight_error(
+    state: PreflightState,
+    *,
+    error_msg: str,
+    strict: bool,
+) -> PreflightResult | None:
+    state.errors.append(error_msg)
+    if strict:
+        return _finalize_preflight(state)
+    state.warnings.append(error_msg)
+    return None
+
+
+def _preflight_parse(
+    sql: str,
+    *,
+    context: PreflightContext,
+    state: PreflightState,
+) -> tuple[Expression | None, PreflightResult | None]:
+    try:
+        expr = parse_sql_strict(
+            sql,
+            dialect=context.dialect,
+            error_level=context.policy.error_level,
+        )
+    except (SqlglotError, TypeError, ValueError) as exc:
+        error_msg = f"Parse failed: {exc}"
+        return None, _handle_preflight_error(state, error_msg=error_msg, strict=context.strict)
+    return expr, None
+
+
+def _preflight_qualify(
+    expr: Expression,
+    *,
+    context: PreflightContext,
+    state: PreflightState,
+) -> tuple[Expression | None, PreflightResult | None]:
+    identify = context.policy.identify or _schema_requires_quoting(context.schema)
+    qualify_options = QualifyStrictOptions(
+        schema=context.schema,
+        dialect=context.dialect,
+        sql=state.original_sql,
+        expand_stars=context.policy.expand_stars,
+        validate_columns=context.policy.validate_qualify_columns and context.schema is not None,
+        identify=identify,
+    )
+    prepared = _prepare_for_qualification(
+        expr,
+        options=NormalizeExprOptions(
+            schema=context.schema,
+            policy=context.policy,
+            sql=state.original_sql,
+        ),
+        policy=context.policy,
+    )
+    try:
+        state.qualified_expr = qualify_strict(prepared, options=qualify_options)
+    except SqlGlotQualificationError as exc:
+        error_msg = f"Qualification failed: {exc}"
+        return None, _handle_preflight_error(
+            state,
+            error_msg=error_msg,
+            strict=context.strict,
+        )
+    except (SqlglotError, TypeError, ValueError) as exc:
+        error_msg = f"Qualification failed: {exc}"
+        return None, _handle_preflight_error(
+            state,
+            error_msg=error_msg,
+            strict=context.strict,
+        )
+    return state.qualified_expr, None
+
+
+def _preflight_annotate(
+    expr: Expression,
+    *,
+    context: PreflightContext,
+    state: PreflightState,
+) -> tuple[Expression | None, PreflightResult | None]:
+    identify = context.policy.identify or _schema_requires_quoting(context.schema)
+    schema_map = _ensure_mapping_schema(context.schema, dialect=context.dialect)
+    try:
+        state.annotated_expr = _annotate_expression(
+            expr,
+            policy=context.policy,
+            identify=identify,
+            schema_map=schema_map,
+        )
+    except (SqlglotError, TypeError, ValueError) as exc:
+        error_msg = f"Annotation failed: {exc}"
+        return None, _handle_preflight_error(
+            state,
+            error_msg=error_msg,
+            strict=context.strict,
+        )
+    return state.annotated_expr, None
+
+
+def _preflight_canonicalize(
+    expr: Expression,
+    *,
+    context: PreflightContext,
+    state: PreflightState,
+) -> tuple[Expression | None, PreflightResult | None]:
+    try:
+        canonicalized = canonicalize(expr, dialect=context.dialect)
+    except (SqlglotError, TypeError, ValueError) as exc:
+        error_msg = f"Canonicalization failed: {exc}"
+        return None, _handle_preflight_error(
+            state,
+            error_msg=error_msg,
+            strict=context.strict,
+        )
+    return canonicalized, None
+
+
+def emit_preflight_diagnostics(result: PreflightResult) -> dict[str, object]:
+    """Emit structured diagnostics from a preflight result.
+
+    Parameters
+    ----------
+    result
+        Preflight result to extract diagnostics from.
+
+    Returns
+    -------
+    dict[str, object]
+        Structured diagnostics payload for logging or storage.
+    """
+    diagnostics: dict[str, object] = {
+        "original_sql": result.original_sql,
+        "policy_hash": result.policy_hash,
+        "schema_map_hash": result.schema_map_hash,
+        "errors": list(result.errors),
+        "warnings": list(result.warnings),
+        "has_errors": len(result.errors) > 0,
+        "has_warnings": len(result.warnings) > 0,
+        "stages_completed": {},
+    }
+
+    # Track which stages completed successfully
+    stages_completed = {
+        "qualified": result.qualified_expr is not None,
+        "annotated": result.annotated_expr is not None,
+        "canonicalized": result.canonicalized_expr is not None,
+    }
+    diagnostics["stages_completed"] = stages_completed
+
+    # Include SQL for each successful stage
+    if result.qualified_expr is not None:
+        try:
+            diagnostics["qualified_sql"] = result.qualified_expr.sql(dialect=DEFAULT_WRITE_DIALECT)
+        except (SqlglotError, TypeError, ValueError):
+            diagnostics["qualified_sql"] = None
+
+    if result.annotated_expr is not None:
+        try:
+            diagnostics["annotated_sql"] = result.annotated_expr.sql(dialect=DEFAULT_WRITE_DIALECT)
+        except (SqlglotError, TypeError, ValueError):
+            diagnostics["annotated_sql"] = None
+
+    if result.canonicalized_expr is not None:
+        try:
+            diagnostics["canonicalized_sql"] = result.canonicalized_expr.sql(
+                dialect=DEFAULT_WRITE_DIALECT
+            )
+        except (SqlglotError, TypeError, ValueError):
+            diagnostics["canonicalized_sql"] = None
+
+    return diagnostics
+
+
+def serialize_ast_artifact(artifact: AstArtifact) -> str:
+    """Serialize an AstArtifact to JSON string.
+
+    Parameters
+    ----------
+    artifact
+        AstArtifact to serialize.
+
+    Returns
+    -------
+    str
+        JSON-serialized artifact.
+    """
+    return json.dumps(artifact.to_dict(), sort_keys=True)
+
+
+def deserialize_ast_artifact(serialized: str) -> AstArtifact:
+    """Deserialize an AstArtifact from JSON string.
+
+    Parameters
+    ----------
+    serialized
+        JSON-serialized artifact string.
+
+    Returns
+    -------
+    AstArtifact
+        Deserialized artifact instance.
+
+    Raises
+    ------
+    ValueError
+        Raised when the serialized data is invalid.
+    """
+    try:
+        data = json.loads(serialized)
+        if not isinstance(data, dict):
+            _raise_invalid_artifact_type()
+        return AstArtifact(
+            sql=data["sql"],
+            ast_json=data["ast_json"],
+            policy_hash=data["policy_hash"],
+        )
+    except (KeyError, TypeError) as exc:
+        msg = f"Invalid AstArtifact serialization: {exc}"
+        raise ValueError(msg) from exc
+
+
+def ast_to_artifact(
+    expr: Expression,
+    *,
+    sql: str | None = None,
+    policy: SqlGlotPolicy | None = None,
+) -> AstArtifact:
+    """Convert a SQLGlot expression to an AstArtifact.
+
+    Parameters
+    ----------
+    expr
+        SQLGlot expression to serialize.
+    sql
+        Optional original SQL text (defaults to expr.sql()).
+    policy
+        Optional policy for hash computation.
+
+    Returns
+    -------
+    AstArtifact
+        Artifact with serialized AST and metadata.
+    """
+    policy_obj = policy or default_sqlglot_policy()
+    policy_snapshot = sqlglot_policy_snapshot_for(policy_obj)
+    ast_data = dump(expr)
+    ast_json = json.dumps(ast_data, sort_keys=True)
+    sql_text = sql or expr.sql(dialect=policy_obj.write_dialect)
+    return AstArtifact(
+        sql=sql_text,
+        ast_json=ast_json,
+        policy_hash=policy_snapshot.policy_hash,
+    )
+
+
+def _raise_invalid_artifact_type() -> None:
+    msg = "Serialized artifact must be a JSON object."
+    raise ValueError(msg)
+
+
+def artifact_to_ast(artifact: AstArtifact) -> Expression:
+    """Convert an AstArtifact back to a SQLGlot expression.
+
+    Parameters
+    ----------
+    artifact
+        Artifact to deserialize.
+
+    Returns
+    -------
+    Expression
+        Deserialized SQLGlot expression.
+
+    Raises
+    ------
+    ValueError
+        Raised when the AST JSON cannot be deserialized.
+    """
+    try:
+        ast_data = json.loads(artifact.ast_json)
+        return load(ast_data)
+    except (SqlglotError, TypeError, ValueError) as exc:
+        msg = f"Failed to deserialize AST: {exc}"
+        raise ValueError(msg) from exc
 
 
 def rewrite_expr(
@@ -1321,6 +1825,7 @@ def _qualification_failure_payload(
 
 
 __all__ = [
+    "AstArtifact",
     "CanonicalizationRules",
     "DataFusionDialect",
     "ExternalTableCompressionProperty",
@@ -1330,6 +1835,7 @@ __all__ = [
     "NormalizeExprOptions",
     "NormalizeExprResult",
     "PlannerDagSnapshot",
+    "PreflightResult",
     "QualifyStrictOptions",
     "SchemaMapping",
     "SqlGlotPolicy",
@@ -1339,10 +1845,14 @@ __all__ = [
     "SqlGlotSurface",
     "SqlGlotSurfacePolicy",
     "apply_transforms",
+    "artifact_to_ast",
+    "ast_to_artifact",
     "bind_params",
     "canonical_ast_fingerprint",
     "canonicalize_expr",
     "default_sqlglot_policy",
+    "deserialize_ast_artifact",
+    "emit_preflight_diagnostics",
     "normalize_ddl_sql",
     "normalize_expr",
     "normalize_expr_with_stats",
@@ -1350,11 +1860,13 @@ __all__ = [
     "parse_sql_strict",
     "plan_fingerprint",
     "planner_dag_snapshot",
+    "preflight_sql",
     "qualify_expr",
     "qualify_strict",
     "register_datafusion_dialect",
     "rewrite_expr",
     "sanitize_templated_sql",
+    "serialize_ast_artifact",
     "simplify_expr",
     "sqlglot_policy_snapshot",
     "sqlglot_policy_snapshot_for",

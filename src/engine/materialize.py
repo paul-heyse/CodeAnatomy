@@ -5,18 +5,26 @@ from __future__ import annotations
 import contextlib
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
+from datafusion.dataframe import DataFrame
 from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.bridge import datafusion_from_arrow, datafusion_write_parquet
-from datafusion_engine.runtime import diagnostics_arrow_ingest_hook
+from arrowdsl.io.parquet import ParquetWriteOptions, write_table_parquet
+from datafusion_engine.bridge import (
+    CopyToOptions,
+    DataFusionDmlOptions,
+    copy_to_path,
+    copy_to_statement,
+    datafusion_from_arrow,
+    datafusion_to_reader,
+)
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
@@ -28,7 +36,6 @@ from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
     write_datafusion_delta,
-    write_table_delta,
 )
 
 if TYPE_CHECKING:
@@ -260,6 +267,8 @@ class _AstWriteRecord:
     rows: int | None
     write_policy: DataFusionWritePolicy | None
     parquet_payload: Mapping[str, object] | None
+    copy_sql: str | None
+    copy_options: Mapping[str, object] | None
     delta_result: DeltaWriteResult | None
 
 
@@ -285,9 +294,105 @@ def _record_ast_write(
         "rows": record.rows,
         "write_policy": record.write_policy.payload() if record.write_policy is not None else None,
         "parquet_options": parquet_options,
+        "copy_sql": record.copy_sql,
+        "copy_options": dict(record.copy_options) if record.copy_options is not None else None,
         "delta_version": record.delta_result.version if record.delta_result is not None else None,
     }
     sink.record_artifact("datafusion_ast_output_writes_v1", payload)
+
+
+def _copy_statement_overrides(
+    policy: DataFusionWritePolicy | None,
+    file_format: str,
+) -> dict[str, object] | None:
+    if policy is None or file_format != "parquet":
+        return None
+    options: dict[str, object] = {}
+    if policy.parquet_compression is not None:
+        options["compression"] = policy.parquet_compression
+    if policy.parquet_statistics_enabled is not None:
+        options["statistics_enabled"] = policy.parquet_statistics_enabled
+    if policy.parquet_row_group_size is not None:
+        options["max_row_group_size"] = int(policy.parquet_row_group_size)
+    return options or None
+
+
+def _copy_options_payload(
+    *,
+    file_format: str,
+    partition_by: Sequence[str],
+    statement_overrides: Mapping[str, object] | None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {"file_format": file_format}
+    if partition_by:
+        payload["partition_by"] = list(partition_by)
+    payload["options"] = dict(statement_overrides) if statement_overrides else None
+    return payload
+
+
+def _ast_copy_options(
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    policy: DataFusionWritePolicy | None,
+    file_format: str,
+    schema: pa.Schema,
+) -> CopyToOptions:
+    from datafusion_engine.runtime import (
+        diagnostics_dml_hook,
+        statement_sql_options_for_profile,
+    )
+
+    partition_by = ()
+    if policy is not None:
+        available = set(schema.names)
+        partition_by = tuple(name for name in policy.partition_by if name in available)
+    statement_overrides = _copy_statement_overrides(policy, file_format)
+    record_hook = None
+    if runtime_profile.diagnostics_sink is not None:
+        base_hook = diagnostics_dml_hook(runtime_profile.diagnostics_sink)
+
+        def _hook(payload: Mapping[str, object]) -> None:
+            merged = dict(payload)
+            merged["dataset"] = "ast_files_v1"
+            merged["statement_type"] = "COPY"
+            merged["file_format"] = file_format
+            merged["partition_by"] = list(partition_by) if partition_by else None
+            merged["copy_options"] = (
+                dict(statement_overrides) if statement_overrides is not None else None
+            )
+            base_hook(merged)
+
+        record_hook = _hook
+    return CopyToOptions(
+        file_format=file_format,
+        partition_by=partition_by,
+        statement_overrides=statement_overrides,
+        allow_file_output=True,
+        dml=DataFusionDmlOptions(
+            sql_options=statement_sql_options_for_profile(runtime_profile),
+            record_hook=record_hook,
+        ),
+    )
+
+
+def _copy_select_sql(
+    table_name: str,
+    *,
+    sort_by: Sequence[str],
+    schema: pa.Schema,
+) -> str:
+    available = set(schema.names)
+    order_by = [name for name in sort_by if name in available]
+    base = f"SELECT * FROM {_sql_identifier(table_name)}"
+    if not order_by:
+        return base
+    ordering = ", ".join(_sql_identifier(name) for name in order_by)
+    return f"{base} ORDER BY {ordering}"
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
 
 
 def _write_ast_external(
@@ -297,8 +402,11 @@ def _write_ast_external(
     path: str,
     file_format: str,
 ) -> None:
-    if file_format != "parquet":
-        msg = f"AST DataFusion writes only support parquet, got {file_format!r}."
+    from datafusion_engine.runtime import diagnostics_arrow_ingest_hook
+
+    normalized_format = file_format.lower()
+    if normalized_format not in {"parquet", "csv", "json"}:
+        msg = f"AST DataFusion writes only support parquet/csv/json, got {file_format!r}."
         raise ValueError(msg)
     df_ctx = runtime_profile.session_context()
     temp_name = f"__ast_write_{uuid.uuid4().hex}"
@@ -307,15 +415,28 @@ def _write_ast_external(
         if runtime_profile.diagnostics_sink is not None
         else None
     )
-    df = datafusion_from_arrow(
+    _ = datafusion_from_arrow(
         df_ctx,
         name=temp_name,
         value=table,
         ingest_hook=ingest_hook,
     )
     policy = _ast_write_policy(runtime_profile, schema=table.schema)
+    copy_options = _ast_copy_options(
+        runtime_profile=runtime_profile,
+        policy=policy,
+        file_format=normalized_format,
+        schema=table.schema,
+    )
+    select_sql = _copy_select_sql(
+        temp_name,
+        sort_by=policy.sort_by if policy is not None else (),
+        schema=table.schema,
+    )
+    copy_sql: str | None = None
     try:
-        payload = datafusion_write_parquet(df, path=path, policy=policy)
+        copy_sql = copy_to_statement(select_sql, path=str(path), options=copy_options)
+        copy_to_path(df_ctx, sql=select_sql, path=str(path), options=copy_options).collect()
     finally:
         _deregister_table(df_ctx, name=temp_name)
     rows = int(table.num_rows) if isinstance(table, pa.Table) else None
@@ -327,7 +448,13 @@ def _write_ast_external(
             file_format=file_format,
             rows=rows,
             write_policy=policy,
-            parquet_payload=payload,
+            parquet_payload=None,
+            copy_sql=copy_sql,
+            copy_options=_copy_options_payload(
+                file_format=normalized_format,
+                partition_by=copy_options.partition_by,
+                statement_overrides=copy_options.statement_overrides,
+            ),
             delta_result=None,
         ),
     )
@@ -340,6 +467,8 @@ def _write_ast_delta(
     path: str,
     storage_options: Mapping[str, str] | None,
 ) -> None:
+    from datafusion_engine.runtime import diagnostics_arrow_ingest_hook
+
     df_ctx = runtime_profile.session_context()
     temp_name = f"__ast_delta_{uuid.uuid4().hex}"
     ingest_hook = (
@@ -355,20 +484,12 @@ def _write_ast_delta(
     )
     delta_options = DeltaWriteOptions(mode="append")
     try:
-        try:
-            datafusion_result = write_datafusion_delta(
-                df,
-                base_dir=path,
-                options=delta_options,
-                storage_options=storage_options,
-            )
-        except (TypeError, ValueError):
-            datafusion_result = write_table_delta(
-                table,
-                path,
-                options=delta_options,
-                storage_options=storage_options,
-            )
+        datafusion_result = write_datafusion_delta(
+            df,
+            base_dir=path,
+            options=delta_options,
+            storage_options=storage_options,
+        )
     finally:
         _deregister_table(df_ctx, name=temp_name)
     rows = int(table.num_rows) if isinstance(table, pa.Table) else None
@@ -381,6 +502,8 @@ def _write_ast_delta(
             rows=rows,
             write_policy=None,
             parquet_payload=None,
+            copy_sql=None,
+            copy_options=None,
             delta_result=datafusion_result,
         ),
     )
@@ -429,4 +552,53 @@ def write_ast_outputs(
     )
 
 
-__all__ = ["build_plan_product", "resolve_prefer_reader", "write_ast_outputs"]
+def df_to_reader(df: DataFrame) -> pa.RecordBatchReader:
+    """Convert a DataFusion DataFrame to a streaming RecordBatchReader.
+
+    Prefers the __arrow_c_stream__ protocol for zero-copy streaming.
+
+    Parameters
+    ----------
+    df : DataFrame
+        DataFusion DataFrame to convert.
+
+    Returns
+    -------
+    pa.RecordBatchReader
+        Streaming reader for the DataFrame results.
+    """
+    return datafusion_to_reader(df)
+
+
+def write_parquet_stream(
+    reader: pa.RecordBatchReader,
+    *,
+    path: str,
+    options: ParquetWriteOptions | None = None,
+) -> str:
+    """Write a RecordBatchReader to a Parquet file using streaming.
+
+    Parameters
+    ----------
+    reader : pa.RecordBatchReader
+        Streaming reader to write.
+    path : str
+        Output path for the Parquet file.
+    options : ParquetWriteOptions | None
+        Optional Parquet write options.
+
+    Returns
+    -------
+    str
+        Path to the written Parquet file.
+    """
+    return write_table_parquet(reader, path, opts=options, overwrite=True)
+
+
+__all__ = [
+    "build_plan_product",
+    "df_to_reader",
+    "resolve_prefer_reader",
+    "write_ast_outputs",
+    "write_parquet_stream",
+]

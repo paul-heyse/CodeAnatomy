@@ -32,8 +32,6 @@ from arrowdsl.schema.metadata import (
     ordering_from_schema,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from datafusion_engine.bridge import datafusion_from_arrow
-from datafusion_engine.runtime import DataFusionRuntimeProfile, diagnostics_arrow_ingest_hook
 from datafusion_engine.udf_registry import _register_kernel_udfs, register_datafusion_udfs
 
 type KernelFn = Callable[..., TableLike]
@@ -42,6 +40,8 @@ _SPAN_NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
 
 
 def _session_context(ctx: ExecutionContext | None) -> SessionContext:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
     if ctx is None or ctx.runtime.datafusion is None:
         session = DataFusionRuntimeProfile().session_context()
     else:
@@ -58,6 +58,8 @@ def _df_from_table(
     batch_size: int | None = None,
     ingest_hook: Callable[[Mapping[str, object]], None] | None = None,
 ) -> DataFrame:
+    from datafusion_engine.bridge import datafusion_from_arrow
+
     existing = _existing_table_names(ctx)
     table_name = _temp_name(name, existing) if name in existing else name
     return datafusion_from_arrow(
@@ -78,6 +80,8 @@ def _batch_size_from_ctx(ctx: ExecutionContext | None) -> int | None:
 def _arrow_ingest_hook(
     ctx: ExecutionContext | None,
 ) -> Callable[[Mapping[str, object]], None] | None:
+    from datafusion_engine.runtime import diagnostics_arrow_ingest_hook
+
     if ctx is None or ctx.runtime.datafusion is None:
         return None
     diagnostics = ctx.runtime.datafusion.diagnostics_sink

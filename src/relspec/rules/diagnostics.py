@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import pyarrow as pa
-from sqlglot import Expression
 from sqlglot.diff import diff
 from sqlglot.serde import dump
 
@@ -17,6 +16,7 @@ from arrowdsl.spec.io import rows_from_table, table_from_rows
 from datafusion_engine.kernel_registry import KernelCapability
 from relspec.rules.definitions import RuleDomain
 from sqlglot_tools.bridge import SqlGlotDiagnostics, SqlGlotRelationDiff
+from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import (
     canonical_ast_fingerprint,
     default_sqlglot_policy,

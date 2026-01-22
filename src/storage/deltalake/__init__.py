@@ -18,8 +18,12 @@ __all__ = (
     "DeltaWriteResult",
     "DeltaWriteRetryPolicy",
     "EncodingPolicy",
+    "FileIndexEntry",
+    "FilePruningPolicy",
+    "FilePruningResult",
     "StorageOptions",
     "apply_delta_write_policies",
+    "build_delta_file_index",
     "cleanup_delta_log",
     "coerce_delta_table",
     "create_delta_checkpoint",
@@ -31,7 +35,10 @@ __all__ = (
     "delta_table_version",
     "delta_write_configuration",
     "enable_delta_features",
+    "evaluate_and_select_files",
+    "evaluate_filters_against_index",
     "open_delta_table",
+    "select_candidate_files",
     "upsert_dataset_partitions_delta",
     "vacuum_delta",
     "write_datafusion_delta",
@@ -78,11 +85,23 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "write_finalize_result_delta": ("storage.deltalake.delta", "write_finalize_result_delta"),
     "write_named_datasets_delta": ("storage.deltalake.delta", "write_named_datasets_delta"),
     "write_table_delta": ("storage.deltalake.delta", "write_table_delta"),
+    "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
+    "build_delta_file_index": ("storage.deltalake.file_index", "build_delta_file_index"),
+    "FilePruningPolicy": ("storage.deltalake.file_pruning", "FilePruningPolicy"),
+    "FilePruningResult": ("storage.deltalake.file_pruning", "FilePruningResult"),
+    "evaluate_and_select_files": ("storage.deltalake.file_pruning", "evaluate_and_select_files"),
+    "evaluate_filters_against_index": (
+        "storage.deltalake.file_pruning",
+        "evaluate_filters_against_index",
+    ),
+    "select_candidate_files": ("storage.deltalake.file_pruning", "select_candidate_files"),
 }
 
 if TYPE_CHECKING:
     import storage.deltalake.config as _delta_config
     import storage.deltalake.delta as _delta_io
+    import storage.deltalake.file_index as _file_index
+    import storage.deltalake.file_pruning as _file_pruning
 
     DeltaSchemaPolicy = _delta_config.DeltaSchemaPolicy
     DeltaWritePolicy = _delta_config.DeltaWritePolicy
@@ -117,6 +136,13 @@ if TYPE_CHECKING:
     write_finalize_result_delta = _delta_io.write_finalize_result_delta
     write_named_datasets_delta = _delta_io.write_named_datasets_delta
     write_table_delta = _delta_io.write_table_delta
+    FileIndexEntry = _file_index.FileIndexEntry
+    build_delta_file_index = _file_index.build_delta_file_index
+    FilePruningPolicy = _file_pruning.FilePruningPolicy
+    FilePruningResult = _file_pruning.FilePruningResult
+    evaluate_and_select_files = _file_pruning.evaluate_and_select_files
+    evaluate_filters_against_index = _file_pruning.evaluate_filters_against_index
+    select_candidate_files = _file_pruning.select_candidate_files
 
 
 def __getattr__(name: str) -> object:

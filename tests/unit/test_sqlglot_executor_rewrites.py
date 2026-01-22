@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from sqlglot import Expression, parse_one
 from sqlglot.executor import execute
 from sqlglot.transforms import eliminate_full_outer_join, eliminate_semi_and_anti_joins
+
+from sqlglot_tools.compat import Expression, parse_one
 
 
 def _execute(

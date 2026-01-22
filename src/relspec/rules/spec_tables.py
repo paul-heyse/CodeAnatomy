@@ -12,14 +12,6 @@ from arrowdsl.core.ordering import OrderingKey
 from arrowdsl.core.plan_ops import JoinType, SortKey
 from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
-from arrowdsl.spec.codec import (
-    decode_scalar_union,
-    encode_scalar_union,
-    parse_dedupe_strategy,
-    parse_mapping_sequence,
-    parse_sort_order,
-    parse_string_tuple,
-)
 from arrowdsl.spec.expr_ir import ExprIR
 from arrowdsl.spec.infra import (
     DATASET_REF_STRUCT,
@@ -27,6 +19,14 @@ from arrowdsl.spec.infra import (
     SORT_KEY_STRUCT,
 )
 from arrowdsl.spec.io import rows_from_table, table_from_rows
+from arrowdsl.spec.literals import (
+    decode_scalar_union,
+    encode_scalar_union,
+    parse_dedupe_strategy,
+    parse_mapping_sequence,
+    parse_sort_order,
+    parse_string_tuple,
+)
 from datafusion_engine.extract_metadata import ExtractDerivedIdSpec, ExtractOrderingKeySpec
 from relspec.model import (
     AddLiteralSpec,

@@ -9,12 +9,12 @@ from typing import Protocol
 import ibis
 import pyarrow as pa
 from ibis.expr.types import Table, Value
-from sqlglot import Expression
 from sqlglot.errors import ParseError
 from sqlglot.serde import dump
 
 from ibis_engine.schema_utils import validate_expr_schema
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
+from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,

@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
 
+import pyarrow as pa
 from arro3.core.types import ArrowArrayExportable, ArrowStreamExportable
 from datafusion import DataFrameWriteOptions, InsertOp
 from deltalake import CommitProperties, DeltaTable, WriterProperties, write_deltalake
@@ -18,7 +19,6 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.schema import SchemaTransform
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from storage.deltalake.config import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
@@ -215,6 +215,8 @@ def _write_table_delta_datafusion(
     options: DeltaWriteOptions,
     storage_options: StorageOptions | None = None,
 ) -> DeltaWriteResult:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
     ctx = DataFusionRuntimeProfile().session_context()
     arrow_data = cast("ArrowArrayExportable | ArrowStreamExportable", table)
     df = ctx.from_arrow(arrow_data)
@@ -939,6 +941,76 @@ def _deregister_datafusion_table(df: object, *, name: str) -> None:
         deregister(name)
 
 
+def read_delta_cdf(
+    table_path: str,
+    *,
+    storage_options: StorageOptions | None = None,
+    cdf_options: DeltaCdfOptions | None = None,
+) -> TableLike:
+    """Read change data feed from a Delta table.
+
+    Parameters
+    ----------
+    table_path : str
+        Path to the Delta table.
+    storage_options : StorageOptions | None
+        Storage options for Delta table access.
+    cdf_options : DeltaCdfOptions | None
+        Options for CDF read (version range, columns, etc.).
+
+    Returns
+    -------
+    TableLike
+        Arrow Table with CDF changes.
+
+    Raises
+    ------
+    ValueError
+        If CDF is not enabled on the Delta table.
+    """
+    storage = _storage_dict(storage_options)
+    dt = DeltaTable(table_path, storage_options=storage)
+
+    # Check if CDF is enabled
+    metadata = dt.metadata()
+    configuration = metadata.configuration or {}
+    cdf_enabled = configuration.get("delta.enableChangeDataFeed", "false").lower() == "true"
+    if not cdf_enabled:
+        msg = f"Change data feed is not enabled on Delta table at {table_path}"
+        raise ValueError(msg)
+
+    # Prepare CDF options
+    resolved_options = cdf_options or DeltaCdfOptions()
+
+    # Load CDF data
+    try:
+        cdf_data = dt.load_cdf(
+            starting_version=resolved_options.starting_version,
+            ending_version=resolved_options.ending_version,
+            starting_timestamp=resolved_options.starting_timestamp,
+            ending_timestamp=resolved_options.ending_timestamp,
+            columns=resolved_options.columns,
+        )
+    except Exception as exc:
+        msg = f"Failed to load CDF from Delta table at {table_path}: {exc}"
+        raise ValueError(msg) from exc
+
+    # Convert to Arrow Table
+    if isinstance(cdf_data, pa.Table):
+        return cdf_data
+    if hasattr(cdf_data, "read_all"):
+        # RecordBatchReader
+        return cdf_data.read_all()
+    if hasattr(cdf_data, "to_arrow"):
+        # Polars DataFrame
+        return cdf_data.to_arrow()
+    if hasattr(cdf_data, "to_pyarrow_table"):
+        # Other formats
+        return cdf_data.to_pyarrow_table()
+    # Fallback: try to convert using PyArrow
+    return pa.table(cdf_data)
+
+
 __all__ = [
     "DeltaCdfOptions",
     "DeltaSchemaMode",
@@ -962,6 +1034,7 @@ __all__ = [
     "delta_table_version",
     "enable_delta_features",
     "open_delta_table",
+    "read_delta_cdf",
     "upsert_dataset_partitions_delta",
     "vacuum_delta",
     "write_datafusion_delta",

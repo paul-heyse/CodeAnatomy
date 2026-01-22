@@ -8,8 +8,7 @@
 - Decommission legacy write paths, static registries, and string-only SQL round-trips.
 
 ## Status summary (updated)
-- Scopes 1–7 and 9 are implemented.
-- Scope 8 (observability + diagnostics consolidation) remains in progress.
+- Scopes 1–9 are implemented.
 
 ## Inputs / references
 - `docs/palns/combined_advanced_library_utilization_plan.md`
@@ -73,7 +72,7 @@ Implementation checklist
 - [x] Introduce an `EngineRuntime` bundle to own DataFusion/Ibis/SQLGlot policy wiring.
 - [x] Make `build_engine_session()` consume `EngineRuntime` and persist its snapshots.
 - [x] Centralize runtime hashing to include SQLGlot + function catalog + write policy.
-- [ ] Ensure diagnostics record engine runtime + compiler snapshots once per session.
+- [x] Ensure diagnostics record engine runtime + compiler snapshots once per session.
 
 Module retirements
 - [x] Replace ad-hoc runtime wiring scattered in `engine/materialize*` with the new bundle.
@@ -135,7 +134,7 @@ Target files
 Implementation checklist
 - [x] Make AST execution the default for DataFusion SQL ingress.
 - [x] Enforce dialect-aware `read` + `write` policies on all SQL parsing.
-- [ ] Persist AST + normalized SQL in diagnostics bundles.
+- [x] Persist AST + normalized SQL in diagnostics bundles.
 - [x] Add strict error-level policies for unsupported syntax.
 
 Module retirements
@@ -245,7 +244,7 @@ Implementation checklist
 - [x] Default Delta writes to `IbisBackend.to_delta` with schema policies.
 - [x] Thread `run_id` and commit version into `CommitProperties`.
 - [x] Expose Delta CDF reads via provider-backed registration.
-- [ ] Add engine helpers for vacuum + history snapshots.
+- [x] Add engine helpers for vacuum + history snapshots.
 
 Module retirements
 - [x] Retire direct `write_deltalake` calls outside the IO bridge.
@@ -313,12 +312,12 @@ Target files
 - `src/engine/session_factory.py`
 
 Implementation checklist
-- [ ] Emit a single engine runtime artifact per session.
-- [ ] Record SQLGlot AST + normalized SQL for all SQL ingress paths.
-- [ ] Record write policy metadata for all outputs (Delta + parquet/csv/json).
+- [x] Emit a single engine runtime artifact per session.
+- [x] Record SQLGlot AST + normalized SQL for all SQL ingress paths.
+- [x] Record write policy metadata for all outputs (Delta + parquet/csv/json).
 
 Module retirements
-- [ ] Remove duplicate per-module diagnostics that replicate the same payloads.
+- [x] Remove duplicate per-module diagnostics that replicate the same payloads.
 
 ---
 
@@ -351,7 +350,7 @@ Implementation checklist
 ## Acceptance criteria
 - [x] Engine builds a single session with DataFusion + Ibis + SQLGlot policy snapshots.
 - [x] All dataset registrations are DDL-first (DeltaTableFactory and UNBOUNDED where applicable).
-- [ ] SQL ingress records normalized AST + dialect policy and executes AST by default.
+- [x] SQL ingress records normalized AST + dialect policy and executes AST by default.
 - [x] Delta writes are idempotent (CommitProperties `app_id` + `version`).
 - [x] Write policy supports DataFusion `DataFrameWriteOptions` and Parquet writer tuning.
 - [x] Legacy modules are removed with no runtime regressions.

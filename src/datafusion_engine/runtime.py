@@ -2768,6 +2768,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             self.delta_commit_runs[key] = run
         elif metadata:
             run.metadata.update(dict(metadata))
+        if commit_metadata:
+            run.metadata["commit_metadata"] = dict(commit_metadata)
         options, updated = run.next_commit_version()
         if self.diagnostics_sink is not None:
             commit_meta_payload = dict(commit_metadata) if commit_metadata is not None else None

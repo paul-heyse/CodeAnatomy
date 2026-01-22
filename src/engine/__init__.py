@@ -6,6 +6,12 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from engine.delta_tools import (
+        DeltaHistorySnapshot,
+        DeltaVacuumResult,
+        delta_history,
+        delta_vacuum,
+    )
     from engine.function_registry import FunctionRegistry, default_function_registry
     from engine.materialize_pipeline import (
         build_plan_product,
@@ -20,6 +26,8 @@ if TYPE_CHECKING:
     from engine.session_factory import build_engine_session
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
+    "DeltaHistorySnapshot": ("engine.delta_tools", "DeltaHistorySnapshot"),
+    "DeltaVacuumResult": ("engine.delta_tools", "DeltaVacuumResult"),
     "EngineSession": ("engine.session", "EngineSession"),
     "ExecutionSurfacePolicy": ("engine.plan_policy", "ExecutionSurfacePolicy"),
     "FunctionRegistry": ("engine.function_registry", "FunctionRegistry"),
@@ -31,6 +39,8 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "build_engine_session": ("engine.session_factory", "build_engine_session"),
     "build_plan_product": ("engine.materialize_pipeline", "build_plan_product"),
     "default_function_registry": ("engine.function_registry", "default_function_registry"),
+    "delta_history": ("engine.delta_tools", "delta_history"),
+    "delta_vacuum": ("engine.delta_tools", "delta_vacuum"),
     "resolve_cache_policy": ("engine.materialize_pipeline", "resolve_cache_policy"),
     "resolve_prefer_reader": ("engine.materialize_pipeline", "resolve_prefer_reader"),
     "resolve_runtime_profile": ("engine.runtime_profile", "resolve_runtime_profile"),
@@ -52,6 +62,8 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "DeltaHistorySnapshot",
+    "DeltaVacuumResult",
     "EngineRuntime",
     "EngineSession",
     "ExecutionSurfacePolicy",
@@ -63,6 +75,8 @@ __all__ = [
     "build_engine_session",
     "build_plan_product",
     "default_function_registry",
+    "delta_history",
+    "delta_vacuum",
     "resolve_cache_policy",
     "resolve_prefer_reader",
     "resolve_runtime_profile",

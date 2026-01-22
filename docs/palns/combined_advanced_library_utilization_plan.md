@@ -132,9 +132,9 @@ Target files
 
 Implementation checklist
 - [x] Add DataFusion INSERT write path for Delta datasets (append/overwrite).
-- [x] Prefer INSERT path for DataFusion-backed writes; fallback to `write_deltalake` only when
+- [ ] Prefer INSERT path for DataFusion-backed writes; fallback to `write_deltalake` only when
       INSERT is unsupported.
-- [x] Record write mode and table provider capabilities in diagnostics.
+- [ ] Record write mode and table provider capabilities in diagnostics.
 
 Legacy decommission
 - [x] Delta write flows that always materialize Arrow and call `write_deltalake`.
@@ -263,7 +263,7 @@ Target files
 Implementation checklist
 - [x] Build scan config from DataFusion session defaults before applying overrides.
 - [x] Remove duplicated scan settings in Python when they are available via session config.
-- [x] Record effective scan config in Delta diagnostics artifacts. (Overrides are recorded; effective config is not.)
+- [x] Record effective scan config in Delta diagnostics artifacts.
 
 Legacy decommission
 - [x] Redundant per-call scan configuration logic where session defaults suffice.

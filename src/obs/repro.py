@@ -924,6 +924,7 @@ def _write_runtime_artifacts(
     table_artifacts = [
         ("datafusion_explains", context.datafusion_explains),
         ("datafusion_plan_artifacts_v1", context.datafusion_plan_artifacts),
+        ("engine_runtime_v1", context.engine_runtime),
         (
             "datafusion_schema_registry_validation_v1",
             context.datafusion_schema_registry_validation,
@@ -1610,6 +1611,7 @@ def write_run_bundle(
         relspec/datafusion_traces.delta
         relspec/datafusion_function_catalog.delta
         relspec/datafusion_write_policy.delta
+        relspec/engine_runtime_v1/
         relspec/datafusion_explains/
         relspec/datafusion_plan_artifacts_v1/
         relspec/datafusion_schema_registry_validation_v1/

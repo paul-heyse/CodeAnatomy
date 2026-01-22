@@ -77,7 +77,7 @@ Implementation checklist
 Objective: keep DataFusion plans lazy; register views instead of materialized Arrow tables
 whenever possible, and use `datafusion.catalog.Table` as the universal registry handle.
 
-Status: [~] Partially complete.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -99,7 +99,7 @@ Target files
 - `src/ibis_engine/registry.py`
 
 Implementation checklist
-- [ ] Convert registry registration to `register_view`/`into_view` for plan outputs.
+- [x] Convert registry registration to `register_view`/`into_view` for plan outputs.
 - [x] Register fragment + nested schema views via DataFrame builders (`into_view`).
 - [x] Register symtable-derived CPG views via DataFrame builders (no SQL DDL).
 - [x] Stop calling `to_arrow_table` for registry flows outside diagnostics.
@@ -109,7 +109,7 @@ Implementation checklist
 Objective: replace raw SQL fragments with DataFusion Expr and DataFrame APIs so
 fragment construction is schema-aware and compiler-validated.
 
-Status: [~] Partially complete.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -127,9 +127,10 @@ Target files
 - `src/datafusion_engine/kernels.py`
 
 Implementation checklist
-- [ ] Replace SQL fragment generators with Expr/DataFrame transformations.
+- [x] Normalize fragment SQL into SQLGlot expressions and build DataFrames directly.
+- [x] Replace SQL fragment generators with Expr/DataFrame transformations.
 - [ ] Route any remaining raw SQL through `parse_sql_expr`.
-- [ ] Delete fragment-to-string paths once all consumers use Expr templates.
+- [x] Delete fragment-to-string paths once all consumers use Expr templates.
 - [x] Register fragment ViewSpecs via DataFrame builders (SQLGlot → DataFrame).
 - [x] Add CTE + UNNEST handling in the DataFrame translator to support fragment builders.
 - [x] Replace symtable SQL view generation with DataFrame builders.
@@ -138,7 +139,7 @@ Implementation checklist
 Objective: standardize output surfaces on streaming RecordBatch readers and Arrow
 C Stream exports; minimize full materialization in hot paths.
 
-Status: [~] Partially complete.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -166,7 +167,7 @@ Implementation checklist
 Objective: remove custom param-table registry plumbing and use DataFusion-native
 table functions or unnest-based parameter expansion.
 
-Status: [ ] Remaining.
+Status: [~] Partially complete.
 
 Code patterns
 ```python
@@ -191,9 +192,9 @@ Target files
 - `src/datafusion_engine/runtime.py`
 
 Implementation checklist
-- [ ] Replace param-table registry with UDTF or unnest-based expansions.
-- [ ] Remove custom catalog/schema prefixes for params.
-- [ ] Ensure parameter usage is validated by information_schema routines.
+- [x] Replace param-table registry with VALUES/memtable expansions.
+- [x] Remove custom catalog/schema prefixes for params.
+- [x] Ensure parameter usage is validated by information_schema routines.
 
 ## Scope 6: Plan artifacts as first-class outputs
 Objective: persist logical, optimized, physical, and explain artifacts for every

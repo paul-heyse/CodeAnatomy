@@ -25,16 +25,12 @@ from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.extract_bundles import bundle
 from datafusion_engine.extract_pipelines import post_kernels_for_postprocess
 from datafusion_engine.kernel_registry import kernel_capability
-from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from engine.session import EngineSession
 from ibis_engine.compiler_checkpoint import compile_checkpoint
 from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
 from ibis_engine.lineage import lineage_graph_by_output, required_columns_by_table
-from ibis_engine.param_tables import (
-    ParamTablePolicy,
-    ParamTableSpec,
-    qualified_param_table_name,
-)
+from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
 from ibis_engine.params_bridge import list_param_names_from_rel_ops
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
@@ -982,7 +978,41 @@ def _param_metadata(
                     metadata={"missing_params": ",".join(missing)},
                 )
             )
+    collisions = _param_table_collisions(context, param_names=param_names)
+    if collisions:
+        diagnostics.append(
+            RuleDiagnostic(
+                domain=rule_ctx.rule.domain,
+                template=None,
+                rule_name=rule_ctx.rule.name,
+                severity="error",
+                message="Param table names collide with registered datasets.",
+                plan_signature=rule_ctx.source.plan_signature,
+                metadata={"param_table_collisions": ",".join(collisions)},
+            )
+        )
     return param_names, table_refs
+
+
+def _param_table_collisions(
+    context: SqlGlotDiagnosticsContext,
+    *,
+    param_names: set[str],
+) -> tuple[str, ...]:
+    profile = context.ctx.runtime.datafusion
+    if profile is None or not param_names:
+        return ()
+    from datafusion_engine.runtime import sql_options_for_profile
+
+    sql_options = sql_options_for_profile(profile)
+    session = profile.session_context()
+    table_names = table_names_snapshot(session, sql_options=sql_options)
+    collisions = [
+        f"{context.param_policy.prefix}{name}"
+        for name in sorted(param_names)
+        if f"{context.param_policy.prefix}{name}" in table_names
+    ]
+    return tuple(collisions)
 
 
 def _final_sqlglot_metadata(
@@ -1013,11 +1043,6 @@ def _final_sqlglot_metadata(
     metadata = dict(base_metadata)
     if param_names:
         metadata["param_tables"] = ",".join(sorted(param_names))
-        qualified = [
-            qualified_param_table_name(param_policy, name, scope_key=None)
-            for name in sorted(param_names)
-        ]
-        metadata["param_tables_qualified"] = ",".join(qualified)
     non_param_tables = dataset_table_names(table_refs, policy=param_policy)
     if non_param_tables:
         metadata["dataset_tables"] = ",".join(non_param_tables)

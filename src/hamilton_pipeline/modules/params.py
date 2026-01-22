@@ -23,6 +23,7 @@ from ibis_engine.param_tables import (
     ParamTableScope,
     ParamTableSpec,
     param_signature_from_array,
+    param_table_name,
     unique_values,
 )
 from ibis_engine.param_tables import (
@@ -223,14 +224,19 @@ def param_table_name_map(
     param_table_registry: ParamTableRegistry,
     engine_session: EngineSession,
 ) -> dict[str, str]:
-    """Register param tables into the backend and return name mapping.
+    """Return param table names without backend registration.
 
     Returns
     -------
     dict[str, str]
         Mapping of logical param names to qualified table names.
     """
-    return param_table_registry.register_into_backend(engine_session.ibis_backend)
+    _ = engine_session
+    policy = param_table_registry.policy
+    return {
+        logical_name: param_table_name(policy, logical_name)
+        for logical_name in param_table_registry.artifacts
+    }
 
 
 @tag(layer="params", artifact="param_tables_ibis", kind="object")

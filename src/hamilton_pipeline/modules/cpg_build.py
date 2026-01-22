@@ -1367,12 +1367,7 @@ def _param_table_aliases(
     aliases: dict[str, IbisTable] = {}
     for logical_name, table in param_tables.items():
         table_name = param_table_name(policy, logical_name)
-        names = (
-            logical_name,
-            table_name,
-            f"{policy.schema}.{table_name}",
-            f"{policy.catalog}.{policy.schema}.{table_name}",
-        )
+        names = (logical_name, table_name)
         for name in names:
             aliases.setdefault(name, table)
     return aliases

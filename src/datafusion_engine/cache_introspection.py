@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import importlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -114,6 +115,34 @@ def _extract_cache_config(settings: list[dict[str, object]]) -> CacheConfigSnaps
     )
 
 
+def _cache_snapshot_from_table(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+) -> CacheStateSnapshot | None:
+    query = f"SELECT * FROM {table_name}()"
+    try:
+        table = ctx.sql(query).to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    rows = table.to_pylist()
+    if not rows:
+        return None
+    row = rows[0]
+    return CacheStateSnapshot(
+        cache_name=str(row.get("cache_name") or table_name),
+        event_time_unix_ms=int(row.get("event_time_unix_ms") or _now_ms()),
+        entry_count=int(row["entry_count"]) if row.get("entry_count") is not None else None,
+        hit_count=int(row["hit_count"]) if row.get("hit_count") is not None else None,
+        miss_count=int(row["miss_count"]) if row.get("miss_count") is not None else None,
+        eviction_count=(
+            int(row["eviction_count"]) if row.get("eviction_count") is not None else None
+        ),
+        config_ttl=str(row.get("config_ttl")) if row.get("config_ttl") is not None else None,
+        config_limit=str(row.get("config_limit")) if row.get("config_limit") is not None else None,
+    )
+
+
 def metadata_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     """Capture metadata cache state snapshot.
 
@@ -134,6 +163,9 @@ def metadata_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     Future DataFusion versions may add table functions like
     ``SELECT * FROM metadata_cache()`` for runtime introspection.
     """
+    snapshot = _cache_snapshot_from_table(ctx, table_name="metadata_cache")
+    if snapshot is not None:
+        return snapshot
     introspector = SchemaIntrospector(ctx, sql_options=None)
     settings = introspector.settings_snapshot()
     config = _extract_cache_config(settings)
@@ -170,6 +202,9 @@ def list_files_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     Future DataFusion versions may add table functions like
     ``SELECT * FROM list_files_cache()`` for runtime introspection.
     """
+    snapshot = _cache_snapshot_from_table(ctx, table_name="list_files_cache")
+    if snapshot is not None:
+        return snapshot
     introspector = SchemaIntrospector(ctx, sql_options=None)
     settings = introspector.settings_snapshot()
     config = _extract_cache_config(settings)
@@ -204,6 +239,9 @@ def predicate_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     Currently DataFusion does not expose cache introspection table functions,
     so this returns a snapshot with configuration only and no runtime stats.
     """
+    snapshot = _cache_snapshot_from_table(ctx, table_name="predicate_cache")
+    if snapshot is not None:
+        return snapshot
     introspector = SchemaIntrospector(ctx, sql_options=None)
     settings = introspector.settings_snapshot()
     config = _extract_cache_config(settings)
@@ -286,7 +324,25 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
     >>> register_cache_introspection_functions(ctx)
     # Future: ctx.sql("SELECT * FROM list_files_cache()").collect()
     """
-    # Placeholder for future UDTF registration when DataFusion adds native support
+    introspector = SchemaIntrospector(ctx, sql_options=None)
+    settings = introspector.settings_snapshot()
+    config = _extract_cache_config(settings)
+    payload = {
+        "list_files_cache_ttl": config.list_files_cache_ttl,
+        "list_files_cache_limit": config.list_files_cache_limit,
+        "metadata_cache_limit": config.metadata_cache_limit,
+        "predicate_cache_size": config.predicate_cache_size,
+    }
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:
+        msg = "datafusion_ext is required for cache introspection tables."
+        raise ImportError(msg) from exc
+    register = getattr(module, "register_cache_tables", None)
+    if not callable(register):
+        msg = "datafusion_ext.register_cache_tables is unavailable."
+        raise TypeError(msg)
+    register(ctx, payload)
 
 
 __all__ = [

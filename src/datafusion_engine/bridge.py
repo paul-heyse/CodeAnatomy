@@ -67,13 +67,16 @@ from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.compat import ErrorLevel, Expression, exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
+    ast_to_artifact,
     default_sqlglot_policy,
+    emit_preflight_diagnostics,
     normalize_expr,
     parse_sql_strict,
     plan_fingerprint,
     preflight_sql,
     register_datafusion_dialect,
     rewrite_expr,
+    serialize_ast_artifact,
 )
 
 logger = logging.getLogger(__name__)
@@ -515,6 +518,7 @@ def sqlglot_to_datafusion(
     """
     options = options or DataFusionCompileOptions()
     rewritten = _apply_rewrite_hook(expr, options=options)
+    _maybe_enforce_preflight(rewritten, options=options)
     return df_from_sqlglot_or_sql(
         ctx,
         rewritten,
@@ -991,7 +995,7 @@ def _maybe_enforce_preflight(
     ValueError
         Raised when preflight enforcement is enabled and validation fails.
     """
-    if not options.enforce_preflight:
+    if not options.enforce_preflight and options.sql_ingest_hook is None:
         return
     policy = options.sqlglot_policy or default_sqlglot_policy()
     sql_text = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
@@ -1002,9 +1006,15 @@ def _maybe_enforce_preflight(
         strict=True,
         policy=policy,
     )
+    diagnostics = emit_preflight_diagnostics(result)
+    if options.run_id is not None:
+        diagnostics["run_id"] = options.run_id
+    if options.sql_ingest_hook is not None:
+        options.sql_ingest_hook(diagnostics)
     if result.errors:
-        msg = f"Preflight validation failed: {'; '.join(result.errors)}"
-        raise ValueError(msg)
+        if options.enforce_preflight:
+            msg = f"Preflight validation failed: {'; '.join(result.errors)}"
+            raise ValueError(msg)
 
 
 def _policy_violations(expr: Expression, policy: DataFusionSqlPolicy) -> tuple[str, ...]:
@@ -1100,6 +1110,7 @@ class DataFusionPlanArtifacts:
     explain_analyze: TableLike | RecordBatchReaderLike | None
     substrait_plan: bytes | None
     substrait_validation: Mapping[str, object] | None = None
+    sqlglot_ast: str | None = None
     unparsed_sql: str | None = None
     unparse_error: str | None = None
     logical_plan: str | None = None
@@ -1132,6 +1143,7 @@ class DataFusionPlanArtifacts:
             "substrait_validation": (
                 dict(self.substrait_validation) if self.substrait_validation is not None else None
             ),
+            "sqlglot_ast": self.sqlglot_ast,
             "unparsed_sql": self.unparsed_sql,
             "unparse_error": self.unparse_error,
             "logical_plan": self.logical_plan,
@@ -1167,6 +1179,7 @@ class DataFusionPlanArtifacts:
             "explain_analyze": self.explain_analyze,
             "substrait_b64": substrait_b64,
             "substrait_validation": self.substrait_validation,
+            "sqlglot_ast": self.sqlglot_ast,
             "unparsed_sql": self.unparsed_sql,
             "unparse_error": self.unparse_error,
             "logical_plan": self.logical_plan,
@@ -1726,6 +1739,12 @@ def collect_plan_artifacts(
         policy_hash=policy_hash,
         schema_map_hash=options.schema_map_hash,
     )
+    sqlglot_ast: str | None = None
+    try:
+        policy = options.sqlglot_policy or default_sqlglot_policy()
+        sqlglot_ast = serialize_ast_artifact(ast_to_artifact(expr, sql=sql, policy=policy))
+    except (RuntimeError, TypeError, ValueError):
+        sqlglot_ast = None
     return DataFusionPlanArtifacts(
         plan_hash=plan_hash,
         sql=sql,
@@ -1733,6 +1752,7 @@ def collect_plan_artifacts(
         explain_analyze=analyze_rows,
         substrait_plan=substrait_plan,
         substrait_validation=substrait_validation,
+        sqlglot_ast=sqlglot_ast,
         unparsed_sql=unparsed_sql,
         unparse_error=unparse_error,
         logical_plan=cast("str | None", plan_details.get("logical_plan")),

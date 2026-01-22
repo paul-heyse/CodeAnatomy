@@ -19,7 +19,7 @@ from datafusion_engine.runtime import dataset_spec_from_context
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
-from ibis_engine.param_tables import ParamTableRegistry
+from ibis_engine.param_tables import ParamTablePolicy, param_table_name
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import (
     FILE_ID_PARAM_THRESHOLD,
@@ -33,7 +33,7 @@ from incremental.invalidations import validate_schema_identity
 from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_specs import dataset_name_from_alias
 from relspec.engine import PlanResolver
-from relspec.incremental import RelspecIncrementalSpec, incremental_spec
+from relspec.incremental import incremental_spec
 from storage.deltalake import (
     DeltaUpsertOptions,
     DeltaWriteOptions,
@@ -42,7 +42,6 @@ from storage.deltalake import (
 )
 
 if TYPE_CHECKING:
-    from ibis.expr.types import Table
 
     from arrowdsl.core.scan_telemetry import ScanTelemetry
     from relspec.model import DatasetRef
@@ -203,20 +202,6 @@ def _partition_specs(
     return tuple({column: value} for value in values)
 
 
-def _file_id_param_table(
-    file_ids: Sequence[str],
-    *,
-    backend: BaseBackend,
-    spec: RelspecIncrementalSpec,
-) -> tuple[Table, str] | None:
-    if len(file_ids) < FILE_ID_PARAM_THRESHOLD:
-        return None
-    param_spec = spec.file_id_param_spec()
-    registry = ParamTableRegistry(specs={param_spec.logical_name: param_spec})
-    registry.register_values(param_spec.logical_name, file_ids)
-    registry.register_into_backend(backend)
-    table = registry.ibis_tables(backend)[param_spec.logical_name]
-    return table, param_spec.key_col
 
 
 def _relspec_state_dataset_name(name: str) -> str | None:
@@ -272,15 +257,16 @@ def _read_state_dataset(
     spec = incremental_spec()
     file_id_column = spec.file_id_column_for(dataset_name, columns=dataset_schema.names)
     if file_id_column is not None:
-        param_table = _file_id_param_table(file_ids, backend=backend, spec=spec)
-        param_key_column = param_table[1] if param_table is not None else None
+        param_spec = spec.file_id_param_spec()
+        policy = ParamTablePolicy()
+        table_name = param_table_name(policy, param_spec.logical_name)
         query = dataset_query_for_file_ids(
             file_ids,
             schema=dataset_schema,
             options=FileIdQueryOptions(
                 file_id_column=file_id_column,
-                param_table=param_table[0] if param_table is not None else None,
-                param_key_column=param_key_column,
+                param_table_name=table_name,
+                param_key_column=param_spec.key_col,
                 param_table_threshold=FILE_ID_PARAM_THRESHOLD,
             ),
         )

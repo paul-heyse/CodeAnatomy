@@ -448,6 +448,11 @@ def datafusion_plan_artifacts_table(
                     else None
                 ),
                 "substrait_validation_status": substrait_status,
+                "sqlglot_ast": (
+                    str(artifact.get("sqlglot_ast"))
+                    if artifact.get("sqlglot_ast") is not None
+                    else None
+                ),
                 "unparsed_sql": (
                     str(artifact.get("unparsed_sql"))
                     if artifact.get("unparsed_sql") is not None

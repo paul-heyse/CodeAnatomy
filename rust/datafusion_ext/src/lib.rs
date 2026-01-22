@@ -2,11 +2,12 @@
 
 use std::any::Any;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::array::{
     ArrayRef,
@@ -22,6 +23,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use arrow::ipc::reader::StreamReader;
+use arrow::record_batch::RecordBatch;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use datafusion::catalog::{
@@ -30,14 +32,19 @@ use datafusion::catalog::{
     MemorySchemaProvider,
     SchemaProvider,
     Session,
+    TableFunctionImpl,
     TableProvider,
 };
+use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use datafusion::execution::cache::{CacheAccessor, FileMetadataCache};
+use datafusion::execution::SessionStateDefaults;
 use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory,
     PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
 };
+use datafusion::physical_optimizer::{OptimizerConfig, PhysicalOptimizerRule};
 use datafusion_common::{
     Constraint, Constraints, DFSchema, DataFusionError, Result, ScalarValue, Statistics,
 };
@@ -64,6 +71,8 @@ use datafusion_expr::{
 use datafusion_expr::expr_fn::col;
 use datafusion_physical_plan::ExecutionPlan;
 use deltalake::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
+use deltalake::kernel::models::actions::Add;
+use deltalake::kernel::scalars::ScalarExt;
 use deltalake::{ensure_table_uri, DeltaTableBuilder};
 use tokio::runtime::Runtime;
 use datafusion_python::context::PySessionContext;
@@ -79,6 +88,13 @@ fn schema_from_ipc(schema_ipc: Vec<u8>) -> PyResult<SchemaRef> {
     let reader = StreamReader::try_new(Cursor::new(schema_ipc), None)
         .map_err(|err| PyValueError::new_err(format!("Failed to decode schema IPC: {err}")))?;
     Ok(reader.schema())
+}
+
+fn now_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 #[derive(Debug)]
@@ -672,6 +688,8 @@ fn delta_table_provider(
     timestamp: Option<String>,
     file_column_name: Option<String>,
     enable_parquet_pushdown: Option<bool>,
+    schema_force_view_types: Option<bool>,
+    wrap_partition_values: Option<bool>,
     schema_ipc: Option<Vec<u8>>,
 ) -> PyResult<PyObject> {
     let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
@@ -710,13 +728,19 @@ fn delta_table_provider(
     if let Some(pushdown) = enable_parquet_pushdown {
         scan_builder = scan_builder.with_parquet_pushdown(pushdown);
     }
+    if let Some(wrap_partition_values) = wrap_partition_values {
+        scan_builder = scan_builder.wrap_partition_values(wrap_partition_values);
+    }
     if let Some(schema_ipc) = schema_ipc {
         let schema = schema_from_ipc(schema_ipc)?;
         scan_builder = scan_builder.with_schema(schema);
     }
-    let scan_config = scan_builder.build(&snapshot).map_err(|err| {
+    let mut scan_config = scan_builder.build(&snapshot).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to build Delta scan config: {err}"))
     })?;
+    if let Some(force_view) = schema_force_view_types {
+        scan_config.schema_force_view_types = force_view;
+    }
     let provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to build Delta table provider: {err}"))
     })?;
@@ -725,6 +749,117 @@ fn delta_table_provider(
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
     Ok(capsule.into_py(py))
+}
+
+#[pyfunction]
+fn delta_table_provider_with_files(
+    py: Python<'_>,
+    table_uri: String,
+    storage_options: Option<Vec<(String, String)>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    files: Vec<String>,
+    file_column_name: Option<String>,
+    enable_parquet_pushdown: Option<bool>,
+    schema_force_view_types: Option<bool>,
+    wrap_partition_values: Option<bool>,
+    schema_ipc: Option<Vec<u8>>,
+) -> PyResult<PyObject> {
+    let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
+        PyValueError::new_err(format!("Invalid Delta table URI {table_uri:?}: {err}"))
+    })?;
+    let mut builder = DeltaTableBuilder::from_url(table_url).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta table: {err}"))
+    })?;
+    if let Some(options) = storage_options {
+        let options: HashMap<String, String> = options.into_iter().collect();
+        builder = builder.with_storage_options(options);
+    }
+    if let Some(version) = version {
+        builder = builder.with_version(version);
+    }
+    if let Some(timestamp) = timestamp {
+        builder = builder.with_datestring(timestamp).map_err(|err| {
+            PyValueError::new_err(format!("Invalid Delta timestamp: {err}"))
+        })?;
+    }
+    let runtime = Runtime::new().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}"))
+    })?;
+    let table = runtime.block_on(builder.load()).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to load Delta table: {err}"))
+    })?;
+    let snapshot = table.snapshot().map_err(|err| {
+        PyRuntimeError::new_err(format!("Delta table snapshot unavailable: {err}"))
+    })?;
+    let snapshot = snapshot.snapshot().clone();
+    let log_store = table.log_store();
+    let mut scan_builder = DeltaScanConfigBuilder::new();
+    if let Some(name) = file_column_name {
+        scan_builder = scan_builder.with_file_column_name(&name);
+    }
+    if let Some(pushdown) = enable_parquet_pushdown {
+        scan_builder = scan_builder.with_parquet_pushdown(pushdown);
+    }
+    if let Some(wrap_partition_values) = wrap_partition_values {
+        scan_builder = scan_builder.wrap_partition_values(wrap_partition_values);
+    }
+    if let Some(schema_ipc) = schema_ipc {
+        let schema = schema_from_ipc(schema_ipc)?;
+        scan_builder = scan_builder.with_schema(schema);
+    }
+    let mut scan_config = scan_builder.build(&snapshot).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta scan config: {err}"))
+    })?;
+    if let Some(force_view) = schema_force_view_types {
+        scan_config.schema_force_view_types = force_view;
+    }
+    let add_actions = add_actions_for_paths(&table, &files)
+        .map_err(|err| PyRuntimeError::new_err(format!("Failed to build file list: {err}")))?;
+    let provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config)
+        .map_err(|err| PyRuntimeError::new_err(format!("Failed to build Delta provider: {err}")))?;
+    let provider = provider.with_files(add_actions);
+    let ffi_provider = FFI_TableProvider::new(Arc::new(provider), true, None);
+    let name = CString::new("datafusion_table_provider")
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
+    let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
+    Ok(capsule.into_py(py))
+}
+
+#[pyfunction]
+fn install_expr_planners(ctx: PyRef<PySessionContext>, planner_names: Vec<String>) -> PyResult<()> {
+    if planner_names.is_empty() {
+        return Err(PyValueError::new_err(
+            "ExprPlanner installation requires at least one planner name.",
+        ));
+    }
+    let planners = SessionStateDefaults::default_expr_planners();
+    let mut state = ctx.ctx.state_ref().write();
+    let slot = state.expr_planners();
+    *slot = Some(planners);
+    Ok(())
+}
+
+#[pyfunction]
+fn install_tracing(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    let mut state = ctx.ctx.state_ref().write();
+    let rules = state.physical_optimizer_rules();
+    let mut existing = rules.take().unwrap_or_default();
+    existing.push(Arc::new(TracingMarkerRule));
+    *rules = Some(existing);
+    Ok(())
+}
+
+#[pyfunction]
+fn register_cache_tables(
+    ctx: PyRef<PySessionContext>,
+    config: Option<HashMap<String, String>>,
+) -> PyResult<()> {
+    let snapshot_config = CacheSnapshotConfig::from_map(config);
+    register_cache_table_functions(&ctx.ctx, snapshot_config).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to register cache table functions: {err}"))
+    })?;
+    Ok(())
 }
 
 #[pyfunction]
@@ -800,7 +935,11 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         "cpg_score" => Ok(ScalarUDF::from(Arc::new(CpgScoreUdf { signature }))),
         "stable_hash64" => Ok(ScalarUDF::from(Arc::new(StableHash64Udf { signature }))),
         "stable_hash128" => Ok(ScalarUDF::from(Arc::new(StableHash128Udf { signature }))),
-        "position_encoding_norm" => Ok(ScalarUDF::from(Arc::new(PositionEncodingUdf { signature }))),
+        "prefixed_hash64" => Ok(ScalarUDF::from(Arc::new(PrefixedHash64Udf { signature }))),
+        "stable_id" => Ok(ScalarUDF::from(Arc::new(StableIdUdf { signature }))),
+        "position_encoding_norm" => {
+            Ok(ScalarUDF::from(Arc::new(PositionEncodingUdf { signature })))
+        }
         "col_to_byte" => Ok(ScalarUDF::from(Arc::new(ColToByteUdf { signature }))),
         name => Err(DataFusionError::Plan(format!(
             "Unsupported rule primitive: {name}"
@@ -847,6 +986,14 @@ fn volatility_from_str(value: &str) -> Result<Volatility> {
     }
 }
 
+fn prefixed_hash64_value(prefix: &str, value: &str) -> String {
+    format!("{prefix}:{}", hash64_value(value))
+}
+
+fn stable_id_value(prefix: &str, value: &str) -> String {
+    format!("{prefix}:{}", hash128_value(value))
+}
+
 fn hash64_value(value: &str) -> i64 {
     let mut hasher = Blake2bVar::new(8).expect("blake2b supports 8-byte output");
     hasher.update(value.as_bytes());
@@ -863,6 +1010,246 @@ fn hash128_value(value: &str) -> String {
     let mut out = [0u8; 16];
     hasher.finalize_variable(&mut out).expect("hash output");
     hex::encode(out)
+}
+
+#[derive(Debug)]
+struct TracingMarkerRule;
+
+impl PhysicalOptimizerRule for TracingMarkerRule {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(plan)
+    }
+
+    fn name(&self) -> &str {
+        "codeanatomy_tracing_marker"
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CacheSnapshotConfig {
+    list_files_cache_ttl: Option<String>,
+    list_files_cache_limit: Option<String>,
+    metadata_cache_limit: Option<String>,
+    predicate_cache_size: Option<String>,
+}
+
+impl CacheSnapshotConfig {
+    fn from_map(config: Option<HashMap<String, String>>) -> Self {
+        let mut config_map = config.unwrap_or_default();
+        Self {
+            list_files_cache_ttl: config_map.remove("list_files_cache_ttl"),
+            list_files_cache_limit: config_map.remove("list_files_cache_limit"),
+            metadata_cache_limit: config_map.remove("metadata_cache_limit"),
+            predicate_cache_size: config_map.remove("predicate_cache_size"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CacheTableKind {
+    ListFiles,
+    Metadata,
+    Predicate,
+}
+
+#[derive(Debug)]
+struct CacheTableFunction {
+    runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+    config: CacheSnapshotConfig,
+    kind: CacheTableKind,
+}
+
+impl CacheTableFunction {
+    fn cache_name(&self) -> &'static str {
+        match self.kind {
+            CacheTableKind::ListFiles => "list_files",
+            CacheTableKind::Metadata => "metadata",
+            CacheTableKind::Predicate => "predicate",
+        }
+    }
+
+    fn config_ttl(&self) -> Option<&str> {
+        match self.kind {
+            CacheTableKind::ListFiles => self.config.list_files_cache_ttl.as_deref(),
+            CacheTableKind::Metadata => None,
+            CacheTableKind::Predicate => None,
+        }
+    }
+
+    fn config_limit(&self) -> Option<&str> {
+        match self.kind {
+            CacheTableKind::ListFiles => self.config.list_files_cache_limit.as_deref(),
+            CacheTableKind::Metadata => self.config.metadata_cache_limit.as_deref(),
+            CacheTableKind::Predicate => self.config.predicate_cache_size.as_deref(),
+        }
+    }
+
+    fn entry_count(&self) -> Option<i64> {
+        match self.kind {
+            CacheTableKind::ListFiles => self
+                .runtime_env
+                .cache_manager
+                .get_list_files_cache()
+                .map(|cache| cache.len() as i64),
+            CacheTableKind::Metadata => {
+                let cache = self.runtime_env.cache_manager.get_file_metadata_cache();
+                Some(cache.list_entries().len() as i64)
+            }
+            CacheTableKind::Predicate => self
+                .runtime_env
+                .cache_manager
+                .get_file_statistic_cache()
+                .map(|cache| cache.len() as i64),
+        }
+    }
+
+    fn hit_count(&self) -> Option<i64> {
+        if matches!(self.kind, CacheTableKind::Metadata) {
+            let cache = self.runtime_env.cache_manager.get_file_metadata_cache();
+            let hits: i64 = cache
+                .list_entries()
+                .values()
+                .map(|entry| entry.hits as i64)
+                .sum();
+            return Some(hits);
+        }
+        None
+    }
+
+    fn make_table(&self) -> Result<Arc<dyn TableProvider>> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            Field::new("cache_name", DataType::Utf8, false),
+            Field::new("event_time_unix_ms", DataType::Int64, false),
+            Field::new("entry_count", DataType::Int64, true),
+            Field::new("hit_count", DataType::Int64, true),
+            Field::new("miss_count", DataType::Int64, true),
+            Field::new("eviction_count", DataType::Int64, true),
+            Field::new("config_ttl", DataType::Utf8, true),
+            Field::new("config_limit", DataType::Utf8, true),
+        ]));
+        let cache_name = StringArray::from(vec![Some(self.cache_name())]);
+        let event_time = Int64Array::from(vec![Some(now_unix_ms())]);
+        let entry_count = Int64Array::from(vec![self.entry_count()]);
+        let hit_count = Int64Array::from(vec![self.hit_count()]);
+        let miss_count = Int64Array::from(vec![None]);
+        let eviction_count = Int64Array::from(vec![None]);
+        let config_ttl = StringArray::from(vec![self.config_ttl()]);
+        let config_limit = StringArray::from(vec![self.config_limit()]);
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(cache_name),
+                Arc::new(event_time),
+                Arc::new(entry_count),
+                Arc::new(hit_count),
+                Arc::new(miss_count),
+                Arc::new(eviction_count),
+                Arc::new(config_ttl),
+                Arc::new(config_limit),
+            ],
+        )
+        .map_err(|err| DataFusionError::Plan(format!("Failed to build cache table: {err}")))?;
+        let table = MemTable::try_new(schema, vec![vec![batch]])?;
+        Ok(Arc::new(table))
+    }
+}
+
+impl TableFunctionImpl for CacheTableFunction {
+    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        if !args.is_empty() {
+            return Err(DataFusionError::Plan(
+                "Cache table functions do not accept arguments.".into(),
+            ));
+        }
+        self.make_table()
+    }
+}
+
+fn register_cache_table_functions(
+    ctx: &SessionContext,
+    config: CacheSnapshotConfig,
+) -> Result<()> {
+    let runtime_env = Arc::clone(ctx.state().runtime_env());
+    let list_files = CacheTableFunction {
+        runtime_env: Arc::clone(&runtime_env),
+        config: config.clone(),
+        kind: CacheTableKind::ListFiles,
+    };
+    let metadata = CacheTableFunction {
+        runtime_env: Arc::clone(&runtime_env),
+        config: config.clone(),
+        kind: CacheTableKind::Metadata,
+    };
+    let predicate = CacheTableFunction {
+        runtime_env,
+        config,
+        kind: CacheTableKind::Predicate,
+    };
+    ctx.register_udtf("list_files_cache", Arc::new(list_files));
+    ctx.register_udtf("metadata_cache", Arc::new(metadata));
+    ctx.register_udtf("predicate_cache", Arc::new(predicate));
+    Ok(())
+}
+
+fn add_actions_for_paths(
+    table: &deltalake::DeltaTable,
+    files: &[String],
+) -> Result<Vec<Add>> {
+    let snapshot = table
+        .snapshot()
+        .map_err(|err| DataFusionError::Plan(format!("Delta snapshot unavailable: {err}")))?;
+    let mut remaining: HashSet<String> = files.iter().cloned().collect();
+    let mut adds: Vec<Add> = Vec::new();
+    for file in snapshot.log_data().iter() {
+        let path = file.path().to_string();
+        if !remaining.remove(&path) {
+            continue;
+        }
+        let partition_values = file
+            .partition_values()
+            .map(|data| {
+                data.fields()
+                    .iter()
+                    .zip(data.values().iter())
+                    .map(|(field, value)| {
+                        let serialized = if value.is_null() {
+                            None
+                        } else {
+                            Some(value.serialize())
+                        };
+                        (field.name().to_string(), serialized)
+                    })
+                    .collect::<HashMap<String, Option<String>>>()
+            })
+            .unwrap_or_default();
+        adds.push(Add {
+            path,
+            partition_values,
+            size: file.size(),
+            modification_time: file.modification_time(),
+            data_change: true,
+            stats: file.stats(),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+        });
+        if remaining.is_empty() {
+            break;
+        }
+    }
+    if !remaining.is_empty() {
+        let missing: Vec<String> = remaining.into_iter().collect();
+        return Err(DataFusionError::Plan(format!(
+            "Delta pruning file list not found in table: {missing:?}"
+        )));
+    }
+    Ok(adds)
 }
 
 fn normalize_position_encoding(value: &str) -> i32 {
@@ -1071,6 +1458,102 @@ impl ScalarUDFImpl for StableHash128Udf {
     }
 }
 
+struct PrefixedHash64Udf {
+    signature: Signature,
+}
+
+impl ScalarUDFImpl for PrefixedHash64Udf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "prefixed_hash64"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+        let prefixes = arrays[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                DataFusionError::Plan("prefixed_hash64 expects string prefix input".into())
+            })?;
+        let values = arrays[1]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                DataFusionError::Plan("prefixed_hash64 expects string value input".into())
+            })?;
+        let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 16);
+        for index in 0..values.len() {
+            if prefixes.is_null(index) || values.is_null(index) {
+                builder.append_null();
+            } else {
+                builder.append_value(prefixed_hash64_value(
+                    prefixes.value(index),
+                    values.value(index),
+                ));
+            }
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+struct StableIdUdf {
+    signature: Signature,
+}
+
+impl ScalarUDFImpl for StableIdUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "stable_id"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+        let prefixes = arrays[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| DataFusionError::Plan("stable_id expects string prefix input".into()))?;
+        let values = arrays[1]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| DataFusionError::Plan("stable_id expects string value input".into()))?;
+        let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 32);
+        for index in 0..values.len() {
+            if prefixes.is_null(index) || values.is_null(index) {
+                builder.append_null();
+            } else {
+                builder.append_value(stable_id_value(
+                    prefixes.value(index),
+                    values.value(index),
+                ));
+            }
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
 struct PositionEncodingUdf {
     signature: Signature,
 }
@@ -1180,6 +1663,10 @@ fn datafusion_ext(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(schema_evolution_adapter_factory, module)?)?;
     module.add_function(wrap_pyfunction!(parquet_listing_table_provider, module)?)?;
     module.add_function(wrap_pyfunction!(delta_table_provider, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_table_provider_with_files, module)?)?;
+    module.add_function(wrap_pyfunction!(install_expr_planners, module)?)?;
+    module.add_function(wrap_pyfunction!(install_tracing, module)?)?;
+    module.add_function(wrap_pyfunction!(register_cache_tables, module)?)?;
     module.add_function(wrap_pyfunction!(table_logical_plan, module)?)?;
     module.add_function(wrap_pyfunction!(table_dfschema_tree, module)?)?;
     module.add_function(wrap_pyfunction!(install_schema_evolution_adapter_factory, module)?)?;

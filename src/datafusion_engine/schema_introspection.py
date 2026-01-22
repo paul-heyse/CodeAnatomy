@@ -78,7 +78,11 @@ def _sql_literal(value: str) -> str:
     return f"'{escaped}'"
 
 
-def table_names_snapshot(ctx: SessionContext) -> set[str]:
+def table_names_snapshot(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> set[str]:
     """Return registered table names from information_schema.
 
     Returns
@@ -87,7 +91,11 @@ def table_names_snapshot(ctx: SessionContext) -> set[str]:
         Set of table names registered in the session.
     """
     names: set[str] = set()
-    for row in _rows_for_query(ctx, "SELECT table_name FROM information_schema.tables"):
+    for row in _rows_for_query(
+        ctx,
+        "SELECT table_name FROM information_schema.tables",
+        sql_options=sql_options,
+    ):
         value = row.get("table_name")
         if value is not None:
             names.add(str(value))

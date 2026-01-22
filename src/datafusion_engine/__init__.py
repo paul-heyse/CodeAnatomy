@@ -24,11 +24,6 @@ if TYPE_CHECKING:
         DataFusionSqlPolicy,
     )
     from datafusion_engine.df_builder import df_from_sqlglot, register_dataset
-    from datafusion_engine.param_tables import (
-        ensure_param_schema,
-        register_param_arrow_table,
-        register_param_tables_df,
-    )
     from datafusion_engine.registry_bridge import register_dataset_df
     from datafusion_engine.registry_loader import (
         RegistryTarget,
@@ -84,7 +79,6 @@ __all__ = [
     "apply_execution_policy",
     "datafusion_to_table",
     "df_from_sqlglot",
-    "ensure_param_schema",
     "has_schema",
     "ibis_plan_to_datafusion",
     "ibis_plan_to_table",
@@ -96,8 +90,6 @@ __all__ = [
     "register_all_schemas",
     "register_dataset",
     "register_dataset_df",
-    "register_param_arrow_table",
-    "register_param_tables_df",
     "register_registry_catalog",
     "register_registry_delta_tables",
     "register_registry_exports",
@@ -129,7 +121,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "register_view_specs": ("datafusion_engine.runtime", "register_view_specs"),
     "datafusion_to_table": ("datafusion_engine.bridge", "datafusion_to_table"),
     "df_from_sqlglot": ("datafusion_engine.df_builder", "df_from_sqlglot"),
-    "ensure_param_schema": ("datafusion_engine.param_tables", "ensure_param_schema"),
     "ibis_plan_to_datafusion": ("datafusion_engine.bridge", "ibis_plan_to_datafusion"),
     "ibis_plan_to_table": ("datafusion_engine.bridge", "ibis_plan_to_table"),
     "ibis_to_datafusion": ("datafusion_engine.bridge", "ibis_to_datafusion"),
@@ -143,8 +134,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "has_schema": ("datafusion_engine.schema_registry", "has_schema"),
     "register_dataset": ("datafusion_engine.df_builder", "register_dataset"),
     "register_dataset_df": ("datafusion_engine.registry_bridge", "register_dataset_df"),
-    "register_param_arrow_table": ("datafusion_engine.param_tables", "register_param_arrow_table"),
-    "register_param_tables_df": ("datafusion_engine.param_tables", "register_param_tables_df"),
     "register_schema": ("datafusion_engine.schema_registry", "register_schema"),
     "register_all_schemas": ("datafusion_engine.schema_registry", "register_all_schemas"),
     "nested_base_sql": ("datafusion_engine.schema_registry", "nested_base_sql"),

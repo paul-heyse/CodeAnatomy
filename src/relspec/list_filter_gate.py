@@ -67,11 +67,7 @@ def _validate_in_rhs(
         Raised when list-filter validation fails.
     """
     if isinstance(rhs, (exp.Subquery, exp.Select)):
-        if _subquery_is_from_param_table(
-            rhs,
-            param_schema=param_policy.schema,
-            param_prefix=param_policy.prefix,
-        ):
+        if _subquery_is_from_param_table(rhs, param_prefix=param_policy.prefix):
             return
         msg = (
             f"[list-filter-gate] Rule '{rule_name}' uses IN-subquery not sourced from "
@@ -188,7 +184,6 @@ def _literal_count(items: list[Expression]) -> int:
 def _subquery_is_from_param_table(
     query: Expression,
     *,
-    param_schema: str,
     param_prefix: str,
 ) -> bool:
     """Check whether a subquery sources from param tables.
@@ -197,8 +192,6 @@ def _subquery_is_from_param_table(
     ----------
     query
         SQLGlot query expression to inspect.
-    param_schema
-        Allowed parameter schema name.
     param_prefix
         Allowed parameter table prefix.
 
@@ -208,13 +201,8 @@ def _subquery_is_from_param_table(
         ``True`` when the query uses only param tables.
     """
     for table in query.find_all(exp.Table):
-        schema = table.args.get("db")
         name = table.name
-        if (
-            isinstance(schema, str)
-            and (schema == param_schema or schema.startswith(f"{param_schema}_"))
-            and name.startswith(param_prefix)
-        ):
+        if name.startswith(param_prefix):
             return True
     return False
 

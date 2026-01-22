@@ -11,6 +11,7 @@ from enum import Enum
 from functools import cache
 from typing import cast
 
+import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
@@ -52,8 +53,6 @@ class ParamTablePolicy:
     """Policy controlling param table naming and registration."""
 
     scope: ParamTableScope = ParamTableScope.PER_RUN
-    catalog: str = "codeintel"
-    schema: str = "params"
     prefix: str = "p_"
 
 
@@ -90,9 +89,6 @@ class ParamTableRegistry:
     policy: ParamTablePolicy = field(default_factory=ParamTablePolicy)
     artifacts: dict[str, ParamTableArtifact] = field(default_factory=dict)
     scope_key: str | None = None
-    registered_signatures: dict[str, str] = field(default_factory=dict)
-    registered_schema: str | None = None
-    registered_catalog: str | None = None
 
     def __post_init__(self) -> None:
         """Normalize registry scope key after initialization."""
@@ -148,7 +144,7 @@ class ParamTableRegistry:
         self.artifacts[logical_name] = artifact
         return artifact
 
-    def ibis_tables(self, backend: BaseBackend) -> dict[str, Table]:
+    def ibis_tables(self, _backend: BaseBackend) -> dict[str, Table]:
         """Return Ibis table handles for registered param tables.
 
         Returns
@@ -157,62 +153,13 @@ class ParamTableRegistry:
             Ibis table expressions keyed by logical name.
         """
         tables: dict[str, Table] = {}
-        schema_name = param_table_schema(self.policy, scope_key=self.scope_key)
         for logical_name in self.artifacts:
             table_name = param_table_name(self.policy, logical_name)
-            tables[logical_name] = backend.table(table_name, database=schema_name)
-        return tables
-
-    def register_into_backend(self, backend: BaseBackend) -> dict[str, str]:
-        """Register param tables into an Ibis backend.
-
-        Returns
-        -------
-        dict[str, str]
-            Mapping of logical param names to qualified names.
-
-        Raises
-        ------
-        TypeError
-            Raised when the backend does not support table creation.
-        """
-        schema_name = param_table_schema(self.policy, scope_key=self.scope_key)
-        if self.registered_catalog != self.policy.catalog:
-            create_catalog = getattr(backend, "create_catalog", None)
-            if callable(create_catalog):
-                create_catalog(self.policy.catalog, force=True)
-            self.registered_catalog = self.policy.catalog
-        if self.registered_schema != schema_name:
-            self.registered_signatures.clear()
-            self.registered_schema = schema_name
-        if self.artifacts:
-            create_database = getattr(backend, "create_database", None)
-            if callable(create_database):
-                create_database(
-                    schema_name,
-                    catalog=self.policy.catalog,
-                    force=True,
-                )
-        mapping: dict[str, str] = {}
-        for logical_name, artifact in self.artifacts.items():
-            table_name = param_table_name(self.policy, logical_name)
-            qualified = f"{self.policy.catalog}.{schema_name}.{table_name}"
-            if self.registered_signatures.get(logical_name) == artifact.signature:
-                mapping[logical_name] = qualified
-                continue
-            create_table = getattr(backend, "create_table", None)
-            if not callable(create_table):
-                msg = "Ibis backend is missing create_table."
-                raise TypeError(msg)
-            create_table(
-                table_name,
-                artifact.table,
-                database=schema_name,
-                overwrite=True,
+            tables[logical_name] = ibis.memtable(
+                self.artifacts[logical_name].table,
+                name=table_name,
             )
-            mapping[logical_name] = qualified
-            self.registered_signatures[logical_name] = artifact.signature
-        return mapping
+        return tables
 
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -236,41 +183,6 @@ def param_table_name(policy: ParamTablePolicy, logical_name: str) -> str:
         msg = f"Invalid param logical name: {logical_name!r}."
         raise ValueError(msg)
     return f"{policy.prefix}{logical_name}"
-
-
-def param_table_schema(policy: ParamTablePolicy, *, scope_key: str | None) -> str:
-    """Return the schema name for parameter tables.
-
-    Returns
-    -------
-    str
-        Schema name with scope suffix when configured.
-    """
-    if policy.scope in {
-        ParamTableScope.PER_RUN,
-        ParamTableScope.PER_SESSION,
-        ParamTableScope.PER_RULE,
-    }:
-        return _scoped_schema(policy.schema, scope_key=scope_key)
-    return policy.schema
-
-
-def qualified_param_table_name(
-    policy: ParamTablePolicy,
-    logical_name: str,
-    *,
-    scope_key: str | None = None,
-) -> str:
-    """Return a fully qualified param table name.
-
-    Returns
-    -------
-    str
-        Qualified name in catalog.schema.table form.
-    """
-    schema_name = param_table_schema(policy, scope_key=scope_key)
-    table_name = param_table_name(policy, logical_name)
-    return f"{policy.catalog}.{schema_name}.{table_name}"
 
 
 def param_signature_from_array(
@@ -363,12 +275,6 @@ def _normalize_scope_key(value: str) -> str:
     return normalized or "scope"
 
 
-def _scoped_schema(base: str, *, scope_key: str | None) -> str:
-    if not scope_key:
-        return base
-    return f"{base}_{scope_key}"
-
-
 __all__ = [
     "ListParamSpec",
     "ParamTableArtifact",
@@ -379,8 +285,6 @@ __all__ = [
     "build_param_table",
     "param_signature_from_array",
     "param_table_name",
-    "param_table_schema",
-    "qualified_param_table_name",
     "scalar_param_signature",
     "unique_values",
 ]

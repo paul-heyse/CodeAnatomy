@@ -139,7 +139,7 @@ class DataFusionCompileOptions:
     sql_policy: DataFusionSqlPolicy | None = None
     sql_policy_name: str | None = None
     enforce_sql_policy: bool = True
-    enforce_preflight: bool = False
+    enforce_preflight: bool = True
     dialect: str = field(
         default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_COMPILE).dialect
     )

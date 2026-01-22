@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
+import ibis
 from ibis.expr.types import BooleanValue, Table, Value
 
 from arrowdsl.core.expr_types import ScalarValue
@@ -89,9 +90,10 @@ class FileIdQueryOptions:
     """Options for file-id filtered query compilation."""
 
     file_id_column: str = "file_id"
-    param_table: Table | None = None
+    param_table_name: str | None = None
     param_key_column: str | None = None
     param_table_threshold: int = FILE_ID_PARAM_THRESHOLD
+    param_table_prefix: str = "p_"
 
 
 def dataset_query_for_file_ids(
@@ -137,16 +139,17 @@ def dataset_query_for_file_ids(
             predicate=predicate,
             pushdown_predicate=predicate,
         )
-    if (
-        resolved_options.param_table is not None
-        and len(file_ids) >= resolved_options.param_table_threshold
-    ):
+    if len(file_ids) >= resolved_options.param_table_threshold:
         key_column = resolved_options.param_key_column or resolved_options.file_id_column
+        table_name = resolved_options.param_table_name or (
+            f"{resolved_options.param_table_prefix}{key_column}"
+        )
+        param_table = ibis.memtable({key_column: list(file_ids)}, name=table_name)
         return IbisQuerySpec(
             projection=IbisProjectionSpec(base=tuple(columns)),
             macros=(
                 FileIdParamMacro(
-                    param_table=resolved_options.param_table,
+                    param_table=param_table,
                     file_id_column=resolved_options.file_id_column,
                     param_key_column=key_column,
                 ),

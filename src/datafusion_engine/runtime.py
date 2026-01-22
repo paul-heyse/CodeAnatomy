@@ -25,7 +25,10 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, 
 from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.metadata import schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.cache_introspection import capture_cache_diagnostics
+from datafusion_engine.cache_introspection import (
+    capture_cache_diagnostics,
+    register_cache_introspection_functions,
+)
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -1709,8 +1712,9 @@ class DataFusionRuntimeProfile:
     enable_metrics: bool = False
     metrics_collector: Callable[[], Mapping[str, object] | None] | None = None
     enable_tracing: bool = False
-    tracing_hook: Callable[[], None] | None = None
+    tracing_hook: Callable[[SessionContext], None] | None = None
     tracing_collector: Callable[[], Mapping[str, object] | None] | None = None
+    enforce_preflight: bool = True
     capture_explain: bool = False
     explain_analyze: bool = True
     explain_analyze_level: str | None = None
@@ -1872,7 +1876,8 @@ class DataFusionRuntimeProfile:
         self._install_function_factory(ctx)
         self._install_expr_planners(ctx)
         self._install_physical_expr_adapter_factory(ctx)
-        self._install_tracing()
+        self._install_tracing(ctx)
+        self._install_cache_tables(ctx)
         self._record_cache_diagnostics(ctx)
         if self.session_context_hook is not None:
             ctx = self.session_context_hook(ctx)
@@ -3045,6 +3050,18 @@ class DataFusionRuntimeProfile:
                 cache_snapshots,
             )
 
+    def _install_cache_tables(self, ctx: SessionContext) -> None:
+        if not (self.enable_cache_manager or self.cache_enabled):
+            return
+        try:
+            register_cache_introspection_functions(ctx)
+        except ImportError as exc:
+            msg = "Cache table functions require datafusion_ext."
+            raise RuntimeError(msg) from exc
+        except (RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Cache table function registration failed: {exc}"
+            raise RuntimeError(msg) from exc
+
     def _build_session_context(self) -> SessionContext:
         """Create the SessionContext base for this runtime profile.
 
@@ -3199,7 +3216,7 @@ class DataFusionRuntimeProfile:
             },
         )
 
-    def _install_tracing(self) -> None:
+    def _install_tracing(self, ctx: SessionContext) -> None:
         """Enable tracing when configured.
 
         Raises
@@ -3210,9 +3227,18 @@ class DataFusionRuntimeProfile:
         if not self.enable_tracing:
             return
         if self.tracing_hook is None:
-            msg = "Tracing enabled but tracing_hook is not set."
-            raise ValueError(msg)
-        self.tracing_hook()
+            try:
+                module = importlib.import_module("datafusion_ext")
+            except ImportError as exc:
+                msg = "Tracing enabled but datafusion_ext is unavailable."
+                raise ValueError(msg) from exc
+            install = getattr(module, "install_tracing", None)
+            if not callable(install):
+                msg = "Tracing enabled but datafusion_ext.install_tracing is unavailable."
+                raise ValueError(msg)
+            install(ctx)
+            return
+        self.tracing_hook(ctx)
 
     def _resolve_compile_hooks(
         self,
@@ -3288,7 +3314,11 @@ class DataFusionRuntimeProfile:
         DataFusionCompileOptions
             Compile options aligned with this runtime profile.
         """
-        resolved = options or DataFusionCompileOptions(cache=None, cache_max_columns=None)
+        resolved = options or DataFusionCompileOptions(
+            cache=None,
+            cache_max_columns=None,
+            enforce_preflight=self.enforce_preflight,
+        )
         cache = resolved.cache if resolved.cache is not None else self.cache_enabled
         cache_max_columns = (
             resolved.cache_max_columns
@@ -3326,6 +3356,7 @@ class DataFusionRuntimeProfile:
             cache == resolved.cache,
             cache_max_columns == resolved.cache_max_columns,
             resolved_params == resolved.params,
+            self.enforce_preflight == resolved.enforce_preflight,
             capture_explain == resolved.capture_explain,
             explain_analyze == resolved.explain_analyze,
             hooks.explain_hook == resolved.explain_hook,
@@ -3346,6 +3377,7 @@ class DataFusionRuntimeProfile:
             cache_max_columns=cache_max_columns,
             params=resolved_params,
             param_identifier_allowlist=param_allowlist,
+            enforce_preflight=resolved.enforce_preflight,
             capture_explain=capture_explain,
             explain_analyze=explain_analyze,
             explain_hook=hooks.explain_hook,

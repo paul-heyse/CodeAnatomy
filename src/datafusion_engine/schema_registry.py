@@ -1267,6 +1267,7 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("explain_analyze_artifact_format", pa.string(), nullable=True),
             pa.field("substrait_b64", pa.string(), nullable=True),
             pa.field("substrait_validation_status", pa.string(), nullable=True),
+            pa.field("sqlglot_ast", pa.string(), nullable=True),
             pa.field("unparsed_sql", pa.string(), nullable=True),
             pa.field("unparse_error", pa.string(), nullable=True),
             pa.field("logical_plan", pa.string(), nullable=True),

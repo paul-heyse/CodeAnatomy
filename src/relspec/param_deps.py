@@ -15,8 +15,6 @@ class ParamDep:
 
     logical_name: str
     table_name: str
-    schema: str
-    catalog: str | None
 
 
 @dataclass(frozen=True)
@@ -49,19 +47,10 @@ def infer_param_deps(
     """
     deps: set[ParamDep] = set()
     for ref in table_refs:
-        if not _is_param_schema(ref.schema, policy=policy):
-            continue
         if not ref.name.startswith(policy.prefix):
             continue
         logical = ref.name[len(policy.prefix) :]
-        deps.add(
-            ParamDep(
-                logical_name=logical,
-                table_name=ref.name,
-                schema=policy.schema,
-                catalog=ref.catalog,
-            )
-        )
+        deps.add(ParamDep(logical_name=logical, table_name=ref.name))
     return tuple(sorted(deps, key=lambda dep: dep.logical_name))
 
 
@@ -96,20 +85,8 @@ def dataset_table_names(
     tuple[str, ...]
         Sorted dataset table names referenced by the rule.
     """
-    names = {
-        ref.name
-        for ref in table_refs
-        if not _is_param_schema(ref.schema, policy=policy) or not ref.name.startswith(policy.prefix)
-    }
+    names = {ref.name for ref in table_refs if not ref.name.startswith(policy.prefix)}
     return tuple(sorted(names))
-
-
-def _is_param_schema(schema: str | None, *, policy: ParamTablePolicy) -> bool:
-    if schema is None:
-        return False
-    if schema == policy.schema:
-        return True
-    return schema.startswith(f"{policy.schema}_")
 
 
 def build_param_reverse_index(

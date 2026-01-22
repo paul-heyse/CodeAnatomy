@@ -13,10 +13,10 @@ from datafusion_engine.compile_options import DataFusionSqlPolicy
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
-    default_sqlglot_policy,
     normalize_ddl_sql,
     parse_sql_strict,
     register_datafusion_dialect,
+    resolve_sqlglot_policy,
     sqlglot_sql,
     transpile_sql,
 )
@@ -156,7 +156,7 @@ class ViewSpec:
         if self.sql is None:
             msg = f"View {self.name!r} does not define SQL."
             raise ValueError(msg)
-        policy = default_sqlglot_policy()
+        policy = resolve_sqlglot_policy(name="datafusion_ddl")
         register_datafusion_dialect()
         transpiled_sql = transpile_sql(self.sql, policy=policy)
         query = parse_sql_strict(

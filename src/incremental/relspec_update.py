@@ -60,6 +60,8 @@ from storage.deltalake import (
 )
 
 if TYPE_CHECKING:
+    from ibis.expr.types import Table as IbisTable
+
     from arrowdsl.core.scan_telemetry import ScanTelemetry
     from relspec.model import DatasetRef
 
@@ -411,6 +413,17 @@ class _PrunedDatasetInputs:
     ctx: ExecutionContext
 
 
+@dataclass(frozen=True)
+class _FileIdFilterInputs:
+    table: IbisTable | TableLike
+    dataset_schema: pa.Schema
+    dataset_name: str
+    file_ids: Sequence[str]
+    ctx: ExecutionContext
+    backend: BaseBackend
+    dataset_dir: Path
+
+
 def _partition_specs(
     column: str,
     values: Sequence[str],
@@ -511,13 +524,15 @@ def _read_state_dataset(
             dataset_name=dataset_name,
         )
     filtered = _apply_file_id_filter(
-        table=table,
-        dataset_schema=dataset_schema,
-        dataset_name=dataset_name,
-        file_ids=file_ids,
-        ctx=ctx,
-        backend=backend,
-        dataset_dir=dataset_dir,
+        _FileIdFilterInputs(
+            table=table,
+            dataset_schema=dataset_schema,
+            dataset_name=dataset_name,
+            file_ids=file_ids,
+            ctx=ctx,
+            backend=backend,
+            dataset_dir=dataset_dir,
+        )
     )
     if filtered is not None:
         return filtered
@@ -526,29 +541,23 @@ def _read_state_dataset(
     return empty_table(schema)
 
 
-def _apply_file_id_filter(
-    *,
-    table: TableLike,
-    dataset_schema: pa.Schema,
-    dataset_name: str,
-    file_ids: Sequence[str],
-    ctx: ExecutionContext,
-    backend: BaseBackend,
-    dataset_dir: Path,
-) -> TableLike | None:
+def _apply_file_id_filter(inputs: _FileIdFilterInputs) -> TableLike | None:
     spec = incremental_spec()
-    file_id_column = spec.file_id_column_for(dataset_name, columns=dataset_schema.names)
+    file_id_column = spec.file_id_column_for(
+        inputs.dataset_name,
+        columns=inputs.dataset_schema.names,
+    )
     if file_id_column is None:
         return None
-    if file_ids and len(file_ids) >= FILE_ID_PARAM_THRESHOLD:
+    if inputs.file_ids and len(inputs.file_ids) >= FILE_ID_PARAM_THRESHOLD:
         pruned = _read_state_dataset_pruned(
             _PrunedDatasetInputs(
-                dataset_dir=dataset_dir,
-                dataset_name=dataset_name,
+                dataset_dir=inputs.dataset_dir,
+                dataset_name=inputs.dataset_name,
                 file_id_column=file_id_column,
-                file_ids=file_ids,
-                schema=dataset_schema,
-                ctx=ctx,
+                file_ids=inputs.file_ids,
+                schema=inputs.dataset_schema,
+                ctx=inputs.ctx,
             )
         )
         if pruned is not None:
@@ -557,8 +566,8 @@ def _apply_file_id_filter(
     policy = ParamTablePolicy()
     table_name = param_table_name(policy, param_spec.logical_name)
     query = dataset_query_for_file_ids(
-        file_ids,
-        schema=dataset_schema,
+        inputs.file_ids,
+        schema=inputs.dataset_schema,
         options=FileIdQueryOptions(
             file_id_column=file_id_column,
             param_table_name=table_name,
@@ -566,9 +575,14 @@ def _apply_file_id_filter(
             param_table_threshold=FILE_ID_PARAM_THRESHOLD,
         ),
     )
-    plan = plan_from_source(table, ctx=ctx, backend=backend, name=dataset_name)
+    plan = plan_from_source(
+        inputs.table,
+        ctx=inputs.ctx,
+        backend=inputs.backend,
+        name=inputs.dataset_name,
+    )
     plan = IbisPlan(expr=apply_query_spec(plan.expr, spec=query), ordering=plan.ordering)
-    execution = ibis_execution_from_ctx(ctx, backend=backend)
+    execution = ibis_execution_from_ctx(inputs.ctx, backend=inputs.backend)
     return materialize_ibis_plan(plan, execution=execution)
 
 

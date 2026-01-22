@@ -13,11 +13,6 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 from hamilton.function_modifiers import tag
-from normalize.output_writes import (
-    NormalizeDeltaWriteRequest,
-    NormalizeDeltaWriteResult,
-    write_normalize_output_delta,
-)
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
@@ -52,7 +47,7 @@ from datafusion_engine.runtime import (
     settings_snapshot_for_profile,
     sql_options_for_profile,
 )
-from datafusion_engine.schema_introspection import SCHEMA_MAP_HASH_VERSION, SchemaIntrospector
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import is_nested_dataset
 from engine.function_registry import arrow_kernel_registry_snapshot, default_function_registry
 from engine.plan_cache import PlanCacheEntry
@@ -69,7 +64,6 @@ from hamilton_pipeline.pipeline_types import (
     RelspecSnapshots,
     RepoScanConfig,
 )
-from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.execution_factory import ibis_execution_from_profile
 from ibis_engine.io_bridge import (
     IbisCopyWriteOptions,
@@ -93,6 +87,11 @@ from incremental.fingerprint_changes import (
 from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig
+from normalize.output_writes import (
+    NormalizeDeltaWriteRequest,
+    NormalizeDeltaWriteResult,
+    write_normalize_output_delta,
+)
 from normalize.registry_runtime import (
     dataset_name_from_alias as normalize_dataset_name_from_alias,
 )
@@ -141,7 +140,7 @@ from schema_spec.system import (
     ddl_fingerprint_from_definition,
     make_dataset_spec,
 )
-from sqlglot_tools.optimizer import sqlglot_policy_snapshot
+from sqlglot_tools.optimizer import SCHEMA_MAP_HASH_VERSION, sqlglot_policy_snapshot
 from storage.dataset_sources import (
     DatasetDiscoveryOptions,
     DatasetSourceOptions,
@@ -151,6 +150,7 @@ from storage.deltalake import coerce_delta_table, delta_table_version
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
+    from ibis_engine.execution import IbisExecutionContext
     from storage.deltalake import DeltaWriteResult
 
 # -----------------------
@@ -1918,9 +1918,11 @@ def write_normalize_outputs_delta(
             dataset_name = normalize_dataset_name_from_alias(alias)
         except KeyError:
             continue
+        dataset_path = str(base_dir / dataset_name)
         request = NormalizeDeltaWriteRequest(
             table_name=dataset_name,
             dataframe=table,
+            path=dataset_path,
             mode=mode,
             commit_metadata={"output": dataset_name},
         )

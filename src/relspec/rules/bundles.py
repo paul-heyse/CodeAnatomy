@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
+from relspec.errors import RelspecValidationError
 from relspec.rules.definitions import RuleDefinition, RuleDomain
 from relspec.rules.diagnostics import RuleDiagnostic
 from relspec.rules.templates import RuleTemplateSpec
@@ -90,12 +91,12 @@ def register_bundle(bundle: RuleBundle) -> None:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when a bundle with the same name is already registered.
     """
     if bundle.name in _BUNDLES:
         msg = f"Duplicate rule bundle: {bundle.name!r}."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     _BUNDLES[bundle.name] = bundle
 
 

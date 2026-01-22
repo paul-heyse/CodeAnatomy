@@ -39,7 +39,7 @@ from datafusion_engine.table_provider_metadata import (
     record_table_provider_metadata,
 )
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
-from sqlglot_tools.optimizer import default_sqlglot_policy, parse_sql_strict
+from sqlglot_tools.optimizer import parse_sql_strict, resolve_sqlglot_policy
 
 BYTE_SPAN_T = byte_span_type()
 SPAN_T = span_type()
@@ -2873,7 +2873,7 @@ def _nested_df_builder(sql: str) -> Callable[[SessionContext], DataFrame]:
         register_udfs = getattr(udf_module, "register_datafusion_udfs", None)
         if callable(register_udfs):
             register_udfs(ctx)
-        policy = default_sqlglot_policy()
+        policy = resolve_sqlglot_policy(name="datafusion_compile")
         expr = parse_sql_strict(sql, dialect=policy.read_dialect)
         df = df_from_sqlglot(ctx, expr)
         return cast("DataFrame", df)

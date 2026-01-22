@@ -42,6 +42,7 @@ import pyarrow as pa
 
 from arrowdsl.spec.io import rows_from_table, table_from_rows
 from arrowdsl.spec.literals import parse_string_tuple
+from relspec.errors import RelspecValidationError
 from relspec.rules.definitions import RuleDomain
 from relspec.rules.diagnostics import RuleDiagnostic
 
@@ -210,12 +211,12 @@ def _parse_domain(value: object | None) -> RuleDomain:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the domain is missing or unsupported.
     """
     if value is None:
         msg = "Template domain is required."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     domain = str(value)
     if domain == "cpg":
         return "cpg"
@@ -224,7 +225,7 @@ def _parse_domain(value: object | None) -> RuleDomain:
     if domain == "extract":
         return "extract"
     msg = f"Unsupported template domain: {domain!r}."
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 __all__ = [

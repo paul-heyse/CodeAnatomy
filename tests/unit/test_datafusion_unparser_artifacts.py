@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import ibis
 import pyarrow as pa
 import pytest
 
@@ -64,3 +65,20 @@ def test_plan_artifacts_include_projection_map() -> None:
     assert artifacts.projection_map is not None
     projection_map = json.loads(artifacts.projection_map)
     assert projection_map == {"events": ["id"]}
+
+
+def test_plan_artifacts_include_ibis_payload() -> None:
+    """Capture Ibis artifacts alongside SQLGlot plan artifacts."""
+    ctx = DataFusionRuntimeProfile().session_context()
+    ctx.register_record_batches(
+        "events",
+        [pa.table({"id": [1, 2], "label": ["a", "b"]}).to_batches()],
+    )
+    sql = "SELECT id FROM events"
+    expr = parse_sql_strict(sql, dialect="datafusion")
+    ibis_expr = ibis.memtable({"id": [1]})
+    options = DataFusionCompileOptions(ibis_expr=ibis_expr)
+    artifacts = collect_plan_artifacts(ctx, expr, options=options)
+    assert artifacts.ibis_decompile is not None
+    assert artifacts.ibis_sql is not None
+    assert artifacts.ibis_sql_pretty is not None

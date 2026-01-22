@@ -11,7 +11,7 @@ from datafusion import SQLOptions
 from sqlglot_tools.optimizer import SqlGlotSurface, sqlglot_surface_policy
 
 if TYPE_CHECKING:
-    from ibis.expr.types import Value
+    from ibis.expr.types import Expr, Value
 
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -146,6 +146,7 @@ class DataFusionCompileOptions:
     cache_max_columns: int | None = 64
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None = None
     params: Mapping[str, object] | Mapping[Value, object] | None = None
+    ibis_expr: Expr | None = None
     param_identifier_allowlist: tuple[str, ...] | None = None
     prepared_statements: bool = True
     prepared_param_types: Mapping[str, str] | None = None
@@ -175,5 +176,6 @@ class DataFusionCompileOptions:
     sqlglot_policy_hash: str | None = None
     run_id: str | None = None
     prefer_substrait: bool = False
+    prefer_ast_execution: bool = False
     record_substrait_gaps: bool = False
     dynamic_projection: bool = True

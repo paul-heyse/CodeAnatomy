@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.execution_context import ExecutionContext
+from relspec.errors import RelspecValidationError
 from relspec.rules.compiler import RuleHandler
 
 if TYPE_CHECKING:
@@ -28,13 +29,13 @@ class NormalizeRuleHandler(RuleHandler):
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when a non-normalize rule is passed.
         """
         _ = ctx
         if rule.domain != self.domain:
             msg = f"NormalizeRuleHandler received rule for domain {rule.domain!r}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return rule
 
 

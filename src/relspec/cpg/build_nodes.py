@@ -49,6 +49,7 @@ from ibis_engine.sources import (
     register_ibis_view,
     source_to_ibis,
 )
+from relspec.errors import RelspecValidationError
 from relspec.rules.handlers.cpg_emit import NodeEmitRuleHandler
 from schema_spec.system import DatasetSpec
 
@@ -194,7 +195,7 @@ def _resolve_node_build_context(
     nodes_schema = dataset_schema_from_context("cpg_nodes_v1")
     if resolved.ibis_backend is None:
         msg = "Ibis backend is required for CPG node builds."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return NodeBuildContext(
         ctx=ctx,
         config=resolved,
@@ -211,11 +212,11 @@ def _resolve_ctx_for_session(
     if session is None:
         if ctx is None:
             msg = "Either ctx or session must be provided for CPG node builds."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return ctx
     if ctx is not None and ctx is not session.ctx:
         msg = "Provided ctx must match session.ctx when session is supplied."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return session.ctx
 
 
@@ -494,7 +495,7 @@ def _materialize_ibis_plan(
     backend = context.execution.ibis_backend
     if backend is None:
         msg = "Ibis backend is required for Ibis node materialization."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     registered = register_ibis_view(
         plan.expr,
         options=SourceToIbisOptions(
@@ -523,7 +524,7 @@ def _node_emitted_plans_ibis(
         enabled = getattr(context.options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         if not enabled:
             continue
         plan = catalog.get(spec.table_ref)
@@ -531,7 +532,7 @@ def _node_emitted_plans_ibis(
             continue
         if spec.preprocessor_id is not None:
             msg = f"Node preprocessor {spec.preprocessor_id!r} is not supported for Ibis."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         emitted.append((spec, handler.compile_ibis(plan, spec=spec)))
     return emitted
 
@@ -585,7 +586,7 @@ def _build_cpg_nodes_ibis(
     backend = config.ibis_backend
     if backend is None:
         msg = "Ibis backend is required when building nodes with Ibis."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     policy = config.surface_policy or ExecutionSurfacePolicy()
     prefer_reader = resolve_prefer_reader(ctx=context.ctx, policy=policy)
     emit_context = NodeEmitIbisContext(
@@ -655,7 +656,7 @@ def build_cpg_nodes_raw(
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the Ibis backend is unavailable.
     """
     exec_ctx = _resolve_ctx_for_session(ctx, session)
@@ -664,7 +665,7 @@ def build_cpg_nodes_raw(
     backend = build_context.config.ibis_backend
     if backend is None:
         msg = "Ibis backend is required when building nodes with Ibis."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     emitted = _node_emitted_plans_ibis(
         NodeEmitIbisContext(
             ctx=exec_ctx,

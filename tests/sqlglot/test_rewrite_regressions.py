@@ -7,14 +7,18 @@ from collections.abc import Mapping, Sequence
 
 from sqlglot.executor import execute
 
-from sqlglot_tools.compat import Expression
+from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
+    ParseSqlOptions,
     artifact_to_ast,
     ast_to_artifact,
+    bind_params,
     default_sqlglot_policy,
     deserialize_ast_artifact,
     normalize_expr,
+    optimize_expr,
+    parse_sql,
     parse_sql_strict,
     serialize_ast_artifact,
 )
@@ -96,6 +100,27 @@ def test_rewrite_semantics_with_normalization() -> None:
     assert normalized_result == (("x", 1), ("y", 2))
 
 
+def test_optimize_pipeline_semantics() -> None:
+    """Ensure optimize pipeline preserves query semantics."""
+    sql = "SELECT a FROM t WHERE b > 0"
+    tables = {"t": [{"a": "x", "b": 1}, {"a": "y", "b": -1}]}
+    policy = default_sqlglot_policy()
+    expr = parse_sql(
+        sql,
+        options=ParseSqlOptions(
+            dialect=policy.read_dialect,
+            sanitize_templated=True,
+        ),
+    )
+    optimized = optimize_expr(
+        expr,
+        policy=policy,
+        schema={"t": {"a": "string", "b": "int"}},
+        sql=sql,
+    )
+    assert _execute_expr(optimized, tables=tables) == _execute_sql(sql, tables=tables)
+
+
 def test_ast_artifact_roundtrip() -> None:
     """Ensure AstArtifact serialization roundtrip preserves AST structure."""
     sql = "SELECT a, b FROM t WHERE a = 'x'"
@@ -128,6 +153,39 @@ def test_ast_artifact_preserves_semantics() -> None:
     restored_result = _execute_expr(restored_expr, tables=tables)
     assert original_result == restored_result
     assert restored_result == (("x", 2),)
+
+
+def test_parameterized_sql_binding_positional_placeholders() -> None:
+    """Bind named and positional parameters for placeholders."""
+    sql = "SELECT a FROM t WHERE a = $1 OR a = ?"
+    policy = default_sqlglot_policy()
+    expr = parse_sql(
+        sql,
+        options=ParseSqlOptions(
+            dialect=policy.read_dialect,
+            sanitize_templated=True,
+            preserve_params=True,
+        ),
+    )
+    assert list(expr.find_all(exp.Placeholder))
+    bound = bind_params(expr, params={"1": "x", "2": "y"})
+    tables = {"t": [{"a": "x"}, {"a": "y"}, {"a": "z"}]}
+    assert _execute_expr(bound, tables=tables) == (("x",), ("y",))
+
+
+def test_datafusion_generator_eliminates_qualify() -> None:
+    """Ensure DataFusion generator removes QUALIFY clauses."""
+    sql = "SELECT a FROM t QUALIFY ROW_NUMBER() OVER (PARTITION BY a ORDER BY a) = 1"
+    policy = default_sqlglot_policy()
+    expr = parse_sql(
+        sql,
+        options=ParseSqlOptions(
+            dialect=policy.read_dialect,
+            sanitize_templated=True,
+        ),
+    )
+    rendered = expr.sql(dialect="datafusion_ext")
+    assert "QUALIFY" not in rendered.upper()
 
 
 def test_ast_artifact_metadata() -> None:

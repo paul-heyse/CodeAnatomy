@@ -14,8 +14,8 @@ from sqlglot_tools.optimizer import (
     SqlGlotPolicy,
     SqlGlotPolicySnapshot,
     canonical_ast_fingerprint,
-    default_sqlglot_policy,
     plan_fingerprint,
+    resolve_sqlglot_policy,
     sqlglot_policy_snapshot_for,
 )
 
@@ -30,6 +30,7 @@ _SIGNATURE_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32()),
         pa.field("policy_hash", pa.string()),
+        pa.field("policy_rules_hash", pa.string()),
         pa.field("schema_map_hash", pa.string()),
         pa.field("ast_hash", pa.string()),
         pa.field("plan_fingerprint", pa.string()),
@@ -98,11 +99,12 @@ def sqlglot_plan_signature(
     str
         Stable signature hash for the plan.
     """
-    resolved_policy = policy or default_sqlglot_policy()
+    resolved_policy = policy or resolve_sqlglot_policy()
     policy_snapshot = sqlglot_policy_snapshot_for(resolved_policy)
     payload = {
         "version": _SIGNATURE_VERSION,
         "policy_hash": policy_snapshot.policy_hash,
+        "policy_rules_hash": policy_snapshot.rules_hash,
         "schema_map_hash": schema_map_hash or "",
         "ast_hash": canonical_ast_fingerprint(expr),
         "plan_fingerprint": plan_fingerprint(expr, dialect=policy_snapshot.write_dialect),
@@ -121,6 +123,7 @@ def execution_bundle_signature(bundle: ExecutionBundle) -> str:
     payload = {
         "version": _SIGNATURE_VERSION,
         "policy_hash": bundle.sqlglot_policy.policy_hash,
+        "policy_rules_hash": bundle.sqlglot_policy.rules_hash,
         "schema_map_hash": bundle.schema_map_hash or "",
         "ast_hash": bundle.ast_fingerprint,
         "plan_fingerprint": bundle.plan_fingerprint,

@@ -44,6 +44,7 @@ from ibis_engine.sources import (
     register_ibis_view,
     source_to_ibis,
 )
+from relspec.errors import RelspecValidationError
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
@@ -91,12 +92,12 @@ def _resolve_props_build_context(
     options = resolved.options or PropsBuildOptions()
     if options.merge_json_props and not options.include_heavy_json_props:
         msg = "merge_json_props requires include_heavy_json_props to be enabled."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     props_spec = dataset_spec_from_context("cpg_props_v1")
     props_schema = dataset_schema_from_context("cpg_props_v1")
     if resolved.ibis_backend is None:
         msg = "Ibis backend is required for CPG property builds."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return PropsBuildContext(
         ctx=ctx,
         config=resolved,
@@ -113,11 +114,11 @@ def _resolve_ctx_for_session(
     if session is None:
         if ctx is None:
             msg = "Either ctx or session must be provided for CPG props builds."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return ctx
     if ctx is not None and ctx is not session.ctx:
         msg = "Provided ctx must match session.ctx when session is supplied."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return session.ctx
 
 
@@ -391,7 +392,7 @@ def _materialize_ibis_plan(
     backend = context.execution.ibis_backend
     if backend is None:
         msg = "Ibis backend is required for Ibis property materialization."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     registered = register_ibis_view(
         plan.expr,
         options=SourceToIbisOptions(
@@ -409,7 +410,7 @@ def _should_emit_prop_spec(spec: PropTableSpec, options: PropsBuildOptions) -> b
     enabled = getattr(options, spec.option_flag, None)
     if enabled is None:
         msg = f"Unknown option flag: {spec.option_flag}"
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     if not enabled:
         return False
     include_if = resolve_prop_include(spec.include_if_id)
@@ -567,7 +568,7 @@ def _build_cpg_props_ibis(
     backend = config.ibis_backend
     if backend is None:
         msg = "Ibis backend is required when building props with Ibis."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     prefer_reader = resolve_prefer_reader(
         ctx=context.ctx,
         policy=config.surface_policy or ExecutionSurfacePolicy(),
@@ -643,7 +644,7 @@ def _build_cpg_props_raw_ibis(
     backend = context.config.ibis_backend
     if backend is None:
         msg = "Ibis backend is required when building props with Ibis."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     props_json_schema = _props_json_schema()
     emitted_fast, _ = _prop_emitted_plans_ibis(
         PropsEmitIbisContext(

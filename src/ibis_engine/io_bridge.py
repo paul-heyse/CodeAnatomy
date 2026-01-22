@@ -18,7 +18,6 @@ from ibis.expr.types import Scalar
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import (
     RecordBatchReaderLike,
     TableLike,
@@ -159,27 +158,6 @@ class IbisNamedDatasetWriteOptions:
 
 
 @dataclass(frozen=True)
-class DeltaExecutionContext:
-    """Execution context required for Delta writes."""
-
-    runtime_profile: DataFusionRuntimeProfile
-    backend: IbisCompilerBackend
-    ctx: SessionContext
-    execution_ctx: ExecutionContext
-
-
-@dataclass(frozen=True)
-class DeltaInsertContext:
-    """Inputs required to attempt a Delta insert."""
-
-    execution: DeltaExecutionContext
-    table_name: str
-    value: IbisWriteInput
-    mode: DeltaInsertMode
-    batch_size: int | None
-
-
-@dataclass(frozen=True)
 class IbisParquetWriteOptions:
     """Options for writing Ibis expressions to parquet directories."""
 
@@ -219,6 +197,19 @@ class DeltaCommitReservation:
     options: IbisDeltaWriteOptions
     run: DataFusionRun | None
     key: str
+
+
+@dataclass(frozen=True)
+class DeltaWriteContext:
+    """Shared inputs for Delta write operations."""
+
+    execution: IbisExecutionContext
+    ctx: SessionContext
+    backend: BaseBackend
+    runtime_profile: DataFusionRuntimeProfile
+    delta_options: IbisDeltaWriteOptions
+    batch_size: int | None
+    reporter: Callable[[DeltaWriteResult], None] | None
 
 
 @dataclass(frozen=True)
@@ -523,6 +514,127 @@ def apply_ibis_delta_write_policies(
     )
 
 
+def _reserve_delta_commit(
+    runtime_profile: DataFusionRuntimeProfile,
+    *,
+    key: str,
+    delta_options: IbisDeltaWriteOptions,
+    metadata: Mapping[str, object] | None,
+) -> DeltaCommitReservation:
+    if delta_options.app_id is not None and delta_options.version is not None:
+        return DeltaCommitReservation(options=delta_options, run=None, key=key)
+    commit_options, commit_run = runtime_profile.reserve_delta_commit(
+        key=key,
+        metadata=metadata,
+        commit_metadata=delta_options.commit_metadata,
+    )
+    reserved_options = replace(
+        delta_options,
+        app_id=commit_options.app_id,
+        version=commit_options.version,
+    )
+    return DeltaCommitReservation(options=reserved_options, run=commit_run, key=key)
+
+
+def _finalize_delta_commit(
+    runtime_profile: DataFusionRuntimeProfile,
+    reservation: DeltaCommitReservation,
+) -> None:
+    if reservation.run is None:
+        return
+    runtime_profile.finalize_delta_commit(key=reservation.key, run=reservation.run)
+
+
+def _finalize_delta_write_result(
+    *,
+    path: str,
+    version: int | None,
+    runtime_profile: DataFusionRuntimeProfile,
+    reporter: Callable[[DeltaWriteResult], None] | None,
+) -> DeltaWriteResult:
+    result = DeltaWriteResult(path=path, version=version)
+    _record_delta_features(runtime_profile, path=path, version=version)
+    if reporter is not None:
+        reporter(result)
+    return result
+
+
+def _write_delta_ibis_from_input(
+    value: IbisWriteInput,
+    *,
+    backend: BaseBackend,
+    execution: IbisExecutionContext,
+    path: str,
+    options: IbisDeltaWriteOptions,
+) -> int | None:
+    write_source = value.materialize_table() if isinstance(value, PlanProduct) else value
+    write_plan = source_to_ibis(
+        cast("IbisPlan | IbisTable | TableLike | RecordBatchReaderLike", write_source),
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=None,
+            ordering=None,
+            namespace_recorder=namespace_recorder_from_ctx(execution.ctx),
+        ),
+    )
+    return write_delta_ibis(backend, write_plan.expr, path, options=options)
+
+
+def _write_delta_dataset(
+    *,
+    name: str,
+    path: str,
+    table_name: str | None,
+    value: IbisWriteInput,
+    context: DeltaWriteContext,
+) -> DeltaWriteResult:
+    reservation = _reserve_delta_commit(
+        context.runtime_profile,
+        key=path,
+        delta_options=context.delta_options,
+        metadata={"dataset": name},
+    )
+    insert_result = None
+    if table_name is not None and _delta_insert_allowed(
+        context.ctx,
+        table_name=table_name,
+        delta_options=context.delta_options,
+    ):
+        request = DeltaInsertRequest(
+            ctx=context.ctx,
+            table_name=table_name,
+            value=value,
+            mode=cast("DeltaInsertMode", context.delta_options.mode),
+            backend=cast("IbisCompilerBackend", context.backend),
+            batch_size=context.batch_size,
+            runtime_profile=context.runtime_profile,
+        )
+        insert_result = _try_delta_insert(request)
+    if insert_result is None:
+        version = _write_delta_ibis_from_input(
+            value,
+            backend=context.backend,
+            execution=context.execution,
+            path=path,
+            options=reservation.options,
+        )
+        _finalize_delta_commit(context.runtime_profile, reservation)
+        return _finalize_delta_write_result(
+            path=path,
+            version=version,
+            runtime_profile=context.runtime_profile,
+            reporter=context.reporter,
+        )
+    _finalize_delta_commit(context.runtime_profile, reservation)
+    version = delta_table_version(path, storage_options=reservation.options.storage_options)
+    return _finalize_delta_write_result(
+        path=path,
+        version=version,
+        runtime_profile=context.runtime_profile,
+        reporter=context.reporter,
+    )
+
+
 def _resolved_delta_write_options(
     options: IbisDatasetWriteOptions | IbisNamedDatasetWriteOptions,
 ) -> IbisDeltaWriteOptions:
@@ -533,60 +645,6 @@ def _resolved_delta_write_options(
         schema_policy=options.delta_schema_policy,
         storage_options=options.storage_options,
     )
-
-
-def _require_delta_execution(
-    options: IbisDatasetWriteOptions | IbisNamedDatasetWriteOptions,
-    *,
-    context_label: str,
-) -> DeltaExecutionContext:
-    if options.execution is None:
-        msg = f"{context_label} requires an execution context."
-        raise ValueError(msg)
-    runtime_profile = options.execution.ctx.runtime.datafusion
-    backend = options.execution.ibis_backend
-    if runtime_profile is None or backend is None:
-        msg = f"{context_label} requires a runtime profile and Ibis backend."
-        raise ValueError(msg)
-    return DeltaExecutionContext(
-        runtime_profile=runtime_profile,
-        backend=cast("IbisCompilerBackend", backend),
-        ctx=runtime_profile.session_context(),
-        execution_ctx=options.execution.ctx,
-    )
-
-
-def _reserve_delta_commit(
-    runtime_profile: DataFusionRuntimeProfile,
-    *,
-    commit_key: str,
-    delta_options: IbisDeltaWriteOptions,
-    metadata: Mapping[str, object],
-) -> tuple[IbisDeltaWriteOptions, object | None]:
-    if delta_options.app_id is not None and delta_options.version is not None:
-        return delta_options, None
-    commit_options, commit_run = runtime_profile.reserve_delta_commit(
-        key=commit_key,
-        metadata=metadata,
-        commit_metadata=delta_options.commit_metadata,
-    )
-    resolved = replace(
-        delta_options,
-        app_id=commit_options.app_id,
-        version=commit_options.version,
-    )
-    return resolved, commit_run
-
-
-def _finalize_delta_commit(
-    runtime_profile: DataFusionRuntimeProfile,
-    *,
-    commit_key: str,
-    commit_run: object | None,
-) -> None:
-    if commit_run is None:
-        return
-    runtime_profile.finalize_delta_commit(key=commit_key, run=commit_run)
 
 
 def write_ibis_dataset_delta(
@@ -611,13 +669,6 @@ def write_ibis_dataset_delta(
         Raised when the DataFusion backend cannot produce an Arrow table.
     """
     options = options or IbisDatasetWriteOptions()
-    delta_options = options.delta_options or IbisDeltaWriteOptions()
-    delta_options = apply_ibis_delta_write_policies(
-        delta_options,
-        write_policy=options.delta_write_policy,
-        schema_policy=options.delta_schema_policy,
-        storage_options=options.storage_options,
-    )
     writer_strategy = _resolve_writer_strategy(options=options, data=data)
     if writer_strategy != "datafusion":
         msg = "Delta writes require the DataFusion writer strategy."
@@ -626,78 +677,28 @@ def write_ibis_dataset_delta(
         msg = "DataFusion writer requires an execution context for Ibis inputs."
         raise ValueError(msg)
     runtime_profile = options.execution.ctx.runtime.datafusion
-    if runtime_profile is None or options.execution.ibis_backend is None:
+    backend = options.execution.ibis_backend
+    if runtime_profile is None or backend is None:
         msg = "DataFusion writer requires a runtime profile and Ibis backend."
         raise ValueError(msg)
-    backend = options.execution.ibis_backend
     df_ctx = runtime_profile.session_context()
+    context = DeltaWriteContext(
+        execution=options.execution,
+        ctx=df_ctx,
+        backend=backend,
+        runtime_profile=runtime_profile,
+        delta_options=_resolved_delta_write_options(options),
+        batch_size=_resolved_write_batch_size(options),
+        reporter=options.delta_reporter,
+    )
     resolved_table = table_name or _table_name_for_delta_path(df_ctx, path=str(base_dir))
-    batch_size = _resolved_write_batch_size(options)
-    commit_key = str(base_dir)
-    commit_run = None
-    resolved_delta_options = delta_options
-    if runtime_profile is not None and (
-        delta_options.app_id is None or delta_options.version is None
-    ):
-        commit_options, commit_run = runtime_profile.reserve_delta_commit(
-            key=commit_key,
-            metadata={"dataset": commit_key},
-            commit_metadata=delta_options.commit_metadata,
-        )
-        resolved_delta_options = replace(
-            delta_options,
-            app_id=commit_options.app_id,
-            version=commit_options.version,
-        )
-    if resolved_table is not None and _delta_insert_allowed(
-        df_ctx,
+    return _write_delta_dataset(
+        name=resolved_table or str(base_dir),
+        path=str(base_dir),
         table_name=resolved_table,
-        delta_options=delta_options,
-    ):
-        insert_result = _try_delta_insert(
-            ctx=df_ctx,
-            table_name=resolved_table,
-            value=data,
-            mode=cast("DeltaInsertMode", delta_options.mode),
-            backend=cast("IbisCompilerBackend", backend),
-            batch_size=batch_size,
-            runtime_profile=runtime_profile,
-        )
-        if insert_result is not None:
-            if runtime_profile is not None and commit_run is not None:
-                runtime_profile.finalize_delta_commit(key=commit_key, run=commit_run)
-            version = delta_table_version(
-                str(base_dir),
-                storage_options=resolved_delta_options.storage_options,
-            )
-            datafusion_result = DeltaWriteResult(path=str(base_dir), version=version)
-            _record_delta_features(runtime_profile, path=str(base_dir), version=version)
-            if options.delta_reporter is not None:
-                options.delta_reporter(datafusion_result)
-            return datafusion_result
-    write_source = data.materialize_table() if isinstance(data, PlanProduct) else data
-    write_plan = source_to_ibis(
-        cast("IbisPlan | IbisTable | TableLike | RecordBatchReaderLike", write_source),
-        options=SourceToIbisOptions(
-            backend=backend,
-            name=None,
-            ordering=None,
-            namespace_recorder=namespace_recorder_from_ctx(options.execution.ctx),
-        ),
+        value=data,
+        context=context,
     )
-    version = write_delta_ibis(
-        backend,
-        write_plan.expr,
-        str(base_dir),
-        options=resolved_delta_options,
-    )
-    if runtime_profile is not None and commit_run is not None:
-        runtime_profile.finalize_delta_commit(key=commit_key, run=commit_run)
-    datafusion_result = DeltaWriteResult(path=str(base_dir), version=version)
-    _record_delta_features(runtime_profile, path=str(base_dir), version=version)
-    if options.delta_reporter is not None:
-        options.delta_reporter(datafusion_result)
-    return datafusion_result
 
 
 def write_ibis_named_datasets_delta(
@@ -727,84 +728,32 @@ def write_ibis_named_datasets_delta(
         msg = "Named dataset writes require an execution context."
         raise ValueError(msg)
     runtime_profile = options.execution.ctx.runtime.datafusion
-    if runtime_profile is None or options.execution.ibis_backend is None:
+    backend = options.execution.ibis_backend
+    if runtime_profile is None or backend is None:
         msg = "Named dataset writes require a runtime profile and Ibis backend."
         raise ValueError(msg)
-    backend = options.execution.ibis_backend
-    delta_options = options.delta_options or IbisDeltaWriteOptions()
-    delta_options = apply_ibis_delta_write_policies(
-        delta_options,
-        write_policy=options.delta_write_policy,
-        schema_policy=options.delta_schema_policy,
-        storage_options=options.storage_options,
-    )
-    batch_size = _resolved_named_write_batch_size(options)
-    results: dict[str, DeltaWriteResult] = {}
     df_ctx = runtime_profile.session_context()
-    for name, value in datasets.items():
-        dataset_path = str(Path(base_dir) / name)
-        commit_run = None
-        commit_key = dataset_path
-        resolved_options = delta_options
-        if runtime_profile is not None and (
-            delta_options.app_id is None or delta_options.version is None
-        ):
-            commit_options, commit_run = runtime_profile.reserve_delta_commit(
-                key=commit_key,
-                metadata={"dataset": name},
-                commit_metadata=delta_options.commit_metadata,
-            )
-            resolved_options = replace(
-                delta_options,
-                app_id=commit_options.app_id,
-                version=commit_options.version,
-            )
-        if _delta_insert_allowed(
-            df_ctx,
+    delta_options = _resolved_delta_write_options(options)
+    batch_size = _resolved_named_write_batch_size(options)
+    context = DeltaWriteContext(
+        execution=options.execution,
+        ctx=df_ctx,
+        backend=backend,
+        runtime_profile=runtime_profile,
+        delta_options=delta_options,
+        batch_size=batch_size,
+        reporter=None,
+    )
+    results = {
+        name: _write_delta_dataset(
+            name=name,
+            path=str(Path(base_dir) / name),
             table_name=name,
-            delta_options=delta_options,
-        ):
-            insert_result = _try_delta_insert(
-                ctx=df_ctx,
-                table_name=name,
-                value=value,
-                mode=cast("DeltaInsertMode", delta_options.mode),
-                backend=cast("IbisCompilerBackend", backend),
-                batch_size=batch_size,
-                runtime_profile=runtime_profile,
-            )
-            if insert_result is not None:
-                if runtime_profile is not None and commit_run is not None:
-                    runtime_profile.finalize_delta_commit(key=commit_key, run=commit_run)
-                version = delta_table_version(
-                    dataset_path,
-                    storage_options=resolved_options.storage_options,
-                )
-                result = DeltaWriteResult(path=dataset_path, version=version)
-                results[name] = result
-                _record_delta_features(runtime_profile, path=dataset_path, version=version)
-                continue
-        write_source = value.materialize_table() if isinstance(value, PlanProduct) else value
-        write_plan = source_to_ibis(
-            cast("IbisPlan | IbisTable | TableLike | RecordBatchReaderLike", write_source),
-            options=SourceToIbisOptions(
-                backend=backend,
-                name=None,
-                ordering=None,
-                namespace_recorder=namespace_recorder_from_ctx(options.execution.ctx),
-            ),
+            value=value,
+            context=context,
         )
-        version = write_delta_ibis(
-            backend,
-            write_plan.expr,
-            dataset_path,
-            options=resolved_options,
-        )
-        if runtime_profile is not None and commit_run is not None:
-            runtime_profile.finalize_delta_commit(key=commit_key, run=commit_run)
-        result = DeltaWriteResult(path=dataset_path, version=version)
-        results[name] = result
-        _record_delta_features(runtime_profile, path=dataset_path, version=version)
+        for name, value in datasets.items()
+    }
     if options.delta_reporter is not None:
         for result in results.values():
             options.delta_reporter(result)
@@ -850,23 +799,17 @@ def _table_registered(ctx: SessionContext, *, table_name: str) -> bool:
 
 
 def _delta_insert_compatible(options: IbisDeltaWriteOptions) -> bool:
-    if options.mode not in {"append", "overwrite"}:
-        return False
-    if options.schema_mode == "overwrite":
-        return False
-    if options.predicate is not None:
-        return False
-    if options.configuration:
-        return False
-    if options.commit_metadata:
-        return False
-    if options.target_file_size is not None:
-        return False
-    if options.writer_properties is not None:
-        return False
-    if options.app_id is not None or options.version is not None:
-        return False
-    return True
+    return (
+        options.mode in {"append", "overwrite"}
+        and options.schema_mode != "overwrite"
+        and options.predicate is None
+        and not options.configuration
+        and not options.commit_metadata
+        and options.target_file_size is None
+        and options.writer_properties is None
+        and options.app_id is None
+        and options.version is None
+    )
 
 
 def _delta_insert_allowed(
@@ -875,22 +818,22 @@ def _delta_insert_allowed(
     table_name: str,
     delta_options: IbisDeltaWriteOptions,
 ) -> bool:
-    if not _delta_insert_compatible(delta_options):
-        return False
-    if not _table_registered(ctx, table_name=table_name):
-        return False
     metadata = table_provider_metadata(id(ctx), table_name=table_name)
-    if metadata is not None and metadata.file_format is not None:
-        if metadata.file_format.lower() != "delta":
-            return False
-    if (
-        metadata is not None
-        and metadata.partition_columns
-        and delta_options.partition_by
-        and tuple(delta_options.partition_by) != metadata.partition_columns
-    ):
-        return False
-    return True
+    format_ok = (
+        metadata is None or metadata.file_format is None or metadata.file_format.lower() == "delta"
+    )
+    partition_ok = (
+        metadata is None
+        or not metadata.partition_columns
+        or not delta_options.partition_by
+        or tuple(delta_options.partition_by) == metadata.partition_columns
+    )
+    return (
+        _delta_insert_compatible(delta_options)
+        and _table_registered(ctx, table_name=table_name)
+        and format_ok
+        and partition_ok
+    )
 
 
 def _is_insert_unsupported_error(exc: Exception) -> bool:
@@ -986,38 +929,29 @@ def _delta_insert_select_sql(
     return f"SELECT * FROM {_sql_identifier(temp_name)}"
 
 
-def _try_delta_insert(
-    *,
-    ctx: SessionContext,
-    table_name: str,
-    value: IbisWriteInput,
-    mode: DeltaInsertMode,
-    backend: IbisCompilerBackend,
-    batch_size: int | None,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> DeltaInsertResult | None:
+def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
     df_obj, temp_name = _datafusion_df_for_write(
-        name=table_name,
-        value=value,
-        backend=backend,
-        ctx=ctx,
-        batch_size=batch_size,
+        name=request.table_name,
+        value=request.value,
+        backend=request.backend,
+        ctx=request.ctx,
+        batch_size=request.batch_size,
     )
     df = cast("DataFrame", df_obj)
     try:
         select_sql = _delta_insert_select_sql(df, temp_name=temp_name)
-        options = DeltaInsertOptions(mode=mode)
+        options = DeltaInsertOptions(mode=request.mode)
         if select_sql is None:
             result = datafusion_insert_from_dataframe(
-                ctx,
-                table_name,
+                request.ctx,
+                request.table_name,
                 df,
                 options=options,
             )
         else:
             result = datafusion_insert_delta(
-                ctx,
-                table_name,
+                request.ctx,
+                request.table_name,
                 select_sql,
                 options=options,
             )
@@ -1027,11 +961,11 @@ def _try_delta_insert(
         raise
     finally:
         if temp_name is not None:
-            _deregister_table(ctx, name=temp_name)
+            _deregister_table(request.ctx, name=temp_name)
     _record_delta_insert_diagnostics(
-        runtime_profile,
-        table_name=table_name,
-        mode=mode,
+        request.runtime_profile,
+        table_name=request.table_name,
+        mode=request.mode,
         rows_affected=result.rows_affected,
     )
     return result

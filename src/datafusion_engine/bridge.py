@@ -89,12 +89,15 @@ from sqlglot_tools.bridge import (
 from sqlglot_tools.compat import ErrorLevel, Expression, exp
 from sqlglot_tools.lineage import (
     LineageExtractionOptions,
+    LineagePayload,
     canonical_ast_fingerprint,
     extract_lineage_payload,
 )
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
+    PreflightOptions,
     SchemaMapping,
+    SqlGlotPolicy,
     ast_to_artifact,
     bind_params,
     default_sqlglot_policy,
@@ -527,6 +530,14 @@ def df_from_sqlglot_or_sql(
                 projection_map=projection_map,
                 sql_options=_sql_options_for_options(resolved),
             )
+    if resolved.prefer_ast_execution:
+        bound_expr = expr
+        if resolved.params and _contains_params(expr):
+            bound_expr = _bind_params_for_ast(expr, options=resolved)
+        df = df_from_sqlglot_ast(ctx, bound_expr, options=resolved)
+        _maybe_explain(ctx, bound_expr, options=resolved)
+        _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
+        return df
     bound_expr = expr
     replayed = _try_replay_substrait(ctx, bound_expr, options=resolved)
     if replayed is not None:
@@ -635,6 +646,8 @@ def compile_sqlglot_expr(
         SQLGlot expression for the Ibis input.
     """
     resolved = options or DataFusionCompileOptions()
+    if resolved.ibis_expr is None:
+        resolved = replace(resolved, ibis_expr=expr)
     policy = resolved.sqlglot_policy or default_sqlglot_policy()
     if resolved.dialect:
         policy = replace(policy, write_dialect=resolved.dialect)
@@ -1299,10 +1312,12 @@ def _maybe_enforce_preflight(
     sql_text = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
     result = preflight_sql(
         sql_text,
-        schema=options.schema_map,
-        dialect=options.dialect,
-        strict=True,
-        policy=policy,
+        options=PreflightOptions(
+            schema=options.schema_map,
+            dialect=options.dialect,
+            strict=True,
+            policy=policy,
+        ),
     )
     diagnostics = emit_preflight_diagnostics(result)
     if options.run_id is not None:
@@ -1352,7 +1367,7 @@ def _contains_statements(expr: Expression) -> bool:
 
 
 def _contains_params(expr: Expression) -> bool:
-    return bool(expr.find(exp.Parameter))
+    return bool(expr.find(exp.Placeholder)) or bool(expr.find(exp.Parameter))
 
 
 def _ibis_param_bindings(
@@ -1384,8 +1399,8 @@ def _validated_param_bindings(
 ) -> dict[str, object]:
     bindings = datafusion_param_bindings(values or {})
     for name in bindings:
-        if not name.isidentifier():
-            msg = f"SQL parameter name {name!r} is not a valid identifier."
+        if not (name.isidentifier() or name.isdigit()):
+            msg = f"SQL parameter name {name!r} is not a valid identifier or index."
             raise ValueError(msg)
     if not allowlist:
         return bindings
@@ -1409,6 +1424,9 @@ class DataFusionPlanArtifacts:
     normalized_sql: str | None = None
     substrait_validation: Mapping[str, object] | None = None
     sqlglot_ast: str | None = None
+    ibis_decompile: str | None = None
+    ibis_sql: str | None = None
+    ibis_sql_pretty: str | None = None
     read_dialect: str | None = None
     write_dialect: str | None = None
     canonical_fingerprint: str | None = None
@@ -1451,6 +1469,9 @@ class DataFusionPlanArtifacts:
                 dict(self.substrait_validation) if self.substrait_validation is not None else None
             ),
             "sqlglot_ast": self.sqlglot_ast,
+            "ibis_decompile": self.ibis_decompile,
+            "ibis_sql": self.ibis_sql,
+            "ibis_sql_pretty": self.ibis_sql_pretty,
             "read_dialect": self.read_dialect,
             "write_dialect": self.write_dialect,
             "canonical_fingerprint": self.canonical_fingerprint,
@@ -1502,6 +1523,9 @@ class DataFusionPlanArtifacts:
             "substrait_b64": substrait_b64,
             "substrait_validation": self.substrait_validation,
             "sqlglot_ast": self.sqlglot_ast,
+            "ibis_decompile": self.ibis_decompile,
+            "ibis_sql": self.ibis_sql,
+            "ibis_sql_pretty": self.ibis_sql_pretty,
             "read_dialect": self.read_dialect,
             "write_dialect": self.write_dialect,
             "canonical_fingerprint": self.canonical_fingerprint,
@@ -1566,7 +1590,11 @@ def execute_dml(
     """
     resolved = options or DataFusionDmlOptions()
     _ensure_dialect(resolved.dialect)
-    expr = parse_sql_strict(sql, dialect=resolved.dialect)
+    expr = parse_sql_strict(
+        sql,
+        dialect=resolved.dialect,
+        preserve_params=resolved.params is not None,
+    )
     if not _contains_dml(expr):
         msg = "DML execution requires a DML statement."
         raise ValueError(msg)
@@ -2004,6 +2032,128 @@ def _join_operator_evidence(plan: str | None) -> tuple[str, ...] | None:
     return tuple(operators)
 
 
+@dataclass(frozen=True)
+class _PlanArtifactInputs:
+    resolved_expr: Expression
+    sql: str
+    param_signature: str | None
+    projection_map: str | None
+    policy: SqlGlotPolicy
+    details: _PlanArtifactsDetails
+    plan_hash: str
+
+
+def _collect_plan_artifact_inputs(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+    df: DataFrame | None,
+) -> _PlanArtifactInputs:
+    _ensure_dialect(options.dialect)
+    bindings = _validated_param_bindings(
+        options.params,
+        allowlist=options.param_identifier_allowlist,
+    )
+    param_signature = scalar_param_signature(bindings) if bindings else None
+    projection_map = _projection_map_payload(expr, options=options)
+    policy = options.sqlglot_policy or default_sqlglot_policy()
+    resolved_expr = expr
+    if bindings and _contains_params(expr):
+        try:
+            resolved_expr = bind_params(expr, params=bindings)
+        except (KeyError, TypeError, ValueError):
+            resolved_expr = expr
+    sql = resolved_expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    details = _collect_plan_artifacts_details(ctx, sql=sql, options=options, df=df)
+    plan_hash = options.plan_hash or plan_fingerprint(
+        resolved_expr,
+        dialect=options.dialect,
+        policy_hash=options.sqlglot_policy_hash,
+        schema_map_hash=options.schema_map_hash,
+    )
+    return _PlanArtifactInputs(
+        resolved_expr=resolved_expr,
+        sql=sql,
+        param_signature=param_signature,
+        projection_map=projection_map,
+        policy=policy,
+        details=details,
+        plan_hash=plan_hash,
+    )
+
+
+def _collect_sqlglot_ast_artifact(
+    resolved_expr: Expression,
+    *,
+    sql: str,
+    policy: SqlGlotPolicy,
+) -> str | None:
+    try:
+        return serialize_ast_artifact(ast_to_artifact(resolved_expr, sql=sql, policy=policy))
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _collect_lineage_payload(
+    resolved_expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+    policy: SqlGlotPolicy,
+) -> LineagePayload | None:
+    try:
+        return extract_lineage_payload(
+            resolved_expr,
+            options=LineageExtractionOptions(
+                schema=_lineage_schema_map(options.schema_map),
+                dialect=policy.write_dialect,
+            ),
+        )
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _collect_normalized_sql(
+    resolved_expr: Expression,
+    *,
+    sql: str,
+    options: DataFusionCompileOptions,
+    policy: SqlGlotPolicy,
+) -> str | None:
+    try:
+        normalize_options = NormalizeExprOptions(
+            schema=options.schema_map,
+            policy=policy,
+            enable_rewrites=options.enable_rewrites,
+            rewrite_hook=options.rewrite_hook,
+            sql=sql,
+        )
+        normalized_expr = normalize_expr(resolved_expr, options=normalize_options)
+        return sqlglot_sql(normalized_expr, policy=policy)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _collect_ibis_artifacts(
+    options: DataFusionCompileOptions,
+) -> tuple[str | None, str | None, str | None]:
+    ibis_expr = options.ibis_expr
+    if ibis_expr is None:
+        return None, None, None
+    from ibis.expr.types import Table, Value
+
+    if not isinstance(ibis_expr, (Table, Value)):
+        return None, None, None
+    from ibis_engine.sql_bridge import ibis_plan_artifacts
+
+    ibis_payload = ibis_plan_artifacts(ibis_expr, dialect=options.dialect)
+    return (
+        ibis_payload["ibis_decompile"],
+        ibis_payload["ibis_sql"],
+        ibis_payload["ibis_sql_pretty"],
+    )
+
+
 def collect_plan_artifacts(
     ctx: SessionContext,
     expr: Expression,
@@ -2032,88 +2182,60 @@ def collect_plan_artifacts(
     DataFusionPlanArtifacts
         Plan artifacts derived from EXPLAIN and Substrait serialization.
     """
-    _ensure_dialect(options.dialect)
-    bindings = _validated_param_bindings(
-        options.params,
-        allowlist=options.param_identifier_allowlist,
+    inputs = _collect_plan_artifact_inputs(ctx, expr, options=options, df=df)
+    sqlglot_ast = _collect_sqlglot_ast_artifact(
+        inputs.resolved_expr,
+        sql=inputs.sql,
+        policy=inputs.policy,
     )
-    param_signature = scalar_param_signature(bindings) if bindings else None
-    projection_map = _projection_map_payload(expr, options=options)
-    policy = options.sqlglot_policy or default_sqlglot_policy()
-    resolved_expr = expr
-    if bindings and _contains_params(expr):
-        try:
-            resolved_expr = bind_params(expr, params=bindings)
-        except (KeyError, TypeError, ValueError):
-            resolved_expr = expr
-    sql = resolved_expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
-    details = _collect_plan_artifacts_details(ctx, sql=sql, options=options, df=df)
-    policy_hash = options.sqlglot_policy_hash
-    plan_hash = options.plan_hash or plan_fingerprint(
-        resolved_expr,
-        dialect=options.dialect,
-        policy_hash=policy_hash,
-        schema_map_hash=options.schema_map_hash,
+    lineage_payload = _collect_lineage_payload(
+        inputs.resolved_expr,
+        options=options,
+        policy=inputs.policy,
     )
-    sqlglot_ast: str | None = None
-    try:
-        sqlglot_ast = serialize_ast_artifact(ast_to_artifact(resolved_expr, sql=sql, policy=policy))
-    except (RuntimeError, TypeError, ValueError):
-        sqlglot_ast = None
-    lineage_payload = None
-    try:
-        lineage_payload = extract_lineage_payload(
-            resolved_expr,
-            options=LineageExtractionOptions(
-                schema=_lineage_schema_map(options.schema_map),
-                dialect=policy.write_dialect,
-            ),
-        )
-    except (RuntimeError, TypeError, ValueError):
-        lineage_payload = None
     canonical_fingerprint = (
         lineage_payload.canonical_fingerprint
         if lineage_payload is not None
-        else canonical_ast_fingerprint(resolved_expr)
+        else canonical_ast_fingerprint(inputs.resolved_expr)
     )
-    normalized_sql = None
-    try:
-        normalize_options = NormalizeExprOptions(
-            schema=options.schema_map,
-            policy=policy,
-            enable_rewrites=options.enable_rewrites,
-            rewrite_hook=options.rewrite_hook,
-            sql=sql,
-        )
-        normalized_expr = normalize_expr(resolved_expr, options=normalize_options)
-        normalized_sql = sqlglot_sql(normalized_expr, policy=policy)
-    except (RuntimeError, TypeError, ValueError):
-        normalized_sql = None
+    normalized_sql = _collect_normalized_sql(
+        inputs.resolved_expr,
+        sql=inputs.sql,
+        options=options,
+        policy=inputs.policy,
+    )
+    ibis_decompile, ibis_sql, ibis_sql_pretty = _collect_ibis_artifacts(options)
     return DataFusionPlanArtifacts(
-        plan_hash=plan_hash,
-        sql=sql,
+        plan_hash=inputs.plan_hash,
+        sql=inputs.sql,
         normalized_sql=normalized_sql,
-        explain=details.explain_rows,
-        explain_analyze=details.analyze_rows,
-        substrait_plan=details.substrait_plan,
-        substrait_validation=details.substrait_validation,
+        explain=inputs.details.explain_rows,
+        explain_analyze=inputs.details.analyze_rows,
+        substrait_plan=inputs.details.substrait_plan,
+        substrait_validation=inputs.details.substrait_validation,
         sqlglot_ast=sqlglot_ast,
-        read_dialect=policy.read_dialect,
-        write_dialect=policy.write_dialect,
+        ibis_decompile=ibis_decompile,
+        ibis_sql=ibis_sql,
+        ibis_sql_pretty=ibis_sql_pretty,
+        read_dialect=inputs.policy.read_dialect,
+        write_dialect=inputs.policy.write_dialect,
         canonical_fingerprint=canonical_fingerprint,
         lineage_tables=lineage_payload.tables if lineage_payload is not None else None,
         lineage_columns=lineage_payload.columns if lineage_payload is not None else None,
         lineage_scopes=lineage_payload.scopes if lineage_payload is not None else None,
-        param_signature=param_signature,
-        projection_map=projection_map,
-        unparsed_sql=details.unparsed_sql,
-        unparse_error=details.unparse_error,
-        logical_plan=cast("str | None", details.plan_details.get("logical_plan")),
-        optimized_plan=cast("str | None", details.plan_details.get("optimized_plan")),
-        physical_plan=cast("str | None", details.plan_details.get("physical_plan")),
-        graphviz=cast("str | None", details.plan_details.get("graphviz")),
-        partition_count=cast("int | None", details.plan_details.get("partition_count")),
-        join_operators=cast("tuple[str, ...] | None", details.plan_details.get("join_operators")),
+        param_signature=inputs.param_signature,
+        projection_map=inputs.projection_map,
+        unparsed_sql=inputs.details.unparsed_sql,
+        unparse_error=inputs.details.unparse_error,
+        logical_plan=cast("str | None", inputs.details.plan_details.get("logical_plan")),
+        optimized_plan=cast("str | None", inputs.details.plan_details.get("optimized_plan")),
+        physical_plan=cast("str | None", inputs.details.plan_details.get("physical_plan")),
+        graphviz=cast("str | None", inputs.details.plan_details.get("graphviz")),
+        partition_count=cast("int | None", inputs.details.plan_details.get("partition_count")),
+        join_operators=cast(
+            "tuple[str, ...] | None",
+            inputs.details.plan_details.get("join_operators"),
+        ),
         run_id=run_id,
     )
 
@@ -2132,7 +2254,11 @@ def execute_sql(
         Record batch reader over the SQL results.
     """
     _ensure_dialect(options.dialect)
-    expr = parse_sql_strict(sql, dialect=options.dialect)
+    expr = parse_sql_strict(
+        sql,
+        dialect=options.dialect,
+        preserve_params=options.params is not None,
+    )
     df = df_from_sqlglot_or_sql(ctx, expr, options=options)
     return _collect_reader(df)
 

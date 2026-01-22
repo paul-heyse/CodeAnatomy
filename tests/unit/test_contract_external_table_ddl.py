@@ -7,6 +7,7 @@ import pyarrow as pa
 from datafusion_engine.registry_bridge import datafusion_external_table_sql
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
+from ibis_engine.schema_utils import sqlglot_column_sql
 from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec
 from schema_spec.system import DataFusionScanOptions, DatasetSpec
 
@@ -97,3 +98,20 @@ def test_external_table_option_precedence() -> None:
     assert "PRIMARY KEY (metric_id)" in sql
     assert "COMPRESSION TYPE gzip" in sql
     assert "OPTIONS ('coalesce_batches' 'true', 'rows_per_page' '3000')" in sql
+
+
+def test_sqlglot_column_defs_match_schema_utils() -> None:
+    """Align SQLGlot column definitions across DDL entrypoints."""
+    table_spec = TableSchemaSpec(
+        name="events",
+        fields=[
+            ArrowFieldSpec(name="id", dtype=pa.int64(), nullable=True),
+            ArrowFieldSpec(name="payload", dtype=pa.string(), nullable=True),
+        ],
+    )
+    expected = [
+        col.sql(dialect="datafusion")
+        for col in table_spec.to_sqlglot_column_defs(dialect="datafusion")
+    ]
+    schema = table_spec.to_arrow_schema()
+    assert sqlglot_column_sql(schema, dialect="datafusion") == expected

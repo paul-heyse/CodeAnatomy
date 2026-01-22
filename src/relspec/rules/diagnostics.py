@@ -9,14 +9,14 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import pyarrow as pa
-from sqlglot.diff import diff
 from sqlglot.serde import dump
 
 from arrowdsl.spec.io import rows_from_table, table_from_rows
 from datafusion_engine.kernel_registry import KernelCapability
+from relspec.errors import RelspecValidationError
 from relspec.rules.definitions import RuleDomain
 from sqlglot_tools.bridge import SqlGlotDiagnostics, SqlGlotRelationDiff
-from sqlglot_tools.compat import Expression
+from sqlglot_tools.compat import Expression, diff
 from sqlglot_tools.optimizer import (
     canonical_ast_fingerprint,
     default_sqlglot_policy,
@@ -206,7 +206,7 @@ def substrait_plan_bytes(diagnostic: RuleDiagnostic) -> bytes | None:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the Substrait payload is not valid base64.
     """
     payload = diagnostic.metadata.get("substrait_plan_b64")
@@ -216,7 +216,7 @@ def substrait_plan_bytes(diagnostic: RuleDiagnostic) -> bytes | None:
         return base64.b64decode(payload)
     except (TypeError, ValueError) as exc:
         msg = "Invalid Substrait payload in diagnostic metadata."
-        raise ValueError(msg) from exc
+        raise RelspecValidationError(msg) from exc
 
 
 def _sqlglot_metadata_payload(diagnostics: SqlGlotDiagnostics) -> dict[str, str]:
@@ -404,12 +404,12 @@ def _parse_domain(value: object | None) -> RuleDomain:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the domain is missing or unsupported.
     """
     if value is None:
         msg = "Diagnostic domain is required."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     domain = str(value)
     if domain == "cpg":
         return "cpg"
@@ -418,7 +418,7 @@ def _parse_domain(value: object | None) -> RuleDomain:
     if domain == "extract":
         return "extract"
     msg = f"Unsupported diagnostic domain: {domain!r}."
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _parse_severity(value: object | None) -> RuleDiagnosticSeverity:
@@ -436,19 +436,19 @@ def _parse_severity(value: object | None) -> RuleDiagnosticSeverity:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the severity is missing or unsupported.
     """
     if value is None:
         msg = "Diagnostic severity is required."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     severity = str(value)
     if severity == "error":
         return "error"
     if severity == "warning":
         return "warning"
     msg = f"Unsupported diagnostic severity: {severity!r}."
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 __all__ = [

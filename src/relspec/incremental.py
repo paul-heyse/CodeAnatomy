@@ -12,6 +12,7 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_schema_f
 from ibis_engine.param_tables import ParamTableSpec
 from normalize.op_specs import normalize_op_specs
 from normalize.registry_runtime import dataset_name_from_alias
+from relspec.errors import RelspecValidationError
 from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.definitions import RelationshipPayload, RuleDefinition
 from relspec.schema_context import RelspecSchemaContext
@@ -189,7 +190,7 @@ def _delta_snapshot(name: str, *, path: str) -> DeltaTableSnapshot | None:
         version = delta_table_version(path)
         features = delta_table_features(path)
         cdf = delta_cdf_enabled(path)
-    except (RuntimeError, TypeError, ValueError):
+    except (RuntimeError, TypeError, RelspecValidationError):
         return None
     return DeltaTableSnapshot(
         name=name,
@@ -225,7 +226,7 @@ def _relation_output_contracts(rules: Sequence[RuleDefinition]) -> Mapping[str, 
                 "Conflicting relationship output contracts for "
                 f"{output_name!r}: {existing!r} vs {contract_name!r}."
             )
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         mapping[output_name] = contract_name
     return mapping
 

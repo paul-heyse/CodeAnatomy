@@ -29,6 +29,7 @@ from arrowdsl.spec.literals import (
 )
 from datafusion_engine.extract_metadata import ExtractDerivedIdSpec, ExtractOrderingKeySpec
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
+from relspec.errors import RelspecValidationError
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -863,7 +864,7 @@ def _normalize_payload_row(payload: object | None) -> dict[str, object] | None:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when normalize query macros are present.
     """
     if not isinstance(payload, NormalizePayload):
@@ -873,7 +874,7 @@ def _normalize_payload_row(payload: object | None) -> dict[str, object] | None:
     if query is not None:
         if query.macros:
             msg = "Normalize query macros are not supported in rule spec tables."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         query_payload = {
             "query_base": list(query.projection.base) or None,
             "query_derived": _query_derived_rows(query.projection.derived),
@@ -1084,7 +1085,7 @@ def _query_derived_from_rows(
         expr_json = row.get("expr_json")
         if name is None or expr_json is None:
             msg = "Normalize query derived entries require name and expr_json."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         derived[str(name)] = ExprIR.from_json(str(expr_json))
     return derived
 
@@ -1381,7 +1382,7 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the kernel kind is unsupported.
     """
     kind = str(payload["kind"])
@@ -1424,7 +1425,7 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
         result = CanonicalSortKernelSpec(sort_keys=_decode_sort_keys(spec.get("sort_keys")))
     else:
         msg = f"Unsupported kernel kind: {kind!r}"
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return result
 
 
@@ -1462,7 +1463,7 @@ def _parse_domain(value: object) -> RuleDomain:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the rule domain is unsupported.
     """
     domain_map: dict[str, RuleDomain] = {
@@ -1474,7 +1475,7 @@ def _parse_domain(value: object) -> RuleDomain:
     if normalized in domain_map:
         return domain_map[normalized]
     msg = f"Unsupported rule domain: {value!r}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _parse_execution_mode(value: object | None) -> ExecutionMode:
@@ -1492,7 +1493,7 @@ def _parse_execution_mode(value: object | None) -> ExecutionMode:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the execution mode is unsupported.
     """
     mode_map: dict[str, ExecutionMode] = {
@@ -1506,7 +1507,7 @@ def _parse_execution_mode(value: object | None) -> ExecutionMode:
     if normalized in mode_map:
         return mode_map[normalized]
     msg = f"Unsupported execution mode: {normalized!r}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _parse_join_type(value: object | None) -> JoinType:
@@ -1524,7 +1525,7 @@ def _parse_join_type(value: object | None) -> JoinType:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the join type is unsupported.
     """
     join_map: dict[str, JoinType] = {
@@ -1541,7 +1542,7 @@ def _parse_join_type(value: object | None) -> JoinType:
     if normalized in join_map:
         return join_map[normalized]
     msg = f"Unsupported join type: {normalized!r}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _parse_interval_mode(value: object | None) -> IntervalMode:
@@ -1559,7 +1560,7 @@ def _parse_interval_mode(value: object | None) -> IntervalMode:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the interval mode is unsupported.
     """
     mode_map: dict[str, IntervalMode] = {
@@ -1571,7 +1572,7 @@ def _parse_interval_mode(value: object | None) -> IntervalMode:
     if normalized in mode_map:
         return mode_map[normalized]
     msg = f"Unsupported interval align mode: {normalized!r}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _parse_interval_how(value: object | None) -> IntervalHow:
@@ -1589,7 +1590,7 @@ def _parse_interval_how(value: object | None) -> IntervalHow:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the interval join mode is unsupported.
     """
     how_map: dict[str, IntervalHow] = {
@@ -1600,7 +1601,7 @@ def _parse_interval_how(value: object | None) -> IntervalHow:
     if normalized in how_map:
         return how_map[normalized]
     msg = f"Unsupported interval align how: {normalized!r}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _parse_score_order(value: object | None) -> ScoreOrder:
@@ -1618,7 +1619,7 @@ def _parse_score_order(value: object | None) -> ScoreOrder:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when the score order is unsupported.
     """
     order_map: dict[str, ScoreOrder] = {
@@ -1629,7 +1630,7 @@ def _parse_score_order(value: object | None) -> ScoreOrder:
     if normalized in order_map:
         return order_map[normalized]
     msg = f"Unsupported score order: {normalized!r}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _derived_rows(values: Sequence[ExtractDerivedIdSpec]) -> list[dict[str, object]] | None:

@@ -39,7 +39,7 @@ class DataFusionLaneOptions:
 
     prefer_substrait: bool = True
     record_substrait_gaps: bool = True
-    allow_full_materialization: bool = True
+    allow_full_materialization: bool = False
     capture_explain: bool | None = None
     capture_plan_artifacts: bool | None = None
 

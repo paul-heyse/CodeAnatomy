@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.ordering import OrderingKey
 from arrowdsl.spec.expr_ir import ExprIR
 from datafusion_engine.extract_metadata import ExtractDerivedIdSpec
 from ibis_engine.query_compiler import IbisQuerySpec
+from relspec.errors import RelspecValidationError
 from relspec.model import (
     HashJoinConfig,
     IntervalAlignConfig,
@@ -18,6 +19,9 @@ from relspec.model import (
     ProjectConfig,
     WinnerSelectConfig,
 )
+
+if TYPE_CHECKING:
+    from relspec.rules.rel_ops import RelOpT
 
 RuleDomain = Literal["cpg", "normalize", "extract"]
 ExecutionMode = Literal["auto", "plan", "table", "external", "hybrid"]
@@ -141,27 +145,28 @@ class RuleDefinition:
     post_kernels: tuple[KernelSpecT, ...] = ()
     stages: tuple[RuleStage, ...] = ()
     payload: RulePayload | None = None
+    rel_ops: tuple[RelOpT, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate central rule definition invariants.
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when required fields are missing or invalid.
         """
         if not self.name:
             msg = "RuleDefinition.name must be non-empty."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         if not self.output:
             msg = "RuleDefinition.output must be non-empty."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         if len(set(self.inputs)) != len(self.inputs):
             msg = f"RuleDefinition.inputs contains duplicates for {self.name!r}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         if self.domain not in {"cpg", "normalize", "extract"}:
             msg = f"RuleDefinition.domain is invalid: {self.domain!r}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
 
 
 def stage_enabled(stage: RuleStage, options: Mapping[str, object]) -> bool:

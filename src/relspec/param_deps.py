@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
+from relspec.errors import RelspecValidationError
 from sqlglot_tools.lineage import TableRef
 
 
@@ -64,13 +65,13 @@ def validate_param_deps(
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when a rule references undeclared param tables.
     """
     missing = sorted(dep.logical_name for dep in deps if dep.logical_name not in specs)
     if missing:
         msg = f"Rule {rule_name!r} references undeclared param tables: {missing}."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
 
 
 def dataset_table_names(

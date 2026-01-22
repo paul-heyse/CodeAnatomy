@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
 
+from relspec.errors import RelspecValidationError
 from relspec.normalize.rule_specs import NormalizeRuleFamilySpec
 
 
@@ -58,7 +59,7 @@ def _single_family_template(spec: RuleTemplateSpec) -> tuple[NormalizeRuleFamily
     family_factory = _param_str(spec, "rule_factory")
     if not family_factory:
         msg = f"RuleTemplateSpec {spec.name!r} missing rule_factory param."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     overrides = _base_overrides(spec)
     return (
         NormalizeRuleFamilySpec(

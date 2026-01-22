@@ -35,6 +35,7 @@ from cpg.scip_roles import (
     SCIP_ROLE_WRITE,
 )
 from relspec.contracts import RELATION_OUTPUT_NAME
+from relspec.errors import RelspecValidationError
 from relspec.model import (
     AddLiteralSpec,
     EvidenceSpec,
@@ -154,7 +155,7 @@ def _severity_score_expr() -> ExprIR:
 def _require_inputs(spec: RuleTemplateSpec, *, count: int) -> tuple[str, ...]:
     if len(spec.inputs) != count:
         msg = f"RuleTemplateSpec {spec.name!r} requires {count} inputs."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return spec.inputs
 
 
@@ -169,7 +170,7 @@ def _required_param_str(spec: RuleTemplateSpec, key: str) -> str:
     value = _param_str(spec, key)
     if not value:
         msg = f"RuleTemplateSpec {spec.name!r} missing required param: {key}"
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return value
 
 
@@ -520,7 +521,7 @@ def expand_rule_templates(specs: Sequence[RuleTemplateSpec]) -> tuple[RuleDefini
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when an unknown template factory is requested.
     """
     expanded: list[RuleDefinitionSpec] = []
@@ -528,7 +529,7 @@ def expand_rule_templates(specs: Sequence[RuleTemplateSpec]) -> tuple[RuleDefini
         factory = TEMPLATE_FACTORIES.get(spec.factory)
         if factory is None:
             msg = f"Unknown rule template factory: {spec.factory!r}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         expanded.extend(factory(spec))
     return tuple(expanded)
 

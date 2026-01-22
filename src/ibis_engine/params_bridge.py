@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import ibis
 import ibis.expr.datatypes as dt
 from ibis.expr.types import BooleanValue, Table, Value
 
 from ibis_engine.param_tables import scalar_param_signature
-from relspec.rules.rel_ops import ParamOp, RelOpT
+
+if TYPE_CHECKING:
+    from relspec.rules.rel_ops import RelOpT
 
 type JoinHow = Literal[
     "anti",
@@ -120,6 +122,8 @@ def specs_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[ScalarParamSpec, ...]:
     tuple[ParamSpec, ...]
         Parameter specs in encounter order.
     """
+    from relspec.rules.rel_ops import ParamOp
+
     specs: list[ScalarParamSpec] = []
     for op in ops:
         if not isinstance(op, ParamOp):
@@ -138,6 +142,8 @@ def list_param_names_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[str, ...]:
     tuple[str, ...]
         List parameter names in encounter order.
     """
+    from relspec.rules.rel_ops import ParamOp
+
     names: list[str] = []
     for op in ops:
         if not isinstance(op, ParamOp):
@@ -214,7 +220,7 @@ def param_types_from_bindings(
     resolved: dict[str, str] = {}
     for key, value in values.items():
         if isinstance(key, str):
-            resolved[key] = _sql_type_from_value(value)
+            resolved[_normalize_sql_param_name(key)] = _sql_type_from_value(value)
             continue
         name = _param_name(key)
         if not name:
@@ -242,7 +248,7 @@ def datafusion_param_bindings(
     bindings: dict[str, object] = {}
     for key, value in values.items():
         if isinstance(key, str):
-            bindings[key] = value
+            bindings[_normalize_sql_param_name(key)] = value
             continue
         name = _param_name(key)
         if not name:
@@ -351,9 +357,8 @@ def stable_join(
         Joined table with collision-safe suffixes applied.
     """
     resolved = options or JoinOptions()
-    right_view = right.view()
     return left.join(
-        right_view,
+        right,
         predicates,
         how=resolved.how,
         lname=resolved.lname,
@@ -367,6 +372,10 @@ def _param_name(param: Value) -> str:
         result = getter()
         return result if isinstance(result, str) else ""
     return ""
+
+
+def _normalize_sql_param_name(name: str) -> str:
+    return name.lstrip(":$")
 
 
 def _sql_type_from_dtype(dtype: dt.DataType) -> str:

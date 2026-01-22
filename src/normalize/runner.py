@@ -67,8 +67,8 @@ from sqlglot_tools.bridge import SqlGlotDiagnosticsOptions, sqlglot_diagnostics
 from sqlglot_tools.lineage import LineageExtractionOptions, extract_lineage_payload
 from sqlglot_tools.optimizer import (
     ast_to_artifact,
-    default_sqlglot_policy,
     plan_fingerprint,
+    resolve_sqlglot_policy,
     serialize_ast_artifact,
     sqlglot_policy_snapshot_for,
 )
@@ -211,7 +211,7 @@ def _normalize_ibis_context(
 
 
 def _sqlglot_context(runtime: NormalizeRuntime) -> _SqlGlotPlanContext:
-    policy = default_sqlglot_policy()
+    policy = resolve_sqlglot_policy()
     snapshot = sqlglot_policy_snapshot_for(policy)
     schema_map, schema_map_hash = _sqlglot_schema_map(runtime)
     return _SqlGlotPlanContext(

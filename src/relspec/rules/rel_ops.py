@@ -12,6 +12,7 @@ import pyarrow as pa
 from arrowdsl.io.ipc import ipc_hash, ipc_table, payload_ipc_bytes
 from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
+from relspec.errors import RelspecValidationError
 from relspec.model import HashJoinConfig, JoinType
 
 REL_OP_SIGNATURE_VERSION = 1
@@ -209,7 +210,7 @@ class _QuerySpecState:
 def _mark_once(*, value: bool, label: str) -> bool:
     if value:
         msg = f"Multiple {label} entries are not allowed."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return True
 
 
@@ -217,7 +218,7 @@ def _validate_rel_op(op: RelOpT, *, idx: int, state: _RelOpState) -> None:
     if isinstance(op, ScanOp):
         if idx != 0:
             msg = "ScanOp must be the first op in the sequence."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         state.scan_seen = _mark_once(value=state.scan_seen, label="ScanOp")
         return
     if isinstance(op, ProjectOp):
@@ -283,7 +284,7 @@ def _apply_query_op(state: _QuerySpecState, op: RelOpT) -> None:
     if isinstance(op, ParamOp):
         return
     msg = f"Unsupported rel op for QuerySpec: {op.kind!r}."
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def rel_ops_to_rows(ops: Sequence[RelOpT]) -> list[dict[str, object]] | None:
@@ -432,7 +433,7 @@ def _expr_from_row(row: Mapping[str, object], *, label: str) -> ExprIR:
     expr_json = row.get("expr_json")
     if expr_json is None:
         msg = f"{label} op requires expr_json."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return ExprIR.from_json(str(expr_json))
 
 
@@ -499,7 +500,7 @@ def _rel_op_from_row(row: Mapping[str, object]) -> RelOpT:
     decoder = _REL_OP_DECODERS.get(kind)
     if decoder is None:
         msg = f"Unsupported rel op kind: {kind!r}."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return decoder(row)
 
 
@@ -517,7 +518,7 @@ def _payload_from_row(row: Mapping[str, object], *, schema: pa.Schema) -> dict[s
         table = ipc_table(raw)
         if not table.schema.equals(schema, check_metadata=False):
             msg = "Rel op payload schema mismatch."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         rows = table.to_pylist()
         if not rows:
             return {}
@@ -563,7 +564,7 @@ def _parse_join_type(value: object | None) -> JoinType:
     if normalized in join_map:
         return join_map[normalized]
     msg = f"Unsupported join type: {normalized!r}."
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _join_payload(spec: HashJoinConfig) -> dict[str, object]:

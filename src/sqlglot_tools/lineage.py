@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
@@ -13,7 +11,6 @@ from sqlglot.errors import SqlglotError
 from sqlglot.lineage import Node, lineage
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import build_scope
-from sqlglot.serde import dump
 
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.compat import Expression, exp
@@ -22,6 +19,7 @@ from sqlglot_tools.optimizer import (
     SchemaMapping,
     SchemaMappingNode,
     SqlGlotPolicy,
+    canonical_ast_fingerprint,
     default_sqlglot_policy,
     normalize_expr,
 )
@@ -216,35 +214,6 @@ def extract_lineage_payload(
         canonical_fingerprint=fingerprint,
         qualified_sql=qualified_sql,
     )
-
-
-def canonical_ast_fingerprint(expr: Expression) -> str:
-    """Generate stable fingerprint for canonical AST.
-
-    Uses SQLGlot's serde.dump to serialize the AST to JSON,
-    then hashes for a stable fingerprint.
-
-    Parameters
-    ----------
-    expr : Expression
-        SQLGlot expression to fingerprint.
-
-    Returns
-    -------
-    str
-        SHA256 hex digest of the canonical AST.
-    """
-    try:
-        payload = dump(expr)
-        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(serialized.encode()).hexdigest()
-    except (SqlglotError, TypeError, ValueError):
-        # Fallback to SQL text hash
-        try:
-            sql = expr.sql()
-            return hashlib.sha256(sql.encode()).hexdigest()
-        except (SqlglotError, TypeError, ValueError):
-            return hashlib.sha256(repr(expr).encode()).hexdigest()
 
 
 def required_columns_by_table(

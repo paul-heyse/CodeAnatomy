@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from normalize.rule_factories import build_rule_definitions_from_specs
+from relspec.errors import RelspecValidationError
 from relspec.normalize.rule_registry_specs import rule_family_specs
 from relspec.registry.rules import RuleAdapter
 from relspec.rules.definitions import RuleDefinition
@@ -36,12 +37,12 @@ class NormalizeRuleAdapter(RuleAdapter):
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when the adapter domain is misconfigured.
         """
         if self.domain != "normalize":
             msg = f"Unexpected adapter domain: {self.domain!r}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return self.registry.rule_definitions(self.factory_name)
 
     def templates(self) -> Sequence[RuleTemplateSpec]:
@@ -54,12 +55,12 @@ class NormalizeRuleAdapter(RuleAdapter):
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when the adapter domain is misconfigured.
         """
         if self.domain != "normalize":
             msg = f"Unexpected adapter domain: {self.domain!r}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return self.registry.templates(self.factory_name)
 
     def template_diagnostics(self) -> Sequence[RuleDiagnostic]:
@@ -72,12 +73,12 @@ class NormalizeRuleAdapter(RuleAdapter):
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when the adapter domain is misconfigured.
         """
         if self.domain != "normalize":
             msg = f"Unexpected adapter domain: {self.domain!r}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return self.registry.template_diagnostics(self.factory_name)
 
 

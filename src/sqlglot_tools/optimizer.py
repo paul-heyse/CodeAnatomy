@@ -22,8 +22,6 @@ from sqlglot.optimizer.canonicalize import canonicalize
 from sqlglot.optimizer.normalize import normalization_distance
 from sqlglot.optimizer.normalize import normalize as normalize_predicates
 from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
-from sqlglot.optimizer.pushdown_predicates import pushdown_predicates
-from sqlglot.optimizer.pushdown_projections import pushdown_projections
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.qualify_columns import (
     qualify_outputs,
@@ -42,6 +40,7 @@ from sqlglot.transforms import (
     ensure_bools,
     explode_projection_to_unnest,
     move_ctes_to_top_level,
+    preprocess,
     unnest_to_explode,
 )
 
@@ -181,6 +180,25 @@ _DAG_HASH_SCHEMA = pa.schema(
         pa.field("version", pa.int32()),
         pa.field("steps", pa.list_(pa.string())),
         pa.field("edges", pa.list_(_EDGE_SCHEMA)),
+    ]
+)
+SCHEMA_MAP_HASH_VERSION: int = 1
+_SCHEMA_MAP_COLUMN_SCHEMA = pa.struct(
+    [
+        pa.field("name", pa.string()),
+        pa.field("dtype", pa.string()),
+    ]
+)
+_SCHEMA_MAP_ENTRY_SCHEMA = pa.struct(
+    [
+        pa.field("table", pa.string()),
+        pa.field("columns", pa.list_(_SCHEMA_MAP_COLUMN_SCHEMA)),
+    ]
+)
+_SCHEMA_MAP_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("entries", pa.list_(_SCHEMA_MAP_ENTRY_SCHEMA)),
     ]
 )
 
@@ -324,6 +342,28 @@ class NormalizeExprOptions:
 
 
 @dataclass(frozen=True)
+class SqlGlotCompileOptions:
+    """Options for compiling SQLGlot expressions."""
+
+    schema: SchemaMapping | None = None
+    rules: CanonicalizationRules | None = None
+    rewrite_hook: Callable[[Expression], Expression] | None = None
+    enable_rewrites: bool = True
+    policy: SqlGlotPolicy | None = None
+    sql: str | None = None
+
+
+@dataclass(frozen=True)
+class ParseSqlOptions:
+    """Options for parsing SQL text."""
+
+    dialect: str
+    error_level: ErrorLevel | None = None
+    sanitize_templated: bool = True
+    preserve_params: bool = False
+
+
+@dataclass(frozen=True)
 class NormalizationStats:
     """Normalization stats for predicate normalization decisions."""
 
@@ -377,31 +417,32 @@ class PreflightResult:
     schema_map_hash: str | None
 
 
-DEFAULT_READ_DIALECT: str = "datafusion"
-DEFAULT_WRITE_DIALECT: str = "datafusion_ext"
+DEFAULT_CANONICAL_DIALECT: str = "duckdb"
+DEFAULT_READ_DIALECT: str = DEFAULT_CANONICAL_DIALECT
+DEFAULT_WRITE_DIALECT: str = DEFAULT_CANONICAL_DIALECT
 DEFAULT_NORMALIZATION_DISTANCE: int = 1000
 DEFAULT_ERROR_LEVEL: ErrorLevel = ErrorLevel.IMMEDIATE
 DEFAULT_UNSUPPORTED_LEVEL: ErrorLevel = ErrorLevel.RAISE
 DEFAULT_OPTIMIZE_RULES: tuple[Callable[..., Expression], ...] = tuple(RULES)
 DEFAULT_SURFACE_POLICIES: dict[SqlGlotSurface, SqlGlotSurfacePolicy] = {
     SqlGlotSurface.DATAFUSION_COMPILE: SqlGlotSurfacePolicy(
-        dialect=DEFAULT_WRITE_DIALECT,
+        dialect="datafusion_ext",
         lane="dialect_shim",
     ),
     SqlGlotSurface.DATAFUSION_DML: SqlGlotSurfacePolicy(
-        dialect=DEFAULT_READ_DIALECT,
+        dialect="datafusion_ext",
         lane="transforms",
     ),
     SqlGlotSurface.DATAFUSION_EXTERNAL_TABLE: SqlGlotSurfacePolicy(
-        dialect=DEFAULT_WRITE_DIALECT,
+        dialect="datafusion_ext",
         lane="dialect_shim",
     ),
     SqlGlotSurface.DATAFUSION_DIAGNOSTICS: SqlGlotSurfacePolicy(
-        dialect=DEFAULT_WRITE_DIALECT,
+        dialect="datafusion_ext",
         lane="dialect_shim",
     ),
     SqlGlotSurface.DATAFUSION_DDL: SqlGlotSurfacePolicy(
-        dialect=DEFAULT_WRITE_DIALECT,
+        dialect="datafusion_ext",
         lane="dialect_shim",
     ),
 }
@@ -817,6 +858,50 @@ def canonical_ast_fingerprint(expr: Expression) -> str:
         return payload_hash(payload_dict, _AST_HASH_SCHEMA)
 
 
+def schema_map_fingerprint_from_mapping(mapping: SchemaMapping) -> str:
+    """Return a stable fingerprint for a schema mapping.
+
+    Returns
+    -------
+    str
+        SHA-256 fingerprint for the schema mapping payload.
+    """
+    flat = _flatten_schema_mapping(mapping)
+    entries: list[dict[str, object]] = []
+    for table_name, columns in sorted(flat.items(), key=lambda item: item[0]):
+        column_entries = [
+            {"name": name, "dtype": dtype}
+            for name, dtype in sorted(columns.items(), key=lambda item: item[0])
+        ]
+        entries.append({"table": table_name, "columns": column_entries})
+    payload = {"version": SCHEMA_MAP_HASH_VERSION, "entries": entries}
+    return payload_hash(payload, _SCHEMA_MAP_HASH_SCHEMA)
+
+
+def _is_leaf_schema_node(node: SchemaMappingNode) -> bool:
+    return all(not isinstance(value, Mapping) for value in node.values())
+
+
+def _flatten_schema_mapping(mapping: SchemaMapping) -> dict[str, dict[str, str]]:
+    flat: dict[str, dict[str, str]] = {}
+
+    def _visit(node: SchemaMappingNode, path: list[str]) -> None:
+        if _is_leaf_schema_node(node):
+            table_key = ".".join(path)
+            flat[table_key] = {str(key): str(value) for key, value in node.items()}
+            return
+        for key, value in node.items():
+            if not isinstance(value, Mapping):
+                continue
+            _visit(value, [*path, str(key)])
+
+    for key, value in mapping.items():
+        if not isinstance(value, Mapping):
+            continue
+        _visit(value, [str(key)])
+    return flat
+
+
 def apply_transforms(
     expr: Expression, *, transforms: Sequence[Callable[[Expression], Expression]]
 ) -> Expression:
@@ -847,10 +932,27 @@ def sqlglot_sql(
         SQL string generated with policy dialect and generator settings.
     """
     policy = policy or default_sqlglot_policy()
+    return sqlglot_emit(expr, policy=policy, pretty=pretty)
+
+
+def sqlglot_emit(
+    expr: Expression,
+    *,
+    policy: SqlGlotPolicy,
+    pretty: bool | None = None,
+) -> str:
+    """Emit SQL from an expression using the policy generator settings.
+
+    Returns
+    -------
+    str
+        SQL string emitted using the policy generator.
+    """
     generator = dict(_generator_kwargs(policy))
     if pretty is not None:
         generator["pretty"] = pretty
     generator["dialect"] = policy.write_dialect
+    generator["identify"] = policy.identify
     generator["unsupported_level"] = policy.unsupported_level
     return expr.sql(**cast("GeneratorInitKwargs", generator))
 
@@ -1062,6 +1164,17 @@ def _external_table_compression_sql(
     return f"COMPRESSION TYPE {generator.sql(expression, 'this')}"
 
 
+DATAFUSION_SELECT_TRANSFORMS: Callable[[SqlGlotGenerator, Expression], str] = preprocess(
+    [
+        _rewrite_full_outer_join,
+        _rewrite_semi_anti_join,
+        eliminate_qualify,
+        move_ctes_to_top_level,
+        ensure_bools,
+    ]
+)
+
+
 class DataFusionGenerator(SqlGlotGenerator):
     """SQL generator overrides for DataFusion."""
 
@@ -1077,6 +1190,7 @@ class DataFusionGenerator(SqlGlotGenerator):
         }
         self.TRANSFORMS = {
             **self.TRANSFORMS,
+            exp.Select: DATAFUSION_SELECT_TRANSFORMS,
             exp.Array: _array_transform,
             exp.FileFormatProperty: _file_format_property_sql,
             exp.PartitionedByProperty: _partitioned_by_property_sql,
@@ -1098,13 +1212,16 @@ def register_datafusion_dialect(name: str = "datafusion_ext") -> None:
     Dialect.classes.setdefault("datafusion", DataFusionDialect)
 
 
-def sanitize_templated_sql(sql: str) -> str:
+def sanitize_templated_sql(sql: str, *, preserve_params: bool = False) -> str:
     """Return SQL text with templated segments replaced for parsing.
 
     Parameters
     ----------
     sql
         Raw SQL text that may contain templated segments.
+
+    preserve_params
+        Whether to preserve parameter placeholders like ``:name``.
 
     Returns
     -------
@@ -1114,7 +1231,37 @@ def sanitize_templated_sql(sql: str) -> str:
     sanitized = sql
     for pattern in _TEMPLATE_PATTERNS:
         sanitized = pattern.sub(_TEMPLATE_TOKEN, sanitized)
+    if preserve_params:
+        return sanitized
     return _PARAM_PATTERN.sub(_TEMPLATE_TOKEN, sanitized)
+
+
+def parse_sql(
+    sql: str,
+    *,
+    options: ParseSqlOptions,
+) -> Expression:
+    """Parse SQL with configurable sanitization and error handling.
+
+    Parameters
+    ----------
+    sql
+        SQL text to parse.
+    options
+        Parsing options controlling dialect, strictness, and sanitization.
+
+    Returns
+    -------
+    sqlglot.Expression
+        Parsed SQLGlot expression.
+    """
+    sanitized = (
+        sanitize_templated_sql(sql, preserve_params=options.preserve_params)
+        if options.sanitize_templated
+        else sql
+    )
+    level = options.error_level or DEFAULT_ERROR_LEVEL
+    return parse_one(sanitized, dialect=options.dialect, error_level=level)
 
 
 def parse_sql_strict(
@@ -1122,6 +1269,7 @@ def parse_sql_strict(
     *,
     dialect: str,
     error_level: ErrorLevel | None = None,
+    preserve_params: bool = False,
 ) -> Expression:
     """Parse SQL with strict error handling and templated sanitization.
 
@@ -1133,15 +1281,23 @@ def parse_sql_strict(
         SQLGlot dialect used for parsing.
     error_level
         Optional SQLGlot error level override.
+    preserve_params
+        Whether to preserve templated parameters during sanitization.
 
     Returns
     -------
     sqlglot.Expression
         Parsed SQLGlot expression.
     """
-    sanitized = sanitize_templated_sql(sql)
-    level = error_level or DEFAULT_ERROR_LEVEL
-    return parse_one(sanitized, dialect=dialect, error_level=level)
+    return parse_sql(
+        sql,
+        options=ParseSqlOptions(
+            dialect=dialect,
+            error_level=error_level,
+            sanitize_templated=True,
+            preserve_params=preserve_params,
+        ),
+    )
 
 
 def qualify_expr(
@@ -1168,6 +1324,7 @@ def optimize_expr(
     *,
     schema: SchemaMapping | None = None,
     policy: SqlGlotPolicy | None = None,
+    sql: str | None = None,
 ) -> Expression:
     """Return an optimized SQLGlot expression.
 
@@ -1183,6 +1340,11 @@ def optimize_expr(
         schema=schema_map,
         dialect=policy.read_dialect,
         rules=policy.rules,
+        sql=sql,
+        expand_stars=policy.expand_stars,
+        validate_qualify_columns=policy.validate_qualify_columns and schema_map is not None,
+        identify=policy.identify,
+        max_distance=policy.normalization_distance,
     )
 
 
@@ -1213,32 +1375,55 @@ def normalize_expr_with_stats(
     NormalizeExprResult
         Normalized expression and predicate normalization stats.
     """
-    policy, identify, schema_map = _normalize_policy_context(options)
-    prepared = _prepare_for_qualification(expr, options=options, policy=policy)
-    qualified = _qualify_expression(
+    compile_options = _compile_options_from_normalize(options)
+    policy = compile_options.policy or default_sqlglot_policy()
+    prepared = _prepare_for_qualification(expr, options=compile_options, policy=policy)
+    distance = normalization_distance(prepared, max_=policy.normalization_distance)
+    optimized = optimize_expr(
         prepared,
-        options=options,
+        schema=compile_options.schema,
         policy=policy,
-        identify=identify,
+        sql=compile_options.sql,
     )
-    annotated = _annotate_expression(
-        qualified,
-        policy=policy,
-        identify=identify,
-        schema_map=schema_map,
-    )
-    simplified = _simplify_expression(annotated, policy=policy)
-    normalized_predicates, stats = _normalize_predicates_with_stats(
-        simplified,
+    stats = NormalizationStats(
+        distance=distance,
         max_distance=policy.normalization_distance,
+        applied=distance <= policy.normalization_distance,
     )
-    projected = pushdown_projections(
-        normalized_predicates,
-        schema=schema_map,
-        dialect=policy.read_dialect,
+    return NormalizeExprResult(expr=optimized, stats=stats)
+
+
+def compile_expr(
+    expr: Expression,
+    *,
+    options: SqlGlotCompileOptions,
+) -> Expression:
+    """Return an optimized SQLGlot expression using the canonical pipeline.
+
+    Returns
+    -------
+    sqlglot.Expression
+        Optimized expression tree.
+    """
+    policy = options.policy or default_sqlglot_policy()
+    prepared = _prepare_for_qualification(expr, options=options, policy=policy)
+    return optimize_expr(
+        prepared,
+        schema=options.schema,
+        policy=policy,
+        sql=options.sql,
     )
-    expr_out = pushdown_predicates(projected, dialect=policy.read_dialect)
-    return NormalizeExprResult(expr=expr_out, stats=stats)
+
+
+def _compile_options_from_normalize(options: NormalizeExprOptions) -> SqlGlotCompileOptions:
+    return SqlGlotCompileOptions(
+        schema=options.schema,
+        rules=options.rules,
+        rewrite_hook=options.rewrite_hook,
+        enable_rewrites=options.enable_rewrites,
+        policy=options.policy,
+        sql=options.sql,
+    )
 
 
 def _normalize_policy_context(
@@ -1253,7 +1438,7 @@ def _normalize_policy_context(
 def _prepare_for_qualification(
     expr: Expression,
     *,
-    options: NormalizeExprOptions,
+    options: SqlGlotCompileOptions,
     policy: SqlGlotPolicy,
 ) -> Expression:
     canonical = canonicalize_expr(expr, rules=options.rules)
@@ -1338,13 +1523,21 @@ def _normalize_predicates_with_stats(
     )
 
 
+@dataclass(frozen=True)
+class PreflightOptions:
+    """Options for preflight SQL validation."""
+
+    schema: SchemaMapping | None = None
+    dialect: str = "datafusion"
+    strict: bool = True
+    preserve_params: bool = False
+    policy: SqlGlotPolicy | None = None
+
+
 def preflight_sql(
     sql: str,
     *,
-    schema: SchemaMapping | None = None,
-    dialect: str = "datafusion",
-    strict: bool = True,
-    policy: SqlGlotPolicy | None = None,
+    options: PreflightOptions | None = None,
 ) -> PreflightResult:
     """Preflight SQL through qualify + annotate + canonicalize pipeline.
 
@@ -1352,14 +1545,8 @@ def preflight_sql(
     ----------
     sql
         SQL text to preflight.
-    schema
-        Schema mapping for qualification.
-    dialect
-        SQLGlot dialect used for parsing.
-    strict
-        Whether to enforce strict qualification (errors on failure).
-    policy
-        SQLGlot policy for normalization.
+    options
+        Preflight options controlling schema, dialect, and policy behavior.
 
     Returns
     -------
@@ -1367,26 +1554,16 @@ def preflight_sql(
         Result capturing all qualification stages and diagnostics.
     """
     # Compute policy and schema hashes
-    policy_obj = policy or default_sqlglot_policy()
+    resolved_options = options or PreflightOptions()
+    policy_obj = resolved_options.policy or default_sqlglot_policy()
     policy_snapshot = sqlglot_policy_snapshot_for(policy_obj)
     policy_hash = policy_snapshot.policy_hash
 
-    schema_map_hash: str | None = None
-    if schema is not None:
-        schema_dict = {name: dict(values) for name, values in schema.items()}
-        schema_payload = {
-            "version": HASH_PAYLOAD_VERSION,
-            "schema": json.dumps(schema_dict, sort_keys=True),
-        }
-        schema_map_hash = payload_hash(
-            schema_payload,
-            pa.schema(
-                [
-                    pa.field("version", pa.int32()),
-                    pa.field("schema", pa.string()),
-                ]
-            ),
-        )
+    schema_map_hash = (
+        schema_map_fingerprint_from_mapping(resolved_options.schema)
+        if resolved_options.schema is not None
+        else None
+    )
 
     state = PreflightState(
         original_sql=sql,
@@ -1394,10 +1571,11 @@ def preflight_sql(
         schema_map_hash=schema_map_hash,
     )
     context = PreflightContext(
-        schema=schema,
+        schema=resolved_options.schema,
         policy=policy_obj,
-        dialect=dialect,
-        strict=strict,
+        dialect=resolved_options.dialect,
+        strict=resolved_options.strict,
+        preserve_params=resolved_options.preserve_params,
     )
 
     expr, result = _preflight_parse(sql, context=context, state=state)
@@ -1440,6 +1618,7 @@ class PreflightContext:
     policy: SqlGlotPolicy
     dialect: str
     strict: bool
+    preserve_params: bool
 
 
 def _finalize_preflight(state: PreflightState) -> PreflightResult:
@@ -1479,6 +1658,7 @@ def _preflight_parse(
             sql,
             dialect=context.dialect,
             error_level=context.policy.error_level,
+            preserve_params=context.preserve_params,
         )
     except (SqlglotError, TypeError, ValueError) as exc:
         error_msg = f"Parse failed: {exc}"
@@ -1503,7 +1683,7 @@ def _preflight_qualify(
     )
     prepared = _prepare_for_qualification(
         expr,
-        options=NormalizeExprOptions(
+        options=SqlGlotCompileOptions(
             schema=context.schema,
             policy=context.policy,
             sql=state.original_sql,
@@ -1773,25 +1953,80 @@ def bind_params(expr: Expression, *, params: Mapping[str, object]) -> Expression
     """
     if not params:
         return expr
-
-    def _rewrite(node: Expression) -> Expression:
-        if isinstance(node, exp.Parameter):
-            name = _param_name(node)
-            if name not in params:
-                msg = f"Missing parameter binding for {name!r}."
-                raise KeyError(msg)
-            return _literal_from_value(params[name])
-        return node
-
-    return expr.transform(_rewrite)
+    binder = _ParamBinder(
+        params=_normalize_param_bindings(params),
+        used_names=_explicit_param_names(expr),
+    )
+    return binder.bind(expr)
 
 
-def _param_name(node: exp.Parameter) -> str:
+@dataclass
+class _ParamBinder:
+    params: Mapping[str, object]
+    used_names: set[str]
+    ordinal: int = 0
+
+    def bind(self, expr: Expression) -> Expression:
+        return expr.transform(self._rewrite)
+
+    def _rewrite(self, node: Expression) -> Expression:
+        if not isinstance(node, (exp.Placeholder, exp.Parameter)):
+            return node
+        name = self._param_key(node)
+        if name not in self.params:
+            msg = f"Missing parameter binding for {name!r}."
+            raise KeyError(msg)
+        return _literal_from_value(self.params[name])
+
+    def _param_key(self, node: exp.Placeholder | exp.Parameter) -> str:
+        raw = _param_raw_name(node)
+        if raw is None:
+            return self._next_ordinal()
+        return _normalize_param_key(raw)
+
+    def _next_ordinal(self) -> str:
+        self.ordinal += 1
+        while str(self.ordinal) in self.used_names:
+            self.ordinal += 1
+        name = str(self.ordinal)
+        self.used_names.add(name)
+        return name
+
+
+def _normalize_param_bindings(params: Mapping[str, object]) -> dict[str, object]:
+    return {_normalize_param_key(str(key)): value for key, value in params.items()}
+
+
+def _explicit_param_names(expr: Expression) -> set[str]:
+    names: set[str] = set()
+    for node in expr.find_all(exp.Placeholder):
+        raw = _param_raw_name(node)
+        if raw is not None:
+            names.add(_normalize_param_key(raw))
+    for node in expr.find_all(exp.Parameter):
+        raw = _param_raw_name(node)
+        if raw is not None:
+            names.add(_normalize_param_key(raw))
+    return names
+
+
+def _param_raw_name(node: exp.Placeholder | exp.Parameter) -> str | None:
+    if isinstance(node, exp.Placeholder):
+        raw = node.this
+        if raw is None:
+            return None
+        return raw if isinstance(raw, str) else str(raw)
     name = getattr(node, "name", None)
-    if isinstance(name, str):
+    if isinstance(name, str) and name:
         return name
     value = node.this
+    if value is None:
+        return None
     return value if isinstance(value, str) else str(value)
+
+
+def _normalize_param_key(name: str) -> str:
+    return name.lstrip(":$")
 
 
 def _literal_from_value(value: object) -> Expression:
@@ -1973,10 +2208,13 @@ __all__ = [
     "NormalizationStats",
     "NormalizeExprOptions",
     "NormalizeExprResult",
+    "ParseSqlOptions",
     "PlannerDagSnapshot",
+    "PreflightOptions",
     "PreflightResult",
     "QualifyStrictOptions",
     "SchemaMapping",
+    "SqlGlotCompileOptions",
     "SqlGlotPolicy",
     "SqlGlotPolicySnapshot",
     "SqlGlotQualificationError",
@@ -1989,6 +2227,7 @@ __all__ = [
     "bind_params",
     "canonical_ast_fingerprint",
     "canonicalize_expr",
+    "compile_expr",
     "default_sqlglot_policy",
     "deserialize_ast_artifact",
     "emit_preflight_diagnostics",
@@ -1996,6 +2235,7 @@ __all__ = [
     "normalize_expr",
     "normalize_expr_with_stats",
     "optimize_expr",
+    "parse_sql",
     "parse_sql_strict",
     "plan_fingerprint",
     "planner_dag_snapshot",
@@ -2006,8 +2246,10 @@ __all__ = [
     "resolve_sqlglot_policy",
     "rewrite_expr",
     "sanitize_templated_sql",
+    "schema_map_fingerprint_from_mapping",
     "serialize_ast_artifact",
     "simplify_expr",
+    "sqlglot_emit",
     "sqlglot_policy_by_name",
     "sqlglot_policy_snapshot",
     "sqlglot_policy_snapshot_for",

@@ -22,6 +22,7 @@ from cpg.specs import (
 )
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import ibis_null_literal, validate_expr_schema
+from relspec.errors import RelspecValidationError
 
 
 def emit_props_fast(
@@ -196,7 +197,7 @@ def _value_expr(
     value_type = field.value_type
     if value_type is None:
         msg = f"Missing value_type for prop field {field.prop_key!r}."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     raw = _source_expr(table, field=field, value_type=value_type)
     raw = _apply_transform(raw, transform_id=field.transform_id)
     if json_mode:
@@ -222,7 +223,7 @@ def _apply_transform(expr: Value, *, transform_id: str | None) -> Value:
     if transform_id == TRANSFORM_FLAG_TO_BOOL:
         return flag_to_bool_expr(expr)
     msg = f"Unknown prop transform id: {transform_id!r}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 def _json_value_expr(expr: Value) -> Value:

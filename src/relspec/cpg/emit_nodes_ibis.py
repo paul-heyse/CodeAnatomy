@@ -14,6 +14,7 @@ from cpg.schemas import CPG_NODES_SCHEMA
 from cpg.specs import NodeEmitSpec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import coalesce_columns, ibis_null_literal, validate_expr_schema
+from relspec.errors import RelspecValidationError
 
 
 def emit_nodes_ibis(
@@ -58,7 +59,7 @@ def _ibis_cast_type(dtype: pa.DataType) -> Literal["string", "int64"]:
     if patypes.is_integer(dtype):
         return "int64"
     msg = f"Unsupported cast dtype for node emission: {dtype}"
-    raise ValueError(msg)
+    raise RelspecValidationError(msg)
 
 
 __all__ = ["emit_nodes_ibis"]

@@ -23,6 +23,7 @@ from ibis_engine.expr_compiler import (
     union_tables,
 )
 from ibis_engine.plan import IbisPlan
+from relspec.errors import RelspecCompilationError
 from relspec.model import DatasetRef, HashJoinConfig
 from relspec.plan import (
     RelAggregate,
@@ -280,7 +281,7 @@ def _ibis_join_kind(config: HashJoinConfig) -> str:
 
     Raises
     ------
-    ValueError
+    RelspecCompilationError
         Raised when the join type is unsupported.
     """
     join_type = config.join_type
@@ -297,7 +298,7 @@ def _ibis_join_kind(config: HashJoinConfig) -> str:
     if join_type in {"left anti", "right anti"}:
         return "anti"
     msg = f"Unsupported join type for Ibis: {join_type!r}."
-    raise ValueError(msg)
+    raise RelspecCompilationError(msg)
 
 
 def _compile_join_node(
@@ -456,16 +457,16 @@ def _join_predicates(
 
     Raises
     ------
-    ValueError
+    RelspecCompilationError
         Raised when join keys are missing or mismatched.
     """
     if not config.left_keys:
         msg = "HashJoinConfig requires left_keys."
-        raise ValueError(msg)
+        raise RelspecCompilationError(msg)
     right_keys = config.resolved_right_keys()
     if len(right_keys) != len(config.left_keys):
         msg = "HashJoinConfig left/right key count mismatch."
-        raise ValueError(msg)
+        raise RelspecCompilationError(msg)
     return [
         left[lkey] == right[rkey] for lkey, rkey in zip(config.left_keys, right_keys, strict=True)
     ]
@@ -498,7 +499,7 @@ def _select_join_output(
 
     Raises
     ------
-    ValueError
+    RelspecCompilationError
         Raised when join output selection is invalid.
     """
     left_cols = tuple(left.columns) if config.left_output is None else config.left_output
@@ -506,7 +507,7 @@ def _select_join_output(
     collisions = set(left_cols) & set(right_cols)
     if collisions and not config.output_suffix_for_left and not config.output_suffix_for_right:
         msg = "HashJoinConfig output columns collide without suffixes."
-        raise ValueError(msg)
+        raise RelspecCompilationError(msg)
     left_suffix = config.output_suffix_for_left
     right_suffix = config.output_suffix_for_right
     out_cols: list[IbisValue] = []
@@ -576,12 +577,12 @@ def _aggregate_expr(
     ------
     TypeError
         Raised when the aggregate function is unsupported.
-    ValueError
+    RelspecCompilationError
         Raised when the aggregate expression has no arguments.
     """
     if not spec.args:
         msg = f"Aggregate {spec.name!r} missing arguments."
-        raise ValueError(msg)
+        raise RelspecCompilationError(msg)
     arg = spec.args[0]
     expr = expr_ir_to_ibis(arg, table, registry=registry)
     func = getattr(expr, spec.func, None)
@@ -610,11 +611,11 @@ def _validate_set_op_ordering(orderings: Sequence[Ordering], *, op_label: str) -
         return
     if len(levels) != 1:
         msg = f"Set op {op_label} requires consistent ordering levels."
-        raise ValueError(msg)
+        raise RelspecCompilationError(msg)
     reference = orderings[0]
     if any(ordering != reference for ordering in orderings[1:]):
         msg = f"Set op {op_label} requires consistent ordering keys."
-        raise ValueError(msg)
+        raise RelspecCompilationError(msg)
 
 
 __all__ = [

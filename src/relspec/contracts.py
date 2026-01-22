@@ -8,6 +8,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from datafusion_engine.runtime import dataset_schema_from_context
+from relspec.errors import RelspecValidationError
 from schema_spec.system import (
     Contract,
     DatasetSpec,
@@ -86,14 +87,14 @@ def relation_output_ddl(*, dialect: str | None = None) -> str:
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when DataFusion cannot provide a CREATE TABLE statement.
     """
     _ = dialect
     ddl = dataset_table_definition(RELATION_OUTPUT_NAME)
     if ddl is None:
         msg = "DataFusion did not return a CREATE TABLE statement for relation_output_v1."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return ddl
 
 

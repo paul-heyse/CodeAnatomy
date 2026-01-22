@@ -17,9 +17,9 @@ from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
-    default_sqlglot_policy,
     normalize_expr,
     parse_sql_strict,
+    resolve_sqlglot_policy,
 )
 
 
@@ -77,7 +77,7 @@ def _normalize_fragment_expr(
     schema_map: SchemaMapping | None,
 ) -> Expression:
     sql = FRAGMENT_SQL[name]
-    policy = default_sqlglot_policy()
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
     return normalize_expr(
         expr,

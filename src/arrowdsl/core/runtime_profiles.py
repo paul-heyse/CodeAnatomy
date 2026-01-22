@@ -411,6 +411,13 @@ def runtime_profile_factory(profile: str) -> RuntimeProfile:
     return _align_datafusion_profile(runtime)
 
 
+_DATAFUSION_POLICY_BY_PROFILE: dict[str, str] = {
+    "DEV_DEBUG": "dev",
+    "PROD_FAST": "prod",
+    "MEMORY_TIGHT": "dev",
+}
+
+
 def _align_datafusion_profile(runtime: RuntimeProfile) -> RuntimeProfile:
     profile = runtime.datafusion
     if profile is None:
@@ -421,12 +428,22 @@ def _align_datafusion_profile(runtime: RuntimeProfile) -> RuntimeProfile:
     target_partitions = profile.target_partitions
     if target_partitions is None and runtime.cpu_threads is not None:
         target_partitions = runtime.cpu_threads
-    if batch_size == profile.batch_size and target_partitions == profile.target_partitions:
+    config_policy_name = profile.config_policy_name
+    if config_policy_name in {None, "symtable"}:
+        suggested = _DATAFUSION_POLICY_BY_PROFILE.get(runtime.name)
+        if suggested is not None:
+            config_policy_name = suggested
+    if (
+        batch_size == profile.batch_size
+        and target_partitions == profile.target_partitions
+        and config_policy_name == profile.config_policy_name
+    ):
         return runtime
     updated_profile = replace(
         profile,
         batch_size=batch_size,
         target_partitions=target_partitions,
+        config_policy_name=config_policy_name,
     )
     return replace(runtime, datafusion=updated_profile)
 

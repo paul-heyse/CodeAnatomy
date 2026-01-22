@@ -10,8 +10,7 @@ This plan implements the Ibis deployment improvements from the review, **excludi
 Make Ibis backend creation and execution context wiring consistent across all pipelines (validation, materialization, repro, incremental). This avoids drift in SQL options, DataFusion profiles, and object-store registration.
 
 ### Status
-- Completed: added `execution_factory` with ctx/profile helpers; migrated call sites in `src/schema_spec/system.py`, `src/engine/materialize_pipeline.py`, `src/hamilton_pipeline/modules/outputs.py`, `src/obs/repro.py`, `src/incremental/relspec_update.py`, `src/extract/session.py`, `src/extract/helpers.py`, `src/incremental/runtime.py`, `src/relspec/rules/validation.py`.
-- Remaining: migrate remaining direct `build_backend` / `IbisExecutionContext` usage in `src/engine/session_factory.py`, `src/schema_spec/system.py` (non-ctx fallback), `src/relspec/graph.py`, `src/relspec/compiler.py`, `src/relspec/cpg/build_edges.py`, `src/relspec/cpg/build_nodes.py`, `src/relspec/cpg/build_props.py`, `src/normalize/runner.py`, `src/normalize/ibis_api.py`, `src/hamilton_pipeline/modules/inputs.py`, `src/hamilton_pipeline/modules/normalization.py`, `src/incremental/publish.py`, `src/datafusion_engine/runtime.py`.
+- Completed: factory used across all call sites, including session/runtime/normalize/relspec/hamilton/incremental/DataFusion helpers.
 
 ### Design / Architecture
 Introduce a single factory module that builds `BaseBackend` and `IbisExecutionContext` from `ExecutionContext` or `DataFusionRuntimeProfile`, and require all call sites to use it.
@@ -94,10 +93,9 @@ def ibis_execution_from_ctx(
 
 ### Implementation Checklist
 - [x] Add `execution_factory` module with ctx/profile helpers for backend + execution context.
-- [x] Replace local helper functions that build backends or execution contexts in the migrated call sites.
-- [ ] Replace remaining direct `build_backend` / `IbisExecutionContext` usage listed above.
-- [ ] Ensure `IbisBackendConfig` values consistently reflect `ExecutionContext.runtime` settings for all factory outputs.
-- [ ] Add a unit test verifying that SQL options (fuse_selects/default_limit/default_dialect) match runtime settings for factory outputs.
+- [x] Replace local helper functions that build backends or execution contexts in all call sites.
+- [x] Ensure `IbisBackendConfig` values consistently reflect `ExecutionContext.runtime` settings for factory outputs.
+- [x] Add a unit test verifying that SQL options (fuse_selects/default_limit/default_dialect) match runtime settings for factory outputs.
 
 ## Item 2: Consolidate Ibis Plan Catalog Implementations
 
@@ -222,8 +220,7 @@ class IbisPlanCatalog:
 Ensure a single, consistent schema/type mapping path for Ibis schemas and SQL/DDL generation (including nested types), avoiding drift between Arrow, SQLGlot, and DataFusion DDL logic.
 
 ### Status
-- Completed: `sqlglot_column_sql` added to `src/ibis_engine/schema_utils.py`; `src/datafusion_engine/schema_introspection.py` routes external table DDL through SQLGlot defs when available; `schema_map_for_sqlglot` added and used in `src/relspec/schema_context.py`.
-- Remaining: eliminate `_arrow_type_to_sql_type` fallback paths and any remaining bespoke SQL type string maps; add coverage tests to assert identical column defs across all DDL entrypoints.
+- Completed: `sqlglot_column_sql` added; DDL generation now routes through SQLGlot column defs without Arrow-type fallbacks; schema-map helpers updated; coverage added for column-def parity.
 
 ### Design / Architecture
 Promote a canonical mapping in `ibis_engine.schema_utils` and route all DDL generation through Ibis schema + SQLGlot column defs instead of bespoke string maps.
@@ -264,10 +261,10 @@ Use this for external table DDL assembly and any SQL column definition needs.
 
 ### Implementation Checklist
 - [x] Add `sqlglot_column_sql` helper to `schema_utils`.
-- [x] Route external table DDL through SQLGlot-based defs when possible (keeping partition and NOT NULL behavior).
-- [ ] Remove `_arrow_type_to_sql_type` fallback and route all DDL through SQLGlot column defs.
-- [ ] Ensure `TableSchemaSpec.to_sqlglot_column_defs` remains the authoritative place for constraints.
-- [ ] Add a test that verifies SQL column defs are identical across all DDL entrypoints.
+- [x] Route external table DDL through SQLGlot-based defs with partition and NOT NULL behavior.
+- [x] Remove `_arrow_type_to_sql_type` fallback and route all DDL through SQLGlot column defs.
+- [x] Ensure `TableSchemaSpec.to_sqlglot_column_defs` remains the authoritative place for constraints.
+- [x] Add a test that verifies SQL column defs are identical across all DDL entrypoints.
 
 ## Item 4: Standardize List-Parameter Joins
 
@@ -275,8 +272,7 @@ Use this for external table DDL assembly and any SQL column definition needs.
 Use a single, consistent join policy for list-parameter filtering to avoid collision drift and simplify behavior (especially for semi-joins).
 
 ### Status
-- Completed: `list_param_join` now accepts `JoinOptions`; `FileIdParamMacro` routes through `list_param_join`.
-- Remaining: add a unit test for rname/lname collision policy and audit any other list-param joins for direct `semi_join` usage.
+- Completed: `list_param_join` supports `JoinOptions`, `FileIdParamMacro` routed through it, and collision policy coverage added.
 
 ### Design / Architecture
 Route all list-param joins through `list_param_join` and allow a `JoinOptions` override for consistent name-collision handling.
@@ -311,7 +307,7 @@ Update `FileIdParamMacro` to use this entrypoint so the join policy is centraliz
 ### Implementation Checklist
 - [x] Extend `list_param_join` to accept `JoinOptions`.
 - [x] Replace `FileIdParamMacro` manual `semi_join` with `list_param_join`.
-- [ ] Add a unit test that confirms rname/lname policy is applied for list-param joins.
+- [x] Add a unit test that confirms rname/lname policy is applied for list-param joins.
 
 ## Item 5: Consolidate Selector Pattern Translation
 
@@ -319,8 +315,7 @@ Update `FileIdParamMacro` to use this entrypoint so the join policy is centraliz
 Avoid multiple implementations for `SelectorPattern -> ibis.selectors` translation so selector behavior is consistent everywhere.
 
 ### Status
-- Completed: `selector_from_pattern` added to `src/ibis_engine/selector_utils.py`; `across_columns`, `bind_columns`, and `apply_across` now share the helper.
-- Remaining: add a small test verifying numeric/string/temporal/regex selectors match expected columns.
+- Completed: selector helper consolidated and test coverage added for numeric/string/temporal/regex patterns.
 
 ### Design / Architecture
 Create a single helper in `selector_utils` and use it from both `selector_utils` and `macros`.
@@ -349,7 +344,7 @@ def selector_from_pattern(pattern: SelectorPattern) -> object:
 ### Implementation Checklist
 - [x] Add `selector_from_pattern` to `selector_utils`.
 - [x] Replace duplicated pattern translation logic in `across_columns` and `bind_columns`.
-- [ ] Add a small test verifying numeric/string/temporal/regex selectors match expected columns.
+- [x] Add a small test verifying numeric/string/temporal/regex selectors match expected columns.
 
 ## Item 6: Expand Ibis Plan Artifacts (Decompile + SQL)
 
@@ -357,8 +352,7 @@ def selector_from_pattern(pattern: SelectorPattern) -> object:
 Capture Ibis expression source and rendered SQL in the same artifact lane as SQLGlot checkpoints for reproducibility and review.
 
 ### Status
-- Completed: added `ibis_decompile`, `ibis_sql`, and `ibis_sql_pretty` into the SQLGlot artifact payload in `src/relspec/rules/validation.py`.
-- Remaining: add a shared `ibis_plan_artifacts` helper with safe fallback handling, and integrate it into compiler/bridge diagnostics paths.
+- Completed: shared `ibis_plan_artifacts` helper added with safe fallbacks and integrated into rule validation and DataFusion plan-artifact capture.
 
 ### Design / Architecture
 Extend compiler checkpoint or diagnostics hooks to attach:
@@ -389,9 +383,9 @@ Wire these into the diagnostics path where SQLGlot artifacts are already produce
 
 ### Implementation Checklist
 - [x] Add Ibis SQL/decompile artifacts to the existing SQLGlot artifact payload.
-- [ ] Add `ibis_plan_artifacts` helper and integrate into diagnostics recording.
-- [ ] Guard decompile with a safe fallback if `ibis.decompile` raises (record an error string instead of failing).
-- [ ] Add a test that checks artifacts include both SQLGlot and Ibis-level data.
+- [x] Add `ibis_plan_artifacts` helper and integrate into diagnostics recording.
+- [x] Guard decompile with a safe fallback if `ibis.decompile` raises.
+- [x] Add a test that checks artifacts include both SQLGlot and Ibis-level data.
 
 ## Rollout Order (Recommended)
 

@@ -162,7 +162,7 @@ def compile_graph_plan(
                         execution_policy=execution.execution_policy,
                         execution_label=execution_label,
                         runtime_profile=runtime_profile,
-                        options=DataFusionLaneOptions(),
+                        options=DataFusionLaneOptions(allow_full_materialization=True),
                     ),
                 )
             except (TypeError, ValueError, RuntimeError) as exc:
@@ -173,7 +173,7 @@ def compile_graph_plan(
                         lane="fallback",
                         fallback_reason=str(exc),
                         execution_label=execution_label,
-                        options=DataFusionLaneOptions(),
+                        options=DataFusionLaneOptions(allow_full_materialization=True),
                     ),
                 )
                 logger.exception("DataFusion lane failed; falling back to Ibis execution.")

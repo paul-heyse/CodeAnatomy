@@ -33,7 +33,7 @@ from datafusion_engine.runtime import (
 )
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.execution import materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
 
+    from ibis_engine.execution import IbisExecutionContext
     from ibis_engine.registry import DatasetLocation
 
 

@@ -11,6 +11,7 @@ from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.plan_ops import DedupeSpec, JoinType, SortKey
 from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.query_compiler import IbisQuerySpec
+from relspec.errors import RelspecValidationError
 
 type Expression = ExprIR
 type ExecutionMode = Literal["auto", "plan", "table", "external", "hybrid"]
@@ -305,15 +306,15 @@ class RelationshipRule:
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when required rule configuration is missing or inconsistent.
         """
         if not self.name:
             msg = "RelationshipRule.name must be non-empty."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         if not self.output_dataset:
             msg = "RelationshipRule.output_dataset must be non-empty."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
 
         self._validate_variant_configs()
         self._validate_kind_inputs()
@@ -341,16 +342,16 @@ class RelationshipRule:
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when required variant configs are missing or conflicting.
         """
         if self.kind not in active_variants:
             msg = f"{self.kind.name} rules require {self.kind.value} config."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         if len(active_variants) != 1:
             extras = sorted(kind.value for kind in active_variants if kind != self.kind)
             msg = f"{self.kind.name} rules cannot mix configs: {extras}."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
 
     def _forbid_variant_configs(self, active_variants: set[RuleKind]) -> None:
         """Reject variant configs for rule kinds that do not require them.
@@ -362,14 +363,14 @@ class RelationshipRule:
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when variant configs are present for the current rule kind.
         """
         if not active_variants:
             return
         extras = sorted(kind.value for kind in active_variants)
         msg = f"{self.kind.name} rules cannot set configs: {extras}."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
 
     def _validate_kind_inputs(self) -> None:
         """Validate input arity requirements for the configured rule kind."""
@@ -395,12 +396,12 @@ class RelationshipRule:
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when the rule has a different number of inputs.
         """
         if len(self.inputs) != count:
             msg = f"{self.kind.name} rules require exactly {count} inputs."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
 
     def _require_min_inputs(self, count: int) -> None:
         """Ensure the rule has at least ``count`` inputs.
@@ -412,48 +413,48 @@ class RelationshipRule:
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when the rule has fewer than the required inputs.
         """
         if len(self.inputs) < count:
             msg = f"{self.kind.name} rules require at least {count} inputs."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
 
     def _validate_hash_join(self) -> None:
         """Validate hash-join rule inputs and configuration.
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when hash-join configuration requirements are not met.
         """
         self._require_exact_inputs(HASH_JOIN_INPUTS)
         if self.hash_join is None:
             msg = "HASH_JOIN rules require hash_join config."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
 
     def _validate_interval_align(self) -> None:
         """Validate interval-align rule inputs and configuration.
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when interval-align configuration requirements are not met.
         """
         self._require_exact_inputs(HASH_JOIN_INPUTS)
         if self.interval_align is None:
             msg = "INTERVAL_ALIGN rules require interval_align config."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
 
     def _validate_winner_select(self) -> None:
         """Validate winner-select rule inputs and configuration.
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when winner-select configuration requirements are not met.
         """
         self._require_exact_inputs(SINGLE_INPUT)
         if self.winner_select is None:
             msg = "WINNER_SELECT rules require winner_select config."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)

@@ -58,11 +58,11 @@ def validate_registry(
     template_diagnostics: tuple[RuleDiagnostic, ...] = ()
     try:
         rule_diagnostics = registry.rule_diagnostics()
-    except ValueError as exc:
+    except (RelspecValidationError, ValueError) as exc:
         errors.append(str(exc))
     try:
         template_diagnostics = registry.template_diagnostics()
-    except ValueError as exc:
+    except (RelspecValidationError, ValueError) as exc:
         errors.append(str(exc))
     for diag in (*rule_diagnostics, *template_diagnostics):
         if diag.severity == "error":
@@ -73,7 +73,7 @@ def validate_registry(
     if include_coverage:
         try:
             rules = registry.rule_definitions()
-        except ValueError as exc:
+        except (RelspecValidationError, ValueError) as exc:
             errors.append(str(exc))
         else:
             coverage = assess_rule_coverage(rules)

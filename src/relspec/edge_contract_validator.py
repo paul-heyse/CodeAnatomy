@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from arrowdsl.finalize.finalize import Contract
 from cpg.kind_catalog import edge_kind_required_props
+from relspec.errors import RelspecValidationError
 from relspec.model import RelationshipRule
 from relspec.registry import ContractCatalog
 
@@ -232,7 +233,7 @@ def validate_relationship_output_contracts_for_edge_kinds(
 
     Raises
     ------
-    ValueError
+    RelspecValidationError
         Raised when validation fails with a multi-error report.
     """
     cfg = config or EdgeContractValidationConfig()
@@ -261,4 +262,4 @@ def validate_relationship_output_contracts_for_edge_kinds(
 
     if errors:
         msg = "Edge contract validation failed:\n" + "\n".join(f" - {err}" for err in errors)
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)

@@ -5,16 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from ibis.expr.types import Table as IbisTable
-from sqlglot.diff import Insert, Keep, diff
+from sqlglot.diff import Insert, Keep
 
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
-from sqlglot_tools.compat import ErrorLevel, exp
+from sqlglot_tools.compat import ErrorLevel, diff, exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SqlGlotPolicy,
-    default_sqlglot_policy,
     normalize_expr,
     parse_sql_strict,
+    resolve_sqlglot_policy,
 )
 
 
@@ -139,7 +139,7 @@ def semantic_diff_expr(
 
 
 def _policy_with_dialect(policy: SqlGlotPolicy | None, *, dialect: str) -> SqlGlotPolicy:
-    resolved = policy or default_sqlglot_policy()
+    resolved = resolve_sqlglot_policy(policy=policy)
     if not dialect:
         return resolved
     return replace(resolved, read_dialect=dialect, write_dialect=dialect)

@@ -10,8 +10,9 @@ from ibis_engine.param_tables import ParamTablePolicy
 from relspec.rules.definitions import RuleDefinition
 from relspec.rules.validation import (
     RuleSqlGlotSource,
-    SqlGlotDiagnosticsContext,
+    SqlGlotDiagnosticsConfig,
     SqlGlotRuleContext,
+    build_sqlglot_context,
     rule_ir_metadata,
 )
 from relspec.schema_context import RelspecSchemaContext
@@ -29,21 +30,20 @@ def test_rule_ir_metadata_contains_decompile_and_sql() -> None:
         inputs=("events",),
         output="output_table",
     )
-    source = RuleSqlGlotSource(expr=table, input_names=("events",), plan_signature=None)
+    source = RuleSqlGlotSource(expr=table, input_names=("events",))
     rule_ctx = SqlGlotRuleContext(
         rule=rule,
         source=source,
         plan_signature=None,
     )
     schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
-    diagnostics_ctx = SqlGlotDiagnosticsContext(
-        backend=backend,
-        schema_context=schema_context,
-        ctx=ctx,
-        param_specs={},
-        param_policy=ParamTablePolicy(),
-        list_filter_gate_policy=None,
-        kernel_lane_policy=None,
+    diagnostics_ctx = build_sqlglot_context(
+        SqlGlotDiagnosticsConfig(
+            backend=backend,
+            schema_context=schema_context,
+            ctx=ctx,
+            param_table_policy=ParamTablePolicy(),
+        )
     )
     metadata = rule_ir_metadata(rule_ctx, context=diagnostics_ctx)
     assert "ibis_decompile" in metadata
@@ -65,21 +65,20 @@ def test_rule_ir_metadata_is_stable() -> None:
         inputs=("events",),
         output="output_table",
     )
-    source = RuleSqlGlotSource(expr=table, input_names=("events",), plan_signature=None)
+    source = RuleSqlGlotSource(expr=table, input_names=("events",))
     rule_ctx = SqlGlotRuleContext(
         rule=rule,
         source=source,
         plan_signature=None,
     )
     schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
-    diagnostics_ctx = SqlGlotDiagnosticsContext(
-        backend=backend,
-        schema_context=schema_context,
-        ctx=ctx,
-        param_specs={},
-        param_policy=ParamTablePolicy(),
-        list_filter_gate_policy=None,
-        kernel_lane_policy=None,
+    diagnostics_ctx = build_sqlglot_context(
+        SqlGlotDiagnosticsConfig(
+            backend=backend,
+            schema_context=schema_context,
+            ctx=ctx,
+            param_table_policy=ParamTablePolicy(),
+        )
     )
     first = rule_ir_metadata(rule_ctx, context=diagnostics_ctx)
     second = rule_ir_metadata(rule_ctx, context=diagnostics_ctx)

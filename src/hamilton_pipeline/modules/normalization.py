@@ -38,6 +38,7 @@ from datafusion_engine.runtime import (
 from datafusion_engine.sql_options import sql_options_for_profile
 from extract.evidence_plan import EvidencePlan
 from ibis_engine.builtin_udfs import prefixed_hash64
+from ibis_engine.catalog import IbisPlanSource
 from ibis_engine.execution import materialize_ibis_plan
 from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
@@ -46,7 +47,6 @@ from ibis_engine.sources import SourceToIbisOptions, source_to_ibis
 from normalize.catalog import IbisPlanCatalog, NormalizeCatalogInputs
 from normalize.catalog import normalize_plan_catalog as build_normalize_plan_catalog
 from normalize.ibis_api import DiagnosticsSources
-from normalize.ibis_plan_builders import IbisPlanSource
 from normalize.ibis_spans import (
     add_ast_span_struct_ibis,
     add_scip_occurrence_span_struct_ibis,

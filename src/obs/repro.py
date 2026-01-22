@@ -48,8 +48,13 @@ from schema_spec.system import (
     dataset_table_ddl_fingerprint,
     dataset_table_definition,
 )
-from sqlglot_tools.compat import exp, parse_one
-from sqlglot_tools.optimizer import planner_dag_snapshot, register_datafusion_dialect
+from sqlglot_tools.compat import exp
+from sqlglot_tools.optimizer import (
+    ParseSqlOptions,
+    parse_sql,
+    planner_dag_snapshot,
+    register_datafusion_dialect,
+)
 
 if TYPE_CHECKING:
     from arrowdsl.spec.io import IpcWriteConfig
@@ -1007,7 +1012,7 @@ def _contract_schema_asts(contracts: ContractCatalog) -> JsonDict:
             msg = f"Contract DDL missing from DataFusion for {name!r}."
             raise ValueError(msg)
         try:
-            expr = parse_one(ddl, read="datafusion")
+            expr = parse_sql(ddl, options=ParseSqlOptions(dialect="datafusion"))
         except ParseError as exc:
             msg = f"Failed to parse DataFusion DDL for {name!r}: {exc}"
             raise ValueError(msg) from exc
@@ -1188,7 +1193,7 @@ def _write_sqlglot_planner_dag(
             continue
         dialect = metadata.get("sql_dialect") or "datafusion_ext"
         try:
-            expr = parse_one(optimized_sql, read=dialect)
+            expr = parse_sql(optimized_sql, options=ParseSqlOptions(dialect=str(dialect)))
         except (TypeError, ValueError, ParseError):
             continue
         dag = planner_dag_snapshot(expr, dialect=dialect)

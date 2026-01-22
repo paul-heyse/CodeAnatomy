@@ -86,7 +86,8 @@ def ibis_execution_from_profile(profile: object) -> IbisExecutionContext:
     TypeError
         Raised when the input is not a DataFusionRuntimeProfile.
     """
-    from datafusion_engine.runtime import DataFusionRuntimeProfile, runtime_profile_factory
+    from arrowdsl.core.runtime_profiles import runtime_profile_factory
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     if not isinstance(profile, DataFusionRuntimeProfile):
         msg = f"Expected DataFusionRuntimeProfile, got {type(profile)!r}."
@@ -110,7 +111,8 @@ def ibis_backend_from_profile(profile: object) -> BaseBackend:
     TypeError
         Raised when the input is not a DataFusionRuntimeProfile.
     """
-    from datafusion_engine.runtime import DataFusionRuntimeProfile, runtime_profile_factory
+    from arrowdsl.core.runtime_profiles import runtime_profile_factory
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     if not isinstance(profile, DataFusionRuntimeProfile):
         msg = f"Expected DataFusionRuntimeProfile, got {type(profile)!r}."

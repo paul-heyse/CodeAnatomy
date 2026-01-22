@@ -18,6 +18,7 @@ from datafusion_engine.table_provider_metadata import (
     all_table_provider_metadata,
     table_provider_metadata,
 )
+from relspec.errors import RelspecValidationError
 from sqlglot_tools.optimizer import SchemaMapping
 
 if TYPE_CHECKING:
@@ -76,13 +77,13 @@ class RelspecSchemaContext:
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when the engine session lacks a DataFusion context.
         """
         session_ctx = engine_session.df_ctx()
         if session_ctx is None:
             msg = "EngineSession does not have a DataFusion SessionContext."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return cls.from_session(session_ctx)
 
     def dataset_names(self) -> tuple[str, ...]:

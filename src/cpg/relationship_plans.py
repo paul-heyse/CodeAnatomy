@@ -73,7 +73,6 @@ if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
 
 
-
 @dataclass(frozen=True)
 class RelationPlanBundle:
     """Compiled relation plans plus scan telemetry."""

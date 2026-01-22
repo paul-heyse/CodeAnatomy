@@ -8,35 +8,13 @@ from dataclasses import dataclass, field
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
-from arrowdsl.io.ipc import payload_hash
 from datafusion_engine.sql_options import (
     sql_options_for_profile,
     statement_sql_options_for_profile,
 )
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from ibis_engine.schema_utils import sqlglot_column_defs
-from sqlglot_tools.optimizer import SchemaMapping, SchemaMappingNode
-
-SCHEMA_MAP_HASH_VERSION: int = 1
-
-_SCHEMA_MAP_COLUMN_SCHEMA = pa.struct(
-    [
-        pa.field("name", pa.string()),
-        pa.field("dtype", pa.string()),
-    ]
-)
-_SCHEMA_MAP_ENTRY_SCHEMA = pa.struct(
-    [
-        pa.field("table", pa.string()),
-        pa.field("columns", pa.list_(_SCHEMA_MAP_COLUMN_SCHEMA)),
-    ]
-)
-_SCHEMA_MAP_HASH_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32()),
-        pa.field("entries", pa.list_(_SCHEMA_MAP_ENTRY_SCHEMA)),
-    ]
-)
+from sqlglot_tools.optimizer import SchemaMapping, schema_map_fingerprint_from_mapping
 
 
 def _read_only_sql_options() -> SQLOptions:
@@ -765,50 +743,6 @@ def schema_map_for_sqlglot(introspector: SchemaIntrospector) -> SchemaMapping:
             column
         ] = dtype_str
     return mapping
-
-
-def schema_map_fingerprint_from_mapping(mapping: SchemaMapping) -> str:
-    """Return a stable fingerprint for a schema mapping.
-
-    Returns
-    -------
-    str
-        SHA-256 fingerprint for the schema mapping payload.
-    """
-    flat = _flatten_schema_mapping(mapping)
-    entries: list[dict[str, object]] = []
-    for table_name, columns in sorted(flat.items(), key=lambda item: item[0]):
-        column_entries = [
-            {"name": name, "dtype": dtype}
-            for name, dtype in sorted(columns.items(), key=lambda item: item[0])
-        ]
-        entries.append({"table": table_name, "columns": column_entries})
-    payload = {"version": SCHEMA_MAP_HASH_VERSION, "entries": entries}
-    return payload_hash(payload, _SCHEMA_MAP_HASH_SCHEMA)
-
-
-def _is_leaf_schema_node(node: SchemaMappingNode) -> bool:
-    return all(not isinstance(value, Mapping) for value in node.values())
-
-
-def _flatten_schema_mapping(mapping: SchemaMapping) -> dict[str, dict[str, str]]:
-    flat: dict[str, dict[str, str]] = {}
-
-    def _visit(node: SchemaMappingNode, path: list[str]) -> None:
-        if _is_leaf_schema_node(node):
-            table_key = ".".join(path)
-            flat[table_key] = {str(key): str(value) for key, value in node.items()}
-            return
-        for key, value in node.items():
-            if not isinstance(value, Mapping):
-                continue
-            _visit(value, [*path, str(key)])
-
-    for key, value in mapping.items():
-        if not isinstance(value, Mapping):
-            continue
-        _visit(value, [str(key)])
-    return flat
 
 
 def find_struct_field_keys(

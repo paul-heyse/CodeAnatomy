@@ -35,7 +35,7 @@ from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
-from ibis_engine.sql_bridge import decompile_expr
+from ibis_engine.sql_bridge import ibis_plan_artifacts
 from ibis_engine.substrait_bridge import try_ibis_to_substrait_bytes
 from obs.diagnostics import DiagnosticsCollector
 from relspec.errors import RelspecValidationError
@@ -82,13 +82,16 @@ from sqlglot_tools.lineage import (
     required_columns_by_table,
 )
 from sqlglot_tools.optimizer import (
+    PreflightOptions,
     SchemaMapping,
     SqlGlotPolicy,
     SqlGlotQualificationError,
     ast_to_artifact,
     default_sqlglot_policy,
+    emit_preflight_diagnostics,
     parse_sql_strict,
     plan_fingerprint,
+    preflight_sql,
     sanitize_templated_sql,
     serialize_ast_artifact,
     sqlglot_policy_snapshot_for,
@@ -516,7 +519,7 @@ def rule_sqlglot_diagnostics(
     """
     try:
         context = build_sqlglot_context(config)
-    except (ImportError, ValueError):
+    except (ImportError, RelspecValidationError, ValueError):
         return ()
     diagnostics: list[RuleDiagnostic] = []
     for rule in rules:
@@ -743,6 +746,13 @@ def _build_rule_diagnostics(
         ctx=context.ctx,
     )
     describe_error = extra_metadata.get("df_describe_error")
+    preflight_diagnostics, preflight_payload = _preflight_rule_diagnostics(
+        rule_ctx,
+        context=context,
+        sql=optimized.optimized.sql(unsupported_level=ErrorLevel.RAISE),
+    )
+    if preflight_payload is not None:
+        extra_metadata["preflight_payload"] = preflight_payload
     if context.schema_map_hash is not None:
         extra_metadata["schema_map_hash"] = context.schema_map_hash
     extra_metadata.update(_rule_ir_metadata(rule_ctx, context=context))
@@ -774,6 +784,7 @@ def _build_rule_diagnostics(
             ),
         )
     )
+    diagnostics.extend(preflight_diagnostics)
     _record_sqlglot_artifact(
         rule_ctx,
         context=context,
@@ -930,6 +941,60 @@ def _required_columns_metadata(
         if columns:
             metadata[f"required_columns:{table}"] = ",".join(columns)
     return metadata
+
+
+def _preflight_rule_diagnostics(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+    sql: str,
+) -> tuple[tuple[RuleDiagnostic, ...], str | None]:
+    result = preflight_sql(
+        sql,
+        options=PreflightOptions(
+            schema=context.schema_map,
+            dialect=context.policy.write_dialect,
+            strict=True,
+            policy=context.policy,
+        ),
+    )
+    payload_text = _stable_payload_text(emit_preflight_diagnostics(result))
+    metadata: dict[str, str] = {
+        "preflight_payload": payload_text,
+    }
+    if result.errors:
+        metadata["preflight_errors"] = "; ".join(result.errors)
+        return (
+            (
+                RuleDiagnostic(
+                    domain=rule_ctx.rule.domain,
+                    template=None,
+                    rule_name=rule_ctx.rule.name,
+                    severity="error",
+                    message="SQL preflight validation failed.",
+                    plan_signature=rule_ctx.plan_signature,
+                    metadata=metadata,
+                ),
+            ),
+            payload_text,
+        )
+    if result.warnings:
+        metadata["preflight_warnings"] = "; ".join(result.warnings)
+        return (
+            (
+                RuleDiagnostic(
+                    domain=rule_ctx.rule.domain,
+                    template=None,
+                    rule_name=rule_ctx.rule.name,
+                    severity="warning",
+                    message="SQL preflight validation warnings.",
+                    plan_signature=rule_ctx.plan_signature,
+                    metadata=metadata,
+                ),
+            ),
+            payload_text,
+        )
+    return (), payload_text
 
 
 def _provider_metadata_payload(
@@ -1243,10 +1308,7 @@ def _rule_ir_metadata(
     context: SqlGlotDiagnosticsContext,
 ) -> dict[str, str]:
     metadata: dict[str, str] = {}
-    try:
-        metadata["ibis_decompile"] = decompile_expr(rule_ctx.source.expr)
-    except (TypeError, ValueError):
-        return metadata
+    metadata.update(ibis_plan_artifacts(rule_ctx.source.expr, dialect="datafusion"))
     try:
         checkpoint = compile_checkpoint(
             rule_ctx.source.expr,
@@ -1257,14 +1319,13 @@ def _rule_ir_metadata(
         return metadata
     policy = default_sqlglot_policy()
     policy = replace(policy, read_dialect="datafusion", write_dialect="datafusion")
-    metadata["ibis_sql"] = checkpoint.sql
+    metadata["sqlglot_plan_hash"] = checkpoint.plan_hash
+    metadata["sqlglot_policy_hash"] = checkpoint.policy_hash
     metadata["ibis_sql_pretty"] = sqlglot_sql(
         checkpoint.normalized,
         policy=policy,
         pretty=True,
     )
-    metadata["sqlglot_plan_hash"] = checkpoint.plan_hash
-    metadata["sqlglot_policy_hash"] = checkpoint.policy_hash
     return metadata
 
 

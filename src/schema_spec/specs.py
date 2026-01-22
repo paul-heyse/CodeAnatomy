@@ -34,9 +34,9 @@ from sqlglot_tools.optimizer import (
     ExternalTableOptionsProperty,
     ExternalTableOrderProperty,
     SqlGlotPolicy,
-    default_sqlglot_policy,
     normalize_ddl_sql,
     register_datafusion_dialect,
+    resolve_sqlglot_policy,
     sqlglot_sql,
 )
 
@@ -63,7 +63,8 @@ def _ddl_policy(dialect: str) -> SqlGlotPolicy:
     SqlGlotPolicy
         SQLGlot policy configured for the dialect.
     """
-    policy = default_sqlglot_policy()
+    policy_name = "datafusion_ddl" if dialect in {"datafusion", "datafusion_ext"} else None
+    policy = resolve_sqlglot_policy(name=policy_name)
     return replace(policy, read_dialect=dialect, write_dialect=dialect)
 
 

@@ -8,7 +8,7 @@ from typing import Protocol
 
 import ibis
 import pyarrow as pa
-from ibis.expr.types import Table, Value
+from ibis.expr.types import Expr, Table, Value
 from sqlglot.errors import ParseError
 from sqlglot.serde import dump
 
@@ -19,9 +19,9 @@ from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
     SqlGlotPolicy,
-    default_sqlglot_policy,
     normalize_expr,
     parse_sql_strict,
+    resolve_sqlglot_policy,
     sqlglot_policy_snapshot_for,
     sqlglot_sql,
     transpile_sql,
@@ -276,7 +276,7 @@ def _schema_map_from_catalog(
 
 
 def _sqlglot_policy_for_spec(spec: SqlIngestSpec) -> SqlGlotPolicy:
-    policy = default_sqlglot_policy()
+    policy = resolve_sqlglot_policy()
     if spec.dialect is None:
         return replace(policy, validate_qualify_columns=True, identify=True)
     return replace(
@@ -297,6 +297,37 @@ def decompile_expr(expr: Table | Value) -> str:
         Decompiled Ibis expression source.
     """
     return ibis.decompile(expr)
+
+
+def ibis_plan_artifacts(
+    expr: Expr,
+    *,
+    dialect: str | None = None,
+) -> dict[str, str]:
+    """Return Ibis-level artifacts for diagnostics.
+
+    Returns
+    -------
+    dict[str, str]
+        Ibis decompile and SQL artifacts.
+    """
+    try:
+        decompile = ibis.decompile(expr)
+    except (NotImplementedError, RuntimeError, TypeError, ValueError) as exc:
+        decompile = f"ERROR: {exc}"
+    try:
+        sql = expr.to_sql(dialect=dialect)
+    except (NotImplementedError, RuntimeError, TypeError, ValueError) as exc:
+        sql = f"ERROR: {exc}"
+    try:
+        sql_pretty = expr.to_sql(dialect=dialect, pretty=True)
+    except (NotImplementedError, RuntimeError, TypeError, ValueError) as exc:
+        sql_pretty = f"ERROR: {exc}"
+    return {
+        "ibis_decompile": decompile,
+        "ibis_sql": sql,
+        "ibis_sql_pretty": sql_pretty,
+    }
 
 
 def sql_ingest_artifacts(
@@ -354,6 +385,7 @@ __all__ = [
     "SqlIngestArtifacts",
     "SqlIngestSpec",
     "decompile_expr",
+    "ibis_plan_artifacts",
     "parse_sql_table",
     "sql_ingest_artifacts",
 ]

@@ -47,6 +47,7 @@ from ibis_engine.sources import (
     register_ibis_table,
     register_ibis_view,
 )
+from relspec.errors import RelspecValidationError
 from relspec.rules.cache import rule_table_cached
 from relspec.rules.handlers.cpg_emit import EdgeEmitRuleHandler
 from schema_spec.system import DatasetSpec
@@ -95,7 +96,7 @@ def _build_edges_raw_ibis(edge_context: EdgeRelationContext) -> EdgePlanBundle:
         enabled = getattr(edge_context.options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         if not enabled:
             continue
         rel = relation_plans.get(spec.relation_ref)
@@ -184,11 +185,11 @@ def _edge_relation_context(
     inputs = config.inputs
     if inputs is None:
         msg = "EdgeBuildConfig.inputs is required for CPG edge compilation."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     backend = config.ibis_backend
     if backend is None:
         msg = "Ibis backend is required for CPG edge compilation."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     catalog = _edge_catalog(inputs, backend=backend)
     relation_rule_table = rule_table_cached("cpg")
     relation_bundle = compile_relation_plans_ibis(
@@ -236,11 +237,11 @@ def _resolve_ctx_for_session(
     if session is None:
         if ctx is None:
             msg = "Either ctx or session must be provided for CPG edge builds."
-            raise ValueError(msg)
+            raise RelspecValidationError(msg)
         return ctx
     if ctx is not None and ctx is not session.ctx:
         msg = "Provided ctx must match session.ctx when session is supplied."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     return session.ctx
 
 
@@ -329,7 +330,7 @@ def _finalize_edges_ibis(
         raise TypeError(msg)
     if config.ibis_backend is None:
         msg = "Ibis backend is required for Ibis edge materialization."
-        raise ValueError(msg)
+        raise RelspecValidationError(msg)
     policy = config.surface_policy or ExecutionSurfacePolicy()
     prefer_reader = resolve_prefer_reader(ctx=exec_ctx, policy=policy)
     view_name = f"{edges_spec.name}_raw"

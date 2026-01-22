@@ -26,8 +26,7 @@ from ibis_engine.io_bridge import (
 from ibis_engine.param_tables import ParamTableArtifact
 from obs.repro import collect_repro_info
 from schema_spec.system import dataset_table_ddl_fingerprint
-from sqlglot_tools.compat import parse_one
-from sqlglot_tools.optimizer import planner_dag_snapshot
+from sqlglot_tools.optimizer import ParseSqlOptions, parse_sql, planner_dag_snapshot
 from storage.io import (
     delta_commit_metadata,
     delta_history_snapshot,
@@ -894,7 +893,10 @@ def _sqlglot_planner_dag_hashes(
             continue
         try:
             dialect = payload.get("sql_dialect") or "datafusion_ext"
-            expr = parse_one(optimized_sql, read=str(dialect))
+            expr = parse_sql(
+                optimized_sql,
+                options=ParseSqlOptions(dialect=str(dialect)),
+            )
         except (TypeError, ValueError, ParseError):
             continue
         dag = planner_dag_snapshot(expr)

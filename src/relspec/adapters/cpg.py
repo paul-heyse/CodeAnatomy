@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from relspec import errors as relspec_errors
 from relspec.registry.rules import RuleAdapter
 from relspec.rules.cpg_relationship_specs import (
     cpg_rule_definitions as cpg_rule_definitions_from_specs,
@@ -43,12 +44,12 @@ class CpgRuleAdapter(RuleAdapter):
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when the adapter domain is misconfigured.
         """
         if self.domain != "cpg":
             msg = f"Unexpected adapter domain: {self.domain!r}."
-            raise ValueError(msg)
+            raise relspec_errors.RelspecValidationError(msg)
         return self.registry.rule_definitions(self.factory_name)
 
     def templates(self) -> Sequence[RuleTemplateSpec]:
@@ -61,12 +62,12 @@ class CpgRuleAdapter(RuleAdapter):
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when the adapter domain is misconfigured.
         """
         if self.domain != "cpg":
             msg = f"Unexpected adapter domain: {self.domain!r}."
-            raise ValueError(msg)
+            raise relspec_errors.RelspecValidationError(msg)
         return self.registry.templates(self.factory_name)
 
     def template_diagnostics(self) -> Sequence[RuleDiagnostic]:
@@ -79,12 +80,12 @@ class CpgRuleAdapter(RuleAdapter):
 
         Raises
         ------
-        ValueError
+        RelspecValidationError
             Raised when the adapter domain is misconfigured.
         """
         if self.domain != "cpg":
             msg = f"Unexpected adapter domain: {self.domain!r}."
-            raise ValueError(msg)
+            raise relspec_errors.RelspecValidationError(msg)
         return self.registry.template_diagnostics(self.factory_name)
 
 

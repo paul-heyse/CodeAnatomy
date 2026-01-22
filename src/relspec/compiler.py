@@ -23,7 +23,6 @@ from ibis.expr.types import BooleanValue
 from ibis.expr.types import Column as IbisColumn
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
-from sqlglot.diff import diff as sqlglot_diff
 from sqlglot.serde import dump as sqlglot_dump
 
 from arrowdsl.core.determinism import DeterminismTier
@@ -114,6 +113,7 @@ from relspec.schema_context import RelspecSchemaContext
 from schema_spec.system import dataset_spec_from_contract
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.compat import Expression
+from sqlglot_tools.compat import diff as sqlglot_diff
 from sqlglot_tools.lineage import (
     LineageExtractionOptions,
     extract_lineage_payload,
@@ -309,6 +309,9 @@ def _execution_bundle_for_plan(
         "sqlglot_policy_rules_hash": policy_snapshot.rules_hash,
         "plan_signature": plan_fingerprint_value,
     }
+    if runtime_profile is not None:
+        artifacts["datafusion_profile"] = runtime_profile.telemetry_payload_v1()
+        artifacts["datafusion_profile_hash"] = runtime_profile.telemetry_payload_hash()
     diff_payload = None
     try:
         diff_payload = _sqlglot_diff_payload(expr, normalized)
@@ -415,7 +418,7 @@ def _adapter_plan_executor(
                         execution_policy=execution_policy,
                         execution_label=execution_label,
                         runtime_profile=runtime_profile,
-                        options=DataFusionLaneOptions(),
+                        options=DataFusionLaneOptions(allow_full_materialization=True),
                     ),
                 )
             except (TypeError, ValueError, RuntimeError) as exc:
@@ -426,7 +429,7 @@ def _adapter_plan_executor(
                         lane="fallback",
                         fallback_reason=str(exc),
                         execution_label=execution_label,
-                        options=DataFusionLaneOptions(),
+                        options=DataFusionLaneOptions(allow_full_materialization=True),
                     ),
                 )
                 logger.exception("DataFusion lane failed; falling back to Ibis execution.")

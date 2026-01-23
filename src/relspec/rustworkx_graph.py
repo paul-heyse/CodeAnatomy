@@ -15,6 +15,7 @@ from relspec.rules.definitions import EvidenceSpec as RuleEvidenceSpec
 
 if TYPE_CHECKING:
     from normalize.runner import ResolvedNormalizeRule
+    from relspec.inferred_deps import InferredDeps
     from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
     from relspec.model import RelationshipRule
     from relspec.rules.definitions import RuleDefinition
@@ -114,6 +115,8 @@ class GraphEdge:
     required_columns: tuple[str, ...] = ()
     required_types: tuple[tuple[str, str], ...] = ()
     required_metadata: tuple[tuple[bytes, bytes], ...] = ()
+    inferred: bool = False
+    plan_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -196,6 +199,52 @@ def build_rule_graph_from_normalize_rules(
     """
     rule_nodes = tuple(_rule_node_from_normalize(rule) for rule in rules)
     return _build_rule_graph(rule_nodes, output_policy=output_policy)
+
+
+def build_rule_graph_from_inferred_deps(
+    deps: Sequence[InferredDeps],
+    *,
+    output_policy: OutputPolicy = "all_producers",
+    priority: int = 100,
+) -> RuleGraph:
+    """Build a rule graph from inferred dependencies.
+
+    Uses calculation-driven scheduling where the dependency graph is derived
+    from actual Ibis/DataFusion expression analysis rather than declared inputs.
+
+    Parameters
+    ----------
+    deps : Sequence[InferredDeps]
+        Inferred dependencies for each rule.
+    output_policy : OutputPolicy
+        Policy for handling multiple producers.
+    priority : int
+        Default priority for rules.
+
+    Returns
+    -------
+    RuleGraph
+        Graph with rule and evidence nodes derived from expression analysis.
+    """
+    rule_nodes = tuple(
+        RuleNode(
+            name=dep.rule_name,
+            output=dep.output,
+            inputs=dep.inputs,
+            sources=dep.inputs,
+            priority=priority,
+            evidence=None,
+        )
+        for dep in deps
+    )
+    fingerprints = {dep.rule_name: dep.plan_fingerprint for dep in deps}
+    required_columns = {dep.rule_name: dep.required_columns for dep in deps}
+    return _build_rule_graph_inferred(
+        rule_nodes,
+        output_policy=output_policy,
+        fingerprints=fingerprints,
+        required_columns=required_columns,
+    )
 
 
 def rule_graph_snapshot(
@@ -356,6 +405,81 @@ def _build_rule_graph(
                 rule_node,
                 evidence_idx[rule.output],
                 GraphEdge(kind="produces", name=rule.output),
+            )
+        )
+    graph.add_edges_from(edges)
+    return RuleGraph(
+        graph=graph,
+        evidence_idx=evidence_idx,
+        rule_idx=rule_idx,
+        output_policy=output_policy,
+    )
+
+
+def _build_rule_graph_inferred(
+    rules: Sequence[RuleNode],
+    *,
+    output_policy: OutputPolicy,
+    fingerprints: Mapping[str, str],
+    required_columns: Mapping[str, Mapping[str, tuple[str, ...]]],
+) -> RuleGraph:
+    """Build a rule graph with inferred dependency metadata.
+
+    Similar to _build_rule_graph but includes inferred=True flag and
+    plan fingerprints on edges.
+
+    Returns
+    -------
+    RuleGraph
+        Rule graph populated with inferred metadata.
+
+    Raises
+    ------
+    ValueError
+        Raised when the output policy is unsupported.
+    """
+    if output_policy != "all_producers":
+        msg = f"Unsupported output policy: {output_policy!r}."
+        raise ValueError(msg)
+    _validate_rule_names(rules)
+    evidence_names = _collect_evidence_names(rules)
+    graph = rx.PyDiGraph(multigraph=False, check_cycle=False, attrs={"label": "relspec"})
+    evidence_idx: dict[str, int] = {}
+    rule_idx: dict[str, int] = {}
+    for name in sorted(evidence_names):
+        evidence_idx[name] = graph.add_node(GraphNode("evidence", EvidenceNode(name)))
+    for rule in sorted(rules, key=lambda item: item.name):
+        rule_idx[rule.name] = graph.add_node(GraphNode("rule", rule))
+    edges: list[tuple[int, int, GraphEdge]] = []
+    for rule in rules:
+        rule_node = rule_idx[rule.name]
+        rule_fingerprint = fingerprints.get(rule.name)
+        rule_columns = required_columns.get(rule.name, {})
+        for source in rule.sources:
+            source_columns = rule_columns.get(source, ())
+            edges.append(
+                (
+                    evidence_idx[source],
+                    rule_node,
+                    GraphEdge(
+                        kind="requires",
+                        name=source,
+                        required_columns=source_columns,
+                        inferred=True,
+                        plan_fingerprint=rule_fingerprint,
+                    ),
+                )
+            )
+        edges.append(
+            (
+                rule_node,
+                evidence_idx[rule.output],
+                GraphEdge(
+                    kind="produces",
+                    name=rule.output,
+                    inferred=True,
+                    plan_fingerprint=rule_fingerprint,
+                ),
             )
         )
     graph.add_edges_from(edges)
@@ -539,6 +663,7 @@ __all__ = [
     "RuleGraphSnapshot",
     "RuleNode",
     "build_rule_graph_from_definitions",
+    "build_rule_graph_from_inferred_deps",
     "build_rule_graph_from_normalize_rules",
     "build_rule_graph_from_relationship_rules",
     "rule_graph_diagnostics",

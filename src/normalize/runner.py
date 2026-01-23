@@ -7,11 +7,12 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeGuard, cast
 
 import msgspec
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value
+from sqlglot.errors import SqlglotError
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
@@ -50,6 +51,14 @@ from normalize.rule_defaults import resolve_rule_defaults
 from normalize.rule_factories import build_rule_definitions_from_specs
 from normalize.runtime import NormalizeRuntime
 from normalize.runtime_validation import validate_rule_specs
+from relspec.config import COMPARE_DECLARED_INFERRED
+from relspec.inferred_deps import (
+    InferredDeps,
+    InferredDepsRequest,
+    infer_deps_from_ibis_plan,
+    log_inferred_deps_comparison,
+    summarize_inferred_deps,
+)
 from relspec.model import AmbiguityPolicy, ConfidencePolicy
 from relspec.normalize.rule_registry_specs import rule_family_specs
 from relspec.policies import PolicyRegistry
@@ -602,6 +611,10 @@ def compile_normalize_plans_ibis(
     context = _normalize_ibis_context(catalog, ctx=ctx, options=options)
     plans: dict[str, IbisPlan] = {}
     materialize = set(options.materialize_outputs or ())
+
+    # Phase 1: Inferred dependencies comparison mode
+    inferred_deps_list: list[InferredDeps] = []
+    compare_mode = _should_compare_inferred_deps()
     for rule in context.ordered:
         plan = _resolve_rule_plan_ibis(
             rule,
@@ -645,6 +658,23 @@ def compile_normalize_plans_ibis(
             context.evidence.register(rule.output, dataset_schema(rule.output))
         except KeyError:
             continue
+
+        # Infer dependencies for comparison if enabled
+        if compare_mode:
+            inferred = _infer_rule_deps(
+                plan,
+                rule_name=rule.name,
+                output=rule.output,
+                declared_inputs=rule.inputs,
+                backend=options.backend,
+            )
+            if inferred is not None:
+                inferred_deps_list.append(inferred)
+
+    # Log inferred dependency comparison results
+    if compare_mode and inferred_deps_list:
+        _log_inferred_deps_comparison(inferred_deps_list)
+
     return plans
 
 
@@ -655,6 +685,29 @@ def _resolve_rule_plan_ibis(
     ctx: ExecutionContext,
     backend: BaseBackend,
 ) -> IbisPlan | None:
+    """Resolve an Ibis plan for a normalize rule.
+
+    Parameters
+    ----------
+    rule : ResolvedNormalizeRule
+        Resolved normalize rule to compile.
+    catalog : IbisPlanCatalog
+        Catalog of available Ibis plans and sources.
+    ctx : ExecutionContext
+        Execution context for namespace recording.
+    backend : BaseBackend
+        Ibis backend.
+
+    Returns
+    -------
+    IbisPlan | None
+        Resolved Ibis plan or None when the rule cannot be compiled.
+
+    Raises
+    ------
+    TypeError
+        Raised when an input DatasetSource must be materialized first.
+    """
     if rule.ibis_builder is None:
         if not rule.inputs:
             return None
@@ -676,6 +729,81 @@ def _resolve_rule_plan_ibis(
         )
     builder = resolve_plan_builder_ibis(rule.ibis_builder)
     return builder(catalog, ctx, backend)
+
+
+def _should_compare_inferred_deps() -> bool:
+    """Return whether to compare inferred vs declared dependencies.
+
+    Returns
+    -------
+    bool
+        True when inferred dependencies should be compared.
+    """
+    return COMPARE_DECLARED_INFERRED
+
+
+def _is_ibis_compiler_backend(backend: BaseBackend) -> TypeGuard[IbisCompilerBackend]:
+    return hasattr(backend, "compiler")
+
+
+def _infer_rule_deps(
+    plan: IbisPlan,
+    *,
+    rule_name: str,
+    output: str,
+    declared_inputs: tuple[str, ...],
+    backend: BaseBackend,
+) -> InferredDeps | None:
+    """Infer dependencies from an Ibis plan.
+
+    Parameters
+    ----------
+    plan : IbisPlan
+        Compiled Ibis plan.
+    rule_name : str
+        Name of the rule.
+    output : str
+        Output dataset name.
+    declared_inputs : tuple[str, ...]
+        Declared input dependencies.
+    backend : BaseBackend
+        Ibis backend.
+
+    Returns
+    -------
+    InferredDeps | None
+        Inferred dependencies or None if inference fails.
+    """
+    if not _is_ibis_compiler_backend(backend):
+        return None
+    request = InferredDepsRequest(
+        rule_name=rule_name,
+        output=output,
+        declared_inputs=declared_inputs,
+    )
+    try:
+        return infer_deps_from_ibis_plan(
+            plan,
+            backend=backend,
+            request=request,
+        )
+    except (SqlglotError, TypeError, ValueError):
+        return None
+
+
+def _log_inferred_deps_comparison(deps: list[InferredDeps]) -> None:
+    """Log comparison results for inferred dependencies.
+
+    Parameters
+    ----------
+    deps : list[InferredDeps]
+        Inferred dependencies to summarize.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    comparison = summarize_inferred_deps(deps)
+    log_inferred_deps_comparison(comparison, logger=log)
 
 
 __all__ = [

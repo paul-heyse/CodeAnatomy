@@ -1,0 +1,365 @@
+"""Runtime artifacts container for DataFusion handles and materialized tables.
+
+This module provides data structures for managing runtime state during
+rule execution, including DataFusion context handles, materialized tables,
+view references, and schema caches.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    import pyarrow as pa
+
+
+class TableLike(Protocol):
+    """Protocol for table-like objects."""
+
+    def schema(self) -> pa.Schema:
+        """Return the table schema."""
+        ...
+
+    def to_pyarrow(self) -> pa.Table:
+        """Convert to PyArrow table."""
+        ...
+
+
+class SchemaLike(Protocol):
+    """Protocol for schema-like objects."""
+
+    @property
+    def names(self) -> Sequence[str]:
+        """Return column names."""
+        ...
+
+    def field(self, name: str) -> Any:
+        """Return field by name."""
+        ...
+
+
+@dataclass(frozen=True)
+class ViewReference:
+    """Reference to a registered view in the execution context.
+
+    Attributes
+    ----------
+    name : str
+        View name as registered in the context.
+    source_rule : str
+        Name of the rule that produced this view.
+    schema_fingerprint : str | None
+        Hash of the view schema for validation.
+    plan_fingerprint : str | None
+        Hash of the plan that created this view.
+    """
+
+    name: str
+    source_rule: str
+    schema_fingerprint: str | None = None
+    plan_fingerprint: str | None = None
+
+
+@dataclass(frozen=True)
+class MaterializedTable:
+    """Reference to a materialized table with metadata.
+
+    Attributes
+    ----------
+    name : str
+        Table name.
+    source_rule : str
+        Name of the rule that produced this table.
+    row_count : int
+        Number of rows in the table.
+    schema_fingerprint : str | None
+        Hash of the table schema.
+    plan_fingerprint : str | None
+        Hash of the plan that created this table.
+    storage_path : str | None
+        Path if persisted to disk.
+    """
+
+    name: str
+    source_rule: str
+    row_count: int = 0
+    schema_fingerprint: str | None = None
+    plan_fingerprint: str | None = None
+    storage_path: str | None = None
+
+
+@dataclass(frozen=True)
+class MaterializedTableSpec:
+    """Metadata for registering a materialized table."""
+
+    source_rule: str
+    schema_fingerprint: str | None = None
+    plan_fingerprint: str | None = None
+    storage_path: str | None = None
+
+
+@dataclass
+class RuntimeArtifacts:
+    """Container for runtime artifacts during rule execution.
+
+    Manages DataFusion context handles, materialized tables, view references,
+    and schema caches. Mutable to allow progressive population during execution.
+
+    Attributes
+    ----------
+    datafusion_ctx : object | None
+        DataFusion SessionContext handle.
+    materialized_tables : dict[str, TableLike]
+        Materialized PyArrow tables keyed by dataset name.
+    view_references : dict[str, ViewReference]
+        Registered views keyed by view name.
+    schema_cache : dict[str, SchemaLike]
+        Cached schemas keyed by dataset name.
+    table_metadata : dict[str, MaterializedTable]
+        Metadata for materialized tables.
+    execution_order : list[str]
+        Order in which rules were executed.
+    """
+
+    datafusion_ctx: object | None = None
+    materialized_tables: dict[str, TableLike] = field(default_factory=dict)
+    view_references: dict[str, ViewReference] = field(default_factory=dict)
+    schema_cache: dict[str, SchemaLike] = field(default_factory=dict)
+    table_metadata: dict[str, MaterializedTable] = field(default_factory=dict)
+    execution_order: list[str] = field(default_factory=list)
+
+    def register_view(
+        self,
+        name: str,
+        *,
+        source_rule: str,
+        schema_fingerprint: str | None = None,
+        plan_fingerprint: str | None = None,
+    ) -> ViewReference:
+        """Register a view reference.
+
+        Parameters
+        ----------
+        name : str
+            View name.
+        source_rule : str
+            Rule that produced the view.
+        schema_fingerprint : str | None
+            Schema hash for validation.
+        plan_fingerprint : str | None
+            Plan hash for cache invalidation.
+
+        Returns
+        -------
+        ViewReference
+            The registered view reference.
+        """
+        ref = ViewReference(
+            name=name,
+            source_rule=source_rule,
+            schema_fingerprint=schema_fingerprint,
+            plan_fingerprint=plan_fingerprint,
+        )
+        self.view_references[name] = ref
+        return ref
+
+    def register_materialized(
+        self,
+        name: str,
+        table: TableLike,
+        *,
+        spec: MaterializedTableSpec,
+    ) -> MaterializedTable:
+        """Register a materialized table.
+
+        Parameters
+        ----------
+        name : str
+            Table name.
+        table : TableLike
+            The materialized table.
+        spec : MaterializedTableSpec
+            Metadata describing the table's origin and storage.
+
+        Returns
+        -------
+        MaterializedTable
+            Metadata for the registered table.
+        """
+        self.materialized_tables[name] = table
+
+        # Try to get row count
+        row_count = 0
+        try:
+            pa_table = table.to_pyarrow()
+            row_count = pa_table.num_rows
+        except (AttributeError, TypeError):
+            pass
+
+        metadata = MaterializedTable(
+            name=name,
+            source_rule=spec.source_rule,
+            row_count=row_count,
+            schema_fingerprint=spec.schema_fingerprint,
+            plan_fingerprint=spec.plan_fingerprint,
+            storage_path=spec.storage_path,
+        )
+        self.table_metadata[name] = metadata
+        return metadata
+
+    def cache_schema(self, name: str, schema: SchemaLike) -> None:
+        """Cache a schema for later retrieval.
+
+        Parameters
+        ----------
+        name : str
+            Dataset name.
+        schema : SchemaLike
+            Schema to cache.
+        """
+        self.schema_cache[name] = schema
+
+    def get_schema(self, name: str) -> SchemaLike | None:
+        """Retrieve a cached schema.
+
+        Parameters
+        ----------
+        name : str
+            Dataset name.
+
+        Returns
+        -------
+        SchemaLike | None
+            Cached schema or None if not found.
+        """
+        return self.schema_cache.get(name)
+
+    def record_execution(self, rule_name: str) -> None:
+        """Record that a rule was executed.
+
+        Parameters
+        ----------
+        rule_name : str
+            Name of the executed rule.
+        """
+        self.execution_order.append(rule_name)
+
+    def has_artifact(self, name: str) -> bool:
+        """Check if an artifact exists (view or materialized).
+
+        Parameters
+        ----------
+        name : str
+            Artifact name.
+
+        Returns
+        -------
+        bool
+            True if artifact exists.
+        """
+        return name in self.view_references or name in self.materialized_tables
+
+    def artifact_source(self, name: str) -> str | None:
+        """Get the source rule for an artifact.
+
+        Parameters
+        ----------
+        name : str
+            Artifact name.
+
+        Returns
+        -------
+        str | None
+            Source rule name or None if not found.
+        """
+        if name in self.view_references:
+            return self.view_references[name].source_rule
+        if name in self.table_metadata:
+            return self.table_metadata[name].source_rule
+        return None
+
+    def clone(self) -> RuntimeArtifacts:
+        """Create a shallow copy for staged updates.
+
+        Returns
+        -------
+        RuntimeArtifacts
+            Shallow copy of this container.
+        """
+        return RuntimeArtifacts(
+            datafusion_ctx=self.datafusion_ctx,
+            materialized_tables=dict(self.materialized_tables),
+            view_references=dict(self.view_references),
+            schema_cache=dict(self.schema_cache),
+            table_metadata=dict(self.table_metadata),
+            execution_order=list(self.execution_order),
+        )
+
+
+@dataclass(frozen=True)
+class RuntimeArtifactsSummary:
+    """Summary of runtime artifacts for observability.
+
+    Attributes
+    ----------
+    total_views : int
+        Number of registered views.
+    total_materialized : int
+        Number of materialized tables.
+    total_rows : int
+        Total rows across all materialized tables.
+    execution_order : tuple[str, ...]
+        Order of rule execution.
+    view_names : tuple[str, ...]
+        Names of registered views.
+    materialized_names : tuple[str, ...]
+        Names of materialized tables.
+    """
+
+    total_views: int
+    total_materialized: int
+    total_rows: int
+    execution_order: tuple[str, ...]
+    view_names: tuple[str, ...] = ()
+    materialized_names: tuple[str, ...] = ()
+
+
+def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:
+    """Create a summary of runtime artifacts.
+
+    Parameters
+    ----------
+    artifacts : RuntimeArtifacts
+        Artifacts to summarize.
+
+    Returns
+    -------
+    RuntimeArtifactsSummary
+        Summary for observability.
+    """
+    total_rows = sum(
+        meta.row_count for meta in artifacts.table_metadata.values()
+    )
+
+    return RuntimeArtifactsSummary(
+        total_views=len(artifacts.view_references),
+        total_materialized=len(artifacts.materialized_tables),
+        total_rows=total_rows,
+        execution_order=tuple(artifacts.execution_order),
+        view_names=tuple(sorted(artifacts.view_references.keys())),
+        materialized_names=tuple(sorted(artifacts.materialized_tables.keys())),
+    )
+
+
+__all__ = [
+    "MaterializedTable",
+    "MaterializedTableSpec",
+    "RuntimeArtifacts",
+    "RuntimeArtifactsSummary",
+    "SchemaLike",
+    "TableLike",
+    "ViewReference",
+    "summarize_artifacts",
+]

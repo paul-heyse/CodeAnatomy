@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 __all__ = (
     "DeltaCdfOptions",
+    "DeltaDataCheckRequest",
     "DeltaSchemaPolicy",
     "DeltaVacuumOptions",
     "DeltaWritePolicy",
@@ -22,6 +23,7 @@ __all__ = (
     "create_delta_checkpoint",
     "delta_cdf_enabled",
     "delta_commit_metadata",
+    "delta_data_checker",
     "delta_history_snapshot",
     "delta_protocol_snapshot",
     "delta_schema_configuration",
@@ -32,6 +34,8 @@ __all__ = (
     "evaluate_and_select_files",
     "evaluate_filters_against_index",
     "open_delta_table",
+    "query_builder_available",
+    "query_delta_via_querybuilder",
     "read_delta_cdf",
     "select_candidate_files",
     "vacuum_delta",
@@ -43,6 +47,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "delta_schema_configuration": ("storage.deltalake.config", "delta_schema_configuration"),
     "delta_write_configuration": ("storage.deltalake.config", "delta_write_configuration"),
     "DeltaCdfOptions": ("storage.deltalake.delta", "DeltaCdfOptions"),
+    "DeltaDataCheckRequest": ("storage.deltalake.delta", "DeltaDataCheckRequest"),
     "DeltaVacuumOptions": ("storage.deltalake.delta", "DeltaVacuumOptions"),
     "DeltaWriteResult": ("storage.deltalake.delta", "DeltaWriteResult"),
     "StorageOptions": ("storage.deltalake.delta", "StorageOptions"),
@@ -52,12 +57,18 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "create_delta_checkpoint": ("storage.deltalake.delta", "create_delta_checkpoint"),
     "delta_cdf_enabled": ("storage.deltalake.delta", "delta_cdf_enabled"),
     "delta_commit_metadata": ("storage.deltalake.delta", "delta_commit_metadata"),
+    "delta_data_checker": ("storage.deltalake.delta", "delta_data_checker"),
     "delta_history_snapshot": ("storage.deltalake.delta", "delta_history_snapshot"),
     "delta_protocol_snapshot": ("storage.deltalake.delta", "delta_protocol_snapshot"),
     "delta_table_features": ("storage.deltalake.delta", "delta_table_features"),
     "delta_table_version": ("storage.deltalake.delta", "delta_table_version"),
     "enable_delta_features": ("storage.deltalake.delta", "enable_delta_features"),
     "open_delta_table": ("storage.deltalake.delta", "open_delta_table"),
+    "query_builder_available": ("storage.deltalake.query_builder", "query_builder_available"),
+    "query_delta_via_querybuilder": (
+        "storage.deltalake.query_builder",
+        "query_delta_via_querybuilder",
+    ),
     "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
     "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
@@ -77,12 +88,14 @@ if TYPE_CHECKING:
     import storage.deltalake.delta as _delta_io
     import storage.deltalake.file_index as _file_index
     import storage.deltalake.file_pruning as _file_pruning
+    import storage.deltalake.query_builder as _query_builder
 
     DeltaSchemaPolicy = _delta_config.DeltaSchemaPolicy
     DeltaWritePolicy = _delta_config.DeltaWritePolicy
     delta_schema_configuration = _delta_config.delta_schema_configuration
     delta_write_configuration = _delta_config.delta_write_configuration
     DeltaCdfOptions = _delta_io.DeltaCdfOptions
+    DeltaDataCheckRequest = _delta_io.DeltaDataCheckRequest
     DeltaVacuumOptions = _delta_io.DeltaVacuumOptions
     DeltaWriteResult = _delta_io.DeltaWriteResult
     StorageOptions = _delta_io.StorageOptions
@@ -91,6 +104,7 @@ if TYPE_CHECKING:
     coerce_delta_table = _delta_io.coerce_delta_table
     create_delta_checkpoint = _delta_io.create_delta_checkpoint
     delta_commit_metadata = _delta_io.delta_commit_metadata
+    delta_data_checker = _delta_io.delta_data_checker
     delta_history_snapshot = _delta_io.delta_history_snapshot
     delta_protocol_snapshot = _delta_io.delta_protocol_snapshot
     delta_cdf_enabled = _delta_io.delta_cdf_enabled
@@ -98,6 +112,8 @@ if TYPE_CHECKING:
     delta_table_version = _delta_io.delta_table_version
     enable_delta_features = _delta_io.enable_delta_features
     open_delta_table = _delta_io.open_delta_table
+    query_builder_available = _query_builder.query_builder_available
+    query_delta_via_querybuilder = _query_builder.query_delta_via_querybuilder
     read_delta_cdf = _delta_io.read_delta_cdf
     vacuum_delta = _delta_io.vacuum_delta
     FileIndexEntry = _file_index.FileIndexEntry

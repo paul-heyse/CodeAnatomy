@@ -47,6 +47,7 @@ from ibis_engine.registry import (
     IbisDatasetRegistry,
     resolve_datafusion_scan_options,
     resolve_dataset_schema,
+    resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
 from schema_spec.specs import ExternalTableConfigOverrides
@@ -254,7 +255,19 @@ class DeltaCdfRegistrationOptions:
 
     cdf_options: DeltaCdfOptions | None = None
     storage_options: Mapping[str, str] | None = None
+    log_storage_options: Mapping[str, str] | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
+
+
+@dataclass(frozen=True)
+class DeltaCdfArtifact:
+    """Diagnostics payload for Delta CDF registration."""
+
+    name: str
+    path: str
+    provider: str
+    options: DeltaCdfOptions | None
+    log_storage_options: Mapping[str, str] | None
 
 
 @dataclass(frozen=True)
@@ -616,9 +629,21 @@ def datafusion_external_table_sql(
         partitioned_by = tuple(col for col, _ in scan.partition_cols) or None
         file_sort_order = scan.file_sort_order or None
         unbounded = scan.unbounded
+    ddl_dialect = dialect
+    if (
+        ddl_dialect is None
+        and runtime_profile is not None
+        and runtime_profile.enable_delta_session_defaults
+        and location.format == "delta"
+    ):
+        ddl_dialect = "datafusion_ext"
+    if ddl_dialect == "datafusion_ext":
+        from sqlglot_tools.optimizer import register_datafusion_dialect
+
+        register_datafusion_dialect()
     overrides = ExternalTableConfigOverrides(
         table_name=name,
-        dialect=dialect,
+        dialect=ddl_dialect,
         options=_external_table_options(
             location=location,
             scan=scan,
@@ -683,7 +708,11 @@ def _external_table_options(
     options: dict[str, object] = {}
     if runtime_profile is not None and runtime_profile.external_table_options:
         options.update(runtime_profile.external_table_options)
-    if location.storage_options:
+    if location.format == "delta":
+        log_storage = resolve_delta_log_storage_options(location)
+        if log_storage:
+            options.update(log_storage)
+    elif location.storage_options:
         options.update(location.storage_options)
     if location.read_options:
         options.update(location.read_options)
@@ -1004,7 +1033,7 @@ def _should_register_delta_provider(context: DataFusionRegistrationContext) -> b
 class _DeltaProviderRequest:
     ctx: SessionContext
     path: str
-    storage_options: Mapping[str, str] | None
+    log_storage_options: Mapping[str, str] | None
     version: int | None
     timestamp: str | None
     delta_scan: DeltaScanOptions | None
@@ -1029,7 +1058,7 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
     request = _DeltaProviderRequest(
         ctx=context.ctx,
         path=str(location.path),
-        storage_options=location.storage_options,
+        log_storage_options=resolve_delta_log_storage_options(location),
         version=location.delta_version,
         timestamp=location.delta_timestamp,
         delta_scan=delta_scan,
@@ -1063,6 +1092,7 @@ def _register_delta_cdf(context: DataFusionRegistrationContext) -> DataFrame:
     options = DeltaCdfRegistrationOptions(
         cdf_options=context.location.delta_cdf_options,
         storage_options=context.location.storage_options,
+        log_storage_options=resolve_delta_log_storage_options(context.location),
         runtime_profile=context.runtime_profile,
     )
     return register_delta_cdf_df(
@@ -1086,7 +1116,9 @@ def _delta_table_provider_from_session(
         msg = "datafusion_ext.delta_table_provider_from_session is unavailable."
         raise TypeError(msg)
     schema_ipc = _schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
-    storage_payload = list(request.storage_options.items()) if request.storage_options else None
+    storage_payload = (
+        list(request.log_storage_options.items()) if request.log_storage_options else None
+    )
     provider = provider_factory(
         request.ctx,
         request.path,
@@ -1170,10 +1202,12 @@ def _delta_provider_artifact_payload(
     delta_scan: DeltaScanOptions | None,
     delta_scan_effective: Mapping[str, object] | None,
 ) -> dict[str, object]:
+    log_storage = resolve_delta_log_storage_options(location)
     return {
         "path": str(location.path),
         "delta_version": location.delta_version,
         "delta_timestamp": location.delta_timestamp,
+        "delta_log_storage_options": dict(log_storage) if log_storage else None,
         "delta_scan": _delta_scan_payload(delta_scan),
         "delta_scan_effective": delta_scan_effective,
     }
@@ -2197,7 +2231,7 @@ def register_delta_cdf_df(
     """
     resolved = options or DeltaCdfRegistrationOptions()
     cdf_options = resolved.cdf_options
-    storage_options = resolved.storage_options
+    storage_options = resolved.log_storage_options or resolved.storage_options
     runtime_profile = resolved.runtime_profile
     provider = _delta_cdf_table_provider(
         path=path,
@@ -2219,10 +2253,13 @@ def register_delta_cdf_df(
     )
     _record_delta_cdf_artifact(
         runtime_profile,
-        name=name,
-        path=path,
-        provider="table_provider",
-        options=cdf_options,
+        artifact=DeltaCdfArtifact(
+            name=name,
+            path=path,
+            provider="table_provider",
+            options=cdf_options,
+            log_storage_options=storage_options,
+        ),
     )
     return ctx.table(name)
 
@@ -2259,18 +2296,18 @@ def _delta_cdf_table_provider(
 def _record_delta_cdf_artifact(
     runtime_profile: DataFusionRuntimeProfile | None,
     *,
-    name: str,
-    path: str,
-    provider: str,
-    options: DeltaCdfOptions | None,
+    artifact: DeltaCdfArtifact,
 ) -> None:
     if runtime_profile is None or runtime_profile.diagnostics_sink is None:
         return
     payload: dict[str, object] = {
-        "name": name,
-        "path": path,
-        "provider": provider,
-        "options": _cdf_options_payload(options),
+        "name": artifact.name,
+        "path": artifact.path,
+        "provider": artifact.provider,
+        "options": _cdf_options_payload(artifact.options),
+        "delta_log_storage_options": (
+            dict(artifact.log_storage_options) if artifact.log_storage_options else None
+        ),
     }
     runtime_profile.diagnostics_sink.record_artifact("datafusion_delta_cdf_v1", payload)
 

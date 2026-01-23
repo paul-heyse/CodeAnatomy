@@ -129,6 +129,7 @@ class DataFusionDmlOptions:
     table_policy: DataFusionSqlPolicy | None = None
     param_identifier_allowlist: tuple[str, ...] | None = None
     params: Mapping[str, object] | None = None
+    named_params: Mapping[str, object] | None = None
     dialect: str = field(
         default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_DML).dialect
     )
@@ -146,6 +147,7 @@ class DataFusionCompileOptions:
     cache_max_columns: int | None = 64
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None = None
     params: Mapping[str, object] | Mapping[Value, object] | None = None
+    named_params: Mapping[str, object] | None = None
     ibis_expr: Expr | None = None
     param_identifier_allowlist: tuple[str, ...] | None = None
     prepared_statements: bool = True

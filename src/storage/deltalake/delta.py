@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import importlib
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
+import pyarrow as pa
 from deltalake import CommitProperties, DeltaTable, Transaction
 
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.io.ipc import ipc_bytes
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.schema import SchemaTransform
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
 
 type StorageOptions = Mapping[str, str]
 
@@ -76,10 +80,25 @@ class DeltaVacuumOptions:
     commit_metadata: Mapping[str, str] | None = None
 
 
+@dataclass(frozen=True)
+class DeltaDataCheckRequest:
+    """Inputs required for Delta constraint checks."""
+
+    ctx: SessionContext
+    table_path: str
+    data: TableLike | RecordBatchReaderLike
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+    version: int | None = None
+    timestamp: str | None = None
+    extra_constraints: Sequence[str] | None = None
+
+
 def open_delta_table(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
     version: int | None = None,
     timestamp: str | None = None,
 ) -> DeltaTable:
@@ -98,7 +117,7 @@ def open_delta_table(
     if version is not None and timestamp is not None:
         msg = "Specify either version or timestamp, not both."
         raise ValueError(msg)
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     table = DeltaTable(path, storage_options=storage)
     if version is not None:
         table.load_as_version(version)
@@ -111,6 +130,7 @@ def delta_table_version(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> int | None:
     """Return the latest Delta table version when the table exists.
 
@@ -119,7 +139,7 @@ def delta_table_version(
     int | None
         Latest Delta table version, or None if not a Delta table.
     """
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     if not DeltaTable.is_deltatable(path, storage_options=storage):
         return None
     return DeltaTable(path, storage_options=storage).version()
@@ -129,6 +149,7 @@ def delta_table_features(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> dict[str, str] | None:
     """Return Delta table feature configuration values when present.
 
@@ -137,7 +158,7 @@ def delta_table_features(
     dict[str, str] | None
         Feature configuration values or ``None`` if no features are set.
     """
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     if not DeltaTable.is_deltatable(path, storage_options=storage):
         return None
     table = DeltaTable(path, storage_options=storage)
@@ -156,6 +177,7 @@ def delta_cdf_enabled(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> bool:
     """Return True when Delta CDF is enabled for the table.
 
@@ -164,7 +186,11 @@ def delta_cdf_enabled(
     bool
         True when Change Data Feed is enabled.
     """
-    features = delta_table_features(path, storage_options=storage_options)
+    features = delta_table_features(
+        path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
     if not features:
         return False
     cdf_flag = features.get("delta.enableChangeDataFeed")
@@ -184,6 +210,7 @@ def delta_commit_metadata(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> dict[str, str] | None:
     """Return custom commit metadata for the latest Delta table version.
 
@@ -192,7 +219,7 @@ def delta_commit_metadata(
     dict[str, str] | None
         Custom commit metadata or ``None`` when not present.
     """
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     if not DeltaTable.is_deltatable(path, storage_options=storage):
         return None
     history = DeltaTable(path, storage_options=storage).history(1)
@@ -216,6 +243,7 @@ def delta_history_snapshot(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
     limit: int = 1,
 ) -> dict[str, object] | None:
     """Return the latest Delta history entry.
@@ -225,7 +253,7 @@ def delta_history_snapshot(
     dict[str, object] | None
         History entry payload or ``None`` when unavailable.
     """
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     if not DeltaTable.is_deltatable(path, storage_options=storage):
         return None
     history = DeltaTable(path, storage_options=storage).history(limit)
@@ -238,6 +266,7 @@ def delta_protocol_snapshot(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> dict[str, object] | None:
     """Return Delta protocol versions and active feature flags.
 
@@ -246,7 +275,7 @@ def delta_protocol_snapshot(
     dict[str, object] | None
         Protocol payload or ``None`` when unavailable.
     """
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     if not DeltaTable.is_deltatable(path, storage_options=storage):
         return None
     protocol = DeltaTable(path, storage_options=storage).protocol()
@@ -262,6 +291,7 @@ def enable_delta_features(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
     features: Mapping[str, str] | None = None,
     commit_metadata: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
@@ -272,7 +302,7 @@ def enable_delta_features(
     dict[str, str]
         Properties applied to the Delta table.
     """
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     if not DeltaTable.is_deltatable(path, storage_options=storage):
         return {}
     resolved = features or DEFAULT_DELTA_FEATURE_PROPERTIES
@@ -293,6 +323,7 @@ def vacuum_delta(
     *,
     options: DeltaVacuumOptions | None = None,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> list[str]:
     """Run a Delta vacuum to remove stale files.
 
@@ -302,7 +333,7 @@ def vacuum_delta(
         Files eligible for deletion (or removed when ``dry_run`` is False).
     """
     options = options or DeltaVacuumOptions()
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     table = DeltaTable(path, storage_options=storage)
     return table.vacuum(
         retention_hours=options.retention_hours,
@@ -318,9 +349,10 @@ def create_delta_checkpoint(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> None:
     """Create a checkpoint for a Delta table."""
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     DeltaTable(path, storage_options=storage).create_checkpoint()
 
 
@@ -328,9 +360,10 @@ def cleanup_delta_log(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> None:
     """Delete expired Delta log files."""
-    storage = _storage_dict(storage_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
     DeltaTable(path, storage_options=storage).cleanup_metadata()
 
 
@@ -361,6 +394,7 @@ def read_delta_cdf(
     table_path: str,
     *,
     storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
     cdf_options: DeltaCdfOptions | None = None,
 ) -> TableLike:
     """Read change data feed from a Delta table.
@@ -371,6 +405,8 @@ def read_delta_cdf(
         Path to the Delta table.
     storage_options : StorageOptions | None
         Storage options for Delta table access.
+    log_storage_options : StorageOptions | None
+        Log-store options for Delta table access.
     cdf_options : DeltaCdfOptions | None
         Options for CDF read (version range, columns, etc.).
 
@@ -388,6 +424,7 @@ def read_delta_cdf(
     provider = _delta_cdf_table_provider(
         table_path,
         storage_options=storage_options,
+        log_storage_options=log_storage_options,
         options=resolved_options,
     )
     if provider is None:
@@ -396,26 +433,95 @@ def read_delta_cdf(
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     ctx = DataFusionRuntimeProfile().session_context()
-    name = f"__delta_cdf_{uuid.uuid4().hex}"
-    select_columns = "*"
+    from datafusion_engine.bridge import datafusion_read_table
+
+    df = datafusion_read_table(ctx, provider)
     if resolved_options.columns:
-        select_columns = ", ".join(resolved_options.columns)
-    predicate = resolved_options.predicate
+        from datafusion import col
+
+        df = df.select(*(col(name) for name in resolved_options.columns))
+    if resolved_options.predicate:
+        try:
+            predicate_expr = df.parse_sql_expr(resolved_options.predicate)
+            df = df.filter(predicate_expr)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Delta CDF predicate parse failed: {exc}"
+            raise ValueError(msg) from exc
+    return cast("TableLike", df.to_arrow_table())
+
+
+def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
+    """Validate incoming data against Delta table constraints.
+
+    Returns
+    -------
+    list[str]
+        Constraint violation messages when present.
+
+    Raises
+    ------
+    ValueError
+        Raised when datafusion_ext is unavailable or Delta inputs are invalid.
+    TypeError
+        Raised when the delta data checker entrypoint is missing.
+    """
     try:
-        ctx.register_table(name, provider)
-        sql = f"SELECT {select_columns} FROM {name}"
-        if predicate:
-            sql = f"{sql} WHERE {predicate}"
-        df = ctx.sql(sql)
-        return cast("TableLike", df.to_arrow_table())
-    finally:
-        ctx.deregister_table(name)
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:
+        msg = "Delta data checks require datafusion_ext."
+        raise ValueError(msg) from exc
+    checker = getattr(module, "delta_data_checker", None)
+    if not callable(checker):
+        msg = "datafusion_ext.delta_data_checker is unavailable."
+        raise TypeError(msg)
+    table = _coerce_table(request.data)
+    if not isinstance(table, pa.Table):
+        to_pyarrow = getattr(table, "to_pyarrow", None)
+        if callable(to_pyarrow):
+            resolved = to_pyarrow()
+            if isinstance(resolved, pa.Table):
+                table = resolved
+            else:
+                table = pa.Table.from_batches(table.to_batches())
+        else:
+            table = pa.Table.from_batches(table.to_batches())
+    payload = ipc_bytes(cast("pa.Table", table))
+    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
+    storage_payload = list(storage.items()) if storage else None
+    constraints_payload = (
+        [str(item) for item in request.extra_constraints if str(item).strip()]
+        if request.extra_constraints
+        else None
+    )
+    result = checker(
+        request.ctx,
+        request.table_path,
+        storage_payload,
+        request.version,
+        request.timestamp,
+        payload,
+        constraints_payload,
+    )
+    if result is None:
+        return []
+    if isinstance(result, Sequence) and not isinstance(result, (str, bytes, bytearray)):
+        return [str(item) for item in result]
+    return [str(result)]
 
 
 def _coerce_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
     if isinstance(value, RecordBatchReaderLike):
         return value.read_all()
     return value
+
+
+def _log_storage_dict(
+    storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
+) -> dict[str, str] | None:
+    if log_storage_options is not None:
+        return dict(log_storage_options)
+    return _storage_dict(storage_options)
 
 
 def _storage_dict(storage_options: StorageOptions | None) -> dict[str, str] | None:
@@ -471,6 +577,7 @@ def _delta_cdf_table_provider(
     table_path: str,
     *,
     storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
     options: DeltaCdfOptions | None,
 ) -> object | None:
     try:
@@ -491,13 +598,15 @@ def _delta_cdf_table_provider(
     if resolved.ending_timestamp is not None:
         ext_options.ending_timestamp = resolved.ending_timestamp
     ext_options.allow_out_of_range = resolved.allow_out_of_range
-    storage = list(storage_options.items()) if storage_options else None
-    return provider_factory(table_path, storage, ext_options)
+    storage = _log_storage_dict(storage_options, log_storage_options)
+    storage_payload = list(storage.items()) if storage else None
+    return provider_factory(table_path, storage_payload, ext_options)
 
 
 __all__ = [
     "DEFAULT_DELTA_FEATURE_PROPERTIES",
     "DeltaCdfOptions",
+    "DeltaDataCheckRequest",
     "DeltaVacuumOptions",
     "DeltaWriteResult",
     "EncodingPolicy",
@@ -509,6 +618,7 @@ __all__ = [
     "create_delta_checkpoint",
     "delta_cdf_enabled",
     "delta_commit_metadata",
+    "delta_data_checker",
     "delta_history_snapshot",
     "delta_protocol_snapshot",
     "delta_table_features",

@@ -35,6 +35,7 @@ from datafusion_engine.bridge import (
     datafusion_from_arrow,
     datafusion_insert_delta,
     datafusion_insert_from_dataframe,
+    datafusion_to_table,
     datafusion_view_sql,
     ibis_plan_to_datafusion,
     ibis_to_datafusion,
@@ -51,6 +52,7 @@ from ibis_engine.execution import (
     stream_ibis_plan,
 )
 from ibis_engine.plan import IbisPlan
+from ibis_engine.registry import resolve_delta_log_storage_options
 from ibis_engine.runner import async_stream_plan
 from ibis_engine.sources import (
     DatabaseHint,
@@ -64,9 +66,11 @@ from ibis_engine.sources import (
 )
 from sqlglot_tools.bridge import IbisCompilerBackend
 from storage.deltalake import (
+    DeltaDataCheckRequest,
     DeltaWriteResult,
     StorageOptions,
     delta_cdf_enabled,
+    delta_data_checker,
     delta_table_features,
     delta_table_version,
 )
@@ -85,6 +89,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from ibis_engine.registry import DatasetLocation
     from obs.datafusion_runs import DataFusionRun
 
 
@@ -139,6 +144,7 @@ class IbisDatasetWriteOptions:
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     storage_options: StorageOptions | None = None
+    delta_log_storage_options: StorageOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -155,6 +161,7 @@ class IbisNamedDatasetWriteOptions:
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     storage_options: StorageOptions | None = None
+    delta_log_storage_options: StorageOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +231,19 @@ class DeltaInsertRequest:
     batch_size: int | None
     runtime_profile: DataFusionRuntimeProfile | None
     constraints: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DeltaDataCheckContext:
+    """Inputs required to run DeltaDataChecker."""
+
+    ctx: SessionContext
+    runtime_profile: DataFusionRuntimeProfile | None
+    table_name: str
+    table: TableLike
+    constraints: Sequence[str]
+    operation: str
+    location: DatasetLocation | None = None
 
 
 def _resolved_write_batch_size(options: IbisDatasetWriteOptions) -> int | None:
@@ -482,6 +502,7 @@ def apply_ibis_delta_write_policies(
     write_policy: DeltaWritePolicy | None,
     schema_policy: DeltaSchemaPolicy | None,
     storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
 ) -> IbisDeltaWriteOptions:
     """Return Delta write options with policy overrides applied.
 
@@ -506,12 +527,18 @@ def apply_ibis_delta_write_policies(
         merged = dict(options.storage_options or {})
         merged.update(dict(storage_options))
         merged_storage = merged
+    merged_log_storage = options.log_storage_options
+    if log_storage_options:
+        merged = dict(options.log_storage_options or {})
+        merged.update(dict(log_storage_options))
+        merged_log_storage = merged
     return replace(
         options,
         configuration=configs,
         schema_mode=schema_mode,
         target_file_size=target_file_size,
         storage_options=merged_storage,
+        log_storage_options=merged_log_storage,
     )
 
 
@@ -617,6 +644,35 @@ def _write_delta_dataset(
         )
         insert_result = _try_delta_insert(request)
     if insert_result is None:
+        if context.runtime_profile.enable_delta_data_checker:
+            resolved_name = table_name or name
+            location = _delta_location_for_table(
+                context.runtime_profile, table_name=resolved_name
+            )
+            if location is None:
+                _record_delta_data_checker(
+                    context.runtime_profile,
+                    payload={
+                        "event_time_unix_ms": int(time.time() * 1000),
+                        "status": "skipped",
+                        "operation": "delta_write",
+                        "table_name": resolved_name,
+                        "reason": "missing_location",
+                    },
+                )
+            else:
+                table = _delta_check_table_for_input(value, context=context)
+                _run_delta_data_checker(
+                    DeltaDataCheckContext(
+                        ctx=context.ctx,
+                        runtime_profile=context.runtime_profile,
+                        table_name=resolved_name,
+                        table=table,
+                        constraints=tuple(location.delta_constraints),
+                        operation="delta_write",
+                        location=location,
+                    )
+                )
         version = _write_delta_ibis_from_input(
             value,
             backend=context.backend,
@@ -632,7 +688,11 @@ def _write_delta_dataset(
             reporter=context.reporter,
         )
     _finalize_delta_commit(context.runtime_profile, reservation)
-    version = delta_table_version(path, storage_options=reservation.options.storage_options)
+    version = delta_table_version(
+        path,
+        storage_options=reservation.options.storage_options,
+        log_storage_options=reservation.options.log_storage_options,
+    )
     return _finalize_delta_write_result(
         path=path,
         version=version,
@@ -650,6 +710,7 @@ def _resolved_delta_write_options(
         write_policy=options.delta_write_policy,
         schema_policy=options.delta_schema_policy,
         storage_options=options.storage_options,
+        log_storage_options=options.delta_log_storage_options,
     )
 
 
@@ -922,18 +983,126 @@ def _record_delta_features(
     runtime_profile.diagnostics_sink.record_artifact("relspec_delta_features_v1", payload)
 
 
+def _record_delta_data_checker(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    payload: Mapping[str, object],
+) -> None:
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    runtime_profile.diagnostics_sink.record_events("delta_data_checker_v1", [payload])
+
+
+def _dataframe_to_table(df: DataFrame) -> TableLike:
+    to_table = getattr(df, "to_arrow_table", None)
+    if callable(to_table):
+        return cast("TableLike", to_table())
+    return datafusion_to_table(df)
+
+
+def _delta_check_table_for_input(
+    value: IbisWriteInput,
+    *,
+    context: DeltaWriteContext,
+) -> TableLike:
+    if isinstance(value, PlanProduct):
+        return value.materialize_table()
+    if isinstance(value, IbisPlan):
+        return materialize_ibis_plan(value, execution=context.execution)
+    if isinstance(value, IbisTable):
+        return materialize_ibis_plan(IbisPlan(expr=value), execution=context.execution)
+    table = coerce_table_like(value)
+    if isinstance(table, RecordBatchReaderLike):
+        return table.read_all()
+    return table
+
+
+def _run_delta_data_checker(context: DeltaDataCheckContext) -> None:
+    if context.runtime_profile is None or not context.runtime_profile.enable_delta_data_checker:
+        return
+    resolved_location = context.location or _delta_location_for_table(
+        context.runtime_profile, table_name=context.table_name
+    )
+    if resolved_location is None:
+        _record_delta_data_checker(
+            context.runtime_profile,
+            payload={
+                "event_time_unix_ms": int(time.time() * 1000),
+                "status": "skipped",
+                "operation": context.operation,
+                "table_name": context.table_name,
+                "reason": "missing_location",
+            },
+        )
+        return
+    log_storage = resolve_delta_log_storage_options(resolved_location)
+    table_path = str(resolved_location.path)
+    try:
+        violations = delta_data_checker(
+            DeltaDataCheckRequest(
+                ctx=context.ctx,
+                table_path=table_path,
+                data=context.table,
+                storage_options=resolved_location.storage_options,
+                log_storage_options=log_storage,
+                version=resolved_location.delta_version,
+                timestamp=resolved_location.delta_timestamp,
+                extra_constraints=context.constraints,
+            )
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        _record_delta_data_checker(
+            context.runtime_profile,
+            payload={
+                "event_time_unix_ms": int(time.time() * 1000),
+                "status": "error",
+                "operation": context.operation,
+                "table_name": context.table_name,
+                "table_path": table_path,
+                "error": str(exc),
+            },
+        )
+        raise
+    status = "failed" if violations else "passed"
+    _record_delta_data_checker(
+        context.runtime_profile,
+        payload={
+            "event_time_unix_ms": int(time.time() * 1000),
+            "status": status,
+            "operation": context.operation,
+            "table_name": context.table_name,
+            "table_path": table_path,
+            "violations": list(violations),
+            "extra_constraints": list(context.constraints),
+        },
+    )
+    if violations:
+        msg = f"Delta constraints failed for {context.table_name}: {violations}"
+        raise ValueError(msg)
+
+
+def _delta_location_for_table(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    table_name: str,
+) -> DatasetLocation | None:
+    if runtime_profile is None:
+        return None
+    for catalog in runtime_profile.registry_catalogs.values():
+        if catalog.has(table_name):
+            return catalog.get(table_name)
+    return None
+
+
 def _delta_constraints_for_table(
     runtime_profile: DataFusionRuntimeProfile | None,
     *,
     table_name: str,
 ) -> tuple[str, ...]:
-    if runtime_profile is None:
+    location = _delta_location_for_table(runtime_profile, table_name=table_name)
+    if location is None:
         return ()
-    for catalog in runtime_profile.registry_catalogs.values():
-        if catalog.has(table_name):
-            location = catalog.get(table_name)
-            return tuple(location.delta_constraints)
-    return ()
+    return tuple(location.delta_constraints)
 
 
 def _delta_insert_select_sql(
@@ -959,6 +1128,37 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
     )
     df = cast("DataFrame", df_obj)
     try:
+        if (
+            request.runtime_profile is not None
+            and request.runtime_profile.enable_delta_data_checker
+        ):
+            location = _delta_location_for_table(
+                request.runtime_profile, table_name=request.table_name
+            )
+            if location is None:
+                _record_delta_data_checker(
+                    request.runtime_profile,
+                    payload={
+                        "event_time_unix_ms": int(time.time() * 1000),
+                        "status": "skipped",
+                        "operation": "delta_insert",
+                        "table_name": request.table_name,
+                        "reason": "missing_location",
+                    },
+                )
+            else:
+                table = _dataframe_to_table(df)
+                _run_delta_data_checker(
+                    DeltaDataCheckContext(
+                        ctx=request.ctx,
+                        runtime_profile=request.runtime_profile,
+                        table_name=request.table_name,
+                        table=table,
+                        constraints=request.constraints,
+                        operation="delta_insert",
+                        location=location,
+                    )
+                )
         select_sql = _delta_insert_select_sql(df, temp_name=temp_name)
         options = DeltaInsertOptions(mode=request.mode, constraints=request.constraints)
         if select_sql is None:

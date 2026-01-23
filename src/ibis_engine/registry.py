@@ -55,6 +55,7 @@ class DatasetLocation:
     partitioning: str | None = "hive"
     read_options: Mapping[str, object] = field(default_factory=dict)
     storage_options: Mapping[str, str] = field(default_factory=dict)
+    delta_log_storage_options: Mapping[str, str] = field(default_factory=dict)
     delta_scan: DeltaScanOptions | None = None
     delta_cdf_options: DeltaCdfOptions | None = None
     delta_write_policy: DeltaWritePolicy | None = None
@@ -78,6 +79,7 @@ class ReadDatasetParams:
     dataset_format: DatasetFormat
     read_options: Mapping[str, object] | None = None
     storage_options: Mapping[str, str] | None = None
+    delta_log_storage_options: Mapping[str, str] | None = None
     filesystem: object | None = None
     partitioning: str | None = None
     table_name: str | None = None
@@ -236,6 +238,9 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "partitioning": loc.partitioning,
                 "datafusion_provider": loc.datafusion_provider,
                 "storage_options": dict(loc.storage_options) if loc.storage_options else None,
+                "delta_log_storage_options": (
+                    dict(loc.delta_log_storage_options) if loc.delta_log_storage_options else None
+                ),
                 "delta_scan": delta_scan,
                 "delta_write_policy": delta_write_policy,
                 "delta_schema_policy": delta_schema_policy,
@@ -331,6 +336,21 @@ def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | 
     return None
 
 
+def resolve_delta_log_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
+    """Return Delta log-store options for a dataset location.
+
+    Returns
+    -------
+    Mapping[str, str] | None
+        Log-store options for Delta table access.
+    """
+    if location.delta_log_storage_options:
+        return location.delta_log_storage_options
+    if location.storage_options:
+        return location.storage_options
+    return None
+
+
 def resolve_delta_write_policy(location: DatasetLocation) -> DeltaWritePolicy | None:
     """Return Delta write policy for a dataset location.
 
@@ -416,8 +436,9 @@ def read_dataset(
         options = dict(params.read_options or {})
         if params.table_name is not None:
             options.setdefault("table_name", params.table_name)
-        if params.storage_options:
-            options.setdefault("storage_options", dict(params.storage_options))
+        log_storage = params.delta_log_storage_options or params.storage_options
+        if log_storage:
+            options.setdefault("storage_options", dict(log_storage))
         version = options.get("version")
         if version is not None and not isinstance(version, int):
             options.pop("version", None)
@@ -463,6 +484,7 @@ def _read_via_datafusion_registry(
         partitioning=params.partitioning,
         read_options=dict(params.read_options or {}),
         storage_options=dict(params.storage_options or {}),
+        delta_log_storage_options=dict(params.delta_log_storage_options or {}),
         filesystem=params.filesystem,
         dataset_spec=params.dataset_spec,
         datafusion_scan=scan,

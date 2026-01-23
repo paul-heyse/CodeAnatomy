@@ -199,6 +199,10 @@ class DatafusionPlanArtifactRecord(DiagnosticsStruct, frozen=True):
     substrait_b64: str | None = None
     substrait_validation: Mapping[str, object] | None = None
     sqlglot_ast: bytes | bytearray | memoryview | None = None
+    ibis_decompile: str | None = None
+    ibis_sql: str | None = None
+    ibis_sql_pretty: str | None = None
+    ibis_graphviz: str | None = None
     read_dialect: str | None = None
     write_dialect: str | None = None
     canonical_fingerprint: str | None = None
@@ -609,6 +613,12 @@ def _plan_artifact_row(
         "substrait_b64": str(entry.substrait_b64) if entry.substrait_b64 is not None else None,
         "substrait_validation_status": substrait_status,
         "sqlglot_ast": _binary_payload(entry.sqlglot_ast),
+        "ibis_decompile": str(entry.ibis_decompile) if entry.ibis_decompile is not None else None,
+        "ibis_sql": str(entry.ibis_sql) if entry.ibis_sql is not None else None,
+        "ibis_sql_pretty": str(entry.ibis_sql_pretty)
+        if entry.ibis_sql_pretty is not None
+        else None,
+        "ibis_graphviz": str(entry.ibis_graphviz) if entry.ibis_graphviz is not None else None,
         "read_dialect": str(entry.read_dialect) if entry.read_dialect is not None else None,
         "write_dialect": str(entry.write_dialect) if entry.write_dialect is not None else None,
         "canonical_fingerprint": (

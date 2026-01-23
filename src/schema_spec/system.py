@@ -792,6 +792,7 @@ class DatasetOpenSpec:
     parquet_read_options: ds.ParquetReadOptions | None = None
     read_options: Mapping[str, object] = field(default_factory=dict)
     storage_options: Mapping[str, str] = field(default_factory=dict)
+    delta_log_storage_options: Mapping[str, str] = field(default_factory=dict)
     delta_version: int | None = None
     delta_timestamp: str | None = None
     discovery: DatasetDiscoveryOptions | None = field(default_factory=DatasetDiscoveryOptions)
@@ -862,6 +863,7 @@ class DatasetOpenSpec:
             dataset_format=self.dataset_format,
             read_options=self.read_options,
             storage_options=self.storage_options,
+            delta_log_storage_options=self.delta_log_storage_options,
             filesystem=self.filesystem,
             partitioning=self.partitioning,
             table_name=table_name,

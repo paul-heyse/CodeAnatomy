@@ -9,7 +9,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
@@ -69,6 +69,7 @@ from datafusion_engine.registry_bridge import (
     apply_projection_scan_overrides,
 )
 from datafusion_engine.schema_registry import has_schema, schema_for
+from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from engine.plan_cache import PlanCacheEntry, PlanCacheKey
 from ibis_engine.param_tables import scalar_param_signature
 from ibis_engine.params_bridge import datafusion_param_bindings
@@ -205,6 +206,7 @@ if TYPE_CHECKING:
     from datafusion.substrait import Consumer as SubstraitConsumerType
     from datafusion.substrait import Serde as SubstraitSerdeType
 
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from schema_spec.policies import ParquetColumnPolicy
 else:
     DataFusionLogicalPlanType = object
@@ -1030,6 +1032,32 @@ def datafusion_to_reader(
     return _apply_ordering(reader, ordering=ordering)
 
 
+def datafusion_read_table(
+    ctx: SessionContext,
+    table: object,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> DataFrame:
+    """Return a DataFusion DataFrame from a table provider without registration.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        DataFusion DataFrame for the table provider.
+    """
+    df = ctx.read_table(table)
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return df
+    runtime_profile.diagnostics_sink.record_artifact(
+        "datafusion_read_table_v1",
+        {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "table_type": type(table).__name__,
+        },
+    )
+    return df
+
+
 def datafusion_partitioned_readers(df: DataFrame) -> list[pa.RecordBatchReader]:
     """Return partitioned stream readers when supported by DataFusion.
 
@@ -1443,6 +1471,119 @@ def _validated_param_bindings(
     return bindings
 
 
+def _is_named_param_value(value: object) -> bool:
+    if isinstance(value, (DataFrame, TableProviderCapsule, TableLike, RecordBatchReaderLike)):
+        return True
+    return hasattr(value, "__datafusion_table_provider__")
+
+
+def _named_param_type(value: object) -> str:
+    if isinstance(value, DataFrame):
+        return "DataFrame"
+    if isinstance(value, TableProviderCapsule):
+        return "TableProviderCapsule"
+    if isinstance(value, RecordBatchReaderLike):
+        return "RecordBatchReaderLike"
+    if isinstance(value, TableLike):
+        return "TableLike"
+    return type(value).__name__
+
+
+def _validated_named_params(
+    params: Mapping[str, object] | None,
+    *,
+    allowlist: Sequence[str] | None,
+) -> dict[str, object]:
+    if not params:
+        return {}
+    validated: dict[str, object] = {}
+    allowed = set(allowlist) if allowlist is not None else None
+    for name, value in params.items():
+        if not isinstance(name, str) or not name.isidentifier():
+            msg = f"Named parameter {name!r} is not a valid identifier."
+            raise ValueError(msg)
+        if allowed is not None and name not in allowed:
+            msg = f"Named parameter {name!r} is not allowlisted."
+            raise ValueError(msg)
+        if not _is_named_param_value(value):
+            msg = f"Named parameter {name!r} must be table-like."
+            raise ValueError(msg)
+        validated[name] = value
+    return validated
+
+
+def _emit_named_param_diagnostics(
+    options: DataFusionCompileOptions,
+    *,
+    params: Mapping[str, object],
+) -> None:
+    if not params:
+        return
+    payload = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "named_param_count": len(params),
+        "named_params": {name: _named_param_type(value) for name, value in params.items()},
+        "dialect": options.dialect,
+        "run_id": options.run_id,
+    }
+    if options.sql_ingest_hook is not None:
+        options.sql_ingest_hook(payload)
+        return
+    if options.runtime_profile is None or options.runtime_profile.diagnostics_sink is None:
+        return
+    options.runtime_profile.diagnostics_sink.record_artifact(
+        "datafusion_named_params_v1",
+        payload,
+    )
+
+
+def _sql_options_for_named_params(options: DataFusionCompileOptions) -> SQLOptions:
+    if options.sql_options is not None:
+        base = options.sql_options
+    elif options.runtime_profile is not None:
+        base = options.runtime_profile.sql_options()
+    else:
+        base = SQLOptions()
+    allow_ddl = False
+    allow_dml = False
+    allow_statements = False
+    return (
+        base.with_allow_ddl(allow_ddl)
+        .with_allow_dml(allow_dml)
+        .with_allow_statements(allow_statements)
+    )
+
+
+def _ensure_named_param_slot(ctx: SessionContext, name: str) -> None:
+    try:
+        ctx.table(name)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        return
+    msg = f"Named parameter {name!r} collides with an existing table."
+    raise ValueError(msg)
+
+
+@contextlib.contextmanager
+def _register_named_params(
+    ctx: SessionContext,
+    params: Mapping[str, object],
+) -> Iterator[None]:
+    if not params:
+        yield
+        return
+    registered: list[str] = []
+    try:
+        for name, value in params.items():
+            _ensure_named_param_slot(ctx, name)
+            ctx.register_table(name, value)
+            registered.append(name)
+        yield
+    finally:
+        for name in registered:
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                ctx.deregister_table(name)
+
+
 @dataclass(frozen=True)
 class DataFusionPlanArtifacts:
     """Captured DataFusion plan artifacts for diagnostics."""
@@ -1458,6 +1599,7 @@ class DataFusionPlanArtifacts:
     ibis_decompile: str | None = None
     ibis_sql: str | None = None
     ibis_sql_pretty: str | None = None
+    ibis_graphviz: str | None = None
     read_dialect: str | None = None
     write_dialect: str | None = None
     canonical_fingerprint: str | None = None
@@ -1503,6 +1645,7 @@ class DataFusionPlanArtifacts:
             "ibis_decompile": self.ibis_decompile,
             "ibis_sql": self.ibis_sql,
             "ibis_sql_pretty": self.ibis_sql_pretty,
+            "ibis_graphviz": self.ibis_graphviz,
             "read_dialect": self.read_dialect,
             "write_dialect": self.write_dialect,
             "canonical_fingerprint": self.canonical_fingerprint,
@@ -1557,6 +1700,7 @@ class DataFusionPlanArtifacts:
             "ibis_decompile": self.ibis_decompile,
             "ibis_sql": self.ibis_sql,
             "ibis_sql_pretty": self.ibis_sql_pretty,
+            "ibis_graphviz": self.ibis_graphviz,
             "read_dialect": self.read_dialect,
             "write_dialect": self.write_dialect,
             "canonical_fingerprint": self.canonical_fingerprint,
@@ -1620,6 +1764,9 @@ def execute_dml(
         Raised when the SQL statement is not DML or violates policy.
     """
     resolved = options or DataFusionDmlOptions()
+    if resolved.named_params:
+        msg = "Named parameters are not supported for DML execution."
+        raise ValueError(msg)
     _ensure_dialect(resolved.dialect)
     expr = parse_sql_strict(
         sql,
@@ -2168,14 +2315,14 @@ def _collect_normalized_sql(
 
 def _collect_ibis_artifacts(
     options: DataFusionCompileOptions,
-) -> tuple[str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str | None]:
     ibis_expr = options.ibis_expr
     if ibis_expr is None:
-        return None, None, None
+        return None, None, None, None
     from ibis.expr.types import Table, Value
 
     if not isinstance(ibis_expr, (Table, Value)):
-        return None, None, None
+        return None, None, None, None
     from ibis_engine.sql_bridge import ibis_plan_artifacts
 
     ibis_payload = ibis_plan_artifacts(ibis_expr, dialect=options.dialect)
@@ -2183,6 +2330,7 @@ def _collect_ibis_artifacts(
         ibis_payload["ibis_decompile"],
         ibis_payload["ibis_sql"],
         ibis_payload["ibis_sql_pretty"],
+        ibis_payload.get("ibis_graphviz"),
     )
 
 
@@ -2236,7 +2384,9 @@ def collect_plan_artifacts(
         options=options,
         policy=inputs.policy,
     )
-    ibis_decompile, ibis_sql, ibis_sql_pretty = _collect_ibis_artifacts(options)
+    ibis_decompile, ibis_sql, ibis_sql_pretty, ibis_graphviz = _collect_ibis_artifacts(
+        options
+    )
     return DataFusionPlanArtifacts(
         plan_hash=inputs.plan_hash,
         sql=inputs.sql,
@@ -2249,6 +2399,7 @@ def collect_plan_artifacts(
         ibis_decompile=ibis_decompile,
         ibis_sql=ibis_sql,
         ibis_sql_pretty=ibis_sql_pretty,
+        ibis_graphviz=ibis_graphviz,
         read_dialect=inputs.policy.read_dialect,
         write_dialect=inputs.policy.write_dialect,
         canonical_fingerprint=canonical_fingerprint,
@@ -2284,13 +2435,38 @@ def execute_sql(
     -------
     pyarrow.RecordBatchReader
         Record batch reader over the SQL results.
+
+    Raises
+    ------
+    ValueError
+        Raised when named parameters are invalid or violate read-only policy.
     """
     _ensure_dialect(options.dialect)
+    named_params = _validated_named_params(
+        options.named_params,
+        allowlist=options.param_identifier_allowlist,
+    )
     expr = parse_sql_strict(
         sql,
         dialect=options.dialect,
         preserve_params=options.params is not None,
     )
+    if named_params:
+        read_only_policy = DataFusionSqlPolicy()
+        violations = _policy_violations(expr, read_only_policy)
+        if violations:
+            msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
+            raise ValueError(msg)
+        safe_options = replace(
+            options,
+            sql_options=_sql_options_for_named_params(options),
+            sql_policy=read_only_policy,
+            sql_policy_name=None,
+        )
+        _emit_named_param_diagnostics(safe_options, params=named_params)
+        with _register_named_params(ctx, named_params):
+            df = df_from_sqlglot_or_sql(ctx, expr, options=safe_options)
+            return _collect_reader(df)
     df = df_from_sqlglot_or_sql(ctx, expr, options=options)
     return _collect_reader(df)
 
@@ -2912,6 +3088,7 @@ __all__ = [
     "datafusion_insert_delta",
     "datafusion_insert_from_dataframe",
     "datafusion_partitioned_readers",
+    "datafusion_read_table",
     "datafusion_to_async_batches",
     "datafusion_to_reader",
     "datafusion_to_table",

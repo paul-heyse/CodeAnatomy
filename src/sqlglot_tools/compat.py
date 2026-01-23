@@ -63,4 +63,66 @@ def diff(left: Expression, right: Expression) -> Iterable[object]:
     return cast("Iterable[object]", diff_fn(left, right))
 
 
-__all__ = ["Dialect", "DialectType", "ErrorLevel", "Expression", "diff", "exp", "parse_one"]
+def pushdown_predicates_transform(expr: Expression) -> Expression:
+    """Return an expression with predicates pushed down when supported.
+
+    Returns
+    -------
+    Expression
+        SQLGlot expression with predicate pushdown applied when available.
+    """
+    try:
+        from sqlglot.optimizer.pushdown_predicates import (
+            pushdown_predicates as _pushdown_predicates,
+        )
+    except ImportError:
+        return expr
+    return _pushdown_predicates(expr)
+
+
+def pushdown_projections_transform(expr: Expression) -> Expression:
+    """Return an expression with projections pushed down when supported.
+
+    Returns
+    -------
+    Expression
+        SQLGlot expression with projection pushdown applied when available.
+    """
+    try:
+        from sqlglot.optimizer.pushdown_projections import (
+            pushdown_projections as _pushdown_projections,
+        )
+    except ImportError:
+        return expr
+    return _pushdown_projections(expr)
+
+
+def add_recursive_cte_column_names_transform(expr: Expression) -> Expression:
+    """Return an expression with recursive CTE column names when supported.
+
+    Returns
+    -------
+    Expression
+        SQLGlot expression with recursive CTE columns applied when available.
+    """
+    try:
+        from sqlglot.transforms import (
+            add_recursive_cte_column_names as _add_recursive_cte_column_names,
+        )
+    except ImportError:
+        return expr
+    return _add_recursive_cte_column_names(expr)
+
+
+__all__ = [
+    "Dialect",
+    "DialectType",
+    "ErrorLevel",
+    "Expression",
+    "add_recursive_cte_column_names_transform",
+    "diff",
+    "exp",
+    "parse_one",
+    "pushdown_predicates_transform",
+    "pushdown_projections_transform",
+]

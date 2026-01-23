@@ -42,6 +42,7 @@ from ibis_engine.io_bridge import (
 )
 from ibis_engine.params_bridge import param_binding_mode, param_binding_signature
 from ibis_engine.plan import IbisPlan
+from ibis_engine.registry import resolve_delta_log_storage_options
 from ibis_engine.runner import IbisCachePolicy
 from schema_spec.policies import DataFusionWritePolicy
 from storage.deltalake import DeltaWriteResult
@@ -603,6 +604,7 @@ def _write_delta(
     *,
     context: _DeltaWriteContext,
 ) -> None:
+    log_storage_options = resolve_delta_log_storage_options(context.location)
     datafusion_result = write_ibis_dataset_delta(
         reader,
         str(context.location.path),
@@ -612,6 +614,7 @@ def _write_delta(
             delta_options=IbisDeltaWriteOptions(
                 mode="append",
                 storage_options=context.location.storage_options,
+                log_storage_options=log_storage_options,
             ),
         ),
     )

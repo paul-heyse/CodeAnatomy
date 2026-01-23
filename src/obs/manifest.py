@@ -458,7 +458,10 @@ def _location_metadata(loc: DatasetLocation | None) -> DatasetRecordMetadata:
     delta_protocol: JsonDict | None = None
     delta_history: JsonDict | None = None
     if loc is not None and fmt == "delta":
-        storage_options = dict(loc.storage_options) if loc.storage_options is not None else None
+        from ibis_engine.registry import resolve_delta_log_storage_options
+
+        log_storage = resolve_delta_log_storage_options(loc)
+        storage_options = dict(log_storage) if log_storage is not None else None
         version, features, commit, protocol, history = _delta_metadata_from_path(
             path, storage_options=storage_options
         )

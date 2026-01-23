@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from datafusion_engine.bridge import (
+        datafusion_read_table,
         datafusion_to_table,
         ibis_plan_to_datafusion,
         ibis_plan_to_table,
@@ -77,6 +78,7 @@ __all__ = [
     "SchemaIntrospector",
     "apply_execution_label",
     "apply_execution_policy",
+    "datafusion_read_table",
     "datafusion_to_table",
     "df_from_sqlglot",
     "has_schema",
@@ -119,6 +121,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "apply_execution_label": ("datafusion_engine.runtime", "apply_execution_label"),
     "apply_execution_policy": ("datafusion_engine.runtime", "apply_execution_policy"),
     "register_view_specs": ("datafusion_engine.runtime", "register_view_specs"),
+    "datafusion_read_table": ("datafusion_engine.bridge", "datafusion_read_table"),
     "datafusion_to_table": ("datafusion_engine.bridge", "datafusion_to_table"),
     "df_from_sqlglot": ("datafusion_engine.df_builder", "df_from_sqlglot"),
     "ibis_plan_to_datafusion": ("datafusion_engine.bridge", "ibis_plan_to_datafusion"),

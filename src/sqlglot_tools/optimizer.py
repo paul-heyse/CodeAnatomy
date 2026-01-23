@@ -47,7 +47,17 @@ from sqlglot.transforms import (
 
 from arrowdsl.io.ipc import payload_hash
 from serde_msgspec import StructBase
-from sqlglot_tools.compat import Dialect, DialectType, ErrorLevel, Expression, exp, parse_one
+from sqlglot_tools.compat import (
+    Dialect,
+    DialectType,
+    ErrorLevel,
+    Expression,
+    add_recursive_cte_column_names_transform,
+    exp,
+    parse_one,
+    pushdown_predicates_transform,
+    pushdown_projections_transform,
+)
 
 type SchemaMappingNode = Mapping[str, str] | Mapping[str, SchemaMappingNode]
 type SchemaMapping = Mapping[str, SchemaMappingNode]
@@ -576,10 +586,13 @@ def default_sqlglot_policy() -> SqlGlotPolicy:
             _rewrite_semi_anti_join,
             eliminate_qualify,
             move_ctes_to_top_level,
+            add_recursive_cte_column_names_transform,
             _rewrite_explode_projection,
             _rewrite_map_access,
             _rewrite_span_named_struct,
             unnest_to_explode,
+            pushdown_projections_transform,
+            pushdown_predicates_transform,
             ensure_bools,
         ),
         expand_stars=True,

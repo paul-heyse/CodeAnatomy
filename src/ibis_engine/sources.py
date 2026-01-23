@@ -140,6 +140,7 @@ class IbisDeltaWriteOptions:
     app_id: str | None = None
     version: int | None = None
     storage_options: Mapping[str, str] | None = None
+    log_storage_options: Mapping[str, str] | None = None
 
 
 def table_to_ibis(
@@ -487,7 +488,6 @@ def write_delta_ibis(
     path: str,
     *,
     options: IbisDeltaWriteOptions | None = None,
-    storage_options: Mapping[str, str] | None = None,
 ) -> int | None:
     """Write a Delta table via the backend to_delta method.
 
@@ -501,8 +501,6 @@ def write_delta_ibis(
         Delta table path.
     options : IbisDeltaWriteOptions | None
         Delta write options.
-    storage_options : Mapping[str, str] | None
-        Storage options to merge with the write options.
 
     Returns
     -------
@@ -524,7 +522,7 @@ def write_delta_ibis(
     if resolved.predicate is not None and resolved.mode != "overwrite":
         msg = "Delta predicate filters require overwrite mode."
         raise ValueError(msg)
-    merged_storage = _merge_storage_options(resolved.storage_options, storage_options)
+    storage_payload = resolved.log_storage_options or resolved.storage_options
     kwargs: dict[str, object] = {
         "mode": resolved.mode,
         "predicate": resolved.predicate,
@@ -532,7 +530,7 @@ def write_delta_ibis(
         "configuration": dict(resolved.configuration) if resolved.configuration else None,
         "target_file_size": resolved.target_file_size,
         "writer_properties": resolved.writer_properties,
-        "storage_options": dict(merged_storage) if merged_storage else None,
+        "storage_options": dict(storage_payload) if storage_payload else None,
     }
     if resolved.schema_mode is not None:
         kwargs["schema_mode"] = resolved.schema_mode
@@ -542,7 +540,7 @@ def write_delta_ibis(
     if commit_properties is not None:
         kwargs["commit_properties"] = commit_properties
     to_delta(expr, path, **_filter_kwargs(to_delta, kwargs))
-    return _delta_table_version(path, storage_options=merged_storage)
+    return _delta_table_version(path, storage_options=storage_payload)
 
 
 def _commit_properties(options: IbisDeltaWriteOptions) -> CommitProperties | None:
@@ -556,18 +554,6 @@ def _commit_properties(options: IbisDeltaWriteOptions) -> CommitProperties | Non
         app_transactions=app_transactions,
         custom_metadata=custom_metadata,
     )
-
-
-def _merge_storage_options(
-    base: Mapping[str, str] | None,
-    overrides: Mapping[str, str] | None,
-) -> Mapping[str, str] | None:
-    merged: dict[str, str] = {}
-    if base:
-        merged.update({str(key): str(value) for key, value in base.items()})
-    if overrides:
-        merged.update({str(key): str(value) for key, value in overrides.items()})
-    return merged or None
 
 
 def _delta_table_version(

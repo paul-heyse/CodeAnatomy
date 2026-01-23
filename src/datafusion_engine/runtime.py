@@ -214,6 +214,9 @@ _SQL_SURFACES_SCHEMA = pa.struct(
 )
 _EXTENSIONS_SCHEMA = pa.struct(
     [
+        pa.field("delta_session_defaults_enabled", pa.bool_()),
+        pa.field("delta_querybuilder_enabled", pa.bool_()),
+        pa.field("delta_data_checker_enabled", pa.bool_()),
         pa.field("delta_plan_codecs_enabled", pa.bool_()),
         pa.field("delta_plan_codec_physical", pa.string()),
         pa.field("delta_plan_codec_logical", pa.string()),
@@ -1935,12 +1938,15 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         },
         "sql_surfaces": {
             "enable_information_schema": profile.enable_information_schema,
-            "enable_ident_normalization": profile.enable_ident_normalization,
+            "enable_ident_normalization": _effective_ident_normalization(profile),
             "enable_url_table": profile.enable_url_table,
             "sql_parser_dialect": parser_dialect,
             "ansi_mode": ansi_mode,
         },
         "extensions": {
+            "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
+            "delta_querybuilder_enabled": profile.enable_delta_querybuilder,
+            "delta_data_checker_enabled": profile.enable_delta_data_checker,
             "delta_plan_codecs_enabled": profile.enable_delta_plan_codecs,
             "delta_plan_codec_physical": profile.delta_plan_codec_physical,
             "delta_plan_codec_logical": profile.delta_plan_codec_logical,
@@ -1977,9 +1983,10 @@ def _apply_optional_settings(
 
 
 def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]:
+    enable_ident_normalization = _effective_ident_normalization(profile)
     payload: dict[str, str] = {
         "datafusion.sql_parser.enable_ident_normalization": str(
-            profile.enable_ident_normalization
+            enable_ident_normalization
         ).lower()
     }
     optional_values = {
@@ -1996,6 +2003,12 @@ def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, st
     }
     _apply_optional_settings(payload, optional_values)
     return payload
+
+
+def _effective_ident_normalization(profile: DataFusionRuntimeProfile) -> bool:
+    if profile.enable_delta_session_defaults:
+        return False
+    return profile.enable_ident_normalization
 
 
 def _extra_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]:
@@ -2093,7 +2106,7 @@ class _RuntimeDiagnosticsMixin:
             "memory_limit_bytes": profile.memory_limit_bytes,
             "default_catalog": profile.default_catalog,
             "default_schema": profile.default_schema,
-            "enable_ident_normalization": profile.enable_ident_normalization,
+            "enable_ident_normalization": _effective_ident_normalization(profile),
             "catalog_auto_load_location": profile.catalog_auto_load_location,
             "catalog_auto_load_format": profile.catalog_auto_load_format,
             "ast_catalog_location": profile.ast_catalog_location,
@@ -2165,6 +2178,9 @@ class _RuntimeDiagnosticsMixin:
             "expr_planner_hook": bool(profile.expr_planner_hook),
             "expr_planner_names": list(profile.expr_planner_names),
             "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
+            "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
+            "delta_querybuilder_enabled": profile.enable_delta_querybuilder,
+            "delta_data_checker_enabled": profile.enable_delta_data_checker,
             "delta_plan_codecs_enabled": profile.enable_delta_plan_codecs,
             "delta_plan_codec_physical": profile.delta_plan_codec_physical,
             "delta_plan_codec_logical": profile.delta_plan_codec_logical,
@@ -2281,12 +2297,15 @@ class _RuntimeDiagnosticsMixin:
             },
             "sql_surfaces": {
                 "enable_information_schema": profile.enable_information_schema,
-                "enable_ident_normalization": profile.enable_ident_normalization,
+                "enable_ident_normalization": _effective_ident_normalization(profile),
                 "enable_url_table": profile.enable_url_table,
                 "sql_parser_dialect": parser_dialect,
                 "ansi_mode": ansi_mode,
             },
             "extensions": {
+                "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
+                "delta_querybuilder_enabled": profile.enable_delta_querybuilder,
+                "delta_data_checker_enabled": profile.enable_delta_data_checker,
                 "delta_plan_codecs_enabled": profile.enable_delta_plan_codecs,
                 "delta_plan_codec_physical": profile.delta_plan_codec_physical,
                 "delta_plan_codec_logical": profile.delta_plan_codec_logical,
@@ -2419,6 +2438,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     enable_udfs: bool = True
     udf_catalog_policy: Literal["default", "strict"] = "default"
     require_delta: bool = True
+    enable_delta_session_defaults: bool = False
+    enable_delta_querybuilder: bool = False
+    enable_delta_data_checker: bool = False
     enable_delta_plan_codecs: bool = False
     delta_plan_codec_physical: str = "delta_physical"
     delta_plan_codec_logical: str = "delta_logical"
@@ -2482,7 +2504,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         config = config.with_information_schema(self.enable_information_schema)
         config = _apply_identifier_settings(
             config,
-            enable_ident_normalization=self.enable_ident_normalization,
+            enable_ident_normalization=_effective_ident_normalization(self),
         )
         config = _apply_optional_int_config(
             config,
@@ -2613,6 +2635,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return cached
         ctx = self._build_session_context()
         ctx = self._apply_url_table(ctx)
+        self._apply_delta_session_defaults(ctx)
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
@@ -2644,6 +2667,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         """
         ctx = self._build_session_context()
         ctx = self._apply_url_table(ctx)
+        self._apply_delta_session_defaults(ctx)
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
@@ -2763,6 +2787,47 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = "datafusion_ext.install_delta_table_factory is unavailable."
             raise TypeError(msg)
         installer(ctx, "DELTATABLE")
+
+    def _apply_delta_session_defaults(self, ctx: SessionContext) -> None:
+        """Apply Delta session defaults when enabled.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when the DataFusion extension module is unavailable.
+        """
+        if not self.enable_delta_session_defaults:
+            return
+        available = True
+        installed = False
+        error: str | None = None
+        cause: Exception | None = None
+        try:
+            module = importlib.import_module("datafusion_ext")
+        except ImportError as exc:
+            available = False
+            error = str(exc)
+            cause = exc
+        else:
+            applier = getattr(module, "apply_delta_session_defaults", None)
+            if not callable(applier):
+                error = "datafusion_ext.apply_delta_session_defaults is unavailable."
+            else:
+                try:
+                    applier(ctx)
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    error = str(exc)
+                    cause = exc
+                else:
+                    installed = True
+        self._record_delta_session_defaults(
+            available=available,
+            installed=installed,
+            error=error,
+        )
+        if error is not None:
+            msg = "Delta session defaults require datafusion_ext."
+            raise RuntimeError(msg) from cause
 
     def _install_udfs(self, ctx: SessionContext) -> None:
         """Install registered UDFs on the session context."""
@@ -4023,6 +4088,38 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             },
         )
 
+    @staticmethod
+    def _install_delta_plan_codecs_extension(
+        ctx: SessionContext,
+    ) -> tuple[bool, bool]:
+        try:
+            module = importlib.import_module("datafusion_ext")
+        except ImportError:
+            return False, False
+        installer = getattr(module, "install_delta_plan_codecs", None)
+        if not callable(installer):
+            return False, False
+        try:
+            result = installer(ctx)
+        except (RuntimeError, TypeError, ValueError):
+            return True, False
+        return True, bool(result) if result is not None else True
+
+    def _install_delta_plan_codecs_context(
+        self, ctx: SessionContext
+    ) -> tuple[bool, bool]:
+        register = getattr(ctx, "register_extension_codecs", None)
+        if not callable(register):
+            return False, False
+        try:
+            register(self.delta_plan_codec_physical, self.delta_plan_codec_logical)
+        except TypeError:
+            try:
+                register(self.delta_plan_codec_logical, self.delta_plan_codec_physical)
+            except TypeError:
+                return True, False
+        return True, True
+
     def ensure_delta_plan_codecs(self, ctx: SessionContext) -> bool:
         """Install Delta plan codecs when enabled.
 
@@ -4033,21 +4130,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         """
         if not self.enable_delta_plan_codecs:
             return False
-        register = getattr(ctx, "register_extension_codecs", None)
-        available = callable(register)
-        installed = False
-        if available:
-            try:
-                register(self.delta_plan_codec_physical, self.delta_plan_codec_logical)
-            except TypeError:
-                try:
-                    register(self.delta_plan_codec_logical, self.delta_plan_codec_physical)
-                except TypeError:
-                    installed = False
-                else:
-                    installed = True
-            else:
-                installed = True
+        available, installed = self._install_delta_plan_codecs_extension(ctx)
+        if not available:
+            available, installed = self._install_delta_plan_codecs_context(ctx)
         self._record_delta_plan_codecs(
             available=available,
             installed=installed,
@@ -4073,6 +4158,25 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "installed": installed,
                 "physical_codec": self.delta_plan_codec_physical,
                 "logical_codec": self.delta_plan_codec_logical,
+            },
+        )
+
+    def _record_delta_session_defaults(
+        self,
+        *,
+        available: bool,
+        installed: bool,
+        error: str | None,
+    ) -> None:
+        if self.diagnostics_sink is None:
+            return
+        self.diagnostics_sink.record_artifact(
+            "datafusion_delta_session_defaults_v1",
+            {
+                "enabled": self.enable_delta_session_defaults,
+                "available": available,
+                "installed": installed,
+                "error": error,
             },
         )
 

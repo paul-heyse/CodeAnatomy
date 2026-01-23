@@ -100,11 +100,21 @@ def test_normalize_expr_pushes_predicates() -> None:
             sql=sql,
         ),
     )
-    expected = (
-        'SELECT "_0"."a" AS "a", "_0"."b" AS "b" FROM (SELECT "t"."a" AS "a", '
-        '"t"."b" AS "b" FROM "t" AS "t" WHERE "t"."a" > 1) AS "_0" WHERE TRUE'
+    inner_wheres = [
+        select.args.get("where")
+        for select in normalized.find_all(exp.Select)
+        if select is not normalized
+    ]
+    assert any(
+        where is not None
+        and "a" in where.sql(dialect=policy.read_dialect)
+        and "> 1" in where.sql(dialect=policy.read_dialect)
+        for where in inner_wheres
     )
-    assert sqlglot_sql(normalized, policy=policy) == expected
+    outer_where = normalized.args.get("where")
+    if outer_where is not None:
+        assert isinstance(outer_where.this, exp.Boolean)
+        assert outer_where.this.this is True
 
 
 @pytest.mark.parametrize(

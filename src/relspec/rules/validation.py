@@ -1309,7 +1309,8 @@ def _rule_ir_metadata(
     context: SqlGlotDiagnosticsContext,
 ) -> dict[str, str]:
     metadata: dict[str, str] = {}
-    metadata.update(ibis_plan_artifacts(rule_ctx.source.expr, dialect="datafusion"))
+    ibis_metadata = ibis_plan_artifacts(rule_ctx.source.expr, dialect="datafusion")
+    metadata.update({key: value for key, value in ibis_metadata.items() if value is not None})
     try:
         checkpoint = compile_checkpoint(
             rule_ctx.source.expr,

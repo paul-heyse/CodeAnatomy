@@ -318,13 +318,13 @@ def ibis_plan_artifacts(
     expr: Expr,
     *,
     dialect: str | None = None,
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     """Return Ibis-level artifacts for diagnostics.
 
     Returns
     -------
-    dict[str, str]
-        Ibis decompile and SQL artifacts.
+    dict[str, str | None]
+        Ibis decompile, SQL, and optional graphviz artifacts.
     """
     try:
         decompile = ibis.decompile(expr)
@@ -338,10 +338,22 @@ def ibis_plan_artifacts(
         sql_pretty = expr.to_sql(dialect=dialect, pretty=True)
     except (NotImplementedError, RuntimeError, TypeError, ValueError) as exc:
         sql_pretty = f"ERROR: {exc}"
+    graphviz: str | None = None
+    try:
+        from ibis.expr.visualize import to_graph
+    except (ImportError, ModuleNotFoundError):
+        graphviz = None
+    else:
+        try:
+            graph = to_graph(expr)
+            graphviz = graph.source if hasattr(graph, "source") else str(graph)
+        except (NotImplementedError, RuntimeError, TypeError, ValueError) as exc:
+            graphviz = f"ERROR: {exc}"
     return {
         "ibis_decompile": decompile,
         "ibis_sql": sql,
         "ibis_sql_pretty": sql_pretty,
+        "ibis_graphviz": graphviz,
     }
 
 

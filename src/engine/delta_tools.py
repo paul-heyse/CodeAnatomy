@@ -7,12 +7,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from arrowdsl.core.interop import RecordBatchReaderLike
 from storage.deltalake import (
     DeltaVacuumOptions,
     StorageOptions,
     delta_history_snapshot,
     delta_protocol_snapshot,
     delta_table_version,
+    query_builder_available,
+    query_delta_via_querybuilder,
     vacuum_delta,
 )
 
@@ -40,14 +43,43 @@ class DeltaVacuumResult:
     retention_hours: int | None
 
 
-def delta_history(
-    *,
-    path: str,
-    storage_options: StorageOptions | None = None,
-    limit: int = 1,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-    dataset: str | None = None,
-) -> DeltaHistorySnapshot:
+@dataclass(frozen=True)
+class DeltaHistoryRequest:
+    """Inputs for Delta history snapshots."""
+
+    path: str
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+    limit: int = 1
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    dataset: str | None = None
+
+
+@dataclass(frozen=True)
+class DeltaVacuumRequest:
+    """Inputs for Delta vacuum operations."""
+
+    path: str
+    options: DeltaVacuumOptions | None = None
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    dataset: str | None = None
+
+
+@dataclass(frozen=True)
+class DeltaQueryRequest:
+    """Inputs for Delta QueryBuilder SQL execution."""
+
+    path: str
+    sql: str
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+    table_name: str = "t"
+    runtime_profile: DataFusionRuntimeProfile | None = None
+
+
+def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
     """Return Delta history/protocol snapshots and record diagnostics.
 
     Returns
@@ -56,24 +88,33 @@ def delta_history(
         History and protocol snapshots for the Delta table.
     """
     history = delta_history_snapshot(
-        path,
-        storage_options=storage_options,
-        limit=limit,
+        request.path,
+        storage_options=request.storage_options,
+        log_storage_options=request.log_storage_options,
+        limit=request.limit,
     )
-    protocol = delta_protocol_snapshot(path, storage_options=storage_options)
-    version = delta_table_version(path, storage_options=storage_options)
+    protocol = delta_protocol_snapshot(
+        request.path,
+        storage_options=request.storage_options,
+        log_storage_options=request.log_storage_options,
+    )
+    version = delta_table_version(
+        request.path,
+        storage_options=request.storage_options,
+        log_storage_options=request.log_storage_options,
+    )
     snapshot = DeltaHistorySnapshot(
-        path=path,
+        path=request.path,
         version=version,
         history=history,
         protocol=protocol,
     )
     _record_maintenance(
-        runtime_profile,
+        request.runtime_profile,
         payload={
             "event_time_unix_ms": int(time.time() * 1000),
-            "dataset": dataset,
-            "path": path,
+            "dataset": request.dataset,
+            "path": request.path,
             "operation": "history",
             "version": version,
             "history": history,
@@ -83,14 +124,7 @@ def delta_history(
     return snapshot
 
 
-def delta_vacuum(
-    *,
-    path: str,
-    options: DeltaVacuumOptions | None = None,
-    storage_options: StorageOptions | None = None,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-    dataset: str | None = None,
-) -> DeltaVacuumResult:
+def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
     """Run Delta vacuum and record diagnostics.
 
     Returns
@@ -98,24 +132,25 @@ def delta_vacuum(
     DeltaVacuumResult
         Vacuum result payload.
     """
-    resolved = options or DeltaVacuumOptions()
+    resolved = request.options or DeltaVacuumOptions()
     removed = vacuum_delta(
-        path,
+        request.path,
         options=resolved,
-        storage_options=storage_options,
+        storage_options=request.storage_options,
+        log_storage_options=request.log_storage_options,
     )
     result = DeltaVacuumResult(
-        path=path,
+        path=request.path,
         removed_files=tuple(removed),
         dry_run=resolved.dry_run,
         retention_hours=resolved.retention_hours,
     )
     _record_maintenance(
-        runtime_profile,
+        request.runtime_profile,
         payload={
             "event_time_unix_ms": int(time.time() * 1000),
-            "dataset": dataset,
-            "path": path,
+            "dataset": request.dataset,
+            "path": request.path,
             "operation": "vacuum",
             "dry_run": resolved.dry_run,
             "retention_hours": resolved.retention_hours,
@@ -135,4 +170,61 @@ def _record_maintenance(
     runtime_profile.diagnostics_sink.record_artifact("delta_maintenance_v1", payload)
 
 
-__all__ = ["DeltaHistorySnapshot", "DeltaVacuumResult", "delta_history", "delta_vacuum"]
+def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
+    """Execute SQL against a Delta table using QueryBuilder.
+
+    Returns
+    -------
+    RecordBatchReaderLike
+        Streaming reader over the query results.
+
+    Raises
+    ------
+    ValueError
+        Raised when QueryBuilder execution is disabled or unavailable.
+    """
+    if request.runtime_profile is not None and not request.runtime_profile.enable_delta_querybuilder:
+        msg = "Delta QueryBuilder execution is disabled in the runtime profile."
+        raise ValueError(msg)
+    if not query_builder_available():
+        msg = "deltalake.QueryBuilder is unavailable."
+        raise ValueError(msg)
+    storage = request.log_storage_options or request.storage_options
+    reader = query_delta_via_querybuilder(
+        request.path,
+        request.sql,
+        table_name=request.table_name,
+        storage_options=storage,
+    )
+    _record_querybuilder(
+        request.runtime_profile,
+        payload={
+            "event_time_unix_ms": int(time.time() * 1000),
+            "path": request.path,
+            "sql": request.sql,
+            "table_name": request.table_name,
+        },
+    )
+    return reader
+
+
+def _record_querybuilder(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    payload: Mapping[str, object],
+) -> None:
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    runtime_profile.diagnostics_sink.record_artifact("delta_querybuilder_v1", payload)
+
+
+__all__ = [
+    "DeltaHistoryRequest",
+    "DeltaHistorySnapshot",
+    "DeltaQueryRequest",
+    "DeltaVacuumRequest",
+    "DeltaVacuumResult",
+    "delta_history",
+    "delta_query",
+    "delta_vacuum",
+]

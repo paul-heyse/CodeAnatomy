@@ -57,8 +57,14 @@ def _scan_external_table_options(location: DatasetLocation) -> dict[str, object]
 
 
 def _ddl_options_for_location(location: DatasetLocation) -> Mapping[str, object] | None:
+    from ibis_engine.registry import resolve_delta_log_storage_options
+
     options: dict[str, object] = {}
-    if location.storage_options:
+    if location.format == "delta":
+        log_storage = resolve_delta_log_storage_options(location)
+        if log_storage:
+            options.update(log_storage)
+    elif location.storage_options:
         options.update(location.storage_options)
     if location.read_options:
         options.update(location.read_options)

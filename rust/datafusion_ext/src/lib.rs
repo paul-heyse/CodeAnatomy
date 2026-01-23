@@ -70,16 +70,26 @@ use datafusion_expr::{
 };
 use datafusion_expr::expr_fn::col;
 use datafusion_physical_plan::ExecutionPlan;
-use deltalake::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
+use deltalake::delta_datafusion::{
+    DeltaCdfTableProvider,
+    DeltaDataChecker,
+    DeltaLogicalCodec,
+    DeltaPhysicalCodec,
+    DeltaScanConfig,
+    DeltaScanConfigBuilder,
+    DeltaTableFactory,
+    DeltaTableProvider,
+};
 use deltalake::kernel::models::actions::Add;
 use deltalake::kernel::scalars::ScalarExt;
+use deltalake::table::Constraint as DeltaConstraint;
 use deltalake::{ensure_table_uri, DeltaTableBuilder};
+use deltalake::errors::DeltaTableError;
 use tokio::runtime::Runtime;
 use datafusion_python::context::PySessionContext;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule, PyDict};
-use deltalake::delta_datafusion::{DeltaTableFactory, DeltaCdfTableProvider, DeltaScanConfig};
 use deltalake::operations::DeltaOps;
 use chrono::{DateTime, Utc};
 
@@ -1279,6 +1289,25 @@ fn install_delta_table_factory(ctx: PyRef<PySessionContext>, alias: String) -> P
     Ok(())
 }
 
+// Scope 4: Apply Delta session defaults to existing SessionContext
+#[pyfunction]
+fn apply_delta_session_defaults(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    let mut state = ctx.ctx.state_ref().write();
+    let config = state.config_mut();
+    config.options_mut().sql_parser.enable_ident_normalization = false;
+    Ok(())
+}
+
+// Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
+#[pyfunction]
+fn install_delta_plan_codecs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    let mut state = ctx.ctx.state_ref().write();
+    let config = state.config_mut();
+    config.set_extension(Arc::new(DeltaLogicalCodec {}));
+    config.set_extension(Arc::new(DeltaPhysicalCodec {}));
+    Ok(())
+}
+
 // Scope 8: Native Delta CDF TableProvider integration
 #[pyclass]
 #[derive(Clone)]
@@ -1515,6 +1544,86 @@ fn delta_scan_config_from_session(
         payload.set_item("schema_ipc", py.None())?;
     }
     Ok(payload.into())
+}
+
+// Scope 2: DeltaDataChecker integration
+#[pyfunction]
+fn delta_data_checker(
+    ctx: PyRef<PySessionContext>,
+    table_uri: String,
+    storage_options: Option<Vec<(String, String)>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    data_ipc: Vec<u8>,
+    extra_constraints: Option<Vec<String>>,
+) -> PyResult<Vec<String>> {
+    if version.is_some() && timestamp.is_some() {
+        return Err(PyValueError::new_err(
+            "Specify either version or timestamp, not both.",
+        ));
+    }
+    let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
+        PyValueError::new_err(format!("Invalid Delta table URI {table_uri:?}: {err}"))
+    })?;
+    let mut builder = DeltaTableBuilder::from_url(table_url).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to build Delta table: {err}"))
+    })?;
+    if let Some(options) = storage_options {
+        let options: HashMap<String, String> = options.into_iter().collect();
+        builder = builder.with_storage_options(options);
+    }
+    if let Some(version) = version {
+        builder = builder.with_version(version);
+    }
+    if let Some(timestamp) = timestamp {
+        builder = builder.with_datestring(timestamp).map_err(|err| {
+            PyValueError::new_err(format!("Invalid Delta timestamp: {err}"))
+        })?;
+    }
+    let runtime = Runtime::new().map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}"))
+    })?;
+    let table = runtime.block_on(builder.load()).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to load Delta table: {err}"))
+    })?;
+    let snapshot = table.snapshot().map_err(|err| {
+        PyRuntimeError::new_err(format!("Delta table snapshot unavailable: {err}"))
+    })?;
+    let snapshot = snapshot.snapshot().clone();
+    let mut checker = DeltaDataChecker::new(&snapshot).with_session_context(ctx.ctx.clone());
+    if let Some(extra_constraints) = extra_constraints {
+        let mut constraints: Vec<DeltaConstraint> = Vec::new();
+        for (idx, expr) in extra_constraints.into_iter().enumerate() {
+            let trimmed = expr.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let name = format!("extra_{idx}");
+            constraints.push(DeltaConstraint::new(&name, trimmed));
+        }
+        if !constraints.is_empty() {
+            checker = checker.with_extra_constraints(constraints);
+        }
+    }
+    let reader = StreamReader::try_new(Cursor::new(data_ipc), None)
+        .map_err(|err| PyValueError::new_err(format!("Failed to decode data IPC: {err}")))?;
+    let mut violations: Vec<String> = Vec::new();
+    for batch in reader {
+        let batch =
+            batch.map_err(|err| PyValueError::new_err(format!("Invalid IPC batch: {err}")))?;
+        match runtime.block_on(checker.check_batch(&batch)) {
+            Ok(()) => {}
+            Err(DeltaTableError::InvalidData { violations: batch_violations }) => {
+                violations.extend(batch_violations);
+            }
+            Err(err) => {
+                return Err(PyRuntimeError::new_err(format!(
+                    "Delta data check failed: {err}"
+                )));
+            }
+        }
+    }
+    Ok(violations)
 }
 
 fn normalize_position_encoding(value: &str) -> i32 {
@@ -1938,8 +2047,11 @@ fn datafusion_ext(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(registry_catalog_provider_factory, module)?)?;
     module.add_class::<DeltaCdfOptions>()?;
     module.add_function(wrap_pyfunction!(install_delta_table_factory, module)?)?;
+    module.add_function(wrap_pyfunction!(apply_delta_session_defaults, module)?)?;
+    module.add_function(wrap_pyfunction!(install_delta_plan_codecs, module)?)?;
     module.add_function(wrap_pyfunction!(delta_cdf_table_provider, module)?)?;
     module.add_function(wrap_pyfunction!(delta_table_provider_from_session, module)?)?;
     module.add_function(wrap_pyfunction!(delta_scan_config_from_session, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_data_checker, module)?)?;
     Ok(())
 }

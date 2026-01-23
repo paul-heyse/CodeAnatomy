@@ -349,6 +349,7 @@ def _resolve_delta_write_context(
         write_policy=write_policy,
         schema_policy=schema_policy,
         storage_options=output_config.delta_storage_options if output_config is not None else None,
+        log_storage_options=None,
     )
     constraints = spec.delta_constraints if spec is not None else ()
     storage_options = output_config.delta_storage_options if output_config is not None else None

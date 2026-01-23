@@ -25,7 +25,7 @@ Phase 4: Ibis debugging artifacts (Scope 11).
 ## Scope 1: Delta QueryBuilder adapter (embedded DataFusion in deltalake)
 Objective: add an optional, minimal SQL execution path that uses `deltalake.QueryBuilder` for Delta-only queries without `datafusion` Python dependency.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -44,15 +44,15 @@ Target files
 - `src/engine/delta_tools.py`
 
 Implementation checklist
-- [ ] Add a small adapter that wraps `QueryBuilder.register(...).execute(...)`.
-- [ ] Define a feature flag in runtime profile to enable QueryBuilder path.
-- [ ] Add diagnostics artifact capturing QueryBuilder usage (SQL + table path).
-- [ ] Ensure returned `RecordBatchReader` integrates with existing Arrow streaming flows.
+- [x] Add a small adapter that wraps `QueryBuilder.register(...).execute(...)`.
+- [x] Define a feature flag in runtime profile to enable QueryBuilder path.
+- [x] Add diagnostics artifact capturing QueryBuilder usage (SQL + table path).
+- [x] Ensure returned `RecordBatchReader` integrates with existing Arrow streaming flows.
 
 ## Scope 2: DeltaDataChecker integration for constraint enforcement
 Objective: leverage delta-rs embedded DataFusion checker for invariants/constraints on write and merge paths.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```rust
@@ -71,15 +71,15 @@ Target files
 - `src/ibis_engine/io_bridge.py`
 
 Implementation checklist
-- [ ] Expose a PyO3 function in `datafusion_ext` to run `DeltaDataChecker`.
-- [ ] Add a Python wrapper to call the checker after DataFusion writes.
-- [ ] Wire into Delta write/merge flows with explicit opt-in.
-- [ ] Emit diagnostics for constraint failures with table path + rule name.
+- [x] Expose a PyO3 function in `datafusion_ext` to run `DeltaDataChecker`.
+- [x] Add a Python wrapper to call the checker after DataFusion writes.
+- [x] Wire into Delta write/merge flows with explicit opt-in.
+- [x] Emit diagnostics for constraint failures with table path + rule name.
 
 ## Scope 3: Delta plan codecs (Logical + Physical) for plan serialization
 Objective: enable DataFusion plan (de)serialization for Delta table providers to support caching and distributed execution.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```rust
@@ -97,14 +97,14 @@ Target files
 - `src/datafusion_engine/runtime.py`
 
 Implementation checklist
-- [ ] Expose codec installation helper via `datafusion_ext`.
-- [ ] Add runtime profile switches for codec installation.
-- [ ] Record codec enablement in diagnostics snapshots.
+- [x] Expose codec installation helper via `datafusion_ext`.
+- [x] Add runtime profile switches for codec installation.
+- [x] Record codec enablement in diagnostics snapshots.
 
 ## Scope 4: Delta session defaults + case sensitivity utilities
 Objective: enforce consistent Delta session defaults and avoid casing drift between Delta schema and DataFusion parsing.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```rust
@@ -123,14 +123,14 @@ Target files
 - `src/datafusion_engine/registry_bridge.py`
 
 Implementation checklist
-- [ ] Add a `datafusion_ext` helper to apply Delta session defaults to a `SessionContext`.
-- [ ] Add `DataFusionRuntimeProfile` toggle for Delta session defaults.
-- [ ] Normalize identifier casing for Delta table registration in registry bridge.
+- [x] Add a `datafusion_ext` helper to apply Delta session defaults to a `SessionContext`.
+- [x] Add `DataFusionRuntimeProfile` toggle for Delta session defaults.
+- [x] Normalize identifier casing for Delta table registration in registry bridge.
 
 ## Scope 5: Delta object-store registry seam
 Objective: split Delta log-store configuration from bulk parquet read configuration and make registry-based object stores explicit.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -146,14 +146,14 @@ Target files
 - `src/datafusion_engine/registry_bridge.py`
 
 Implementation checklist
-- [ ] Extend `DatasetLocation` to accept log-store vs data-store options explicitly.
-- [ ] Thread log-store options to DeltaTable creation; keep filesystem for data reads separate.
-- [ ] Emit diagnostics showing which object store was bound for each Delta registration.
+- [x] Extend `DatasetLocation` to accept log-store vs data-store options explicitly.
+- [x] Thread log-store options to DeltaTable creation; keep filesystem for data reads separate.
+- [x] Emit diagnostics showing which object store was bound for each Delta registration.
 
 ## Scope 6: Delta Sharing provider integration (optional)
 Objective: add an optional integration path for Delta Sharing via `datafusion_delta_sharing` when enabled.
 
-Status: [ ] Remaining.
+Status: [ ] Optional (deferred).
 
 Code patterns
 ```rust
@@ -178,7 +178,7 @@ Implementation checklist
 ## Scope 7: DataFusion named parameters for safe table injection
 Objective: add `named_params` support to SQL execution paths to allow safe DataFrame/table injection without string templating.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -194,14 +194,14 @@ Target files
 - `src/ibis_engine/sql_bridge.py`
 
 Implementation checklist
-- [ ] Extend SQL execution helpers to accept `named_params`.
-- [ ] Add validation for DataFrame/table params and enforce read-only SQL options.
-- [ ] Add diagnostics for param binding shapes (names + types).
+- [x] Extend SQL execution helpers to accept `named_params`.
+- [x] Add validation for DataFrame/table params and enforce read-only SQL options.
+- [x] Add diagnostics for param binding shapes (names + types).
 
 ## Scope 8: SessionContext.read_table direct path
 Objective: add a helper for direct TableProvider reads without catalog registration for ephemeral scans.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -217,14 +217,14 @@ Target files
 - `src/datafusion_engine/registry_bridge.py`
 
 Implementation checklist
-- [ ] Add a `datafusion_read_table` helper that wraps `SessionContext.read_table`.
-- [ ] Use in ephemeral validation / diagnostics paths where registration is unnecessary.
-- [ ] Record usage in diagnostics for visibility.
+- [x] Add a `datafusion_read_table` helper that wraps `SessionContext.read_table`.
+- [x] Use in ephemeral validation / diagnostics paths where registration is unnecessary.
+- [x] Record usage in diagnostics for visibility.
 
 ## Scope 9: SQLGlot pushdown transforms + recursive CTE hygiene
 Objective: introduce compiler-level pushdown transformations and recursive CTE column normalization.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -242,14 +242,14 @@ Target files
 - `src/sqlglot_tools/compat.py`
 
 Implementation checklist
-- [ ] Add pushdown transforms to the SQLGlot rewrite lane.
-- [ ] Add recursive CTE name normalization transform (dialect-guarded).
-- [ ] Update optimizer policy hashes to include new transforms.
+- [x] Add pushdown transforms to the SQLGlot rewrite lane.
+- [x] Add recursive CTE name normalization transform (dialect-guarded).
+- [x] Update optimizer policy hashes to include new transforms.
 
 ## Scope 10: SQLGlot executor for golden tests
 Objective: add correctness tests that execute SQLGlot ASTs without DataFusion, ensuring rewrite validity.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -264,14 +264,14 @@ Target files
 - `src/sqlglot_tools/optimizer.py`
 
 Implementation checklist
-- [ ] Add minimal fixtures for AST execution.
-- [ ] Compare baseline SQL vs rewritten SQL for functional equivalence.
-- [ ] Gate rewrite additions on executor golden tests.
+- [x] Add minimal fixtures for AST execution.
+- [x] Compare baseline SQL vs rewritten SQL for functional equivalence.
+- [x] Gate rewrite additions on executor golden tests.
 
 ## Scope 11: Ibis GraphViz artifacts
 Objective: emit Ibis IR graph artifacts (`to_graph`) alongside existing SQLGlot and DataFusion artifacts for debugging.
 
-Status: [ ] Remaining.
+Status: [x] Complete.
 
 Code patterns
 ```python
@@ -287,9 +287,9 @@ Target files
 - `src/obs/repro.py`
 
 Implementation checklist
-- [ ] Add optional graph artifact emission to compiler checkpoints.
-- [ ] Store graph output in diagnostics bundle when enabled.
-- [ ] Ensure graph generation is skipped when GraphViz is unavailable.
+- [x] Add optional graph artifact emission to compiler checkpoints.
+- [x] Store graph output in diagnostics bundle when enabled.
+- [x] Ensure graph generation is skipped when GraphViz is unavailable.
 
 ## Files to decommission and delete
 None identified. This plan is additive; no existing modules are superseded. If the

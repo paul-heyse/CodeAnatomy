@@ -129,15 +129,21 @@ class RuleStage:
 
 @dataclass(frozen=True)
 class RuleDefinition:
-    """Centralized rule definition across CPG, normalize, and extract."""
+    """Centralized rule definition across CPG, normalize, and extract.
+
+    Note: The ``inputs`` field is deprecated for manual specification.
+    Dependencies are now inferred from Ibis/DataFusion expression analysis
+    at runtime. The field defaults to empty tuple and will be removed
+    in a future release.
+    """
 
     name: str
     domain: RuleDomain
     kind: str
-    inputs: tuple[str, ...]
     output: str
     execution_mode: ExecutionMode = "auto"
     priority: int = 100
+    inputs: tuple[str, ...] = ()  # Deprecated: now inferred from expression analysis
     evidence: EvidenceSpec | None = None
     evidence_output: EvidenceOutput | None = None
     policy_overrides: PolicyOverrides = field(default_factory=PolicyOverrides)
@@ -161,7 +167,8 @@ class RuleDefinition:
         if not self.output:
             msg = "RuleDefinition.output must be non-empty."
             raise RelspecValidationError(msg)
-        if len(set(self.inputs)) != len(self.inputs):
+        # Skip duplicate check for empty inputs (deprecated field)
+        if self.inputs and len(set(self.inputs)) != len(self.inputs):
             msg = f"RuleDefinition.inputs contains duplicates for {self.name!r}."
             raise RelspecValidationError(msg)
         if self.domain not in {"cpg", "normalize", "extract"}:

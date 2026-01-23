@@ -58,6 +58,31 @@ result = build_graph_product(
 )
 ```
 
+## Calculation-Driven Scheduling
+
+Dependencies are automatically inferred from Ibis/DataFusion expressions via SQLGlot lineage analysis. No manual `inputs=` declarations required. The system:
+
+1. Compiles Ibis expressions to SQLGlot AST
+2. Extracts table references via `referenced_tables()`
+3. Extracts column-level lineage via `required_columns_by_table()`
+4. Builds rustworkx graph with inferred edges via `build_rule_graph_from_inferred_deps()`
+5. Generates Hamilton DAGs for orchestration
+
+**Key modules:**
+- `src/relspec/inferred_deps.py` - Dependency inference from expressions
+- `src/relspec/task_spec.py` - Task classification (view/compute/materialization)
+- `src/relspec/graph_edge_validation.py` - Column-level edge validation
+- `src/relspec/hamilton_synthesis.py` - Hamilton DAG generation from rustworkx graphs
+
+**Feature flags** (in `src/relspec/config.py`):
+- `USE_INFERRED_DEPS` - Use inferred dependencies for scheduling (default: True)
+- `COMPARE_DECLARED_INFERRED` - Log comparison between declared and inferred (default: True)
+- `HAMILTON_DAG_OUTPUT` - Generate Hamilton DAG modules (default: True)
+
+**Deprecated patterns:**
+- Manual `inputs=` declarations in rule specs are deprecated
+- Legacy graph builders (`build_rule_graph_from_definitions`, `build_rule_graph_from_relationship_rules`, `build_rule_graph_from_normalize_rules`) emit deprecation warnings
+
 ## Key Architectural Invariants
 
 - **Byte Spans Are Canonical**: All normalizations anchor to byte offsets (`bstart`, `bend`)

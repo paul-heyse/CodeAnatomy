@@ -12,11 +12,14 @@ from relspec.normalize.rule_specs import NormalizeRuleFamilySpec
 
 @dataclass(frozen=True)
 class RuleTemplateSpec:
-    """Template spec for generating normalize rule families."""
+    """Template spec for generating normalize rule families.
+
+    Note: The ``inputs`` field has been removed. Dependencies are now inferred
+    from Ibis/DataFusion expression analysis rather than declared manually.
+    """
 
     name: str
     factory: str
-    inputs: tuple[str, ...] = ()
     params: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -28,21 +31,6 @@ def _param_str(spec: RuleTemplateSpec, key: str) -> str | None:
     if value is None:
         return None
     return str(value)
-
-
-def _param_tuple(
-    spec: RuleTemplateSpec,
-    key: str,
-    *,
-    default: Sequence[str],
-) -> tuple[str, ...]:
-    value = spec.params.get(key)
-    if value is None:
-        return tuple(default)
-    if isinstance(value, (list, tuple)):
-        return tuple(str(item) for item in value)
-    msg = f"RuleTemplateSpec {spec.name!r} param {key!r} must be a list."
-    raise TypeError(msg)
 
 
 def _base_overrides(spec: RuleTemplateSpec) -> dict[str, str | None]:
@@ -65,7 +53,6 @@ def _single_family_template(spec: RuleTemplateSpec) -> tuple[NormalizeRuleFamily
         NormalizeRuleFamilySpec(
             name=spec.name,
             factory=family_factory,
-            inputs=spec.inputs,
             output=overrides["output"],
             confidence_policy=overrides["confidence_policy"],
             ambiguity_policy=overrides["ambiguity_policy"],
@@ -76,18 +63,13 @@ def _single_family_template(spec: RuleTemplateSpec) -> tuple[NormalizeRuleFamily
 
 
 def _bytecode_template(spec: RuleTemplateSpec) -> tuple[NormalizeRuleFamilySpec, ...]:
-    cfg_inputs = _param_tuple(
-        spec,
-        "cfg_inputs",
-        default=("py_bc_blocks", "py_bc_code_units", "py_bc_cfg_edges"),
-    )
-    dfg_inputs = _param_tuple(spec, "dfg_inputs", default=("py_bc_instructions",))
+    # Note: cfg_inputs and dfg_inputs params are no longer used.
+    # Dependencies are now inferred from expression analysis.
     overrides = _base_overrides(spec)
     return (
         NormalizeRuleFamilySpec(
             name=f"{spec.name}_cfg",
             factory="bytecode_cfg",
-            inputs=cfg_inputs,
             output=overrides["output"],
             confidence_policy=overrides["confidence_policy"],
             ambiguity_policy=overrides["ambiguity_policy"],
@@ -97,7 +79,6 @@ def _bytecode_template(spec: RuleTemplateSpec) -> tuple[NormalizeRuleFamilySpec,
         NormalizeRuleFamilySpec(
             name=f"{spec.name}_dfg",
             factory="bytecode_dfg",
-            inputs=dfg_inputs,
             output=overrides["output"],
             confidence_policy=overrides["confidence_policy"],
             ambiguity_policy=overrides["ambiguity_policy"],
@@ -142,6 +123,9 @@ def expand_rule_templates(
 def rule_template_specs() -> tuple[RuleTemplateSpec, ...]:
     """Return normalize rule template specs.
 
+    Note: Dependencies are now inferred from expression analysis
+    rather than declared via inputs parameter.
+
     Returns
     -------
     tuple[RuleTemplateSpec, ...]
@@ -151,7 +135,6 @@ def rule_template_specs() -> tuple[RuleTemplateSpec, ...]:
         RuleTemplateSpec(
             name="types",
             factory="single_family",
-            inputs=("cst_type_exprs", "scip_symbol_information"),
             params={"rule_factory": "types"},
         ),
         RuleTemplateSpec(
@@ -162,19 +145,11 @@ def rule_template_specs() -> tuple[RuleTemplateSpec, ...]:
         RuleTemplateSpec(
             name="diagnostics",
             factory="single_family",
-            inputs=(
-                "cst_parse_errors",
-                "ts_errors",
-                "ts_missing",
-                "scip_diagnostics",
-                "scip_documents",
-            ),
             params={"rule_factory": "diagnostics"},
         ),
         RuleTemplateSpec(
             name="span_errors",
             factory="single_family",
-            inputs=("span_errors_v1",),
             params={"rule_factory": "span_errors"},
         ),
     )

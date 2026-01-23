@@ -160,11 +160,24 @@ def build_rule_graph_from_definitions(
 ) -> RuleGraph:
     """Build a rule graph from centralized rule definitions.
 
+    .. deprecated::
+        Use :func:`build_rule_graph_from_inferred_deps` instead.
+        Dependencies are now inferred from Ibis/DataFusion expression analysis
+        rather than declared in rule definitions.
+
     Returns
     -------
     RuleGraph
         Graph with rule and evidence nodes.
     """
+    import warnings
+
+    warnings.warn(
+        "build_rule_graph_from_definitions is deprecated; "
+        "use build_rule_graph_from_inferred_deps instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     rule_nodes = tuple(_rule_node_from_definition(rule) for rule in rules)
     return _build_rule_graph(rule_nodes, output_policy=output_policy)
 
@@ -176,11 +189,24 @@ def build_rule_graph_from_relationship_rules(
 ) -> RuleGraph:
     """Build a rule graph from relationship rules.
 
+    .. deprecated::
+        Use :func:`build_rule_graph_from_inferred_deps` instead.
+        Dependencies are now inferred from Ibis/DataFusion expression analysis
+        rather than declared in relationship rules.
+
     Returns
     -------
     RuleGraph
         Graph with rule and evidence nodes.
     """
+    import warnings
+
+    warnings.warn(
+        "build_rule_graph_from_relationship_rules is deprecated; "
+        "use build_rule_graph_from_inferred_deps instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     rule_nodes = tuple(_rule_node_from_relationship(rule) for rule in rules)
     return _build_rule_graph(rule_nodes, output_policy=output_policy)
 
@@ -192,11 +218,24 @@ def build_rule_graph_from_normalize_rules(
 ) -> RuleGraph:
     """Build a rule graph from resolved normalize rules.
 
+    .. deprecated::
+        Use :func:`build_rule_graph_from_inferred_deps` instead.
+        Dependencies are now inferred from Ibis/DataFusion expression analysis
+        rather than declared in normalize rules.
+
     Returns
     -------
     RuleGraph
         Graph with rule and evidence nodes.
     """
+    import warnings
+
+    warnings.warn(
+        "build_rule_graph_from_normalize_rules is deprecated; "
+        "use build_rule_graph_from_inferred_deps instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     rule_nodes = tuple(_rule_node_from_normalize(rule) for rule in rules)
     return _build_rule_graph(rule_nodes, output_policy=output_policy)
 

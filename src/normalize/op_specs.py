@@ -4,73 +4,73 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from normalize.registry_runtime import dataset_alias, dataset_names
+from normalize.registry_runtime import dataset_alias
 from relspec.rules.definitions import RuleDefinition
 
 
 @dataclass(frozen=True)
 class NormalizeOpSpec:
-    """Specification for normalize op dependency expansion."""
+    """Specification for normalize op dependency expansion.
+
+    Note: The ``inputs`` field is deprecated for manual specification.
+    Dependencies are now inferred from Ibis/DataFusion expression analysis.
+    The field is retained for backward compatibility but defaults to empty.
+    """
 
     name: str
-    inputs: tuple[str, ...]
     outputs: tuple[str, ...]
-
-
-def _normalize_datasets() -> frozenset[str]:
-    return frozenset(dataset_names())
-
-
-def _maybe_alias(name: str, normalize_names: frozenset[str]) -> str:
-    if name in normalize_names:
-        return dataset_alias(name)
-    return name
+    inputs: tuple[str, ...] = ()  # Deprecated: now inferred from expression analysis
 
 
 def _rule_op_specs(definitions: tuple[RuleDefinition, ...]) -> tuple[NormalizeOpSpec, ...]:
-    normalize_names = _normalize_datasets()
+    """Build NormalizeOpSpec instances from rule definitions.
+
+    Note: The inputs are set to empty since dependencies are now inferred
+    from expression analysis rather than declared in rule definitions.
+
+    Returns
+    -------
+    tuple[NormalizeOpSpec, ...]
+        Normalize op specs derived from rule definitions.
+    """
     specs: list[NormalizeOpSpec] = []
     for rule in definitions:
         output = dataset_alias(rule.output)
-        inputs = tuple(_maybe_alias(name, normalize_names) for name in rule.inputs)
-        specs.append(NormalizeOpSpec(name=output, inputs=inputs, outputs=(output,)))
+        # Dependencies are now inferred from expression analysis
+        specs.append(NormalizeOpSpec(name=output, outputs=(output,)))
     return tuple(specs)
 
 
+# Extra op specs for normalize operations not derived from rule definitions.
+# Note: inputs are no longer manually specified; dependencies are inferred
+# from expression analysis at runtime.
 _EXTRA_OP_SPECS: tuple[NormalizeOpSpec, ...] = (
     NormalizeOpSpec(
         name="cst_imports_norm",
-        inputs=("cst_imports",),
         outputs=("cst_imports_norm", "cst_imports"),
     ),
     NormalizeOpSpec(
         name="cst_defs_norm",
-        inputs=("cst_defs",),
         outputs=("cst_defs_norm", "cst_defs"),
     ),
     NormalizeOpSpec(
         name="scip_occurrences_norm",
-        inputs=("scip_documents", "scip_occurrences", "file_line_index"),
         outputs=("scip_occurrences_norm", "scip_occurrences", "scip_span_errors"),
     ),
     NormalizeOpSpec(
         name="dim_qualified_names",
-        inputs=("cst_callsites", "cst_defs"),
         outputs=("dim_qualified_names",),
     ),
     NormalizeOpSpec(
         name="callsite_qname_candidates",
-        inputs=("cst_callsites", "cst_call_args"),
         outputs=("callsite_qname_candidates",),
     ),
     NormalizeOpSpec(
         name="ast_nodes_norm",
-        inputs=("ast_nodes", "file_line_index"),
         outputs=("ast_nodes_norm",),
     ),
     NormalizeOpSpec(
         name="py_bc_instructions_norm",
-        inputs=("py_bc_instructions", "file_line_index"),
         outputs=("py_bc_instructions_norm",),
     ),
 )

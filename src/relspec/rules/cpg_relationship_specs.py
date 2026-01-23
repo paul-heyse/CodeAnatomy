@@ -436,11 +436,11 @@ def _rule_from_spec(spec: RuleDefinitionSpec) -> RuleDefinition:
         rule_priority_col=spec.rule_priority_col,
         edge_emit=_edge_emit_payload(spec.edge),
     )
+    # Note: inputs field is deprecated; dependencies now inferred from expression analysis
     return RuleDefinition(
         name=spec.name,
         domain="cpg",
         kind=spec.kind.value,
-        inputs=spec.inputs,
         output=payload.output_dataset or spec.name,
         execution_mode=spec.execution_mode,
         priority=spec.priority,

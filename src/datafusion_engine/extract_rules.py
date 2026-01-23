@@ -51,11 +51,11 @@ def _payload_from_metadata(row: ExtractMetadata) -> ExtractPayload:
 
 def _rule_from_metadata(row: ExtractMetadata) -> RuleDefinition:
     payload = _payload_from_metadata(row)
+    # Note: inputs field defaults to empty; dependencies now inferred from expression analysis
     return RuleDefinition(
         name=row.name,
         domain="extract",
         kind="extract",
-        inputs=(),
         output=row.name,
         execution_mode="external",
         priority=100,

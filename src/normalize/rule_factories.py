@@ -32,11 +32,14 @@ class RuleConfig:
 
 @dataclass(frozen=True)
 class RuleDefinitionSpec:
-    """Structural inputs for a normalize rule definition spec."""
+    """Structural inputs for a normalize rule definition spec.
+
+    Note: The ``inputs`` field is deprecated. Dependencies are now inferred
+    from Ibis/DataFusion expression analysis rather than declared manually.
+    """
 
     name: str
     output: str
-    inputs: Sequence[str]
     plan_builder: str | None
     execution_mode: ExecutionMode = "auto"
 
@@ -115,7 +118,6 @@ def build_type_rules(
             RuleDefinitionSpec(
                 name="type_exprs_norm",
                 output="type_exprs_norm_v1",
-                inputs=("cst_type_exprs",),
                 plan_builder="type_exprs",
                 execution_mode=execution_mode,
             ),
@@ -128,7 +130,6 @@ def build_type_rules(
             RuleDefinitionSpec(
                 name="type_nodes",
                 output="type_nodes_v1",
-                inputs=("type_exprs_norm_v1", "scip_symbol_information"),
                 plan_builder="type_nodes",
                 execution_mode=execution_mode,
             ),
@@ -156,7 +157,6 @@ def build_bytecode_cfg_rules(
             RuleDefinitionSpec(
                 name="cfg_blocks_norm",
                 output="py_bc_blocks_norm_v1",
-                inputs=("py_bc_blocks", "py_bc_code_units"),
                 plan_builder="cfg_blocks",
                 execution_mode=execution_mode,
             ),
@@ -169,7 +169,6 @@ def build_bytecode_cfg_rules(
             RuleDefinitionSpec(
                 name="cfg_edges_norm",
                 output="py_bc_cfg_edges_norm_v1",
-                inputs=("py_bc_cfg_edges", "py_bc_code_units"),
                 plan_builder="cfg_edges",
                 execution_mode=execution_mode,
             ),
@@ -197,7 +196,6 @@ def build_bytecode_dfg_rules(
             RuleDefinitionSpec(
                 name="def_use_events",
                 output="py_bc_def_use_events_v1",
-                inputs=("py_bc_instructions",),
                 plan_builder="def_use_events",
                 execution_mode=execution_mode,
             ),
@@ -210,7 +208,6 @@ def build_bytecode_dfg_rules(
             RuleDefinitionSpec(
                 name="reaching_defs",
                 output="py_bc_reaches_v1",
-                inputs=("py_bc_def_use_events_v1",),
                 plan_builder="reaching_defs",
                 execution_mode=execution_mode,
             ),
@@ -238,16 +235,6 @@ def build_diagnostics_rules(
             RuleDefinitionSpec(
                 name="diagnostics_norm",
                 output="diagnostics_norm_v1",
-                inputs=(
-                    "cst_parse_errors",
-                    "file_line_index",
-                    "symtable_scopes",
-                    "ts_errors",
-                    "ts_missing",
-                    "py_bc_code_units",
-                    "scip_diagnostics",
-                    "scip_documents",
-                ),
                 plan_builder="diagnostics",
                 execution_mode=execution_mode,
             ),
@@ -275,7 +262,6 @@ def build_span_error_rules(
             RuleDefinitionSpec(
                 name="span_errors",
                 output="span_errors_v1",
-                inputs=(),
                 plan_builder="span_errors",
                 execution_mode=execution_mode,
             ),
@@ -301,6 +287,16 @@ def _definition(
     *,
     config: RuleConfig | None = None,
 ) -> RuleDefinition:
+    """Build a RuleDefinition from a spec.
+
+    Note: The inputs field is set to an empty tuple since dependencies
+    are now inferred from Ibis/DataFusion expression analysis.
+
+    Returns
+    -------
+    RuleDefinition
+        Central rule definition for the normalize spec.
+    """
     config = config or RuleConfig()
     evidence = _evidence_spec(config.evidence_sources)
     return RuleDefinition(
@@ -308,7 +304,7 @@ def _definition(
         domain=_normalize_domain(),
         kind="normalize",
         output=spec.output,
-        inputs=tuple(spec.inputs),
+        inputs=(),  # Dependencies now inferred from expression analysis
         payload=NormalizePayload(plan_builder=spec.plan_builder, query=None),
         evidence=evidence,
         evidence_output=config.evidence_output,

@@ -117,14 +117,14 @@ def _interval_align_rule(spec: _IntervalAlignRuleSpec) -> RuleDefinition:
             emit_match_meta=False,
         ),
     )
+    # Note: inputs field is deprecated; dependencies now inferred from expression analysis
     return RuleDefinition(
         name=spec.name,
         domain="cpg",
         kind=RuleKind.INTERVAL_ALIGN.value,
-        inputs=spec.inputs,
         output=spec.output_dataset,
         priority=0,
-        evidence=EvidenceSpec(sources=spec.inputs),
+        evidence=EvidenceSpec(sources=spec.inputs),  # Keep evidence.sources for validation
         payload=payload,
     )
 
@@ -165,14 +165,14 @@ def _hash_join_rule(
             right_output=("qname_id",),
         ),
     )
+    # Note: inputs field is deprecated; dependencies now inferred from expression analysis
     return RuleDefinition(
         name=name,
         domain="cpg",
         kind=RuleKind.HASH_JOIN.value,
-        inputs=inputs,
         output=output_dataset,
         priority=10,
-        evidence=EvidenceSpec(sources=inputs),
+        evidence=EvidenceSpec(sources=inputs),  # Keep evidence.sources for validation
         payload=payload,
     )
 

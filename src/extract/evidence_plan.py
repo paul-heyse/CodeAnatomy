@@ -59,11 +59,11 @@ def _normalize_rule(rule: RelationshipRule | RuleDefinition) -> RuleDefinition:
     if isinstance(rule, RuleDefinition):
         return rule
     evidence = rule.evidence
+    # Note: inputs field is deprecated; dependencies now inferred from expression analysis
     return RuleDefinition(
         name=rule.name,
         domain="cpg",
         kind=rule.kind.value,
-        inputs=tuple(ref.name for ref in rule.inputs),
         output=rule.output_dataset,
         execution_mode=rule.execution_mode,
         priority=rule.priority,

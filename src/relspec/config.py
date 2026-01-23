@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 # -----------------------------------------------------------------------------
 
 # Phase 2: Use inferred dependencies for scheduling instead of declared
-USE_INFERRED_DEPS: bool = False
+USE_INFERRED_DEPS: bool = True
 
 # Threshold for significant order changes in migration validation
 _SIGNIFICANT_ORDER_CHANGE_THRESHOLD: int = 2
@@ -28,7 +28,7 @@ _SIGNIFICANT_ORDER_CHANGE_THRESHOLD: int = 2
 COMPARE_DECLARED_INFERRED: bool = True
 
 # Phase 4: Generate Hamilton DAG modules from rustworkx graphs
-HAMILTON_DAG_OUTPUT: bool = False
+HAMILTON_DAG_OUTPUT: bool = True
 
 
 @dataclass(frozen=True)

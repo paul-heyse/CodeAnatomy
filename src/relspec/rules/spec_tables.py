@@ -412,15 +412,17 @@ def rule_definitions_from_table(table: pa.Table) -> tuple[RuleDefinition, ...]:
         priority = row.get("priority")
         payload = _payload_from_row(domain, row)
         post_kernels = _kernels_from_row(row.get("post_kernels"))
+        # Note: inputs field is deprecated; dependencies now inferred from expression analysis
+        # Keep reading inputs from table for backward compatibility with serialized data
         definitions.append(
             RuleDefinition(
                 name=str(row["name"]),
                 domain=domain,
                 kind=str(row["kind"]),
-                inputs=parse_string_tuple(row.get("inputs"), label="inputs"),
                 output=str(row["output"]),
                 execution_mode=_parse_execution_mode(execution_mode),
                 priority=int(priority) if priority is not None else 100,
+                inputs=parse_string_tuple(row.get("inputs"), label="inputs"),  # Deprecated
                 evidence=_evidence_from_row(row.get("evidence")),
                 evidence_output=_evidence_output_from_row(row.get("evidence_output")),
                 policy_overrides=_policy_overrides_from_row(row.get("policy_overrides")),

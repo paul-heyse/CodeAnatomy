@@ -63,6 +63,23 @@ DIAG_DETAIL_STRUCT = struct_type(
 )
 DIAG_DETAILS_TYPE = list_view_type(DIAG_DETAIL_STRUCT, large=True)
 
+SQLGLOT_PARSE_ERROR_DETAIL_STRUCT = struct_type(
+    {
+        "description": pa.string(),
+        "message": pa.string(),
+        "line": pa.int64(),
+        "col": pa.int64(),
+        "start_context": pa.string(),
+        "highlight": pa.string(),
+        "end_context": pa.string(),
+        "into_expression": pa.string(),
+    }
+)
+SQLGLOT_PARSE_ERROR_DETAILS_TYPE = list_view_type(
+    SQLGLOT_PARSE_ERROR_DETAIL_STRUCT,
+    large=True,
+)
+
 
 def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
     return ctx.sql_with_options(sql, sql_options_for_profile(None))
@@ -1277,6 +1294,10 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("ibis_sql", pa.string(), nullable=True),
             pa.field("ibis_sql_pretty", pa.string(), nullable=True),
             pa.field("ibis_graphviz", pa.string(), nullable=True),
+            pa.field("ibis_compiled_sql", pa.string(), nullable=True),
+            pa.field("ibis_compiled_sql_hash", pa.string(), nullable=True),
+            pa.field("ibis_compile_params", pa.string(), nullable=True),
+            pa.field("ibis_compile_limit", pa.int64(), nullable=True),
             pa.field("read_dialect", pa.string(), nullable=True),
             pa.field("write_dialect", pa.string(), nullable=True),
             pa.field("canonical_fingerprint", pa.string(), nullable=True),
@@ -1293,6 +1314,42 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("graphviz", pa.string(), nullable=True),
             pa.field("partition_count", pa.int64(), nullable=True),
             pa.field("join_operators", pa.list_(pa.string()), nullable=True),
+        ]
+    ),
+)
+
+IBIS_SQL_INGEST_SCHEMA = _schema_with_metadata(
+    "ibis_sql_ingest_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("ingest_kind", pa.string(), nullable=False),
+            pa.field("source_name", pa.string(), nullable=True),
+            pa.field("sql", pa.string(), nullable=False),
+            pa.field("decompiled_sql", pa.string(), nullable=True),
+            pa.field("schema", pa.map_(pa.string(), pa.string()), nullable=True),
+            pa.field("dialect", pa.string(), nullable=True),
+            pa.field("parse_errors", SQLGLOT_PARSE_ERROR_DETAILS_TYPE, nullable=True),
+            pa.field("sqlglot_sql", pa.string(), nullable=True),
+            pa.field("normalized_sql", pa.string(), nullable=True),
+            pa.field("sqlglot_ast", pa.binary(), nullable=True),
+            pa.field("ibis_sqlglot_ast", pa.binary(), nullable=True),
+            pa.field("sqlglot_policy_hash", pa.string(), nullable=True),
+            pa.field("sqlglot_policy_snapshot", pa.binary(), nullable=True),
+        ]
+    ),
+)
+
+SQLGLOT_PARSE_ERRORS_SCHEMA = _schema_with_metadata(
+    "sqlglot_parse_errors_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("source", pa.string(), nullable=True),
+            pa.field("sql", pa.string(), nullable=True),
+            pa.field("dialect", pa.string(), nullable=True),
+            pa.field("error", pa.string(), nullable=True),
+            pa.field("parse_errors", SQLGLOT_PARSE_ERROR_DETAILS_TYPE, nullable=True),
         ]
     ),
 )
@@ -1571,7 +1628,9 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "dim_qualified_names_v1": DIM_QUALIFIED_NAMES_SCHEMA,
     "engine_runtime_v1": ENGINE_RUNTIME_SCHEMA,
     "feature_state_v1": FEATURE_STATE_SCHEMA,
+    "ibis_sql_ingest_v1": IBIS_SQL_INGEST_SCHEMA,
     "libcst_files_v1": LIBCST_FILES_SCHEMA,
+    "sqlglot_parse_errors_v1": SQLGLOT_PARSE_ERRORS_SCHEMA,
     "param_file_ids_v1": PARAM_FILE_IDS_SCHEMA,
     "rel_callsite_qname_v1": REL_CALLSITE_QNAME_SCHEMA,
     "rel_callsite_symbol_v1": REL_CALLSITE_SYMBOL_SCHEMA,
@@ -4270,6 +4329,7 @@ __all__ = [
     "DIAG_DETAIL_STRUCT",
     "DIAG_TAGS_TYPE",
     "ENGINE_REQUIRED_FUNCTIONS",
+    "IBIS_SQL_INGEST_SCHEMA",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
     "SCHEMA_REGISTRY",
@@ -4286,6 +4346,7 @@ __all__ = [
     "SCIP_SYMBOL_RELATIONSHIPS_SCHEMA",
     "SCIP_VIEW_NAMES",
     "SCIP_VIEW_SCHEMA_MAP",
+    "SQLGLOT_PARSE_ERRORS_SCHEMA",
     "SYMTABLE_FILES_SCHEMA",
     "SYMTABLE_VIEW_NAMES",
     "TREE_SITTER_CHECK_VIEWS",

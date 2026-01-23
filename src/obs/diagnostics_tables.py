@@ -68,6 +68,19 @@ def _coalesce_int(
     return coalesce_unset_or_none(value, default)
 
 
+def _coerce_int_value(value: object | msgspec.UnsetType) -> int | None:
+    if value is msgspec.UNSET or value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (float, str, bytes, bytearray)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _optional_int(value: int | msgspec.UnsetType | None) -> int | None:
     normalized = unset_to_none(value)
     if normalized is None or isinstance(normalized, bool):
@@ -105,12 +118,33 @@ def _string_list_or_empty(value: object | msgspec.UnsetType) -> list[str]:
     return items if items is not None else []
 
 
+def _string_map(value: object | msgspec.UnsetType) -> dict[str, str] | None:
+    if value is msgspec.UNSET or value is None:
+        return None
+    if isinstance(value, Mapping):
+        return {str(key): str(item) for key, item in value.items()}
+    return None
+
+
 def _stringify_payload(value: object) -> str | None:
     if value is None or value is msgspec.UNSET:
         return None
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=True, default=str)
+
+
+def _binary_json_payload(value: object) -> bytes | None:
+    if value is None or value is msgspec.UNSET:
+        return None
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    payload = json.dumps(value, ensure_ascii=True, default=str)
+    return payload.encode("utf-8")
 
 
 def _binary_payload(value: object) -> bytes | None:
@@ -123,6 +157,38 @@ def _binary_payload(value: object) -> bytes | None:
     if isinstance(value, memoryview):
         return value.tobytes()
     return None
+
+
+def _parse_error_details(value: object | msgspec.UnsetType) -> list[dict[str, object]] | None:
+    if value is msgspec.UNSET or value is None:
+        return None
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return None
+    details: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        entry: dict[str, object] = {}
+        for key in (
+            "description",
+            "message",
+            "start_context",
+            "highlight",
+            "end_context",
+            "into_expression",
+        ):
+            value_entry = item.get(key)
+            if value_entry is not None:
+                entry[key] = str(value_entry)
+        line = _coerce_int_value(item.get("line"))
+        if line is not None:
+            entry["line"] = line
+        col = _coerce_int_value(item.get("col"))
+        if col is not None:
+            entry["col"] = col
+        if entry:
+            details.append(entry)
+    return details or None
 
 
 class DatafusionExplainEvent(DiagnosticsStruct, frozen=True):
@@ -203,6 +269,10 @@ class DatafusionPlanArtifactRecord(DiagnosticsStruct, frozen=True):
     ibis_sql: str | None = None
     ibis_sql_pretty: str | None = None
     ibis_graphviz: str | None = None
+    ibis_compiled_sql: str | None = None
+    ibis_compiled_sql_hash: str | None = None
+    ibis_compile_params: str | None = None
+    ibis_compile_limit: int | None = None
     read_dialect: str | None = None
     write_dialect: str | None = None
     canonical_fingerprint: str | None = None
@@ -219,6 +289,32 @@ class DatafusionPlanArtifactRecord(DiagnosticsStruct, frozen=True):
     graphviz: str | None = None
     partition_count: int | None = None
     join_operators: Sequence[object] | object | None = None
+
+
+class IbisSqlIngestRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
+    ingest_kind: str | None = None
+    source_name: str | None = None
+    sql: str | None = None
+    decompiled_sql: str | None = None
+    schema: Mapping[str, object] | None = None
+    dialect: str | None = None
+    parse_errors: Sequence[object] | object | None = None
+    sqlglot_sql: str | None = None
+    normalized_sql: str | None = None
+    sqlglot_ast: bytes | bytearray | memoryview | None = None
+    ibis_sqlglot_ast: bytes | bytearray | memoryview | None = None
+    sqlglot_policy_hash: str | None = None
+    sqlglot_policy_snapshot: object | None = None
+
+
+class SqlglotParseErrorRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
+    source: str | None = None
+    sql: str | None = None
+    dialect: str | None = None
+    error: str | None = None
+    parse_errors: Sequence[object] | object | None = None
 
 
 class EngineRuntimeRecord(DiagnosticsStruct, frozen=True):
@@ -619,6 +715,18 @@ def _plan_artifact_row(
         if entry.ibis_sql_pretty is not None
         else None,
         "ibis_graphviz": str(entry.ibis_graphviz) if entry.ibis_graphviz is not None else None,
+        "ibis_compiled_sql": (
+            str(entry.ibis_compiled_sql) if entry.ibis_compiled_sql is not None else None
+        ),
+        "ibis_compiled_sql_hash": (
+            str(entry.ibis_compiled_sql_hash)
+            if entry.ibis_compiled_sql_hash is not None
+            else None
+        ),
+        "ibis_compile_params": (
+            str(entry.ibis_compile_params) if entry.ibis_compile_params is not None else None
+        ),
+        "ibis_compile_limit": _optional_int(entry.ibis_compile_limit),
         "read_dialect": str(entry.read_dialect) if entry.read_dialect is not None else None,
         "write_dialect": str(entry.write_dialect) if entry.write_dialect is not None else None,
         "canonical_fingerprint": (
@@ -639,6 +747,87 @@ def _plan_artifact_row(
         "graphviz": str(entry.graphviz) if entry.graphviz is not None else None,
         "partition_count": _optional_int(entry.partition_count),
         "join_operators": _string_list(entry.join_operators),
+    }
+
+
+def ibis_sql_ingest_table(
+    artifacts: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build an Ibis SQL ingest diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to IBIS_SQL_INGEST_V1.
+    """
+    now = _now_ms()
+    rows = [_ibis_sql_ingest_row(artifact, default_time=now) for artifact in artifacts]
+    schema = schema_for("ibis_sql_ingest_v1")
+    return table_from_rows(schema, rows)
+
+
+def _ibis_sql_ingest_row(
+    artifact: Mapping[str, object],
+    *,
+    default_time: int,
+) -> dict[str, object]:
+    entry = _convert_event(artifact, target_type=IbisSqlIngestRecord)
+    ingest_kind = str(entry.ingest_kind or "unknown")
+    return {
+        "event_time_unix_ms": _coalesce_event_time(
+            entry.event_time_unix_ms,
+            default=default_time,
+        ),
+        "ingest_kind": ingest_kind,
+        "source_name": str(entry.source_name) if entry.source_name is not None else None,
+        "sql": str(entry.sql or ""),
+        "decompiled_sql": str(entry.decompiled_sql) if entry.decompiled_sql is not None else None,
+        "schema": _string_map(entry.schema),
+        "dialect": str(entry.dialect) if entry.dialect is not None else None,
+        "parse_errors": _parse_error_details(entry.parse_errors),
+        "sqlglot_sql": str(entry.sqlglot_sql) if entry.sqlglot_sql is not None else None,
+        "normalized_sql": str(entry.normalized_sql) if entry.normalized_sql is not None else None,
+        "sqlglot_ast": _binary_payload(entry.sqlglot_ast),
+        "ibis_sqlglot_ast": _binary_payload(entry.ibis_sqlglot_ast),
+        "sqlglot_policy_hash": (
+            str(entry.sqlglot_policy_hash) if entry.sqlglot_policy_hash is not None else None
+        ),
+        "sqlglot_policy_snapshot": _binary_json_payload(entry.sqlglot_policy_snapshot),
+    }
+
+
+def sqlglot_parse_errors_table(
+    records: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build a SQLGlot parse errors diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to SQLGLOT_PARSE_ERRORS_V1.
+    """
+    now = _now_ms()
+    rows = [_sqlglot_parse_error_row(record, default_time=now) for record in records]
+    schema = schema_for("sqlglot_parse_errors_v1")
+    return table_from_rows(schema, rows)
+
+
+def _sqlglot_parse_error_row(
+    record: Mapping[str, object],
+    *,
+    default_time: int,
+) -> dict[str, object]:
+    entry = _convert_event(record, target_type=SqlglotParseErrorRecord)
+    return {
+        "event_time_unix_ms": _coalesce_event_time(
+            entry.event_time_unix_ms,
+            default=default_time,
+        ),
+        "source": str(entry.source) if entry.source is not None else None,
+        "sql": str(entry.sql) if entry.sql is not None else None,
+        "dialect": str(entry.dialect) if entry.dialect is not None else None,
+        "error": str(entry.error) if entry.error is not None else None,
+        "parse_errors": _parse_error_details(entry.parse_errors),
     }
 
 
@@ -963,5 +1152,7 @@ __all__ = [
     "engine_runtime_table",
     "feature_state_table",
     "file_pruning_diagnostics_table",
+    "ibis_sql_ingest_table",
     "lineage_diagnostics_row",
+    "sqlglot_parse_errors_table",
 ]

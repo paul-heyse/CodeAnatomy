@@ -51,11 +51,13 @@ from ibis_engine.registry import (
     resolve_delta_scan_options,
 )
 from schema_spec.specs import ExternalTableConfigOverrides
-from sqlglot_tools.compat import exp
+from sqlglot_tools.compat import exp, parse_one
 from sqlglot_tools.optimizer import (
     ExternalTableOptionsProperty,
+    build_select,
     parse_sql_strict,
     resolve_sqlglot_policy,
+    sqlglot_emit,
 )
 
 if TYPE_CHECKING:
@@ -1572,8 +1574,20 @@ def _apply_projection_exprs(
         ctx.deregister_table(base_name)
     base_view = ctx.table(table_name).into_view(temporary=True)
     ctx.register_table(base_name, base_view)
-    selection = ", ".join(projection_exprs)
-    view_sql = f"SELECT {selection} FROM {base_name}"
+    parsed_exprs: list[exp.Expression] = []
+    for projection in projection_exprs:
+        try:
+            parsed_exprs.append(parse_one(projection))
+        except (ParseError, TypeError, ValueError):
+            parsed_exprs = []
+            break
+    if parsed_exprs:
+        policy = resolve_sqlglot_policy(name="datafusion_compile")
+        view_expr = build_select(parsed_exprs, from_=base_name)
+        view_sql = sqlglot_emit(view_expr, policy=policy)
+    else:
+        selection = ", ".join(projection_exprs)
+        view_sql = f"SELECT {selection} FROM {base_name}"
     projected = ctx.sql_with_options(view_sql, sql_options)
     ctx.deregister_table(table_name)
     projected_view = projected.into_view(temporary=False)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
@@ -34,6 +35,7 @@ from datafusion_engine.normalize_ids import (
 from datafusion_engine.schema_registry import DIAG_DETAILS_TYPE
 from ibis_engine.builtin_udfs import col_to_byte
 from ibis_engine.catalog import IbisPlanCatalog
+from ibis_engine.expr_compiler import OperationSupportBackend, preflight_portability
 from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
@@ -1171,6 +1173,83 @@ def _def_use_kind_expr(opname: Value) -> Value:
     )
 
 
+def _backend_dialect(backend: BaseBackend) -> str | None:
+    dialect = getattr(backend, "dialect", None)
+    if isinstance(dialect, str):
+        return dialect
+    return None
+
+
+@dataclass(frozen=True)
+class OpFallbackPayload:
+    builder_name: str
+    missing_ops: tuple[str, ...]
+    fallback_reason: str | None
+    error: str | None = None
+
+
+def _record_op_fallback(
+    ctx: ExecutionContext,
+    *,
+    backend: BaseBackend,
+    payload: OpFallbackPayload,
+) -> None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return
+    record = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "stage": "normalize",
+        "builder": payload.builder_name,
+        "backend": type(backend).__name__,
+        "missing_ops": list(payload.missing_ops),
+        "fallback_reason": payload.fallback_reason,
+        "error": payload.error,
+    }
+    profile.diagnostics_sink.record_artifact("ibis_op_fallback_v1", record)
+
+
+def _apply_portability_fallback(
+    plan: IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+    builder_name: str,
+) -> IbisPlan:
+    dialect = _backend_dialect(backend)
+    try:
+        result = preflight_portability(
+            plan.expr,
+            backend=cast("OperationSupportBackend", backend),
+            dialect=dialect,
+        )
+    except ValueError as exc:
+        _record_op_fallback(
+            ctx,
+            backend=backend,
+            payload=OpFallbackPayload(
+                builder_name=builder_name,
+                missing_ops=(),
+                fallback_reason="fallback_failed",
+                error=str(exc),
+            ),
+        )
+        raise
+    if result.missing_ops:
+        _record_op_fallback(
+            ctx,
+            backend=backend,
+            payload=OpFallbackPayload(
+                builder_name=builder_name,
+                missing_ops=result.missing_ops,
+                fallback_reason=result.fallback_reason,
+            ),
+        )
+    if result.expr is plan.expr:
+        return plan
+    return IbisPlan(expr=result.expr, ordering=plan.ordering)
+
+
 IbisPlanDeriver = Callable[[IbisPlanCatalog, ExecutionContext, BaseBackend], IbisPlan | None]
 
 
@@ -1208,11 +1287,28 @@ def resolve_plan_builder_ibis(name: str) -> IbisPlanDeriver:
         Raised when the plan builder name is unknown.
     """
     builders = plan_builders_ibis()
-    builder = builders.get(name)
-    if builder is None:
+    try:
+        resolved_builder = builders[name]
+    except KeyError as exc:
         msg = f"Unknown normalize Ibis plan builder: {name!r}."
-        raise KeyError(msg)
-    return builder
+        raise KeyError(msg) from exc
+
+    def _wrapped(
+        catalog: IbisPlanCatalog,
+        ctx: ExecutionContext,
+        backend: BaseBackend,
+    ) -> IbisPlan | None:
+        plan = resolved_builder(catalog, ctx, backend)
+        if plan is None:
+            return None
+        return _apply_portability_fallback(
+            plan,
+            ctx=ctx,
+            backend=backend,
+            builder_name=name,
+        )
+
+    return _wrapped
 
 
 __all__ = [

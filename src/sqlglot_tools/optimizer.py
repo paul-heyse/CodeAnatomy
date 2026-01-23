@@ -15,7 +15,7 @@ from typing import Final, Literal, TypedDict, Unpack, cast
 import msgspec
 import pyarrow as pa
 import sqlglot
-from sqlglot.errors import SqlglotError
+from sqlglot.errors import ParseError, SqlglotError
 from sqlglot.generator import Generator as SqlGlotGenerator
 from sqlglot.optimizer import RULES, optimize
 from sqlglot.optimizer.annotate_types import annotate_types
@@ -963,6 +963,45 @@ def sqlglot_emit(
     return expr.sql(**cast("GeneratorInitKwargs", generator))
 
 
+def build_select(
+    expressions: Sequence[Expression],
+    *,
+    from_: Expression | str,
+    where: Expression | None = None,
+    limit: int | None = None,
+) -> Expression:
+    """Return a SELECT expression assembled from SQLGlot nodes.
+
+    Returns
+    -------
+    Expression
+        SQLGlot SELECT expression.
+    """
+    source = exp.table_(from_) if isinstance(from_, str) else from_
+    query = exp.select(*expressions).from_(source)
+    if where is not None:
+        query = query.where(where)
+    if limit is not None:
+        query = query.limit(limit)
+    return query
+
+
+def build_insert(
+    source: Expression,
+    *,
+    table_name: str,
+    overwrite: bool | None = None,
+) -> Expression:
+    """Return an INSERT expression assembled from SQLGlot nodes.
+
+    Returns
+    -------
+    Expression
+        SQLGlot INSERT expression.
+    """
+    return exp.insert(source, into=exp.table_(table_name), overwrite=overwrite)
+
+
 def transpile_sql(
     sql: str,
     *,
@@ -1304,6 +1343,39 @@ def parse_sql_strict(
             preserve_params=preserve_params,
         ),
     )
+
+
+def parse_error_payload(exc: ParseError) -> list[dict[str, object]]:
+    """Return structured parse error details from a SQLGlot ParseError.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Structured parse error entries suitable for diagnostics payloads.
+    """
+    errors: list[dict[str, object]] = []
+    for item in exc.errors:
+        if not isinstance(item, Mapping):
+            continue
+        entry: dict[str, object] = {}
+        for key in (
+            "description",
+            "message",
+            "line",
+            "col",
+            "start_context",
+            "highlight",
+            "end_context",
+            "into_expression",
+        ):
+            value = item.get(key)
+            if value is not None:
+                entry[key] = value
+        if entry:
+            errors.append(entry)
+    if not errors:
+        errors.append({"message": str(exc)})
+    return errors
 
 
 def qualify_expr(
@@ -2219,6 +2291,8 @@ __all__ = [
     "artifact_to_ast",
     "ast_to_artifact",
     "bind_params",
+    "build_insert",
+    "build_select",
     "canonical_ast_fingerprint",
     "canonicalize_expr",
     "compile_expr",
@@ -2229,6 +2303,7 @@ __all__ = [
     "normalize_expr",
     "normalize_expr_with_stats",
     "optimize_expr",
+    "parse_error_payload",
     "parse_sql",
     "parse_sql_strict",
     "plan_fingerprint",

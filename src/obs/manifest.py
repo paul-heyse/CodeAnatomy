@@ -17,7 +17,12 @@ from arrowdsl.schema.serialization import dataset_fingerprint, schema_fingerprin
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from obs.repro import ReproInfo
 from serde_msgspec import StructBase, to_builtins
-from sqlglot_tools.optimizer import ParseSqlOptions, parse_sql, planner_dag_snapshot
+from sqlglot_tools.optimizer import (
+    ParseSqlOptions,
+    parse_error_payload,
+    parse_sql,
+    planner_dag_snapshot,
+)
 from storage.io import (
     delta_commit_metadata,
     delta_history_snapshot,
@@ -921,6 +926,53 @@ def _sqlglot_planner_dag_hashes(
     return results or None
 
 
+def _sqlglot_parse_errors(
+    payloads: Sequence[Mapping[str, object]] | None,
+) -> list[JsonDict] | None:
+    if not payloads:
+        return None
+    results: list[JsonDict] = []
+    for payload in payloads:
+        optimized_sql = payload.get("optimized_sql")
+        if not isinstance(optimized_sql, str) or not optimized_sql:
+            continue
+        dialect = payload.get("sql_dialect") or "datafusion_ext"
+        try:
+            _ = parse_sql(
+                optimized_sql,
+                options=ParseSqlOptions(dialect=str(dialect)),
+            )
+        except ParseError as exc:
+            results.append(
+                {
+                    "domain": _optional_str(payload.get("domain")),
+                    "rule_name": _optional_str(payload.get("rule_name")),
+                    "plan_signature": _optional_str(payload.get("plan_signature")),
+                    "plan_fingerprint": _optional_str(payload.get("plan_fingerprint")),
+                    "sqlglot_policy_hash": _optional_str(payload.get("sqlglot_policy_hash")),
+                    "sql_dialect": _optional_str(dialect),
+                    "sql": optimized_sql,
+                    "error": str(exc),
+                    "parse_errors": _to_json_value(parse_error_payload(exc)),
+                }
+            )
+        except (TypeError, ValueError) as exc:
+            results.append(
+                {
+                    "domain": _optional_str(payload.get("domain")),
+                    "rule_name": _optional_str(payload.get("rule_name")),
+                    "plan_signature": _optional_str(payload.get("plan_signature")),
+                    "plan_fingerprint": _optional_str(payload.get("plan_fingerprint")),
+                    "sqlglot_policy_hash": _optional_str(payload.get("sqlglot_policy_hash")),
+                    "sql_dialect": _optional_str(dialect),
+                    "sql": optimized_sql,
+                    "error": str(exc),
+                    "parse_errors": None,
+                }
+            )
+    return results or None
+
+
 def _optional_str(value: object) -> str | None:
     if value is None:
         return None
@@ -978,6 +1030,10 @@ def _manifest_notes(data: ManifestData) -> JsonDict:
         "sqlglot_planner_dag_hashes": _optional_note(
             data.sqlglot_ast_payloads,
             _sqlglot_planner_dag_hashes,
+        ),
+        "sqlglot_parse_errors": _optional_note(
+            data.sqlglot_ast_payloads,
+            _sqlglot_parse_errors,
         ),
         "dataset_registry_snapshot": _optional_note(
             data.dataset_registry_snapshot,

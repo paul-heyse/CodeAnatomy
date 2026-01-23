@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict, cast
 import msgspec
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
+from sqlglot.errors import SqlglotError
 
 try:
     import pyarrow.substrait as pa_substrait
@@ -88,7 +89,7 @@ from sqlglot_tools.bridge import (
     ibis_to_datafusion_ast_path,
     ibis_to_sqlglot,
 )
-from sqlglot_tools.compat import ErrorLevel, Expression, exp
+from sqlglot_tools.compat import ErrorLevel, Expression, exp, parse_one
 from sqlglot_tools.lineage import (
     LineageExtractionOptions,
     LineagePayload,
@@ -102,6 +103,8 @@ from sqlglot_tools.optimizer import (
     SqlGlotPolicy,
     ast_to_artifact,
     bind_params,
+    build_insert,
+    build_select,
     emit_preflight_diagnostics,
     normalize_expr,
     parse_sql_strict,
@@ -531,6 +534,17 @@ def _emit_sql(expr: Expression, *, options: DataFusionCompileOptions) -> str:
     return sqlglot_emit(expr, policy=policy)
 
 
+def _emit_internal_sql(expr: Expression) -> str:
+    return _emit_sql(expr, options=DataFusionCompileOptions())
+
+
+def _parse_sql_expr(sql: str) -> Expression | None:
+    try:
+        return parse_one(sql)
+    except (SqlglotError, TypeError, ValueError):
+        return None
+
+
 def df_from_sqlglot_or_sql(
     ctx: SessionContext,
     expr: Expression,
@@ -616,10 +630,18 @@ def validate_table_constraints(
         for constraint in constraints:
             if not constraint.strip():
                 continue
-            df = ctx.sql_with_options(
-                f"SELECT 1 FROM {name} WHERE NOT ({constraint}) LIMIT 1",
-                sql_options,
-            )
+            constraint_expr = _parse_sql_expr(constraint)
+            if constraint_expr is None:
+                query = f"SELECT 1 FROM {name} WHERE NOT ({constraint}) LIMIT 1"
+            else:
+                query_expr = build_select(
+                    [exp.Literal.number(1)],
+                    from_=name,
+                    where=exp.not_(constraint_expr),
+                    limit=1,
+                )
+                query = _emit_internal_sql(query_expr)
+            df = ctx.sql_with_options(query, sql_options)
             if _df_has_rows(df):
                 violations.append(constraint)
     finally:
@@ -1600,6 +1622,10 @@ class DataFusionPlanArtifacts:
     ibis_sql: str | None = None
     ibis_sql_pretty: str | None = None
     ibis_graphviz: str | None = None
+    ibis_compiled_sql: str | None = None
+    ibis_compiled_sql_hash: str | None = None
+    ibis_compile_params: str | None = None
+    ibis_compile_limit: int | None = None
     read_dialect: str | None = None
     write_dialect: str | None = None
     canonical_fingerprint: str | None = None
@@ -1646,6 +1672,10 @@ class DataFusionPlanArtifacts:
             "ibis_sql": self.ibis_sql,
             "ibis_sql_pretty": self.ibis_sql_pretty,
             "ibis_graphviz": self.ibis_graphviz,
+            "ibis_compiled_sql": self.ibis_compiled_sql,
+            "ibis_compiled_sql_hash": self.ibis_compiled_sql_hash,
+            "ibis_compile_params": self.ibis_compile_params,
+            "ibis_compile_limit": self.ibis_compile_limit,
             "read_dialect": self.read_dialect,
             "write_dialect": self.write_dialect,
             "canonical_fingerprint": self.canonical_fingerprint,
@@ -1701,6 +1731,10 @@ class DataFusionPlanArtifacts:
             "ibis_sql": self.ibis_sql,
             "ibis_sql_pretty": self.ibis_sql_pretty,
             "ibis_graphviz": self.ibis_graphviz,
+            "ibis_compiled_sql": self.ibis_compiled_sql,
+            "ibis_compiled_sql_hash": self.ibis_compiled_sql_hash,
+            "ibis_compile_params": self.ibis_compile_params,
+            "ibis_compile_limit": self.ibis_compile_limit,
             "read_dialect": self.read_dialect,
             "write_dialect": self.write_dialect,
             "canonical_fingerprint": self.canonical_fingerprint,
@@ -2315,23 +2349,46 @@ def _collect_normalized_sql(
 
 def _collect_ibis_artifacts(
     options: DataFusionCompileOptions,
-) -> tuple[str | None, str | None, str | None, str | None]:
+) -> Mapping[str, object] | None:
     ibis_expr = options.ibis_expr
     if ibis_expr is None:
-        return None, None, None, None
+        return None
     from ibis.expr.types import Table, Value
 
     if not isinstance(ibis_expr, (Table, Value)):
-        return None, None, None, None
+        return None
     from ibis_engine.sql_bridge import ibis_plan_artifacts
 
-    ibis_payload = ibis_plan_artifacts(ibis_expr, dialect=options.dialect)
-    return (
-        ibis_payload["ibis_decompile"],
-        ibis_payload["ibis_sql"],
-        ibis_payload["ibis_sql_pretty"],
-        ibis_payload.get("ibis_graphviz"),
+    return ibis_plan_artifacts(
+        ibis_expr,
+        dialect=options.dialect,
+        params=options.params,
     )
+
+
+def _payload_str(payload: Mapping[str, object] | None, key: str) -> str | None:
+    if payload is None:
+        return None
+    value = payload.get(key)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _payload_int(payload: Mapping[str, object] | None, key: str) -> int | None:
+    if payload is None:
+        return None
+    value = payload.get(key)
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (float, str, bytes, bytearray)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def collect_plan_artifacts(
@@ -2384,9 +2441,7 @@ def collect_plan_artifacts(
         options=options,
         policy=inputs.policy,
     )
-    ibis_decompile, ibis_sql, ibis_sql_pretty, ibis_graphviz = _collect_ibis_artifacts(
-        options
-    )
+    ibis_payload = _collect_ibis_artifacts(options)
     return DataFusionPlanArtifacts(
         plan_hash=inputs.plan_hash,
         sql=inputs.sql,
@@ -2396,10 +2451,14 @@ def collect_plan_artifacts(
         substrait_plan=inputs.details.substrait_plan,
         substrait_validation=inputs.details.substrait_validation,
         sqlglot_ast=sqlglot_ast,
-        ibis_decompile=ibis_decompile,
-        ibis_sql=ibis_sql,
-        ibis_sql_pretty=ibis_sql_pretty,
-        ibis_graphviz=ibis_graphviz,
+        ibis_decompile=_payload_str(ibis_payload, "ibis_decompile"),
+        ibis_sql=_payload_str(ibis_payload, "ibis_sql"),
+        ibis_sql_pretty=_payload_str(ibis_payload, "ibis_sql_pretty"),
+        ibis_graphviz=_payload_str(ibis_payload, "ibis_graphviz"),
+        ibis_compiled_sql=_payload_str(ibis_payload, "ibis_compiled_sql"),
+        ibis_compiled_sql_hash=_payload_str(ibis_payload, "ibis_compiled_sql_hash"),
+        ibis_compile_params=_payload_str(ibis_payload, "ibis_compile_params"),
+        ibis_compile_limit=_payload_int(ibis_payload, "ibis_compile_limit"),
         read_dialect=inputs.policy.read_dialect,
         write_dialect=inputs.policy.write_dialect,
         canonical_fingerprint=canonical_fingerprint,
@@ -2879,13 +2938,22 @@ def datafusion_insert_delta(
         Raised when the insert mode is unsupported.
     """
     resolved = options or DeltaInsertOptions()
-    if resolved.mode == "overwrite":
-        sql = f"INSERT OVERWRITE {table_name} {source_sql}"
-    elif resolved.mode == "append":
-        sql = f"INSERT INTO {table_name} {source_sql}"
-    else:
+    if resolved.mode not in {"overwrite", "append"}:
         msg = f"Unsupported Delta INSERT mode: {resolved.mode!r}."
         raise ValueError(msg)
+    source_expr = _parse_sql_expr(source_sql)
+    if source_expr is None:
+        if resolved.mode == "overwrite":
+            sql = f"INSERT OVERWRITE {table_name} {source_sql}"
+        else:
+            sql = f"INSERT INTO {table_name} {source_sql}"
+    else:
+        insert_expr = build_insert(
+            source_expr,
+            table_name=table_name,
+            overwrite=resolved.mode == "overwrite",
+        )
+        sql = _emit_internal_sql(insert_expr)
 
     if resolved.constraints:
         _validate_sql_constraints(
@@ -2930,10 +2998,25 @@ def _validate_sql_constraints(
     for constraint in constraints:
         if not constraint.strip():
             continue
-        query = (
-            "SELECT 1 FROM "
-            f"({source_sql}) AS input WHERE NOT ({constraint}) LIMIT 1"
-        )
+        source_expr = _parse_sql_expr(source_sql)
+        constraint_expr = _parse_sql_expr(constraint)
+        if source_expr is None or constraint_expr is None:
+            query = (
+                "SELECT 1 FROM "
+                f"({source_sql}) AS input WHERE NOT ({constraint}) LIMIT 1"
+            )
+        else:
+            subquery = exp.Subquery(
+                this=source_expr,
+                alias=exp.TableAlias(this=exp.to_identifier("input")),
+            )
+            query_expr = build_select(
+                [exp.Literal.number(1)],
+                from_=subquery,
+                where=exp.not_(constraint_expr),
+                limit=1,
+            )
+            query = _emit_internal_sql(query_expr)
         df = ctx.sql_with_options(query, sql_options)
         if _df_has_rows(df):
             msg = f"Delta constraint violated: {constraint}"
@@ -2985,10 +3068,12 @@ def datafusion_insert_from_dataframe(
     register_batches(temp_name, batches)
 
     try:
+        source_expr = build_select([exp.Star()], from_=temp_name)
+        source_sql = _emit_internal_sql(source_expr)
         result = datafusion_insert_delta(
             ctx,
             table_name,
-            f"SELECT * FROM {temp_name}",
+            source_sql,
             options=resolved,
         )
     finally:

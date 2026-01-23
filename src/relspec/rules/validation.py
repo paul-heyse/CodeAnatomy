@@ -1310,7 +1310,9 @@ def _rule_ir_metadata(
 ) -> dict[str, str]:
     metadata: dict[str, str] = {}
     ibis_metadata = ibis_plan_artifacts(rule_ctx.source.expr, dialect="datafusion")
-    metadata.update({key: value for key, value in ibis_metadata.items() if value is not None})
+    metadata.update(
+        {key: str(value) for key, value in ibis_metadata.items() if value is not None}
+    )
     try:
         checkpoint = compile_checkpoint(
             rule_ctx.source.expr,

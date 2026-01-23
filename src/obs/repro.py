@@ -37,6 +37,7 @@ from serde_msgspec import StructBase, to_builtins
 from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
     ParseSqlOptions,
+    parse_error_payload,
     parse_sql,
     planner_dag_snapshot,
     register_datafusion_dialect,
@@ -1385,6 +1386,7 @@ def _write_sqlglot_planner_dag(
 
     diagnostics = rule_diagnostics_from_table(diagnostics_table)
     payloads: list[JsonDict] = []
+    parse_errors: list[JsonDict] = []
     for diagnostic in diagnostics:
         metadata = diagnostic.metadata
         optimized_sql = metadata.get("optimized_sql")
@@ -1393,7 +1395,35 @@ def _write_sqlglot_planner_dag(
         dialect = metadata.get("sql_dialect") or "datafusion_ext"
         try:
             expr = parse_sql(optimized_sql, options=ParseSqlOptions(dialect=str(dialect)))
-        except (TypeError, ValueError, ParseError):
+        except ParseError as exc:
+            parse_errors.append(
+                {
+                    "domain": str(diagnostic.domain),
+                    "rule_name": diagnostic.rule_name,
+                    "plan_signature": diagnostic.plan_signature,
+                    "plan_fingerprint": _to_json_value(metadata.get("plan_fingerprint")),
+                    "sqlglot_policy_hash": _to_json_value(metadata.get("sqlglot_policy_hash")),
+                    "sql_dialect": str(dialect),
+                    "sql": optimized_sql,
+                    "error": str(exc),
+                    "parse_errors": _to_json_value(parse_error_payload(exc)),
+                }
+            )
+            continue
+        except (TypeError, ValueError) as exc:
+            parse_errors.append(
+                {
+                    "domain": str(diagnostic.domain),
+                    "rule_name": diagnostic.rule_name,
+                    "plan_signature": diagnostic.plan_signature,
+                    "plan_fingerprint": _to_json_value(metadata.get("plan_fingerprint")),
+                    "sqlglot_policy_hash": _to_json_value(metadata.get("sqlglot_policy_hash")),
+                    "sql_dialect": str(dialect),
+                    "sql": optimized_sql,
+                    "error": str(exc),
+                    "parse_errors": None,
+                }
+            )
             continue
         dag = planner_dag_snapshot(expr, dialect=dialect)
         steps = [
@@ -1422,6 +1452,14 @@ def _write_sqlglot_planner_dag(
             _write_delta_payload(
                 relspec_dir / "sqlglot_planner_dag.delta",
                 {"payloads": payloads},
+                overwrite=True,
+            )
+        )
+    if parse_errors:
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / "sqlglot_parse_errors.delta",
+                {"payloads": parse_errors},
                 overwrite=True,
             )
         )

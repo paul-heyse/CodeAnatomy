@@ -27,12 +27,20 @@ from ibis_engine.builtin_udfs import (
     stable_hash128,
     stable_id,
 )
+from ibis_engine.schema_utils import ibis_schema_from_arrow
 
 IbisExprFn = Callable[..., Value]
 PORTABILITY_GATE_OPS: tuple[type[ops.Node], ...] = (
     ops.TableUnnest,
     ops.Unnest,
     ops.WindowFunction,
+)
+SUPPORTED_JOIN_KINDS: tuple[str, ...] = (
+    "inner",
+    "left",
+    "right",
+    "outer",
+    "cross",
 )
 
 
@@ -311,6 +319,96 @@ def _missing_portability_ops(nodes: Sequence[object]) -> tuple[str, ...]:
     return tuple(sorted(missing))
 
 
+def unsupported_join_kinds(expr: Value | Table) -> tuple[str, ...]:
+    """Return unsupported join kinds detected in an expression.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted join kind labels that require fallback handling.
+    """
+    missing: set[str] = set()
+    try:
+        nodes = list(expr.op().find(ops.JoinChain))
+    except AttributeError:
+        return ()
+    for chain in nodes:
+        rest = getattr(chain, "rest", ())
+        if not isinstance(rest, Sequence):
+            continue
+        for link in rest:
+            how = getattr(link, "how", None)
+            if how is None:
+                continue
+            how_label = str(how)
+            if how_label not in SUPPORTED_JOIN_KINDS:
+                missing.add(f"join:{how_label}")
+    return tuple(sorted(missing))
+
+
+@dataclass(frozen=True)
+class PortabilityFallbackResult:
+    """Result of portability preflight and fallback rewrites."""
+
+    expr: Table
+    missing_ops: tuple[str, ...]
+    fallback_reason: str | None = None
+
+
+def _sql_fallback_expr(
+    expr: Table,
+    *,
+    backend: OperationSupportBackend,
+    dialect: str | None,
+) -> Table:
+    sql_builder = getattr(backend, "sql", None)
+    if not callable(sql_builder):
+        msg = "SQL fallback requires a backend with sql() support."
+        raise TypeError(msg)
+    try:
+        compiled = expr.compile()
+    except (AttributeError, NotImplementedError, RuntimeError, TypeError, ValueError) as exc:
+        msg = f"SQL fallback compile failed: {exc}"
+        raise ValueError(msg) from exc
+    if compiled is None:
+        msg = "SQL fallback compile produced no SQL."
+        raise ValueError(msg)
+    compiled_sql = compiled if isinstance(compiled, str) else str(compiled)
+    ibis_schema = ibis_schema_from_arrow(expr.schema().to_pyarrow())
+    sql_fn = cast("Callable[..., Table]", sql_builder)
+    try:
+        return sql_fn(compiled_sql, schema=ibis_schema, dialect=dialect)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = f"SQL fallback ingestion failed: {exc}"
+        raise ValueError(msg) from exc
+
+
+def preflight_portability(
+    expr: Table,
+    *,
+    backend: OperationSupportBackend,
+    dialect: str | None = None,
+) -> PortabilityFallbackResult:
+    """Apply preflight support checks and optional fallbacks.
+
+    Returns
+    -------
+    PortabilityFallbackResult
+        Result with missing ops metadata and any fallback expression.
+    """
+    missing_ops = unsupported_operations(expr, backend=backend)
+    missing_joins = unsupported_join_kinds(expr)
+    missing = tuple(sorted({*missing_ops, *missing_joins}))
+    if not missing:
+        return PortabilityFallbackResult(expr=expr, missing_ops=())
+    fallback_expr = _sql_fallback_expr(expr, backend=backend, dialect=dialect)
+    return PortabilityFallbackResult(
+        expr=fallback_expr,
+        missing_ops=missing,
+        fallback_reason="sql_fallback",
+    )
+
+
 def align_set_op_tables(tables: Sequence[Table]) -> list[Table]:
     """Align tables to a shared schema for set operations.
 
@@ -397,11 +495,14 @@ __all__ = [
     "IbisExprFn",
     "IbisExprRegistry",
     "OperationSupportBackend",
+    "PortabilityFallbackResult",
     "align_set_op_tables",
     "default_expr_registry",
     "difference_tables",
     "expr_ir_to_ibis",
     "intersect_tables",
+    "preflight_portability",
     "union_tables",
+    "unsupported_join_kinds",
     "unsupported_operations",
 ]

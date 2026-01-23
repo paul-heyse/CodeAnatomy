@@ -7,6 +7,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+import msgspec
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value
 
@@ -17,7 +18,9 @@ from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
     SqlGlotPolicy,
+    ast_to_artifact,
     normalize_expr_with_stats,
+    serialize_ast_artifact,
 )
 
 
@@ -47,6 +50,16 @@ class IbisCompilerBackend(Protocol):
     """Protocol for Ibis backends exposing a SQLGlot compiler."""
 
     compiler: SqlGlotCompiler
+
+    def sql(
+        self,
+        sql: str,
+        *,
+        schema: object | None = None,
+        dialect: str | None = None,
+    ) -> IbisTable:
+        """Return a table expression from a SQL string."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -190,6 +203,26 @@ def _resolved_dialect(policy: SqlGlotPolicy | None) -> str:
 
 def _sql_text(expr: Expression, *, dialect: str) -> str:
     return expr.sql(dialect=dialect)
+
+
+def sqlglot_ast_payload(
+    expr: Expression | None,
+    *,
+    policy: SqlGlotPolicy | None,
+) -> bytes | None:
+    """Return serialized SQLGlot AST diagnostics payload.
+
+    Returns
+    -------
+    bytes | None
+        Serialized AST payload for diagnostics, if available.
+    """
+    if expr is None:
+        return None
+    try:
+        return serialize_ast_artifact(ast_to_artifact(expr, policy=policy))
+    except (TypeError, ValueError, msgspec.EncodeError):
+        return None
 
 
 def _ast_diff_summary(left: Expression, right: Expression) -> dict[str, int]:

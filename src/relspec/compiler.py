@@ -41,7 +41,13 @@ from engine.materialize_pipeline import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.compiler_checkpoint import try_plan_hash
 from ibis_engine.execution_factory import ibis_execution_from_ctx
-from ibis_engine.expr_compiler import IbisExprRegistry, default_expr_registry, expr_ir_to_ibis
+from ibis_engine.expr_compiler import (
+    IbisExprRegistry,
+    OperationSupportBackend,
+    default_expr_registry,
+    expr_ir_to_ibis,
+    preflight_portability,
+)
 from ibis_engine.io_bridge import IbisMaterializeOptions, materialize_table
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
@@ -61,6 +67,7 @@ from relspec.edge_contract_validator import (
 )
 from relspec.engine import IbisRelPlanCompiler, PlanResolver, RelPlanCompiler, output_plan_hash
 from relspec.errors import (
+    RelspecCapabilityError,
     RelspecCompilationError,
     RelspecExecutionError,
     RelspecValidationError,
@@ -976,6 +983,89 @@ def _apply_plan_transforms(
     return IbisPlan(expr=expr, ordering=plan.ordering)
 
 
+def _backend_dialect(backend: BaseBackend) -> str | None:
+    dialect = getattr(backend, "dialect", None)
+    if isinstance(dialect, str):
+        return dialect
+    return None
+
+
+@dataclass(frozen=True)
+class OpFallbackPayload:
+    execution_label: ExecutionLabel | None
+    missing_ops: tuple[str, ...]
+    fallback_reason: str | None
+    error: str | None = None
+
+
+def _record_op_fallback(
+    ctx: ExecutionContext,
+    *,
+    backend: BaseBackend,
+    payload: OpFallbackPayload,
+) -> None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return
+    record = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "stage": "relspec",
+        "backend": type(backend).__name__,
+        "missing_ops": list(payload.missing_ops),
+        "fallback_reason": payload.fallback_reason,
+        "error": payload.error,
+        "execution_label": {
+            "rule": payload.execution_label.rule_name,
+            "output": payload.execution_label.output_dataset,
+        }
+        if payload.execution_label is not None
+        else None,
+    }
+    profile.diagnostics_sink.record_artifact("ibis_op_fallback_v1", record)
+
+
+def _preflight_plan(
+    plan: IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+    execution_label: ExecutionLabel | None,
+) -> IbisPlan:
+    dialect = _backend_dialect(backend)
+    try:
+        result = preflight_portability(
+            plan.expr,
+            backend=cast("OperationSupportBackend", backend),
+            dialect=dialect,
+        )
+    except ValueError as exc:
+        _record_op_fallback(
+            ctx,
+            backend=backend,
+            payload=OpFallbackPayload(
+                execution_label=execution_label,
+                missing_ops=(),
+                fallback_reason="fallback_failed",
+                error=str(exc),
+            ),
+        )
+        msg = f"Backend fallback failed for plan: {exc}"
+        raise RelspecCapabilityError(msg) from exc
+    if result.missing_ops:
+        _record_op_fallback(
+            ctx,
+            backend=backend,
+            payload=OpFallbackPayload(
+                execution_label=execution_label,
+                missing_ops=result.missing_ops,
+                fallback_reason=result.fallback_reason,
+            ),
+        )
+    if result.expr is plan.expr:
+        return plan
+    return IbisPlan(expr=result.expr, ordering=plan.ordering)
+
+
 def _dedupe_spec_with_defaults(spec: DedupeSpec, *, schema: SchemaLike) -> DedupeSpec:
     """Apply default tie breakers for score-based deduplication.
 
@@ -1358,10 +1448,22 @@ class CompiledRule:
                     name=f"{label.rule_name}_{label.output_dataset}_post",
                 )
                 plan = self.apply_plan_transforms(plan, ctx=ctx)
+                plan = _preflight_plan(
+                    plan,
+                    ctx=ctx,
+                    backend=resolved_backend,
+                    execution_label=label,
+                )
                 table = resolved_executor(plan, ctx, options.params, label)
         elif self.rel_plan is not None:
             plan = compiler.compile(self.rel_plan, ctx=ctx, resolver=effective_resolver)
             plan = self.apply_plan_transforms(plan, ctx=ctx)
+            plan = _preflight_plan(
+                plan,
+                ctx=ctx,
+                backend=resolved_backend,
+                execution_label=label,
+            )
             table = resolved_executor(plan, ctx, options.params, label)
         else:
             msg = "CompiledRule has neither rel_plan nor execute_fn."

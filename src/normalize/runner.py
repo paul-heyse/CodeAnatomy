@@ -53,8 +53,6 @@ from normalize.runtime_validation import validate_rule_specs
 from relspec.model import AmbiguityPolicy, ConfidencePolicy
 from relspec.normalize.rule_registry_specs import rule_family_specs
 from relspec.policies import PolicyRegistry
-from relspec.rustworkx_graph import build_rule_graph_from_normalize_rules
-from relspec.rustworkx_schedule import schedule_rules
 from relspec.rules.definitions import (
     EvidenceOutput,
     EvidenceSpec,
@@ -64,6 +62,8 @@ from relspec.rules.definitions import (
 )
 from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.rel_ops import query_spec_from_rel_ops
+from relspec.rustworkx_graph import build_rule_graph_from_normalize_rules
+from relspec.rustworkx_schedule import schedule_rules
 from schema_spec.system import ContractSpec
 from sqlglot_tools.bridge import SqlGlotDiagnosticsOptions, sqlglot_diagnostics
 from sqlglot_tools.lineage import LineageExtractionOptions, extract_lineage_payload

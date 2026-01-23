@@ -14,6 +14,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import datafusion
+import msgspec
 import pyarrow as pa
 from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
@@ -79,6 +80,7 @@ from datafusion_engine.udf_registry import (
 )
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCache
+from serde_msgspec import StructBase
 
 if TYPE_CHECKING:
     from datafusion_engine.udf_catalog import UdfCatalog
@@ -108,6 +110,14 @@ PlanArtifactsHook = Callable[[Mapping[str, object]], None]
 SqlIngestHook = Callable[[Mapping[str, object]], None]
 CacheEventHook = Callable[[DataFusionCacheEvent], None]
 SubstraitFallbackHook = Callable[[DataFusionSubstraitFallbackEvent], None]
+
+_TELEMETRY_MSGPACK_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
+
+
+def _encode_telemetry_msgpack(payload: object) -> bytes:
+    buf = bytearray()
+    _TELEMETRY_MSGPACK_ENCODER.encode_into(payload, buf)
+    return bytes(buf)
 
 
 class DiagnosticsSink(Protocol):
@@ -473,8 +483,13 @@ class SchemaHardeningProfile:
         return config
 
 
-@dataclass(frozen=True)
-class FeatureStateSnapshot:
+class FeatureStateSnapshot(
+    StructBase,
+    array_like=True,
+    gc=False,
+    cache_hash=True,
+    frozen=True,
+):
     """Snapshot of runtime feature gates and determinism tier."""
 
     profile_name: str
@@ -731,6 +746,35 @@ CST_DIAGNOSTIC_STATEMENTS: tuple[PreparedStatementSpec, ...] = (
         sql="SELECT * FROM cst_callsites WHERE file_id = $1",
         param_types=("Utf8",),
     ),
+)
+
+INFO_SCHEMA_STATEMENTS: tuple[PreparedStatementSpec, ...] = (
+    PreparedStatementSpec(
+        name="table_names_snapshot",
+        sql="SELECT table_name FROM information_schema.tables",
+    ),
+    PreparedStatementSpec(
+        name="tables_snapshot",
+        sql="SELECT table_catalog, table_schema, table_name, table_type FROM information_schema.tables",
+    ),
+    PreparedStatementSpec(
+        name="df_settings_snapshot",
+        sql="SELECT name, value FROM information_schema.df_settings",
+    ),
+    PreparedStatementSpec(
+        name="routines_snapshot",
+        sql="SELECT * FROM information_schema.routines",
+    ),
+    PreparedStatementSpec(
+        name="parameters_snapshot",
+        sql=(
+            "SELECT specific_name, routine_name, parameter_name, parameter_mode, "
+            "data_type, ordinal_position FROM information_schema.parameters"
+        ),
+    ),
+)
+INFO_SCHEMA_STATEMENT_NAMES: frozenset[str] = frozenset(
+    spec.name for spec in INFO_SCHEMA_STATEMENTS
 )
 
 _SESSION_CONTEXT_CACHE: dict[str, SessionContext] = {}
@@ -2266,6 +2310,16 @@ class _RuntimeDiagnosticsMixin:
             },
         }
 
+    def telemetry_payload_msgpack(self) -> bytes:
+        """Return a MessagePack-encoded telemetry payload.
+
+        Returns
+        -------
+        bytes
+            MessagePack payload for runtime telemetry.
+        """
+        return _encode_telemetry_msgpack(self.telemetry_payload_v1())
+
     def telemetry_payload_hash(self) -> str:
         """Return a stable hash for the versioned telemetry payload.
 
@@ -2391,7 +2445,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     delta_commit_runs: dict[str, DataFusionRun] = field(default_factory=dict, repr=False)
     local_filesystem_root: str | None = None
     input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
-    prepared_statements: tuple[PreparedStatementSpec, ...] = ()
+    prepared_statements: tuple[PreparedStatementSpec, ...] = INFO_SCHEMA_STATEMENTS
     config_policy_name: str | None = "symtable"
     config_policy: DataFusionConfigPolicy | None = None
     schema_hardening_name: str | None = "schema_hardening"
@@ -2578,6 +2632,36 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.session_context_hook is not None:
             ctx = self.session_context_hook(ctx)
         self._cache_context(ctx)
+        return ctx
+
+    def ephemeral_context(self) -> SessionContext:
+        """Return a non-cached SessionContext configured from the profile.
+
+        Returns
+        -------
+        datafusion.SessionContext
+            Session context configured for the profile without caching.
+        """
+        ctx = self._build_session_context()
+        ctx = self._apply_url_table(ctx)
+        self._register_local_filesystem(ctx)
+        self._install_input_plugins(ctx)
+        self._install_registry_catalogs(ctx)
+        self._install_delta_table_factory(ctx)
+        self._install_udfs(ctx)
+        self._install_schema_registry(ctx)
+        self._validate_rule_function_allowlist(ctx)
+        self._prepare_statements(ctx)
+        self.ensure_delta_plan_codecs(ctx)
+        self._install_function_factory(ctx)
+        self._install_expr_planners(ctx)
+        self._record_extension_parity_validation()
+        self._install_physical_expr_adapter_factory(ctx)
+        self._install_tracing(ctx)
+        self._install_cache_tables(ctx)
+        self._record_cache_diagnostics(ctx)
+        if self.session_context_hook is not None:
+            ctx = self.session_context_hook(ctx)
         return ctx
 
     def named_args_supported(self) -> bool:
@@ -3907,6 +3991,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def _prepare_statements(self, ctx: SessionContext) -> None:
         """Prepare SQL statements when configured."""
         statements = list(self.prepared_statements)
+        if not self.enable_information_schema:
+            statements = [
+                statement
+                for statement in statements
+                if statement.name not in INFO_SCHEMA_STATEMENT_NAMES
+            ]
         if self.enable_schema_registry:
             statements.extend(CST_DIAGNOSTIC_STATEMENTS)
         seen: set[str] = set()
@@ -4878,7 +4968,7 @@ def apply_execution_policy(
 
 @lru_cache(maxsize=128)
 def _datafusion_type_name(dtype: pa.DataType) -> str:
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().ephemeral_context()
     table = pa.Table.from_arrays([pa.array([None], type=dtype)], names=["value"])
     ctx.register_table("t", ctx.from_arrow(table))
     result = _sql_with_options(ctx, "SELECT arrow_typeof(value) AS dtype FROM t").to_arrow_table()

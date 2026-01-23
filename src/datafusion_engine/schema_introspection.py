@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
@@ -30,8 +30,14 @@ def _table_for_query(
     query: str,
     *,
     sql_options: SQLOptions | None = None,
+    prepared_name: str | None = None,
 ) -> pa.Table:
     options = sql_options or _read_only_sql_options()
+    if prepared_name is not None:
+        try:
+            return ctx.sql_with_options(f"EXECUTE {prepared_name}", options).to_arrow_table()
+        except (RuntimeError, TypeError, ValueError):
+            pass
     return ctx.sql_with_options(query, options).to_arrow_table()
 
 
@@ -40,6 +46,7 @@ def _rows_for_query(
     query: str,
     *,
     sql_options: SQLOptions | None = None,
+    prepared_name: str | None = None,
 ) -> list[dict[str, object]]:
     """Return a list of row mappings for a SQL query.
 
@@ -48,7 +55,12 @@ def _rows_for_query(
     list[dict[str, object]]
         Rows represented as dictionaries keyed by column name.
     """
-    table = _table_for_query(ctx, query, sql_options=sql_options)
+    table = _table_for_query(
+        ctx,
+        query,
+        sql_options=sql_options,
+        prepared_name=prepared_name,
+    )
     return [dict(row) for row in table.to_pylist()]
 
 
@@ -74,6 +86,7 @@ def table_names_snapshot(
         ctx,
         "SELECT table_name FROM information_schema.tables",
         sql_options=sql_options,
+        prepared_name="table_names_snapshot",
     ):
         value = row.get("table_name")
         if value is not None:
@@ -94,7 +107,12 @@ def settings_snapshot_table(
         Table of settings from information_schema.df_settings.
     """
     query = "SELECT name, value FROM information_schema.df_settings"
-    return _table_for_query(ctx, query, sql_options=sql_options)
+    return _table_for_query(
+        ctx,
+        query,
+        sql_options=sql_options,
+        prepared_name="df_settings_snapshot",
+    )
 
 
 def tables_snapshot_table(
@@ -112,7 +130,12 @@ def tables_snapshot_table(
     query = (
         "SELECT table_catalog, table_schema, table_name, table_type FROM information_schema.tables"
     )
-    return _table_for_query(ctx, query, sql_options=sql_options)
+    return _table_for_query(
+        ctx,
+        query,
+        sql_options=sql_options,
+        prepared_name="tables_snapshot",
+    )
 
 
 def routines_snapshot_table(
@@ -127,11 +150,13 @@ def routines_snapshot_table(
     pyarrow.Table
         Routine inventory from information_schema.routines.
     """
-    query = (
-        "SELECT routine_catalog, routine_schema, routine_name, routine_type "
-        "FROM information_schema.routines"
+    query = "SELECT * FROM information_schema.routines"
+    return _table_for_query(
+        ctx,
+        query,
+        sql_options=sql_options,
+        prepared_name="routines_snapshot",
     )
-    return _table_for_query(ctx, query, sql_options=sql_options)
 
 
 def table_constraint_rows(
@@ -223,103 +248,6 @@ def _ddl_column_defs(schema: pa.Schema, *, partition_columns: set[str]) -> list[
             column_sql = f"{column_sql} NOT NULL"
         column_defs.append(f"  {column_sql}")
     return column_defs
-
-
-@dataclass(frozen=True)
-class ExternalTableDDLBuilder:
-    """Builder for CREATE EXTERNAL TABLE DDL statements.
-
-    Generates DataFusion-compatible DDL for external tables from PyArrow
-    schemas and storage locations.
-    """
-
-    table_name: str
-    schema: pa.Schema
-    location: str
-    file_format: str = "PARQUET"
-    partition_columns: Sequence[str] = ()
-    options: Mapping[str, str] = field(default_factory=dict)
-
-    def build_ddl(self) -> str:
-        """Build CREATE EXTERNAL TABLE DDL statement.
-
-        Returns
-        -------
-        str
-            DDL statement for registering the external table.
-        """
-        column_defs = _ddl_column_defs(
-            self.schema,
-            partition_columns=set(self.partition_columns),
-        )
-
-        columns_clause = ",\n".join(column_defs)
-
-        stored_as = self.file_format.upper()
-
-        options_clause = ""
-        if self.options:
-            option_items = [f"{k} {_sql_literal(v)}" for k, v in self.options.items()]
-            options_clause = f"\nOPTIONS ({', '.join(option_items)})"
-
-        partitioned_clause = ""
-        if self.partition_columns:
-            partition_cols = ", ".join(self.partition_columns)
-            partitioned_clause = f"\nPARTITIONED BY ({partition_cols})"
-
-        return (
-            f"CREATE EXTERNAL TABLE {self.table_name} (\n"
-            f"{columns_clause}\n"
-            f")\n"
-            f"STORED AS {stored_as}"
-            f"{partitioned_clause}"
-            f"{options_clause}\n"
-            f"LOCATION {_sql_literal(self.location)}"
-        )
-
-    def with_options(self, options: Mapping[str, str]) -> ExternalTableDDLBuilder:
-        """Return a builder with updated options.
-
-        Parameters
-        ----------
-        options : Mapping[str, str]
-            Storage options to include in the DDL.
-
-        Returns
-        -------
-        ExternalTableDDLBuilder
-            New builder instance with updated options.
-        """
-        return ExternalTableDDLBuilder(
-            table_name=self.table_name,
-            schema=self.schema,
-            location=self.location,
-            file_format=self.file_format,
-            partition_columns=self.partition_columns,
-            options=options,
-        )
-
-    def with_partition_columns(self, partition_columns: Sequence[str]) -> ExternalTableDDLBuilder:
-        """Return a builder with updated partition columns.
-
-        Parameters
-        ----------
-        partition_columns : Sequence[str]
-            Partition column names.
-
-        Returns
-        -------
-        ExternalTableDDLBuilder
-            New builder instance with updated partition columns.
-        """
-        return ExternalTableDDLBuilder(
-            table_name=self.table_name,
-            schema=self.schema,
-            location=self.location,
-            file_format=self.file_format,
-            partition_columns=partition_columns,
-            options=self.options,
-        )
 
 
 def _table_name_from_ddl(ddl: str) -> str:
@@ -501,11 +429,13 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Routine inventory rows including name and type.
         """
-        query = (
-            "SELECT routine_catalog, routine_schema, routine_name, routine_type "
-            "FROM information_schema.routines"
+        query = "SELECT * FROM information_schema.routines"
+        return _rows_for_query(
+            self.ctx,
+            query,
+            sql_options=self.sql_options,
+            prepared_name="routines_snapshot",
         )
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
 
     def parameters_snapshot(self) -> list[dict[str, object]]:
         """Return routine parameter rows from information_schema.
@@ -520,7 +450,12 @@ class SchemaIntrospector:
             "data_type, ordinal_position "
             "FROM information_schema.parameters"
         )
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+        return _rows_for_query(
+            self.ctx,
+            query,
+            sql_options=self.sql_options,
+            prepared_name="parameters_snapshot",
+        )
 
     def parameters_snapshot_table(self) -> pa.Table | None:
         """Return information_schema.parameters as Arrow table if available.
@@ -536,7 +471,12 @@ class SchemaIntrospector:
             "FROM information_schema.parameters"
         )
         try:
-            return _table_for_query(self.ctx, query, sql_options=self.sql_options)
+            return _table_for_query(
+                self.ctx,
+                query,
+                sql_options=self.sql_options,
+                prepared_name="parameters_snapshot",
+            )
         except (RuntimeError, TypeError, ValueError, KeyError):
             return None
 
@@ -815,7 +755,6 @@ def _function_catalog_sort_key(row: Mapping[str, object]) -> tuple[str, str]:
 
 
 __all__ = [
-    "ExternalTableDDLBuilder",
     "SchemaIntrospector",
     "find_struct_field_keys",
     "routines_snapshot_table",

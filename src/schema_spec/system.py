@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from arrowdsl.spec.expr_ir import ExprIR
     from arrowdsl.spec.tables.schema import SchemaSpecTables
     from ibis_engine.execution import IbisExecutionContext
-    from ibis_engine.sources import DatasetSource, PlanSource
+    from ibis_engine.sources import PlanSource
     from schema_spec.view_specs import ViewSpec
 
 
@@ -219,9 +219,12 @@ class DataFusionScanOptions:
 class DeltaScanOptions:
     """Delta-specific scan configuration."""
 
+    # Delta CDF configuration is handled via DatasetLocation.delta_cdf_options
+    # to keep change-data-feed registration separate from standard scans.
+
     file_column_name: str | None = None
     enable_parquet_pushdown: bool = True
-    schema_force_view_types: bool = False
+    schema_force_view_types: bool | None = None
     wrap_partition_values: bool = False
     schema: pa.Schema | None = None
 

@@ -16,10 +16,16 @@ from arrowdsl.core.metrics import (
 )
 from arrowdsl.schema.serialization import schema_to_dict
 from core_types import JsonDict
+from serde_msgspec import StructBase
 
 
-@dataclass(frozen=True)
-class ScanTelemetry:
+class ScanTelemetry(
+    StructBase,
+    array_like=True,
+    gc=False,
+    cache_hash=True,
+    frozen=True,
+):
     """Scan telemetry for dataset fragments."""
 
     fragment_count: int

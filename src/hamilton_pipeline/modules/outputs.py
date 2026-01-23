@@ -54,6 +54,7 @@ from engine.plan_cache import PlanCacheEntry
 from engine.plan_policy import WriterStrategy
 from engine.runtime_profile import RuntimeProfileSnapshot, runtime_profile_snapshot
 from extract.evidence_plan import EvidencePlan
+from hamilton_pipeline.graph_synthesis import dependency_map, rule_output_map
 from hamilton_pipeline.modules.extraction import ExtractErrorArtifacts
 from hamilton_pipeline.pipeline_types import (
     CpgOutputTables,
@@ -133,9 +134,9 @@ from relspec.rules.coverage import collect_rule_demands
 from relspec.rules.diagnostics import rule_diagnostics_from_table
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.spec_tables import rule_definitions_from_table
-from relspec.rustworkx_graph import RuleGraph, rule_graph_diagnostics, rule_graph_snapshot
-from relspec.rustworkx_schedule import RuleSchedule, impacted_rules, provenance_for_rule
 from relspec.runtime import RelspecRuntime
+from relspec.rustworkx_graph import rule_graph_diagnostics, rule_graph_snapshot
+from relspec.rustworkx_schedule import impacted_rules, provenance_for_rule
 from schema_spec.system import (
     DatasetSpec,
     dataset_spec_from_schema,
@@ -153,6 +154,8 @@ from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
     from ibis_engine.execution import IbisExecutionContext
+    from relspec.rustworkx_graph import RuleGraph
+    from relspec.rustworkx_schedule import RuleSchedule
     from storage.deltalake import DeltaWriteResult
 
 # -----------------------
@@ -3069,6 +3072,8 @@ def relspec_snapshots(
         name: impacted_rules(relspec_rule_graph, evidence_name=name)
         for name in sorted(relspec_rule_graph.evidence_idx)
     }
+    dependency_map_payload = dependency_map(relspec_rule_graph)
+    output_map_payload = rule_output_map(relspec_rule_graph)
     return RelspecSnapshots(
         registry_snapshot=snapshot,
         contracts=relationship_contracts,
@@ -3080,6 +3085,8 @@ def relspec_snapshots(
         ),
         rule_graph_diagnostics=rule_graph_diagnostics(relspec_rule_graph),
         rule_schedule=relspec_rule_schedule,
+        rule_dependency_map=dependency_map_payload,
+        rule_output_map=output_map_payload,
         rule_provenance=rule_provenance,
         evidence_impact=evidence_impact,
     )
@@ -4099,6 +4106,8 @@ def run_bundle_context(
         rule_graph_snapshot=run_bundle_inputs.relspec_snapshots.rule_graph_snapshot,
         rule_graph_diagnostics=run_bundle_inputs.relspec_snapshots.rule_graph_diagnostics,
         rule_schedule=run_bundle_inputs.relspec_snapshots.rule_schedule,
+        rule_dependency_map=run_bundle_inputs.relspec_snapshots.rule_dependency_map,
+        rule_output_map=run_bundle_inputs.relspec_snapshots.rule_output_map,
         rule_provenance=run_bundle_inputs.relspec_snapshots.rule_provenance,
         evidence_impact=run_bundle_inputs.relspec_snapshots.evidence_impact,
         datafusion_metrics=datafusion_artifacts.metrics,

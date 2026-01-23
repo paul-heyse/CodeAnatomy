@@ -9,11 +9,8 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
-from ibis.expr.types import Table as IbisTable
-from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from ibis_engine.execution import materialize_ibis_plan
 from ibis_engine.execution_factory import ibis_execution_from_ctx
@@ -28,8 +25,6 @@ from relspec.errors import (
     RelspecExecutionError,
     RelspecValidationError,
 )
-from relspec.rustworkx_graph import build_rule_graph_from_relationship_rules
-from relspec.rustworkx_schedule import schedule_rules
 from relspec.execution_lanes import (
     DataFusionLaneInputs,
     DataFusionLaneOptions,
@@ -40,9 +35,16 @@ from relspec.execution_lanes import (
 )
 from relspec.model import RelationshipRule
 from relspec.rules.evidence import EvidenceCatalog
+from relspec.rustworkx_graph import build_rule_graph_from_relationship_rules
+from relspec.rustworkx_schedule import schedule_rules
 
 if TYPE_CHECKING:
+    from ibis.expr.types import Table as IbisTable
+    from ibis.expr.types import Value as IbisValue
+
+    from arrowdsl.core.interop import SchemaLike, TableLike
     from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+    from relspec.engine import RelPlanCompiler
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,16 @@ class GraphExecutionOptions:
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     params: Mapping[IbisValue, object] | None = None
+
+
+@dataclass(frozen=True)
+class _GraphPlanContext:
+    ctx: ExecutionContext
+    compiler: RelationshipRuleCompiler
+    plan_compiler: RelPlanCompiler[IbisPlan]
+    plan_executor: Callable[..., TableLike]
+    execution: GraphExecutionOptions
+    ibis_backend: BaseBackend
 
 
 def compile_graph_plan(
@@ -97,14 +109,31 @@ def compile_graph_plan(
     GraphPlan
         Graph-level plan and per-output subplans.
     """
-    work = evidence.clone()
-    plan_compiler = compiler.plan_compiler or IbisRelPlanCompiler()
     execution = execution or GraphExecutionOptions()
     if execution.ibis_backend is None:
         msg = "Ibis backend is required for graph plan compilation."
         raise RelspecExecutionError(msg)
     ibis_backend = execution.ibis_backend
+    plan_compiler = compiler.plan_compiler or IbisRelPlanCompiler()
+    plan_executor = _graph_plan_executor(execution=execution, ibis_backend=ibis_backend)
+    context = _GraphPlanContext(
+        ctx=ctx,
+        compiler=compiler,
+        plan_compiler=plan_compiler,
+        plan_executor=plan_executor,
+        execution=execution,
+        ibis_backend=ibis_backend,
+    )
+    merged = _compile_graph_outputs(rules, evidence=evidence, context=context)
+    union = _union_plans(list(merged.values()), label="relspec_graph")
+    return GraphPlan(plan=union, outputs=merged)
 
+
+def _graph_plan_executor(
+    *,
+    execution: GraphExecutionOptions,
+    ibis_backend: BaseBackend,
+) -> Callable[..., TableLike]:
     def _plan_executor(
         plan: IbisPlan,
         exec_ctx: ExecutionContext,
@@ -149,7 +178,16 @@ def compile_graph_plan(
         )
         return materialize_ibis_plan(plan, execution=ibis_execution)
 
-    outputs: dict[str, list[IbisPlan]] = {}
+    return _plan_executor
+
+
+def _compile_graph_outputs(
+    rules: Sequence[RelationshipRule],
+    *,
+    evidence: EvidenceCatalog,
+    context: _GraphPlanContext,
+) -> dict[str, IbisPlan]:
+    work = evidence.clone()
     graph = build_rule_graph_from_relationship_rules(rules)
     output_schemas = _output_schema_map(rules)
     schedule = schedule_rules(
@@ -158,46 +196,57 @@ def compile_graph_plan(
         output_schema_for=output_schemas.get,
     )
     rules_by_name = {rule.name: rule for rule in rules}
+    outputs: dict[str, list[IbisPlan]] = {}
     for name in schedule.ordered_rules:
         rule = rules_by_name[name]
-        compiled = compiler.compile_rule(rule, ctx=ctx)
-        if compiled.rel_plan is not None:
-            plan = plan_compiler.compile(
-                compiled.rel_plan,
-                ctx=ctx,
-                resolver=compiler.resolver,
-            )
-            plan = compiled.apply_plan_transforms(plan, ctx=ctx)
-        else:
-            table = compiled.execute(
-                ctx=ctx,
-                resolver=compiler.resolver,
-                compiler=plan_compiler,
-                options=RuleExecutionOptions(
-                    params=execution.params,
-                    plan_executor=_plan_executor,
-                    execution_policy=execution.execution_policy,
-                    ibis_backend=ibis_backend,
-                ),
-            )
-            plan = register_ibis_table(
-                table,
-                options=SourceToIbisOptions(
-                    backend=ibis_backend,
-                    name=None,
-                    ordering=Ordering.unordered(),
-                ),
-            )
+        plan = _compile_rule_plan(rule, context=context)
         outputs.setdefault(rule.output_dataset, []).append(plan)
         work.register(rule.output_dataset, _plan_schema(plan))
+    return _merge_output_plans(outputs)
+
+
+def _compile_rule_plan(
+    rule: RelationshipRule,
+    *,
+    context: _GraphPlanContext,
+) -> IbisPlan:
+    compiled = context.compiler.compile_rule(rule, ctx=context.ctx)
+    if compiled.rel_plan is not None:
+        plan = context.plan_compiler.compile(
+            compiled.rel_plan,
+            ctx=context.ctx,
+            resolver=context.compiler.resolver,
+        )
+        return compiled.apply_plan_transforms(plan, ctx=context.ctx)
+    table = compiled.execute(
+        ctx=context.ctx,
+        resolver=context.compiler.resolver,
+        compiler=context.plan_compiler,
+        options=RuleExecutionOptions(
+            params=context.execution.params,
+            plan_executor=context.plan_executor,
+            execution_policy=context.execution.execution_policy,
+            ibis_backend=context.ibis_backend,
+        ),
+    )
+    return register_ibis_table(
+        table,
+        options=SourceToIbisOptions(
+            backend=context.ibis_backend,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
+
+
+def _merge_output_plans(outputs: Mapping[str, list[IbisPlan]]) -> dict[str, IbisPlan]:
     merged: dict[str, IbisPlan] = {}
     for output, plans in outputs.items():
         if len(plans) == 1:
             merged[output] = plans[0]
             continue
         merged[output] = _union_plans(plans, label=output)
-    union = _union_plans(list(merged.values()), label="relspec_graph")
-    return GraphPlan(plan=union, outputs=merged)
+    return merged
 
 
 def compile_union_graph_plan[RuleT](

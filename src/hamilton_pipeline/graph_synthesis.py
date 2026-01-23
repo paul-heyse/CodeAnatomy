@@ -18,7 +18,18 @@ class DependencyDiff:
 
 
 def dependency_map(graph: RuleGraph) -> Mapping[str, tuple[str, ...]]:
-    """Return rule -> evidence dependency map derived from a rule graph."""
+    """Return rule -> evidence dependency map derived from a rule graph.
+
+    Returns
+    -------
+    Mapping[str, tuple[str, ...]]
+        Evidence dependencies keyed by rule name.
+
+    Raises
+    ------
+    TypeError
+        Raised when the rule graph payloads are not the expected types.
+    """
     mapping: dict[str, tuple[str, ...]] = {}
     for rule_name, node_idx in graph.rule_idx.items():
         deps: list[str] = []
@@ -36,7 +47,18 @@ def dependency_map(graph: RuleGraph) -> Mapping[str, tuple[str, ...]]:
 
 
 def rule_output_map(graph: RuleGraph) -> Mapping[str, str]:
-    """Return rule -> output dataset map derived from a rule graph."""
+    """Return rule -> output dataset map derived from a rule graph.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Output dataset names keyed by rule name.
+
+    Raises
+    ------
+    TypeError
+        Raised when the rule graph payloads are not the expected types.
+    """
     mapping: dict[str, str] = {}
     for rule_name, node_idx in graph.rule_idx.items():
         node = graph.graph[node_idx]
@@ -52,7 +74,13 @@ def compare_dependency_maps(
     expected: Mapping[str, Sequence[str]],
     actual: Mapping[str, Sequence[str]],
 ) -> DependencyDiff:
-    """Return a diff between two dependency maps."""
+    """Return a diff between two dependency maps.
+
+    Returns
+    -------
+    DependencyDiff
+        Missing, extra, and mismatched dependencies.
+    """
     missing = {
         name: _sorted_deps(expected[name])
         for name in sorted(expected)

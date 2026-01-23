@@ -15,6 +15,8 @@ from normalize.registry_runtime import dataset_name_from_alias
 from relspec.errors import RelspecValidationError
 from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.definitions import RelationshipPayload, RuleDefinition
+from relspec.rustworkx_graph import RuleGraph
+from relspec.rustworkx_schedule import impacted_rules_for_evidence
 from relspec.schema_context import RelspecSchemaContext
 from storage.deltalake.delta import delta_cdf_enabled, delta_table_features, delta_table_version
 
@@ -113,6 +115,15 @@ class DeltaTableSnapshot:
     features: Mapping[str, str] | None = None
 
 
+@dataclass(frozen=True)
+class RelspecRuleImpact:
+    """Rule impact derived from incremental evidence changes."""
+
+    changed_evidence: tuple[str, ...] = ()
+    impacted_rules: tuple[str, ...] = ()
+    full_refresh: bool = False
+
+
 def build_incremental_spec(
     rules: Sequence[RuleDefinition],
     *,
@@ -163,6 +174,35 @@ def incremental_spec() -> RelspecIncrementalSpec:
     rules = rule_definitions_cached()
     schema_context = RelspecSchemaContext.from_session(DataFusionRuntimeProfile().session_context())
     return build_incremental_spec(rules, schema_context=schema_context)
+
+
+def relspec_rule_impact(
+    graph: RuleGraph,
+    *,
+    changed_evidence: Iterable[str],
+    full_refresh: bool = False,
+) -> RelspecRuleImpact:
+    """Return impacted rules derived from changed evidence names.
+
+    Returns
+    -------
+    RelspecRuleImpact
+        Impacted rule names and evidence inputs.
+    """
+    if full_refresh:
+        return RelspecRuleImpact(
+            changed_evidence=tuple(sorted(graph.evidence_idx)),
+            impacted_rules=tuple(sorted(graph.rule_idx)),
+            full_refresh=True,
+        )
+    filtered = {name for name in changed_evidence if name in graph.evidence_idx}
+    evidence = tuple(sorted(filtered))
+    impacted = impacted_rules_for_evidence(graph, evidence_names=evidence)
+    return RelspecRuleImpact(
+        changed_evidence=evidence,
+        impacted_rules=impacted,
+        full_refresh=False,
+    )
 
 
 def _delta_table_snapshots(
@@ -305,6 +345,8 @@ def _file_id_column_from_columns(columns: Sequence[str]) -> str | None:
 __all__ = [
     "DeltaTableSnapshot",
     "RelspecIncrementalSpec",
+    "RelspecRuleImpact",
     "build_incremental_spec",
     "incremental_spec",
+    "relspec_rule_impact",
 ]

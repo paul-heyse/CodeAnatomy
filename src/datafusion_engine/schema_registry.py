@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Literal, TypedDict, cast
 
 import pyarrow as pa
-from datafusion import SessionContext, SQLOptions
+from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from arrowdsl.core.ordering import OrderingLevel
@@ -28,16 +28,8 @@ from arrowdsl.schema.semantic_types import (
     byte_span_type,
     span_type,
 )
-from datafusion_engine.schema_introspection import (
-    SchemaIntrospector,
-    _table_name_from_ddl,
-    table_names_snapshot,
-)
+from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
-from datafusion_engine.table_provider_metadata import (
-    TableProviderMetadata,
-    record_table_provider_metadata,
-)
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
 from sqlglot_tools.optimizer import parse_sql_strict, resolve_sqlglot_policy
 
@@ -72,12 +64,8 @@ DIAG_DETAIL_STRUCT = struct_type(
 DIAG_DETAILS_TYPE = list_view_type(DIAG_DETAIL_STRUCT, large=True)
 
 
-def _sql_options() -> SQLOptions:
-    return sql_options_for_profile(None)
-
-
 def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
-    return ctx.sql_with_options(sql, _sql_options())
+    return ctx.sql_with_options(sql, sql_options_for_profile(None))
 
 
 def _attrs_field(name: str = "attrs") -> pa.Field:
@@ -3044,7 +3032,7 @@ def validate_ast_views(
         Raised when view schemas fail validation.
     """
     resolved_views = tuple(dict.fromkeys(view_names)) if view_names is not None else AST_VIEW_NAMES
-    sql_options = _sql_options()
+    sql_options = sql_options_for_profile(None)
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
     _validate_required_functions(
@@ -3130,7 +3118,7 @@ def validate_ts_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    sql_options = _sql_options()
+    sql_options = sql_options_for_profile(None)
     function_catalog = _function_catalog(ctx)
     _validate_required_functions(
         ctx,
@@ -3230,7 +3218,7 @@ def validate_symtable_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    sql_options = _sql_options()
+    sql_options = sql_options_for_profile(None)
     function_catalog = _function_catalog(ctx)
     _validate_required_functions(
         ctx,
@@ -3305,7 +3293,7 @@ def validate_scip_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    sql_options = _sql_options()
+    sql_options = sql_options_for_profile(None)
     function_catalog = _function_catalog(ctx)
     _validate_required_functions(
         ctx,
@@ -3340,7 +3328,7 @@ def validate_scip_views(ctx: SessionContext) -> None:
 
 def _function_names(ctx: SessionContext) -> set[str]:
     try:
-        return SchemaIntrospector(ctx, sql_options=_sql_options()).function_names()
+        return SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None)).function_names()
     except (RuntimeError, TypeError, ValueError):
         return set()
 
@@ -3378,7 +3366,7 @@ class FunctionCatalog:
 
 
 def _function_catalog(ctx: SessionContext) -> FunctionCatalog | None:
-    introspector = SchemaIntrospector(ctx, sql_options=_sql_options())
+    introspector = SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None))
     routines: list[dict[str, object]]
     parameters: list[dict[str, object]]
     try:
@@ -4011,7 +3999,7 @@ def validate_cst_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    sql_options = _sql_options()
+    sql_options = sql_options_for_profile(None)
     function_catalog = _function_catalog(ctx)
     _validate_required_functions(
         ctx,
@@ -4268,49 +4256,6 @@ def register_all_schemas(ctx: SessionContext) -> None:
         register_schema(ctx, name, nested_schema_for(name))
 
 
-def register_external_table_via_ddl(
-    ctx: SessionContext,
-    *,
-    ddl: str,
-    metadata: TableProviderMetadata | None = None,
-) -> None:
-    """Register an external table via DDL statement.
-
-    This is the preferred path for table registration, using DataFusion's
-    native DDL parsing and execution instead of bespoke registry logic.
-
-    Parameters
-    ----------
-    ctx : SessionContext
-        DataFusion session context for table registration.
-    ddl : str
-        CREATE EXTERNAL TABLE DDL statement.
-    metadata : TableProviderMetadata | None
-        Optional metadata to associate with the registered table.
-
-    Examples
-    --------
-    >>> ddl = '''
-    ... CREATE EXTERNAL TABLE my_table (
-    ...   id BIGINT NOT NULL,
-    ...   name VARCHAR
-    ... )
-    ... STORED AS PARQUET
-    ... LOCATION 's3://bucket/path/to/data'
-    ... '''
-    >>> register_external_table_via_ddl(ctx, ddl=ddl)
-    """
-    ctx.sql_with_options(ddl, sql_options_for_profile(None)).collect()
-    table_name = _table_name_from_ddl(ddl)
-
-    if metadata is None:
-        metadata = TableProviderMetadata(table_name=table_name, ddl=ddl)
-    elif metadata.ddl is None:
-        metadata = metadata.with_ddl(ddl)
-
-    record_table_provider_metadata(id(ctx), metadata=metadata)
-
-
 __all__ = [
     "AST_FILES_SCHEMA",
     "AST_VIEW_NAMES",
@@ -4359,7 +4304,6 @@ __all__ = [
     "nested_view_spec",
     "nested_view_specs",
     "register_all_schemas",
-    "register_external_table_via_ddl",
     "register_schema",
     "registered_table_names",
     "schema_for",

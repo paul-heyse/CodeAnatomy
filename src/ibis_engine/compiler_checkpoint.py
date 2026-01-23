@@ -17,9 +17,9 @@ from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
-    default_sqlglot_policy,
     normalize_expr,
     plan_fingerprint,
+    resolve_sqlglot_policy,
     sqlglot_policy_snapshot_for,
     sqlglot_sql,
 )
@@ -56,7 +56,7 @@ def compile_checkpoint(
     compiled = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = schema_map or _schema_map_from_backend(backend)
     schema_map_hash = schema_map_fingerprint_from_mapping(schema) if schema is not None else None
-    policy = default_sqlglot_policy()
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
     if normalization_budget is not None:

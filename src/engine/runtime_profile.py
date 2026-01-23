@@ -14,6 +14,7 @@ import pyarrow as pa
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
 from arrowdsl.io.ipc import payload_hash
+from arrowdsl.schema.serialization import schema_to_msgpack
 from engine.function_registry import default_function_registry
 from serde_msgspec import dumps_msgpack, to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
@@ -98,6 +99,7 @@ class RuntimeProfileSnapshot:
     datafusion: dict[str, object] | None
     function_registry_hash: str
     profile_hash: str
+    scan_profile_schema_msgpack: bytes | None = None
 
     def payload(self) -> dict[str, object]:
         """Return the snapshot payload for serialization.
@@ -119,6 +121,7 @@ class RuntimeProfileSnapshot:
             "datafusion": self.datafusion,
             "function_registry_hash": self.function_registry_hash,
             "profile_hash": self.profile_hash,
+            "scan_profile_schema_msgpack": self.scan_profile_schema_msgpack,
         }
 
 
@@ -225,6 +228,9 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     datafusion_hash = (
         runtime.datafusion.telemetry_payload_hash() if runtime.datafusion is not None else None
     )
+    scan_profile_schema_msgpack = schema_to_msgpack(
+        pa.schema([pa.field("scan_profile", _SCAN_PROFILE_SCHEMA)])
+    )
     snapshot_payload = {
         "name": runtime.name,
         "determinism_tier": runtime.determinism.value,
@@ -263,6 +269,7 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         datafusion=datafusion_payload,
         function_registry_hash=function_registry_hash,
         profile_hash=profile_hash,
+        scan_profile_schema_msgpack=scan_profile_schema_msgpack,
     )
 
 

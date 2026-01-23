@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         DataFusionRuntimeProfile,
         ExecutionLabel,
     )
+    from relspec.rules.exec_events import RuleScheduleMetadata
 
 import ibis
 import pyarrow as pa
@@ -107,7 +108,11 @@ from relspec.policies import (
     evidence_spec_from_schema,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
-from relspec.rules.exec_events import RuleExecutionObserver, rule_execution_event_from_table
+from relspec.rules.exec_events import (
+    RuleExecutionEventContext,
+    RuleExecutionObserver,
+    rule_execution_event_from_table,
+)
 from relspec.schema_context import RelspecSchemaContext
 from schema_spec.system import dataset_spec_from_contract
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
@@ -1375,6 +1380,7 @@ class CompiledOutputExecutionOptions:
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     rule_exec_observer: RuleExecutionObserver | None = None
+    rule_schedule_metadata: Mapping[str, RuleScheduleMetadata] | None = None
     surface_policy: ExecutionSurfacePolicy | None = None
 
 
@@ -1457,6 +1463,7 @@ class CompiledOutput:
                 for compiled in self.contributors
             )
         else:
+            schedule_metadata_map = options.rule_schedule_metadata or {}
             for compiled in self.contributors:
                 started = time.perf_counter()
                 table = compiled.execute(
@@ -1486,7 +1493,10 @@ class CompiledOutput:
                         output_dataset=compiled.rule.output_dataset,
                         table=table,
                         duration_ms=duration_ms,
-                        plan_hash=plan_hash,
+                        context=RuleExecutionEventContext(
+                            plan_hash=plan_hash,
+                            schedule_metadata=schedule_metadata_map.get(compiled.rule.name),
+                        ),
                     )
                 )
                 table_parts.append(table)

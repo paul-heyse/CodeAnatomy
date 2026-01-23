@@ -15,6 +15,7 @@ from arrowdsl.core.interop import DataTypeLike, SchemaLike
 from arrowdsl.io.ipc import payload_hash
 from arrowdsl.schema.semantic_types import register_semantic_extension_types
 from core_types import JsonDict
+from serde_msgspec import dumps_msgpack, loads_msgpack
 
 DATASET_FINGERPRINT_VERSION = 1
 
@@ -147,5 +148,42 @@ def dataset_fingerprint(
     }
     return payload_hash(payload, _dataset_fingerprint_schema())
 
+def schema_to_msgpack(schema: SchemaLike) -> bytes:
+    """Serialize an Arrow schema to MessagePack bytes.
 
-__all__ = ["dataset_fingerprint", "schema_fingerprint", "schema_to_dict"]
+    Returns
+    -------
+    bytes
+        MessagePack payload (using extension types where available).
+    """
+    resolved = _resolve_schema(schema)
+    return dumps_msgpack(resolved)
+
+
+def schema_from_msgpack(payload: bytes) -> pa.Schema:
+    """Deserialize an Arrow schema from MessagePack bytes.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Decoded schema instance.
+
+    Raises
+    ------
+    TypeError
+        Raised when the payload does not decode to a schema.
+    """
+    decoded = loads_msgpack(payload, target_type=object, strict=False)
+    if isinstance(decoded, pa.Schema):
+        return decoded
+    msg = "MessagePack payload is not a pyarrow.Schema."
+    raise TypeError(msg)
+
+
+__all__ = [
+    "dataset_fingerprint",
+    "schema_fingerprint",
+    "schema_from_msgpack",
+    "schema_to_dict",
+    "schema_to_msgpack",
+]

@@ -32,7 +32,7 @@ _NULL_SEPARATOR = "\x1f"
 
 def _datafusion_context() -> SessionContext:
     profile = DataFusionRuntimeProfile()
-    return profile.session_context()
+    return profile.ephemeral_context()
 
 
 def _sql_table(ctx: SessionContext, sql: str) -> pa.Table:

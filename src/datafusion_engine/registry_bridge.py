@@ -18,6 +18,7 @@ import pyarrow.fs as pafs
 from datafusion import SessionContext, SQLOptions
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
+from sqlglot.errors import ParseError
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
@@ -25,7 +26,6 @@ from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import ensure_path
-from datafusion_engine.listing_table_provider import TableProviderCapsule
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     table_constraint_rows,
@@ -37,6 +37,7 @@ from datafusion_engine.sql_options import (
 from datafusion_engine.sql_options import (
     statement_sql_options_for_profile as _statement_sql_options_for_profile,
 )
+from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
@@ -49,6 +50,12 @@ from ibis_engine.registry import (
     resolve_delta_scan_options,
 )
 from schema_spec.specs import ExternalTableConfigOverrides
+from sqlglot_tools.compat import exp
+from sqlglot_tools.optimizer import (
+    ExternalTableOptionsProperty,
+    parse_sql_strict,
+    resolve_sqlglot_policy,
+)
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -70,6 +77,7 @@ _CACHED_DATASETS: dict[int, set[str]] = {}
 _REGISTERED_CATALOGS: dict[int, set[str]] = {}
 _REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
 _INPUT_PLUGIN_PREFIXES = ("artifact://", "dataset://", "repo://")
+_OPTIONS_TUPLE_ARITY: int = 2
 _CST_EXTERNAL_TABLE_NAME = "libcst_files_v1"
 _CST_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
 _CST_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
@@ -237,7 +245,7 @@ class DataFusionRegistryOptions:
     schema: SchemaLike | None
     read_options: Mapping[str, object]
     cache: bool
-    provider: Literal["listing", "parquet"] | None
+    provider: Literal["listing", "parquet", "delta_cdf"] | None
 
 
 @dataclass(frozen=True)
@@ -439,6 +447,11 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     if provider == "dataset":
         msg = "DataFusion dataset providers are not supported; use listing or native formats."
         raise ValueError(msg)
+    if provider == "delta_cdf" and location.format != "delta":
+        msg = "Delta CDF provider requires delta-format datasets."
+        raise ValueError(msg)
+    if provider is None and location.format == "delta" and location.delta_cdf_options is not None:
+        provider = "delta_cdf"
     if provider is None and _prefers_listing_table(location, scan=scan):
         provider = "listing"
     return DataFusionRegistryOptions(
@@ -621,7 +634,10 @@ def datafusion_external_table_sql(
         file_format=location.format,
         overrides=overrides,
     )
-    return spec.external_table_sql(config)
+    ddl = spec.external_table_sql(config)
+    expected = _expected_scan_option_literals(location, scan)
+    _validate_scan_options_in_ddl(ddl, expected=expected)
+    return ddl
 
 
 def _delta_table_factory_available() -> bool:
@@ -631,6 +647,19 @@ def _delta_table_factory_available() -> bool:
         return False
     installer = getattr(module, "install_delta_table_factory", None)
     return callable(installer)
+
+
+def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        msg = "Schema evolution adapter requires datafusion_ext."
+        raise RuntimeError(msg) from exc
+    installer = getattr(module, "install_schema_evolution_adapter_factory", None)
+    if not callable(installer):
+        msg = "Schema evolution adapter installer is unavailable in datafusion_ext."
+        raise TypeError(msg)
+    installer(ctx)
 
 
 def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec | None:
@@ -658,14 +687,120 @@ def _external_table_options(
         options.update(location.storage_options)
     if location.read_options:
         options.update(location.read_options)
-    if scan is not None:
-        if scan.file_extension:
-            options.setdefault("file_extension", scan.file_extension)
-        if scan.parquet_column_options is not None:
-            options.update(scan.parquet_column_options.external_table_options())
+    options.update(_scan_external_table_options(location, scan))
     if options_override:
         options.update(options_override)
     return options or None
+
+
+def _scan_external_table_options(
+    location: DatasetLocation,
+    scan: DataFusionScanOptions | None,
+) -> dict[str, object]:
+    if scan is None:
+        return {}
+    options: dict[str, object] = {}
+    if scan.file_extension and location.format != "delta":
+        options["file_extension"] = scan.file_extension
+    if location.format == "parquet":
+        if scan.skip_metadata is not None:
+            options["skip_metadata"] = scan.skip_metadata
+        if scan.schema_force_view_types is not None:
+            options["schema_force_view_types"] = scan.schema_force_view_types
+        if scan.binary_as_string is not None:
+            options["binary_as_string"] = scan.binary_as_string
+        if scan.skip_arrow_metadata is not None:
+            options["skip_arrow_metadata"] = scan.skip_arrow_metadata
+        if scan.parquet_column_options is not None:
+            options.update(scan.parquet_column_options.external_table_options())
+    return options
+
+
+def _option_literal_text(value: object) -> str | None:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _expected_scan_option_literals(
+    location: DatasetLocation,
+    scan: DataFusionScanOptions | None,
+) -> dict[str, str]:
+    raw = _scan_external_table_options(location, scan)
+    return {
+        str(key).lower(): rendered
+        for key, value in raw.items()
+        if (rendered := _option_literal_text(value)) is not None
+    }
+
+
+def _literal_token(node: exp.Expression) -> str | None:
+    if isinstance(node, exp.Literal):
+        return str(node.this)
+    if isinstance(node, exp.Identifier):
+        return node.name
+    return None
+
+
+def _ddl_external_table_options(
+    ddl: str,
+    *,
+    dialect: str,
+) -> dict[str, str]:
+    expr = parse_sql_strict(ddl, dialect=dialect)
+    create_expr = expr if isinstance(expr, exp.Create) else expr.find(exp.Create)
+    if create_expr is None:
+        return {}
+    properties = create_expr.args.get("properties")
+    if not isinstance(properties, exp.Properties):
+        return {}
+    options_property = None
+    for prop in properties.expressions:
+        if isinstance(prop, ExternalTableOptionsProperty):
+            options_property = prop
+            break
+    if options_property is None:
+        return {}
+    options: dict[str, str] = {}
+    for entry in options_property.expressions:
+        if (
+            not isinstance(entry, exp.Tuple)
+            or len(entry.expressions) != _OPTIONS_TUPLE_ARITY
+        ):
+            continue
+        key_expr, value_expr = entry.expressions
+        key = _literal_token(key_expr)
+        value = _literal_token(value_expr)
+        if key is None or value is None:
+            continue
+        options[key.lower()] = value
+    return options
+
+
+def _validate_scan_options_in_ddl(
+    ddl: str,
+    *,
+    expected: Mapping[str, str],
+) -> None:
+    if not expected:
+        return
+    policy = resolve_sqlglot_policy(name="datafusion_ddl")
+    try:
+        actual = _ddl_external_table_options(ddl, dialect=policy.read_dialect)
+    except ParseError as exc:
+        msg = f"Failed to parse external table DDL for option validation: {exc}"
+        raise ValueError(msg) from exc
+    missing = {key: value for key, value in expected.items() if actual.get(key) != value}
+    if missing:
+        msg = (
+            "External table DDL is missing expected scan options: "
+            f"{sorted(missing.items())}."
+        )
+        raise ValueError(msg)
 
 
 def register_dataset_df(
@@ -735,9 +870,9 @@ def register_dataset_ddl(
     --------
     Register a streaming Parquet source:
 
-    >>> from datafusion import SessionContext
+    >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
     >>> from schema_spec.system import DatasetSpec, DataFusionScanOptions
-    >>> ctx = SessionContext()
+    >>> ctx = DataFusionRuntimeProfile().ephemeral_context()
     >>> spec = DatasetSpec(
     ...     table_spec=table_spec,
     ...     datafusion_scan=DataFusionScanOptions(unbounded=True),
@@ -842,6 +977,8 @@ def _build_registration_context(
 
 def _register_dataset_with_context(context: DataFusionRegistrationContext) -> DataFrame:
     if context.location.format == "delta":
+        if context.options.provider == "delta_cdf":
+            return _register_delta_cdf(context)
         if _should_register_delta_provider(context):
             return _register_delta_provider(context)
         if context.external_table_sql is None:
@@ -882,6 +1019,13 @@ class _DeltaProviderResponse:
 def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
     location = context.location
     delta_scan = resolve_delta_scan_options(location)
+    if (
+        delta_scan is not None
+        and delta_scan.schema_force_view_types is None
+        and context.runtime_profile is not None
+    ):
+        enable_view_types = _schema_hardening_view_types(context.runtime_profile)
+        delta_scan = replace(delta_scan, schema_force_view_types=enable_view_types)
     request = _DeltaProviderRequest(
         ctx=context.ctx,
         path=str(location.path),
@@ -913,6 +1057,20 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
     )
     df = context.ctx.table(context.name)
     return _maybe_cache(context, df)
+
+
+def _register_delta_cdf(context: DataFusionRegistrationContext) -> DataFrame:
+    options = DeltaCdfRegistrationOptions(
+        cdf_options=context.location.delta_cdf_options,
+        storage_options=context.location.storage_options,
+        runtime_profile=context.runtime_profile,
+    )
+    return register_delta_cdf_df(
+        context.ctx,
+        name=context.name,
+        path=str(context.location.path),
+        options=options,
+    )
 
 
 def _delta_table_provider_from_session(
@@ -1094,6 +1252,17 @@ def _register_external_table(
         dataset_name=context.name,
         location=context.location,
     )
+    dataset_spec = _resolve_dataset_spec(context.name, context.location)
+    evolution_required = (
+        _requires_schema_evolution_adapter(dataset_spec.evolution_spec)
+        if dataset_spec is not None
+        else False
+    )
+    _ensure_expr_adapter_factory(
+        context.ctx,
+        factory=expr_adapter_factory,
+        evolution_required=evolution_required,
+    )
     _validate_constraints_and_defaults(
         context,
         enable_information_schema=(
@@ -1248,7 +1417,6 @@ def _record_listing_table_artifact(
         sql_options=_sql_options_for_profile(profile),
     )
     expected_schema = context.options.schema
-    schema_payload = schema_to_dict(expected_schema) if expected_schema is not None else None
     expected_schema_fingerprint = _schema_fingerprint(expected_schema)
     actual_schema_fingerprint = _schema_fingerprint(details.actual_schema)
     expected_ddl_fingerprint = (
@@ -1263,15 +1431,11 @@ def _record_listing_table_artifact(
         enable_information_schema=profile.enable_information_schema,
         sql_options=_sql_options_for_profile(profile),
     )
-    column_options = (
-        details.scan.parquet_column_options.external_table_options()
-        if details.scan is not None and details.scan.parquet_column_options is not None
-        else None
-    )
     table_schema_snapshot = _table_schema_snapshot(
         schema=context.options.schema,
         partition_cols=details.table_partition_cols,
     )
+    evolution_payload, evolution_required = _schema_evolution_details(context)
     ordering_keys: list[list[str]] | None = None
     ordering_matches_scan: bool | None = None
     if expected_schema is not None:
@@ -1310,7 +1474,11 @@ def _record_listing_table_artifact(
         "meta_fetch_concurrency": (
             details.scan.meta_fetch_concurrency if details.scan is not None else None
         ),
-        "parquet_column_options": column_options,
+        "parquet_column_options": (
+            details.scan.parquet_column_options.external_table_options()
+            if details.scan is not None and details.scan.parquet_column_options is not None
+            else None
+        ),
         "list_files_cache_limit": (
             details.scan.list_files_cache_limit if details.scan is not None else None
         ),
@@ -1330,7 +1498,7 @@ def _record_listing_table_artifact(
         ),
         "listing_mutable": details.scan.listing_mutable if details.scan is not None else None,
         "unbounded": details.scan.unbounded if details.scan is not None else None,
-        "schema": schema_payload,
+        "schema": schema_to_dict(expected_schema) if expected_schema is not None else None,
         "expected_schema_fingerprint": expected_schema_fingerprint,
         "actual_schema_fingerprint": actual_schema_fingerprint,
         "schema_match": _fingerprints_match(expected_schema_fingerprint, actual_schema_fingerprint),
@@ -1339,6 +1507,8 @@ def _record_listing_table_artifact(
         "ddl_match": _fingerprints_match(expected_ddl_fingerprint, observed_ddl_fingerprint),
         "table_schema_snapshot": table_schema_snapshot,
         "table_schema_contract": _table_schema_contract_payload(details.table_schema_contract),
+        "schema_evolution": evolution_payload,
+        "schema_evolution_required": evolution_required,
         "expr_adapter_factory": _adapter_factory_payload(details.expr_adapter_factory),
         "read_options": dict(context.options.read_options),
     }
@@ -1474,45 +1644,7 @@ def _apply_scan_settings(
             scan.listing_table_ignore_subdirectory,
             True,
         ),
-        (
-            "datafusion.execution.parquet.skip_arrow_metadata",
-            scan.skip_arrow_metadata,
-            True,
-        ),
-        ("datafusion.execution.parquet.binary_as_string", scan.binary_as_string, True),
-        (
-            "datafusion.execution.parquet.schema_force_view_types",
-            scan.schema_force_view_types,
-            True,
-        ),
-        ("datafusion.execution.parquet.skip_metadata", scan.skip_metadata, True),
     ]
-    column_options = scan.parquet_column_options
-    if column_options is not None:
-        if column_options.statistics_enabled:
-            settings.append(
-                (
-                    "datafusion.execution.parquet.statistics_enabled",
-                    ",".join(column_options.statistics_enabled),
-                    False,
-                )
-            )
-        if column_options.bloom_filter_enabled:
-            settings.append(
-                (
-                    "datafusion.execution.parquet.bloom_filter_enabled",
-                    ",".join(column_options.bloom_filter_enabled),
-                    False,
-                )
-            )
-        if column_options.dictionary_enabled:
-            settings.append(
-                (
-                    "datafusion.execution.parquet.dictionary_enabled",
-                    ",".join(column_options.dictionary_enabled),
-                    False,
-                )
-            )
     for key, value, lower in settings:
         if value is None:
             continue
@@ -1661,6 +1793,32 @@ def _resolve_expr_adapter_factory(
     return None
 
 
+def _ensure_expr_adapter_factory(
+    ctx: SessionContext,
+    *,
+    factory: object | None,
+    evolution_required: bool,
+) -> None:
+    if factory is None:
+        if evolution_required:
+            msg = "Schema evolution adapter is required but not configured."
+            raise ValueError(msg)
+        return
+    register = getattr(ctx, "register_physical_expr_adapter_factory", None)
+    if callable(register):
+        try:
+            register(factory)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Failed to register physical expr adapter factory: {exc}"
+            raise ValueError(msg) from exc
+        return
+    if evolution_required:
+        _install_schema_evolution_adapter_factory(ctx)
+        return
+    msg = "SessionContext does not support physical expr adapter registration."
+    raise TypeError(msg)
+
+
 def _requires_schema_evolution_adapter(evolution: object) -> bool:
     rename_map = getattr(evolution, "rename_map", None)
     allow_missing = bool(getattr(evolution, "allow_missing", False))
@@ -1719,6 +1877,43 @@ def _table_schema_contract_payload(
         if partition_schema is not None
         else None,
     }
+
+
+def _optional_bool(value: object | None) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _schema_evolution_payload(evolution: object | None) -> dict[str, object] | None:
+    if evolution is None:
+        return None
+    rename_map = getattr(evolution, "rename_map", None)
+    rename_payload = (
+        {str(key): str(value) for key, value in rename_map.items()}
+        if isinstance(rename_map, Mapping)
+        else None
+    )
+    return {
+        "promote_options": getattr(evolution, "promote_options", None),
+        "rename_map": rename_payload,
+        "allow_missing": _optional_bool(getattr(evolution, "allow_missing", None)),
+        "allow_extra": _optional_bool(getattr(evolution, "allow_extra", None)),
+        "allow_casts": _optional_bool(getattr(evolution, "allow_casts", None)),
+    }
+
+
+def _schema_evolution_details(
+    context: DataFusionRegistrationContext,
+) -> tuple[dict[str, object] | None, bool | None]:
+    spec = _resolve_dataset_spec(context.name, context.location)
+    if spec is None:
+        return None, None
+    evolution_spec = spec.evolution_spec
+    return (
+        _schema_evolution_payload(evolution_spec),
+        _requires_schema_evolution_adapter(evolution_spec),
+    )
 
 
 def _adapter_factory_payload(factory: object | None) -> str | None:

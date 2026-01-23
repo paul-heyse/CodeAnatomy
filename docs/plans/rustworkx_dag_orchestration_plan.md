@@ -30,7 +30,7 @@
 Objective: define a bipartite DAG (rule nodes + evidence nodes) with stable identifiers,
 explicit edge payloads, and all_producers semantics for multi-producer outputs.
 
-Status: Not started.
+Status: Completed.
 
 Representative code
 ```python
@@ -120,20 +120,20 @@ Target files
 - `src/relspec/graph.py`
 - `src/relspec/rules/definitions.py`
 - `src/relspec/rules/evidence.py`
-- `tests/relspec/test_rustworkx_graph.py` (new)
+- `tests/unit/test_relspec_graph.py`
 
 Implementation checklist
-- [ ] Define RuleGraph, EvidenceNode, RuleNode, and OutputPolicy types.
-- [ ] Enforce all_producers semantics for multi-producer outputs.
-- [ ] Encode "requires" and "produces" edge payloads with evidence metadata.
-- [ ] Provide adapters for both RuleDefinition and RelationshipRule inputs.
-- [ ] Add tests for node/edge counts, payloads, and deterministic node IDs.
+- [x] Define RuleGraph, EvidenceNode, RuleNode, and OutputPolicy types.
+- [x] Enforce all_producers semantics for multi-producer outputs.
+- [x] Encode "requires" and "produces" edge payloads with evidence metadata.
+- [x] Provide adapters for both RuleDefinition and RelationshipRule inputs.
+- [x] Add tests for node/edge counts, payloads, and deterministic node IDs.
 
 ## Scope 2: Deterministic scheduling and readiness loop
 Objective: replace bespoke readiness scans with TopologicalSorter and stable tie-breaking,
 support partial runs via seed evidence nodes, and expose generation waves for parallelism.
 
-Status: Not started.
+Status: Completed.
 
 Representative code
 ```python
@@ -191,21 +191,20 @@ def schedule_rules(
 Target files
 - `src/relspec/rustworkx_schedule.py` (new)
 - `src/relspec/graph.py`
-- `src/relspec/rules/graph.py`
-- `tests/relspec/test_rustworkx_schedule.py` (new)
+- `tests/unit/test_relspec_graph.py`
 
 Implementation checklist
-- [ ] Implement TopologicalSorter scheduling with deterministic tie-breaks.
-- [ ] Support `initial` seed evidence nodes for partial runs.
-- [ ] Expose both total order and generation waves for parallelism.
-- [ ] Add `lexicographical_topological_sort` for deterministic snapshots.
-- [ ] Include critical-path diagnostics using `dag_longest_path_length`.
+- [x] Implement TopologicalSorter scheduling with deterministic tie-breaks.
+- [x] Support `initial` seed evidence nodes for partial runs.
+- [x] Expose both total order and generation waves for parallelism.
+- [x] Add `lexicographical_topological_sort` for deterministic snapshots.
+- [x] Include critical-path diagnostics using `dag_longest_path_length`.
 
 ## Scope 3: Diagnostics, cycles, and visualization
 Objective: add cycle reporting, SCC grouping for fixpoints, transitive reduction for clarity,
 and DOT export for CI artifacts and local inspection.
 
-Status: Not started.
+Status: Completed.
 
 Representative code
 ```python
@@ -231,22 +230,21 @@ def dag_diagnostics(graph: RuleGraph) -> dict[str, object]:
 
 Target files
 - `src/relspec/rustworkx_graph.py`
-- `src/relspec/rules/diagnostics.py`
 - `src/obs/repro.py`
-- `tests/relspec/test_rustworkx_diagnostics.py` (new)
+- `tests/unit/test_relspec_graph.py`
 
 Implementation checklist
-- [ ] Add cycle detection with `is_directed_acyclic_graph` and `simple_cycles`.
-- [ ] Record SCC groups for fixpoint planning with `strongly_connected_components`.
-- [ ] Provide `transitive_reduction` and DOT export helpers.
-- [ ] Normalize rustworkx return types for deterministic serialization.
-- [ ] Emit diagnostics artifacts in `obs/repro.py`.
+- [x] Add cycle detection with `is_directed_acyclic_graph` and `simple_cycles`.
+- [x] Record SCC groups for fixpoint planning with `strongly_connected_components`.
+- [x] Provide `transitive_reduction` and DOT export helpers.
+- [x] Normalize rustworkx return types for deterministic serialization.
+- [x] Emit diagnostics artifacts in `obs/repro.py`.
 
 ## Scope 4: Graph identity and stable snapshots
 Objective: formalize a stable rule graph signature that includes nodes, edges, evidence
 requirements, and output semantics, and persist snapshots for repro and audits.
 
-Status: Not started.
+Status: Completed.
 
 Representative code
 ```python
@@ -289,21 +287,23 @@ def rule_graph_signature(snapshot: RuleGraphSnapshot) -> str:
 
 Target files
 - `src/relspec/rustworkx_graph.py`
-- `src/relspec/graph.py`
+- `src/relspec/registry/snapshot.py`
+- `src/relspec/rules/cache.py`
+- `src/incremental/invalidations.py`
 - `src/obs/repro.py`
-- `tests/relspec/test_rustworkx_snapshot.py` (new)
+- `tests/unit/test_relspec_graph.py`
 
 Implementation checklist
-- [ ] Define RuleGraphSnapshot and schema for hashing.
-- [ ] Serialize nodes and edges deterministically (sorted, stable IDs).
-- [ ] Extend `rule_graph_signature` to include edges and policy metadata.
-- [ ] Add `obs/repro.py` hooks to persist snapshots and hashes.
+- [x] Define RuleGraphSnapshot and schema for hashing.
+- [x] Serialize nodes and edges deterministically (sorted, stable IDs).
+- [x] Extend `rule_graph_signature` to include edges and policy metadata.
+- [x] Add `obs/repro.py` hooks to persist snapshots and hashes.
 
 ## Scope 5: Incremental impact and provenance
 Objective: compute impacted rules and evidence via descendants and ancestors, integrate
 with incremental config, and expose provenance for debugging and audits.
 
-Status: Not started.
+Status: Partially completed (impact/provenance helpers and artifacts done; incremental integration pending).
 
 Representative code
 ```python
@@ -346,16 +346,16 @@ Target files
 - `tests/relspec/test_rustworkx_incremental.py` (new)
 
 Implementation checklist
-- [ ] Add impact and provenance helpers (descendants, ancestors).
+- [x] Add impact and provenance helpers (descendants, ancestors).
 - [ ] Integrate impact sets with incremental config and state.
-- [ ] Emit provenance artifacts in `obs/repro.py`.
-- [ ] Add tests for impact closure and provenance ordering.
+- [x] Emit provenance artifacts in `obs/repro.py`.
+- [x] Add tests for impact closure and provenance ordering.
 
 ## Scope 6: Execution integration inside Hamilton nodes
 Objective: keep Hamilton as orchestrator while using rustworkx to order and batch rule
 execution, and to expose schedule artifacts as standard pipeline outputs.
 
-Status: Not started.
+Status: Mostly completed (execution integration and artifacts done; schedule metadata in exec events pending).
 
 Representative code
 ```python
@@ -398,16 +398,16 @@ Target files
 - `tests/hamilton_pipeline/test_relspec_schedule.py` (new)
 
 Implementation checklist
-- [ ] Add Hamilton node for rule graph and rule schedule artifacts.
-- [ ] Execute rules by generation, updating dynamic resolvers per wave.
-- [ ] Preserve existing compiled output finalization semantics.
+- [x] Add Hamilton node for rule graph and rule schedule artifacts.
+- [x] Execute rules by generation, updating dynamic resolvers per wave.
+- [x] Preserve existing compiled output finalization semantics.
 - [ ] Record rule execution events with schedule metadata.
 
 ## Scope 7: Hamilton DAG synthesis from rustworkx adjacency
 Objective: provide an optional path to generate Hamilton-compatible dependency maps
 or module stubs from the rustworkx graph for deep alignment and introspection.
 
-Status: Not started.
+Status: Partially completed (dependency map and artifacts emitted; DAG validation pending).
 
 Representative code
 ```python
@@ -438,28 +438,30 @@ Target files
 - `src/relspec/rustworkx_graph.py`
 
 Implementation checklist
-- [ ] Generate a dependency map from the rustworkx graph.
+- [x] Generate a dependency map from the rustworkx graph.
 - [ ] Decide how to render map into Hamilton modules or driver inputs.
 - [ ] Add a validation step to compare Hamilton DAG vs rustworkx DAG.
-- [ ] Expose synthesized DAG metadata in diagnostics artifacts.
+- [x] Expose synthesized DAG metadata in diagnostics artifacts.
 
 ## Decommission (post-migration cleanup)
+Status: Completed.
+
 These are removed only after rustworkx scheduling is the sole path and parity checks pass.
 
 Functions and types to decommission
-- `src/relspec/graph.py: order_rules` (replaced by rustworkx TopologicalSorter scheduling)
-- `src/relspec/graph.py: order_rules_by_evidence` (replaced by rustworkx scheduling + output semantics)
-- `src/relspec/graph.py: RuleSelectors` (replaced by graph builders over RuleDefinition inputs)
-- `src/relspec/graph.py: RuleNode` (replaced by rustworkx RuleNode/EvidenceNode types)
-- `src/relspec/graph.py: rule_graph_signature` (replaced by rustworkx snapshot signature)
-- `src/relspec/graph.py: RULE_GRAPH_SIGNATURE_VERSION` (moved to rustworkx graph signature schema)
-- `src/relspec/graph.py: _RULE_GRAPH_SCHEMA` (moved to rustworkx graph signature schema)
-- `src/relspec/graph.py: _ready_rules` (replaced by TopologicalSorter readiness)
-- `src/relspec/graph.py: _select_by_output` (replaced by all_producers semantics in graph)
-- `src/relspec/graph.py: _register_rule_output` (replaced by graph-driven evidence updates)
-- `src/relspec/graph.py: _register_output` (replaced by graph-driven evidence updates)
-- `src/relspec/graph.py: _central_evidence` (absorbed into EvidenceNode construction)
+- [x] `src/relspec/graph.py: order_rules` (replaced by rustworkx TopologicalSorter scheduling)
+- [x] `src/relspec/graph.py: order_rules_by_evidence` (replaced by rustworkx scheduling + output semantics)
+- [x] `src/relspec/graph.py: RuleSelectors` (replaced by graph builders over RuleDefinition inputs)
+- [x] `src/relspec/graph.py: RuleNode` (replaced by rustworkx RuleNode/EvidenceNode types)
+- [x] `src/relspec/graph.py: rule_graph_signature` (replaced by rustworkx snapshot signature)
+- [x] `src/relspec/graph.py: RULE_GRAPH_SIGNATURE_VERSION` (moved to rustworkx graph signature schema)
+- [x] `src/relspec/graph.py: _RULE_GRAPH_SCHEMA` (moved to rustworkx graph signature schema)
+- [x] `src/relspec/graph.py: _ready_rules` (replaced by TopologicalSorter readiness)
+- [x] `src/relspec/graph.py: _select_by_output` (replaced by all_producers semantics in graph)
+- [x] `src/relspec/graph.py: _register_rule_output` (replaced by graph-driven evidence updates)
+- [x] `src/relspec/graph.py: _register_output` (replaced by graph-driven evidence updates)
+- [x] `src/relspec/graph.py: _central_evidence` (absorbed into EvidenceNode construction)
 
 Modules to delete
-- `src/relspec/compiler_graph.py` (compat wrapper for legacy graph helpers)
-- `src/relspec/rules/graph.py` (compat wrapper for legacy graph helpers)
+- [x] `src/relspec/compiler_graph.py` (compat wrapper for legacy graph helpers)
+- [x] `src/relspec/rules/graph.py` (compat wrapper for legacy graph helpers)

@@ -6,18 +6,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from arrowdsl.core.interop import TableLike
-from arrowdsl.spec.io import IpcWriteConfig
-from datafusion_engine.nested_tables import ViewReference
-from engine.plan_policy import WriterStrategy
-from relspec.compiler import CompiledOutput
-from relspec.registry import ContractCatalog, DatasetLocation, RelspecSnapshot
-from relspec.rustworkx_graph import GraphDiagnostics, RuleGraphSnapshot
-from relspec.rustworkx_schedule import RuleSchedule
-from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
-
 if TYPE_CHECKING:
+    from arrowdsl.core.interop import TableLike
+    from arrowdsl.spec.io import IpcWriteConfig
+    from datafusion_engine.nested_tables import ViewReference
+    from engine.plan_policy import WriterStrategy
     from ibis_engine.sources import DatasetSource
+    from relspec.compiler import CompiledOutput
+    from relspec.registry import ContractCatalog, DatasetLocation, RelspecSnapshot
+    from relspec.rustworkx_graph import GraphDiagnostics, RuleGraphSnapshot
+    from relspec.rustworkx_schedule import RuleSchedule
+    from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 
 @dataclass(frozen=True)
@@ -351,6 +350,8 @@ class RelspecSnapshots:
     rule_graph_snapshot: RuleGraphSnapshot
     rule_graph_diagnostics: GraphDiagnostics
     rule_schedule: RuleSchedule
+    rule_dependency_map: Mapping[str, tuple[str, ...]]
+    rule_output_map: Mapping[str, str]
     rule_provenance: Mapping[str, tuple[str, ...]]
     evidence_impact: Mapping[str, tuple[str, ...]]
 

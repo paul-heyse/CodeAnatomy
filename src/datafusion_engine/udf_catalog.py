@@ -48,6 +48,8 @@ class BuiltinFunctionSpec:
     return_type: pa.DataType
     volatility: str = "immutable"
     description: str | None = None
+    input_type_names: tuple[str, ...] = ()
+    return_type_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,121 @@ class FunctionSignature:
     input_types: tuple[str, ...]
     return_type: str | None
     volatility: str | None
+
+
+@dataclass(frozen=True)
+class RoutineMeta:
+    """Normalized routine metadata."""
+
+    function_type: str
+    return_type: str | None
+    volatility: str | None
+
+
+def _normalize_volatility(raw: object | None) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return "immutable" if raw else "volatile"
+    text = str(raw).strip().lower()
+    if text in {"immutable", "stable", "volatile"}:
+        return text
+    if text in {"deterministic", "deterministic=true", "true"}:
+        return "immutable"
+    if text in {"nondeterministic", "non_deterministic", "false"}:
+        return "volatile"
+    return None
+
+
+def _routine_columns(table: pa.Table) -> dict[str, str]:
+    return {name.lower(): name for name in table.column_names}
+
+
+def _routine_name_values(table: pa.Table, columns: Mapping[str, str]) -> list[object]:
+    name_col = columns.get("routine_name") or columns.get("function_name") or columns.get("name")
+    if name_col is None:
+        return [None] * table.num_rows
+    return table.column(name_col).to_pylist()
+
+
+def _routine_type_values(table: pa.Table, columns: Mapping[str, str]) -> list[object]:
+    type_col = columns.get("routine_type") or columns.get("function_type")
+    if type_col is None:
+        return [None] * table.num_rows
+    return table.column(type_col).to_pylist()
+
+
+def _routine_return_values(table: pa.Table, columns: Mapping[str, str]) -> list[object]:
+    return_col = (
+        columns.get("return_type")
+        or columns.get("data_type")
+        or columns.get("result_data_type")
+    )
+    if return_col is None:
+        return [None] * table.num_rows
+    return table.column(return_col).to_pylist()
+
+
+def _routine_volatility_values(table: pa.Table, columns: Mapping[str, str]) -> list[object]:
+    volatility_col = columns.get("volatility")
+    if volatility_col is not None:
+        return table.column(volatility_col).to_pylist()
+    deterministic_col = columns.get("is_deterministic")
+    if deterministic_col is not None:
+        return table.column(deterministic_col).to_pylist()
+    return [None] * table.num_rows
+
+
+def _routine_metadata(
+    routines: pa.Table,
+) -> tuple[frozenset[str], dict[str, RoutineMeta], dict[str, set[str]]]:
+    columns = _routine_columns(routines)
+    names = _routine_name_values(routines, columns)
+    types = _routine_type_values(routines, columns)
+    returns = _routine_return_values(routines, columns)
+    volatilities = _routine_volatility_values(routines, columns)
+    function_names = frozenset(str(name) for name in names if name is not None)
+    routine_meta: dict[str, RoutineMeta] = {}
+    functions_by_category: dict[str, set[str]] = {}
+    for name, rtype, rreturn, rvol in zip(names, types, returns, volatilities, strict=False):
+        if name is None:
+            continue
+        key = str(name)
+        routine_meta.setdefault(
+            key,
+            RoutineMeta(
+                function_type=str(rtype).lower() if rtype else "function",
+                return_type=str(rreturn) if rreturn is not None else None,
+                volatility=_normalize_volatility(rvol),
+            ),
+        )
+        category = str(rtype).lower() if rtype else "unknown"
+        functions_by_category.setdefault(category, set()).add(key)
+    return function_names, routine_meta, functions_by_category
+
+
+def _parameter_groups(parameters: pa.Table) -> dict[str, list[tuple[int, str]]]:
+    routine_col = parameters.column("routine_name").to_pylist()
+    dtype_col = parameters.column("data_type").to_pylist()
+    ordinal_col = parameters.column("ordinal_position").to_pylist()
+    mode_col = (
+        parameters.column("parameter_mode").to_pylist()
+        if "parameter_mode" in parameters.column_names
+        else [None] * len(routine_col)
+    )
+    param_groups: dict[str, list[tuple[int, str]]] = {}
+    for routine, dtype, ordinal, mode in zip(
+        routine_col, dtype_col, ordinal_col, mode_col, strict=False
+    ):
+        if routine is None:
+            continue
+        if mode is not None and str(mode).upper() != "IN":
+            continue
+        key = str(routine)
+        param_groups.setdefault(key, []).append(
+            (int(ordinal) if ordinal else 0, str(dtype) if dtype else "unknown")
+        )
+    return param_groups
 
 
 @dataclass(frozen=True)
@@ -94,51 +211,32 @@ class FunctionCatalog:
         FunctionCatalog
             Immutable catalog of runtime functions.
         """
-        # Parse routine names
-        routine_names = routines.column("routine_name").to_pylist()
-        function_names = frozenset(str(name) for name in routine_names if name is not None)
+        function_names, routine_meta, functions_by_category = _routine_metadata(routines)
 
-        # Group by routine_type (FUNCTION, AGGREGATE, WINDOW)
-        functions_by_category: dict[str, set[str]] = {}
-        routine_types = routines.column("routine_type").to_pylist()
-        for name, rtype in zip(routine_names, routine_types, strict=False):
-            if name is None:
-                continue
-            category = str(rtype).lower() if rtype else "unknown"
-            if category not in functions_by_category:
-                functions_by_category[category] = set()
-            functions_by_category[category].add(str(name))
-
-        # Build signatures if parameters available
         function_signatures: dict[str, FunctionSignature] = {}
         if parameters_available and parameters is not None:
-            # Group parameters by routine_name, build signatures
-            param_groups: dict[str, list[tuple[int, str]]] = {}
-            routine_col = parameters.column("routine_name").to_pylist()
-            dtype_col = parameters.column("data_type").to_pylist()
-            ordinal_col = parameters.column("ordinal_position").to_pylist()
-
-            for routine, dtype, ordinal in zip(routine_col, dtype_col, ordinal_col, strict=False):
-                if routine is None:
-                    continue
-                key = str(routine)
-                if key not in param_groups:
-                    param_groups[key] = []
-                param_groups[key].append(
-                    (int(ordinal) if ordinal else 0, str(dtype) if dtype else "unknown")
-                )
-
-            # Build signatures from grouped parameters
+            param_groups = _parameter_groups(parameters)
             for name in function_names:
                 params = param_groups.get(name, [])
                 params.sort(key=lambda x: x[0])
                 input_types = tuple(p[1] for p in params)
+                meta = routine_meta.get(name, RoutineMeta("function", None, None))
                 function_signatures[name] = FunctionSignature(
                     function_name=name,
-                    function_type="function",  # Could be enhanced from routines
+                    function_type=meta.function_type,
                     input_types=input_types,
-                    return_type=None,  # DataFusion info_schema doesn't expose this reliably
-                    volatility=None,
+                    return_type=meta.return_type,
+                    volatility=meta.volatility,
+                )
+        if not function_signatures and routine_meta:
+            for name in function_names:
+                meta = routine_meta.get(name, RoutineMeta("function", None, None))
+                function_signatures[name] = FunctionSignature(
+                    function_name=name,
+                    function_type=meta.function_type,
+                    input_types=(),
+                    return_type=meta.return_type,
+                    volatility=meta.volatility,
                 )
 
         return cls(
@@ -260,13 +358,22 @@ def _builtin_spec_from_signature(func_id: str, sig: FunctionSignature) -> Builti
     BuiltinFunctionSpec
         Builtin function specification.
     """
-    category = "aggregate" if "aggregate" in sig.function_type.lower() else "math"
+    func_type = sig.function_type.lower()
+    if "window" in func_type:
+        category: BuiltinCategory = "window"
+    elif "aggregate" in func_type:
+        category = "aggregate"
+    else:
+        category = "math"
     return BuiltinFunctionSpec(
         func_id=func_id,
         datafusion_name=func_id,
         category=category,
         input_types=(),  # Type info from info_schema is limited
         return_type=pa.null(),
+        volatility=sig.volatility or "immutable",
+        input_type_names=sig.input_types,
+        return_type_name=sig.return_type,
     )
 
 

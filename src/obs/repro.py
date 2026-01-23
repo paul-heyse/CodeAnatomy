@@ -25,11 +25,15 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.io.ipc import IpcWriteInput, ipc_hash
-from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
+from arrowdsl.schema.serialization import (
+    schema_fingerprint,
+    schema_to_dict,
+    schema_to_msgpack,
+)
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
-from serde_msgspec import StructBase, to_builtins
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_product import PlanProduct
+from serde_msgspec import StructBase, to_builtins
 from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
     ParseSqlOptions,
@@ -55,18 +59,24 @@ if TYPE_CHECKING:
 # -----------------------
 
 
-class PythonInfo(StructBase):
+class PythonInfo(StructBase, frozen=True):
+    """Python runtime metadata."""
+
     version: str
     executable: str
 
 
-class PlatformInfo(StructBase):
+class PlatformInfo(StructBase, frozen=True):
+    """Platform metadata for the runtime host."""
+
     platform: str
     machine: str
     python_implementation: str
 
 
-class PackageVersions(StructBase):
+class PackageVersions(StructBase, frozen=True):
+    """Captured package versions for reproducibility."""
+
     pyarrow: str | None = None
     datafusion: str | None = None
     ibis_framework: str | None = None
@@ -75,7 +85,9 @@ class PackageVersions(StructBase):
     libcst: str | None = None
 
 
-class GitInfo(StructBase):
+class GitInfo(StructBase, frozen=True):
+    """Git metadata for the repository."""
+
     present: bool
     head: str | None = None
     ref: str | None = None
@@ -83,7 +95,9 @@ class GitInfo(StructBase):
     error: str | None = None
 
 
-class ReproInfo(StructBase):
+class ReproInfo(StructBase, frozen=True):
+    """Top-level reproducibility metadata bundle."""
+
     python: PythonInfo
     platform: PlatformInfo
     packages: PackageVersions
@@ -487,6 +501,8 @@ class RunBundleContext:
     rule_graph_snapshot: RuleGraphSnapshot | None = None
     rule_graph_diagnostics: GraphDiagnostics | None = None
     rule_schedule: RuleSchedule | None = None
+    rule_dependency_map: Mapping[str, Sequence[str]] | None = None
+    rule_output_map: Mapping[str, str] | None = None
     rule_provenance: Mapping[str, Sequence[str]] | None = None
     evidence_impact: Mapping[str, Sequence[str]] | None = None
     datafusion_metrics: JsonDict | None = None
@@ -627,98 +643,120 @@ def _write_dataset_locations(
     )
 
 
-def _write_relspec_snapshots(
-    bundle_dir: Path, context: RunBundleContext, files_written: list[str]
+def _write_optional_obs_dataset(
+    relspec_dir: Path,
+    *,
+    name: str,
+    table: pa.Table | None,
+    overwrite: bool,
+    files_written: list[str],
 ) -> None:
-    relspec_dir = bundle_dir / "relspec"
-    _ensure_dir(relspec_dir)
-    if context.rule_table is not None:
-        files_written.append(
-            _write_obs_dataset(
-                relspec_dir,
-                name="rules",
-                table=context.rule_table,
-                overwrite=context.overwrite,
-            )
-        )
-    if context.template_table is not None:
-        files_written.append(
-            _write_obs_dataset(
-                relspec_dir,
-                name="templates",
-                table=context.template_table,
-                overwrite=context.overwrite,
-            )
-        )
-    if context.template_diagnostics is not None:
-        files_written.append(
-            _write_obs_dataset(
-                relspec_dir,
-                name="template_diagnostics",
-                table=context.template_diagnostics,
-                overwrite=context.overwrite,
-            )
-        )
-    if context.rule_diagnostics is not None:
-        files_written.append(
-            _write_obs_dataset(
-                relspec_dir,
-                name="rule_diagnostics",
-                table=context.rule_diagnostics,
-                overwrite=context.overwrite,
-            )
-        )
-        _write_sqlglot_ast_payloads(
+    if table is None:
+        return
+    files_written.append(
+        _write_obs_dataset(
             relspec_dir,
-            context.rule_diagnostics,
-            files_written,
+            name=name,
+            table=table,
+            overwrite=overwrite,
         )
-        _write_sqlglot_planner_dag(
+    )
+
+
+def _write_rule_diagnostics(
+    relspec_dir: Path,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if context.rule_diagnostics is None:
+        return
+    files_written.append(
+        _write_obs_dataset(
             relspec_dir,
-            context.rule_diagnostics,
-            files_written,
+            name="rule_diagnostics",
+            table=context.rule_diagnostics,
+            overwrite=context.overwrite,
         )
-        _write_sqlglot_qualification_failures(
-            relspec_dir,
-            context.rule_diagnostics,
-            files_written,
+    )
+    _write_sqlglot_ast_payloads(
+        relspec_dir,
+        context.rule_diagnostics,
+        files_written,
+    )
+    _write_sqlglot_planner_dag(
+        relspec_dir,
+        context.rule_diagnostics,
+        files_written,
+    )
+    _write_sqlglot_qualification_failures(
+        relspec_dir,
+        context.rule_diagnostics,
+        files_written,
+    )
+    _write_substrait_artifacts(
+        relspec_dir,
+        context.rule_diagnostics,
+        files_written,
+    )
+
+
+def _write_contract_artifacts(
+    relspec_dir: Path,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if context.relationship_contracts is None:
+        return
+    snap = serialize_contract_catalog(context.relationship_contracts)
+    files_written.append(
+        _write_delta_payload(
+            relspec_dir / "contracts.delta",
+            snap,
+            overwrite=True,
         )
-    if context.relationship_contracts is not None:
-        snap = serialize_contract_catalog(context.relationship_contracts)
+    )
+    ddl = _contract_schema_ddls(context.relationship_contracts)
+    if ddl:
         files_written.append(
             _write_delta_payload(
-                relspec_dir / "contracts.delta",
-                snap,
+                relspec_dir / "contracts_ddl.delta",
+                ddl,
                 overwrite=True,
             )
         )
-        ddl = _contract_schema_ddls(context.relationship_contracts)
-        if ddl:
-            files_written.append(
-                _write_delta_payload(
-                    relspec_dir / "contracts_ddl.delta",
-                    ddl,
-                    overwrite=True,
-                )
-            )
-        asts = _contract_schema_asts(context.relationship_contracts)
-        if asts:
-            files_written.append(
-                _write_delta_payload(
-                    relspec_dir / "contracts_ast.delta",
-                    asts,
-                    overwrite=True,
-                )
-            )
-    if context.compiled_relationship_outputs is not None:
-        snap = serialize_compiled_outputs(context.compiled_relationship_outputs)
+    asts = _contract_schema_asts(context.relationship_contracts)
+    if asts:
         files_written.append(
             _write_delta_payload(
-                relspec_dir / "compiled_outputs.delta",
-                snap,
+                relspec_dir / "contracts_ast.delta",
+                asts,
                 overwrite=True,
             )
         )
+
+
+def _write_compiled_outputs(
+    relspec_dir: Path,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if context.compiled_relationship_outputs is None:
+        return
+    snap = serialize_compiled_outputs(context.compiled_relationship_outputs)
+    files_written.append(
+        _write_delta_payload(
+            relspec_dir / "compiled_outputs.delta",
+            snap,
+            overwrite=True,
+        )
+    )
+
+
+def _write_graph_artifacts(
+    relspec_dir: Path,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
     if context.rule_graph_snapshot is not None:
         files_written.append(
             _write_delta_payload(
@@ -743,6 +781,22 @@ def _write_relspec_snapshots(
                 overwrite=True,
             )
         )
+    if context.rule_dependency_map is not None:
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / "rule_dependency_map.delta",
+                context.rule_dependency_map,
+                overwrite=True,
+            )
+        )
+    if context.rule_output_map is not None:
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / "rule_output_map.delta",
+                context.rule_output_map,
+                overwrite=True,
+            )
+        )
     if context.rule_provenance is not None:
         files_written.append(
             _write_delta_payload(
@@ -759,17 +813,49 @@ def _write_relspec_snapshots(
                 overwrite=True,
             )
         )
+
+
+def _write_relspec_snapshots(
+    bundle_dir: Path, context: RunBundleContext, files_written: list[str]
+) -> None:
+    relspec_dir = bundle_dir / "relspec"
+    _ensure_dir(relspec_dir)
+    _write_optional_obs_dataset(
+        relspec_dir,
+        name="rules",
+        table=context.rule_table,
+        overwrite=context.overwrite,
+        files_written=files_written,
+    )
+    _write_optional_obs_dataset(
+        relspec_dir,
+        name="templates",
+        table=context.template_table,
+        overwrite=context.overwrite,
+        files_written=files_written,
+    )
+    _write_optional_obs_dataset(
+        relspec_dir,
+        name="template_diagnostics",
+        table=context.template_diagnostics,
+        overwrite=context.overwrite,
+        files_written=files_written,
+    )
+    _write_rule_diagnostics(relspec_dir, context, files_written)
+    _write_contract_artifacts(relspec_dir, context, files_written)
+    _write_compiled_outputs(relspec_dir, context, files_written)
+    _write_graph_artifacts(relspec_dir, context, files_written)
     _write_runtime_artifacts(relspec_dir, context, files_written)
-    if context.rule_diagnostics is not None:
-        _write_substrait_artifacts(
-            relspec_dir,
-            context.rule_diagnostics,
-            files_written,
-        )
 
 
 def serialize_rule_graph_snapshot(snapshot: RuleGraphSnapshot) -> Mapping[str, object]:
-    """Serialize a rule graph snapshot into a payload mapping."""
+    """Serialize a rule graph snapshot into a payload mapping.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Mapping payload for snapshot serialization.
+    """
     return {
         "version": snapshot.version,
         "label": snapshot.label,
@@ -780,7 +866,13 @@ def serialize_rule_graph_snapshot(snapshot: RuleGraphSnapshot) -> Mapping[str, o
 
 
 def serialize_rule_graph_diagnostics(diag: GraphDiagnostics) -> Mapping[str, object]:
-    """Serialize rule graph diagnostics into a payload mapping."""
+    """Serialize rule graph diagnostics into a payload mapping.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Mapping payload for diagnostics serialization.
+    """
     return {
         "status": diag.status,
         "cycles": [list(cycle) for cycle in diag.cycles],
@@ -793,7 +885,13 @@ def serialize_rule_graph_diagnostics(diag: GraphDiagnostics) -> Mapping[str, obj
 
 
 def serialize_rule_schedule(schedule: RuleSchedule) -> Mapping[str, object]:
-    """Serialize a rule schedule into a payload mapping."""
+    """Serialize a rule schedule into a payload mapping.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Mapping payload for schedule serialization.
+    """
     return {
         "ordered_rules": list(schedule.ordered_rules),
         "generations": [list(gen) for gen in schedule.generations],
@@ -1369,12 +1467,14 @@ def _write_schema_snapshot(
 ) -> None:
     from schema_spec.system import dataset_table_ddl_fingerprint
 
+    schema_msgpack_b64 = base64.b64encode(schema_to_msgpack(table.schema)).decode("ascii")
     doc: JsonDict = {
         "name": name,
         "rows": int(table.num_rows),
         "schema_fingerprint": schema_fingerprint(table.schema),
         "ddl_fingerprint": dataset_table_ddl_fingerprint(name),
         "schema": cast("JsonValue", schema_to_dict(table.schema)),
+        "schema_msgpack_b64": schema_msgpack_b64,
     }
     files_written.append(
         _write_delta_payload(
@@ -1447,11 +1547,13 @@ def _delta_metadata_payload(
     from schema_spec.system import dataset_table_ddl_fingerprint
 
     schema = _ipc_schema(table)
+    schema_msgpack_b64 = base64.b64encode(schema_to_msgpack(schema)).decode("ascii")
     return {
         "name": name,
         "schema": schema_to_dict(schema),
         "schema_fingerprint": schema_fingerprint(schema),
         "ddl_fingerprint": dataset_table_ddl_fingerprint(name),
+        "schema_msgpack_b64": schema_msgpack_b64,
     }
 
 
@@ -1753,6 +1855,8 @@ def write_run_bundle(
         relspec/rule_graph_snapshot.delta
         relspec/rule_graph_diagnostics.delta
         relspec/rule_schedule.delta
+        relspec/rule_dependency_map.delta
+        relspec/rule_output_map.delta
         relspec/rule_provenance.delta
         relspec/evidence_impact.delta
         relspec/scan_telemetry/

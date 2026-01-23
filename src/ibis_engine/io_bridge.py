@@ -223,6 +223,7 @@ class DeltaInsertRequest:
     backend: IbisCompilerBackend
     batch_size: int | None
     runtime_profile: DataFusionRuntimeProfile | None
+    constraints: tuple[str, ...] = ()
 
 
 def _resolved_write_batch_size(options: IbisDatasetWriteOptions) -> int | None:
@@ -600,6 +601,10 @@ def _write_delta_dataset(
         table_name=table_name,
         delta_options=context.delta_options,
     ):
+        constraints = _delta_constraints_for_table(
+            context.runtime_profile,
+            table_name=table_name,
+        )
         request = DeltaInsertRequest(
             ctx=context.ctx,
             table_name=table_name,
@@ -608,6 +613,7 @@ def _write_delta_dataset(
             backend=cast("IbisCompilerBackend", context.backend),
             batch_size=context.batch_size,
             runtime_profile=context.runtime_profile,
+            constraints=constraints,
         )
         insert_result = _try_delta_insert(request)
     if insert_result is None:
@@ -916,6 +922,20 @@ def _record_delta_features(
     runtime_profile.diagnostics_sink.record_artifact("relspec_delta_features_v1", payload)
 
 
+def _delta_constraints_for_table(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    table_name: str,
+) -> tuple[str, ...]:
+    if runtime_profile is None:
+        return ()
+    for catalog in runtime_profile.registry_catalogs.values():
+        if catalog.has(table_name):
+            location = catalog.get(table_name)
+            return tuple(location.delta_constraints)
+    return ()
+
+
 def _delta_insert_select_sql(
     df: DataFrame,
     *,
@@ -940,7 +960,7 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
     df = cast("DataFrame", df_obj)
     try:
         select_sql = _delta_insert_select_sql(df, temp_name=temp_name)
-        options = DeltaInsertOptions(mode=request.mode)
+        options = DeltaInsertOptions(mode=request.mode, constraints=request.constraints)
         if select_sql is None:
             result = datafusion_insert_from_dataframe(
                 request.ctx,

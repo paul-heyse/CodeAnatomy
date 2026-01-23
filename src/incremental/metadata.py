@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 
@@ -16,6 +17,7 @@ from ibis_engine.io_bridge import (
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
+from serde_msgspec import to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
 from storage.deltalake import enable_delta_features
 
@@ -90,7 +92,7 @@ def write_cdf_cursor_snapshot(
     state_store.ensure_dirs()
     cursors = cursor_store.list_cursors()
     if cursors:
-        rows = [cursor.to_dict() for cursor in cursors]
+        rows = [cast("dict[str, object]", to_builtins(cursor)) for cursor in cursors]
         table = pa.Table.from_pylist(rows, schema=_CDF_CURSOR_SCHEMA)
     else:
         table = table_from_schema(_CDF_CURSOR_SCHEMA, columns={}, num_rows=0)

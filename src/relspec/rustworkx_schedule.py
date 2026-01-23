@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING
 import rustworkx as rx
 
 from relspec.errors import RelspecValidationError
-from relspec.rustworkx_graph import EvidenceNode, RuleGraph, RuleNode
 from relspec.rules.evidence import EvidenceCatalog
+from relspec.rules.exec_events import RuleScheduleMetadata
+from relspec.rustworkx_graph import EvidenceNode, RuleGraph, RuleNode
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
@@ -32,7 +33,18 @@ def schedule_rules(
     output_schema_for: Callable[[str], SchemaLike | None] | None = None,
     allow_partial: bool = False,
 ) -> RuleSchedule:
-    """Return a deterministic rule schedule driven by a rule graph."""
+    """Return a deterministic rule schedule driven by a rule graph.
+
+    Returns
+    -------
+    RuleSchedule
+        Ordered rule names and generation waves.
+
+    Raises
+    ------
+    RelspecValidationError
+        Raised when evidence requirements cannot be satisfied.
+    """
     working = evidence.clone()
     seed_nodes = _seed_nodes(graph, working.sources)
     sorter = _make_sorter(graph, seed_nodes=seed_nodes)
@@ -76,7 +88,13 @@ def impacted_rules(
     *,
     evidence_name: str,
 ) -> tuple[str, ...]:
-    """Return rule names impacted by a changed evidence dataset."""
+    """Return rule names impacted by a changed evidence dataset.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted impacted rule names.
+    """
     node = graph.evidence_idx.get(evidence_name)
     if node is None:
         return ()
@@ -89,12 +107,36 @@ def impacted_rules(
     return tuple(sorted(set(names)))
 
 
+def impacted_rules_for_evidence(
+    graph: RuleGraph,
+    *,
+    evidence_names: Iterable[str],
+) -> tuple[str, ...]:
+    """Return impacted rules for multiple evidence datasets.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted impacted rule names.
+    """
+    impacted: set[str] = set()
+    for name in evidence_names:
+        impacted.update(impacted_rules(graph, evidence_name=name))
+    return tuple(sorted(impacted))
+
+
 def provenance_for_rule(
     graph: RuleGraph,
     *,
     rule_name: str,
 ) -> tuple[str, ...]:
-    """Return evidence names that contribute to a rule."""
+    """Return evidence names that contribute to a rule.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted evidence names contributing to the rule.
+    """
     node = graph.rule_idx.get(rule_name)
     if node is None:
         return ()
@@ -105,6 +147,33 @@ def provenance_for_rule(
         if graph.graph[idx].kind == "evidence"
     ]
     return tuple(sorted(set(names)))
+
+
+def rule_schedule_metadata(
+    schedule: RuleSchedule,
+) -> dict[str, RuleScheduleMetadata]:
+    """Return per-rule schedule metadata for execution events.
+
+    Returns
+    -------
+    dict[str, RuleScheduleMetadata]
+        Mapping of rule names to schedule metadata.
+    """
+    order_index = {name: idx for idx, name in enumerate(schedule.ordered_rules)}
+    mapping: dict[str, RuleScheduleMetadata] = {}
+    for gen_idx, generation in enumerate(schedule.generations):
+        generation_size = len(generation)
+        for gen_order, name in enumerate(generation):
+            schedule_index = order_index.get(name)
+            if schedule_index is None:
+                continue
+            mapping[name] = RuleScheduleMetadata(
+                schedule_index=schedule_index,
+                generation_index=gen_idx,
+                generation_order=gen_order,
+                generation_size=generation_size,
+            )
+    return mapping
 
 
 def _seed_nodes(graph: RuleGraph, seed_evidence: Iterable[str]) -> list[int]:
@@ -191,6 +260,8 @@ def _has_rule_predecessor(graph: RuleGraph, node_idx: int) -> bool:
 __all__ = [
     "RuleSchedule",
     "impacted_rules",
+    "impacted_rules_for_evidence",
     "provenance_for_rule",
+    "rule_schedule_metadata",
     "schedule_rules",
 ]

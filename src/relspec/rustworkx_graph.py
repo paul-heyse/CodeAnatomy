@@ -155,7 +155,13 @@ def build_rule_graph_from_definitions(
     *,
     output_policy: OutputPolicy = "all_producers",
 ) -> RuleGraph:
-    """Build a rule graph from centralized rule definitions."""
+    """Build a rule graph from centralized rule definitions.
+
+    Returns
+    -------
+    RuleGraph
+        Graph with rule and evidence nodes.
+    """
     rule_nodes = tuple(_rule_node_from_definition(rule) for rule in rules)
     return _build_rule_graph(rule_nodes, output_policy=output_policy)
 
@@ -165,7 +171,13 @@ def build_rule_graph_from_relationship_rules(
     *,
     output_policy: OutputPolicy = "all_producers",
 ) -> RuleGraph:
-    """Build a rule graph from relationship rules."""
+    """Build a rule graph from relationship rules.
+
+    Returns
+    -------
+    RuleGraph
+        Graph with rule and evidence nodes.
+    """
     rule_nodes = tuple(_rule_node_from_relationship(rule) for rule in rules)
     return _build_rule_graph(rule_nodes, output_policy=output_policy)
 
@@ -175,7 +187,13 @@ def build_rule_graph_from_normalize_rules(
     *,
     output_policy: OutputPolicy = "all_producers",
 ) -> RuleGraph:
-    """Build a rule graph from resolved normalize rules."""
+    """Build a rule graph from resolved normalize rules.
+
+    Returns
+    -------
+    RuleGraph
+        Graph with rule and evidence nodes.
+    """
     rule_nodes = tuple(_rule_node_from_normalize(rule) for rule in rules)
     return _build_rule_graph(rule_nodes, output_policy=output_policy)
 
@@ -186,15 +204,21 @@ def rule_graph_snapshot(
     label: str,
     rule_signatures: Mapping[str, str] | None = None,
 ) -> RuleGraphSnapshot:
-    """Return a deterministic snapshot of a rule graph."""
+    """Return a deterministic snapshot of a rule graph.
+
+    Returns
+    -------
+    RuleGraphSnapshot
+        Snapshot payload for the rule graph.
+    """
     signatures = dict(rule_signatures or {})
-    node_map = {graph.graph[idx]: idx for idx in graph.graph.node_indices()}
+    node_map = {id(graph.graph[idx]): idx for idx in graph.graph.node_indices()}
     try:
         ordered_nodes = rx.lexicographical_topological_sort(
             graph.graph,
             key=_node_sort_key,
         )
-        ordered_pairs = [(node_map[node], node) for node in ordered_nodes]
+        ordered_pairs = [(node_map[id(node)], node) for node in ordered_nodes]
     except ValueError:
         ordered_pairs = [(idx, graph.graph[idx]) for idx in sorted(graph.graph.node_indices())]
     nodes = tuple(
@@ -211,7 +235,13 @@ def rule_graph_snapshot(
 
 
 def rule_graph_signature(snapshot: RuleGraphSnapshot) -> str:
-    """Return a stable signature for a rule graph snapshot."""
+    """Return a stable signature for a rule graph snapshot.
+
+    Returns
+    -------
+    str
+        Stable signature string.
+    """
     payload = {
         "version": snapshot.version,
         "label": snapshot.label,
@@ -223,7 +253,13 @@ def rule_graph_signature(snapshot: RuleGraphSnapshot) -> str:
 
 
 def rule_graph_diagnostics(graph: RuleGraph) -> GraphDiagnostics:
-    """Return cycle and visualization diagnostics for a rule graph."""
+    """Return cycle and visualization diagnostics for a rule graph.
+
+    Returns
+    -------
+    GraphDiagnostics
+        Cycle detection and visualization payload.
+    """
     g = graph.graph
     if not rx.is_directed_acyclic_graph(g):
         cycles = tuple(tuple(cycle) for cycle in rx.simple_cycles(g))
@@ -248,7 +284,13 @@ def rule_graph_signature_from_definitions(
     output_policy: OutputPolicy = "all_producers",
     rule_signatures: Mapping[str, str] | None = None,
 ) -> str:
-    """Return a stable rule graph signature for rule definitions."""
+    """Return a stable rule graph signature for rule definitions.
+
+    Returns
+    -------
+    str
+        Stable signature string.
+    """
     graph = build_rule_graph_from_definitions(rules, output_policy=output_policy)
     snapshot = rule_graph_snapshot(graph, label=label, rule_signatures=rule_signatures)
     return rule_graph_signature(snapshot)
@@ -261,7 +303,13 @@ def rule_graph_snapshot_from_definitions(
     output_policy: OutputPolicy = "all_producers",
     rule_signatures: Mapping[str, str] | None = None,
 ) -> RuleGraphSnapshot:
-    """Return a rule graph snapshot for rule definitions."""
+    """Return a rule graph snapshot for rule definitions.
+
+    Returns
+    -------
+    RuleGraphSnapshot
+        Snapshot payload for the rule graph.
+    """
     graph = build_rule_graph_from_definitions(rules, output_policy=output_policy)
     return rule_graph_snapshot(graph, label=label, rule_signatures=rule_signatures)
 
@@ -287,8 +335,8 @@ def _build_rule_graph(
     for rule in rules:
         rule_node = rule_idx[rule.name]
         requirements = _edge_requirements(rule.evidence)
-        for source in rule.sources:
-            edges.append(
+        edges.extend(
+            [
                 (
                     evidence_idx[source],
                     rule_node,
@@ -300,7 +348,9 @@ def _build_rule_graph(
                         required_metadata=requirements[2],
                     ),
                 )
-            )
+                for source in rule.sources
+            ]
+        )
         edges.append(
             (
                 rule_node,
@@ -479,6 +529,7 @@ def _node_sort_key(node: GraphNode) -> str:
 
 
 __all__ = [
+    "RULE_GRAPH_SNAPSHOT_VERSION",
     "GraphDiagnostics",
     "GraphEdge",
     "GraphNode",
@@ -487,7 +538,6 @@ __all__ = [
     "RuleGraph",
     "RuleGraphSnapshot",
     "RuleNode",
-    "RULE_GRAPH_SNAPSHOT_VERSION",
     "build_rule_graph_from_definitions",
     "build_rule_graph_from_normalize_rules",
     "build_rule_graph_from_relationship_rules",

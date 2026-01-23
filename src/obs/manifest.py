@@ -28,15 +28,14 @@ from storage.io import (
 
 if TYPE_CHECKING:
     from arrowdsl.core.scan_telemetry import ScanTelemetry
-    from extract.evidence_specs import EvidenceSpec
     from extract.evidence_plan import EvidencePlan
+    from extract.evidence_specs import EvidenceSpec
     from ibis_engine.execution import IbisExecutionContext
     from ibis_engine.param_tables import ParamTableArtifact
     from normalize.runner import ResolvedNormalizeRule
     from relspec.compiler import CompiledOutput
     from relspec.model import RelationshipRule
     from relspec.registry import DatasetLocation
-    from obs.repro import ReproInfo
 
 
 T = TypeVar("T")
@@ -46,7 +45,7 @@ NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 DIAGNOSTICS_SCHEMA_VERSION = "v1"
 
 
-class DatasetRecord(StructBase):
+class DatasetRecord(StructBase, frozen=True):
     """Record a dataset artifact."""
 
     name: str
@@ -72,7 +71,7 @@ class DatasetRecord(StructBase):
     # Optional: include a small schema description (safe for debugging)
     schema: list[JsonDict] | None = None
 
-class DatasetRecordMetadata(StructBase):
+class DatasetRecordMetadata(StructBase, frozen=True):
     """Metadata for dataset records."""
 
     path: str | None = None
@@ -87,7 +86,7 @@ class DatasetRecordMetadata(StructBase):
     delta_constraints: list[str] | None = None
 
 
-class RuleRecord(StructBase):
+class RuleRecord(StructBase, frozen=True):
     """Record a rule definition."""
 
     name: str
@@ -101,7 +100,7 @@ class RuleRecord(StructBase):
     ambiguity_policy: JsonDict | None = None
 
 
-class OutputRecord(StructBase):
+class OutputRecord(StructBase, frozen=True):
     """Record a produced output (e.g., relationship outputs, cpg outputs)."""
 
     name: str
@@ -117,7 +116,7 @@ class OutputRecord(StructBase):
     dataset_fingerprint: str | None = None
 
 
-class OutputFingerprintInputs(StructBase):
+class OutputFingerprintInputs(StructBase, frozen=True):
     """Inputs required to compute output dataset fingerprints."""
 
     plan_hash: str | None = None
@@ -126,14 +125,14 @@ class OutputFingerprintInputs(StructBase):
     input_fingerprints: Sequence[str] | None = None
 
 
-class OutputLineageRecord(StructBase):
+class OutputLineageRecord(StructBase, frozen=True):
     """Record rule lineage for a relationship output."""
 
     output_dataset: str
     rules: list[str] = msgspec.field(default_factory=list)
 
 
-class ExtractRecord(StructBase):
+class ExtractRecord(StructBase, frozen=True):
     """Record extract output lineage and metadata."""
 
     name: str
@@ -149,7 +148,7 @@ class ExtractRecord(StructBase):
     error_rows: NonNegInt | None = None
 
 
-class Manifest(StructBase):
+class Manifest(StructBase, frozen=True):
     """Top-level manifest record."""
 
     manifest_version: NonNegInt
@@ -180,7 +179,7 @@ class Manifest(StructBase):
         return cast("JsonDict", to_builtins(self))
 
 
-class ManifestContext(StructBase):
+class ManifestContext(StructBase, frozen=True):
     """Core context fields for manifest construction."""
 
     repo_root: str | None
@@ -189,7 +188,7 @@ class ManifestContext(StructBase):
     output_dir: str | None
 
 
-class ManifestData(StructBase):
+class ManifestData(StructBase, frozen=True):
     """Optional inputs used to populate manifest records."""
 
     relspec_input_tables: Mapping[str, TableLike] | None = None
@@ -408,7 +407,7 @@ def _materialized_delta_version(payload: Mapping[str, object]) -> int | None:
     return version_value if isinstance(version_value, int) else None
 
 
-class DeltaMaterializationMetadata(StructBase):
+class DeltaMaterializationMetadata(StructBase, frozen=True):
     """Delta metadata captured from materialization reports."""
 
     path: str | None

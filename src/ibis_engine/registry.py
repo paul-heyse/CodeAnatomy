@@ -24,13 +24,14 @@ from schema_spec.system import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
 )
+from storage.deltalake import DeltaCdfOptions
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type PathLike = str | Path
 type DatasetFormat = str
-type DataFusionProvider = Literal["listing", "parquet"]
+type DataFusionProvider = Literal["listing", "parquet", "delta_cdf"]
 
 _REGISTERED_CATALOGS: dict[int, set[str]] = {}
 _REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
@@ -55,6 +56,7 @@ class DatasetLocation:
     read_options: Mapping[str, object] = field(default_factory=dict)
     storage_options: Mapping[str, str] = field(default_factory=dict)
     delta_scan: DeltaScanOptions | None = None
+    delta_cdf_options: DeltaCdfOptions | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_constraints: tuple[str, ...] = ()

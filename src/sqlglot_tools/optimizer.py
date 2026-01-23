@@ -382,7 +382,7 @@ class NormalizeExprResult:
     stats: NormalizationStats
 
 
-class AstArtifact(StructBase):
+class AstArtifact(StructBase, frozen=True):
     """SQLGlot AST artifact with serialization metadata."""
 
     sql: str
@@ -391,7 +391,7 @@ class AstArtifact(StructBase):
 
 
 _AST_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
-_AST_DECODER = msgspec.msgpack.Decoder(type=dict[str, object], strict=False)
+_AST_DECODER = msgspec.msgpack.Decoder(type=list[dict[str, object]], strict=False)
 _AST_ARTIFACT_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
 _AST_ARTIFACT_DECODER = msgspec.msgpack.Decoder(type=AstArtifact, strict=True)
 

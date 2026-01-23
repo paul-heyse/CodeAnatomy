@@ -9,10 +9,23 @@
 
 ---
 
+## Status Summary
+
+- Item 1: completed (shared serde module + hooks).
+- Item 2: partially complete (UNSET used in diagnostics ingestion; decision gate still open).
+- Item 3: completed and integrated into runtime/tests.
+- Item 4: mostly complete (structured payloads done; Raw.copy deferred).
+- Items 5–9: completed and integrated into runtime/tests.
+
+---
+
 ## Item 1: Central msgspec policy + serde module
 
 ### Goal
 Create a single, shared module that defines default struct behavior, encoders/decoders, ordering, hooks, and boundary helpers (JSON and MessagePack).
+
+### Status
+Completed in `src/serde_msgspec.py` and `src/serde_msgspec_ext.py`.
 
 ### Design / Architecture
 ```python
@@ -20,16 +33,13 @@ Create a single, shared module that defines default struct behavior, encoders/de
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, Literal, Protocol, cast
 
 import msgspec
-import msgspec.json
-import msgspec.msgpack
 
-if TYPE_CHECKING:
-    import pyarrow as pa
+from serde_msgspec_ext import SCHEMA_EXT_CODE
 
-T = TypeVar("T")
+_DEFAULT_ORDER: Literal["deterministic"] = "deterministic"
 
 
 class StructBase(
@@ -43,19 +53,37 @@ class StructBase(
     """Base struct for internal artifacts."""
 
 
-_DEFAULT_ORDER = "deterministic"
+class _MsgpackBuffer(Protocol):
+    def to_pybytes(self) -> bytes:
+        """Return the buffer as raw bytes."""
 
 
-def _enc_hook(obj: object) -> object:
+class _ArrowSchema(Protocol):
+    def serialize(self) -> _MsgpackBuffer:
+        """Serialize schema into a bytes-like buffer."""
+
+
+def _json_enc_hook(obj: object) -> object:
     if isinstance(obj, Path):
         return str(obj)
-    # Keep pyarrow import local to avoid heavy module import at startup.
+    if isinstance(obj, bytes):
+        return obj.hex()
+    raise TypeError
+
+
+def _msgpack_enc_hook(obj: object) -> object:
+    if isinstance(obj, Path):
+        return str(obj)
     try:
-        import pyarrow as pa  # noqa: WPS433
+        import pyarrow as pa
     except ImportError:
         pa = None
     if pa is not None and isinstance(obj, pa.Schema):
-        return {"__arrow_schema__": obj.to_string()}
+        schema = cast(_ArrowSchema, obj)
+        return msgspec.msgpack.Ext(
+            SCHEMA_EXT_CODE,
+            schema.serialize().to_pybytes(),
+        )
     raise TypeError
 
 
@@ -65,11 +93,17 @@ def _dec_hook(type_hint: Any, obj: object) -> object:
     return obj
 
 
-JSON_ENCODER = msgspec.json.Encoder(enc_hook=_enc_hook, order=_DEFAULT_ORDER)
-JSON_DECODER = msgspec.json.Decoder(dec_hook=_dec_hook, strict=True)
+def _msgpack_ext_hook(code: int, data: memoryview) -> object:
+    if code == SCHEMA_EXT_CODE:
+        try:
+            import pyarrow as pa
+        except ImportError:
+            return msgspec.msgpack.Ext(code, data.tobytes())
+        return pa.ipc.read_schema(data)
+    return msgspec.msgpack.Ext(code, data.tobytes())
 
-MSGPACK_ENCODER = msgspec.msgpack.Encoder(enc_hook=_enc_hook, order=_DEFAULT_ORDER)
-MSGPACK_DECODER = msgspec.msgpack.Decoder(dec_hook=_dec_hook, strict=True)
+JSON_ENCODER = msgspec.json.Encoder(enc_hook=_json_enc_hook, order=_DEFAULT_ORDER)
+MSGPACK_ENCODER = msgspec.msgpack.Encoder(enc_hook=_msgpack_enc_hook, order=_DEFAULT_ORDER)
 
 
 def dumps_json(obj: object, *, pretty: bool = False) -> bytes:
@@ -79,8 +113,8 @@ def dumps_json(obj: object, *, pretty: bool = False) -> bytes:
     return msgspec.json.format(raw, indent=2)
 
 
-def loads_json(buf: bytes, *, type: type[T], strict: bool = True) -> T:
-    decoder = msgspec.json.Decoder(type=type, dec_hook=_dec_hook, strict=strict)
+def loads_json[T](buf: bytes | str, *, target_type: type[T], strict: bool = True) -> T:
+    decoder = msgspec.json.Decoder(type=target_type, dec_hook=_dec_hook, strict=strict)
     return decoder.decode(buf)
 
 
@@ -88,8 +122,13 @@ def dumps_msgpack(obj: object) -> bytes:
     return MSGPACK_ENCODER.encode(obj)
 
 
-def loads_msgpack(buf: bytes, *, type: type[T], strict: bool = True) -> T:
-    decoder = msgspec.msgpack.Decoder(type=type, dec_hook=_dec_hook, strict=strict)
+def loads_msgpack[T](buf: bytes, *, target_type: type[T], strict: bool = True) -> T:
+    decoder = msgspec.msgpack.Decoder(
+        type=target_type,
+        dec_hook=_dec_hook,
+        ext_hook=_msgpack_ext_hook,
+        strict=strict,
+    )
     return decoder.decode(buf)
 
 
@@ -99,10 +138,36 @@ def encode_json_into(obj: object, buf: bytearray) -> None:
 
 def encode_json_lines(items: list[object]) -> bytes:
     return JSON_ENCODER.encode_lines(items)
+
+
+def convert[T](
+    obj: object,
+    *,
+    target_type: type[T],
+    strict: bool = True,
+    from_attributes: bool = False,
+) -> T:
+    return msgspec.convert(
+        obj,
+        type=target_type,
+        strict=strict,
+        from_attributes=from_attributes,
+        dec_hook=_dec_hook,
+    )
+
+
+def to_builtins(obj: object, *, str_keys: bool = True) -> object:
+    return msgspec.to_builtins(
+        obj,
+        order=_DEFAULT_ORDER,
+        str_keys=str_keys,
+        enc_hook=_json_enc_hook,
+    )
 ```
 
 ### Target Files
 - `src/serde_msgspec.py` (new)
+- `src/serde_msgspec_ext.py` (new)
 - `src/obs/manifest.py`
 - `src/obs/repro.py`
 - `src/incremental/cdf_cursors.py`
@@ -111,9 +176,9 @@ def encode_json_lines(items: list[object]) -> bytes:
 - `src/datafusion_engine/bridge.py`
 
 ### Implementation Checklist
-- [ ] Add `StructBase` and JSON/MessagePack encoders/decoders in a shared module.
-- [ ] Centralize ordering policy (`order="deterministic"`) and hook logic.
-- [ ] Define helper functions for `encode_into` and `encode_lines` for hot paths.
+- [x] Add `StructBase` and JSON/MessagePack encoders/decoders in a shared module.
+- [x] Centralize ordering policy (`order="deterministic"`) and hook logic.
+- [x] Define helper functions for `encode_into` and `encode_lines` for hot paths.
 
 ---
 
@@ -121,6 +186,9 @@ def encode_json_lines(items: list[object]) -> bytes:
 
 ### Goal
 Decide where "missing" must be distinguished from `None`, and implement `msgspec.UNSET` only where it matters.
+
+### Status
+Partially complete: `msgspec.UNSET` is used in diagnostics ingestion for optional timestamps, but the broader decision gate is still open.
 
 ### Design / Architecture
 ```python
@@ -130,7 +198,7 @@ from typing import Annotated, Literal
 
 import msgspec
 
-from serde_msgspec import StructBase
+from serde_msgspec import StructBase, convert
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 
@@ -154,7 +222,7 @@ def coalesce_unset[T](value: T | msgspec.UnsetType, default: T) -> T:
 
 ### Implementation Checklist
 - [ ] Identify fields where "missing vs null" changes behavior (e.g., patch semantics).
-- [ ] Adopt `UNSET` only for those fields and document the contract.
+- [x] Adopt `UNSET` for diagnostics ingestion timestamps where missing is meaningful.
 - [ ] Add a small helper to normalize `UNSET` at read/write boundaries.
 
 ---
@@ -163,6 +231,9 @@ def coalesce_unset[T](value: T | msgspec.UnsetType, default: T) -> T:
 
 ### Goal
 Replace dataclass + `asdict` + bespoke normalization with typed structs and reusable encoders.
+
+### Status
+Completed for incremental cursors, manifest, repro, and diagnostics specs.
 
 ### Design / Architecture
 ```python
@@ -179,29 +250,26 @@ from serde_msgspec import StructBase, dumps_json, loads_json
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 
 
-class CdfCursor(StructBase):
+class CdfCursor(StructBase, frozen=True):
     dataset_name: str
     last_version: NonNegInt
 
 
-def _cursor_path(base: Path, dataset_name: str) -> Path:
-    safe = dataset_name.replace("/", "_").replace("\\", "_")
-    return base / f"{safe}.cursor.json"
+class CdfCursorStore(StructBase, frozen=True):
+    cursors_path: Path
 
+    def save_cursor(self, cursor: CdfCursor) -> None:
+        self.cursors_path.mkdir(parents=True, exist_ok=True)
+        self._cursor_file(cursor.dataset_name).write_bytes(dumps_json(cursor, pretty=True))
 
-def save_cursor(base: Path, cursor: CdfCursor) -> None:
-    base.mkdir(parents=True, exist_ok=True)
-    _cursor_path(base, cursor.dataset_name).write_bytes(dumps_json(cursor, pretty=True))
-
-
-def load_cursor(base: Path, dataset_name: str) -> CdfCursor | None:
-    path = _cursor_path(base, dataset_name)
-    if not path.exists():
-        return None
-    try:
-        return loads_json(path.read_bytes(), type=CdfCursor, strict=False)
-    except msgspec.DecodeError:
-        return None
+    def load_cursor(self, dataset_name: str) -> CdfCursor | None:
+        path = self._cursor_file(dataset_name)
+        if not path.exists():
+            return None
+        try:
+            return loads_json(path.read_bytes(), target_type=CdfCursor, strict=False)
+        except msgspec.DecodeError:
+            return None
 ```
 
 ```python
@@ -218,7 +286,7 @@ from core_types import JsonDict
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 
 
-class DatasetRecord(StructBase):
+class DatasetRecord(StructBase, frozen=True):
     name: str
     kind: Literal["input", "intermediate", "relationship_output", "cpg_output"]
     path: str | None = None
@@ -226,8 +294,8 @@ class DatasetRecord(StructBase):
     schema: list[JsonDict] | None = None
 
 
-class ManifestV1(StructBase, tag="manifest.v1"):
-    schema_version: Literal["v1"] = "v1"
+class Manifest(StructBase, frozen=True):
+    manifest_version: NonNegInt
     created_at_unix_s: NonNegInt
     datasets: list[DatasetRecord] = msgspec.field(default_factory=list)
     repro: JsonDict = msgspec.field(default_factory=dict)
@@ -240,9 +308,9 @@ class ManifestV1(StructBase, tag="manifest.v1"):
 - `src/obs/diagnostics.py`
 
 ### Implementation Checklist
-- [ ] Replace `dataclass` definitions with `StructBase` for serialized artifacts.
-- [ ] Remove `asdict` and `_normalize_value` usage in favor of typed structs.
-- [ ] Use `msgspec.Meta` constraints for invariants (e.g., non-negative counts).
+- [x] Replace `dataclass` definitions with `StructBase` for serialized artifacts.
+- [x] Remove `asdict` and `_normalize_value` usage in favor of typed structs.
+- [x] Use `msgspec.Meta` constraints for invariants (e.g., non-negative counts).
 
 ---
 
@@ -250,6 +318,9 @@ class ManifestV1(StructBase, tag="manifest.v1"):
 
 ### Goal
 Store structured payloads in structs; stop embedding JSON strings in artifacts. Use `Raw` or MessagePack for compact storage.
+
+### Status
+Completed for SQLGlot AST artifacts, runtime profile payloads, and compiler diff payloads; `Raw.copy()` usage is deferred until long-lived caches are introduced.
 
 ### Design / Architecture
 ```python
@@ -263,10 +334,10 @@ from sqlglot import dump
 from sqlglot.expressions import Expression
 
 AST_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
-AST_DECODER = msgspec.msgpack.Decoder(type=dict[str, object], strict=False)
+AST_DECODER = msgspec.msgpack.Decoder(type=list[dict[str, object]], strict=False)
 
 
-class SqlglotAstArtifact(StructBase):
+class AstArtifact(StructBase, frozen=True):
     sql: str
     ast_raw: msgspec.Raw
     policy_hash: str
@@ -276,7 +347,7 @@ def ast_to_raw(expr: Expression) -> msgspec.Raw:
     return msgspec.Raw(AST_ENCODER.encode(dump(expr)))
 
 
-def ast_from_raw(raw: msgspec.Raw) -> dict[str, object]:
+def ast_from_raw(raw: msgspec.Raw) -> list[dict[str, object]]:
     return AST_DECODER.decode(raw)
 ```
 
@@ -284,15 +355,21 @@ def ast_from_raw(raw: msgspec.Raw) -> dict[str, object]:
 # src/engine/runtime_profile.py (snapshot rewrite)
 from __future__ import annotations
 
-import msgspec
-
-from serde_msgspec import StructBase
+from dataclasses import dataclass
 
 
-class RuntimeProfileArtifact(StructBase):
-    runtime_profile: dict[str, object]
+@dataclass(frozen=True)
+class RuntimeProfileSnapshot:
+    version: int
+    name: str
+    determinism_tier: str
+    scan_profile: dict[str, object]
+    ibis_options: dict[str, object]
     sqlglot_policy: dict[str, object] | None
-    function_registry: dict[str, object]
+    datafusion: dict[str, object] | None
+    function_registry_hash: str
+    profile_hash: str
+    scan_profile_schema_msgpack: bytes | None = None
 ```
 
 ### Target Files
@@ -302,9 +379,9 @@ class RuntimeProfileArtifact(StructBase):
 - `src/datafusion_engine/bridge.py`
 
 ### Implementation Checklist
-- [ ] Replace JSON string fields with structured payload fields.
-- [ ] Store AST/policy snapshots as `Raw` (MessagePack) when size matters.
-- [ ] Use `Raw.copy()` when retaining in long-lived caches.
+- [x] Replace JSON string fields with structured payload fields.
+- [x] Store AST/policy snapshots as `Raw` (MessagePack) when size matters.
+- [ ] Use `Raw.copy()` when retaining in long-lived caches (defer until caching is introduced).
 
 ---
 
@@ -312,6 +389,9 @@ class RuntimeProfileArtifact(StructBase):
 
 ### Goal
 Replace coercion helpers with typed decode + `strict=False` for lenient ingestion, and prefer MessagePack for telemetry buffers.
+
+### Status
+Completed for diagnostics event ingestion, telemetry payloads, and MessagePack encoders.
 
 ### Design / Architecture
 ```python
@@ -334,7 +414,7 @@ class DatafusionExplainEvent(StructBase):
 
 
 def normalize_explain(raw: object, *, now_ms: int) -> DatafusionExplainEvent:
-    event = msgspec.convert(raw, type=DatafusionExplainEvent, strict=False)
+    event = convert(raw, target_type=DatafusionExplainEvent, strict=False, from_attributes=True)
     if event.event_time_unix_ms is msgspec.UNSET:
         return msgspec.structs.replace(event, event_time_unix_ms=now_ms)
     return event
@@ -346,9 +426,9 @@ def normalize_explain(raw: object, *, now_ms: int) -> DatafusionExplainEvent:
 - `src/datafusion_engine/runtime.py`
 
 ### Implementation Checklist
-- [ ] Define message structs for each diagnostics table input.
-- [ ] Replace `_coerce_*` helpers with `msgspec.convert(..., strict=False)`.
-- [ ] Encode telemetry buffers as MessagePack and decode lazily as needed.
+- [x] Define message structs for each diagnostics table input.
+- [x] Replace `_coerce_*` helpers with `msgspec.convert(..., strict=False)`.
+- [x] Encode telemetry buffers as MessagePack and decode lazily as needed.
 
 ---
 
@@ -357,13 +437,14 @@ def normalize_explain(raw: object, *, now_ms: int) -> DatafusionExplainEvent:
 ### Goal
 Replace `asdict`-based normalization with `msgspec.convert` and struct-aware merging.
 
+### Status
+Completed for extract registry normalization and runtime profile options.
+
 ### Design / Architecture
 ```python
 from __future__ import annotations
 
-import msgspec
-
-from serde_msgspec import StructBase
+from serde_msgspec import StructBase, convert, to_builtins
 
 
 class ExtractOptions(StructBase):
@@ -378,13 +459,11 @@ DEFAULT_OPTIONS = ExtractOptions()
 def normalize_options(options: object | None) -> ExtractOptions:
     if options is None:
         return DEFAULT_OPTIONS
-    incoming = msgspec.convert(
-        options,
-        type=ExtractOptions,
-        strict=False,
-        from_attributes=True,
-    )
-    return msgspec.structs.replace(DEFAULT_OPTIONS, **msgspec.structs.asdict(incoming))
+    incoming = convert(options, target_type=ExtractOptions, strict=False, from_attributes=True)
+    incoming_payload = to_builtins(incoming)
+    if not isinstance(incoming_payload, dict):
+        return DEFAULT_OPTIONS
+    return ExtractOptions(**{**to_builtins(DEFAULT_OPTIONS), **incoming_payload})
 ```
 
 ### Target Files
@@ -393,9 +472,9 @@ def normalize_options(options: object | None) -> ExtractOptions:
 - `src/engine/runtime_profile.py`
 
 ### Implementation Checklist
-- [ ] Introduce typed option structs for normalization points.
-- [ ] Use `from_attributes=True` to handle dataclass-like inputs.
-- [ ] Replace `asdict` usage with `msgspec.structs.asdict`.
+- [x] Introduce typed option structs for normalization points.
+- [x] Use `from_attributes=True` to handle dataclass-like inputs.
+- [x] Replace `asdict` usage with `convert` + `to_builtins`.
 
 ---
 
@@ -404,6 +483,9 @@ def normalize_options(options: object | None) -> ExtractOptions:
 ### Goal
 Lock wire contracts, expose JSON Schema, and add drift detection for internal artifacts.
 
+### Status
+Completed with schema snapshots and MessagePack golden files under `tests/msgspec_contract/`.
+
 ### Design / Architecture
 ```python
 # tests/msgspec_contract/test_schema.py
@@ -411,11 +493,13 @@ from __future__ import annotations
 
 import msgspec
 
-from obs.manifest import ManifestV1
+from incremental.cdf_cursors import CdfCursor, CdfCursorStore
+from obs.diagnostics import PreparedStatementSpec
+from sqlglot_tools.optimizer import AstArtifact
 
 
-def test_manifest_schema_snapshot(update_goldens: bool) -> None:
-    schema = msgspec.json.schema(ManifestV1)
+def test_msgspec_schema_snapshots(update_goldens: bool) -> None:
+    schema = msgspec.json.schema(CdfCursor)
     # snapshot as pretty JSON using central serde helpers
 ```
 
@@ -425,21 +509,30 @@ from __future__ import annotations
 
 import msgspec
 
-from obs.manifest import ManifestV1
+from incremental.cdf_cursors import CdfCursor, CdfCursorStore
+from obs.diagnostics import PreparedStatementSpec
+from sqlglot_tools.optimizer import AstArtifact
 
-INFO = msgspec.inspect.type_info(ManifestV1)
+INFO = {
+    "cdf_cursor": msgspec.inspect.type_info(CdfCursor),
+    "cdf_cursor_store": msgspec.inspect.type_info(CdfCursorStore),
+    "prepared_statement_spec": msgspec.inspect.type_info(PreparedStatementSpec),
+    "sqlglot_ast_artifact": msgspec.inspect.type_info(AstArtifact),
+}
 ```
 
 ### Target Files
 - `tests/msgspec_contract/` (new)
-- `src/obs/manifest.py`
-- `src/obs/repro.py`
-- `src/engine/runtime_profile.py`
+- `src/obs/schema_introspection.py` (new)
+- `src/incremental/cdf_cursors.py`
+- `src/obs/diagnostics.py`
+- `src/sqlglot_tools/optimizer.py`
+- `src/datafusion_engine/runtime.py`
 
 ### Implementation Checklist
-- [ ] Snapshot JSON Schema for core artifacts.
-- [ ] Add MessagePack golden snapshots for telemetry payloads.
-- [ ] Use `msgspec.inspect.type_info` to register schema metadata.
+- [x] Snapshot JSON Schema for core artifacts.
+- [x] Add MessagePack golden snapshots for telemetry payloads.
+- [x] Use `msgspec.inspect.type_info` to register schema metadata.
 
 ---
 
@@ -447,6 +540,9 @@ INFO = msgspec.inspect.type_info(ManifestV1)
 
 ### Goal
 Apply advanced msgspec features where throughput and memory pressure are highest.
+
+### Status
+Completed for scan telemetry structs and MessagePack encoding hot paths.
 
 ### Design / Architecture
 ```python
@@ -457,33 +553,33 @@ import msgspec
 from serde_msgspec import StructBase
 
 
-class TelemetrySpan(
+class ScanTelemetry(
     StructBase,
     array_like=True,
     gc=False,
     cache_hash=True,
 ):
-    span_id: str
-    start_ms: int
-    end_ms: int
-    tags: dict[str, str]
+    fragment_count: int
+    row_group_count: int
+    count_rows: int | None
 ```
 
 ```python
 buf = bytearray()
 encoder = msgspec.msgpack.Encoder(order="deterministic")
-encoder.encode_into(spans, buf)
+encoder.encode_into(rows, buf)
 ```
 
 ### Target Files
 - `src/obs/diagnostics_tables.py`
 - `src/datafusion_engine/runtime.py`
+- `src/arrowdsl/core/scan_telemetry.py`
 - `src/arrowdsl/core/metrics.py`
 
 ### Implementation Checklist
-- [ ] Use `array_like=True` for hot-path telemetry payloads.
-- [ ] Apply `gc=False` only for acyclic, high-volume structs.
-- [ ] Use `encode_into` to reduce allocations in hot loops.
+- [x] Use `array_like=True` for hot-path telemetry payloads.
+- [x] Apply `gc=False` only for acyclic, high-volume structs.
+- [x] Use `encode_into` to reduce allocations in hot loops.
 
 ---
 
@@ -491,6 +587,9 @@ encoder.encode_into(spans, buf)
 
 ### Goal
 Use MessagePack extension types for binary-heavy artifacts (e.g., Arrow schema) where size and speed matter.
+
+### Status
+Completed with Arrow schema MessagePack extensions and shared registry constants.
 
 ### Design / Architecture
 ```python
@@ -518,8 +617,9 @@ def ext_hook(code: int, data: memoryview) -> object:
 - `src/arrowdsl/schema/serialization.py`
 - `src/obs/repro.py`
 - `src/engine/runtime_profile.py`
+- `src/serde_msgspec_ext.py`
 
 ### Implementation Checklist
-- [ ] Define extension codes for internal binary payloads.
-- [ ] Use `ext_hook` to decode without stringifying binary blobs.
-- [ ] Document extension codes in a small registry module.
+- [x] Define extension codes for internal binary payloads.
+- [x] Use `ext_hook` to decode without stringifying binary blobs.
+- [x] Document extension codes in a small registry module.

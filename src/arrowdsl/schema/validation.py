@@ -33,6 +33,7 @@ from arrowdsl.schema.schema import (
     required_field_names,
     required_non_null_mask,
 )
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import table_constraint_rows
 
 
@@ -138,12 +139,6 @@ def _session_context(ctx: ExecutionContext) -> SessionContext:
     return runtime.session_context()
 
 
-def _sql_options(ctx: ExecutionContext) -> SQLOptions:
-    from datafusion_engine.runtime import sql_options_for_profile
-
-    return sql_options_for_profile(ctx.runtime.datafusion)
-
-
 def _sql_table(
     ctx: SessionContext,
     sql: str,
@@ -208,14 +203,14 @@ def _resolve_key_fields(
 
 @lru_cache(maxsize=128)
 def _datafusion_type_name(dtype: DataTypeLike) -> str:
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().ephemeral_context()
     table = pa.Table.from_arrays(
         [pa.array([None], type=dtype)],
         names=["value"],
     )
     batches = list(table.to_batches())
     ctx.register_record_batches("t", [batches])
-    from datafusion_engine.runtime import sql_options_for_profile
+    from datafusion_engine.sql_options import sql_options_for_profile
 
     options = sql_options_for_profile(None)
     result = _sql_table(ctx, "SELECT arrow_typeof(value) AS dtype FROM t", sql_options=options)
@@ -671,7 +666,9 @@ def validate_table(
         spec=spec,
         options=options,
     )
-    sql_options = _sql_options(ctx)
+    from datafusion_engine.sql_options import sql_options_for_profile
+
+    sql_options = sql_options_for_profile(ctx.runtime.datafusion)
     key_fields = _resolve_key_fields(
         ctx,
         session=session,

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 
+import msgspec
 from sqlglot.executor import execute
 
 from sqlglot_tools.compat import Expression, exp
@@ -195,25 +195,23 @@ def test_ast_artifact_metadata() -> None:
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
     artifact = ast_to_artifact(expr, sql=sql, policy=policy)
     assert artifact.sql == sql
-    assert isinstance(artifact.ast_json, str)
-    assert len(artifact.ast_json) > 0
+    assert isinstance(artifact.ast_raw, msgspec.Raw)
+    assert len(artifact.ast_raw) > 0
     assert isinstance(artifact.policy_hash, str)
     assert len(artifact.policy_hash) > 0
 
 
 def test_serialization_format() -> None:
-    """Ensure serialized artifact is valid JSON with expected structure."""
+    """Ensure serialized artifact is valid MessagePack with expected structure."""
     sql = "SELECT a FROM t"
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
     artifact = ast_to_artifact(expr, sql=sql, policy=policy)
     serialized = serialize_ast_artifact(artifact)
-    parsed = json.loads(serialized)
-    assert isinstance(parsed, dict)
-    assert "sql" in parsed
-    assert "ast_json" in parsed
-    assert "policy_hash" in parsed
-    assert parsed["sql"] == sql
+    parsed = deserialize_ast_artifact(serialized)
+    assert parsed.sql == sql
+    assert isinstance(parsed.ast_raw, msgspec.Raw)
+    assert isinstance(parsed.policy_hash, str)
 
 
 def test_join_rewrite_semantics() -> None:

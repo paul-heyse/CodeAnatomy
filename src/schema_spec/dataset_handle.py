@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -31,6 +31,39 @@ def _schema_version_from_name(name: str) -> int | None:
     if sep and suffix.isdigit():
         return int(suffix)
     return None
+
+
+def _scan_external_table_options(location: DatasetLocation) -> dict[str, object]:
+    from ibis_engine.registry import resolve_datafusion_scan_options
+
+    scan = resolve_datafusion_scan_options(location)
+    if scan is None:
+        return {}
+    options: dict[str, object] = {}
+    if scan.file_extension and location.format != "delta":
+        options["file_extension"] = scan.file_extension
+    if location.format == "parquet":
+        if scan.skip_metadata is not None:
+            options["skip_metadata"] = scan.skip_metadata
+        if scan.schema_force_view_types is not None:
+            options["schema_force_view_types"] = scan.schema_force_view_types
+        if scan.binary_as_string is not None:
+            options["binary_as_string"] = scan.binary_as_string
+        if scan.skip_arrow_metadata is not None:
+            options["skip_arrow_metadata"] = scan.skip_arrow_metadata
+        if scan.parquet_column_options is not None:
+            options.update(scan.parquet_column_options.external_table_options())
+    return options
+
+
+def _ddl_options_for_location(location: DatasetLocation) -> Mapping[str, object] | None:
+    options: dict[str, object] = {}
+    if location.storage_options:
+        options.update(location.storage_options)
+    if location.read_options:
+        options.update(location.read_options)
+    options.update(_scan_external_table_options(location))
+    return options or None
 
 
 @dataclass(frozen=True)
@@ -144,7 +177,7 @@ class DatasetHandle:
         overrides = ExternalTableConfigOverrides(
             table_name=table_name,
             dialect=dialect,
-            options=location.read_options,
+            options=_ddl_options_for_location(location),
             partitioned_by=partitioned_by,
             file_sort_order=file_sort_order,
             unbounded=unbounded,

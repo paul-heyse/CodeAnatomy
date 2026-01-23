@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
+import msgspec
 import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.substrait import Serde
@@ -81,7 +82,6 @@ from sqlglot_tools.lineage import (
     lineage_graph_by_output,
     required_columns_by_table,
 )
-import msgspec
 from sqlglot_tools.optimizer import (
     PreflightOptions,
     SchemaMapping,

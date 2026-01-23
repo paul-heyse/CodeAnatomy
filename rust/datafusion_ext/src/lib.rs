@@ -1057,6 +1057,7 @@ enum CacheTableKind {
     ListFiles,
     Metadata,
     Predicate,
+    Statistics,
 }
 
 #[derive(Debug)]
@@ -1072,6 +1073,7 @@ impl CacheTableFunction {
             CacheTableKind::ListFiles => "list_files",
             CacheTableKind::Metadata => "metadata",
             CacheTableKind::Predicate => "predicate",
+            CacheTableKind::Statistics => "statistics",
         }
     }
 
@@ -1080,6 +1082,7 @@ impl CacheTableFunction {
             CacheTableKind::ListFiles => self.config.list_files_cache_ttl.as_deref(),
             CacheTableKind::Metadata => None,
             CacheTableKind::Predicate => None,
+            CacheTableKind::Statistics => None,
         }
     }
 
@@ -1088,6 +1091,7 @@ impl CacheTableFunction {
             CacheTableKind::ListFiles => self.config.list_files_cache_limit.as_deref(),
             CacheTableKind::Metadata => self.config.metadata_cache_limit.as_deref(),
             CacheTableKind::Predicate => self.config.predicate_cache_size.as_deref(),
+            CacheTableKind::Statistics => self.config.predicate_cache_size.as_deref(),
         }
     }
 
@@ -1103,6 +1107,11 @@ impl CacheTableFunction {
                 Some(cache.list_entries().len() as i64)
             }
             CacheTableKind::Predicate => self
+                .runtime_env
+                .cache_manager
+                .get_file_statistic_cache()
+                .map(|cache| cache.len() as i64),
+            CacheTableKind::Statistics => self
                 .runtime_env
                 .cache_manager
                 .get_file_statistic_cache()
@@ -1188,13 +1197,19 @@ fn register_cache_table_functions(
         kind: CacheTableKind::Metadata,
     };
     let predicate = CacheTableFunction {
+        runtime_env: Arc::clone(&runtime_env),
+        config: config.clone(),
+        kind: CacheTableKind::Predicate,
+    };
+    let statistics = CacheTableFunction {
         runtime_env,
         config,
-        kind: CacheTableKind::Predicate,
+        kind: CacheTableKind::Statistics,
     };
     ctx.register_udtf("list_files_cache", Arc::new(list_files));
     ctx.register_udtf("metadata_cache", Arc::new(metadata));
     ctx.register_udtf("predicate_cache", Arc::new(predicate));
+    ctx.register_udtf("statistics_cache", Arc::new(statistics));
     Ok(())
 }
 

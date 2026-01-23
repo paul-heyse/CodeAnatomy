@@ -10,6 +10,7 @@ from typing import Any
 from datafusion import SessionContext
 
 from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.sql_options import sql_options_for_profile
 
 
 def _now_ms() -> int:
@@ -122,7 +123,7 @@ def _cache_snapshot_from_table(
 ) -> CacheStateSnapshot | None:
     query = f"SELECT * FROM {table_name}()"
     try:
-        table = ctx.sql(query).to_arrow_table()
+        table = ctx.sql_with_options(query, sql_options_for_profile(None)).to_arrow_table()
     except (RuntimeError, TypeError, ValueError):
         return None
     rows = table.to_pylist()
@@ -221,6 +222,38 @@ def list_files_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     )
 
 
+def statistics_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
+    """Capture statistics cache state snapshot.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+
+    Returns
+    -------
+    CacheStateSnapshot
+        Snapshot of statistics cache state.
+    """
+    snapshot = _cache_snapshot_from_table(ctx, table_name="statistics_cache")
+    if snapshot is not None:
+        return snapshot
+    introspector = SchemaIntrospector(ctx, sql_options=None)
+    settings = introspector.settings_snapshot()
+    config = _extract_cache_config(settings)
+    now = _now_ms()
+    return CacheStateSnapshot(
+        cache_name="statistics",
+        event_time_unix_ms=now,
+        entry_count=None,
+        hit_count=None,
+        miss_count=None,
+        eviction_count=None,
+        config_ttl=None,
+        config_limit=config.predicate_cache_size,
+    )
+
+
 def predicate_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     """Capture predicate cache state snapshot.
 
@@ -273,7 +306,8 @@ def capture_cache_diagnostics(ctx: SessionContext) -> dict[str, Any]:
 
     Examples
     --------
-    >>> ctx = SessionContext()
+    >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
+    >>> ctx = DataFusionRuntimeProfile().ephemeral_context()
     >>> diagnostics = capture_cache_diagnostics(ctx)
     >>> diagnostics["cache_snapshots"]
     [{'cache_name': 'list_files', ...}, {'cache_name': 'metadata', ...}]
@@ -285,6 +319,7 @@ def capture_cache_diagnostics(ctx: SessionContext) -> dict[str, Any]:
     snapshots = [
         list_files_cache_snapshot(ctx).to_row(),
         metadata_cache_snapshot(ctx).to_row(),
+        statistics_cache_snapshot(ctx).to_row(),
         predicate_cache_snapshot(ctx).to_row(),
     ]
 
@@ -316,11 +351,13 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
     For now, use the snapshot functions directly:
     - ``list_files_cache_snapshot(ctx)``
     - ``metadata_cache_snapshot(ctx)``
+    - ``statistics_cache_snapshot(ctx)``
     - ``predicate_cache_snapshot(ctx)``
 
     Examples
     --------
-    >>> ctx = SessionContext()
+    >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
+    >>> ctx = DataFusionRuntimeProfile().ephemeral_context()
     >>> register_cache_introspection_functions(ctx)
     # Future: ctx.sql("SELECT * FROM list_files_cache()").collect()
 
@@ -360,4 +397,5 @@ __all__ = [
     "metadata_cache_snapshot",
     "predicate_cache_snapshot",
     "register_cache_introspection_functions",
+    "statistics_cache_snapshot",
 ]

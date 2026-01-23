@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Annotated, TypeVar
+from typing import Annotated
 
 import msgspec
 import pyarrow as pa
@@ -15,15 +15,12 @@ import pyarrow as pa
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_rows
 from datafusion_engine.schema_registry import schema_for
-from serde_msgspec import convert
+from serde_msgspec import coalesce_unset_or_none, convert, unset_to_none
 
 try:
     from sqlglot_tools.lineage import LineagePayload
 except ImportError:
     LineagePayload = None  # type: ignore[misc, assignment]
-
-
-T = TypeVar("T")
 
 
 class DiagnosticsStruct(
@@ -40,9 +37,9 @@ class DiagnosticsStruct(
 EventTimeMs = Annotated[int, msgspec.Meta(ge=0)]
 
 
-def _convert_event(obj: object, *, target_type: type[T]) -> T:
+def _convert_event[T](obj: object, *, target_type: type[T]) -> T:
     try:
-        return convert(obj, type=target_type, strict=False, from_attributes=True)
+        return convert(obj, target_type=target_type, strict=False, from_attributes=True)
     except msgspec.ValidationError:
         return target_type()
 
@@ -52,45 +49,47 @@ def _now_ms() -> int:
 
 
 def _coalesce_event_time(
-    value: int | None | msgspec.UnsetType,
+    value: int | msgspec.UnsetType | None,
     *,
     default: int,
 ) -> int:
-    if value is msgspec.UNSET or value is None or isinstance(value, bool):
+    if isinstance(value, bool):
         return default
-    return value
+    return coalesce_unset_or_none(value, default)
 
 
 def _coalesce_int(
-    value: int | None | msgspec.UnsetType,
+    value: int | msgspec.UnsetType | None,
     *,
     default: int,
 ) -> int:
-    if value is msgspec.UNSET or value is None or isinstance(value, bool):
+    if isinstance(value, bool):
         return default
-    return value
+    return coalesce_unset_or_none(value, default)
 
 
-def _optional_int(value: int | None | msgspec.UnsetType) -> int | None:
-    if value is msgspec.UNSET or value is None or isinstance(value, bool):
+def _optional_int(value: int | msgspec.UnsetType | None) -> int | None:
+    normalized = unset_to_none(value)
+    if normalized is None or isinstance(normalized, bool):
         return None
-    return value
+    return normalized
 
 
-def _optional_float(value: float | int | None | msgspec.UnsetType) -> float | None:
-    if value is msgspec.UNSET or value is None or isinstance(value, bool):
+def _optional_float(value: float | msgspec.UnsetType | None) -> float | None:
+    normalized = unset_to_none(value)
+    if normalized is None or isinstance(normalized, bool):
         return None
-    return float(value)
+    return float(normalized)
 
 
 def _coalesce_float(
-    value: float | int | None | msgspec.UnsetType,
+    value: float | msgspec.UnsetType | None,
     *,
     default: float,
 ) -> float:
-    if value is msgspec.UNSET or value is None or isinstance(value, bool):
+    if isinstance(value, bool):
         return default
-    return float(value)
+    return float(coalesce_unset_or_none(value, default))
 
 
 def _string_list(value: object | msgspec.UnsetType) -> list[str] | None:
@@ -126,15 +125,15 @@ def _binary_payload(value: object) -> bytes | None:
     return None
 
 
-class DatafusionExplainEvent(DiagnosticsStruct):
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+class DatafusionExplainEvent(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     sql: str | None = None
     rows: object | None = None
     explain_analyze: bool = False
 
 
-class SchemaRegistryValidationRecord(DiagnosticsStruct):
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+class SchemaRegistryValidationRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     missing: Sequence[object] | None = None
     type_errors: Mapping[str, object] | None = None
     view_errors: Mapping[str, object] | None = None
@@ -143,16 +142,16 @@ class SchemaRegistryValidationRecord(DiagnosticsStruct):
     relationship_constraint_errors: Mapping[str, object] | None = None
 
 
-class SchemaMapFingerprintRecord(DiagnosticsStruct):
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+class SchemaMapFingerprintRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     schema_map_hash: str | None = None
     schema_map_version: int | None = None
     table_count: int | None = None
     column_count: int | None = None
 
 
-class DdlFingerprintRecord(DiagnosticsStruct):
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+class DdlFingerprintRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     table_catalog: str | None = None
     table_schema: str | None = None
     table_name: str | None = None
@@ -160,7 +159,7 @@ class DdlFingerprintRecord(DiagnosticsStruct):
     ddl_fingerprint: str | None = None
 
 
-class FeatureStateEvent(DiagnosticsStruct):
+class FeatureStateEvent(DiagnosticsStruct, frozen=True):
     profile_name: str | None = None
     determinism_tier: str | None = None
     dynamic_filters_enabled: bool = False
@@ -168,19 +167,19 @@ class FeatureStateEvent(DiagnosticsStruct):
     named_args_supported: bool = False
 
 
-class DatafusionRunRecord(DiagnosticsStruct):
+class DatafusionRunRecord(DiagnosticsStruct, frozen=True):
     run_id: str | None = None
     label: str | None = None
-    start_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
-    end_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    start_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
+    end_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     status: str | None = None
     duration_ms: int | None = None
     metadata: object | None = None
 
 
-class DatafusionCacheStateRecord(DiagnosticsStruct):
+class DatafusionCacheStateRecord(DiagnosticsStruct, frozen=True):
     cache_name: str | None = None
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     entry_count: int | None = None
     hit_count: int | None = None
     miss_count: int | None = None
@@ -189,8 +188,8 @@ class DatafusionCacheStateRecord(DiagnosticsStruct):
     config_limit: str | None = None
 
 
-class DatafusionPlanArtifactRecord(DiagnosticsStruct):
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+class DatafusionPlanArtifactRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     run_id: str | None = None
     plan_hash: str | None = None
     sql: str | None = None
@@ -218,8 +217,8 @@ class DatafusionPlanArtifactRecord(DiagnosticsStruct):
     join_operators: Sequence[object] | object | None = None
 
 
-class EngineRuntimeRecord(DiagnosticsStruct):
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+class EngineRuntimeRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     runtime_profile_name: str | None = None
     determinism_tier: str | None = None
     runtime_profile_hash: str | None = None
@@ -232,22 +231,22 @@ class EngineRuntimeRecord(DiagnosticsStruct):
     datafusion_settings: bytes | bytearray | memoryview | None = None
 
 
-class DatafusionUdfValidationRecord(DiagnosticsStruct):
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+class DatafusionUdfValidationRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     udf_catalog_policy: str | None = None
     missing_udfs: Sequence[object] | object | None = None
     missing_count: int | None = None
 
 
-class DatafusionObjectStoreRecord(DiagnosticsStruct):
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+class DatafusionObjectStoreRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     scheme: str | None = None
     host: str | None = None
     store_type: str | None = None
 
 
-class FilePruningDiagnosticsRecord(DiagnosticsStruct):
-    event_time_unix_ms: EventTimeMs | None | msgspec.UnsetType = msgspec.UNSET
+class FilePruningDiagnosticsRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
     table_name: str | None = None
     table_path: str | None = None
     total_files: int | None = None
@@ -921,6 +920,22 @@ def lineage_diagnostics_row(
     }
 
 
+_DIAGNOSTICS_MSGPACK_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
+
+
+def encode_diagnostics_rows(rows: Sequence[Mapping[str, object]]) -> bytes:
+    """Encode diagnostics rows to MessagePack bytes.
+
+    Returns
+    -------
+    bytes
+        MessagePack payload for diagnostics rows.
+    """
+    buf = bytearray()
+    _DIAGNOSTICS_MSGPACK_ENCODER.encode_into(list(rows), buf)
+    return bytes(buf)
+
+
 __all__ = [
     "FilePruningDiagnostics",
     "FilePruningDiagnosticsSpec",
@@ -934,6 +949,7 @@ __all__ = [
     "datafusion_schema_map_fingerprints_table",
     "datafusion_schema_registry_validation_table",
     "datafusion_udf_validation_table",
+    "encode_diagnostics_rows",
     "engine_runtime_table",
     "feature_state_table",
     "file_pruning_diagnostics_table",

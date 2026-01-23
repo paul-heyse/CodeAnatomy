@@ -46,7 +46,7 @@ class DiagnosticsCollector:
         return {name: list(rows) for name, rows in self.artifacts.items()}
 
 
-class PreparedStatementSpec(StructBase):
+class PreparedStatementSpec(StructBase, frozen=True):
     """Prepared statement metadata for diagnostics reporting."""
 
     name: str

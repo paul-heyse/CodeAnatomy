@@ -101,7 +101,6 @@ from sqlglot_tools.optimizer import (
     SqlGlotPolicy,
     ast_to_artifact,
     bind_params,
-    default_sqlglot_policy,
     emit_preflight_diagnostics,
     normalize_expr,
     parse_sql_strict,
@@ -112,6 +111,7 @@ from sqlglot_tools.optimizer import (
     rewrite_expr,
     serialize_ast_artifact,
     sqlglot_emit,
+    sqlglot_policy_snapshot_for,
     sqlglot_sql,
 )
 
@@ -291,7 +291,7 @@ def _plan_cache_key(
         return None
     if options.params is not None:
         return None
-    policy_hash = options.sqlglot_policy_hash
+    policy_hash = _sqlglot_policy_hash(options)
     plan_hash = options.plan_hash or plan_fingerprint(
         expr,
         dialect=options.dialect,
@@ -324,7 +324,7 @@ def _plan_cache_key_from_substrait(
         return None
     if options.params is not None:
         return None
-    policy_hash = options.sqlglot_policy_hash
+    policy_hash = _sqlglot_policy_hash(options)
     plan_hash = options.plan_hash or plan_fingerprint(
         expr,
         dialect=options.dialect,
@@ -487,11 +487,15 @@ def _merge_sql_policies(*policies: DataFusionSqlPolicy | None) -> DataFusionSqlP
 
 
 def _sql_options_for_options(options: DataFusionCompileOptions) -> SQLOptions:
+    if options.sql_options is not None:
+        return options.sql_options
+    if options.runtime_profile is not None:
+        return options.runtime_profile.sql_options()
     policy = options.sql_policy or resolve_sql_policy(
         options.sql_policy_name,
         fallback=_default_sql_policy(),
     )
-    return options.sql_options or policy.to_sql_options()
+    return policy.to_sql_options()
 
 
 def _ensure_dialect(name: str) -> None:
@@ -507,6 +511,17 @@ def _sqlglot_emit_policy(options: DataFusionCompileOptions) -> SqlGlotPolicy:
         write_dialect=options.dialect,
         unsupported_level=ErrorLevel.RAISE,
     )
+
+
+def _sqlglot_policy_hash(
+    options: DataFusionCompileOptions,
+    *,
+    policy: SqlGlotPolicy | None = None,
+) -> str | None:
+    if options.sqlglot_policy_hash is not None:
+        return options.sqlglot_policy_hash
+    resolved_policy = policy or _sqlglot_emit_policy(options)
+    return sqlglot_policy_snapshot_for(resolved_policy).policy_hash
 
 
 def _emit_sql(expr: Expression, *, options: DataFusionCompileOptions) -> str:
@@ -666,9 +681,7 @@ def compile_sqlglot_expr(
     resolved = options or DataFusionCompileOptions()
     if resolved.ibis_expr is None:
         resolved = replace(resolved, ibis_expr=expr)
-    policy = resolved.sqlglot_policy or default_sqlglot_policy()
-    if resolved.dialect:
-        policy = replace(policy, write_dialect=resolved.dialect)
+    policy = _sqlglot_emit_policy(resolved)
     sg_expr = ibis_to_sqlglot(
         expr,
         backend=backend,
@@ -743,11 +756,11 @@ def ibis_to_datafusion_dual_lane(
 
     Examples
     --------
-    >>> from datafusion import SessionContext
+    >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
     >>> from ibis_engine.backends import get_backend
     >>> from datafusion_engine.bridge import ibis_to_datafusion_dual_lane
     >>> from datafusion_engine.compile_options import DataFusionCompileOptions
-    >>> ctx = SessionContext()
+    >>> ctx = DataFusionRuntimeProfile().ephemeral_context()
     >>> backend = get_backend()
     >>> expr = backend.table("my_table").select("col1", "col2")
     >>> opts = DataFusionCompileOptions(prefer_substrait=True)
@@ -1326,7 +1339,7 @@ def _maybe_enforce_preflight(
     """
     if not options.enforce_preflight and options.sql_ingest_hook is None:
         return
-    policy = options.sqlglot_policy or default_sqlglot_policy()
+    policy = _sqlglot_emit_policy(options)
     sql_text = _emit_sql(expr, options=options)
     result = preflight_sql(
         sql_text,
@@ -2075,7 +2088,7 @@ def _collect_plan_artifact_inputs(
     )
     param_signature = scalar_param_signature(bindings) if bindings else None
     projection_map = _projection_map_payload(expr, options=options)
-    policy = options.sqlglot_policy or default_sqlglot_policy()
+    policy = _sqlglot_emit_policy(options)
     resolved_expr = expr
     if bindings and _contains_params(expr):
         try:
@@ -2084,10 +2097,11 @@ def _collect_plan_artifact_inputs(
             resolved_expr = expr
     sql = _emit_sql(resolved_expr, options=options)
     details = _collect_plan_artifacts_details(ctx, sql=sql, options=options, df=df)
+    policy_hash = _sqlglot_policy_hash(options, policy=policy)
     plan_hash = options.plan_hash or plan_fingerprint(
         resolved_expr,
         dialect=options.dialect,
-        policy_hash=options.sqlglot_policy_hash,
+        policy_hash=policy_hash,
         schema_map_hash=options.schema_map_hash,
     )
     return _PlanArtifactInputs(
@@ -2643,6 +2657,7 @@ class DeltaInsertOptions:
 
     mode: Literal["append", "overwrite"] = "append"
     table_name: str | None = None
+    constraints: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -2696,6 +2711,13 @@ def datafusion_insert_delta(
         msg = f"Unsupported Delta INSERT mode: {resolved.mode!r}."
         raise ValueError(msg)
 
+    if resolved.constraints:
+        _validate_sql_constraints(
+            ctx,
+            source_sql=source_sql,
+            constraints=resolved.constraints,
+        )
+
     # Use DML-enabled SQL options
     allow_dml = True
     sql_options = SQLOptions().with_allow_dml(allow_dml)
@@ -2718,6 +2740,28 @@ def datafusion_insert_delta(
         mode=resolved.mode,
         rows_affected=rows_affected,
     )
+
+
+def _validate_sql_constraints(
+    ctx: SessionContext,
+    *,
+    source_sql: str,
+    constraints: Sequence[str],
+) -> None:
+    if not constraints:
+        return
+    sql_options = SQLOptions()
+    for constraint in constraints:
+        if not constraint.strip():
+            continue
+        query = (
+            "SELECT 1 FROM "
+            f"({source_sql}) AS input WHERE NOT ({constraint}) LIMIT 1"
+        )
+        df = ctx.sql_with_options(query, sql_options)
+        if _df_has_rows(df):
+            msg = f"Delta constraint violated: {constraint}"
+            raise ValueError(msg)
 
 
 def datafusion_insert_from_dataframe(

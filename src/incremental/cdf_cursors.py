@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import msgspec
 
 from serde_msgspec import StructBase, dumps_json, loads_json
-from pathlib import Path
-
 
 NonNegInt = Annotated[int, msgspec.Meta(ge=0)]
 
 
-class CdfCursor(StructBase):
+class CdfCursor(StructBase, frozen=True):
     """Cursor tracking the last processed Delta table version for CDF reads.
 
     Attributes
@@ -28,7 +27,7 @@ class CdfCursor(StructBase):
     last_version: NonNegInt
 
 
-class CdfCursorStore(StructBase):
+class CdfCursorStore(StructBase, frozen=True):
     """Persistent storage for CDF cursors.
 
     This store manages per-dataset cursors that track the last processed
@@ -92,7 +91,7 @@ class CdfCursorStore(StructBase):
         if not cursor_file.exists():
             return None
         try:
-            return loads_json(cursor_file.read_bytes(), type=CdfCursor, strict=False)
+            return loads_json(cursor_file.read_bytes(), target_type=CdfCursor, strict=False)
         except (msgspec.DecodeError, OSError):
             return None
 
@@ -136,7 +135,11 @@ class CdfCursorStore(StructBase):
         cursors: list[CdfCursor] = []
         for cursor_file in self.cursors_path.glob("*.cursor.json"):
             try:
-                cursor = loads_json(cursor_file.read_bytes(), type=CdfCursor, strict=False)
+                cursor = loads_json(
+                    cursor_file.read_bytes(),
+                    target_type=CdfCursor,
+                    strict=False,
+                )
                 cursors.append(cursor)
             except (msgspec.DecodeError, OSError):
                 continue

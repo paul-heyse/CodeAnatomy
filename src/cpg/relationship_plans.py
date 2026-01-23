@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -46,8 +46,6 @@ from relspec.compiler import (
 )
 from relspec.contracts import relation_output_schema
 from relspec.engine import IbisRelPlanCompiler
-from relspec.rustworkx_graph import build_rule_graph_from_relationship_rules
-from relspec.rustworkx_schedule import schedule_rules
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -68,6 +66,8 @@ from relspec.rules.compiler import RuleCompiler
 from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.handlers import default_rule_handlers
 from relspec.rules.spec_tables import rule_definitions_from_table
+from relspec.rustworkx_graph import build_rule_graph_from_relationship_rules
+from relspec.rustworkx_schedule import schedule_rules
 
 if TYPE_CHECKING:
     from ibis.expr.types import Column, Deferred, Selector
@@ -411,7 +411,23 @@ def _compile_relation_plans_ibis(
         execution_policy=context.execution_policy,
         ibis_backend=backend,
     )
+    for rule in _iter_scheduled_rules(context):
+        plan, metrics_plan = _compile_relation_rule_plan(
+            rule,
+            context=context,
+            backend=backend,
+            name_prefix=name_prefix,
+            plan_executor=plan_executor,
+        )
+        plans[rule.output_dataset] = plan
+        context.ibis_catalog.tables[rule.output_dataset] = plan
+        context.evidence.register(rule.output_dataset, context.output_schema)
+        if metrics_plan is not None:
+            coverage[rule.name] = metrics_plan
+    return plans, coverage
 
+
+def _iter_scheduled_rules(context: _IbisRelationContext) -> Iterable[RelationshipRule]:
     graph = build_rule_graph_from_relationship_rules(context.rules)
     output_schemas = {rule.output_dataset: context.output_schema for rule in context.rules}
     schedule = schedule_rules(
@@ -420,67 +436,71 @@ def _compile_relation_plans_ibis(
         output_schema_for=output_schemas.get,
     )
     rules_by_name = {rule.name: rule for rule in context.rules}
-    for name in schedule.ordered_rules:
-        rule = rules_by_name[name]
-        compiled = context.compiler.compile_rule(rule, ctx=context.ctx_exec)
-        plan = None
-        metrics_plan = None
-        if compiled.rel_plan is None:
-            plan, metrics_plan = _compile_kernel_rule_ibis(rule, context=context)
-        if plan is None and compiled.rel_plan is None:
-            table = compiled.execute(
-                ctx=context.ctx_exec,
-                resolver=context.resolver,
-                compiler=context.plan_compiler,
-                options=RuleExecutionOptions(
-                    params=context.param_bindings,
-                    plan_executor=plan_executor,
-                    execution_policy=context.execution_policy,
-                    ibis_backend=backend,
-                ),
-            )
-            aligned = align_table(table, schema=context.output_schema, keep_extra_columns=True)
-            plan = table_to_ibis(
-                aligned,
-                options=SourceToIbisOptions(
-                    backend=backend,
-                    name=f"{name_prefix}_{rule.name}",
-                ),
-            )
-        if plan is None and compiled.rel_plan is not None:
-            plan = context.plan_compiler.compile(
-                compiled.rel_plan,
-                ctx=context.ctx_exec,
-                resolver=context.resolver,
-            )
-            expr = plan.expr
-            if compiled.emit_rule_meta:
-                expr = _apply_rule_meta_ibis(expr, rule)
-            expr = _apply_kernel_specs_ibis(expr, rule.post_kernels, registry=context.registry)
-            validate_expr_schema(
-                expr,
-                expected=context.output_schema,
-                allow_extra_columns=True,
-            )
-            plan = IbisPlan(expr=expr, ordering=plan.ordering)
-        if plan is None:
-            msg = f"Failed to compile ibis relation plan for rule {rule.name!r}."
-            raise ValueError(msg)
-        view_name = f"{name_prefix}_{rule.output_dataset}" if name_prefix else rule.output_dataset
-        plan = register_ibis_view(
-            plan.expr,
-            options=SourceToIbisOptions(
-                backend=backend,
-                name=view_name,
-                ordering=plan.ordering,
+    return tuple(rules_by_name[name] for name in schedule.ordered_rules)
+
+
+def _compile_relation_rule_plan(
+    rule: RelationshipRule,
+    *,
+    context: _IbisRelationContext,
+    backend: BaseBackend,
+    name_prefix: str,
+    plan_executor: PlanExecutor,
+) -> tuple[IbisPlan, IbisPlan | None]:
+    compiled = context.compiler.compile_rule(rule, ctx=context.ctx_exec)
+    plan = None
+    metrics_plan = None
+    if compiled.rel_plan is None:
+        plan, metrics_plan = _compile_kernel_rule_ibis(rule, context=context)
+    if plan is None and compiled.rel_plan is None:
+        table = compiled.execute(
+            ctx=context.ctx_exec,
+            resolver=context.resolver,
+            compiler=context.plan_compiler,
+            options=RuleExecutionOptions(
+                params=context.param_bindings,
+                plan_executor=plan_executor,
+                execution_policy=context.execution_policy,
+                ibis_backend=backend,
             ),
         )
-        plans[rule.output_dataset] = plan
-        context.ibis_catalog.tables[rule.output_dataset] = plan
-        context.evidence.register(rule.output_dataset, context.output_schema)
-        if metrics_plan is not None:
-            coverage[rule.name] = metrics_plan
-    return plans, coverage
+        aligned = align_table(table, schema=context.output_schema, keep_extra_columns=True)
+        plan = table_to_ibis(
+            aligned,
+            options=SourceToIbisOptions(
+                backend=backend,
+                name=f"{name_prefix}_{rule.name}",
+            ),
+        )
+    if plan is None and compiled.rel_plan is not None:
+        plan = context.plan_compiler.compile(
+            compiled.rel_plan,
+            ctx=context.ctx_exec,
+            resolver=context.resolver,
+        )
+        expr = plan.expr
+        if compiled.emit_rule_meta:
+            expr = _apply_rule_meta_ibis(expr, rule)
+        expr = _apply_kernel_specs_ibis(expr, rule.post_kernels, registry=context.registry)
+        validate_expr_schema(
+            expr,
+            expected=context.output_schema,
+            allow_extra_columns=True,
+        )
+        plan = IbisPlan(expr=expr, ordering=plan.ordering)
+    if plan is None:
+        msg = f"Failed to compile ibis relation plan for rule {rule.name!r}."
+        raise ValueError(msg)
+    view_name = f"{name_prefix}_{rule.output_dataset}" if name_prefix else rule.output_dataset
+    plan = register_ibis_view(
+        plan.expr,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=view_name,
+            ordering=plan.ordering,
+        ),
+    )
+    return plan, metrics_plan
 
 
 def _dedupe_order_by(table: Table, *, spec: DedupeSpec) -> list[IbisValue]:

@@ -291,7 +291,7 @@ def _sqlglot_policy_for_spec(spec: SqlIngestSpec) -> SqlGlotPolicy:
     SqlGlotPolicy
         Resolved SQLGlot policy configured for the ingestion spec.
     """
-    policy = resolve_sqlglot_policy()
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
     if spec.dialect is None:
         return replace(policy, validate_qualify_columns=True, identify=True)
     return replace(

@@ -238,7 +238,7 @@ def normalize_options[T](name: str, options: object | None, factory: type[T]) ->
     defaults = extractor_defaults(name)
     if options is None:
         return factory(**defaults)
-    incoming = convert(options, type=factory, strict=False, from_attributes=True)
+    incoming = convert(options, target_type=factory, strict=False, from_attributes=True)
     incoming_payload = to_builtins(incoming)
     if not isinstance(incoming_payload, Mapping):
         return factory(**defaults)

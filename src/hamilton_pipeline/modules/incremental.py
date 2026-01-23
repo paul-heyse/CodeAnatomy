@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from hamilton.function_modifiers import tag
@@ -72,7 +73,11 @@ from incremental.scip_snapshot import (
 from incremental.snapshot import build_repo_snapshot, write_repo_snapshot
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
+from relspec.incremental import RelspecRuleImpact, relspec_rule_impact
 from relspec.schema_context import RelspecSchemaContext
+
+if TYPE_CHECKING:
+    from relspec.rustworkx_graph import RuleGraph
 
 
 @dataclass(frozen=True)
@@ -706,6 +711,22 @@ def _table_file_ids(table: pa.Table) -> tuple[str, ...]:
     return tuple(sorted(set(cleaned)))
 
 
+def _changed_evidence_names(
+    updates: IncrementalDatasetUpdates,
+) -> tuple[str, ...]:
+    names: set[str] = set()
+    for mapping in (
+        updates.extract_updates,
+        updates.normalize_updates,
+        updates.module_index_updates,
+        updates.imports_resolved_updates,
+        updates.exported_defs_updates,
+    ):
+        if mapping:
+            names.update(mapping)
+    return tuple(sorted(names))
+
+
 @tag(layer="incremental", kind="object")
 def incremental_module_index_updates(
     incremental_module_index: pa.Table | None,
@@ -830,6 +851,30 @@ def incremental_dataset_updates(
         module_index_updates=incremental_module_index_updates,
         imports_resolved_updates=incremental_imports_resolved_updates,
         exported_defs_updates=incremental_exported_defs_updates,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def relspec_incremental_rule_impact(
+    relspec_rule_graph: RuleGraph,
+    incremental_dataset_updates: IncrementalDatasetUpdates,
+    incremental_impact: IncrementalImpact,
+    incremental_config: IncrementalConfig,
+) -> RelspecRuleImpact:
+    """Compute rule impact based on incremental dataset updates.
+
+    Returns
+    -------
+    RelspecRuleImpact
+        Impact summary derived from incremental evidence changes.
+    """
+    if not incremental_config.enabled:
+        return RelspecRuleImpact()
+    evidence_names = _changed_evidence_names(incremental_dataset_updates)
+    return relspec_rule_impact(
+        relspec_rule_graph,
+        changed_evidence=evidence_names,
+        full_refresh=incremental_impact.full_refresh,
     )
 
 

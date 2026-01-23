@@ -22,7 +22,6 @@ from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
 from incremental.runtime import IncrementalRuntime
 from incremental.sqlglot_artifacts import sqlglot_artifact_hash
 from incremental.state_store import StateStore
-from relspec.rustworkx_graph import rule_graph_signature_from_definitions
 from relspec.registry.snapshot import RelspecSnapshot
 from relspec.rules.cache import (
     relspec_snapshot_cached,
@@ -31,6 +30,7 @@ from relspec.rules.cache import (
     rule_plan_hashes_cached,
     rule_plan_sql_cached,
 )
+from relspec.rustworkx_graph import rule_graph_signature_from_definitions
 from relspec.schema_context import RelspecSchemaContext
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
 from storage.deltalake import enable_delta_features

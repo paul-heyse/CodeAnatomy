@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypedDict, cast
 
+import msgspec
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
@@ -192,6 +193,22 @@ def scan_telemetry_table(rows: Sequence[Mapping[str, object]]) -> TableLike:
         Scan telemetry table.
     """
     return rows_to_table(list(rows), SCAN_TELEMETRY_SCHEMA)
+
+
+_SCAN_TELEMETRY_ENCODER = msgspec.msgpack.Encoder(order="deterministic")
+
+
+def encode_scan_telemetry_rows(rows: Sequence[Mapping[str, object]]) -> bytes:
+    """Encode scan telemetry rows into MessagePack bytes.
+
+    Returns
+    -------
+    bytes
+        MessagePack payload for scan telemetry rows.
+    """
+    buf = bytearray()
+    _SCAN_TELEMETRY_ENCODER.encode_into(list(rows), buf)
+    return bytes(buf)
 
 
 def list_fragments(
@@ -640,6 +657,7 @@ __all__ = [
     "dataset_stats_table",
     "empty_quality_table",
     "empty_scan_telemetry_table",
+    "encode_scan_telemetry_rows",
     "fragment_file_hints",
     "list_fragments",
     "parquet_metadata_collector",

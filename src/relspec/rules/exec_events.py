@@ -21,9 +21,31 @@ RULE_EXEC_EVENTS_V1 = pa.schema(
         pa.field("schema_fingerprint", pa.string(), nullable=True),
         pa.field("plan_hash", pa.string(), nullable=True),
         pa.field("duration_ms", pa.float64(), nullable=True),
+        pa.field("schedule_index", pa.int64(), nullable=True),
+        pa.field("generation_index", pa.int64(), nullable=True),
+        pa.field("generation_order", pa.int64(), nullable=True),
+        pa.field("generation_size", pa.int64(), nullable=True),
     ],
     metadata={b"schema_name": b"relspec_rule_exec_events_v1"},
 )
+
+
+@dataclass(frozen=True)
+class RuleScheduleMetadata:
+    """Schedule metadata for a rule execution event."""
+
+    schedule_index: int
+    generation_index: int
+    generation_order: int
+    generation_size: int
+
+
+@dataclass(frozen=True)
+class RuleExecutionEventContext:
+    """Optional metadata for a rule execution event."""
+
+    plan_hash: str | None = None
+    schedule_metadata: RuleScheduleMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +58,10 @@ class RuleExecutionEvent:
     schema_fingerprint: str | None = None
     plan_hash: str | None = None
     duration_ms: float | None = None
+    schedule_index: int | None = None
+    generation_index: int | None = None
+    generation_order: int | None = None
+    generation_size: int | None = None
 
     def to_row(self) -> dict[str, object]:
         """Return a row mapping for this event.
@@ -52,6 +78,10 @@ class RuleExecutionEvent:
             "schema_fingerprint": self.schema_fingerprint,
             "plan_hash": self.plan_hash,
             "duration_ms": self.duration_ms,
+            "schedule_index": self.schedule_index,
+            "generation_index": self.generation_index,
+            "generation_order": self.generation_order,
+            "generation_size": self.generation_size,
         }
 
 
@@ -61,7 +91,7 @@ def rule_execution_event_from_table(
     output_dataset: str,
     table: TableLike,
     duration_ms: float | None,
-    plan_hash: str | None = None,
+    context: RuleExecutionEventContext | None = None,
 ) -> RuleExecutionEvent:
     """Build a rule execution event from an output table.
 
@@ -70,6 +100,8 @@ def rule_execution_event_from_table(
     RuleExecutionEvent
         Execution event populated from the output table.
     """
+    plan_hash = context.plan_hash if context is not None else None
+    schedule_metadata = context.schedule_metadata if context is not None else None
     return RuleExecutionEvent(
         rule_name=rule_name,
         output_dataset=output_dataset,
@@ -77,6 +109,18 @@ def rule_execution_event_from_table(
         schema_fingerprint=schema_fingerprint(table.schema),
         plan_hash=plan_hash,
         duration_ms=duration_ms,
+        schedule_index=(
+            schedule_metadata.schedule_index if schedule_metadata is not None else None
+        ),
+        generation_index=(
+            schedule_metadata.generation_index if schedule_metadata is not None else None
+        ),
+        generation_order=(
+            schedule_metadata.generation_order if schedule_metadata is not None else None
+        ),
+        generation_size=(
+            schedule_metadata.generation_size if schedule_metadata is not None else None
+        ),
     )
 
 
@@ -126,7 +170,9 @@ __all__ = [
     "RULE_EXEC_EVENTS_V1",
     "RuleExecutionEvent",
     "RuleExecutionEventCollector",
+    "RuleExecutionEventContext",
     "RuleExecutionObserver",
+    "RuleScheduleMetadata",
     "rule_execution_event_from_table",
     "rule_execution_events_table",
 ]

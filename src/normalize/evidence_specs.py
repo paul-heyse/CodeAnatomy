@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import SchemaLike
@@ -12,7 +13,6 @@ from arrowdsl.schema.metadata import (
     decode_metadata_scalar_map,
 )
 from arrowdsl.spec.literals import parse_scalar_value
-from relspec.rules.definitions import EvidenceOutput, EvidenceSpec
 
 if TYPE_CHECKING:
     from arrowdsl.core.expr_types import ScalarValue
@@ -23,6 +23,24 @@ EVIDENCE_REQUIRED_METADATA_META = b"evidence_required_metadata"
 EVIDENCE_OUTPUT_MAP_META = b"evidence_output_map"
 EVIDENCE_OUTPUT_LITERALS_META = b"evidence_output_literals"
 EVIDENCE_OUTPUT_PROVENANCE_META = b"evidence_output_provenance"
+
+
+@dataclass(frozen=True)
+class EvidenceSpec:
+    """Evidence requirements for normalize outputs."""
+
+    required_columns: tuple[str, ...] = ()
+    required_types: Mapping[str, str] = field(default_factory=dict)
+    required_metadata: Mapping[bytes, bytes] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EvidenceOutput:
+    """Evidence output hints derived from schema metadata."""
+
+    column_map: Mapping[str, str] = field(default_factory=dict)
+    literals: Mapping[str, ScalarValue] = field(default_factory=dict)
+    provenance_columns: tuple[str, ...] = ()
 
 
 def evidence_spec_from_schema(schema: SchemaLike) -> EvidenceSpec | None:
@@ -108,6 +126,8 @@ __all__ = [
     "EVIDENCE_REQUIRED_COLUMNS_META",
     "EVIDENCE_REQUIRED_METADATA_META",
     "EVIDENCE_REQUIRED_TYPES_META",
+    "EvidenceOutput",
+    "EvidenceSpec",
     "evidence_output_from_schema",
     "evidence_spec_from_schema",
 ]

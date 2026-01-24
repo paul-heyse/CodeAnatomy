@@ -34,14 +34,14 @@ uv run ruff format
 **Four-Stage Pipeline:**
 1. **Extraction** → Evidence tables from multiple sources (LibCST, AST, symtable, bytecode, SCIP, tree-sitter)
 2. **Normalization** → Canonical byte spans, stable IDs, join-ready shape
-3. **Relationship Compilation** → Rule-driven Acero plans → relationship tables
+3. **Task/Plan Catalog + Scheduling** → TaskSpec builders → PlanCatalog → inferred TaskGraph → schedule
 4. **CPG Build** → Node/edge/property emission → final outputs
 
 **Core Modules (`src/`):**
 - `arrowdsl/` - Arrow DSL for relational transforms → PyArrow Acero plans
 - `extract/` - Multi-source extractors (repo scan, AST, CST, symtable, bytecode, SCIP)
 - `normalize/` - Byte-span canonicalization, stable ID generation
-- `relspec/` - Relationship rule registry + compiler for deterministic joins
+- `relspec/` - Task/plan catalog, inferred deps, rustworkx graph inference + scheduling
 - `cpg/` - CPG schema definitions, node/edge/property contracts
 - `engine/` - Execution runtime: sessions, plans, materialization
 - `hamilton_pipeline/` - Hamilton DAG orchestration
@@ -69,19 +69,21 @@ Dependencies are automatically inferred from Ibis/DataFusion expressions via SQL
 5. Generates Hamilton DAGs for orchestration
 
 **Key modules:**
-- `src/relspec/inferred_deps.py` - Dependency inference from expressions
-- `src/relspec/task_spec.py` - Task classification (view/compute/materialization)
+- `src/relspec/task_catalog.py` - TaskSpec definitions + TaskCatalog
+- `src/relspec/plan_catalog.py` - PlanArtifact compilation + PlanCatalog
+- `src/relspec/inferred_deps.py` - Dependency inference from SQLGlot lineage
+- `src/relspec/graph_inference.py` - TaskGraph construction from inferred deps
 - `src/relspec/graph_edge_validation.py` - Column-level edge validation
-- `src/relspec/hamilton_synthesis.py` - Hamilton DAG generation from rustworkx graphs
+- `src/relspec/rustworkx_schedule.py` - Inference-driven scheduling
 
 **Feature flags** (in `src/relspec/config.py`):
 - `USE_INFERRED_DEPS` - Use inferred dependencies for scheduling (default: True)
-- `COMPARE_DECLARED_INFERRED` - Log comparison between declared and inferred (default: True)
+- `COMPARE_DECLARED_INFERRED` - Legacy comparison hook if declared inputs exist
 - `HAMILTON_DAG_OUTPUT` - Generate Hamilton DAG modules (default: True)
 
 **Deprecated patterns:**
-- Manual `inputs=` declarations in rule specs are deprecated
-- Legacy graph builders (`build_rule_graph_from_definitions`, `build_rule_graph_from_relationship_rules`, `build_rule_graph_from_normalize_rules`) emit deprecation warnings
+- Rule/spec registry based scheduling has been removed
+- Do not add manual `inputs=` declarations or rule definitions
 
 ## Key Architectural Invariants
 

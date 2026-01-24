@@ -5,32 +5,35 @@ from __future__ import annotations
 from types import ModuleType
 
 from hamilton_pipeline.modules import (
-    cpg_build,
-    extraction,
-    incremental,
+    incremental_plan,
     inputs,
-    normalization,
     outputs,
     params,
+    plan_catalog,
+    task_catalog,
+    task_execution,
+    task_graph,
 )
 
 ALL_MODULES: list[ModuleType] = [
     inputs,
     params,
-    extraction,
-    normalization,
-    cpg_build,
-    incremental,
+    task_catalog,
+    plan_catalog,
+    task_graph,
+    incremental_plan,
+    task_execution,
     outputs,
 ]
 
 __all__ = [
     "ALL_MODULES",
-    "cpg_build",
-    "extraction",
-    "incremental",
+    "incremental_plan",
     "inputs",
-    "normalization",
     "outputs",
     "params",
+    "plan_catalog",
+    "task_catalog",
+    "task_execution",
+    "task_graph",
 ]

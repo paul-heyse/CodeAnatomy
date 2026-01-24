@@ -798,10 +798,7 @@ def _ddl_external_table_options(
         return {}
     options: dict[str, str] = {}
     for entry in options_property.expressions:
-        if (
-            not isinstance(entry, exp.Tuple)
-            or len(entry.expressions) != _OPTIONS_TUPLE_ARITY
-        ):
+        if not isinstance(entry, exp.Tuple) or len(entry.expressions) != _OPTIONS_TUPLE_ARITY:
             continue
         key_expr, value_expr = entry.expressions
         key = _literal_token(key_expr)
@@ -827,10 +824,7 @@ def _validate_scan_options_in_ddl(
         raise ValueError(msg) from exc
     missing = {key: value for key, value in expected.items() if actual.get(key) != value}
     if missing:
-        msg = (
-            "External table DDL is missing expected scan options: "
-            f"{sorted(missing.items())}."
-        )
+        msg = f"External table DDL is missing expected scan options: {sorted(missing.items())}."
         raise ValueError(msg)
 
 

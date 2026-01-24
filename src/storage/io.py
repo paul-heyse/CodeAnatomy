@@ -7,7 +7,6 @@ from typing import Literal
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from arrowdsl.io.ipc import read_table_ipc_file, write_table_ipc_file, write_table_ipc_stream
 from core_types import PathLike, ensure_path
 from ibis_engine.io_bridge import (
     IbisWriteInput,
@@ -35,6 +34,7 @@ from storage.deltalake import (
     vacuum_delta,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+from storage.ipc import read_table_ipc_file, write_table_ipc_file, write_table_ipc_stream
 
 
 def mmap_file(path: PathLike, *, mode: Literal["r", "r+", "w+", "a+"] = "r") -> pa.MemoryMappedFile:

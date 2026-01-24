@@ -6,70 +6,31 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 import ibis
-import pyarrow as pa
 from ibis.backends import BaseBackend
-from ibis.expr.types import BooleanValue, NumericValue, Table, Value
+from ibis.expr.types import BooleanValue, Table, Value
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import empty_table
-from arrowdsl.schema.semantic_types import SPAN_STORAGE
 from datafusion_engine.nested_tables import ViewReference
-from ibis_engine.builtin_udfs import col_to_byte
 from ibis_engine.ids import masked_stable_id_expr
-from ibis_engine.schema_utils import ibis_null_literal
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
-from normalize.ibis_exprs import position_encoding_norm_expr
 from normalize.schemas import SPAN_ERROR_SCHEMA
-from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32
+from normalize.span_logic import (
+    SpanStructInputs,
+    end_exclusive_value,
+    line_base_value,
+    line_offset_expr,
+    normalize_col_unit_expr,
+    normalize_end_col,
+    span_struct_expr,
+    zero_based_line,
+)
 
 SpanSource = TableLike | Table | ViewReference
 
 
-@dataclass(frozen=True)
-class SpanStructInputs:
-    bstart: Value
-    bend: Value
-    start_line0: Value | None = None
-    end_line0: Value | None = None
-    start_col: Value | None = None
-    end_col: Value | None = None
-    col_unit: Value | None = None
-    end_exclusive: Value | None = None
-
-
 def _empty_span_errors_table() -> TableLike:
     return empty_table(SPAN_ERROR_SCHEMA)
-
-
-def _span_struct_expr(inputs: SpanStructInputs) -> Value:
-    span_ok = inputs.bstart.notnull() & inputs.bend.notnull()
-    null_i32 = ibis_null_literal(pa.int32())
-    null_bool = ibis_null_literal(pa.bool_())
-    null_str = ibis_null_literal(pa.string())
-    start_line_expr = (inputs.start_line0 if inputs.start_line0 is not None else null_i32).cast(
-        "int32"
-    )
-    end_line_expr = (inputs.end_line0 if inputs.end_line0 is not None else null_i32).cast("int32")
-    start_col_expr = (inputs.start_col if inputs.start_col is not None else null_i32).cast("int32")
-    end_col_expr = (inputs.end_col if inputs.end_col is not None else null_i32).cast("int32")
-    col_unit_expr = (inputs.col_unit if inputs.col_unit is not None else null_str).cast("string")
-    end_exclusive_expr = (
-        inputs.end_exclusive if inputs.end_exclusive is not None else null_bool
-    ).cast("boolean")
-    bstart_i64 = cast("NumericValue", inputs.bstart.cast("int64"))
-    bend_i64 = cast("NumericValue", inputs.bend.cast("int64"))
-    byte_start = ibis.ifelse(span_ok, bstart_i64.cast("int32"), null_i32)
-    byte_len_value = bend_i64 - bstart_i64
-    byte_len = ibis.ifelse(span_ok, byte_len_value.cast("int32"), null_i32)
-    return ibis.struct(
-        {
-            "start": ibis.struct({"line0": start_line_expr, "col": start_col_expr}),
-            "end": ibis.struct({"line0": end_line_expr, "col": end_col_expr}),
-            "end_exclusive": end_exclusive_expr,
-            "col_unit": col_unit_expr,
-            "byte_span": ibis.struct({"byte_start": byte_start, "byte_len": byte_len}),
-        }
-    ).cast(SPAN_STORAGE)
 
 
 def add_ast_span_struct_ibis(
@@ -119,7 +80,7 @@ def add_ast_span_struct_ibis(
             end_exclusive=base.end_exclusive,
         )
     )
-    end_col = _normalize_end_col(ast.end_col_offset, base.end_exclusive)
+    end_col = normalize_end_col(ast.end_col_offset, base.end_exclusive)
     span_inputs = SpanStructInputs(
         bstart=offsets.bstart,
         bend=offsets.bend,
@@ -130,7 +91,7 @@ def add_ast_span_struct_ibis(
         col_unit=base.col_unit,
         end_exclusive=base.end_exclusive,
     )
-    span = _span_struct_expr(span_inputs)
+    span = span_struct_expr(span_inputs)
     span_id = masked_stable_id_expr(
         "span",
         parts=(ast.path, offsets.bstart, offsets.bend),
@@ -190,7 +151,7 @@ def anchor_instructions_span_struct_ibis(
             end_exclusive=base.end_exclusive,
         )
     )
-    end_col = _normalize_end_col(instr.pos_end_col, base.end_exclusive)
+    end_col = normalize_end_col(instr.pos_end_col, base.end_exclusive)
     span_inputs = SpanStructInputs(
         bstart=offsets.bstart,
         bend=offsets.bend,
@@ -201,7 +162,7 @@ def anchor_instructions_span_struct_ibis(
         col_unit=base.col_unit,
         end_exclusive=base.end_exclusive,
     )
-    span = _span_struct_expr(span_inputs)
+    span = span_struct_expr(span_inputs)
     return joined.mutate(span=span, span_ok=offsets.span_ok)
 
 
@@ -255,7 +216,7 @@ def normalize_cst_callsites_span_struct_ibis(
     else:
         bstart = callsites.callee_bstart
         bend = callsites.callee_bend
-    span = _span_struct_expr(
+    span = span_struct_expr(
         SpanStructInputs(
             bstart=bstart,
             bend=bend,
@@ -295,7 +256,7 @@ def normalize_cst_imports_span_struct_ibis(
     else:
         bstart = imports.alias_bstart
         bend = imports.alias_bend
-    span = _span_struct_expr(
+    span = span_struct_expr(
         SpanStructInputs(
             bstart=bstart,
             bend=bend,
@@ -335,7 +296,7 @@ def normalize_cst_defs_span_struct_ibis(
     else:
         bstart = defs.name_bstart
         bend = defs.name_bend
-    span = _span_struct_expr(
+    span = span_struct_expr(
         SpanStructInputs(
             bstart=bstart,
             bend=bend,
@@ -358,23 +319,23 @@ def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> Table:
         how="left",
     )
     path_expr = ibis.coalesce(occ_docs.path, occ_docs.doc_path)
-    line_base = _line_base_value(occ_docs.line_base, default_base=0)
-    end_exclusive = _end_exclusive_value(occ_docs.end_exclusive, default_exclusive=True)
-    posenc = position_encoding_norm_expr(occ_docs.position_encoding)
-    occ_unit = occ_docs.col_unit.cast("string").lower()
-    posenc_unit = _col_unit_from_encoding(posenc)
-    col_unit = ibis.coalesce(occ_unit, posenc_unit)
+    line_base = line_base_value(occ_docs.line_base, default_base=0)
+    end_exclusive = end_exclusive_value(occ_docs.end_exclusive, default_exclusive=True)
+    col_unit = normalize_col_unit_expr(
+        occ_docs.col_unit,
+        position_encoding=occ_docs.position_encoding,
+    )
     occ_docs = occ_docs.mutate(
         resolved_path=path_expr,
         line_base_norm=line_base,
         end_exclusive_norm=end_exclusive,
         col_unit_norm=col_unit,
-        start_line0=_zero_based_line(occ_docs.start_line, line_base),
-        end_line0=_zero_based_line(occ_docs.end_line, line_base),
-        enc_start_line0=_zero_based_line(occ_docs.enc_start_line, line_base),
-        enc_end_line0=_zero_based_line(occ_docs.enc_end_line, line_base),
-        end_char_norm=_normalize_end_col(occ_docs.end_char, end_exclusive),
-        enc_end_char_norm=_normalize_end_col(occ_docs.enc_end_char, end_exclusive),
+        start_line0=zero_based_line(occ_docs.start_line, line_base),
+        end_line0=zero_based_line(occ_docs.end_line, line_base),
+        enc_start_line0=zero_based_line(occ_docs.enc_start_line, line_base),
+        enc_end_line0=zero_based_line(occ_docs.enc_end_line, line_base),
+        end_char_norm=normalize_end_col(occ_docs.end_char, end_exclusive),
+        enc_end_char_norm=normalize_end_col(occ_docs.enc_end_char, end_exclusive),
     )
 
     start_idx = _line_index_view(line_idx, prefix="start")
@@ -417,25 +378,25 @@ def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> Table:
 
 
 def _scip_occurrence_span_exprs(joined: Table) -> tuple[Table, Table]:
-    bstart = _line_offset_expr(
+    bstart = line_offset_expr(
         joined.start_line_start_byte,
         joined.start_line_text,
         joined.start_char,
         joined.col_unit_norm,
     )
-    bend = _line_offset_expr(
+    bend = line_offset_expr(
         joined.end_line_start_byte,
         joined.end_line_text,
         joined.end_char_norm,
         joined.col_unit_norm,
     )
-    enc_bstart_raw = _line_offset_expr(
+    enc_bstart_raw = line_offset_expr(
         joined.enc_start_line_start_byte,
         joined.enc_start_line_text,
         joined.enc_start_char,
         joined.col_unit_norm,
     )
-    enc_bend_raw = _line_offset_expr(
+    enc_bend_raw = line_offset_expr(
         joined.enc_end_line_start_byte,
         joined.enc_end_line_text,
         joined.enc_end_char_norm,
@@ -455,7 +416,7 @@ def _scip_occurrence_span_exprs(joined: Table) -> tuple[Table, Table]:
         col_unit=joined.col_unit_norm,
         end_exclusive=joined.end_exclusive_norm,
     )
-    span = _span_struct_expr(span_inputs)
+    span = span_struct_expr(span_inputs)
     span_id = masked_stable_id_expr(
         "span",
         parts=(joined.resolved_path, bstart, bend),
@@ -504,19 +465,6 @@ def _scip_span_errors_expr(
         .filter(reason.notnull())
         .select(document_id=occ.document_id, path=path_expr, reason=reason)
     )
-
-
-def _line_offset_expr(
-    line_start: Value,
-    line_text: Value,
-    column: Value,
-    col_unit: Value,
-) -> Value:
-    offset = column.cast("int64")
-    byte_in_line = col_to_byte(line_text, offset, col_unit.cast("string"))
-    left = cast("NumericValue", line_start)
-    right = cast("NumericValue", byte_in_line)
-    return left + right
 
 
 def _line_index_view(line_index: Table, *, prefix: str) -> Table:
@@ -603,9 +551,9 @@ def _span_base_values(
     defaults: SpanCoordDefaults,
 ) -> SpanBaseValues:
     return SpanBaseValues(
-        line_base=_line_base_value(line_base, default_base=defaults.base),
-        col_unit=_col_unit_value(col_unit, default_unit=defaults.unit),
-        end_exclusive=_end_exclusive_value(end_exclusive, default_exclusive=defaults.end_exclusive),
+        line_base=line_base_value(line_base, default_base=defaults.base),
+        col_unit=normalize_col_unit_expr(col_unit, default_unit=defaults.unit),
+        end_exclusive=end_exclusive_value(end_exclusive, default_exclusive=defaults.end_exclusive),
     )
 
 
@@ -615,8 +563,8 @@ def _span_line_values(
     line_base: Value,
 ) -> SpanLineValues:
     return SpanLineValues(
-        start_line0=_zero_based_line(start_line, line_base),
-        end_line0=_zero_based_line(end_line, line_base),
+        start_line0=zero_based_line(start_line, line_base),
+        end_line0=zero_based_line(end_line, line_base),
     )
 
 
@@ -643,14 +591,14 @@ def _join_line_index(
 
 
 def _span_offsets(spec: SpanOffsetSpec) -> SpanOffsets:
-    end_col_norm = _normalize_end_col(spec.end_col, spec.end_exclusive)
-    bstart = _line_offset_expr(
+    end_col_norm = normalize_end_col(spec.end_col, spec.end_exclusive)
+    bstart = line_offset_expr(
         spec.start_idx.start_line_start_byte,
         spec.start_idx.start_line_text,
         spec.start_col,
         spec.col_unit,
     )
-    bend_raw = _line_offset_expr(
+    bend_raw = line_offset_expr(
         spec.end_idx.end_line_start_byte,
         spec.end_idx.end_line_text,
         end_col_norm,
@@ -660,43 +608,6 @@ def _span_offsets(spec: SpanOffsetSpec) -> SpanOffsets:
     bend = ibis.ifelse(end_ok, bend_raw, bstart)
     span_ok = bstart.notnull() & bend.notnull()
     return SpanOffsets(bstart=bstart, bend=bend, span_ok=span_ok)
-
-
-def _line_base_value(line_base: Value, *, default_base: int) -> NumericValue:
-    return cast("NumericValue", ibis.coalesce(line_base.cast("int32"), ibis.literal(default_base)))
-
-
-def _zero_based_line(line_value: Value, line_base: Value) -> NumericValue:
-    left = cast("NumericValue", line_value.cast("int32"))
-    right = cast("NumericValue", line_base.cast("int32"))
-    result = left - right
-    return cast("NumericValue", result.cast("int32"))
-
-
-def _end_exclusive_value(end_exclusive: Value, *, default_exclusive: bool) -> BooleanValue:
-    result = ibis.coalesce(end_exclusive.cast("boolean"), ibis.literal(default_exclusive))
-    return cast("BooleanValue", result)
-
-
-def _normalize_end_col(end_col: Value, end_exclusive: Value) -> NumericValue:
-    col = cast("NumericValue", end_col.cast("int64"))
-    increment = cast("NumericValue", ibis.literal(1, type="int64"))
-    adjusted = col + increment
-    result = ibis.ifelse(end_exclusive, col, adjusted)
-    return cast("NumericValue", result)
-
-
-def _col_unit_value(col_unit: Value, *, default_unit: str) -> Value:
-    return ibis.coalesce(col_unit.cast("string"), ibis.literal(default_unit))
-
-
-def _col_unit_from_encoding(encoding: Value) -> Value:
-    return ibis.cases(
-        (encoding == ibis.literal(ENC_UTF8), ibis.literal("utf8")),
-        (encoding == ibis.literal(ENC_UTF16), ibis.literal("utf16")),
-        (encoding == ibis.literal(ENC_UTF32), ibis.literal("utf32")),
-        else_=ibis.literal("utf32"),
-    )
 
 
 __all__ = [

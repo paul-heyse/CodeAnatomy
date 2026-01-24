@@ -19,6 +19,7 @@ from arrowdsl.core.execution_context import ExecutionContext, execution_context_
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import align_table, encode_table
 from datafusion_engine.extract_registry import extract_metadata, normalize_options
+from datafusion_engine.span_utils import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from extract.helpers import (
     ExtractMaterializeOptions,
     apply_query_and_project,
@@ -37,10 +38,6 @@ if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
 
 from extract.scip_proto_loader import load_scip_pb2_from_build
-
-ENC_UTF8 = 1
-ENC_UTF16 = 2
-ENC_UTF32 = 3
 
 RANGE_LEN_SHORT = 3
 RANGE_LEN_FULL = 4

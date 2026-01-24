@@ -22,7 +22,6 @@ from datafusion_engine.schema_introspection import table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile, statement_sql_options_for_profile
 from datafusion_engine.table_provider_metadata import TableProviderMetadata, table_provider_metadata
 from ibis_engine.query_compiler import IbisQuerySpec
-from relspec.rules.cache import rule_definitions_cached
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec, dataset_spec_from_schema
 
@@ -129,9 +128,8 @@ def dataset_names(ctx: SessionContext | None = None) -> tuple[str, ...]:
     session = _resolve_session_context(ctx)
     names = table_names_snapshot(session, sql_options=sql_options_for_profile(None))
     normalize_names = {name for name in names if _is_normalize_dataset(session, name)}
-    rule_outputs = _normalize_rule_outputs()
     static_names = set(static_dataset_specs.dataset_names())
-    return tuple(sorted(normalize_names | rule_outputs | static_names))
+    return tuple(sorted(normalize_names | static_names))
 
 
 def dataset_alias(name: str, *, ctx: SessionContext | None = None) -> str:
@@ -418,15 +416,6 @@ def _metadata_for_table(ctx: SessionContext, name: str) -> dict[str, str]:
 
 def _is_normalize_dataset(ctx: SessionContext, name: str) -> bool:
     return _metadata_for_table(ctx, name).get(NORMALIZE_STAGE_META) == "normalize"
-
-
-def _normalize_rule_outputs() -> set[str]:
-    outputs: set[str] = set()
-    for rule in rule_definitions_cached():
-        if rule.domain != "normalize":
-            continue
-        outputs.add(rule.output)
-    return outputs
 
 
 def _normalize_output_names(names: Sequence[str] | None) -> tuple[str, ...]:

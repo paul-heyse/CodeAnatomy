@@ -8,11 +8,10 @@ import ibis
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
-from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from incremental.ibis_exec import ibis_expr_to_table
+from incremental.ibis_utils import ibis_table_from_arrow
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime
 
@@ -37,8 +36,8 @@ def compute_changed_exports(
     """
     backend = runtime.ibis_backend()
     prev = _load_prev_exports(backend, prev_exports)
-    curr = _table_expr(backend, curr_exports)
-    changed = _table_expr(backend, changed_files)
+    curr = ibis_table_from_arrow(backend, curr_exports)
+    changed = ibis_table_from_arrow(backend, changed_files)
     out = _export_delta_expr(curr, prev, changed)
     select_exprs = _select_delta_columns(out)
     result = ibis_expr_to_table(
@@ -53,7 +52,7 @@ def compute_changed_exports(
 def _load_prev_exports(backend: BaseBackend, prev_exports: str | None) -> ibis.Table:
     if prev_exports is None:
         empty = table_from_arrays(dataset_schema("dim_exported_defs_v1"), columns={}, num_rows=0)
-        return _table_expr(backend, empty)
+        return ibis_table_from_arrow(backend, empty)
     return backend.read_delta(prev_exports)
 
 
@@ -83,18 +82,6 @@ def _export_key_columns(prev: ibis.Table, curr: ibis.Table) -> list[str]:
 def _select_delta_columns(out: ibis.Table) -> list[Value]:
     output_cols = ["delta_kind", "file_id", "path", "qname_id", "qname", "symbol"]
     return [out[col] if col in out.columns else ibis.literal(None).name(col) for col in output_cols]
-
-
-def _table_expr(backend: BaseBackend, table: TableLike) -> ibis.Table:
-    plan = register_ibis_table(
-        table,
-        options=SourceToIbisOptions(
-            backend=backend,
-            name=None,
-            ordering=Ordering.unordered(),
-        ),
-    )
-    return plan.expr
 
 
 __all__ = ["compute_changed_exports"]

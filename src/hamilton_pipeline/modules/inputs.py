@@ -13,7 +13,6 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.spec.io import IpcWriteConfig
 from core_types import JsonDict
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
@@ -37,9 +36,9 @@ from ibis_engine.execution_factory import ibis_execution_from_ctx
 from incremental.types import IncrementalConfig
 from obs.diagnostics import DiagnosticsCollector
 from relspec.config import RelspecConfig as RelspecRuleConfig
-from relspec.cpg.build_props import PropsBuildOptions
 from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+from storage.ipc import IpcWriteConfig
 
 if TYPE_CHECKING:
     from ibis_engine.execution import IbisExecutionContext
@@ -216,23 +215,6 @@ def streaming_table_provider(incremental_config: IncrementalConfig) -> object | 
     if flag not in {"1", "true", "yes", "y"}:
         return None
     return None
-
-
-@tag(layer="inputs", kind="cpg")
-def cpg_props_options() -> PropsBuildOptions:
-    """Return CPG properties build options.
-
-    Returns
-    -------
-    PropsBuildOptions
-        Options controlling CPG property emission.
-    """
-    include_json = os.environ.get("CODEANATOMY_INCLUDE_JSON_PROPS", "").strip().lower()
-    merge_json = os.environ.get("CODEANATOMY_MERGE_JSON_PROPS", "").strip().lower()
-    return PropsBuildOptions(
-        include_heavy_json_props=include_json in {"1", "true", "yes", "y"},
-        merge_json_props=merge_json in {"1", "true", "yes", "y"},
-    )
 
 
 @tag(layer="inputs", kind="runtime")

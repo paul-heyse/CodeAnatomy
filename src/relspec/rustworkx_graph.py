@@ -1,24 +1,17 @@
-"""Rustworkx-backed rule graph helpers for relspec scheduling."""
+"""Rustworkx-backed task graph helpers for inference-driven scheduling."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import pyarrow as pa
 import rustworkx as rx
 
-from arrowdsl.io.ipc import payload_hash
 from relspec.errors import RelspecValidationError
-from relspec.rules.definitions import EvidenceSpec as RuleEvidenceSpec
-
-if TYPE_CHECKING:
-    from normalize.runner import ResolvedNormalizeRule
-    from relspec.inferred_deps import InferredDeps
-    from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
-    from relspec.model import RelationshipRule
-    from relspec.rules.definitions import RuleDefinition
+from relspec.inferred_deps import InferredDeps
+from storage.ipc import payload_hash
 
 NodeKind = Literal["evidence", "rule"]
 EdgeKind = Literal["requires", "produces"]
@@ -88,14 +81,13 @@ class EvidenceNode:
 
 @dataclass(frozen=True)
 class RuleNode:
-    """Rule node payload."""
+    """Task node payload."""
 
     name: str
     output: str
     inputs: tuple[str, ...]
     sources: tuple[str, ...]
     priority: int
-    evidence: RuleEvidenceSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -153,93 +145,6 @@ class GraphDiagnostics:
     node_map: dict[int, int] | None = None
 
 
-def build_rule_graph_from_definitions(
-    rules: Sequence[RuleDefinition],
-    *,
-    output_policy: OutputPolicy = "all_producers",
-) -> RuleGraph:
-    """Build a rule graph from centralized rule definitions.
-
-    .. deprecated::
-        Use :func:`build_rule_graph_from_inferred_deps` instead.
-        Dependencies are now inferred from Ibis/DataFusion expression analysis
-        rather than declared in rule definitions.
-
-    Returns
-    -------
-    RuleGraph
-        Graph with rule and evidence nodes.
-    """
-    import warnings
-
-    warnings.warn(
-        "build_rule_graph_from_definitions is deprecated; "
-        "use build_rule_graph_from_inferred_deps instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    rule_nodes = tuple(_rule_node_from_definition(rule) for rule in rules)
-    return _build_rule_graph(rule_nodes, output_policy=output_policy)
-
-
-def build_rule_graph_from_relationship_rules(
-    rules: Sequence[RelationshipRule],
-    *,
-    output_policy: OutputPolicy = "all_producers",
-) -> RuleGraph:
-    """Build a rule graph from relationship rules.
-
-    .. deprecated::
-        Use :func:`build_rule_graph_from_inferred_deps` instead.
-        Dependencies are now inferred from Ibis/DataFusion expression analysis
-        rather than declared in relationship rules.
-
-    Returns
-    -------
-    RuleGraph
-        Graph with rule and evidence nodes.
-    """
-    import warnings
-
-    warnings.warn(
-        "build_rule_graph_from_relationship_rules is deprecated; "
-        "use build_rule_graph_from_inferred_deps instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    rule_nodes = tuple(_rule_node_from_relationship(rule) for rule in rules)
-    return _build_rule_graph(rule_nodes, output_policy=output_policy)
-
-
-def build_rule_graph_from_normalize_rules(
-    rules: Sequence[ResolvedNormalizeRule],
-    *,
-    output_policy: OutputPolicy = "all_producers",
-) -> RuleGraph:
-    """Build a rule graph from resolved normalize rules.
-
-    .. deprecated::
-        Use :func:`build_rule_graph_from_inferred_deps` instead.
-        Dependencies are now inferred from Ibis/DataFusion expression analysis
-        rather than declared in normalize rules.
-
-    Returns
-    -------
-    RuleGraph
-        Graph with rule and evidence nodes.
-    """
-    import warnings
-
-    warnings.warn(
-        "build_rule_graph_from_normalize_rules is deprecated; "
-        "use build_rule_graph_from_inferred_deps instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    rule_nodes = tuple(_rule_node_from_normalize(rule) for rule in rules)
-    return _build_rule_graph(rule_nodes, output_policy=output_policy)
-
-
 def build_rule_graph_from_inferred_deps(
     deps: Sequence[InferredDeps],
     *,
@@ -248,22 +153,10 @@ def build_rule_graph_from_inferred_deps(
 ) -> RuleGraph:
     """Build a rule graph from inferred dependencies.
 
-    Uses calculation-driven scheduling where the dependency graph is derived
-    from actual Ibis/DataFusion expression analysis rather than declared inputs.
-
-    Parameters
-    ----------
-    deps : Sequence[InferredDeps]
-        Inferred dependencies for each rule.
-    output_policy : OutputPolicy
-        Policy for handling multiple producers.
-    priority : int
-        Default priority for rules.
-
     Returns
     -------
     RuleGraph
-        Graph with rule and evidence nodes derived from expression analysis.
+        Graph constructed from inferred dependencies.
     """
     rule_nodes = tuple(
         RuleNode(
@@ -272,7 +165,6 @@ def build_rule_graph_from_inferred_deps(
             inputs=dep.inputs,
             sources=dep.inputs,
             priority=priority,
-            evidence=None,
         )
         for dep in deps
     )
@@ -297,7 +189,7 @@ def rule_graph_snapshot(
     Returns
     -------
     RuleGraphSnapshot
-        Snapshot payload for the rule graph.
+        Deterministic snapshot for hashing or diagnostics.
     """
     signatures = dict(rule_signatures or {})
     node_map = {id(graph.graph[idx]): idx for idx in graph.graph.node_indices()}
@@ -328,7 +220,7 @@ def rule_graph_signature(snapshot: RuleGraphSnapshot) -> str:
     Returns
     -------
     str
-        Stable signature string.
+        Stable signature of the snapshot payload.
     """
     payload = {
         "version": snapshot.version,
@@ -346,7 +238,7 @@ def rule_graph_diagnostics(graph: RuleGraph) -> GraphDiagnostics:
     Returns
     -------
     GraphDiagnostics
-        Cycle detection and visualization payload.
+        Diagnostic payload for the graph.
     """
     g = graph.graph
     if not rx.is_directed_acyclic_graph(g):
@@ -365,96 +257,6 @@ def rule_graph_diagnostics(graph: RuleGraph) -> GraphDiagnostics:
     )
 
 
-def rule_graph_signature_from_definitions(
-    rules: Sequence[RuleDefinition],
-    *,
-    label: str,
-    output_policy: OutputPolicy = "all_producers",
-    rule_signatures: Mapping[str, str] | None = None,
-) -> str:
-    """Return a stable rule graph signature for rule definitions.
-
-    Returns
-    -------
-    str
-        Stable signature string.
-    """
-    graph = build_rule_graph_from_definitions(rules, output_policy=output_policy)
-    snapshot = rule_graph_snapshot(graph, label=label, rule_signatures=rule_signatures)
-    return rule_graph_signature(snapshot)
-
-
-def rule_graph_snapshot_from_definitions(
-    rules: Sequence[RuleDefinition],
-    *,
-    label: str,
-    output_policy: OutputPolicy = "all_producers",
-    rule_signatures: Mapping[str, str] | None = None,
-) -> RuleGraphSnapshot:
-    """Return a rule graph snapshot for rule definitions.
-
-    Returns
-    -------
-    RuleGraphSnapshot
-        Snapshot payload for the rule graph.
-    """
-    graph = build_rule_graph_from_definitions(rules, output_policy=output_policy)
-    return rule_graph_snapshot(graph, label=label, rule_signatures=rule_signatures)
-
-
-def _build_rule_graph(
-    rules: Sequence[RuleNode],
-    *,
-    output_policy: OutputPolicy,
-) -> RuleGraph:
-    if output_policy != "all_producers":
-        msg = f"Unsupported output policy: {output_policy!r}."
-        raise ValueError(msg)
-    _validate_rule_names(rules)
-    evidence_names = _collect_evidence_names(rules)
-    graph = rx.PyDiGraph(multigraph=False, check_cycle=False, attrs={"label": "relspec"})
-    evidence_idx: dict[str, int] = {}
-    rule_idx: dict[str, int] = {}
-    for name in sorted(evidence_names):
-        evidence_idx[name] = graph.add_node(GraphNode("evidence", EvidenceNode(name)))
-    for rule in sorted(rules, key=lambda item: item.name):
-        rule_idx[rule.name] = graph.add_node(GraphNode("rule", rule))
-    edges: list[tuple[int, int, GraphEdge]] = []
-    for rule in rules:
-        rule_node = rule_idx[rule.name]
-        requirements = _edge_requirements(rule.evidence)
-        edges.extend(
-            [
-                (
-                    evidence_idx[source],
-                    rule_node,
-                    GraphEdge(
-                        kind="requires",
-                        name=source,
-                        required_columns=requirements[0],
-                        required_types=requirements[1],
-                        required_metadata=requirements[2],
-                    ),
-                )
-                for source in rule.sources
-            ]
-        )
-        edges.append(
-            (
-                rule_node,
-                evidence_idx[rule.output],
-                GraphEdge(kind="produces", name=rule.output),
-            )
-        )
-    graph.add_edges_from(edges)
-    return RuleGraph(
-        graph=graph,
-        evidence_idx=evidence_idx,
-        rule_idx=rule_idx,
-        output_policy=output_policy,
-    )
-
-
 def _build_rule_graph_inferred(
     rules: Sequence[RuleNode],
     *,
@@ -462,21 +264,6 @@ def _build_rule_graph_inferred(
     fingerprints: Mapping[str, str],
     required_columns: Mapping[str, Mapping[str, tuple[str, ...]]],
 ) -> RuleGraph:
-    """Build a rule graph with inferred dependency metadata.
-
-    Similar to _build_rule_graph but includes inferred=True flag and
-    plan fingerprints on edges.
-
-    Returns
-    -------
-    RuleGraph
-        Rule graph populated with inferred metadata.
-
-    Raises
-    ------
-    ValueError
-        Raised when the output policy is unsupported.
-    """
     if output_policy != "all_producers":
         msg = f"Unsupported output policy: {output_policy!r}."
         raise ValueError(msg)
@@ -489,39 +276,33 @@ def _build_rule_graph_inferred(
         evidence_idx[name] = graph.add_node(GraphNode("evidence", EvidenceNode(name)))
     for rule in sorted(rules, key=lambda item: item.name):
         rule_idx[rule.name] = graph.add_node(GraphNode("rule", rule))
-    edges: list[tuple[int, int, GraphEdge]] = []
     for rule in rules:
-        rule_node = rule_idx[rule.name]
-        rule_fingerprint = fingerprints.get(rule.name)
-        rule_columns = required_columns.get(rule.name, {})
+        rule_node_idx = rule_idx[rule.name]
+        rule_required = required_columns.get(rule.name, {})
         for source in rule.sources:
-            source_columns = rule_columns.get(source, ())
-            edges.append(
-                (
-                    evidence_idx[source],
-                    rule_node,
-                    GraphEdge(
-                        kind="requires",
-                        name=source,
-                        required_columns=source_columns,
-                        inferred=True,
-                        plan_fingerprint=rule_fingerprint,
-                    ),
-                )
-            )
-        edges.append(
-            (
-                rule_node,
-                evidence_idx[rule.output],
+            source_idx = evidence_idx[source]
+            graph.add_edge(
+                source_idx,
+                rule_node_idx,
                 GraphEdge(
-                    kind="produces",
-                    name=rule.output,
+                    kind="requires",
+                    name=source,
+                    required_columns=tuple(rule_required.get(source, ())),
                     inferred=True,
-                    plan_fingerprint=rule_fingerprint,
+                    plan_fingerprint=fingerprints.get(rule.name),
                 ),
             )
+        output_idx = evidence_idx[rule.output]
+        graph.add_edge(
+            rule_node_idx,
+            output_idx,
+            GraphEdge(
+                kind="produces",
+                name=rule.output,
+                inferred=True,
+                plan_fingerprint=fingerprints.get(rule.name),
+            ),
         )
-    graph.add_edges_from(edges)
     return RuleGraph(
         graph=graph,
         evidence_idx=evidence_idx,
@@ -530,90 +311,33 @@ def _build_rule_graph_inferred(
     )
 
 
-def _rule_node_from_definition(rule: RuleDefinition) -> RuleNode:
-    inputs = tuple(rule.inputs)
-    evidence = rule.evidence
-    sources = evidence.sources if evidence is not None and evidence.sources else inputs
-    return RuleNode(
-        name=rule.name,
-        output=rule.output,
-        inputs=inputs,
-        sources=sources,
-        priority=rule.priority,
-        evidence=evidence,
-    )
-
-
-def _rule_node_from_relationship(rule: RelationshipRule) -> RuleNode:
-    inputs = tuple(ref.name for ref in rule.inputs)
-    evidence = _relationship_evidence_spec(rule.evidence)
-    sources = evidence.sources if evidence is not None and evidence.sources else inputs
-    return RuleNode(
-        name=rule.name,
-        output=rule.output_dataset,
-        inputs=inputs,
-        sources=sources,
-        priority=rule.priority,
-        evidence=evidence,
-    )
-
-
-def _rule_node_from_normalize(rule: ResolvedNormalizeRule) -> RuleNode:
-    inputs = tuple(rule.inputs)
-    evidence = rule.evidence
-    sources = evidence.sources if evidence is not None and evidence.sources else inputs
-    return RuleNode(
-        name=rule.name,
-        output=rule.output,
-        inputs=inputs,
-        sources=sources,
-        priority=rule.priority,
-        evidence=evidence,
-    )
-
-
-def _relationship_evidence_spec(
-    spec: RelationshipEvidenceSpec | None,
-) -> RuleEvidenceSpec | None:
-    if spec is None:
-        return None
-    return RuleEvidenceSpec(
-        sources=spec.sources,
-        required_columns=spec.required_columns,
-        required_types=spec.required_types,
-        required_metadata=spec.required_metadata,
-    )
-
-
 def _collect_evidence_names(rules: Sequence[RuleNode]) -> set[str]:
     names: set[str] = set()
     for rule in rules:
-        names.update(rule.sources)
         names.add(rule.output)
+        names.update(rule.inputs)
     return names
-
-
-def _edge_requirements(
-    spec: RuleEvidenceSpec | None,
-) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...], tuple[tuple[bytes, bytes], ...]]:
-    if spec is None:
-        return (), (), ()
-    required_columns = tuple(spec.required_columns)
-    required_types = tuple(sorted(spec.required_types.items()))
-    required_metadata = tuple(sorted(spec.required_metadata.items()))
-    return required_columns, required_types, required_metadata
 
 
 def _validate_rule_names(rules: Sequence[RuleNode]) -> None:
     seen: set[str] = set()
-    duplicates: set[str] = set()
     for rule in rules:
+        if not rule.name:
+            msg = "Rule names must be non-empty."
+            raise RelspecValidationError(msg)
         if rule.name in seen:
-            duplicates.add(rule.name)
+            msg = f"Duplicate rule name: {rule.name!r}."
+            raise RelspecValidationError(msg)
         seen.add(rule.name)
-    if duplicates:
-        msg = f"Duplicate rule names in graph: {sorted(duplicates)}."
-        raise RelspecValidationError(msg)
+
+
+def _node_sort_key(node: GraphNode) -> str:
+    if node.kind == "evidence":
+        return f"0:{node.payload.name}"
+    payload = node.payload
+    if isinstance(payload, RuleNode):
+        return f"1:{payload.name}"
+    return "1:"
 
 
 def _node_payload(
@@ -623,38 +347,37 @@ def _node_payload(
     signatures: Mapping[str, str],
 ) -> dict[str, object]:
     if node.kind == "evidence":
-        evidence = node.payload
-        if not isinstance(evidence, EvidenceNode):
+        payload = node.payload
+        if not isinstance(payload, EvidenceNode):
             msg = "Expected EvidenceNode payload for evidence graph node."
             raise TypeError(msg)
         return {
             "id": node_id,
             "kind": node.kind,
-            "name": evidence.name,
+            "name": payload.name,
             "output": None,
             "priority": None,
             "signature": None,
         }
-    rule = node.payload
-    if not isinstance(rule, RuleNode):
+    payload = node.payload
+    if not isinstance(payload, RuleNode):
         msg = "Expected RuleNode payload for rule graph node."
         raise TypeError(msg)
     return {
         "id": node_id,
         "kind": node.kind,
-        "name": rule.name,
-        "output": rule.output,
-        "priority": rule.priority,
-        "signature": signatures.get(rule.name),
+        "name": payload.name,
+        "output": payload.output,
+        "priority": payload.priority,
+        "signature": signatures.get(payload.name),
     }
 
 
-def _edge_payloads(graph: rx.PyDiGraph) -> list[dict[str, object]]:
+def _edge_payloads(graph: rx.PyDiGraph) -> Sequence[dict[str, object]]:
     edges: list[dict[str, object]] = []
     for source, target, payload in graph.weighted_edge_list():
         if not isinstance(payload, GraphEdge):
-            msg = "Expected GraphEdge payload for graph edge."
-            raise TypeError(msg)
+            continue
         edges.append(
             {
                 "source": source,
@@ -662,52 +385,27 @@ def _edge_payloads(graph: rx.PyDiGraph) -> list[dict[str, object]]:
                 "kind": payload.kind,
                 "name": payload.name,
                 "required_columns": list(payload.required_columns),
-                "required_types": _edge_type_entries(payload.required_types),
-                "required_metadata": _edge_metadata_entries(payload.required_metadata),
+                "required_types": [
+                    {"name": name, "type": dtype} for name, dtype in payload.required_types
+                ],
+                "required_metadata": [
+                    {"key": key, "value": value} for key, value in payload.required_metadata
+                ],
             }
         )
-    edges.sort(key=lambda item: (item["source"], item["target"], item["kind"], item["name"]))
     return edges
 
 
-def _edge_type_entries(
-    entries: tuple[tuple[str, str], ...],
-) -> list[dict[str, str]]:
-    return [{"name": name, "type": dtype} for name, dtype in entries]
-
-
-def _edge_metadata_entries(
-    entries: tuple[tuple[bytes, bytes], ...],
-) -> list[dict[str, bytes]]:
-    return [{"key": key, "value": value} for key, value in entries]
-
-
-def _node_sort_key(node: GraphNode) -> str:
-    payload = node.payload
-    if isinstance(payload, EvidenceNode):
-        return f"evidence:{payload.name}"
-    if isinstance(payload, RuleNode):
-        return f"rule:{payload.name}"
-    return node.kind
-
-
 __all__ = [
-    "RULE_GRAPH_SNAPSHOT_VERSION",
+    "EvidenceNode",
     "GraphDiagnostics",
     "GraphEdge",
     "GraphNode",
-    "NodeKind",
-    "OutputPolicy",
     "RuleGraph",
     "RuleGraphSnapshot",
     "RuleNode",
-    "build_rule_graph_from_definitions",
     "build_rule_graph_from_inferred_deps",
-    "build_rule_graph_from_normalize_rules",
-    "build_rule_graph_from_relationship_rules",
     "rule_graph_diagnostics",
     "rule_graph_signature",
-    "rule_graph_signature_from_definitions",
     "rule_graph_snapshot",
-    "rule_graph_snapshot_from_definitions",
 ]

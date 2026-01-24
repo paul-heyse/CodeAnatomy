@@ -8,16 +8,18 @@ from pathlib import Path
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
-from datafusion_engine.runtime import read_delta_as_reader
 from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
     write_ibis_dataset_delta,
 )
+from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
+from incremental.delta_context import DeltaAccessContext
+from incremental.ibis_exec import ibis_expr_to_table
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore
-from storage.deltalake import enable_delta_features
+from storage.deltalake import StorageOptions, delta_table_version, enable_delta_features
 
 FINGERPRINTS_VERSION = 1
 _FINGERPRINTS_SCHEMA = pa.schema(
@@ -41,7 +43,11 @@ def _fingerprints_path(state_store: StateStore) -> Path:
     return state_store.metadata_dir() / _FINGERPRINTS_DIRNAME
 
 
-def read_dataset_fingerprints(state_store: StateStore) -> dict[str, str]:
+def read_dataset_fingerprints(
+    state_store: StateStore,
+    *,
+    context: DeltaAccessContext,
+) -> dict[str, str]:
     """Read the dataset fingerprint mapping from the state store.
 
     Returns
@@ -52,8 +58,15 @@ def read_dataset_fingerprints(state_store: StateStore) -> dict[str, str]:
     path = _fingerprints_path(state_store)
     if not path.exists():
         return {}
-    reader = read_delta_as_reader(str(path))
-    table = reader.read_all()
+    storage = context.storage
+    version = delta_table_version(
+        str(path),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
+    if version is None:
+        return {}
+    table = _read_delta_table(context, path, name="dataset_fingerprints_read")
     results: dict[str, str] = {}
     for row in table.to_pylist():
         if not isinstance(row, Mapping):
@@ -71,6 +84,8 @@ def write_dataset_fingerprints(
     fingerprints: Mapping[str, str],
     *,
     execution: IbisExecutionContext,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> None:
     """Persist dataset fingerprints to the state store."""
     state_store.ensure_dirs()
@@ -100,10 +115,16 @@ def write_dataset_fingerprints(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata={"snapshot_kind": "dataset_fingerprints"},
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
             ),
         ),
     )
-    enable_delta_features(result.path)
+    enable_delta_features(
+        result.path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
 
 
 def output_fingerprint_change_table(
@@ -147,6 +168,21 @@ def output_fingerprint_change_table(
         },
         num_rows=len(names),
     )
+
+
+def _read_delta_table(
+    context: DeltaAccessContext,
+    path: Path,
+    *,
+    name: str,
+) -> pa.Table:
+    backend = context.runtime.ibis_backend()
+    table = read_delta_ibis(
+        backend,
+        str(path),
+        options=IbisDeltaReadOptions(storage_options=context.storage.storage_options),
+    )
+    return ibis_expr_to_table(table, runtime=context.runtime, name=name)
 
 
 __all__ = [

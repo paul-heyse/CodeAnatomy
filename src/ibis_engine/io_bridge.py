@@ -646,9 +646,7 @@ def _write_delta_dataset(
     if insert_result is None:
         if context.runtime_profile.enable_delta_data_checker:
             resolved_name = table_name or name
-            location = _delta_location_for_table(
-                context.runtime_profile, table_name=resolved_name
-            )
+            location = _delta_location_for_table(context.runtime_profile, table_name=resolved_name)
             if location is None:
                 _record_delta_data_checker(
                     context.runtime_profile,

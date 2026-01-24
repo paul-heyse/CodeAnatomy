@@ -6,34 +6,12 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    DatasetRecord: type[object]
-    Manifest: type[object]
-    OutputRecord: type[object]
-    RuleRecord: type[object]
-    build_manifest: object
-    write_manifest_delta: object
-    collect_repro_info: object
-    make_run_bundle_name: object
-    serialize_contract_catalog: object
-    try_get_git_info: object
-    write_run_bundle: object
     column_stats_table: object
     dataset_stats_table: object
     table_summary: object
     schema_fingerprint: object
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
-    "DatasetRecord": ("obs.manifest", "DatasetRecord"),
-    "Manifest": ("obs.manifest", "Manifest"),
-    "OutputRecord": ("obs.manifest", "OutputRecord"),
-    "RuleRecord": ("obs.manifest", "RuleRecord"),
-    "build_manifest": ("obs.manifest", "build_manifest"),
-    "write_manifest_delta": ("obs.manifest", "write_manifest_delta"),
-    "collect_repro_info": ("obs.repro", "collect_repro_info"),
-    "make_run_bundle_name": ("obs.repro", "make_run_bundle_name"),
-    "serialize_contract_catalog": ("obs.repro", "serialize_contract_catalog"),
-    "try_get_git_info": ("obs.repro", "try_get_git_info"),
-    "write_run_bundle": ("obs.repro", "write_run_bundle"),
     "column_stats_table": ("arrowdsl.core.metrics", "column_stats_table"),
     "dataset_stats_table": ("arrowdsl.core.metrics", "dataset_stats_table"),
     "table_summary": ("arrowdsl.core.metrics", "table_summary"),
@@ -58,19 +36,8 @@ def __dir__() -> list[str]:
 
 
 __all__ = (
-    "DatasetRecord",
-    "Manifest",
-    "OutputRecord",
-    "RuleRecord",
-    "build_manifest",
-    "collect_repro_info",
     "column_stats_table",
     "dataset_stats_table",
-    "make_run_bundle_name",
     "schema_fingerprint",
-    "serialize_contract_catalog",
     "table_summary",
-    "try_get_git_info",
-    "write_manifest_delta",
-    "write_run_bundle",
 )

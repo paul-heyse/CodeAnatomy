@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import EvidenceMetadataSpec, evidence_metadata
-from relspec.extract.registry_template_specs import DatasetTemplateSpec
+from datafusion_engine.extract_template_specs import DatasetTemplateSpec
 
 
 @dataclass(frozen=True)

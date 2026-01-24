@@ -24,7 +24,6 @@ from sqlglot.errors import ParseError
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
 from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
-from arrowdsl.io.ipc import payload_hash
 from arrowdsl.schema.metadata import schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.cache_introspection import (
@@ -78,9 +77,9 @@ from datafusion_engine.udf_registry import (
     get_strict_udf_catalog,
     register_datafusion_udfs,
 )
-from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCache
 from serde_msgspec import StructBase
+from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
     from datafusion_engine.udf_catalog import UdfCatalog
@@ -1985,9 +1984,7 @@ def _apply_optional_settings(
 def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]:
     enable_ident_normalization = _effective_ident_normalization(profile)
     payload: dict[str, str] = {
-        "datafusion.sql_parser.enable_ident_normalization": str(
-            enable_ident_normalization
-        ).lower()
+        "datafusion.sql_parser.enable_ident_normalization": str(enable_ident_normalization).lower()
     }
     optional_values = {
         "datafusion.optimizer.repartition_aggregations": profile.repartition_aggregations,
@@ -4105,9 +4102,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return True, False
         return True, bool(result) if result is not None else True
 
-    def _install_delta_plan_codecs_context(
-        self, ctx: SessionContext
-    ) -> tuple[bool, bool]:
+    def _install_delta_plan_codecs_context(self, ctx: SessionContext) -> tuple[bool, bool]:
         register = getattr(ctx, "register_extension_codecs", None)
         if not callable(register):
             return False, False
@@ -4910,25 +4905,8 @@ def _rulepack_required_functions(
     dict[str, int],
     dict[str, set[tuple[str, ...]]],
 ]:
-    from relspec.rules.cache import rule_definitions_cached
-    from relspec.rules.coverage import collect_rule_demands
-
-    demands = collect_rule_demands(rule_definitions_cached(), include_extract_queries=True)
-    registry = default_function_registry(datafusion_function_catalog=datafusion_function_catalog)
-    required: dict[str, set[str]] = {}
-    required_counts: dict[str, int] = {}
-    required_signatures: dict[str, set[tuple[str, ...]]] = {}
-    for mapping in (demands.expr_calls, demands.aggregate_funcs):
-        for name, rules in mapping.items():
-            spec = registry.specs.get(name)
-            engine_name = spec.engine_name if spec is not None else name
-            required.setdefault(engine_name, set()).update(rules)
-            if spec is not None and spec.input_types:
-                required_counts.setdefault(engine_name, len(spec.input_types))
-                signature = _rulepack_signature_for_spec(spec)
-                if signature is not None:
-                    required_signatures.setdefault(engine_name, set()).add(signature)
-    return required, required_counts, required_signatures
+    _ = datafusion_function_catalog
+    return {}, {}, {}
 
 
 def _rulepack_signature_for_spec(spec: object) -> tuple[str, ...] | None:

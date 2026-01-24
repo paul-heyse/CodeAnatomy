@@ -9,6 +9,7 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_schema
+from engine.runtime_profile import runtime_profile_snapshot
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
@@ -19,7 +20,7 @@ from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from serde_msgspec import to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
-from storage.deltalake import enable_delta_features
+from storage.deltalake import StorageOptions, enable_delta_features
 
 _CDF_CURSOR_SCHEMA = pa.schema(
     [
@@ -33,6 +34,8 @@ def write_incremental_metadata(
     state_store: StateStore,
     *,
     runtime: IncrementalRuntime,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> str:
     """Persist runtime + SQLGlot policy metadata to the state store.
 
@@ -42,9 +45,12 @@ def write_incremental_metadata(
         Delta table path for the metadata snapshot.
     """
     state_store.ensure_dirs()
+    runtime_snapshot = runtime_profile_snapshot(runtime.execution_ctx.runtime)
     snapshot = sqlglot_policy_snapshot_for(runtime.sqlglot_policy)
     payload = {
         "datafusion_settings_hash": runtime.profile.settings_hash(),
+        "runtime_profile_hash": runtime_snapshot.profile_hash,
+        "runtime_profile": runtime_snapshot.payload(),
         "sqlglot_policy_hash": snapshot.policy_hash,
         "sqlglot_policy": snapshot.payload(),
     }
@@ -60,10 +66,16 @@ def write_incremental_metadata(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata={"snapshot_kind": "incremental_metadata"},
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
             ),
         ),
     )
-    enable_delta_features(result.path)
+    enable_delta_features(
+        result.path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
     return result.path
 
 
@@ -72,6 +84,8 @@ def write_cdf_cursor_snapshot(
     *,
     cursor_store: CdfCursorStore,
     runtime: IncrementalRuntime,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> str:
     """Persist the current CDF cursor snapshot to the state store.
 
@@ -83,6 +97,10 @@ def write_cdf_cursor_snapshot(
         Cursor store supplying snapshot rows.
     runtime : IncrementalRuntime
         Runtime used for Delta write execution.
+    storage_options : StorageOptions | None
+        Optional storage options for Delta access.
+    log_storage_options : StorageOptions | None
+        Optional log-storage options for Delta access.
 
     Returns
     -------
@@ -107,10 +125,16 @@ def write_cdf_cursor_snapshot(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata={"snapshot_kind": "cdf_cursor_snapshot"},
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
             ),
         ),
     )
-    enable_delta_features(result.path)
+    enable_delta_features(
+        result.path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
     return result.path
 
 
@@ -118,6 +142,8 @@ def write_incremental_artifacts(
     state_store: StateStore,
     *,
     runtime: IncrementalRuntime,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> dict[str, str]:
     """Persist selected incremental diagnostics artifacts to Delta.
 
@@ -136,6 +162,8 @@ def write_incremental_artifacts(
             name=name,
             path=path,
             runtime=runtime,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
         )
         if result is not None:
             updated[name] = result
@@ -147,6 +175,8 @@ def _write_artifact_table(
     name: str,
     path: Path,
     runtime: IncrementalRuntime,
+    storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
 ) -> str | None:
     sink = runtime.profile.diagnostics_sink
     if sink is None:
@@ -165,10 +195,16 @@ def _write_artifact_table(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata={"artifact_name": name},
+                storage_options=storage_options,
+                log_storage_options=log_storage_options,
             ),
         ),
     )
-    enable_delta_features(result.path)
+    enable_delta_features(
+        result.path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
     return result.path
 
 

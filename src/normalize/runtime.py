@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-import ibis
 from datafusion import SessionContext, SQLOptions
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
 from datafusion_engine.runtime import DataFusionRuntimeProfile, DiagnosticsSink
 from datafusion_engine.sql_options import sql_options_for_profile
+from ibis_engine.execution_factory import ibis_backend_from_ctx
 from sqlglot_tools.optimizer import register_datafusion_dialect
 
 if TYPE_CHECKING:
@@ -54,7 +54,7 @@ def build_normalize_runtime(ctx: ExecutionContext) -> NormalizeRuntime:
         raise ValueError(msg)
     register_datafusion_dialect()
     session = runtime_profile.session_context()
-    backend = ibis.datafusion.connect(ctx=session)
+    backend = ibis_backend_from_ctx(ctx)
     sql_options = sql_options_for_profile(runtime_profile)
     return NormalizeRuntime(
         execution_ctx=ctx,

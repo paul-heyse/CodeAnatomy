@@ -16,6 +16,7 @@ from cpg.schemas import (
     CPG_PROPS_BY_FILE_ID_SCHEMA,
     CPG_PROPS_GLOBAL_SCHEMA,
 )
+from incremental.delta_context import DeltaAccessContext
 from incremental.delta_updates import (
     OverwriteDatasetSpec,
     PartitionedDatasetSpec,
@@ -80,6 +81,7 @@ def upsert_cpg_props(
         cpg_edges=inputs.edges,
         runtime=runtime,
     )
+    context = DeltaAccessContext(runtime=runtime)
     updated: dict[str, str] = {}
     spec = PartitionedDatasetSpec(
         name=_PROPS_BY_FILE_DATASET,
@@ -91,7 +93,7 @@ def upsert_cpg_props(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
-        runtime=runtime,
+        context=context,
     )
     if file_path is not None:
         updated[spec.name] = file_path
@@ -107,7 +109,7 @@ def upsert_cpg_props(
                 props_global,
                 spec=global_spec,
                 state_store=state_store,
-                runtime=runtime,
+                context=context,
             )
         )
     return updated

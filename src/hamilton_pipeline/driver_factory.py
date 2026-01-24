@@ -12,10 +12,10 @@ from hamilton import driver
 from hamilton.execution import executors
 from hamilton.lifecycle import base as lifecycle_base
 
-from arrowdsl.io.ipc import ipc_hash
 from core_types import JsonValue
 from cpg.kind_catalog import validate_edge_kind_requirements
 from hamilton_pipeline.modules import ALL_MODULES
+from storage.ipc import ipc_hash
 
 try:
     from hamilton_sdk import adapters as hamilton_adapters

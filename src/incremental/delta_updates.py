@@ -6,8 +6,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from deltalake import DeltaTable
-
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from cpg.schemas import CPG_EDGES_SCHEMA, CPG_NODES_SCHEMA
@@ -17,12 +15,17 @@ from ibis_engine.io_bridge import (
     IbisDeltaWriteOptions,
     write_ibis_dataset_delta,
 )
+from incremental.delta_context import DeltaAccessContext
 from incremental.registry_specs import dataset_schema
-from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
 from normalize.registry_runtime import dataset_name_from_alias
-from storage.deltalake import build_commit_properties, coerce_delta_table
+from storage.deltalake import (
+    build_commit_properties,
+    coerce_delta_table,
+    enable_delta_features,
+    open_delta_table,
+)
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -52,7 +55,7 @@ def upsert_partitioned_dataset(
     spec: PartitionedDatasetSpec,
     base_dir: str,
     changes: IncrementalFileChanges,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> str | None:
     """Upsert a partitioned dataset using the incremental delete set.
 
@@ -82,21 +85,19 @@ def upsert_partitioned_dataset(
         schema=schema,
         encoding_policy=encoding_policy_from_schema(schema),
     )
-    _delete_delta_partitions(
-        base_dir,
-        delete_partitions=delete_partitions,
-        runtime=runtime,
-    )
+    _delete_delta_partitions(base_dir, delete_partitions=delete_partitions, context=context)
     result = write_ibis_dataset_delta(
         data,
         base_dir,
         options=IbisDatasetWriteOptions(
-            execution=runtime.ibis_execution(),
+            execution=context.runtime.ibis_execution(),
             writer_strategy="datafusion",
             delta_options=IbisDeltaWriteOptions(
                 mode="append",
                 schema_mode="merge",
                 partition_by=(spec.partition_column,),
+                storage_options=context.storage.storage_options,
+                log_storage_options=context.storage.log_storage_options,
             ),
         ),
     )
@@ -108,7 +109,7 @@ def write_overwrite_dataset(
     *,
     spec: OverwriteDatasetSpec,
     state_store: StateStore,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> dict[str, str]:
     """Overwrite a dataset with schema enforcement.
 
@@ -128,14 +129,21 @@ def write_overwrite_dataset(
         data,
         target,
         options=IbisDatasetWriteOptions(
-            execution=runtime.ibis_execution(),
+            execution=context.runtime.ibis_execution(),
             writer_strategy="datafusion",
             delta_options=IbisDeltaWriteOptions(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata=dict(metadata) if metadata else None,
+                storage_options=context.storage.storage_options,
+                log_storage_options=context.storage.log_storage_options,
             ),
         ),
+    )
+    enable_delta_features(
+        result.path,
+        storage_options=context.storage.storage_options,
+        log_storage_options=context.storage.log_storage_options,
     )
     return {spec.name: result.path}
 
@@ -145,7 +153,7 @@ def upsert_cpg_nodes(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> dict[str, str]:
     """Upsert CPG nodes into the incremental state store.
 
@@ -164,7 +172,7 @@ def upsert_cpg_nodes(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
-        runtime=runtime,
+        context=context,
     )
     return {} if path is None else {spec.name: path}
 
@@ -174,7 +182,7 @@ def upsert_cpg_edges(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> dict[str, str]:
     """Upsert CPG edges into the incremental state store.
 
@@ -193,7 +201,7 @@ def upsert_cpg_edges(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
-        runtime=runtime,
+        context=context,
     )
     return {} if path is None else {spec.name: path}
 
@@ -203,7 +211,7 @@ def upsert_exported_defs(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> dict[str, str]:
     """Upsert exported definition partitions by file_id.
 
@@ -222,7 +230,7 @@ def upsert_exported_defs(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
-        runtime=runtime,
+        context=context,
     )
     return {} if path is None else {spec.name: path}
 
@@ -232,7 +240,7 @@ def upsert_module_index(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> dict[str, str]:
     """Upsert module index partitions by file_id.
 
@@ -251,7 +259,7 @@ def upsert_module_index(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
-        runtime=runtime,
+        context=context,
     )
     return {} if path is None else {spec.name: path}
 
@@ -261,7 +269,7 @@ def upsert_imports_resolved(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> dict[str, str]:
     """Upsert resolved import partitions by importer_file_id.
 
@@ -280,7 +288,7 @@ def upsert_imports_resolved(
         spec=spec,
         base_dir=str(state_store.dataset_dir(spec.name)),
         changes=changes,
-        runtime=runtime,
+        context=context,
     )
     return {} if path is None else {spec.name: path}
 
@@ -290,7 +298,7 @@ def upsert_extract_outputs(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> dict[str, str]:
     """Upsert extract outputs into the incremental state store.
 
@@ -310,7 +318,7 @@ def upsert_extract_outputs(
             spec=spec,
             base_dir=str(state_store.dataset_dir(dataset_name)),
             changes=changes,
-            runtime=runtime,
+            context=context,
         )
         if path is not None:
             updated[dataset_name] = path
@@ -322,7 +330,7 @@ def upsert_normalize_outputs(
     *,
     state_store: StateStore,
     changes: IncrementalFileChanges,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> dict[str, str]:
     """Upsert normalize outputs into the incremental state store.
 
@@ -343,7 +351,7 @@ def upsert_normalize_outputs(
             spec=spec,
             base_dir=str(state_store.dataset_dir(dataset_name)),
             changes=changes,
-            runtime=runtime,
+            context=context,
         )
         if path is not None:
             updated[dataset_name] = path
@@ -354,14 +362,14 @@ def _delete_delta_partitions(
     base_dir: str,
     *,
     delete_partitions: Sequence[Mapping[str, str]],
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> None:
     if not delete_partitions:
         return
     predicate = _partition_predicate(delete_partitions)
     if not predicate:
         return
-    commit_options, commit_run = runtime.profile.reserve_delta_commit(
+    commit_options, commit_run = context.runtime.profile.reserve_delta_commit(
         key=base_dir,
         metadata={"dataset": base_dir, "operation": "delete"},
     )
@@ -369,8 +377,13 @@ def _delete_delta_partitions(
         app_id=commit_options.app_id,
         version=commit_options.version,
     )
-    DeltaTable(base_dir).delete(predicate, commit_properties=commit_properties)
-    runtime.profile.finalize_delta_commit(
+    table = open_delta_table(
+        base_dir,
+        storage_options=context.storage.storage_options,
+        log_storage_options=context.storage.log_storage_options,
+    )
+    table.delete(predicate, commit_properties=commit_properties)
+    context.runtime.profile.finalize_delta_commit(
         key=base_dir,
         run=commit_run,
         metadata={"operation": "delete", "partition_count": len(delete_partitions)},

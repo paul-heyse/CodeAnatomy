@@ -1,0 +1,192 @@
+"""Ibis-based property emission helpers."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+
+import ibis
+import pyarrow as pa
+from ibis.expr.types import Table, Value
+
+from arrowdsl.core.ordering import Ordering
+from arrowdsl.schema.build import empty_table
+from cpg.kind_catalog import EntityKind
+from cpg.schemas import CPG_PROPS_SCHEMA
+from cpg.specs import (
+    PropFieldSpec,
+    PropOptions,
+    PropTableSpec,
+    filter_fields,
+    resolve_prop_transform,
+)
+from ibis_engine.ids import masked_stable_id_expr
+from ibis_engine.plan import IbisPlan
+from ibis_engine.schema_utils import (
+    ensure_columns,
+    ibis_dtype_from_arrow,
+    ibis_null_literal,
+)
+
+
+@dataclass(frozen=True)
+class CpgPropOptions:
+    """Default property include options for CPG builders."""
+
+    include_heavy_json_props: bool = False
+
+
+def emit_props_ibis(
+    rel: IbisPlan | Table,
+    *,
+    spec: PropTableSpec,
+    options: PropOptions | None = None,
+) -> IbisPlan:
+    """Emit CPG properties from a relation table using Ibis expressions.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan emitting property rows.
+    """
+    expr = rel.expr if isinstance(rel, IbisPlan) else rel
+    resolved_options = options or CpgPropOptions()
+    fields = filter_fields(spec.fields, options=resolved_options)
+    if not fields:
+        return _empty_props_plan()
+    rows: list[Table] = []
+    for field in fields:
+        row_expr = _prop_row_expr(expr, spec=spec, field=field)
+        if row_expr is None:
+            continue
+        rows.append(row_expr)
+    if not rows:
+        return _empty_props_plan()
+    combined = _union_rows(rows)
+    combined = ensure_columns(combined, schema=CPG_PROPS_SCHEMA, only_missing=True)
+    combined = combined.select(*CPG_PROPS_SCHEMA.names)
+    return IbisPlan(expr=combined, ordering=Ordering.unordered())
+
+
+def _prop_row_expr(expr: Table, *, spec: PropTableSpec, field: PropFieldSpec) -> Table | None:
+    value_expr = _field_value_expr(expr, field)
+    if value_expr is None:
+        return None
+    if field.skip_if_none:
+        expr = expr.filter(value_expr.notnull())
+    schema = CPG_PROPS_SCHEMA
+    schema_names = set(schema.names)
+    entity_id = _entity_id_expr(expr, spec)
+    columns: dict[str, Value] = {}
+    if "entity_kind" in schema_names:
+        columns["entity_kind"] = ibis.literal(spec.entity_kind.value)
+    if "entity_id" in schema_names:
+        columns["entity_id"] = entity_id
+    if "node_kind" in schema_names:
+        node_kind = str(spec.node_kind) if spec.node_kind is not None else None
+        columns["node_kind"] = _literal_or_null(node_kind, pa.string())
+    if "prop_key" in schema_names:
+        columns["prop_key"] = ibis.literal(field.prop_key)
+    value_type = field.value_type or "string"
+    if "value_type" in schema_names:
+        columns["value_type"] = ibis.literal(value_type)
+    columns.update(_value_columns(schema, value_expr, value_type=value_type))
+    row = expr.select(**columns)
+    row = ensure_columns(row, schema=CPG_PROPS_SCHEMA, only_missing=True)
+    return row.select(*CPG_PROPS_SCHEMA.names)
+
+
+def _field_value_expr(expr: Table, field: PropFieldSpec) -> Value | None:
+    if field.literal is not None:
+        value = ibis.literal(field.literal)
+    elif field.source_col is not None:
+        value = (
+            expr[field.source_col]
+            if field.source_col in expr.columns
+            else ibis_null_literal(pa.string())
+        )
+    else:
+        return None
+    transform = resolve_prop_transform(field.transform_id)
+    if transform is None:
+        return value
+    return transform.expr_fn(value)
+
+
+def _entity_id_expr(expr: Table, spec: PropTableSpec) -> Value:
+    id_cols = spec.id_cols
+    if spec.entity_kind == EntityKind.EDGE and len(id_cols) == 1 and id_cols[0] in expr.columns:
+        return expr[id_cols[0]]
+    id_values = _id_values(expr, id_cols)
+    required = tuple(expr[col] for col in id_cols if col in expr.columns)
+    prefix = "node" if spec.entity_kind == EntityKind.NODE else "edge"
+    if spec.entity_kind == EntityKind.NODE and spec.node_kind is not None:
+        id_values = (ibis.literal(str(spec.node_kind)), *id_values)
+    return masked_stable_id_expr(prefix, parts=id_values, required=required)
+
+
+def _id_values(expr: Table, columns: Sequence[str]) -> tuple[Value, ...]:
+    values: list[Value] = []
+    for column in columns:
+        if column in expr.columns:
+            values.append(expr[column])
+        else:
+            values.append(ibis_null_literal(pa.string()))
+    if not values:
+        return (ibis_null_literal(pa.string()),)
+    return tuple(values)
+
+
+def _value_columns(schema: pa.Schema, value_expr: Value, *, value_type: str) -> dict[str, Value]:
+    names = set(schema.names)
+    value_column = _resolve_value_column(names, value_type)
+    columns: dict[str, Value] = {}
+    if value_column is None:
+        return columns
+    value_field = schema.field(value_column)
+    columns[value_column] = ibis.cast(value_expr, ibis_dtype_from_arrow(value_field.type))
+    for field in schema:
+        if field.name == value_column:
+            continue
+        if field.name.startswith("value_") and field.name in names:
+            columns[field.name] = ibis_null_literal(field.type)
+    return columns
+
+
+def _resolve_value_column(names: set[str], value_type: str) -> str | None:
+    candidates: dict[str, tuple[str, ...]] = {
+        "string": ("value_string", "value_str", "value"),
+        "int": ("value_int", "value_i64", "value"),
+        "float": ("value_float", "value_f64", "value"),
+        "bool": ("value_bool", "value"),
+        "json": ("value_json", "value"),
+    }
+    for candidate in candidates.get(value_type, ("value",)):
+        if candidate in names:
+            return candidate
+    if "prop_value" in names:
+        return "prop_value"
+    return None
+
+
+def _literal_or_null(value: str | None, dtype: pa.DataType) -> Value:
+    if value is None:
+        return ibis_null_literal(dtype)
+    return ibis.literal(value)
+
+
+def _union_rows(rows: Iterable[Table]) -> Table:
+    iterator = iter(rows)
+    first = next(iterator)
+    combined = first
+    for row in iterator:
+        combined = combined.union(row)
+    return combined
+
+
+def _empty_props_plan() -> IbisPlan:
+    empty = empty_table(CPG_PROPS_SCHEMA)
+    return IbisPlan(expr=ibis.memtable(empty), ordering=Ordering.unordered())
+
+
+__all__ = ["CpgPropOptions", "emit_props_ibis"]

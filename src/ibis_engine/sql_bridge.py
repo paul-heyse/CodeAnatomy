@@ -412,9 +412,7 @@ def _emit_sql_ingest_failure(
         return
     schema_payload = None
     if spec.schema is not None:
-        schema_payload = {
-            field.name: str(field.type) for field in spec.schema.to_pyarrow()
-        }
+        schema_payload = {field.name: str(field.type) for field in spec.schema.to_pyarrow()}
     event_time = context.event_time_unix_ms or _sql_ingest_event_time()
     dialect = context.dialect or spec.dialect
     ingest_kind = context.ingest_kind if context.ingest_kind is not None else spec.ingest_kind

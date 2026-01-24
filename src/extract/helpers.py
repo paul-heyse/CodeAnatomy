@@ -34,12 +34,11 @@ from extract.schema_ops import (
     schema_policy_for_dataset,
 )
 from extract.session import ExtractSession, build_extract_session
-from extract.spec_helpers import plan_requires_row, rule_execution_options
+from extract.spec_helpers import ExtractExecutionOptions, plan_requires_row, rule_execution_options
 from ibis_engine.execution_factory import ibis_backend_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
-from relspec.rules.definitions import RuleStage, stage_enabled
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
@@ -463,10 +462,8 @@ def apply_query_and_project(
         return empty_ibis_plan(name)
     overrides = _options_overrides(normalize.options if normalize else None)
     execution = rule_execution_options(row.template or name, evidence_plan, overrides=overrides)
-    if row.enabled_when is not None:
-        stage = RuleStage(name=name, mode="source", enabled_when=row.enabled_when)
-        if not stage_enabled(stage, execution.as_mapping()):
-            return empty_ibis_plan(name)
+    if row.enabled_when is not None and not _stage_enabled(row.enabled_when, execution):
+        return empty_ibis_plan(name)
     spec = dataset_query(name, repo_id=repo_id)
     expr = apply_query_spec(table, spec=spec)
     expr = apply_evidence_projection(name, expr, evidence_plan=evidence_plan)
@@ -736,6 +733,17 @@ def _options_overrides(options: object | None) -> Mapping[str, object]:
     if isinstance(builtins, Mapping):
         return dict(builtins)
     return {}
+
+
+def _stage_enabled(condition: str, execution: ExtractExecutionOptions) -> bool:
+    if not condition:
+        return True
+    if condition == "allowlist":
+        return bool(execution.module_allowlist)
+    value = execution.as_mapping().get(condition)
+    if isinstance(value, bool):
+        return value
+    return bool(value)
 
 
 __all__ = [

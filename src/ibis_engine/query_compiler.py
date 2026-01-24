@@ -12,7 +12,7 @@ from ibis.expr.types import BooleanValue, Table, Value
 
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.spec.expr_ir import ExprIR
+from sqlglot_tools.expr_spec import ExprIR
 from ibis_engine.expr_compiler import (
     ExprIRLike,
     IbisExprRegistry,

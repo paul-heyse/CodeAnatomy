@@ -685,6 +685,26 @@ def schema_map_for_sqlglot(introspector: SchemaIntrospector) -> SchemaMapping:
     return mapping
 
 
+def schema_map_snapshot(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None,
+) -> tuple[SchemaMapping | None, str | None]:
+    """Return a SQLGlot schema mapping and fingerprint snapshot.
+
+    Returns
+    -------
+    tuple[SchemaMapping | None, str | None]
+        Schema mapping with its fingerprint, or ``(None, None)`` on failure.
+    """
+    try:
+        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+        mapping = schema_map_for_sqlglot(introspector)
+        return mapping, schema_map_fingerprint_from_mapping(mapping)
+    except (RuntimeError, TypeError, ValueError):
+        return None, None
+
+
 def find_struct_field_keys(
     schema: pa.Schema,
     *,

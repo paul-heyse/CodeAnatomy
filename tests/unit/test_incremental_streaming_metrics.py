@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
 
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from incremental import delta_updates
+from incremental.delta_context import DeltaAccessContext
 from incremental.delta_updates import OverwriteDatasetSpec, write_overwrite_dataset
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
@@ -25,18 +29,22 @@ def test_streaming_write_records_metrics(
     """Record streaming diagnostics when overwrite outputs exceed the threshold."""
     sink = DiagnosticsCollector()
     profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
-    runtime = IncrementalRuntime(profile=profile, sqlglot_policy=default_sqlglot_policy())
+    runtime_profile = runtime_profile_factory("default")
+    runtime_profile = replace(runtime_profile, datafusion=profile)
+    exec_ctx = ExecutionContext(runtime=runtime_profile)
+    runtime = IncrementalRuntime.build(ctx=exec_ctx, sqlglot_policy=default_sqlglot_policy())
     monkeypatch.setattr(delta_updates, "_STREAMING_ROW_THRESHOLD", 1)
 
     schema = pa.schema([("file_id", pa.string()), ("value", pa.int64())])
     table = pa.table({"file_id": ["a", "b"], "value": [1, 2]})
     state_store = StateStore(tmp_path)
     spec = OverwriteDatasetSpec(name="test_dataset", schema=schema)
+    context = DeltaAccessContext(runtime)
     _ = write_overwrite_dataset(
         table,
         spec=spec,
         state_store=state_store,
-        runtime=runtime,
+        context=context,
     )
 
     artifacts = sink.artifacts_snapshot().get("incremental_streaming_writes_v1", [])

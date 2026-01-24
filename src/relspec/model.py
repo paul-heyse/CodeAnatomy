@@ -9,7 +9,7 @@ from typing import Literal
 
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.plan_ops import DedupeSpec, JoinType, SortKey
-from arrowdsl.spec.expr_ir import ExprIR
+from sqlglot_tools.expr_spec import ExprIR
 from ibis_engine.query_compiler import IbisQuerySpec
 from relspec.errors import RelspecValidationError
 

@@ -18,7 +18,6 @@ from arrowdsl.core.execution_context import ExecutionContext, execution_context_
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
-from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.schema.metadata import (
     encoding_policy_from_spec,
     merge_metadata_specs,
@@ -36,6 +35,7 @@ from arrowdsl.schema.schema import (
     required_field_names,
 )
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
+from datafusion_engine.finalize import Contract, FinalizeContext
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import (
     is_nested_dataset,
@@ -62,8 +62,7 @@ from storage.dataset_sources import (
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
-    from arrowdsl.spec.expr_ir import ExprIR
-    from arrowdsl.spec.tables.schema import SchemaSpecTables
+    from sqlglot_tools.expr_spec import ExprIR
     from ibis_engine.execution import IbisExecutionContext
     from ibis_engine.sources import PlanSource
     from schema_spec.view_specs import ViewSpec

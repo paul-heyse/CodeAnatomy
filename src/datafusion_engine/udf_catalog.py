@@ -107,9 +107,7 @@ def _routine_type_values(table: pa.Table, columns: Mapping[str, str]) -> list[ob
 
 def _routine_return_values(table: pa.Table, columns: Mapping[str, str]) -> list[object]:
     return_col = (
-        columns.get("return_type")
-        or columns.get("data_type")
-        or columns.get("result_data_type")
+        columns.get("return_type") or columns.get("data_type") or columns.get("result_data_type")
     )
     if return_col is None:
         return [None] * table.num_rows

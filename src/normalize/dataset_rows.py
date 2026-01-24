@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.schema.metadata import metadata_map_bytes, metadata_scalar_map_bytes
 from arrowdsl.schema.validation import ArrowValidationOptions
-from arrowdsl.spec.expr_ir import ExprIR
+from sqlglot_tools.expr_spec import ExprIR
 from datafusion_engine.normalize_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,

@@ -10,7 +10,6 @@ import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.finalize.finalize import FinalizeContext, FinalizeResult
 from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec, align_table, encode_table
 from datafusion_engine.extract_registry import (
@@ -18,6 +17,7 @@ from datafusion_engine.extract_registry import (
     dataset_schema_policy,
     dataset_spec,
 )
+from datafusion_engine.finalize import FinalizeContext, FinalizeResult
 from datafusion_engine.runtime import sql_options_for_profile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 

@@ -2,27 +2,30 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
-from deltalake import DeltaTable
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import column_or_null, table_from_arrays
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.runtime import dataset_schema_from_context, read_delta_as_reader
+from datafusion_engine.runtime import dataset_schema_from_context
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
     write_ibis_dataset_delta,
 )
-from incremental.runtime import IncrementalRuntime
+from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
+from incremental.delta_context import DeltaAccessContext
+from incremental.ibis_exec import ibis_expr_to_table
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteResult,
     build_commit_properties,
     delta_table_version,
     enable_delta_features,
+    open_delta_table,
 )
 
 
@@ -56,7 +59,11 @@ def build_repo_snapshot(repo_files: TableLike) -> pa.Table:
     )
 
 
-def read_repo_snapshot(store: StateStore) -> pa.Table | None:
+def read_repo_snapshot(
+    store: StateStore,
+    *,
+    context: DeltaAccessContext,
+) -> pa.Table | None:
     """Load the previous repo snapshot when present.
 
     Returns
@@ -65,17 +72,24 @@ def read_repo_snapshot(store: StateStore) -> pa.Table | None:
         Snapshot table if it exists.
     """
     path = store.repo_snapshot_path()
-    if not path.exists() or delta_table_version(str(path)) is None:
+    if not path.exists():
         return None
-    reader = read_delta_as_reader(str(path))
-    return reader.read_all()
+    storage = context.storage
+    version = delta_table_version(
+        str(path),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
+    if version is None:
+        return None
+    return _read_delta_table(context, path, name="repo_snapshot_read")
 
 
 def write_repo_snapshot(
     store: StateStore,
     snapshot: pa.Table,
     *,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> DeltaWriteResult:
     """Persist the repo snapshot to the state store as Delta.
 
@@ -91,25 +105,36 @@ def write_repo_snapshot(
         "snapshot_kind": "repo_snapshot",
         "schema_fingerprint": schema_fingerprint(snapshot.schema),
     }
-    existing_version = delta_table_version(str(target))
+    storage = context.storage
+    existing_version = delta_table_version(
+        str(target),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
     if existing_version is None:
         result = write_ibis_dataset_delta(
             snapshot,
             str(target),
             options=IbisDatasetWriteOptions(
-                execution=runtime.ibis_execution(),
+                execution=context.runtime.ibis_execution(),
                 writer_strategy="datafusion",
                 delta_options=IbisDeltaWriteOptions(
                     mode="overwrite",
                     schema_mode="overwrite",
                     commit_metadata=metadata,
+                    storage_options=storage.storage_options,
+                    log_storage_options=storage.log_storage_options,
                 ),
             ),
         )
-        enable_delta_features(result.path)
+        enable_delta_features(
+            result.path,
+            storage_options=storage.storage_options,
+            log_storage_options=storage.log_storage_options,
+        )
         return result
     commit_key = str(target)
-    commit_options, commit_run = runtime.profile.reserve_delta_commit(
+    commit_options, commit_run = context.runtime.profile.reserve_delta_commit(
         key=commit_key,
         metadata={"dataset": commit_key, "operation": "merge"},
         commit_metadata=metadata,
@@ -119,7 +144,11 @@ def write_repo_snapshot(
         version=commit_options.version,
         commit_metadata=metadata,
     )
-    table = DeltaTable(str(target))
+    table = open_delta_table(
+        str(target),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
     update_predicate = (
         "source.file_sha256 <> target.file_sha256 OR "
         "source.path <> target.path OR "
@@ -140,16 +169,39 @@ def write_repo_snapshot(
         .when_not_matched_by_source_delete()
         .execute()
     )
-    runtime.profile.finalize_delta_commit(
+    context.runtime.profile.finalize_delta_commit(
         key=commit_key,
         run=commit_run,
         metadata={"operation": "merge", "rows_affected": snapshot.num_rows},
     )
-    enable_delta_features(str(target))
+    enable_delta_features(
+        str(target),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
     return DeltaWriteResult(
         path=str(target),
-        version=delta_table_version(str(target)),
+        version=delta_table_version(
+            str(target),
+            storage_options=storage.storage_options,
+            log_storage_options=storage.log_storage_options,
+        ),
     )
+
+
+def _read_delta_table(
+    context: DeltaAccessContext,
+    path: Path,
+    *,
+    name: str,
+) -> pa.Table:
+    backend = context.runtime.ibis_backend()
+    table = read_delta_ibis(
+        backend,
+        str(path),
+        options=IbisDeltaReadOptions(storage_options=context.storage.storage_options),
+    )
+    return ibis_expr_to_table(table, runtime=context.runtime, name=name)
 
 
 __all__ = ["build_repo_snapshot", "read_repo_snapshot", "write_repo_snapshot"]

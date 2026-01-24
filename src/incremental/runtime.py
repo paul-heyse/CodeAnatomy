@@ -10,11 +10,10 @@ from typing import TYPE_CHECKING, Self
 import pyarrow as pa
 from datafusion import SessionContext
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.runtime_profiles import runtime_profile_factory
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.execution_factory import ibis_backend_from_profile, ibis_execution_from_ctx
-from sqlglot_tools.optimizer import SqlGlotPolicy, default_sqlglot_policy
+from ibis_engine.execution_factory import ibis_backend_from_ctx, ibis_execution_from_ctx
+from sqlglot_tools.optimizer import SqlGlotPolicy, resolve_sqlglot_policy
 
 if TYPE_CHECKING:
     from ibis.backends import BaseBackend
@@ -26,24 +25,44 @@ if TYPE_CHECKING:
 class IncrementalRuntime:
     """Runtime container for DataFusion/Ibis/SQLGlot integration."""
 
+    execution_ctx: ExecutionContext
     profile: DataFusionRuntimeProfile
     sqlglot_policy: SqlGlotPolicy
     _ctx: SessionContext | None = None
     _ibis_backend: BaseBackend | None = None
-    _execution_ctx: ExecutionContext | None = None
     _ibis_execution: IbisExecutionContext | None = None
 
     @classmethod
-    def build(cls, *, sqlglot_policy: SqlGlotPolicy | None = None) -> IncrementalRuntime:
+    def build(
+        cls,
+        *,
+        ctx: ExecutionContext | None = None,
+        profile: str = "default",
+        sqlglot_policy: SqlGlotPolicy | None = None,
+    ) -> IncrementalRuntime:
         """Create a runtime with default DataFusion profile and SQLGlot policy.
 
         Returns
         -------
         IncrementalRuntime
             Newly constructed runtime instance.
+
+        Raises
+        ------
+        ValueError
+            Raised when the execution context lacks a DataFusion profile.
         """
-        policy = sqlglot_policy or default_sqlglot_policy()
-        return cls(profile=DataFusionRuntimeProfile(), sqlglot_policy=policy)
+        exec_ctx = ctx or execution_context_factory(profile)
+        runtime_profile = exec_ctx.runtime.datafusion
+        if runtime_profile is None:
+            msg = "Incremental runtime requires a DataFusion profile."
+            raise ValueError(msg)
+        policy = resolve_sqlglot_policy(name="datafusion_compile", policy=sqlglot_policy)
+        return cls(
+            execution_ctx=exec_ctx,
+            profile=runtime_profile,
+            sqlglot_policy=policy,
+        )
 
     def session_context(self) -> SessionContext:
         """Return the cached DataFusion SessionContext.
@@ -67,7 +86,7 @@ class IncrementalRuntime:
         """
         backend = self._ibis_backend
         if backend is None:
-            backend = ibis_backend_from_profile(self.profile)
+            backend = ibis_backend_from_ctx(self.execution_ctx)
             self._ibis_backend = backend
         return backend
 
@@ -79,12 +98,7 @@ class IncrementalRuntime:
         ExecutionContext
             Cached or newly created execution context.
         """
-        ctx = self._execution_ctx
-        if ctx is None:
-            runtime_profile = runtime_profile_factory("default").with_datafusion(self.profile)
-            ctx = ExecutionContext(runtime=runtime_profile)
-            self._execution_ctx = ctx
-        return ctx
+        return self.execution_ctx
 
     def ibis_execution(self) -> IbisExecutionContext:
         """Return the cached Ibis execution context.
@@ -97,7 +111,7 @@ class IncrementalRuntime:
         execution = self._ibis_execution
         if execution is None:
             execution = ibis_execution_from_ctx(
-                self.execution_context(),
+                self.execution_ctx,
                 backend=self.ibis_backend(),
             )
             self._ibis_execution = execution

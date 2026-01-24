@@ -20,7 +20,6 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from arrowdsl.io.ipc import ipc_hash, ipc_table, payload_ipc_bytes
 from arrowdsl.schema.dictionary import normalize_dictionaries
 from arrowdsl.schema.encoding_metadata import (
     DICT_INDEX_META,
@@ -34,6 +33,7 @@ from arrowdsl.schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from storage.ipc import ipc_hash, ipc_table, payload_ipc_bytes
 
 if TYPE_CHECKING:
     from arrowdsl.core.expr_types import ScalarValue

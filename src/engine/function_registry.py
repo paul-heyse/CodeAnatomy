@@ -10,7 +10,6 @@ from typing import Literal, TypeVar, cast
 import pyarrow as pa
 
 from arrowdsl.core.interop import pc
-from arrowdsl.io.ipc import payload_hash
 from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
 from datafusion_engine.sql_expression_registry import (
     DataFusionSqlExpressionSpec,
@@ -18,6 +17,7 @@ from datafusion_engine.sql_expression_registry import (
 )
 from datafusion_engine.udf_registry import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
+from storage.ipc import payload_hash
 
 ExecutionLane = Literal[
     "ibis_builtin",
@@ -545,9 +545,7 @@ def _normalize_catalog_volatility(raw: object | None) -> str | None:
 
 
 def _is_parameter_entry(entry: Mapping[str, object]) -> bool:
-    return any(
-        key in entry for key in ("parameter_name", "parameter_mode", "ordinal_position")
-    )
+    return any(key in entry for key in ("parameter_name", "parameter_mode", "ordinal_position"))
 
 
 def _catalog_parameter_specs(
@@ -692,7 +690,13 @@ def _arrow_type_from_datafusion_type(value: str) -> pa.DataType | None:
     parsed_decimal = _parse_decimal_type(normalized)
     if parsed_decimal is not None:
         return pa.decimal128(parsed_decimal[0], parsed_decimal[1])
-    for parser in (_parse_timestamp, _parse_time32, _parse_time64, _parse_duration, _parse_interval):
+    for parser in (
+        _parse_timestamp,
+        _parse_time32,
+        _parse_time64,
+        _parse_duration,
+        _parse_interval,
+    ):
         parsed = parser(normalized)
         if parsed is not None:
             return parsed

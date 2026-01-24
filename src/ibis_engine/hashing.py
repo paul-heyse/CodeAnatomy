@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from arrowdsl.spec.expr_ir import ExprIR
+from sqlglot_tools.expr_spec import ExprIR
 
 
 @dataclass(frozen=True)

@@ -719,9 +719,7 @@ def _plan_artifact_row(
             str(entry.ibis_compiled_sql) if entry.ibis_compiled_sql is not None else None
         ),
         "ibis_compiled_sql_hash": (
-            str(entry.ibis_compiled_sql_hash)
-            if entry.ibis_compiled_sql_hash is not None
-            else None
+            str(entry.ibis_compiled_sql_hash) if entry.ibis_compiled_sql_hash is not None else None
         ),
         "ibis_compile_params": (
             str(entry.ibis_compile_params) if entry.ibis_compile_params is not None else None
@@ -854,10 +852,11 @@ def engine_runtime_table(
                 "runtime_profile_name": str(entry.runtime_profile_name or ""),
                 "determinism_tier": str(entry.determinism_tier or ""),
                 "runtime_profile_hash": str(entry.runtime_profile_hash or ""),
-                "runtime_profile_snapshot": _binary_payload(entry.runtime_profile_snapshot)
-                or b"",
+                "runtime_profile_snapshot": _binary_payload(entry.runtime_profile_snapshot) or b"",
                 "sqlglot_policy_hash": (
-                    str(entry.sqlglot_policy_hash) if entry.sqlglot_policy_hash is not None else None
+                    str(entry.sqlglot_policy_hash)
+                    if entry.sqlglot_policy_hash is not None
+                    else None
                 ),
                 "sqlglot_policy_snapshot": _binary_payload(entry.sqlglot_policy_snapshot),
                 "function_registry_hash": (

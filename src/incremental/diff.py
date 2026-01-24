@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
-from deltalake import DeltaTable
 
 from arrowdsl.schema.serialization import schema_fingerprint
 from ibis_engine.io_bridge import (
@@ -17,21 +16,21 @@ from ibis_engine.io_bridge import (
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.cdf_runtime import CdfReadResult, read_cdf_changes
-from incremental.runtime import IncrementalRuntime
+from incremental.delta_context import DeltaAccessContext
 from incremental.state_store import StateStore
-from storage.deltalake import enable_delta_features
+from storage.deltalake import delta_table_version, enable_delta_features
 
 if TYPE_CHECKING:
     from storage.deltalake import DeltaWriteResult
 
 
 def diff_snapshots_with_delta_cdf(
+    context: DeltaAccessContext,
     *,
     dataset_path: str,
     cursor_store: CdfCursorStore,
     dataset_name: str,
     filter_policy: CdfFilterPolicy | None = None,
-    runtime: IncrementalRuntime,
 ) -> CdfReadResult | None:
     """Diff snapshots using Delta CDF for efficient incremental reads.
 
@@ -40,6 +39,8 @@ def diff_snapshots_with_delta_cdf(
 
     Parameters
     ----------
+    context : DeltaAccessContext
+        Delta access context supplying runtime and storage options.
     dataset_path : str
         Path to the Delta table.
     cursor_store : CdfCursorStore
@@ -48,8 +49,6 @@ def diff_snapshots_with_delta_cdf(
         Name of the dataset for cursor tracking.
     filter_policy : CdfFilterPolicy | None
         Policy for filtering change types. If None, includes all changes.
-    runtime : IncrementalRuntime
-        Shared incremental runtime for DataFusion execution.
 
     Returns
     -------
@@ -62,10 +61,18 @@ def diff_snapshots_with_delta_cdf(
         return None
 
     # Check if it's a Delta table
-    if not DeltaTable.is_deltatable(dataset_path):
+    storage = context.storage
+    if (
+        delta_table_version(
+            dataset_path,
+            storage_options=storage.storage_options,
+            log_storage_options=storage.log_storage_options,
+        )
+        is None
+    ):
         return None
     return read_cdf_changes(
-        runtime,
+        context,
         dataset_path=dataset_path,
         dataset_name=dataset_name,
         cursor_store=cursor_store,
@@ -77,7 +84,7 @@ def write_incremental_diff(
     store: StateStore,
     diff: pa.Table,
     *,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> DeltaWriteResult:
     """Persist the incremental diff to the state store as Delta.
 
@@ -87,8 +94,8 @@ def write_incremental_diff(
         State store holding incremental dataset paths.
     diff : pa.Table
         Incremental diff table to write.
-    runtime : IncrementalRuntime
-        Runtime used for Delta write execution and diagnostics.
+    context : DeltaAccessContext
+        Delta access context supplying runtime and storage options.
 
     Returns
     -------
@@ -106,16 +113,22 @@ def write_incremental_diff(
         diff,
         str(target),
         options=IbisDatasetWriteOptions(
-            execution=runtime.ibis_execution(),
+            execution=context.runtime.ibis_execution(),
             writer_strategy="datafusion",
             delta_options=IbisDeltaWriteOptions(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata=commit_metadata,
+                storage_options=context.storage.storage_options,
+                log_storage_options=context.storage.log_storage_options,
             ),
         ),
     )
-    enable_delta_features(result.path)
+    enable_delta_features(
+        result.path,
+        storage_options=context.storage.storage_options,
+        log_storage_options=context.storage.log_storage_options,
+    )
     return result
 
 

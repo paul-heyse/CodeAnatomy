@@ -36,6 +36,13 @@ from arrowdsl.core.array_iter import iter_array_values
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike
 from datafusion_engine.hash_utils import hash64_from_text, hash128_from_text
 from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.span_utils import (
+    ENC_UTF8,
+    ENC_UTF16,
+    ENC_UTF32,
+    encoding_from_unit,
+    normalize_col_unit_value,
+)
 from datafusion_engine.udf_catalog import (
     UdfCatalog,
     UdfPerformancePolicy,
@@ -57,10 +64,6 @@ UdfTier = Literal["builtin", "pyarrow", "pandas", "python"]
 UDF_TIER_PRIORITY: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
 
 T_Udf = TypeVar("T_Udf", ScalarUDF, AggregateUDF, WindowUDF, TableFunction)
-
-ENC_UTF8 = 1
-ENC_UTF16 = 2
-ENC_UTF32 = 3
 
 
 def _pycapsule_entries() -> tuple[DataFusionPycapsuleUdfEntry, ...]:
@@ -835,46 +838,6 @@ def _code_unit_offset_to_py_index(line: str, offset: int, position_encoding: int
     return min(offset, len(line))
 
 
-def _normalize_col_unit(value: object | None) -> str:
-    if isinstance(value, int):
-        return _col_unit_from_int(value)
-    if isinstance(value, str):
-        return _col_unit_from_text(value)
-    return "utf32"
-
-
-def _col_unit_from_int(value: int) -> str:
-    encoding_map: dict[int, str] = {
-        ENC_UTF8: "utf8",
-        ENC_UTF16: "utf16",
-        ENC_UTF32: "utf32",
-    }
-    return encoding_map.get(value, "utf32")
-
-
-def _col_unit_from_text(value: str) -> str:
-    text = value.strip().lower()
-    if text.isdigit():
-        return _col_unit_from_int(int(text))
-    if "byte" in text:
-        return "byte"
-    if "utf8" in text:
-        return "utf8"
-    if "utf16" in text:
-        return "utf16"
-    if "utf32" in text:
-        return "utf32"
-    return "utf32"
-
-
-def _encoding_from_unit(unit: str) -> int:
-    if unit == "utf8":
-        return ENC_UTF8
-    if unit == "utf16":
-        return ENC_UTF16
-    return ENC_UTF32
-
-
 def _clamp_offset(offset: int, limit: int) -> int:
     return max(0, min(offset, limit))
 
@@ -888,7 +851,7 @@ def _col_to_byte(
         line = line_values.as_py()
         offset_value = offset_values.as_py() if isinstance(offset_values, pa.Scalar) else None
         offset = _coerce_int(offset_value)
-        unit = _normalize_col_unit(
+        unit = normalize_col_unit_value(
             encoding_values.as_py() if isinstance(encoding_values, pa.Scalar) else None
         )
         if not isinstance(line, str) or offset is None:
@@ -896,7 +859,7 @@ def _col_to_byte(
         if unit == "byte":
             byte_len = len(line.encode("utf-8"))
             return pa.scalar(_clamp_offset(offset, byte_len), type=pa.int64())
-        enc = _encoding_from_unit(unit)
+        enc = encoding_from_unit(unit)
         py_index = _code_unit_offset_to_py_index(line, offset, enc)
         py_index = _clamp_offset(py_index, len(line))
         return pa.scalar(len(line[:py_index].encode("utf-8")), type=pa.int64())
@@ -924,7 +887,7 @@ def _col_to_byte(
             out.append(None)
             continue
         offset = _coerce_int(offset_value)
-        unit = _normalize_col_unit(encoding_value)
+        unit = normalize_col_unit_value(encoding_value)
         if offset is None:
             out.append(None)
             continue
@@ -932,7 +895,7 @@ def _col_to_byte(
             byte_len = len(line_value.encode("utf-8"))
             out.append(_clamp_offset(offset, byte_len))
             continue
-        enc = _encoding_from_unit(unit)
+        enc = encoding_from_unit(unit)
         py_index = _code_unit_offset_to_py_index(line_value, offset, enc)
         py_index = _clamp_offset(py_index, len(line_value))
         out.append(len(line_value[:py_index].encode("utf-8")))

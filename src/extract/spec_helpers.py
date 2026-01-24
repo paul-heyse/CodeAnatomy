@@ -3,13 +3,37 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from functools import cache
 
 from arrowdsl.schema.metadata import extractor_option_defaults_from_metadata
 from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata_specs
 from datafusion_engine.extract_registry import dataset_schema, extractor_defaults
 from extract.evidence_plan import EvidencePlan
-from relspec.rules.options import RuleExecutionOptions
+
+
+@dataclass(frozen=True)
+class ExtractExecutionOptions:
+    """Execution options for extract gating and defaults."""
+
+    module_allowlist: tuple[str, ...] = ()
+    feature_flags: Mapping[str, bool] = field(default_factory=dict)
+    metadata_defaults: Mapping[str, object] = field(default_factory=dict)
+
+    def as_mapping(self) -> Mapping[str, object]:
+        """Return a merged mapping of execution flags.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Combined metadata defaults and feature flags.
+        """
+        payload: dict[str, object] = {}
+        payload.update(self.metadata_defaults)
+        payload.update(self.feature_flags)
+        if self.module_allowlist:
+            payload["module_allowlist"] = self.module_allowlist
+        return payload
 
 
 def _rows_for_template(template_name: str) -> tuple[ExtractMetadata, ...]:
@@ -137,12 +161,12 @@ def rule_execution_options(
     plan: EvidencePlan | None,
     *,
     overrides: Mapping[str, object] | None = None,
-) -> RuleExecutionOptions:
+) -> ExtractExecutionOptions:
     """Return execution options for template gating.
 
     Returns
     -------
-    RuleExecutionOptions
+    ExtractExecutionOptions
         Execution options for stage gating.
     """
     override_values = dict(overrides or {})
@@ -150,7 +174,7 @@ def rule_execution_options(
     metadata_defaults = _metadata_defaults(template_name)
     feature_flags = plan_feature_flags(template_name, plan)
     feature_flags.update(_bool_overrides(override_values))
-    return RuleExecutionOptions(
+    return ExtractExecutionOptions(
         module_allowlist=module_allowlist,
         feature_flags=feature_flags,
         metadata_defaults=metadata_defaults,
@@ -169,6 +193,7 @@ def _bool_overrides(overrides: Mapping[str, object]) -> dict[str, bool]:
 
 
 __all__ = [
+    "ExtractExecutionOptions",
     "extractor_option_values",
     "plan_feature_flags",
     "plan_requires_row",

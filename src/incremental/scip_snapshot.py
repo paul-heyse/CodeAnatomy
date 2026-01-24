@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import ibis
@@ -10,13 +11,14 @@ import pyarrow as pa
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.runtime import read_delta_as_reader
 from ibis_engine.builtin_udfs import sha256, stable_hash64
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
     write_ibis_dataset_delta,
 )
+from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
+from incremental.delta_context import DeltaAccessContext
 from incremental.ibis_exec import ibis_expr_to_table
 from incremental.ibis_utils import ibis_table_from_arrow
 from incremental.runtime import IncrementalRuntime
@@ -323,7 +325,11 @@ def scip_changed_file_ids(
     return tuple(sorted(set(values)))
 
 
-def read_scip_snapshot(store: StateStore) -> pa.Table | None:
+def read_scip_snapshot(
+    store: StateStore,
+    *,
+    context: DeltaAccessContext,
+) -> pa.Table | None:
     """Load the previous SCIP snapshot when present.
 
     Returns
@@ -332,17 +338,24 @@ def read_scip_snapshot(store: StateStore) -> pa.Table | None:
         Loaded snapshot table, or ``None`` when missing.
     """
     path = store.scip_snapshot_path()
-    if not path.exists() or delta_table_version(str(path)) is None:
+    if not path.exists():
         return None
-    reader = read_delta_as_reader(str(path))
-    return reader.read_all()
+    storage = context.storage
+    version = delta_table_version(
+        str(path),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
+    if version is None:
+        return None
+    return _read_delta_table(context, path, name="scip_snapshot_read")
 
 
 def write_scip_snapshot(
     store: StateStore,
     snapshot: pa.Table,
     *,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> DeltaWriteResult:
     """Persist the SCIP snapshot to the state store as Delta.
 
@@ -362,16 +375,22 @@ def write_scip_snapshot(
         snapshot,
         str(target),
         options=IbisDatasetWriteOptions(
-            execution=runtime.ibis_execution(),
+            execution=context.runtime.ibis_execution(),
             writer_strategy="datafusion",
             delta_options=IbisDeltaWriteOptions(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata=commit_metadata,
+                storage_options=context.storage.storage_options,
+                log_storage_options=context.storage.log_storage_options,
             ),
         ),
     )
-    enable_delta_features(result.path)
+    enable_delta_features(
+        result.path,
+        storage_options=context.storage.storage_options,
+        log_storage_options=context.storage.log_storage_options,
+    )
     return result
 
 
@@ -379,7 +398,7 @@ def write_scip_diff(
     store: StateStore,
     diff: pa.Table,
     *,
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
 ) -> DeltaWriteResult:
     """Persist the SCIP diff to the state store as Delta.
 
@@ -399,17 +418,38 @@ def write_scip_diff(
         diff,
         str(target),
         options=IbisDatasetWriteOptions(
-            execution=runtime.ibis_execution(),
+            execution=context.runtime.ibis_execution(),
             writer_strategy="datafusion",
             delta_options=IbisDeltaWriteOptions(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata=commit_metadata,
+                storage_options=context.storage.storage_options,
+                log_storage_options=context.storage.log_storage_options,
             ),
         ),
     )
-    enable_delta_features(result.path)
+    enable_delta_features(
+        result.path,
+        storage_options=context.storage.storage_options,
+        log_storage_options=context.storage.log_storage_options,
+    )
     return result
+
+
+def _read_delta_table(
+    context: DeltaAccessContext,
+    path: Path,
+    *,
+    name: str,
+) -> pa.Table:
+    backend = context.runtime.ibis_backend()
+    table = read_delta_ibis(
+        backend,
+        str(path),
+        options=IbisDeltaReadOptions(storage_options=context.storage.storage_options),
+    )
+    return ibis_expr_to_table(table, runtime=context.runtime, name=name)
 
 
 __all__ = [

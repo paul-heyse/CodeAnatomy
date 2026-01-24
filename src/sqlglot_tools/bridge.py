@@ -12,15 +12,25 @@ from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value
 
 from sqlglot_tools.compat import Expression, diff
+from sqlglot_tools.lineage import (
+    LineageExtractionOptions,
+    LineagePayload,
+    extract_lineage_payload,
+)
 from sqlglot_tools.optimizer import (
     DEFAULT_WRITE_DIALECT,
     CanonicalizationRules,
     NormalizeExprOptions,
     SchemaMapping,
     SqlGlotPolicy,
+    _flatten_schema_mapping,
     ast_to_artifact,
+    canonical_ast_fingerprint,
     normalize_expr_with_stats,
+    plan_fingerprint,
+    resolve_sqlglot_policy,
     serialize_ast_artifact,
+    sqlglot_policy_snapshot_for,
 )
 
 
@@ -103,6 +113,31 @@ class SqlGlotDiagnosticsOptions:
     sql: str | None = None
 
 
+@dataclass(frozen=True)
+class SqlGlotPlanArtifacts:
+    """Plan-level SQLGlot artifacts for diagnostics."""
+
+    diagnostics: SqlGlotDiagnostics
+    plan_hash: str
+    policy_hash: str
+    policy_rules_hash: str
+    schema_map_hash: str | None
+    lineage: LineagePayload | None
+    canonical_fingerprint: str | None
+    sqlglot_ast: bytes | None
+
+
+@dataclass(frozen=True)
+class SqlGlotPlanOptions:
+    """Options for SQLGlot plan artifact collection."""
+
+    schema_map: SchemaMapping | None = None
+    schema_map_hash: str | None = None
+    policy: SqlGlotPolicy | None = None
+    policy_name: str = "datafusion_compile"
+    diagnostics: SqlGlotDiagnosticsOptions | None = None
+
+
 def ibis_to_sqlglot(
     expr: IbisTable,
     *,
@@ -170,6 +205,96 @@ def sqlglot_diagnostics(
         normalization_max_distance=stats.max_distance if stats is not None else None,
         normalization_applied=stats.applied if stats is not None else None,
     )
+
+
+def collect_sqlglot_plan_artifacts(
+    expr: IbisTable,
+    *,
+    backend: IbisCompilerBackend,
+    options: SqlGlotPlanOptions | None = None,
+) -> SqlGlotPlanArtifacts:
+    """Collect SQLGlot diagnostics, hashes, and lineage for an Ibis expression.
+
+    Returns
+    -------
+    SqlGlotPlanArtifacts
+        Plan artifacts derived from SQLGlot compilation and optimization.
+    """
+    resolved_options = options or SqlGlotPlanOptions()
+    resolved_policy = resolved_options.policy or resolve_sqlglot_policy(
+        name=resolved_options.policy_name
+    )
+    snapshot = sqlglot_policy_snapshot_for(resolved_policy)
+    diagnostics_options = resolved_options.diagnostics or SqlGlotDiagnosticsOptions()
+    diagnostics = sqlglot_diagnostics(
+        expr,
+        backend=backend,
+        options=SqlGlotDiagnosticsOptions(
+            schema_map=resolved_options.schema_map,
+            rules=diagnostics_options.rules,
+            policy=resolved_policy,
+            normalize=diagnostics_options.normalize,
+            params=diagnostics_options.params,
+            sql=diagnostics_options.sql,
+        ),
+    )
+    plan_hash = plan_fingerprint(
+        diagnostics.optimized,
+        dialect=resolved_policy.write_dialect,
+        policy_hash=snapshot.policy_hash,
+        schema_map_hash=resolved_options.schema_map_hash,
+    )
+    lineage = _lineage_payload(
+        diagnostics.optimized,
+        schema_map=resolved_options.schema_map,
+        policy=resolved_policy,
+    )
+    canonical = (
+        lineage.canonical_fingerprint
+        if lineage is not None
+        else canonical_ast_fingerprint(diagnostics.optimized)
+    )
+    sqlglot_ast = _ast_payload(
+        diagnostics.optimized,
+        sql=diagnostics.sql_text_optimized,
+        policy=resolved_policy,
+    )
+    return SqlGlotPlanArtifacts(
+        diagnostics=diagnostics,
+        plan_hash=plan_hash,
+        policy_hash=snapshot.policy_hash,
+        policy_rules_hash=snapshot.rules_hash,
+        schema_map_hash=resolved_options.schema_map_hash,
+        lineage=lineage,
+        canonical_fingerprint=canonical,
+        sqlglot_ast=sqlglot_ast,
+    )
+
+
+def _lineage_payload(
+    expr: Expression,
+    *,
+    schema_map: SchemaMapping | None,
+    policy: SqlGlotPolicy,
+) -> LineagePayload | None:
+    try:
+        schema = _flatten_schema_mapping(schema_map) if schema_map is not None else None
+        return extract_lineage_payload(
+            expr,
+            options=LineageExtractionOptions(
+                schema=schema,
+                dialect=policy.write_dialect,
+            ),
+        )
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _ast_payload(expr: Expression, *, sql: str, policy: SqlGlotPolicy) -> bytes | None:
+    try:
+        return serialize_ast_artifact(ast_to_artifact(expr, sql=sql, policy=policy))
+    except (RuntimeError, TypeError, ValueError, msgspec.EncodeError):
+        return None
 
 
 def relation_diff(
@@ -352,7 +477,10 @@ __all__ = [
     "SqlGlotCompiler",
     "SqlGlotDiagnostics",
     "SqlGlotDiagnosticsOptions",
+    "SqlGlotPlanArtifacts",
+    "SqlGlotPlanOptions",
     "SqlGlotRelationDiff",
+    "collect_sqlglot_plan_artifacts",
     "execute_sqlglot_ast",
     "ibis_to_datafusion_ast_path",
     "ibis_to_sqlglot",

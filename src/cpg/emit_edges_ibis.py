@@ -66,8 +66,58 @@ def emit_edges_ibis(
     return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 
+def emit_edges_from_relation_output(rel: IbisPlan | Table) -> IbisPlan:
+    """Emit CPG edges from relation_output rows.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan emitting edge rows.
+    """
+    expr = rel.expr if isinstance(rel, IbisPlan) else rel
+    edge_kind = _optional_column(expr, "kind", pa.string())
+    edge_id = _edge_id_expr_from_relation(expr, edge_kind=edge_kind)
+    output = expr.mutate(edge_id=edge_id, edge_kind=edge_kind)
+    output = output.select(
+        edge_id=output.edge_id,
+        edge_kind=output.edge_kind,
+        src_node_id=output.src,
+        dst_node_id=output.dst,
+        path=output.path,
+        bstart=output.bstart,
+        bend=output.bend,
+        origin=output.origin,
+        resolution_method=output.resolution_method,
+        confidence=output.confidence,
+        score=output.score,
+        symbol_roles=output.symbol_roles,
+        qname_source=output.qname_source,
+        ambiguity_group_id=output.ambiguity_group_id,
+        rule_name=output.rule_name,
+        rule_priority=output.rule_priority,
+    )
+    validate_expr_schema(output, expected=CPG_EDGES_SCHEMA, allow_extra_columns=False)
+    return IbisPlan(expr=output, ordering=Ordering.unordered())
+
+
 def _edge_id_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
     edge_kind = str(spec.edge_kind)
+    base_id = stable_id_expr("edge", edge_kind, rel.src, rel.dst)
+    span_id = stable_id_expr(
+        "edge",
+        edge_kind,
+        rel.src,
+        rel.dst,
+        rel.path,
+        rel.bstart,
+        rel.bend,
+    )
+    has_span = rel.path.notnull() & rel.bstart.notnull() & rel.bend.notnull()
+    valid_nodes = rel.src.notnull() & rel.dst.notnull()
+    return ibis.ifelse(valid_nodes, ibis.ifelse(has_span, span_id, base_id), ibis.null())
+
+
+def _edge_id_expr_from_relation(rel: Table, *, edge_kind: Value) -> Value:
     base_id = stable_id_expr("edge", edge_kind, rel.src, rel.dst)
     span_id = stable_id_expr(
         "edge",
@@ -157,4 +207,4 @@ def _optional_column(rel: Table, name: str, dtype: pa.DataType) -> Value:
     return ibis_null_literal(dtype)
 
 
-__all__ = ["emit_edges_ibis"]
+__all__ = ["emit_edges_from_relation_output", "emit_edges_ibis"]

@@ -4,16 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import ibis
 import ibis.expr.datatypes as dt
 from ibis.expr.types import BooleanValue, Table, Value
 
 from ibis_engine.param_tables import scalar_param_signature
-
-if TYPE_CHECKING:
-    from relspec.rules.rel_ops import RelOpT
 
 type JoinHow = Literal[
     "anti",
@@ -114,7 +111,7 @@ class IbisParamRegistry:
         return {self.params[name]: resolved[name] for name in self.params}
 
 
-def specs_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[ScalarParamSpec, ...]:
+def specs_from_rel_ops(ops: Sequence[object]) -> tuple[ScalarParamSpec, ...]:
     """Extract parameter specs from a sequence of relational ops.
 
     Returns
@@ -122,19 +119,19 @@ def specs_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[ScalarParamSpec, ...]:
     tuple[ParamSpec, ...]
         Parameter specs in encounter order.
     """
-    from relspec.rules.rel_ops import ParamOp
-
     specs: list[ScalarParamSpec] = []
     for op in ops:
-        if not isinstance(op, ParamOp):
+        name = getattr(op, "name", None)
+        dtype = getattr(op, "dtype", None)
+        if not isinstance(name, str) or not isinstance(dtype, str):
             continue
-        if _param_kind(op.dtype) != "scalar":
+        if _param_kind(dtype) != "scalar":
             continue
-        specs.append(ScalarParamSpec(name=op.name, dtype=op.dtype))
+        specs.append(ScalarParamSpec(name=name, dtype=dtype))
     return tuple(specs)
 
 
-def list_param_names_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[str, ...]:
+def list_param_names_from_rel_ops(ops: Sequence[object]) -> tuple[str, ...]:
     """Return list-param names declared via ParamOp entries.
 
     Returns
@@ -142,16 +139,16 @@ def list_param_names_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[str, ...]:
     tuple[str, ...]
         List parameter names in encounter order.
     """
-    from relspec.rules.rel_ops import ParamOp
-
     names: list[str] = []
     for op in ops:
-        if not isinstance(op, ParamOp):
+        name = getattr(op, "name", None)
+        dtype = getattr(op, "dtype", None)
+        if not isinstance(name, str) or not isinstance(dtype, str):
             continue
-        if _param_kind(op.dtype) != "array":
+        if _param_kind(dtype) != "array":
             continue
-        if op.name:
-            names.append(op.name)
+        if name:
+            names.append(name)
     return tuple(dict.fromkeys(names))
 
 
@@ -180,7 +177,7 @@ def registry_from_specs(specs: Iterable[ScalarParamSpec]) -> IbisParamRegistry:
     return registry
 
 
-def registry_from_ops(ops: Sequence[RelOpT]) -> IbisParamRegistry:
+def registry_from_ops(ops: Sequence[object]) -> IbisParamRegistry:
     """Build an Ibis parameter registry from relational ops.
 
     Returns

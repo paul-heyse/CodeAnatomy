@@ -55,6 +55,9 @@ def compile_task_plan(task: TaskSpec, *, backend: IbisCompilerBackend, ctx: Exec
 ### Why
 Establish the canonical inference‑first API: task definitions, plan compilation, lineage extraction, and fingerprints. This replaces rule definitions/spec tables as the source of truth.
 
+### Status
+**Completed** — catalogs + compilation helpers are live; unit tests added.
+
 ### Representative Code Snippets
 ```python
 # src/relspec/task_catalog.py (new)
@@ -82,10 +85,10 @@ class PlanCatalog:
 - **Update**: `src/relspec/runtime_artifacts.py` (continue as the runtime store)
 
 ### Implementation Checklist
-- [ ] Define `TaskSpec` and `TaskCatalog` (view/compute/materialization + cache policy).
-- [ ] Define `PlanArtifact` and `PlanCatalog` (plan, SQLGlot AST, lineage, fingerprints).
-- [ ] Implement `compile_task_plan()` helper for Ibis → SQLGlot → lineage.
-- [ ] Add unit tests for catalog indexing and plan compilation.
+- [x] Define `TaskSpec` and `TaskCatalog` (view/compute/materialization + cache policy).
+- [x] Define `PlanArtifact` and `PlanCatalog` (plan, SQLGlot AST, lineage, fingerprints).
+- [x] Implement `compile_task_plan()` helper for Ibis → SQLGlot → lineage.
+- [x] Add unit tests for catalog indexing and plan compilation.
 
 ---
 
@@ -93,6 +96,9 @@ class PlanCatalog:
 
 ### Why
 Replace all rule‑based graph constructors with a single inference path from `PlanCatalog`.
+
+### Status
+**Completed** — inference‑only graph builder shipped; legacy constructors removed.
 
 ### Representative Code Snippets
 ```python
@@ -114,9 +120,9 @@ def build_task_graph(artifacts: Sequence[PlanArtifact]) -> TaskGraph:
 - **Update**: `src/relspec/rustworkx_graph.py` (keep inferred builder, remove legacy paths)
 
 ### Implementation Checklist
-- [ ] Introduce `TaskGraph` wrapper (optional; or reuse existing `RuleGraph`).
-- [ ] Provide `build_task_graph(PlanCatalog)` that uses inferred deps.
-- [ ] Remove/disable `build_rule_graph_from_definitions` and other legacy constructors.
+- [x] Introduce `TaskGraph` wrapper (optional; or reuse existing `RuleGraph`).
+- [x] Provide `build_task_graph(PlanCatalog)` that uses inferred deps.
+- [x] Remove/disable `build_rule_graph_from_definitions` and other legacy constructors.
 
 ---
 
@@ -124,6 +130,9 @@ def build_task_graph(artifacts: Sequence[PlanArtifact]) -> TaskGraph:
 
 ### Why
 Guarantee readiness based on **inferred column requirements** instead of declared inputs.
+
+### Status
+**Completed** — column/type/metadata edge validation wired into scheduling.
 
 ### Representative Code Snippets
 ```python
@@ -137,9 +146,9 @@ if not validate_edge_requirements(graph, rule_idx, catalog=evidence):
 - **Update**: `src/relspec/graph_edge_validation.py`
 
 ### Implementation Checklist
-- [ ] Ensure scheduler only validates through `GraphEdge` requirements.
-- [ ] Include required column/types/metadata checks.
-- [ ] Provide diagnostics for failed edges.
+- [x] Ensure scheduler only validates through `GraphEdge` requirements.
+- [x] Include required column/types/metadata checks.
+- [x] Provide diagnostics for failed edges (column‑level).
 
 ---
 
@@ -147,6 +156,9 @@ if not validate_edge_requirements(graph, rule_idx, catalog=evidence):
 
 ### Why
 Rule registry + spec tables are tightly coupled to declared inputs. Inference pivot requires a task catalog and builder registry instead.
+
+### Status
+**Completed** — normalize, relationship, and CPG task catalogs now emit real plans.
 
 ### Representative Code Snippet
 ```python
@@ -169,9 +181,10 @@ class TaskRegistry:
 - **Update**: `src/hamilton_pipeline/*` to synthesize from TaskGraph
 
 ### Implementation Checklist
-- [ ] Create `TaskRegistry` and task discovery hooks.
-- [ ] Replace normalize/relationship rule factories with task registration.
-- [ ] Update Hamilton orchestration to operate on TaskCatalog/TaskGraph.
+- [x] Create `TaskRegistry` and task discovery hooks.
+- [x] Replace normalize rule factories with task catalog builders.
+- [x] Define relationship task builders (rule‑free) and register into the catalog.
+- [x] Update Hamilton orchestration to operate on TaskCatalog/TaskGraph.
 
 ---
 
@@ -179,6 +192,9 @@ class TaskRegistry:
 
 ### Why
 The current execution pipeline expects rule definitions; inference pivot should compile plans directly from tasks.
+
+### Status
+**Completed** — plan execution is wired into Hamilton with RuntimeArtifacts + EvidenceCatalog updates.
 
 ### Representative Code Snippets
 ```python
@@ -199,9 +215,9 @@ def execute_task_plan(artifact: PlanArtifact, *, ctx: TaskExecutionContext) -> T
 - **Update**: `src/hamilton_pipeline/modules/*` (consume PlanArtifacts)
 
 ### Implementation Checklist
-- [ ] Introduce a minimal execution harness for PlanArtifacts.
-- [ ] Replace rule‑compiler pipeline.
-- [ ] Align runtime artifacts and evidence catalog updates.
+- [x] Introduce a minimal execution harness for PlanArtifacts.
+- [x] Replace rule‑compiler pipeline with plan‑catalog execution in the pipeline.
+- [x] Align runtime artifacts + evidence catalog updates during task execution.
 
 ---
 
@@ -209,6 +225,9 @@ def execute_task_plan(artifact: PlanArtifact, *, ctx: TaskExecutionContext) -> T
 
 ### Why
 Incremental logic should be based on plan fingerprints and inferred lineage rather than rule definitions.
+
+### Status
+**Completed** — plan fingerprints are persisted and used to gate execution.
 
 ### Representative Code Snippet
 ```python
@@ -229,8 +248,8 @@ def diff_plan_catalog(prev: PlanCatalog, curr: PlanCatalog) -> IncrementalDiff:
 - **Update**: `src/relspec/rules/cache.py` (if retained, rewire to PlanCatalog)
 
 ### Implementation Checklist
-- [ ] Implement fingerprint‑diff for Task/Plan catalogs.
-- [ ] Update incremental scheduling to target changed tasks only.
+- [x] Implement fingerprint‑diff for Task/Plan catalogs.
+- [x] Update incremental scheduling to target changed tasks only.
 
 ---
 
@@ -239,24 +258,27 @@ def diff_plan_catalog(prev: PlanCatalog, curr: PlanCatalog) -> IncrementalDiff:
 ### Why
 Once all pipelines use Task/Plan catalog, the rule registry, spec tables, and rule handlers are obsolete.
 
+### Status
+**Mostly complete** — rule registry/spec modules deleted; some rule‑named models remain but are inert.
+
 ### Files to Decommission/Delete
-> **Delete after migration is complete:**
-- `src/relspec/rules/`
-- `src/relspec/registry/`
-- `src/relspec/adapters/`
-- `src/relspec/extract/`
-- `src/relspec/normalize/` (relspec‑side normalize rule specs)
-- `src/relspec/compiler.py`
-- `src/relspec/engine.py`
-- `src/relspec/plan.py`
-- `src/relspec/validate.py`
-- `src/relspec/incremental.py` (replace with PlanCatalog diff)
-- `src/relspec/graph.py` (rule‑level graph plan path)
+> **Status (current repo):**
+- [x] `src/relspec/rules/`
+- [x] `src/relspec/registry/`
+- [x] `src/relspec/adapters/`
+- [x] `src/relspec/extract/`
+- [x] `src/relspec/normalize/` (relspec‑side normalize rule specs)
+- [x] `src/relspec/compiler.py`
+- [x] `src/relspec/engine.py`
+- [x] `src/relspec/plan.py`
+- [x] `src/relspec/validate.py`
+- [x] `src/relspec/graph.py` (rule‑level graph plan path)
+- [x] `src/relspec/incremental.py` (replaced with PlanCatalog diff implementation)
 
 ### Implementation Checklist
-- [ ] Remove all imports of rule registry/spec tables.
-- [ ] Remove rule‑definition serialization/contract tables.
-- [ ] Delete deprecated graph builders.
+- [x] Remove all imports of rule registry/spec tables.
+- [x] Remove rule‑definition serialization/contract tables.
+- [x] Delete deprecated graph builders.
 
 ---
 
@@ -267,27 +289,42 @@ Once all pipelines use Task/Plan catalog, the rule registry, spec tables, and ru
 - **Update**: `docs/plans/calculation_driven_scheduling_and_orchestration.md`
 - **New**: `docs/plans/task_plan_catalog_pivot.md` (this plan)
 
+### Status
+**Completed** — core docs updated and diagram added.
+
 ### Implementation Checklist
-- [ ] Replace “rules registry” terminology with “task/plan catalog.”
-- [ ] Document TaskSpec lifecycle + compilation + inference.
-- [ ] Add diagrams for TaskCatalog → PlanCatalog → TaskGraph → Scheduler.
+- [x] Replace “rules registry” terminology with “task/plan catalog.”
+- [x] Document TaskSpec lifecycle + compilation + inference.
+- [x] Add diagrams for TaskCatalog → PlanCatalog → TaskGraph → Scheduler.
+
+### Diagram — Task/Plan Catalog Flow
+```mermaid
+flowchart LR
+  A[TaskCatalog<br/>TaskSpec builders] --> B[PlanCatalog<br/>compile_task_plan]
+  B --> C[InferredDeps<br/>SQLGlot lineage]
+  C --> D[TaskGraph<br/>rustworkx DAG]
+  D --> E[Scheduler<br/>schedule_rules]
+  E --> F[Execution<br/>execute_plan_artifact]
+  F --> G[RuntimeArtifacts + EvidenceCatalog]
+```
 
 ---
 
 ## Cross‑Cutting Decommission List (Functions)
 
 > **Delete once all call sites are migrated**
-- `relspec.rustworkx_graph.build_rule_graph_from_definitions`
-- `relspec.rustworkx_graph.build_rule_graph_from_relationship_rules`
-- `relspec.rustworkx_graph.build_rule_graph_from_normalize_rules`
-- `relspec.rules.*` (all rule definition/spec/handler functions)
-- `relspec.registry.*` (rule registry / snapshot / rule discovery)
-- `relspec.compiler.*` (rule compilation pipeline)
-- `relspec.engine.*` (rule execution engine)
-- `relspec.plan.*` (rule plan composition)
-- `relspec.validate.*` (rule validation pipeline)
-- `relspec.incremental.*` (rule‑based incremental)
-- `relspec.graph.compile_graph_plan` (rule‑based graph plan)
+> **Status (current repo):**
+- [x] `relspec.rustworkx_graph.build_rule_graph_from_definitions`
+- [x] `relspec.rustworkx_graph.build_rule_graph_from_relationship_rules`
+- [x] `relspec.rustworkx_graph.build_rule_graph_from_normalize_rules`
+- [x] `relspec.rules.*` (all rule definition/spec/handler functions)
+- [x] `relspec.registry.*` (rule registry / snapshot / rule discovery)
+- [x] `relspec.compiler.*` (rule compilation pipeline)
+- [x] `relspec.engine.*` (rule execution engine)
+- [x] `relspec.plan.*` (rule plan composition)
+- [x] `relspec.validate.*` (rule validation pipeline)
+- [x] `relspec.incremental.*` (rule‑based incremental)
+- [x] `relspec.graph.compile_graph_plan` (rule‑based graph plan)
 
 ---
 
@@ -314,7 +351,7 @@ Once all pipelines use Task/Plan catalog, the rule registry, spec tables, and ru
 ---
 
 ## Next Steps (if you want me to proceed)
-1. Inventory which subsystems still import `relspec.rules` or `relspec.registry`.
-2. Define TaskSpec builders for normalize/relationship/cpg outputs.
-3. Implement PlanCatalog + graph inference + scheduler integration.
-4. Delete rule system modules and run quality gates.
+1. Populate `GraphEdge.required_types` / `required_metadata` from schema-aware inference (currently validated but always empty).
+2. Add targeted tests for edge validation (types/metadata) and incremental plan gating.
+3. Decide whether legacy `normalize/runner.py` should be refactored to consume TaskCatalogs or explicitly marked as legacy-only.
+4. Add small diagnostics for incremental plan diff (counts + changed task names) to the diagnostics sink.

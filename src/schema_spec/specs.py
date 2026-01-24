@@ -19,7 +19,6 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from arrowdsl.io.ipc import payload_hash
 from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.encoding_metadata import (
     ENCODING_DICTIONARY,
@@ -39,6 +38,7 @@ from sqlglot_tools.optimizer import (
     resolve_sqlglot_policy,
     sqlglot_sql,
 )
+from storage.ipc import payload_hash
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
@@ -52,7 +52,7 @@ _DDL_FINGERPRINT_SCHEMA = pa.schema(
 )
 
 if TYPE_CHECKING:
-    from arrowdsl.spec.expr_ir import ExprIR
+    from sqlglot_tools.expr_spec import ExprIR
 
 
 def _ddl_policy(dialect: str) -> SqlGlotPolicy:

@@ -20,7 +20,6 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
-from arrowdsl.io.ipc import ipc_table, payload_ipc_bytes
 from arrowdsl.schema.build import (
     dictionary_array_from_indices,
     rows_from_table,
@@ -36,6 +35,7 @@ from arrowdsl.spec.literals import (
     encode_scalar_union,
 )
 from arrowdsl.spec.scalar_union import SCALAR_UNION_TYPE
+from storage.ipc import ipc_table, payload_ipc_bytes
 
 if TYPE_CHECKING:
     from ibis_engine.expr_compiler import IbisExprRegistry

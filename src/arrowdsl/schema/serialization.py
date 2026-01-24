@@ -12,10 +12,10 @@ import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.core.interop import DataTypeLike, SchemaLike
-from arrowdsl.io.ipc import payload_hash
 from arrowdsl.schema.semantic_types import register_semantic_extension_types
 from core_types import JsonDict
 from serde_msgspec import dumps_msgpack, loads_msgpack
+from storage.ipc import payload_hash
 
 DATASET_FINGERPRINT_VERSION = 1
 
@@ -147,6 +147,7 @@ def dataset_fingerprint(
         "input_fingerprints": sorted(input_fingerprints),
     }
     return payload_hash(payload, _dataset_fingerprint_schema())
+
 
 def schema_to_msgpack(schema: SchemaLike) -> bytes:
     """Serialize an Arrow schema to MessagePack bytes.

@@ -8,6 +8,7 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.runtime import read_delta_as_reader
+from incremental.delta_context import DeltaAccessContext
 from incremental.delta_updates import PartitionedDatasetSpec, upsert_partitioned_dataset
 from incremental.runtime import IncrementalRuntime
 from incremental.types import IncrementalFileChanges
@@ -20,6 +21,7 @@ def _read_delta(path: Path) -> pa.Table:
 def test_upsert_partitioned_dataset_requires_partition_column(tmp_path: Path) -> None:
     """Raise when the partition column is missing from the input table."""
     runtime = _runtime_or_skip()
+    context = DeltaAccessContext(runtime)
     spec = PartitionedDatasetSpec(
         name="test_dataset",
         partition_column="file_id",
@@ -32,13 +34,14 @@ def test_upsert_partitioned_dataset_requires_partition_column(tmp_path: Path) ->
             spec=spec,
             base_dir=str(tmp_path / "dataset"),
             changes=IncrementalFileChanges(),
-            runtime=runtime,
+            context=context,
         )
 
 
 def test_upsert_partitioned_dataset_alignment_and_deletes(tmp_path: Path) -> None:
     """Align schemas and delete partitions during partitioned upserts."""
     runtime = _runtime_or_skip()
+    context = DeltaAccessContext(runtime)
     schema = pa.schema(
         [
             ("file_id", pa.string()),
@@ -62,7 +65,7 @@ def test_upsert_partitioned_dataset_alignment_and_deletes(tmp_path: Path) -> Non
         spec=spec,
         base_dir=str(tmp_path / "dataset"),
         changes=changes,
-        runtime=runtime,
+        context=context,
     )
     assert path is not None
 
@@ -82,7 +85,7 @@ def test_upsert_partitioned_dataset_alignment_and_deletes(tmp_path: Path) -> Non
         spec=spec,
         base_dir=str(tmp_path / "dataset"),
         changes=delete_changes,
-        runtime=runtime,
+        context=context,
     )
     updated = _read_delta(Path(path))
     file_ids = {value for value in updated["file_id"].to_pylist() if isinstance(value, str)}

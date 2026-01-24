@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from arrowdsl.finalize.finalize import Contract
+from datafusion_engine.finalize import Contract
 from schema_spec.system import ContractCatalogSpec
 
 

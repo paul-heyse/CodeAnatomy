@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, cast
 
@@ -11,13 +12,13 @@ from ibis.expr.types import Table
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering
-from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from arrowdsl.schema.build import empty_table
 from ibis_engine.catalog import IbisPlanCatalog, IbisPlanSource
 from ibis_engine.execution import materialize_ibis_plan
 from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
+from normalize.ibis_bridge import resolve_plan_builder_ibis
 from normalize.ibis_plan_builders import (
     CFG_BLOCKS_NAME,
     CFG_EDGES_NAME,
@@ -26,13 +27,6 @@ from normalize.ibis_plan_builders import (
     REACHES_NAME,
     TYPE_EXPRS_NAME,
     TYPE_NODES_NAME,
-    cfg_blocks_plan_ibis,
-    cfg_edges_plan_ibis,
-    def_use_events_plan_ibis,
-    diagnostics_plan_ibis,
-    reaching_defs_plan_ibis,
-    type_exprs_plan_ibis,
-    type_nodes_plan_ibis,
 )
 from normalize.ibis_spans import (
     SpanSource,
@@ -88,9 +82,7 @@ def _require_runtime(runtime: NormalizeRuntime | None) -> NormalizeRuntime:
 
 
 def _materialize_table_expr(expr: Table, *, runtime: NormalizeRuntime) -> TableLike:
-    runtime_profile = runtime_profile_factory("default").with_datafusion(runtime.runtime_profile)
-    exec_ctx = ExecutionContext(runtime=runtime_profile)
-    execution = ibis_execution_from_ctx(exec_ctx, backend=runtime.ibis_backend)
+    execution = ibis_execution_from_ctx(runtime.execution_ctx, backend=runtime.ibis_backend)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
     return materialize_ibis_plan(plan, execution=execution)
 
@@ -152,6 +144,28 @@ def _finalize_plan(
     ).good
 
 
+def _build_normalize_output(
+    output: str,
+    *,
+    builder_name: str,
+    inputs: Mapping[str, NormalizeSource],
+    ctx: ExecutionContext,
+    runtime: NormalizeRuntime,
+) -> TableLike:
+    catalog = _catalog_from_tables(
+        runtime.ibis_backend,
+        tables=dict(inputs),
+    )
+    builder = resolve_plan_builder_ibis(builder_name)
+    plan = builder(catalog, ctx, runtime.ibis_backend)
+    return _finalize_plan(
+        plan,
+        output=output,
+        ctx=ctx,
+        runtime=runtime,
+    )
+
+
 def build_cfg_blocks(
     py_bc_blocks: NormalizeSource,
     py_bc_code_units: NormalizeSource,
@@ -169,17 +183,13 @@ def build_cfg_blocks(
     """
     normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
-    catalog = _catalog_from_tables(
-        normalize_runtime.ibis_backend,
-        tables={
+    return _build_normalize_output(
+        CFG_BLOCKS_NAME,
+        builder_name="cfg_blocks",
+        inputs={
             "py_bc_blocks": py_bc_blocks,
             "py_bc_code_units": py_bc_code_units,
         },
-    )
-    plan = cfg_blocks_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
-    return _finalize_plan(
-        plan,
-        output=CFG_BLOCKS_NAME,
         ctx=exec_ctx,
         runtime=normalize_runtime,
     )
@@ -202,17 +212,13 @@ def build_cfg_edges(
     """
     normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
-    catalog = _catalog_from_tables(
-        normalize_runtime.ibis_backend,
-        tables={
+    return _build_normalize_output(
+        CFG_EDGES_NAME,
+        builder_name="cfg_edges",
+        inputs={
             "py_bc_cfg_edges": py_bc_cfg_edges,
             "py_bc_code_units": py_bc_code_units,
         },
-    )
-    plan = cfg_edges_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
-    return _finalize_plan(
-        plan,
-        output=CFG_EDGES_NAME,
         ctx=exec_ctx,
         runtime=normalize_runtime,
     )
@@ -234,12 +240,13 @@ def build_def_use_events(
     """
     normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
-    catalog = _catalog_from_tables(
-        normalize_runtime.ibis_backend,
-        tables={"py_bc_instructions": py_bc_instructions},
+    return _build_normalize_output(
+        DEF_USE_NAME,
+        builder_name="def_use_events",
+        inputs={"py_bc_instructions": py_bc_instructions},
+        ctx=exec_ctx,
+        runtime=normalize_runtime,
     )
-    plan = def_use_events_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
-    return _finalize_plan(plan, output=DEF_USE_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
 def run_reaching_defs(
@@ -258,12 +265,13 @@ def run_reaching_defs(
     """
     normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
-    catalog = _catalog_from_tables(
-        normalize_runtime.ibis_backend,
-        tables={"py_bc_def_use_events_v1": def_use_events},
+    return _build_normalize_output(
+        REACHES_NAME,
+        builder_name="reaching_defs",
+        inputs={"py_bc_def_use_events_v1": def_use_events},
+        ctx=exec_ctx,
+        runtime=normalize_runtime,
     )
-    plan = reaching_defs_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
-    return _finalize_plan(plan, output=REACHES_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
 def normalize_type_exprs(
@@ -282,12 +290,13 @@ def normalize_type_exprs(
     """
     normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
-    catalog = _catalog_from_tables(
-        normalize_runtime.ibis_backend,
-        tables={"cst_type_exprs": cst_type_exprs},
+    return _build_normalize_output(
+        TYPE_EXPRS_NAME,
+        builder_name="type_exprs",
+        inputs={"cst_type_exprs": cst_type_exprs},
+        ctx=exec_ctx,
+        runtime=normalize_runtime,
     )
-    plan = type_exprs_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
-    return _finalize_plan(plan, output=TYPE_EXPRS_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
 def normalize_types(
@@ -314,11 +323,13 @@ def normalize_types(
             "scip_symbol_information": scip_symbol_information,
         },
     )
-    exprs_plan = type_exprs_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    exprs_builder = resolve_plan_builder_ibis("type_exprs")
+    exprs_plan = exprs_builder(catalog, exec_ctx, normalize_runtime.ibis_backend)
     if exprs_plan is None:
         exprs_plan = _empty_plan(TYPE_EXPRS_NAME, backend=normalize_runtime.ibis_backend)
     catalog.add(TYPE_EXPRS_NAME, exprs_plan)
-    plan = type_nodes_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    nodes_builder = resolve_plan_builder_ibis("type_nodes")
+    plan = nodes_builder(catalog, exec_ctx, normalize_runtime.ibis_backend)
     return _finalize_plan(plan, output=TYPE_NODES_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
@@ -338,9 +349,10 @@ def collect_diags(
     """
     normalize_runtime = _require_runtime(runtime)
     exec_ctx = ensure_execution_context(ctx, profile=profile)
-    catalog = _catalog_from_tables(
-        normalize_runtime.ibis_backend,
-        tables={
+    return _build_normalize_output(
+        DIAG_NAME,
+        builder_name="diagnostics",
+        inputs={
             "file_line_index": inputs.file_line_index,
             "cst_parse_errors": inputs.sources.cst_parse_errors,
             "ts_errors": inputs.sources.ts_errors,
@@ -348,9 +360,9 @@ def collect_diags(
             "scip_diagnostics": inputs.sources.scip_diagnostics,
             "scip_documents": inputs.sources.scip_documents,
         },
+        ctx=exec_ctx,
+        runtime=normalize_runtime,
     )
-    plan = diagnostics_plan_ibis(catalog, exec_ctx, normalize_runtime.ibis_backend)
-    return _finalize_plan(plan, output=DIAG_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
 def add_scip_occurrence_byte_spans(

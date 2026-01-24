@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING
 import rustworkx as rx
 
 from relspec.errors import RelspecValidationError
-from relspec.rules.evidence import EvidenceCatalog
-from relspec.rules.exec_events import RuleScheduleMetadata
+from relspec.evidence import EvidenceCatalog
+from relspec.graph_edge_validation import validate_edge_requirements
 from relspec.rustworkx_graph import EvidenceNode, RuleGraph, RuleNode
+from relspec.schedule_events import RuleScheduleMetadata
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
@@ -57,21 +58,25 @@ def schedule_rules(
             break
         ready_rules = _sorted_ready_rules(graph, ready)
         ready_evidence = _ready_evidence_nodes(graph, ready)
+        valid_rules: list[RuleNode] = []
         for rule in ready_rules:
-            if not working.satisfies(rule.evidence, inputs=rule.inputs):
-                msg = f"Rule graph cannot resolve evidence for: {rule.name!r}."
-                raise RelspecValidationError(msg)
+            rule_idx = graph.rule_idx.get(rule.name)
+            if rule_idx is None:
+                continue
+            if not validate_edge_requirements(graph, rule_idx, catalog=working):
+                continue
             ordered.append(rule.name)
             visited_rules.add(rule.name)
+            valid_rules.append(rule)
         _register_ready_evidence(
             graph,
             ready_evidence,
             evidence=working,
             output_schema_for=output_schema_for,
         )
-        sorter.done([*ready_evidence, *[graph.rule_idx[rule.name] for rule in ready_rules]])
-        if ready_rules:
-            generations.append(tuple(rule.name for rule in ready_rules))
+        sorter.done([*ready_evidence, *[graph.rule_idx[rule.name] for rule in valid_rules]])
+        if valid_rules:
+            generations.append(tuple(rule.name for rule in valid_rules))
     missing = tuple(sorted(set(graph.rule_idx) - visited_rules))
     if missing and not allow_partial:
         msg = f"Rule graph cannot resolve evidence for: {list(missing)}."
@@ -99,11 +104,7 @@ def impacted_rules(
     if node is None:
         return ()
     impacted = rx.descendants(graph.graph, node)
-    names = [
-        graph.graph[idx].payload.name
-        for idx in impacted
-        if graph.graph[idx].kind == "rule"
-    ]
+    names = [graph.graph[idx].payload.name for idx in impacted if graph.graph[idx].kind == "rule"]
     return tuple(sorted(set(names)))
 
 
@@ -142,9 +143,7 @@ def provenance_for_rule(
         return ()
     ancestors = rx.ancestors(graph.graph, node)
     names = [
-        graph.graph[idx].payload.name
-        for idx in ancestors
-        if graph.graph[idx].kind == "evidence"
+        graph.graph[idx].payload.name for idx in ancestors if graph.graph[idx].kind == "evidence"
     ]
     return tuple(sorted(set(names)))
 

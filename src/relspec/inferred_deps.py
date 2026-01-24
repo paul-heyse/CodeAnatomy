@@ -20,6 +20,7 @@ from sqlglot_tools.optimizer import plan_fingerprint
 
 if TYPE_CHECKING:
     from ibis_engine.plan import IbisPlan
+    from sqlglot_tools.compat import Expression
 
 _LOG = logging.getLogger(__name__)
 
@@ -107,6 +108,7 @@ def infer_deps_from_ibis_plan(
     *,
     backend: IbisCompilerBackend,
     request: InferredDepsRequest,
+    sqlglot_expr: Expression | None = None,
 ) -> InferredDeps:
     """Infer dependencies from an Ibis plan using SQLGlot lineage.
 
@@ -123,6 +125,8 @@ def infer_deps_from_ibis_plan(
         Ibis backend with SQLGlot compiler.
     request : InferredDepsRequest
         Request payload including rule name, output, and optional declared inputs.
+    sqlglot_expr : Expression | None
+        Optional precompiled SQLGlot expression for the plan.
 
     Returns
     -------
@@ -135,7 +139,7 @@ def infer_deps_from_ibis_plan(
     dialect = request.dialect
 
     # Compile Ibis to SQLGlot for analysis
-    sg_expr = ibis_to_sqlglot(plan.expr, backend=backend, params=None)
+    sg_expr = sqlglot_expr or ibis_to_sqlglot(plan.expr, backend=backend, params=None)
 
     # Extract table references
     tables = referenced_tables(sg_expr)

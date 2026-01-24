@@ -12,6 +12,7 @@ from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.cdf_filters import CdfChangeType, CdfFilterPolicy
 from incremental.cdf_runtime import CdfReadResult
 from incremental.changes import file_changes_from_cdf
+from incremental.delta_context import DeltaAccessContext
 from incremental.diff import diff_snapshots_with_delta_cdf
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
@@ -250,6 +251,7 @@ def test_file_changes_from_cdf_none() -> None:
 def test_cdf_idempotency_replay_same_version(tmp_path: Path) -> None:
     """Test that replaying CDF at same version returns no changes."""
     runtime = _runtime_or_skip()
+    context = DeltaAccessContext(runtime)
     dataset_path = tmp_path / "test_dataset"
     dataset_path.mkdir()
 
@@ -268,20 +270,20 @@ def test_cdf_idempotency_replay_same_version(tmp_path: Path) -> None:
 
     # First read - should create cursor
     cdf_result = diff_snapshots_with_delta_cdf(
+        context,
         dataset_path=str(dataset_path),
         cursor_store=cursor_store,
         dataset_name="test_dataset",
-        runtime=runtime,
     )
     # First read with no prior cursor returns None
     assert cdf_result is None
 
     # Second read at same version - should return None
     cdf_result_2 = diff_snapshots_with_delta_cdf(
+        context,
         dataset_path=str(dataset_path),
         cursor_store=cursor_store,
         dataset_name="test_dataset",
-        runtime=runtime,
     )
     assert cdf_result_2 is None
 
@@ -289,6 +291,7 @@ def test_cdf_idempotency_replay_same_version(tmp_path: Path) -> None:
 def test_cdf_idempotency_no_duplicate_processing(tmp_path: Path) -> None:
     """Test that processed versions are not reprocessed."""
     runtime = _runtime_or_skip()
+    context = DeltaAccessContext(runtime)
     dataset_path = tmp_path / "test_dataset"
     dataset_path.mkdir()
 
@@ -315,10 +318,10 @@ def test_cdf_idempotency_no_duplicate_processing(tmp_path: Path) -> None:
 
     # First read - creates cursor at v1
     cdf_result = diff_snapshots_with_delta_cdf(
+        context,
         dataset_path=str(dataset_path),
         cursor_store=cursor_store,
         dataset_name="test_dataset",
-        runtime=runtime,
     )
     assert cdf_result is None  # First read returns None
 
@@ -329,10 +332,10 @@ def test_cdf_idempotency_no_duplicate_processing(tmp_path: Path) -> None:
 
     # Second read - should return None since no new versions
     cdf_result_2 = diff_snapshots_with_delta_cdf(
+        context,
         dataset_path=str(dataset_path),
         cursor_store=cursor_store,
         dataset_name="test_dataset",
-        runtime=runtime,
     )
     assert cdf_result_2 is None
 

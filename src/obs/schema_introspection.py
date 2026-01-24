@@ -16,8 +16,7 @@ _SCHEMA_TYPES: dict[str, type[msgspec.Struct]] = {
 }
 
 TYPE_INFO: dict[str, msgspec.inspect.Type] = {
-    name: msgspec.inspect.type_info(schema_type)
-    for name, schema_type in _SCHEMA_TYPES.items()
+    name: msgspec.inspect.type_info(schema_type) for name, schema_type in _SCHEMA_TYPES.items()
 }
 
 __all__ = ["TYPE_INFO"]

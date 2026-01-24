@@ -183,7 +183,10 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     ValueError
         Raised when QueryBuilder execution is disabled or unavailable.
     """
-    if request.runtime_profile is not None and not request.runtime_profile.enable_delta_querybuilder:
+    if (
+        request.runtime_profile is not None
+        and not request.runtime_profile.enable_delta_querybuilder
+    ):
         msg = "Delta QueryBuilder execution is disabled in the runtime profile."
         raise ValueError(msg)
     if not query_builder_available():

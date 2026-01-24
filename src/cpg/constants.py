@@ -14,8 +14,8 @@ from arrowdsl.core.metrics import (
     quality_from_ids,
 )
 from arrowdsl.core.scan_telemetry import ScanTelemetry
-from arrowdsl.finalize.finalize import FinalizeResult
 from cpg.scip_roles import SCIP_ROLE_FORWARD_DEFINITION, SCIP_ROLE_GENERATED, SCIP_ROLE_TEST
+from datafusion_engine.finalize import FinalizeResult
 from ibis_engine.hashing import HashExprSpec
 from ibis_engine.hashing import hash_expr_spec_factory as hash_spec_factory
 

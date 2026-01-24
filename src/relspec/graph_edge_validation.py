@@ -6,14 +6,11 @@ have their column-level requirements satisfied by the evidence catalog.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
+from relspec.evidence import EvidenceCatalog
 from relspec.rustworkx_graph import GraphEdge, GraphNode, RuleGraph, RuleNode
-
-if TYPE_CHECKING:
-    from relspec.rules.evidence import EvidenceCatalog
 
 
 @dataclass(frozen=True)
@@ -30,15 +27,27 @@ class EdgeValidationResult:
         Whether all requirements are satisfied.
     missing_columns : tuple[str, ...]
         Columns required but not present.
+    missing_types : tuple[tuple[str, str], ...]
+        Required column/type pairs missing or mismatched.
+    missing_metadata : tuple[tuple[bytes, bytes], ...]
+        Required metadata entries missing or mismatched.
     available_columns : tuple[str, ...]
         Columns actually available in the catalog.
+    available_types : tuple[tuple[str, str], ...]
+        Available column/type pairs in the catalog.
+    available_metadata : tuple[tuple[bytes, bytes], ...]
+        Available metadata entries in the catalog.
     """
 
     source_name: str
     target_rule: str
     is_valid: bool
     missing_columns: tuple[str, ...] = ()
+    missing_types: tuple[tuple[str, str], ...] = ()
+    missing_metadata: tuple[tuple[bytes, bytes], ...] = ()
     available_columns: tuple[str, ...] = ()
+    available_types: tuple[tuple[str, str], ...] = ()
+    available_metadata: tuple[tuple[bytes, bytes], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -100,10 +109,10 @@ def validate_edge_requirements(
     *,
     catalog: EvidenceCatalog,
 ) -> bool:
-    """Validate predecessor edges using GraphEdge.required_columns.
+    """Validate predecessor edges using column/type/metadata requirements.
 
-    Checks whether all columns required by incoming edges are available
-    in the evidence catalog.
+    Checks whether all requirements on incoming edges are satisfied
+    by the evidence catalog.
 
     Parameters
     ----------
@@ -123,10 +132,20 @@ def validate_edge_requirements(
         edge_data = graph.graph.get_edge_data(pred_idx, rule_idx)
         if not isinstance(edge_data, GraphEdge):
             continue
-        if not edge_data.required_columns:
-            continue
         available_cols = catalog.columns_by_dataset.get(edge_data.name, set())
-        if not set(edge_data.required_columns).issubset(available_cols):
+        if edge_data.required_columns and not set(edge_data.required_columns).issubset(
+            available_cols
+        ):
+            return False
+        available_types = catalog.types_by_dataset.get(edge_data.name, {})
+        if edge_data.required_types and _missing_required_types(
+            edge_data.required_types, available_types
+        ):
+            return False
+        available_metadata = catalog.metadata_by_dataset.get(edge_data.name, {})
+        if edge_data.required_metadata and _missing_required_metadata(
+            edge_data.required_metadata, available_metadata
+        ):
             return False
     return True
 
@@ -140,7 +159,7 @@ def validate_edge_requirements_detailed(
     """Validate predecessor edges with detailed results.
 
     Similar to validate_edge_requirements but returns detailed information
-    about which columns are missing from which edges.
+    about which requirements are missing from which edges.
 
     Parameters
     ----------
@@ -179,7 +198,15 @@ def validate_edge_requirements_detailed(
         required_cols = set(edge_data.required_columns)
         missing_cols = required_cols - available_cols
 
-        is_valid = len(missing_cols) == 0
+        available_types = catalog.types_by_dataset.get(edge_data.name, {})
+        missing_types = _missing_required_types(edge_data.required_types, available_types)
+
+        available_metadata = catalog.metadata_by_dataset.get(edge_data.name, {})
+        missing_metadata = _missing_required_metadata(
+            edge_data.required_metadata, available_metadata
+        )
+
+        is_valid = not missing_cols and not missing_types and not missing_metadata
         if not is_valid:
             unsatisfied.append(edge_data.name)
 
@@ -189,7 +216,11 @@ def validate_edge_requirements_detailed(
                 target_rule=rule_name,
                 is_valid=is_valid,
                 missing_columns=tuple(sorted(missing_cols)),
+                missing_types=missing_types,
+                missing_metadata=missing_metadata,
                 available_columns=tuple(sorted(available_cols)),
+                available_types=_sorted_type_pairs(available_types),
+                available_metadata=_sorted_metadata_pairs(available_metadata),
             )
         )
 
@@ -243,6 +274,38 @@ def validate_graph_edges(
         invalid_edges=invalid_edges,
         rule_results=tuple(rule_results),
     )
+
+
+def _missing_required_types(
+    required: tuple[tuple[str, str], ...],
+    available: Mapping[str, str],
+) -> tuple[tuple[str, str], ...]:
+    missing: list[tuple[str, str]] = []
+    for name, dtype in required:
+        if available.get(name) != dtype:
+            missing.append((name, dtype))
+    return tuple(missing)
+
+
+def _missing_required_metadata(
+    required: tuple[tuple[bytes, bytes], ...],
+    available: Mapping[bytes, bytes],
+) -> tuple[tuple[bytes, bytes], ...]:
+    missing: list[tuple[bytes, bytes]] = []
+    for key, value in required:
+        if available.get(key) != value:
+            missing.append((key, value))
+    return tuple(missing)
+
+
+def _sorted_type_pairs(items: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted(items.items(), key=lambda pair: pair[0]))
+
+
+def _sorted_metadata_pairs(
+    items: Mapping[bytes, bytes],
+) -> tuple[tuple[bytes, bytes], ...]:
+    return tuple(sorted(items.items(), key=lambda pair: pair[0]))
 
 
 def ready_rules_with_column_validation(

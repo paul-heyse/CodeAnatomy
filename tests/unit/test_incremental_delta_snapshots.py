@@ -9,6 +9,7 @@ import pytest
 
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.changes import file_changes_from_cdf
+from incremental.delta_context import DeltaAccessContext
 from incremental.diff import diff_snapshots_with_delta_cdf
 from incremental.runtime import IncrementalRuntime
 from incremental.snapshot import write_repo_snapshot
@@ -30,6 +31,7 @@ def _snapshot_table(rows: list[tuple[str, str, str, int, int]]) -> pa.Table:
 def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     """Compare snapshot diffs using Delta change data feed."""
     runtime = _runtime_or_skip()
+    context = DeltaAccessContext(runtime)
     store = StateStore(tmp_path)
     snapshot_one = _snapshot_table(
         [
@@ -37,7 +39,7 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
             ("file_b", "src/b.py", "sha2", 20, 200),
         ]
     )
-    result_one = write_repo_snapshot(store, snapshot_one, runtime=runtime)
+    result_one = write_repo_snapshot(store, snapshot_one, context=context)
     assert result_one.version is not None
 
     snapshot_two = _snapshot_table(
@@ -50,15 +52,15 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     cursor_store.save_cursor(
         CdfCursor(dataset_name="repo_snapshot", last_version=result_one.version)
     )
-    result_two = write_repo_snapshot(store, snapshot_two, runtime=runtime)
+    result_two = write_repo_snapshot(store, snapshot_two, context=context)
     assert result_two.version is not None
 
     cdf_result = diff_snapshots_with_delta_cdf(
+        context,
         dataset_path=str(store.repo_snapshot_path()),
         cursor_store=cursor_store,
         dataset_name="repo_snapshot",
         filter_policy=None,
-        runtime=runtime,
     )
     assert cdf_result is not None
     changes = file_changes_from_cdf(cdf_result, runtime=runtime)

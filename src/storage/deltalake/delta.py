@@ -11,9 +11,9 @@ import pyarrow as pa
 from deltalake import CommitProperties, DeltaTable, Transaction
 
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
-from arrowdsl.io.ipc import ipc_bytes
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.schema import SchemaTransform
+from storage.ipc import ipc_bytes
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

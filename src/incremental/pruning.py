@@ -7,10 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.dataset as ds
-from deltalake import DeltaTable
 
 from datafusion_engine.runtime import DiagnosticsSink
-from storage.deltalake.file_index import build_delta_file_index
+from storage.deltalake import StorageOptions, build_delta_file_index, open_delta_table
 from storage.deltalake.file_pruning import FilePruningResult
 
 
@@ -35,6 +34,9 @@ class FileScopePolicy:
 def prune_delta_files(
     path: Path,
     policy: FileScopePolicy,
+    *,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> FilePruningResult:
     """Return candidate files for a file-id scope based on Delta metadata.
 
@@ -43,7 +45,11 @@ def prune_delta_files(
     FilePruningResult
         Pruning result with candidate file paths.
     """
-    table = DeltaTable(str(path))
+    table = open_delta_table(
+        str(path),
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
     index = build_delta_file_index(table)
     total_files = index.num_rows
     if total_files == 0:
@@ -71,6 +77,9 @@ def prune_delta_files(
 def read_pruned_delta_dataset(
     path: Path,
     policy: FileScopePolicy,
+    *,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
 ) -> ds.Dataset | None:
     """Build a PyArrow dataset from the pruned Delta file list.
 
@@ -79,7 +88,12 @@ def read_pruned_delta_dataset(
     pyarrow.dataset.Dataset | None
         Dataset for candidate files, or None when no files match.
     """
-    result = prune_delta_files(path, policy)
+    result = prune_delta_files(
+        path,
+        policy,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
     if not result.candidate_paths:
         return None
     return ds.dataset(result.candidate_paths, format="parquet")

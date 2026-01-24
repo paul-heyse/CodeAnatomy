@@ -3001,10 +3001,7 @@ def _validate_sql_constraints(
         source_expr = _parse_sql_expr(source_sql)
         constraint_expr = _parse_sql_expr(constraint)
         if source_expr is None or constraint_expr is None:
-            query = (
-                "SELECT 1 FROM "
-                f"({source_sql}) AS input WHERE NOT ({constraint}) LIMIT 1"
-            )
+            query = f"SELECT 1 FROM ({source_sql}) AS input WHERE NOT ({constraint}) LIMIT 1"
         else:
             subquery = exp.Subquery(
                 this=source_expr,

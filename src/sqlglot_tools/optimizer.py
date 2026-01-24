@@ -45,7 +45,6 @@ from sqlglot.transforms import (
     unnest_to_explode,
 )
 
-from arrowdsl.io.ipc import payload_hash
 from serde_msgspec import StructBase
 from sqlglot_tools.compat import (
     Dialect,
@@ -58,6 +57,7 @@ from sqlglot_tools.compat import (
     pushdown_predicates_transform,
     pushdown_projections_transform,
 )
+from storage.ipc import payload_hash
 
 type SchemaMappingNode = Mapping[str, str] | Mapping[str, SchemaMappingNode]
 type SchemaMapping = Mapping[str, SchemaMappingNode]

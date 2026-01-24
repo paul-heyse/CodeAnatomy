@@ -14,7 +14,7 @@ from arrowdsl.schema.metadata import (
     ordering_metadata_spec,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from arrowdsl.spec.expr_ir import ExprIR
+from sqlglot_tools.expr_spec import ExprIR
 from datafusion_engine.extract_bundles import bundle
 from datafusion_engine.extract_ids import hash_spec
 from datafusion_engine.extract_metadata import ExtractMetadata

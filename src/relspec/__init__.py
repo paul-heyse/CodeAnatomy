@@ -1,118 +1,104 @@
-"""Relationship spec models, registry, and compiler."""
+"""Inference-first relationship specification helpers."""
 
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from arrowdsl.spec.infra import DATASET_REF_STRUCT, SORT_KEY_STRUCT
-    from relspec.compiler import (
-        CompiledOutput,
-        CompiledRule,
-        FilesystemPlanResolver,
-        InMemoryPlanResolver,
-        PlanResolver,
-        RelationshipRuleCompiler,
-    )
-    from relspec.contracts import (
-        RELATION_OUTPUT_NAME,
-        RELATION_OUTPUT_SCHEMA,
-        relation_output_contract,
-        relation_output_schema,
-        relation_output_spec,
-    )
-    from relspec.errors import (
-        RelspecCapabilityError,
-        RelspecCompilationError,
-        RelspecError,
-        RelspecExecutionError,
-        RelspecValidationError,
-    )
-    from relspec.execution_bundle import ExecutionBundle
-    from relspec.model import (
-        AddLiteralSpec,
-        AmbiguityPolicy,
-        CanonicalSortKernelSpec,
-        ConfidencePolicy,
-        DatasetRef,
-        DedupeKernelSpec,
-        DropColumnsSpec,
-        EvidenceSpec,
-        ExplodeListSpec,
-        HashJoinConfig,
-        IntervalAlignConfig,
-        KernelSpec,
-        ProjectConfig,
-        RelationshipRule,
-        RenameColumnsSpec,
-        RuleKind,
-        WinnerSelectConfig,
-    )
-    from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
-    from relspec.rules.spec_tables import (
-        AMBIGUITY_STRUCT,
-        CONFIDENCE_STRUCT,
-        EVIDENCE_STRUCT,
-        HASH_JOIN_STRUCT,
-        INTERVAL_ALIGN_STRUCT,
-        PROJECT_EXPR_STRUCT,
-        PROJECT_STRUCT,
-        RULES_SCHEMA,
-        WINNER_SELECT_STRUCT,
-    )
+from typing import TYPE_CHECKING, Any
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
-    "AMBIGUITY_STRUCT": ("relspec.rules.spec_tables", "AMBIGUITY_STRUCT"),
-    "CONFIDENCE_STRUCT": ("relspec.rules.spec_tables", "CONFIDENCE_STRUCT"),
-    "DATASET_REF_STRUCT": ("arrowdsl.spec.infra", "DATASET_REF_STRUCT"),
-    "EVIDENCE_STRUCT": ("relspec.rules.spec_tables", "EVIDENCE_STRUCT"),
-    "HASH_JOIN_STRUCT": ("relspec.rules.spec_tables", "HASH_JOIN_STRUCT"),
-    "INTERVAL_ALIGN_STRUCT": ("relspec.rules.spec_tables", "INTERVAL_ALIGN_STRUCT"),
-    "PROJECT_EXPR_STRUCT": ("relspec.rules.spec_tables", "PROJECT_EXPR_STRUCT"),
-    "PROJECT_STRUCT": ("relspec.rules.spec_tables", "PROJECT_STRUCT"),
-    "RELATION_OUTPUT_NAME": ("relspec.contracts", "RELATION_OUTPUT_NAME"),
-    "RELATION_OUTPUT_SCHEMA": ("relspec.contracts", "RELATION_OUTPUT_SCHEMA"),
-    "RULES_SCHEMA": ("relspec.rules.spec_tables", "RULES_SCHEMA"),
-    "SORT_KEY_STRUCT": ("arrowdsl.spec.infra", "SORT_KEY_STRUCT"),
-    "WINNER_SELECT_STRUCT": ("relspec.rules.spec_tables", "WINNER_SELECT_STRUCT"),
-    "AddLiteralSpec": ("relspec.model", "AddLiteralSpec"),
-    "AmbiguityPolicy": ("relspec.model", "AmbiguityPolicy"),
-    "CanonicalSortKernelSpec": ("relspec.model", "CanonicalSortKernelSpec"),
-    "CompiledOutput": ("relspec.compiler", "CompiledOutput"),
-    "CompiledRule": ("relspec.compiler", "CompiledRule"),
-    "ExecutionBundle": ("relspec.execution_bundle", "ExecutionBundle"),
-    "ConfidencePolicy": ("relspec.model", "ConfidencePolicy"),
-    "ContractCatalog": ("relspec.registry", "ContractCatalog"),
-    "DatasetCatalog": ("relspec.registry", "DatasetCatalog"),
-    "DatasetLocation": ("relspec.registry", "DatasetLocation"),
-    "DatasetRef": ("relspec.model", "DatasetRef"),
-    "DedupeKernelSpec": ("relspec.model", "DedupeKernelSpec"),
-    "DropColumnsSpec": ("relspec.model", "DropColumnsSpec"),
-    "EvidenceSpec": ("relspec.model", "EvidenceSpec"),
-    "ExplodeListSpec": ("relspec.model", "ExplodeListSpec"),
-    "FilesystemPlanResolver": ("relspec.compiler", "FilesystemPlanResolver"),
-    "HashJoinConfig": ("relspec.model", "HashJoinConfig"),
-    "InMemoryPlanResolver": ("relspec.compiler", "InMemoryPlanResolver"),
-    "IntervalAlignConfig": ("relspec.model", "IntervalAlignConfig"),
-    "KernelSpec": ("relspec.model", "KernelSpec"),
-    "PlanResolver": ("relspec.compiler", "PlanResolver"),
-    "ProjectConfig": ("relspec.model", "ProjectConfig"),
-    "RelationshipRule": ("relspec.model", "RelationshipRule"),
-    "RelationshipRuleCompiler": ("relspec.compiler", "RelationshipRuleCompiler"),
-    "RelspecCapabilityError": ("relspec.errors", "RelspecCapabilityError"),
-    "RelspecCompilationError": ("relspec.errors", "RelspecCompilationError"),
-    "RelspecError": ("relspec.errors", "RelspecError"),
-    "RelspecExecutionError": ("relspec.errors", "RelspecExecutionError"),
-    "RelspecValidationError": ("relspec.errors", "RelspecValidationError"),
-    "RenameColumnsSpec": ("relspec.model", "RenameColumnsSpec"),
-    "RuleKind": ("relspec.model", "RuleKind"),
-    "WinnerSelectConfig": ("relspec.model", "WinnerSelectConfig"),
-    "relation_output_contract": ("relspec.contracts", "relation_output_contract"),
-    "relation_output_schema": ("relspec.contracts", "relation_output_schema"),
-    "relation_output_spec": ("relspec.contracts", "relation_output_spec"),
+    "CachePolicy": ("relspec.task_catalog", "CachePolicy"),
+    "EdgeValidationResult": ("relspec.graph_edge_validation", "EdgeValidationResult"),
+    "EvidenceCatalog": ("relspec.evidence", "EvidenceCatalog"),
+    "EvidenceNode": ("relspec.rustworkx_graph", "EvidenceNode"),
+    "GraphDiagnostics": ("relspec.rustworkx_graph", "GraphDiagnostics"),
+    "GraphEdge": ("relspec.rustworkx_graph", "GraphEdge"),
+    "GraphNode": ("relspec.rustworkx_graph", "GraphNode"),
+    "GraphValidationSummary": ("relspec.graph_edge_validation", "GraphValidationSummary"),
+    "IncrementalDiff": ("relspec.incremental", "IncrementalDiff"),
+    "PlanArtifact": ("relspec.plan_catalog", "PlanArtifact"),
+    "PlanCatalog": ("relspec.plan_catalog", "PlanCatalog"),
+    "RuleGraph": ("relspec.rustworkx_graph", "RuleGraph"),
+    "RuleGraphSnapshot": ("relspec.rustworkx_graph", "RuleGraphSnapshot"),
+    "RuleNode": ("relspec.rustworkx_graph", "RuleNode"),
+    "RuleSchedule": ("relspec.rustworkx_schedule", "RuleSchedule"),
+    "RuleValidationResult": ("relspec.graph_edge_validation", "RuleValidationResult"),
+    "TaskBuildContext": ("relspec.task_catalog", "TaskBuildContext"),
+    "TaskCatalog": ("relspec.task_catalog", "TaskCatalog"),
+    "TaskExecutionRequest": ("relspec.execution", "TaskExecutionRequest"),
+    "TaskGraph": ("relspec.graph_inference", "TaskGraph"),
+    "TaskKind": ("relspec.task_catalog", "TaskKind"),
+    "TaskRegistry": ("relspec.task_registry", "TaskRegistry"),
+    "TaskSpec": ("relspec.task_catalog", "TaskSpec"),
+    "build_task_catalog": ("relspec.task_catalog_builders", "build_task_catalog"),
+    "build_task_graph": ("relspec.graph_inference", "build_task_graph"),
+    "compile_task_catalog": ("relspec.plan_catalog", "compile_task_catalog"),
+    "compile_task_plan": ("relspec.plan_catalog", "compile_task_plan"),
+    "diff_plan_catalog": ("relspec.incremental", "diff_plan_catalog"),
+    "execute_plan_artifact": ("relspec.execution", "execute_plan_artifact"),
+    "impacted_rules": ("relspec.rustworkx_schedule", "impacted_rules"),
+    "impacted_rules_for_evidence": ("relspec.rustworkx_schedule", "impacted_rules_for_evidence"),
+    "provenance_for_rule": ("relspec.rustworkx_schedule", "provenance_for_rule"),
+    "ready_rules_with_column_validation": (
+        "relspec.graph_edge_validation",
+        "ready_rules_with_column_validation",
+    ),
+    "rule_graph_diagnostics": ("relspec.rustworkx_graph", "rule_graph_diagnostics"),
+    "rule_graph_signature": ("relspec.rustworkx_graph", "rule_graph_signature"),
+    "rule_graph_snapshot": ("relspec.rustworkx_graph", "rule_graph_snapshot"),
+    "rule_schedule_metadata": ("relspec.rustworkx_schedule", "rule_schedule_metadata"),
+    "schedule_rules": ("relspec.rustworkx_schedule", "schedule_rules"),
+    "task_graph_from_catalog": ("relspec.graph_inference", "task_graph_from_catalog"),
+    "validate_edge_requirements": ("relspec.graph_edge_validation", "validate_edge_requirements"),
+    "validate_edge_requirements_detailed": (
+        "relspec.graph_edge_validation",
+        "validate_edge_requirements_detailed",
+    ),
+    "validate_graph_edges": ("relspec.graph_edge_validation", "validate_graph_edges"),
 }
 
+if TYPE_CHECKING:
+    CachePolicy: Any
+    EdgeValidationResult: Any
+    EvidenceCatalog: Any
+    EvidenceNode: Any
+    GraphDiagnostics: Any
+    GraphEdge: Any
+    GraphNode: Any
+    GraphValidationSummary: Any
+    IncrementalDiff: Any
+    PlanArtifact: Any
+    PlanCatalog: Any
+    RuleGraph: Any
+    RuleGraphSnapshot: Any
+    RuleNode: Any
+    RuleSchedule: Any
+    RuleValidationResult: Any
+    TaskBuildContext: Any
+    TaskCatalog: Any
+    TaskExecutionRequest: Any
+    TaskGraph: Any
+    TaskKind: Any
+    TaskRegistry: Any
+    TaskSpec: Any
+    build_task_catalog: Any
+    build_task_graph: Any
+    compile_task_catalog: Any
+    compile_task_plan: Any
+    diff_plan_catalog: Any
+    execute_plan_artifact: Any
+    impacted_rules: Any
+    impacted_rules_for_evidence: Any
+    provenance_for_rule: Any
+    ready_rules_with_column_validation: Any
+    rule_graph_diagnostics: Any
+    rule_graph_signature: Any
+    rule_graph_snapshot: Any
+    rule_schedule_metadata: Any
+    schedule_rules: Any
+    task_graph_from_catalog: Any
+    validate_edge_requirements: Any
+    validate_edge_requirements_detailed: Any
+    validate_graph_edges: Any
 
 def __getattr__(name: str) -> object:
     target = _EXPORT_MAP.get(name)
@@ -128,53 +114,47 @@ def __dir__() -> list[str]:
     return sorted(list(globals()) + list(_EXPORT_MAP))
 
 
-__all__ = [
-    "AMBIGUITY_STRUCT",
-    "CONFIDENCE_STRUCT",
-    "DATASET_REF_STRUCT",
-    "EVIDENCE_STRUCT",
-    "HASH_JOIN_STRUCT",
-    "INTERVAL_ALIGN_STRUCT",
-    "PROJECT_EXPR_STRUCT",
-    "PROJECT_STRUCT",
-    "RELATION_OUTPUT_NAME",
-    "RELATION_OUTPUT_SCHEMA",
-    "RULES_SCHEMA",
-    "SORT_KEY_STRUCT",
-    "WINNER_SELECT_STRUCT",
-    "AddLiteralSpec",
-    "AmbiguityPolicy",
-    "CanonicalSortKernelSpec",
-    "CompiledOutput",
-    "CompiledRule",
-    "ConfidencePolicy",
-    "ContractCatalog",
-    "DatasetCatalog",
-    "DatasetLocation",
-    "DatasetRef",
-    "DedupeKernelSpec",
-    "DropColumnsSpec",
-    "EvidenceSpec",
-    "ExecutionBundle",
-    "ExplodeListSpec",
-    "FilesystemPlanResolver",
-    "HashJoinConfig",
-    "InMemoryPlanResolver",
-    "IntervalAlignConfig",
-    "KernelSpec",
-    "PlanResolver",
-    "ProjectConfig",
-    "RelationshipRule",
-    "RelationshipRuleCompiler",
-    "RelspecCapabilityError",
-    "RelspecCompilationError",
-    "RelspecError",
-    "RelspecExecutionError",
-    "RelspecValidationError",
-    "RenameColumnsSpec",
-    "RuleKind",
-    "WinnerSelectConfig",
-    "relation_output_contract",
-    "relation_output_schema",
-    "relation_output_spec",
-]
+__all__ = (
+    "CachePolicy",
+    "EdgeValidationResult",
+    "EvidenceCatalog",
+    "EvidenceNode",
+    "GraphDiagnostics",
+    "GraphEdge",
+    "GraphNode",
+    "GraphValidationSummary",
+    "IncrementalDiff",
+    "PlanArtifact",
+    "PlanCatalog",
+    "RuleGraph",
+    "RuleGraphSnapshot",
+    "RuleNode",
+    "RuleSchedule",
+    "RuleValidationResult",
+    "TaskBuildContext",
+    "TaskCatalog",
+    "TaskExecutionRequest",
+    "TaskGraph",
+    "TaskKind",
+    "TaskRegistry",
+    "TaskSpec",
+    "build_task_catalog",
+    "build_task_graph",
+    "compile_task_catalog",
+    "compile_task_plan",
+    "diff_plan_catalog",
+    "execute_plan_artifact",
+    "impacted_rules",
+    "impacted_rules_for_evidence",
+    "provenance_for_rule",
+    "ready_rules_with_column_validation",
+    "rule_graph_diagnostics",
+    "rule_graph_signature",
+    "rule_graph_snapshot",
+    "rule_schedule_metadata",
+    "schedule_rules",
+    "task_graph_from_catalog",
+    "validate_edge_requirements",
+    "validate_edge_requirements_detailed",
+    "validate_graph_edges",
+)

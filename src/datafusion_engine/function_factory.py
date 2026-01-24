@@ -10,7 +10,7 @@ from typing import Literal
 import pyarrow as pa
 from datafusion import SessionContext
 
-from arrowdsl.io.ipc import payload_ipc_bytes
+from storage.ipc import payload_ipc_bytes
 
 UdfVolatility = Literal["immutable", "stable", "volatile"]
 

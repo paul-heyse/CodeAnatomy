@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from arrowdsl.kernel.registry import KernelLane
 from datafusion_engine.compile_options import DataFusionSqlPolicy
+from datafusion_engine.kernel_registry import KernelLane
 from ibis_engine.param_tables import ParamTablePolicy
 from relspec.list_filter_gate import ListFilterGatePolicy
 

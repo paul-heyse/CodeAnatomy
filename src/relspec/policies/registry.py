@@ -1,162 +1,117 @@
-"""Central policy registry for rule resolution."""
+"""Policy registry defaults for inference-driven pipelines."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, overload
+from typing import Literal
 
-from relspec.model import AmbiguityPolicy as RelationshipAmbiguityPolicy
-from relspec.model import ConfidencePolicy as RelationshipConfidencePolicy
-from relspec.model import WinnerSelectConfig
-from relspec.rules.definitions import RuleDomain
+from relspec.model import AmbiguityPolicy, ConfidencePolicy, WinnerSelectConfig
 
-if TYPE_CHECKING:
-    from relspec.model import AmbiguityPolicy as NormalizeAmbiguityPolicy
-    from relspec.model import ConfidencePolicy as NormalizeConfidencePolicy
-
-RELSPEC_CONFIDENCE_POLICIES: Mapping[str, RelationshipConfidencePolicy] = {
-    "scip": RelationshipConfidencePolicy(base=1.0),
-    "qname_fallback": RelationshipConfidencePolicy(base=0.4, penalty=0.1),
-    "runtime": RelationshipConfidencePolicy(base=1.0),
-    "type": RelationshipConfidencePolicy(base=1.0),
-}
-
-RELSPEC_AMBIGUITY_POLICIES: Mapping[str, RelationshipAmbiguityPolicy] = {
-    "qname_fallback": RelationshipAmbiguityPolicy(
-        winner_select=WinnerSelectConfig(
-            keys=("call_id",), score_col="score", score_order="descending"
-        )
-    ),
-}
+RuleDomain = Literal["cpg", "extract", "normalize"]
 
 
-def _normalize_confidence_policies() -> Mapping[str, object]:
+def _default_confidence_policies() -> dict[str, dict[str, ConfidencePolicy]]:
+    base = {
+        "scip": ConfidencePolicy(base=1.0),
+        "cst": ConfidencePolicy(base=0.9),
+        "bytecode": ConfidencePolicy(base=0.8),
+        "diagnostic": ConfidencePolicy(base=0.7),
+        "span": ConfidencePolicy(base=0.6),
+        "type": ConfidencePolicy(base=0.6),
+        "evidence": ConfidencePolicy(base=0.5),
+    }
     return {
-        "bytecode": RelationshipConfidencePolicy(base=1.0),
-        "cst": RelationshipConfidencePolicy(base=1.0),
-        "diagnostic": RelationshipConfidencePolicy(base=1.0),
-        "evidence": RelationshipConfidencePolicy(base=1.0),
-        "scip": RelationshipConfidencePolicy(base=1.0),
-        "span": RelationshipConfidencePolicy(base=1.0),
-        "type": RelationshipConfidencePolicy(base=1.0),
+        "cpg": dict(base),
+        "extract": dict(base),
+        "normalize": dict(base),
     }
 
 
-def _normalize_ambiguity_policies() -> Mapping[str, object]:
-    return {"preserve": RelationshipAmbiguityPolicy()}
-
-
-def _default_confidence_policies() -> Mapping[RuleDomain, Mapping[str, object]]:
-    """Return default confidence policies by domain.
-
-    Returns
-    -------
-    Mapping[RuleDomain, Mapping[str, object]]
-        Default policy mapping.
-    """
+def _default_ambiguity_policies() -> dict[str, dict[str, AmbiguityPolicy]]:
+    preserve = AmbiguityPolicy()
+    winner = AmbiguityPolicy(winner_select=WinnerSelectConfig())
     return {
-        "cpg": RELSPEC_CONFIDENCE_POLICIES,
-        "normalize": _normalize_confidence_policies(),
-        "extract": {},
-    }
-
-
-def _default_ambiguity_policies() -> Mapping[RuleDomain, Mapping[str, object]]:
-    """Return default ambiguity policies by domain.
-
-    Returns
-    -------
-    Mapping[RuleDomain, Mapping[str, object]]
-        Default policy mapping.
-    """
-    return {
-        "cpg": RELSPEC_AMBIGUITY_POLICIES,
-        "normalize": _normalize_ambiguity_policies(),
-        "extract": {},
+        "cpg": {"preserve": preserve, "winner": winner},
+        "extract": {"preserve": preserve, "winner": winner},
+        "normalize": {"preserve": preserve, "winner": winner},
     }
 
 
 @dataclass(frozen=True)
 class PolicyRegistry:
-    """Domain-aware policy registry."""
+    """Registry for confidence and ambiguity policies."""
 
-    confidence_policies: Mapping[RuleDomain, Mapping[str, object]] = field(
+    confidence: Mapping[str, Mapping[str, ConfidencePolicy]] = field(
         default_factory=_default_confidence_policies
     )
-    ambiguity_policies: Mapping[RuleDomain, Mapping[str, object]] = field(
+    ambiguity: Mapping[str, Mapping[str, AmbiguityPolicy]] = field(
         default_factory=_default_ambiguity_policies
     )
 
-    @overload
-    def resolve_confidence(
-        self, domain: Literal["cpg"], name: str | None
-    ) -> RelationshipConfidencePolicy | None: ...
+    def resolve_confidence(self, domain: str, name: str | None) -> ConfidencePolicy | None:
+        """Return a confidence policy for the given domain and name.
 
-    @overload
-    def resolve_confidence(
-        self, domain: Literal["normalize"], name: str | None
-    ) -> NormalizeConfidencePolicy | None: ...
-
-    @overload
-    def resolve_confidence(self, domain: Literal["extract"], name: str | None) -> None: ...
-
-    def resolve_confidence(self, domain: RuleDomain, name: str | None) -> object | None:
-        """Return a confidence policy for a domain/name pair.
+        Parameters
+        ----------
+        domain : str
+            Policy domain (e.g., "cpg", "normalize", "extract").
+        name : str | None
+            Policy name; ``None`` returns ``None``.
 
         Returns
         -------
-        object | None
-            Policy instance, or None if name is None.
+        ConfidencePolicy | None
+            Resolved policy or ``None`` if name is ``None``.
 
         Raises
         ------
         KeyError
-            Raised when the policy name is unknown.
+            Raised when the domain or policy name is unknown.
         """
         if name is None:
             return None
-        policies = self.confidence_policies.get(domain, {})
-        policy = policies.get(name)
-        if policy is None:
+        domain_policies = self.confidence.get(domain)
+        if domain_policies is None:
+            msg = f"Unknown confidence policy domain: {domain!r}."
+            raise KeyError(msg)
+        try:
+            return domain_policies[name]
+        except KeyError as exc:
             msg = f"Unknown confidence policy {name!r} for domain {domain!r}."
-            raise KeyError(msg)
-        return policy
+            raise KeyError(msg) from exc
 
-    @overload
-    def resolve_ambiguity(
-        self, domain: Literal["cpg"], name: str | None
-    ) -> RelationshipAmbiguityPolicy | None: ...
+    def resolve_ambiguity(self, domain: str, name: str | None) -> AmbiguityPolicy | None:
+        """Return an ambiguity policy for the given domain and name.
 
-    @overload
-    def resolve_ambiguity(
-        self, domain: Literal["normalize"], name: str | None
-    ) -> NormalizeAmbiguityPolicy | None: ...
-
-    @overload
-    def resolve_ambiguity(self, domain: Literal["extract"], name: str | None) -> None: ...
-
-    def resolve_ambiguity(self, domain: RuleDomain, name: str | None) -> object | None:
-        """Return an ambiguity policy for a domain/name pair.
+        Parameters
+        ----------
+        domain : str
+            Policy domain (e.g., "cpg", "normalize", "extract").
+        name : str | None
+            Policy name; ``None`` returns ``None``.
 
         Returns
         -------
-        object | None
-            Policy instance, or None if name is None.
+        AmbiguityPolicy | None
+            Resolved policy or ``None`` if name is ``None``.
 
         Raises
         ------
         KeyError
-            Raised when the policy name is unknown.
+            Raised when the domain or policy name is unknown.
         """
         if name is None:
             return None
-        policies = self.ambiguity_policies.get(domain, {})
-        policy = policies.get(name)
-        if policy is None:
-            msg = f"Unknown ambiguity policy {name!r} for domain {domain!r}."
+        domain_policies = self.ambiguity.get(domain)
+        if domain_policies is None:
+            msg = f"Unknown ambiguity policy domain: {domain!r}."
             raise KeyError(msg)
-        return policy
+        try:
+            return domain_policies[name]
+        except KeyError as exc:
+            msg = f"Unknown ambiguity policy {name!r} for domain {domain!r}."
+            raise KeyError(msg) from exc
 
 
-__all__ = ["PolicyRegistry"]
+__all__ = ["PolicyRegistry", "RuleDomain"]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,64 +16,10 @@ from arrowdsl.schema.build import (
 from arrowdsl.schema.build import (
     table_from_rows as build_table_from_rows,
 )
+from storage.ipc import IpcWriteConfig, ipc_read_options_factory, ipc_write_options_factory
 
 if TYPE_CHECKING:
     from arrowdsl.spec.tables.base import SpecTableCodec
-
-
-@dataclass(frozen=True)
-class IpcWriteConfig:
-    """Configuration for IPC write options."""
-
-    compression: str | None = "zstd"
-    use_threads: bool = True
-    unify_dictionaries: bool = True
-    emit_dictionary_deltas: bool = False
-    allow_64bit: bool = False
-    metadata_version: ipc.MetadataVersion = ipc.MetadataVersion.V5
-
-
-def ipc_write_options_factory(
-    config: IpcWriteConfig | None = None,
-) -> ipc.IpcWriteOptions:
-    """Return a shared IPC write options configuration.
-
-    Returns
-    -------
-    ipc.IpcWriteOptions
-        Configured IPC write options.
-    """
-    config = config or IpcWriteConfig()
-    return ipc.IpcWriteOptions(
-        metadata_version=config.metadata_version,
-        allow_64bit=config.allow_64bit,
-        compression=config.compression,
-        use_threads=config.use_threads,
-        emit_dictionary_deltas=config.emit_dictionary_deltas,
-        unify_dictionaries=config.unify_dictionaries,
-    )
-
-
-def ipc_read_options_factory(
-    *,
-    ensure_native_endian: bool = True,
-    ensure_alignment: ipc.Alignment = ipc.Alignment.Any,
-    use_threads: bool = True,
-    included_fields: Sequence[int] | None = None,
-) -> ipc.IpcReadOptions:
-    """Return a shared IPC read options configuration.
-
-    Returns
-    -------
-    ipc.IpcReadOptions
-        Configured IPC read options.
-    """
-    return ipc.IpcReadOptions(
-        ensure_native_endian,
-        ensure_alignment=ensure_alignment,
-        use_threads=use_threads,
-        included_fields=list(included_fields) if included_fields is not None else None,
-    )
 
 
 def write_spec_table(

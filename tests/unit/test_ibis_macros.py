@@ -65,7 +65,5 @@ def test_selector_from_pattern_variants() -> None:
         selector_from_pattern(SelectorPattern(name="temporal", column_type="temporal"))
     )
     assert [col.get_name() for col in temporal] == ["when", "day", "clock"]
-    regex = table.bind(
-        selector_from_pattern(SelectorPattern(name="regex", regex_pattern="^t"))
-    )
+    regex = table.bind(selector_from_pattern(SelectorPattern(name="regex", regex_pattern="^t")))
     assert [col.get_name() for col in regex] == ["txt"]

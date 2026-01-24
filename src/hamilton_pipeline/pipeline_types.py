@@ -8,15 +8,11 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import TableLike
-    from arrowdsl.spec.io import IpcWriteConfig
     from datafusion_engine.nested_tables import ViewReference
     from engine.plan_policy import WriterStrategy
     from ibis_engine.sources import DatasetSource
-    from relspec.compiler import CompiledOutput
-    from relspec.registry import ContractCatalog, DatasetLocation, RelspecSnapshot
-    from relspec.rustworkx_graph import GraphDiagnostics, RuleGraphSnapshot
-    from relspec.rustworkx_schedule import RuleSchedule
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+    from storage.ipc import IpcWriteConfig
 
 
 @dataclass(frozen=True)
@@ -330,30 +326,6 @@ class CpgOutputTables:
         if self.cpg_props_json is not None:
             tables["cpg_props_json"] = self.cpg_props_json
         return tables
-
-
-@dataclass(frozen=True)
-class RelspecInputsBundle:
-    """Bundle of relationship input tables and optional locations."""
-
-    tables: dict[str, TableLike]
-    locations: dict[str, DatasetLocation]
-
-
-@dataclass(frozen=True)
-class RelspecSnapshots:
-    """Snapshots required to reproduce relationship outputs."""
-
-    registry_snapshot: RelspecSnapshot
-    contracts: ContractCatalog
-    compiled_outputs: dict[str, CompiledOutput]
-    rule_graph_snapshot: RuleGraphSnapshot
-    rule_graph_diagnostics: GraphDiagnostics
-    rule_schedule: RuleSchedule
-    rule_dependency_map: Mapping[str, tuple[str, ...]]
-    rule_output_map: Mapping[str, str]
-    rule_provenance: Mapping[str, tuple[str, ...]]
-    evidence_impact: Mapping[str, tuple[str, ...]]
 
 
 @dataclass(frozen=True)

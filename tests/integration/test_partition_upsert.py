@@ -8,6 +8,7 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.runtime import read_delta_as_reader
+from incremental.delta_context import DeltaAccessContext
 from incremental.delta_updates import PartitionedDatasetSpec, upsert_partitioned_dataset
 from incremental.runtime import IncrementalRuntime
 from incremental.types import IncrementalFileChanges
@@ -28,6 +29,7 @@ def test_upsert_dataset_partitions_delta(tmp_path: Path) -> None:
     except ImportError as exc:
         pytest.skip(str(exc))
     base_dir = tmp_path / "dataset"
+    context = DeltaAccessContext(runtime)
     spec = PartitionedDatasetSpec(name="test_dataset", partition_column="file_id")
     table = pa.table({"file_id": ["a", "b"], "value": [1, 2]})
     upsert_partitioned_dataset(
@@ -35,7 +37,7 @@ def test_upsert_dataset_partitions_delta(tmp_path: Path) -> None:
         spec=spec,
         base_dir=str(base_dir),
         changes=IncrementalFileChanges(),
-        runtime=runtime,
+        context=context,
     )
 
     part_a = _read_partition(base_dir, "a")
@@ -49,7 +51,7 @@ def test_upsert_dataset_partitions_delta(tmp_path: Path) -> None:
         spec=spec,
         base_dir=str(base_dir),
         changes=IncrementalFileChanges(),
-        runtime=runtime,
+        context=context,
     )
 
     part_a = _read_partition(base_dir, "a")
@@ -63,7 +65,7 @@ def test_upsert_dataset_partitions_delta(tmp_path: Path) -> None:
         spec=spec,
         base_dir=str(base_dir),
         changes=IncrementalFileChanges(deleted_file_ids=("a",)),
-        runtime=runtime,
+        context=context,
     )
 
     part_a = _read_partition(base_dir, "a")

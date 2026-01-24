@@ -7,37 +7,21 @@ view references, and schema caches.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
+
+from arrowdsl.core.interop import SchemaLike
 
 if TYPE_CHECKING:
     import pyarrow as pa
+
+    from ibis_engine.execution import IbisExecutionContext
 
 
 class TableLike(Protocol):
     """Protocol for table-like objects."""
 
-    def schema(self) -> pa.Schema:
-        """Return the table schema."""
-        ...
-
-    def to_pyarrow(self) -> pa.Table:
-        """Convert to PyArrow table."""
-        ...
-
-
-class SchemaLike(Protocol):
-    """Protocol for schema-like objects."""
-
-    @property
-    def names(self) -> Sequence[str]:
-        """Return column names."""
-        ...
-
-    def field(self, name: str) -> Any:
-        """Return field by name."""
-        ...
+    schema: SchemaLike
 
 
 @dataclass(frozen=True)
@@ -109,6 +93,8 @@ class RuntimeArtifacts:
 
     Attributes
     ----------
+    execution : IbisExecutionContext | None
+        Ibis execution context for materialization.
     datafusion_ctx : object | None
         DataFusion SessionContext handle.
     materialized_tables : dict[str, TableLike]
@@ -123,6 +109,7 @@ class RuntimeArtifacts:
         Order in which rules were executed.
     """
 
+    execution: IbisExecutionContext | None = None
     datafusion_ctx: object | None = None
     materialized_tables: dict[str, TableLike] = field(default_factory=dict)
     view_references: dict[str, ViewReference] = field(default_factory=dict)
@@ -192,11 +179,13 @@ class RuntimeArtifacts:
 
         # Try to get row count
         row_count = 0
-        try:
-            pa_table = table.to_pyarrow()
-            row_count = pa_table.num_rows
-        except (AttributeError, TypeError):
-            pass
+        to_pyarrow = getattr(table, "to_pyarrow", None)
+        if callable(to_pyarrow):
+            try:
+                pa_table = cast("pa.Table", to_pyarrow())
+                row_count = pa_table.num_rows
+            except (AttributeError, TypeError, ValueError):
+                pass
 
         metadata = MaterializedTable(
             name=name,
@@ -339,9 +328,7 @@ def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:
     RuntimeArtifactsSummary
         Summary for observability.
     """
-    total_rows = sum(
-        meta.row_count for meta in artifacts.table_metadata.values()
-    )
+    total_rows = sum(meta.row_count for meta in artifacts.table_metadata.values())
 
     return RuntimeArtifactsSummary(
         total_views=len(artifacts.view_references),

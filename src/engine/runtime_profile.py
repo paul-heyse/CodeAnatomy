@@ -13,11 +13,11 @@ import pyarrow as pa
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
-from arrowdsl.io.ipc import payload_hash
 from arrowdsl.schema.serialization import schema_to_msgpack
 from engine.function_registry import default_function_registry
 from serde_msgspec import dumps_msgpack, to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
+from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -322,9 +322,7 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
             policy_snapshot.policy_hash if policy_snapshot is not None else None
         ),
         "sqlglot_policy_snapshot": (
-            dumps_msgpack(policy_snapshot.payload())
-            if policy_snapshot is not None
-            else None
+            dumps_msgpack(policy_snapshot.payload()) if policy_snapshot is not None else None
         ),
         "function_registry_hash": function_registry.fingerprint(),
         "function_registry_snapshot": dumps_msgpack(function_registry.payload()),
@@ -332,9 +330,7 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
             runtime.datafusion.settings_hash() if runtime.datafusion is not None else None
         ),
         "datafusion_settings": (
-            dumps_msgpack(datafusion_settings)
-            if datafusion_settings is not None
-            else None
+            dumps_msgpack(datafusion_settings) if datafusion_settings is not None else None
         ),
     }
 

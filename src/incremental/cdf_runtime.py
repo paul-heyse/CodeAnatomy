@@ -8,14 +8,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
-from deltalake import DeltaTable
 
 from datafusion_engine.registry_bridge import DeltaCdfRegistrationOptions, register_delta_cdf_df
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
+from incremental.delta_context import DeltaAccessContext
 from incremental.ibis_exec import ibis_expr_to_table
-from incremental.runtime import IncrementalRuntime, TempTableRegistry
-from storage.deltalake import DeltaCdfOptions
+from incremental.runtime import TempTableRegistry
+from storage.deltalake import DeltaCdfOptions, delta_table_version
 
 if TYPE_CHECKING:
     from ibis.expr.types import BooleanValue
@@ -30,7 +30,7 @@ class CdfReadResult:
 
 
 def read_cdf_changes(
-    runtime: IncrementalRuntime,
+    context: DeltaAccessContext,
     *,
     dataset_path: str,
     dataset_name: str,
@@ -47,11 +47,16 @@ def read_cdf_changes(
     path = Path(dataset_path)
     if not path.exists():
         return None
-    if not DeltaTable.is_deltatable(str(path)):
+    storage = context.storage
+    current_version = delta_table_version(
+        str(path),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
+    if current_version is None:
         return None
+    runtime = context.runtime
     cursor = cursor_store.load_cursor(dataset_name)
-    dt = DeltaTable(str(path))
-    current_version = dt.version()
     if cursor is None:
         cursor_store.save_cursor(CdfCursor(dataset_name=dataset_name, last_version=current_version))
         return None
@@ -72,7 +77,8 @@ def read_cdf_changes(
                 path=str(path),
                 options=DeltaCdfRegistrationOptions(
                     cdf_options=cdf_options,
-                    storage_options=None,
+                    storage_options=storage.storage_options,
+                    log_storage_options=storage.log_storage_options,
                     runtime_profile=runtime.profile,
                 ),
             )

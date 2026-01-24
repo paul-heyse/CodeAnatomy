@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrowdsl.io.ipc import payload_hash
 from datafusion_engine.schema_introspection import schema_map_fingerprint_from_mapping
 from sqlglot_tools.lineage import LineagePayload
 from sqlglot_tools.optimizer import (
@@ -18,6 +17,7 @@ from sqlglot_tools.optimizer import (
     resolve_sqlglot_policy,
     sqlglot_policy_snapshot_for,
 )
+from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

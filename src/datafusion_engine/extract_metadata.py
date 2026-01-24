@@ -6,8 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
 
+from datafusion_engine.extract_template_specs import dataset_template_specs
 from datafusion_engine.extract_templates import expand_dataset_templates
-from relspec.extract.registry_template_specs import dataset_template_specs
 
 
 @dataclass(frozen=True)

@@ -45,7 +45,7 @@ from extract.parallel import parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.tree_sitter_cache import TreeSitterCache, TreeSitterParseResult
 from extract.tree_sitter_queries import TreeSitterQueryPack, compile_query_pack
-from extract.worklists import iter_worklist_contexts
+from extract.worklists import iter_worklist_contexts, worklist_queue_name
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -88,6 +88,7 @@ class TreeSitterExtractOptions:
     included_ranges: tuple[tuple[int, int], ...] | None = None
     parse_callback_threshold_bytes: int | None = 5_000_000
     parse_callback_chunk_size: int = 65_536
+    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)
@@ -1020,6 +1021,14 @@ def _collect_ts_rows(
             output_table="tree_sitter_files_v1",
             ctx=ctx,
             file_contexts=file_contexts,
+            queue_name=(
+                worklist_queue_name(
+                    output_table="tree_sitter_files_v1",
+                    repo_id=options.repo_id,
+                )
+                if options.use_worklist_queue
+                else None
+            ),
         )
     )
     if not contexts:
@@ -1062,6 +1071,14 @@ def _iter_ts_row_batches(
             output_table="tree_sitter_files_v1",
             ctx=ctx,
             file_contexts=file_contexts,
+            queue_name=(
+                worklist_queue_name(
+                    output_table="tree_sitter_files_v1",
+                    repo_id=options.repo_id,
+                )
+                if options.use_worklist_queue
+                else None
+            ),
         )
     )
     if not contexts:

@@ -673,7 +673,6 @@ class ComputeModule(Protocol):
     filter: Callable[[ComputeOperand, ComputeOperand], ArrayLike]
     drop_null: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     invert: Callable[[ComputeOperand], ArrayLike]
-    fill_null: Callable[..., ArrayLike]
     value_counts: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     sort_indices: Callable[..., ArrayLike]
     list_parent_indices: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]

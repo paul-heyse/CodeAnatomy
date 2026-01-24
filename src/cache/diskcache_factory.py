@@ -22,6 +22,7 @@ type DiskCacheKind = Literal[
     "runtime",
     "queue",
     "index",
+    "coordination",
 ]
 
 
@@ -44,11 +45,14 @@ class DiskCacheSettings:
     size_limit_bytes: int
     cull_limit: int = 10
     eviction_policy: str = "least-recently-used"
-    statistics: bool = False
+    statistics: bool = True
     tag_index: bool = True
     shards: int | None = None
     timeout_seconds: float = 60.0
     disk_min_file_size: int | None = None
+    sqlite_journal_mode: str | None = "wal"
+    sqlite_mmap_size: int | None = None
+    sqlite_synchronous: str | None = None
 
     def fingerprint(self) -> str:
         """Return a stable fingerprint for cache settings.
@@ -68,6 +72,9 @@ class DiskCacheSettings:
                 "shards": self.shards,
                 "timeout_seconds": self.timeout_seconds,
                 "disk_min_file_size": self.disk_min_file_size,
+                "sqlite_journal_mode": self.sqlite_journal_mode,
+                "sqlite_mmap_size": self.sqlite_mmap_size,
+                "sqlite_synchronous": self.sqlite_synchronous,
             }
         )
 
@@ -135,10 +142,23 @@ def default_diskcache_profile() -> DiskCacheProfile:
         "extract": DiskCacheSettings(
             size_limit_bytes=8 * 1024 * 1024 * 1024,
             shards=8,
+            disk_min_file_size=512 * 1024,
         ),
         "schema": DiskCacheSettings(size_limit_bytes=256 * 1024 * 1024),
         "repo_scan": DiskCacheSettings(size_limit_bytes=512 * 1024 * 1024),
         "runtime": DiskCacheSettings(size_limit_bytes=256 * 1024 * 1024),
+        "queue": DiskCacheSettings(
+            size_limit_bytes=128 * 1024 * 1024,
+            eviction_policy="none",
+        ),
+        "index": DiskCacheSettings(
+            size_limit_bytes=128 * 1024 * 1024,
+            eviction_policy="none",
+        ),
+        "coordination": DiskCacheSettings(
+            size_limit_bytes=64 * 1024 * 1024,
+            eviction_policy="none",
+        ),
     }
     ttl_seconds: dict[DiskCacheKind, float | None] = {
         "plan": None,
@@ -146,6 +166,9 @@ def default_diskcache_profile() -> DiskCacheProfile:
         "schema": 5 * 60,
         "repo_scan": 30 * 60,
         "runtime": 24 * 60 * 60,
+        "queue": None,
+        "index": None,
+        "coordination": None,
     }
     return DiskCacheProfile(
         root=_default_cache_root(),
@@ -156,6 +179,122 @@ def default_diskcache_profile() -> DiskCacheProfile:
 
 
 _CACHE_POOL: dict[str, Cache | FanoutCache] = {}
+
+
+@dataclass(frozen=True)
+class DiskCacheMaintenance:
+    """Maintenance result for a cache kind."""
+
+    kind: DiskCacheKind
+    expired: int
+    culled: int
+    check_errors: int | None = None
+
+
+def run_cache_maintenance(
+    profile: DiskCacheProfile,
+    *,
+    kind: DiskCacheKind,
+    include_check: bool = False,
+) -> DiskCacheMaintenance:
+    """Run cache maintenance for a cache kind.
+
+    Returns
+    -------
+    DiskCacheMaintenance
+        Maintenance results for the cache kind.
+    """
+    cache = cache_for_kind(profile, kind)
+    expired = int(cache.expire(retry=True))
+    culled = int(cache.cull(retry=True))
+    check_errors = None
+    if include_check:
+        errors = cache.check(retry=True)
+        check_errors = len(errors) if isinstance(errors, list) else int(bool(errors))
+    return DiskCacheMaintenance(
+        kind=kind,
+        expired=expired,
+        culled=culled,
+        check_errors=check_errors,
+    )
+
+
+def run_profile_maintenance(
+    profile: DiskCacheProfile,
+    *,
+    kinds: tuple[DiskCacheKind, ...] | None = None,
+    include_check: bool = False,
+) -> list[DiskCacheMaintenance]:
+    """Run maintenance across a set of cache kinds.
+
+    Returns
+    -------
+    list[DiskCacheMaintenance]
+        Maintenance results for each cache kind.
+    """
+    targets = kinds or ("plan", "extract", "schema", "repo_scan", "runtime")
+    return [
+        run_cache_maintenance(profile, kind=kind, include_check=include_check)
+        for kind in targets
+    ]
+
+
+def evict_cache_tag(
+    profile: DiskCacheProfile,
+    *,
+    kind: DiskCacheKind,
+    tag: str,
+) -> int:
+    """Evict cache entries for a tag and kind.
+
+    Returns
+    -------
+    int
+        Count of evicted entries.
+    """
+    cache = cache_for_kind(profile, kind)
+    return int(cache.evict(tag, retry=True))
+
+
+def bulk_cache_set(
+    cache: Cache | FanoutCache | None,
+    entries: Mapping[str, object],
+    *,
+    expire: float | None = None,
+    tag: str | None = None,
+    read: bool = False,
+) -> int:
+    """Set multiple cache entries, using transactions when available.
+
+    Returns
+    -------
+    int
+        Count of entries written.
+    """
+    if cache is None or not entries:
+        return 0
+    if isinstance(cache, FanoutCache):
+        for key, value in entries.items():
+            cache.set(
+                key,
+                value,
+                expire=expire,
+                tag=tag,
+                read=read,
+                retry=True,
+            )
+        return len(entries)
+    with cache.transact():
+        for key, value in entries.items():
+            cache.set(
+                key,
+                value,
+                expire=expire,
+                tag=tag,
+                read=read,
+                retry=True,
+            )
+    return len(entries)
 
 
 def cache_for_kind(profile: DiskCacheProfile, kind: DiskCacheKind) -> Cache | FanoutCache:
@@ -172,28 +311,21 @@ def cache_for_kind(profile: DiskCacheProfile, kind: DiskCacheKind) -> Cache | Fa
         return cache
     settings = profile.settings_for(kind)
     base_dir = profile.root / kind
+    settings_kwargs = _settings_kwargs(settings)
     if settings.shards is not None and settings.shards > 1:
         cache = FanoutCache(
             str(base_dir),
             shards=settings.shards,
             size_limit=settings.size_limit_bytes,
-            cull_limit=settings.cull_limit,
-            eviction_policy=settings.eviction_policy,
-            statistics=settings.statistics,
-            tag_index=settings.tag_index,
             timeout=int(settings.timeout_seconds),
-            disk_min_file_size=settings.disk_min_file_size,
+            **settings_kwargs,
         )
     else:
         cache = Cache(
             str(base_dir),
             size_limit=settings.size_limit_bytes,
-            cull_limit=settings.cull_limit,
-            eviction_policy=settings.eviction_policy,
-            statistics=settings.statistics,
-            tag_index=settings.tag_index,
             timeout=int(settings.timeout_seconds),
-            disk_min_file_size=settings.disk_min_file_size,
+            **settings_kwargs,
         )
     _CACHE_POOL[fingerprint] = cache
     return cache
@@ -218,6 +350,24 @@ def _stats_mapping(stats: object) -> dict[str, object]:
         padded = list(stats) + [None] * max(0, len(keys) - len(stats))
         return dict(zip(keys, padded, strict=False))
     return {}
+
+
+def _settings_kwargs(settings: DiskCacheSettings) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "cull_limit": settings.cull_limit,
+        "eviction_policy": settings.eviction_policy,
+        "statistics": settings.statistics,
+        "tag_index": settings.tag_index,
+    }
+    if settings.disk_min_file_size is not None:
+        kwargs["disk_min_file_size"] = settings.disk_min_file_size
+    if settings.sqlite_journal_mode is not None:
+        kwargs["sqlite_journal_mode"] = settings.sqlite_journal_mode
+    if settings.sqlite_mmap_size is not None:
+        kwargs["sqlite_mmap_size"] = settings.sqlite_mmap_size
+    if settings.sqlite_synchronous is not None:
+        kwargs["sqlite_synchronous"] = settings.sqlite_synchronous
+    return kwargs
 
 
 def diskcache_stats_snapshot(cache: Cache | FanoutCache) -> dict[str, object]:
@@ -279,16 +429,24 @@ def build_index(profile: DiskCacheProfile, *, name: str) -> Index:
         tag_index=settings.tag_index,
         timeout=settings.timeout_seconds,
         disk_min_file_size=settings.disk_min_file_size,
+        sqlite_journal_mode=settings.sqlite_journal_mode,
+        sqlite_mmap_size=settings.sqlite_mmap_size,
+        sqlite_synchronous=settings.sqlite_synchronous,
     )
 
 
 __all__ = [
+    "DiskCacheMaintenance",
     "DiskCacheKind",
     "DiskCacheProfile",
     "DiskCacheSettings",
     "build_deque",
     "build_index",
+    "bulk_cache_set",
     "cache_for_kind",
     "default_diskcache_profile",
     "diskcache_stats_snapshot",
+    "evict_cache_tag",
+    "run_cache_maintenance",
+    "run_profile_maintenance",
 ]

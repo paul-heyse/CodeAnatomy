@@ -32,6 +32,8 @@ from cache.diskcache_factory import (
     cache_for_kind,
     default_diskcache_profile,
     diskcache_stats_snapshot,
+    evict_cache_tag,
+    run_profile_maintenance,
 )
 from datafusion_engine.cache_introspection import (
     capture_cache_diagnostics,
@@ -48,6 +50,7 @@ from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_p
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
+    catalogs_snapshot,
     constraint_rows,
     settings_snapshot_table,
     table_constraint_rows,
@@ -3884,7 +3887,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         try:
             payload.update(
                 {
-                    "catalogs": introspector.catalogs_snapshot(),
+                    "catalogs": catalogs_snapshot(introspector),
                     "schemata": introspector.schemata_snapshot(),
                     "tables": introspector.tables_snapshot(),
                     "columns": introspector.columns_snapshot(),
@@ -4236,7 +4239,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if diskcache_profile is None:
             return
         diskcache_events: list[dict[str, object]] = []
-        for kind in ("plan", "extract", "schema", "repo_scan", "runtime"):
+        for kind in ("plan", "extract", "schema", "repo_scan", "runtime", "coordination"):
             cache = self._diskcache(cast("DiskCacheKind", kind))
             if cache is None:
                 continue
@@ -4250,6 +4253,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     "eviction_policy": settings.eviction_policy,
                     "cull_limit": settings.cull_limit,
                     "shards": settings.shards,
+                    "statistics": settings.statistics,
+                    "tag_index": settings.tag_index,
+                    "disk_min_file_size": settings.disk_min_file_size,
+                    "sqlite_journal_mode": settings.sqlite_journal_mode,
+                    "sqlite_mmap_size": settings.sqlite_mmap_size,
+                    "sqlite_synchronous": settings.sqlite_synchronous,
                 }
             )
             diskcache_events.append(payload)
@@ -4860,6 +4869,61 @@ def schema_introspector_for_profile(
     )
 
 
+def run_diskcache_maintenance(
+    profile: DataFusionRuntimeProfile,
+    *,
+    kinds: tuple[DiskCacheKind, ...] | None = None,
+    include_check: bool = False,
+    record: bool = True,
+) -> list[dict[str, object]]:
+    """Run DiskCache maintenance for a runtime profile.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Maintenance payloads for each cache kind.
+    """
+    cache_profile = profile.diskcache_profile
+    if cache_profile is None:
+        return []
+    results = run_profile_maintenance(
+        cache_profile,
+        kinds=kinds,
+        include_check=include_check,
+    )
+    payloads = [
+        {
+            "kind": result.kind,
+            "expired": result.expired,
+            "culled": result.culled,
+            "check_errors": result.check_errors,
+        }
+        for result in results
+    ]
+    if record and profile.diagnostics_sink is not None and payloads:
+        profile.diagnostics_sink.record_events("diskcache_maintenance_v1", payloads)
+    return payloads
+
+
+def evict_diskcache_entries(
+    profile: DataFusionRuntimeProfile,
+    *,
+    kind: DiskCacheKind,
+    tag: str,
+) -> int:
+    """Evict DiskCache entries for a runtime profile.
+
+    Returns
+    -------
+    int
+        Count of evicted entries.
+    """
+    cache_profile = profile.diskcache_profile
+    if cache_profile is None:
+        return 0
+    return evict_cache_tag(cache_profile, kind=kind, tag=tag)
+
+
 def collect_datafusion_traces(
     profile: DataFusionRuntimeProfile,
 ) -> Mapping[str, object] | None:
@@ -5416,10 +5480,12 @@ __all__ = [
     "dataset_spec_from_context",
     "diagnostics_arrow_ingest_hook",
     "diagnostics_dml_hook",
+    "evict_diskcache_entries",
     "feature_state_snapshot",
     "read_delta_as_reader",
     "register_view_specs",
     "snapshot_plans",
+    "run_diskcache_maintenance",
     "sql_options_for_profile",
     "statement_sql_options_for_profile",
 ]

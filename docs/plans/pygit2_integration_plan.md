@@ -75,11 +75,11 @@ def open_git_context(path: str) -> GitContext | None:
 - **New:** `src/extract/git_context.py`
 
 ### Implementation Checklist
-- [ ] Add `GitContext` helper to centralize repo discovery + HEAD resolution.
-- [ ] Replace `gh_repo_name_with_owner` / `gh_repo_head_sha` with pygit2 logic.
-- [ ] Parse `origin_url` to derive `nameWithOwner` when host is github.com; fallback to repo path otherwise.
-- [ ] Keep explicit overrides (`project_name_override`, `project_version_override`) intact.
-- [ ] Add feature gating (`pygit2.features`) where remote auth is required.
+- [x] Add `GitContext` helper to centralize repo discovery + HEAD resolution.
+- [x] Replace `gh_repo_name_with_owner` / `gh_repo_head_sha` with pygit2 logic.
+- [x] Parse `origin_url` to derive `nameWithOwner` when host is github.com; fallback to repo path otherwise.
+- [x] Keep explicit overrides (`project_name_override`, `project_version_override`) intact.
+- [x] Add feature gating (`pygit2.features`) where remote auth is required (see `extract/git_remotes.py`).
 
 ---
 
@@ -104,10 +104,10 @@ paths.update(entry.path for entry in repo.index)
 - **New:** `src/extract/repo_scan_pygit2.py`
 
 ### Implementation Checklist
-- [ ] Implement pygit2‑based listing (tracked + untracked) with ignore semantics.
-- [ ] Preserve existing include/exclude glob filtering and symlink rules.
-- [ ] Keep filesystem fallback for non‑git directories.
-- [ ] Add tests for parity vs current `git ls-files` behavior.
+- [x] Implement pygit2‑based listing (tracked + untracked) with ignore semantics.
+- [x] Preserve existing include/exclude glob filtering and symlink rules.
+- [x] Keep filesystem fallback for non‑git directories.
+- [x] Add tests for parity vs current `git ls-files` behavior.
 
 ---
 
@@ -130,10 +130,10 @@ text = blob.data.decode("utf-8", errors="replace")
 - **New:** `src/extract/repo_blobs_git.py`
 
 ### Implementation Checklist
-- [ ] Add `ref` option (or `read_from_git`) to control blob source.
-- [ ] Use tree/blob lookup for HEAD or provided ref.
-- [ ] Preserve current working‑tree path for default behavior.
-- [ ] Validate size limits and encoding detection remain consistent.
+- [x] Add `ref` option (or `read_from_git`) to control blob source.
+- [x] Use tree/blob lookup for HEAD or provided ref.
+- [x] Preserve current working‑tree path for default behavior.
+- [x] Validate size limits and encoding detection remain consistent.
 
 ---
 
@@ -157,9 +157,10 @@ for commit in walker:
 - **New:** `src/extract/git_delta.py`
 
 ### Implementation Checklist
-- [ ] Add commit‑range inputs to extract path (old/new ref).
-- [ ] Build changed file list via `repo.diff` or `Tree.diff_to_tree`.
-- [ ] Plug into repo scanning as an optional mode.
+- [x] Add commit‑range inputs to extract path (old/new ref).
+- [x] Build changed file list via `repo.diff` or `Tree.diff_to_tree`.
+- [x] Plug into repo scanning as an optional mode.
+- [x] Wire incremental pipeline settings to supply diff refs automatically.
 
 ---
 
@@ -181,9 +182,9 @@ worktrees = repo.list_worktrees() if hasattr(repo, "list_worktrees") else []
 - **New:** `src/extract/git_submodules.py`
 
 ### Implementation Checklist
-- [ ] Optionally include submodule working directories in scans.
-- [ ] Honor `.gitmodules` update semantics via pygit2 submodule API.
-- [ ] Detect worktrees and avoid double‑scanning.
+- [x] Optionally include submodule working directories in scans.
+- [x] Honor `.gitmodules` update semantics via pygit2 submodule API.
+- [x] Detect worktrees and avoid double‑scanning.
 
 ---
 
@@ -206,9 +207,9 @@ for hunk in blame:
 - Optional downstream usage in diagnostics/telemetry emitters
 
 ### Implementation Checklist
-- [ ] Add mailmap resolution utilities.
-- [ ] Provide optional blame extraction paths (guarded by feature flags).
-- [ ] Keep this optional to avoid runtime cost when not needed.
+- [x] Add mailmap resolution utilities.
+- [x] Provide optional blame extraction paths (guarded by feature flags).
+- [x] Keep this optional to avoid runtime cost when not needed.
 
 ---
 
@@ -229,9 +230,9 @@ if pygit2.features & pygit2.GIT_FEATURE_SSH:
 - `src/extract/scip_identity.py` (if remote probing is required)
 
 ### Implementation Checklist
-- [ ] Add credential and certificate callback helpers.
-- [ ] Gate transport support by `pygit2.features`.
-- [ ] Keep remote operations optional and explicit.
+- [x] Add credential and certificate callback helpers.
+- [x] Gate transport support by `pygit2.features`.
+- [x] Keep remote operations optional and explicit.
 
 ---
 
@@ -255,9 +256,9 @@ settings.server_timeout = 30_000
 - `src/engine/runtime_profile.py` (if runtime config is exposed)
 
 ### Implementation Checklist
-- [ ] Add a runtime‑configurable git settings hook.
-- [ ] Allow safe defaults and explicit overrides.
-- [ ] Document any security implications of `owner_validation`.
+- [x] Add a runtime‑configurable git settings hook.
+- [x] Allow safe defaults and explicit overrides.
+- [x] Document any security implications of `owner_validation`.
 
 ---
 
@@ -286,10 +287,10 @@ ignored = ignore_spec.match_file(path)
 - **New:** `src/extract/pathspec_filters.py`
 
 ### Implementation Checklist
-- [ ] Build a GitIgnoreSpec from `.gitignore`/`.git/info/exclude` when present.
-- [ ] Apply PathSpec include/exclude filters on pygit2‑derived paths.
-- [ ] Replace filesystem fallback filtering with `match_tree_entries` / `check_file`.
-- [ ] Add optional diagnostics for why a path was excluded (CheckResult index).
+- [x] Build a GitIgnoreSpec from `.gitignore`/`.git/info/exclude` when present.
+- [x] Apply PathSpec include/exclude filters on pygit2‑derived paths.
+- [x] Replace filesystem fallback filtering with `match_tree_entries` / `check_file`.
+- [x] Add optional diagnostics for why a path was excluded (CheckResult index).
 
 ---
 

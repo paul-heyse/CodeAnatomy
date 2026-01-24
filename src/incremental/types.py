@@ -15,6 +15,9 @@ class IncrementalSettings:
     state_dir: Path | None = None
     repo_id: str | None = None
     impact_strategy: Literal["hybrid", "symbol_closure", "import_closure"] = "hybrid"
+    git_base_ref: str | None = None
+    git_head_ref: str | None = None
+    git_changed_only: bool = False
 
 
 IncrementalConfig = IncrementalSettings

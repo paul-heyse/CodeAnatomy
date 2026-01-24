@@ -19,7 +19,13 @@ def iter_repo_files_pygit2(
     exclude_dirs: Sequence[str],
     follow_symlinks: bool,
 ) -> list[Path] | None:
-    """Return pygit2-listed repo files, or None if git is unavailable."""
+    """Return pygit2-listed repo files, or None if git is unavailable.
+
+    Returns
+    -------
+    list[pathlib.Path] | None
+        Repo-relative paths when git is available.
+    """
     git_ctx = open_git_context(repo_root)
     if git_ctx is None or git_ctx.repo.workdir is None:
         return None

@@ -7,12 +7,18 @@ view references, and schema caches.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.serialization import schema_fingerprint
-from cache.diskcache_factory import DiskCacheProfile, cache_for_kind
+from cache.diskcache_factory import (
+    DiskCacheProfile,
+    bulk_cache_set,
+    cache_for_kind,
+    evict_cache_tag,
+)
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -256,6 +262,37 @@ class RuntimeArtifacts:
                 retry=True,
             )
 
+    def cache_schemas(self, schemas: Mapping[str, SchemaLike]) -> int:
+        """Cache multiple schemas in a batch.
+
+        Returns
+        -------
+        int
+            Count of schemas cached.
+        """
+        if not schemas:
+            return 0
+        cache = self._cache()
+        if cache is None:
+            return 0
+        for name, schema in schemas.items():
+            self.schema_cache[name] = schema
+        payload = {self._schema_cache_key(name): schema for name, schema in schemas.items()}
+        return bulk_cache_set(cache, payload)
+
+    def evict_cache(self, *, tag: str) -> int:
+        """Evict runtime cache entries for a tag.
+
+        Returns
+        -------
+        int
+            Count of evicted entries.
+        """
+        profile = self.diskcache_profile
+        if profile is None:
+            return 0
+        return evict_cache_tag(profile, kind="runtime", tag=tag)
+
     def get_schema(self, name: str) -> SchemaLike | None:
         """Retrieve a cached schema.
 
@@ -276,11 +313,10 @@ class RuntimeArtifacts:
         if cache is None:
             return None
         cached = cache.get(self._schema_cache_key(name), default=None, retry=True)
-        if cached is None:
+        if cached is None or not isinstance(cached, SchemaLike):
             return None
-        schema = cast("SchemaLike", cached)
-        self.schema_cache[name] = schema
-        return schema
+        self.schema_cache[name] = cached
+        return cached
 
     def record_execution(self, task_name: str) -> None:
         """Record that a task was executed.

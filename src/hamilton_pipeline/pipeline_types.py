@@ -50,6 +50,9 @@ class RepoScanConfig:
     include_globs: tuple[str, ...]
     exclude_globs: tuple[str, ...]
     max_files: int
+    diff_base_ref: str | None = None
+    diff_head_ref: str | None = None
+    changed_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,9 @@ class IncrementalRunConfig:
     enabled: bool
     state_dir: str | None
     repo_id: str | None
+    git_base_ref: str | None = None
+    git_head_ref: str | None = None
+    git_changed_only: bool = False
 
 
 @dataclass(frozen=True)

@@ -9,15 +9,19 @@ import tomllib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
-from functools import partial
+from functools import cache, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import normalize_options
+from arrowdsl.schema.serialization import schema_fingerprint
+from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from extract.cache_utils import (
     cache_for_extract,
+    cache_get,
+    cache_lock,
+    cache_set,
     cache_ttl_seconds,
     diskcache_profile_from_ctx,
     stable_cache_key,
@@ -38,7 +42,7 @@ from extract.helpers import (
 )
 from extract.parallel import parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
-from extract.worklists import iter_worklist_contexts
+from extract.worklists import iter_worklist_contexts, worklist_queue_name
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -66,6 +70,7 @@ class ASTExtractOptions:
     parallel: bool = True
     max_workers: int | None = None
     repo_id: str | None = None
+    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)
@@ -76,6 +81,11 @@ class ASTExtractResult:
 
 
 _PYTHON_VERSION_RE = re.compile(r"(\\d+)\\.(\\d+)")
+
+
+@cache
+def _ast_schema_fingerprint() -> str:
+    return schema_fingerprint(dataset_schema("ast_files_v1"))
 
 
 def _parse_requires_python(spec: str) -> tuple[int, int] | None:
@@ -630,6 +640,7 @@ def _cache_key(file_ctx: FileContext, *, options: ASTExtractOptions) -> tuple[ob
         return None
     return (
         file_ctx.file_sha256,
+        _ast_schema_fingerprint(),
         options.mode,
         options.feature_version,
         options.type_comments,
@@ -907,36 +918,50 @@ def _extract_ast_for_context(
     if not file_ctx.file_id or not file_ctx.path:
         return None
     cache_key = _cache_key(file_ctx, options=options)
-    cache_key_str = None
-    if cache is not None and cache_key is not None:
-        cache_key_str = stable_cache_key("ast", {"key": cache_key})
-        cached = cache.get(cache_key_str, default=None, retry=True)
+    use_cache = cache is not None and cache_key is not None
+    cache_key_str = stable_cache_key("ast", {"key": cache_key}) if use_cache else None
+    if use_cache and cache_key_str is not None:
+        cached = cache_get(cache, key=cache_key_str, default=None)
         if isinstance(cached, _AstWalkResult):
             return _ast_row_from_walk(file_ctx, options=options, walk=cached, errors=[])
-    text = text_from_file_ctx(file_ctx)
-    if text is None:
-        return None
-    max_nodes, error_rows = _limit_errors(file_ctx, text=text, options=options)
-    walk: _AstWalkResult | None = None
-    if not error_rows:
-        walk, parse_errors = _parse_and_walk(
-            text,
-            filename=str(file_ctx.path),
-            options=options,
-            max_nodes=max_nodes,
-        )
-        error_rows.extend(parse_errors)
-        if walk is not None and cache is not None and cache_key is not None and not parse_errors:
-            if cache_key_str is None:
-                cache_key_str = stable_cache_key("ast", {"key": cache_key})
-            cache.set(
-                cache_key_str,
-                walk,
-                expire=cache_ttl,
-                tag=options.repo_id,
-                retry=True,
+
+    def _build_row() -> dict[str, object] | None:
+        text = text_from_file_ctx(file_ctx)
+        if text is None:
+            return None
+        max_nodes, error_rows = _limit_errors(file_ctx, text=text, options=options)
+        walk: _AstWalkResult | None = None
+        if not error_rows:
+            walk, parse_errors = _parse_and_walk(
+                text,
+                filename=str(file_ctx.path),
+                options=options,
+                max_nodes=max_nodes,
             )
-    return _ast_row_from_walk(file_ctx, options=options, walk=walk, errors=error_rows)
+            error_rows.extend(parse_errors)
+            if (
+                use_cache
+                and cache is not None
+                and cache_key_str is not None
+                and walk is not None
+                and not error_rows
+            ):
+                cache_set(
+                    cache,
+                    key=cache_key_str,
+                    value=walk,
+                    expire=cache_ttl,
+                    tag=options.repo_id,
+                )
+        return _ast_row_from_walk(file_ctx, options=options, walk=walk, errors=error_rows)
+
+    if use_cache and cache_key_str is not None:
+        with cache_lock(cache, key=cache_key_str):
+            cached = cache_get(cache, key=cache_key_str, default=None)
+            if isinstance(cached, _AstWalkResult):
+                return _ast_row_from_walk(file_ctx, options=options, walk=cached, errors=[])
+            return _build_row()
+    return _build_row()
 
 
 def _extract_ast_for_row(
@@ -1094,6 +1119,11 @@ def _iter_ast_rows(
             output_table="ast_files_v1",
             ctx=ctx,
             file_contexts=file_contexts,
+            queue_name=(
+                worklist_queue_name(output_table="ast_files_v1", repo_id=options.repo_id)
+                if options.use_worklist_queue
+                else None
+            ),
         )
     )
     if not contexts:

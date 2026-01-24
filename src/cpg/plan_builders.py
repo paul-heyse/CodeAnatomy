@@ -143,14 +143,14 @@ def _sqlglot_union_builder(
 
     def _builder(rows: Sequence[Table]) -> Table:
         from sqlglot_tools.bridge import ibis_to_sqlglot
-        from sqlglot_tools.optimizer import SqlGlotSurface, resolve_sqlglot_policy, sqlglot_sql
+        from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_sql
 
         compiler_backend = cast("IbisCompilerBackend", backend)
         expressions = [ibis_to_sqlglot(row, backend=compiler_backend) for row in rows]
         union_expr = _balanced_union(expressions)
         sql = sqlglot_sql(
             union_expr,
-            policy=resolve_sqlglot_policy(name=SqlGlotSurface.DATAFUSION_COMPILE),
+            policy=resolve_sqlglot_policy(name="datafusion_compile"),
         )
         return compiler_backend.sql(sql)
 

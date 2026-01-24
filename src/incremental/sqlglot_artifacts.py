@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
+from cache.diskcache_factory import cache_for_kind
 from datafusion_engine.schema_introspection import schema_map_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from incremental.runtime import IncrementalRuntime
@@ -67,9 +68,21 @@ def record_sqlglot_plan_artifact(
     if sink is None:
         return
     backend = cast("IbisCompilerBackend", runtime.ibis_backend())
+    cache_profile = runtime.profile.diskcache_profile
+    cache = cache_for_kind(cache_profile, "schema") if cache_profile is not None else None
+    cache_key = (
+        f"schema_map:{runtime.profile.context_cache_key()}"
+        if cache_profile is not None
+        else None
+    )
+    cache_ttl = cache_profile.ttl_for("schema") if cache_profile is not None else None
     schema_map, schema_map_hash = schema_map_snapshot(
         runtime.session_context(),
         sql_options=sql_options_for_profile(runtime.profile),
+        cache=cache,
+        cache_key=cache_key,
+        cache_ttl=cache_ttl,
+        cache_tag=runtime.profile.context_cache_key(),
     )
     artifacts = collect_sqlglot_plan_artifacts(
         expr,

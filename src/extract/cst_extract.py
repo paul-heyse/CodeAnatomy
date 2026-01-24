@@ -51,7 +51,7 @@ from extract.helpers import (
 from extract.parallel import parallel_map, resolve_max_workers, supports_fork
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
-from extract.worklists import iter_worklist_contexts
+from extract.worklists import iter_worklist_contexts, worklist_queue_name
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -97,6 +97,7 @@ class CSTExtractOptions:
     batch_size: int | None = 512
     parallel: bool = True
     max_workers: int | None = None
+    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)
@@ -1448,6 +1449,11 @@ def _collect_cst_file_rows(
             output_table="libcst_files_v1",
             ctx=ctx,
             file_contexts=file_contexts,
+            queue_name=(
+                worklist_queue_name(output_table="libcst_files_v1", repo_id=options.repo_id)
+                if options.use_worklist_queue
+                else None
+            ),
         )
     )
     repo_manager = _build_repo_manager(options, contexts)
@@ -1531,6 +1537,14 @@ def _iter_cst_row_batches(
             output_table="libcst_files_v1",
             ctx=context.ctx,
             file_contexts=context.file_contexts,
+            queue_name=(
+                worklist_queue_name(
+                    output_table="libcst_files_v1",
+                    repo_id=context.options.repo_id,
+                )
+                if context.options.use_worklist_queue
+                else None
+            ),
         )
     )
     if not contexts:

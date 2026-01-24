@@ -11,15 +11,19 @@ from datafusion import SessionContext
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
+from cache.diskcache_factory import build_deque, build_index
 from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.df_builder import df_from_sqlglot
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.schema_introspection import table_names_snapshot
+from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
 from extract.helpers import FileContext, iter_file_contexts
 from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import NormalizeExprOptions, normalize_expr, resolve_sqlglot_policy
 
 if TYPE_CHECKING:
+    from diskcache import Deque, Index
+
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from ibis_engine.registry import DatasetLocation
 
@@ -81,8 +85,22 @@ def iter_worklist_contexts(
     output_table: str,
     ctx: ExecutionContext | None,
     file_contexts: Iterable[FileContext] | None = None,
+    queue_name: str | None = None,
 ) -> Iterable[FileContext]:
     """Yield worklist file contexts with DataFusion fallback.
+
+    Parameters
+    ----------
+    repo_files:
+        Repo manifest table.
+    output_table:
+        Output dataset name used for worklist computation.
+    ctx:
+        Execution context used for DataFusion integration.
+    file_contexts:
+        Optional precomputed file contexts.
+    queue_name:
+        Optional DiskCache queue name for persistent worklists.
 
     Yields
     ------
@@ -95,7 +113,28 @@ def iter_worklist_contexts(
     if ctx is None or ctx.runtime.datafusion is None:
         yield from iter_file_contexts(repo_files)
         return
-    yield from _worklist_stream(ctx, repo_files=repo_files, output_table=output_table)
+    if queue_name is None:
+        yield from _worklist_stream(ctx, repo_files=repo_files, output_table=output_table)
+        return
+    queue_bundle = _worklist_queue(ctx, queue_name=queue_name)
+    if queue_bundle is None:
+        yield from _worklist_stream(ctx, repo_files=repo_files, output_table=output_table)
+        return
+    queue, index = queue_bundle
+    if len(queue) > 0:
+        yield from _drain_worklist_queue(queue, index=index)
+        return
+    for file_ctx in _worklist_stream(ctx, repo_files=repo_files, output_table=output_table):
+        file_id = file_ctx.file_id
+        if not file_id:
+            continue
+        sha = file_ctx.file_sha256 or ""
+        existing = index.get(file_id)
+        if isinstance(existing, str) and existing == sha:
+            continue
+        index[file_id] = sha
+        queue.append(file_ctx)
+    yield from _drain_worklist_queue(queue, index=index)
 
 
 def _worklist_stream(
@@ -162,6 +201,45 @@ def _normalize_worklist_expr(expr: Expression) -> Expression:
     return normalize_expr(expr, options=options)
 
 
+def worklist_queue_name(*, output_table: str, repo_id: str | None) -> str:
+    """Return a stable queue name for persistent worklists.
+
+    Returns
+    -------
+    str
+        Stable queue name derived from the repo and output table.
+    """
+    return stable_cache_label(
+        "worklist",
+        {"output_table": output_table, "repo_id": repo_id},
+    )
+
+
+def _worklist_queue(
+    ctx: ExecutionContext,
+    *,
+    queue_name: str,
+) -> tuple[Deque, Index] | None:
+    profile = diskcache_profile_from_ctx(ctx)
+    if profile is None:
+        return None
+    base_name = f"worklist_{queue_name}"
+    queue = build_deque(profile, name=base_name)
+    index = build_index(profile, name=f"{base_name}_index")
+    return queue, index
+
+
+def _drain_worklist_queue(queue: Deque, *, index: Index) -> Iterator[FileContext]:
+    while len(queue) > 0:
+        item = queue.popleft()
+        if not isinstance(item, FileContext):
+            continue
+        file_id = item.file_id
+        if file_id:
+            index.pop(file_id, None)
+        yield item
+
+
 @contextlib.contextmanager
 def _registered_table(
     ctx: SessionContext,
@@ -205,4 +283,4 @@ def _registered_output_table(
                 deregister(name)
 
 
-__all__ = ["iter_worklist_contexts", "worklist_expr"]
+__all__ = ["iter_worklist_contexts", "worklist_expr", "worklist_queue_name"]

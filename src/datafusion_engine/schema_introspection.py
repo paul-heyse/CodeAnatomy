@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
+from diskcache import memoize_stampede
 
 from datafusion_engine.sql_options import (
     sql_options_for_profile,
@@ -342,6 +343,22 @@ class SchemaIntrospector:
         cache.set(key, rows, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)
         return rows
 
+    def invalidate_cache(self, *, tag: str | None = None) -> int:
+        """Evict cached schema rows for this introspector.
+
+        Returns
+        -------
+        int
+            Count of evicted cache entries.
+        """
+        cache = self.cache
+        if cache is None:
+            return 0
+        cache_tag = tag or self.cache_prefix
+        if not cache_tag:
+            return 0
+        return int(cache.evict(cache_tag, retry=True))
+
     def describe_query(self, sql: str) -> list[dict[str, object]]:
         """Return the computed output schema for a SQL query.
 
@@ -412,7 +429,7 @@ class SchemaIntrospector:
         )
         return self._cached_rows("tables_snapshot", query=query)
 
-    def catalogs_snapshot(self) -> list[dict[str, object]]:
+    def _catalogs_snapshot(self) -> list[dict[str, object]]:
         """Return catalog inventory rows from information_schema.
 
         Returns
@@ -422,6 +439,7 @@ class SchemaIntrospector:
         """
         query = "SELECT DISTINCT catalog_name FROM information_schema.schemata"
         return self._cached_rows("catalogs_snapshot", query=query)
+
 
     def schemata_snapshot(self) -> list[dict[str, object]]:
         """Return schema inventory rows from information_schema.
@@ -756,6 +774,10 @@ def schema_map_snapshot(
     ctx: SessionContext,
     *,
     sql_options: SQLOptions | None,
+    cache: Cache | FanoutCache | None = None,
+    cache_key: str | None = None,
+    cache_ttl: float | None = None,
+    cache_tag: str | None = None,
 ) -> tuple[SchemaMapping | None, str | None]:
     """Return a SQLGlot schema mapping and fingerprint snapshot.
 
@@ -764,12 +786,28 @@ def schema_map_snapshot(
     tuple[SchemaMapping | None, str | None]
         Schema mapping with its fingerprint, or ``(None, None)`` on failure.
     """
-    try:
-        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
-        mapping = schema_map_for_sqlglot(introspector)
-        return mapping, schema_map_fingerprint_from_mapping(mapping)
-    except (RuntimeError, TypeError, ValueError):
-        return None, None
+    def _compute() -> tuple[SchemaMapping | None, str | None]:
+        try:
+            introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+            mapping = schema_map_for_sqlglot(introspector)
+            return mapping, schema_map_fingerprint_from_mapping(mapping)
+        except (RuntimeError, TypeError, ValueError):
+            return None, None
+
+    if cache is None or cache_key is None:
+        return _compute()
+
+    @memoize_stampede(
+        cache,
+        expire=cache_ttl,
+        tag=cache_tag,
+        name="schema_map_snapshot",
+    )
+    def _cached(key: str) -> tuple[SchemaMapping | None, str | None]:
+        _ = key
+        return _compute()
+
+    return _cached(cache_key)
 
 
 def find_struct_field_keys(
@@ -841,8 +879,20 @@ def _function_catalog_sort_key(row: Mapping[str, object]) -> tuple[str, str]:
     return func_name, str(func_type) if func_type is not None else ""
 
 
+def catalogs_snapshot(introspector: SchemaIntrospector) -> list[dict[str, object]]:
+    """Return catalog inventory rows from information_schema.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Catalog inventory rows.
+    """
+    return introspector._catalogs_snapshot()
+
+
 __all__ = [
     "SchemaIntrospector",
+    "catalogs_snapshot",
     "find_struct_field_keys",
     "routines_snapshot_table",
     "tables_snapshot_table",

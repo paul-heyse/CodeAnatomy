@@ -873,6 +873,7 @@ def register_dataset_ddl(
     registration: DatasetDdlRegistration,
     *,
     sql_options: SQLOptions | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> None:
     """Register dataset using DDL (preferred path for streaming sources).
 
@@ -888,6 +889,8 @@ def register_dataset_ddl(
         Registration inputs including name, spec, location, and file format.
     sql_options : SQLOptions | None
         Optional SQL execution options for the DDL statement.
+    runtime_profile : DataFusionRuntimeProfile | None
+        Optional runtime profile used for cache invalidation.
 
     Notes
     -----
@@ -937,6 +940,7 @@ def register_dataset_ddl(
             partition_columns=tuple(config.partitioned_by) if config.partitioned_by else (),
         ),
     )
+    _invalidate_information_schema_cache(runtime_profile, ctx)
 
 
 def _build_registration_context(
@@ -1004,20 +1008,34 @@ def _build_registration_context(
     return context
 
 
+def _invalidate_information_schema_cache(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    ctx: SessionContext,
+) -> None:
+    if runtime_profile is None or not runtime_profile.enable_information_schema:
+        return
+    introspector = schema_introspector_for_profile(runtime_profile, ctx)
+    introspector.invalidate_cache()
+
+
 def _register_dataset_with_context(context: DataFusionRegistrationContext) -> DataFrame:
     if context.location.format == "delta":
         if context.options.provider == "delta_cdf":
-            return _register_delta_cdf(context)
-        if _should_register_delta_provider(context):
-            return _register_delta_provider(context)
+            df = _register_delta_cdf(context)
+        elif _should_register_delta_provider(context):
+            df = _register_delta_provider(context)
+        else:
+            if context.external_table_sql is None:
+                msg = "Delta registration requires a schema-backed DDL statement."
+                raise ValueError(msg)
+            df = _register_external_table(context)
+    else:
         if context.external_table_sql is None:
-            msg = "Delta registration requires a schema-backed DDL statement."
+            msg = "External table registration requires a schema-backed DDL statement."
             raise ValueError(msg)
-        return _register_external_table(context)
-    if context.external_table_sql is None:
-        msg = "External table registration requires a schema-backed DDL statement."
-        raise ValueError(msg)
-    return _register_external_table(context)
+        df = _register_external_table(context)
+    _invalidate_information_schema_cache(context.runtime_profile, context.ctx)
+    return df
 
 
 def _should_register_delta_provider(context: DataFusionRegistrationContext) -> bool:
@@ -1599,6 +1617,7 @@ def _apply_projection_exprs(
         from datafusion_engine.runtime import record_view_definition
 
         record_view_definition(runtime_profile, name=table_name, sql=view_sql)
+        _invalidate_information_schema_cache(runtime_profile, ctx)
     return ctx.table(table_name)
 
 
@@ -1725,6 +1744,7 @@ def _refresh_listing_table(
     with suppress(KeyError, ValueError):
         ctx.deregister_table(name)
     register()
+    _invalidate_information_schema_cache(runtime_profile, ctx)
     if runtime_profile is None or runtime_profile.diagnostics_sink is None:
         return
     runtime_profile.diagnostics_sink.record_artifact(
@@ -2302,6 +2322,7 @@ def register_delta_cdf_df(
             log_storage_options=storage_options,
         ),
     )
+    _invalidate_information_schema_cache(runtime_profile, ctx)
     return ctx.table(name)
 
 

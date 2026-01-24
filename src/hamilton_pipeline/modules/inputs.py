@@ -6,7 +6,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
 
 from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
@@ -48,6 +48,18 @@ def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bo
         return bool(config.enabled)
     mode = os.environ.get("CODEANATOMY_PIPELINE_MODE", "").strip().lower()
     return mode in {"incremental", "streaming"}
+
+
+def _env_bool(name: str) -> bool | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "n"}:
+        return False
+    return None
 
 
 @tag(layer="inputs", kind="runtime")
@@ -510,6 +522,7 @@ def repo_scan_config(
     include_globs: list[str],
     exclude_globs: list[str],
     max_files: int,
+    incremental_config: IncrementalConfig | None = None,
 ) -> RepoScanConfig:
     """Bundle repository scan configuration.
 
@@ -518,11 +531,25 @@ def repo_scan_config(
     RepoScanConfig
         Repository scan configuration bundle.
     """
+    diff_base_ref = None
+    diff_head_ref = None
+    changed_only = False
+    if incremental_config is not None:
+        diff_base_ref = incremental_config.git_base_ref
+        diff_head_ref = incremental_config.git_head_ref
+        changed_only = incremental_config.git_changed_only
+    if not diff_base_ref or not diff_head_ref:
+        diff_base_ref = None
+        diff_head_ref = None
+        changed_only = False
     return RepoScanConfig(
         repo_root=repo_root,
         include_globs=tuple(include_globs),
         exclude_globs=tuple(exclude_globs),
         max_files=int(max_files),
+        diff_base_ref=diff_base_ref,
+        diff_head_ref=diff_head_ref,
+        changed_only=changed_only,
     )
 
 
@@ -663,14 +690,22 @@ def execution_surface_policy(
     )
 
 
+class IncrementalConfigKwargs(TypedDict, total=False):
+    """Keyword arguments supported by incremental_config."""
+
+    incremental_enabled: bool
+    incremental_state_dir: str | None
+    incremental_repo_id: str | None
+    incremental_impact_strategy: str | None
+    incremental_git_base_ref: str | None
+    incremental_git_head_ref: str | None
+    incremental_git_changed_only: bool
+
+
 @tag(layer="inputs", kind="object")
 def incremental_config(
     repo_root: str,
-    *,
-    incremental_enabled: bool = False,
-    incremental_state_dir: str | None = None,
-    incremental_repo_id: str | None = None,
-    incremental_impact_strategy: str | None = None,
+    **kwargs: Unpack[IncrementalConfigKwargs],
 ) -> IncrementalConfig:
     """Bundle incremental configuration values.
 
@@ -684,13 +719,25 @@ def incremental_config(
     ValueError
         Raised when the impact strategy is unsupported.
     """
-    enabled = bool(incremental_enabled) or _incremental_pipeline_enabled()
-    state_dir = incremental_state_dir or os.environ.get("CODEANATOMY_STATE_DIR")
-    repo_id = incremental_repo_id or os.environ.get("CODEANATOMY_REPO_ID")
+    enabled = bool(kwargs.get("incremental_enabled")) or _incremental_pipeline_enabled()
+    state_dir = kwargs.get("incremental_state_dir") or os.environ.get("CODEANATOMY_STATE_DIR")
+    repo_id = kwargs.get("incremental_repo_id") or os.environ.get("CODEANATOMY_REPO_ID")
     impact_strategy = (
-        incremental_impact_strategy
+        kwargs.get("incremental_impact_strategy")
         or os.environ.get("CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY")
         or "hybrid"
+    )
+    git_base_ref = kwargs.get("incremental_git_base_ref") or os.environ.get(
+        "CODEANATOMY_GIT_BASE_REF"
+    )
+    git_head_ref = kwargs.get("incremental_git_head_ref") or os.environ.get(
+        "CODEANATOMY_GIT_HEAD_REF"
+    )
+    git_changed_only_env = _env_bool("CODEANATOMY_GIT_CHANGED_ONLY")
+    git_changed_only = (
+        git_changed_only_env
+        if git_changed_only_env is not None
+        else bool(kwargs.get("incremental_git_changed_only"))
     )
     impact_strategy = impact_strategy.lower()
     if impact_strategy not in {"hybrid", "symbol_closure", "import_closure"}:
@@ -714,6 +761,9 @@ def incremental_config(
         state_dir=resolved_state_dir,
         repo_id=repo_id,
         impact_strategy=impact_strategy_value,
+        git_base_ref=git_base_ref,
+        git_head_ref=git_head_ref,
+        git_changed_only=git_changed_only,
     )
 
 

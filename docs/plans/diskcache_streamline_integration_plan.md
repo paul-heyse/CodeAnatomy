@@ -12,9 +12,7 @@ Adopt DiskCache as the shared cache substrate for cross-run, cross-process reuse
 
 ## Status Summary
 - Last updated: 2026-01-24
-- Completed: Scopes 1, 2, 3, 5, 6
-- Partially complete: Scope 4 (manual invalidation hook), Scope 8 (engine/materialize diagnostics)
-- Deferred/optional: Scope 7 (queue/index integration), optional stampede guard for extract caches
+- Completed: Scopes 1, 2, 3, 4, 5, 6, 7, 8
 
 ---
 
@@ -123,7 +121,7 @@ class PlanCache:
 ## Scope 3 — DiskCache for AST / bytecode / symtable extraction
 **Objective:** Replace per-process dict caches with DiskCache so concurrent workers and repeated runs can reuse extraction results.
 
-**Status:** Completed (FanoutCache-enabled via profile shards; stampede guard optional)
+**Status:** Completed
 
 **Representative pattern**
 ```python
@@ -156,7 +154,7 @@ cache.set(cache_key, result, tag=options.repo_id, expire=cache_ttl, retry=True)
 - [x] Use FanoutCache for concurrent extract workloads (profile shards).
 - [x] Tag entries by repo id and extractor options for invalidation.
 - [x] Add TTL controls aligned with runtime profile settings.
-- [ ] Optional: add stampede protection helpers for heavy extract workloads.
+- [x] Add stampede protection helpers for heavy extract workloads.
 
 **Decommission candidates**
 - `_AST_WORKER_CACHE` in `src/extract/ast_extract.py` (removed).
@@ -168,7 +166,7 @@ cache.set(cache_key, result, tag=options.repo_id, expire=cache_ttl, retry=True)
 ## Scope 4 — Cache schema introspection and contract metadata
 **Objective:** Persist expensive schema introspection queries (information_schema lookups, constraint queries) across runs.
 
-**Status:** Partially complete (cache + TTL + tags done; manual invalidation hook outstanding)
+**Status:** Completed
 
 **Representative pattern**
 ```python
@@ -191,7 +189,7 @@ def _cached_rows(self, prefix: str, payload: Mapping[str, object], fetch: Callab
 - [x] Add a schema-introspection cache with TTL.
 - [x] Cache `table_names_snapshot`, `columns_snapshot`, `table_constraints`, `routine_parameters`, etc.
 - [x] Tag entries by profile/schema-map hash prefix.
-- [ ] Add an explicit invalidation hook when schema changes are detected.
+- [x] Add an explicit invalidation hook when schema changes are detected.
 
 **Decommission candidates**
 - None (behavioral replacement only).
@@ -259,7 +257,7 @@ diskcache.set(cache_key, schema, tag=plan_fingerprint, retry=True)
 ## Scope 7 — Optional persistent queues and indexes
 **Objective:** Use DiskCache `Deque` and `Index` for durable work queues or ordered metadata if needed.
 
-**Status:** Deferred (helpers added; no call sites yet)
+**Status:** Completed
 
 **Representative pattern**
 ```python
@@ -277,8 +275,8 @@ work_queue.append(file_id)
 
 **Implementation checklist**
 - [x] Provide helper builders for DiskCache `Deque` and `Index`.
-- [ ] Identify any queue-like patterns that would benefit from a persistent Deque.
-- [ ] Implement durable queues with at-least-once semantics where justified.
+- [x] Integrate persistent worklist queues with a durable queue/index pair.
+- [x] Implement at-least-once semantics by draining from a persistent queue.
 
 **Decommission candidates**
 - None (new capability).
@@ -288,7 +286,7 @@ work_queue.append(file_id)
 ## Scope 8 — Diagnostics and cache health reporting
 **Objective:** Emit cache stats (hits, misses, size, volume) into existing diagnostics sinks for observability.
 
-**Status:** Partially complete (DataFusion runtime emits stats; engine-level sinks pending)
+**Status:** Completed
 
 **Representative pattern**
 ```python
@@ -306,8 +304,8 @@ reporter.record("diskcache_stats_v1", payload)
 **Implementation checklist**
 - [x] Add a helper to snapshot cache stats and volume.
 - [x] Plumb into DataFusion diagnostics sink with a stable event schema.
-- [ ] Extend engine/materialization diagnostics to emit cache stats.
-- [ ] Keep maintenance ops (`cache.check()`) opt-in only.
+- [x] Extend engine/materialization diagnostics to emit cache stats.
+- [x] Keep maintenance ops (`cache.check()`) opt-in only.
 
 **Decommission candidates**
 - None (observability enhancement).
@@ -330,8 +328,8 @@ reporter.record("diskcache_stats_v1", payload)
 1. Scope 1 (DiskCache factory + config surface)
 2. Scope 2 (Plan cache persistence)
 3. Scope 3 (Extract caches)
-4. Scope 4 (Schema introspection caching) — partial (invalidation hook pending)
+4. Scope 4 (Schema introspection caching)
 5. Scope 5 (Repo scan caching)
 6. Scope 6 (Runtime artifact schema persistence)
-7. Scope 8 (Diagnostics) — partial (engine-level sinks pending)
-8. Scope 7 (Persistent queues/indexes) — deferred/optional
+7. Scope 8 (Diagnostics)
+8. Scope 7 (Persistent queues/indexes)

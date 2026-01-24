@@ -15,6 +15,7 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
+from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
 from datafusion_engine.bridge import (
     CopyToOptions,
     DataFusionDmlOptions,
@@ -292,6 +293,39 @@ def _record_extract_write(
         "delta_version": record.delta_result.version if record.delta_result is not None else None,
     }
     sink.record_artifact("datafusion_extract_output_writes_v1", payload)
+
+
+def _record_diskcache_stats(runtime_profile: DataFusionRuntimeProfile) -> None:
+    sink = runtime_profile.diagnostics_sink
+    if sink is None:
+        return
+    profile = runtime_profile.diskcache_profile
+    if profile is None:
+        return
+    events: list[dict[str, object]] = []
+    for kind in ("plan", "extract", "schema", "repo_scan", "runtime", "coordination"):
+        cache = cache_for_kind(profile, cast("DiskCacheKind", kind))
+        settings = profile.settings_for(cast("DiskCacheKind", kind))
+        payload = diskcache_stats_snapshot(cache)
+        payload.update(
+            {
+                "kind": kind,
+                "profile_key": runtime_profile.context_cache_key(),
+                "size_limit_bytes": settings.size_limit_bytes,
+                "eviction_policy": settings.eviction_policy,
+                "cull_limit": settings.cull_limit,
+                "shards": settings.shards,
+                "statistics": settings.statistics,
+                "tag_index": settings.tag_index,
+                "disk_min_file_size": settings.disk_min_file_size,
+                "sqlite_journal_mode": settings.sqlite_journal_mode,
+                "sqlite_mmap_size": settings.sqlite_mmap_size,
+                "sqlite_synchronous": settings.sqlite_synchronous,
+            }
+        )
+        events.append(payload)
+    if events:
+        sink.record_events("diskcache_stats_v1", events)
 
 
 def _copy_statement_overrides(
@@ -676,17 +710,18 @@ def write_extract_outputs(
                 execution=execution,
             ),
         )
-        return
-    _write_external(
-        reader,
-        context=_ExternalWriteContext(
-            dataset=name,
-            runtime_profile=runtime_profile,
-            location=location,
-            write_policy=policy,
-            rows=rows,
-        ),
-    )
+    else:
+        _write_external(
+            reader,
+            context=_ExternalWriteContext(
+                dataset=name,
+                runtime_profile=runtime_profile,
+                location=location,
+                write_policy=policy,
+                rows=rows,
+            ),
+        )
+    _record_diskcache_stats(runtime_profile)
 
 
 __all__ = [

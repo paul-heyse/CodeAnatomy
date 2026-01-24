@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from cache.diskcache_factory import DiskCacheProfile, cache_for_kind, default_diskcache_profile
+from cache.diskcache_factory import (
+    DiskCacheProfile,
+    bulk_cache_set,
+    cache_for_kind,
+    default_diskcache_profile,
+    evict_cache_tag,
+)
 
 
 @dataclass(frozen=True)
@@ -96,6 +102,22 @@ class PlanCache:
             return
         cache.set(entry.key().as_key(), entry, tag=entry.profile_hash, retry=True)
 
+    def put_many(self, entries: list[PlanCacheEntry]) -> int:
+        """Store multiple Substrait plan entries in the cache.
+
+        Returns
+        -------
+        int
+            Count of entries written.
+        """
+        if not entries:
+            return 0
+        cache = self._ensure_cache()
+        if cache is None:
+            return 0
+        payload = {entry.key().as_key(): entry for entry in entries}
+        return bulk_cache_set(cache, payload)
+
     def contains(self, key: PlanCacheKey) -> bool:
         """Return whether the cache contains an entry for the key.
 
@@ -128,6 +150,19 @@ class PlanCache:
             if isinstance(value, PlanCacheEntry):
                 entries.append(value)
         return entries
+
+    def evict_profile(self, profile_hash: str) -> int:
+        """Evict cached plans for a profile hash.
+
+        Returns
+        -------
+        int
+            Count of evicted cache entries.
+        """
+        profile = self.cache_profile
+        if profile is None:
+            return 0
+        return evict_cache_tag(profile, kind="plan", tag=profile_hash)
 
 
 if TYPE_CHECKING:

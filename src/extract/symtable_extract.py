@@ -7,13 +7,18 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from functools import cache
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import normalize_options
+from arrowdsl.schema.serialization import schema_fingerprint
+from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from extract.cache_utils import (
     cache_for_extract,
+    cache_get,
+    cache_lock,
+    cache_set,
     cache_ttl_seconds,
     diskcache_profile_from_ctx,
     stable_cache_key,
@@ -33,7 +38,7 @@ from extract.helpers import (
 )
 from extract.parallel import resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
-from extract.worklists import iter_worklist_contexts
+from extract.worklists import iter_worklist_contexts, worklist_queue_name
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -50,6 +55,7 @@ class SymtableExtractOptions:
     compile_type: str = "exec"
     repo_id: str | None = None
     max_workers: int | None = None
+    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)
@@ -112,10 +118,19 @@ class SymtableContext:
 _SYMTABLE_CACHE_PARTS = 3
 
 
-def _symtable_cache_key(file_ctx: FileContext, *, compile_type: str) -> tuple[str, str, str] | None:
+@cache
+def _symtable_schema_fingerprint() -> str:
+    return schema_fingerprint(dataset_schema("symtable_files_v1"))
+
+
+def _symtable_cache_key(
+    file_ctx: FileContext,
+    *,
+    compile_type: str,
+) -> tuple[str, str, str, str] | None:
     if not file_ctx.file_id or file_ctx.file_sha256 is None:
         return None
-    return (file_ctx.file_id, file_ctx.file_sha256, compile_type)
+    return (file_ctx.file_id, file_ctx.file_sha256, _symtable_schema_fingerprint(), compile_type)
 
 
 def _effective_max_workers(
@@ -306,39 +321,67 @@ def _extract_symtable_for_context(
         return [], [], []
 
     cache_key = _symtable_cache_key(file_ctx, compile_type=compile_type)
-    cache_key_str = None
-    if cache_key is not None:
-        cache_key_str = stable_cache_key("symtable", {"key": cache_key})
-        if cache is not None:
-            cached = cache.get(cache_key_str, default=None, retry=True)
+    use_cache = cache is not None and cache_key is not None
+    cache_key_str = stable_cache_key("symtable", {"key": cache_key}) if use_cache else None
+    if use_cache and cache_key_str is not None:
+        cached = cache_get(cache, key=cache_key_str, default=None)
+        cached_rows = _coerce_symtable_cache(cached)
+        if cached_rows is not None:
+            return cached_rows
+
+    def _build_result() -> tuple[
+        list[dict[str, object]],
+        list[dict[str, object]],
+        list[dict[str, object]],
+    ]:
+        text = text_from_file_ctx(file_ctx)
+        if not text:
+            return [], [], []
+        try:
+            top = symtable.symtable(text, file_ctx.path, compile_type)
+        except (SyntaxError, TypeError, ValueError):
+            return [], [], []
+        ctx = SymtableContext(file_ctx=file_ctx)
+        result = _walk_symtable(top, ctx)
+        if use_cache and cache is not None and cache_key_str is not None:
+            cache_set(
+                cache,
+                key=cache_key_str,
+                value=result,
+                expire=cache_ttl,
+                tag=ctx.file_ctx.file_id,
+            )
+    return result
+
+
+def _coerce_symtable_cache(
+    cached: object,
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+] | None:
+    if not isinstance(cached, tuple) or len(cached) != _SYMTABLE_CACHE_PARTS:
+        return None
+    rows: list[list[dict[str, object]]] = []
+    for part in cached:
+        if not isinstance(part, list):
+            return None
+        if not all(isinstance(item, dict) for item in part):
+            return None
+        rows.append(part)
+    return (rows[0], rows[1], rows[2])
+
+    if use_cache and cache_key_str is not None:
+        with cache_lock(cache, key=cache_key_str):
+            cached = cache_get(cache, key=cache_key_str, default=None)
             if isinstance(cached, tuple) and len(cached) == _SYMTABLE_CACHE_PARTS:
                 return cast(
                     "tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]",
                     cached,
                 )
-
-    text = text_from_file_ctx(file_ctx)
-    if not text:
-        return [], [], []
-
-    try:
-        top = symtable.symtable(text, file_ctx.path, compile_type)
-    except (SyntaxError, TypeError, ValueError):
-        return [], [], []
-
-    ctx = SymtableContext(file_ctx=file_ctx)
-    result = _walk_symtable(top, ctx)
-    if cache_key is not None and cache is not None:
-        if cache_key_str is None:
-            cache_key_str = stable_cache_key("symtable", {"key": cache_key})
-        cache.set(
-            cache_key_str,
-            result,
-            expire=cache_ttl,
-            tag=ctx.file_ctx.file_id,
-            retry=True,
-        )
-    return result
+            return _build_result()
+    return _build_result()
 
 
 def _walk_symtable(
@@ -617,6 +660,11 @@ def _collect_symtable_file_rows(
             output_table="symtable_files_v1",
             ctx=ctx,
             file_contexts=file_contexts,
+            queue_name=(
+                worklist_queue_name(output_table="symtable_files_v1", repo_id=options.repo_id)
+                if options.use_worklist_queue
+                else None
+            ),
         )
     )
     cache_profile = diskcache_profile_from_ctx(ctx)

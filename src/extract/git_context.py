@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 from urllib.parse import urlparse
 
 import pygit2
 
 from core_types import PathLike, ensure_path
+from extract.git_settings import apply_git_settings_once
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ def open_git_context(path: PathLike) -> GitContext | None:
     GitContext | None
         Git context when discovery succeeds.
     """
+    apply_git_settings_once()
     repo_path = _discover_repo_path(path)
     if repo_path is None:
         return None
@@ -44,7 +46,13 @@ def open_git_context(path: PathLike) -> GitContext | None:
 
 
 def discover_repo_root(path: PathLike) -> Path | None:
-    """Return the repository root for a path when available."""
+    """Return the repository root for a path when available.
+
+    Returns
+    -------
+    pathlib.Path | None
+        Repository root when available.
+    """
     repo_path = _discover_repo_path(path)
     if repo_path is None:
         return None
@@ -53,7 +61,13 @@ def discover_repo_root(path: PathLike) -> Path | None:
 
 
 def discover_repo_root_from_paths(paths: Iterable[PathLike]) -> Path | None:
-    """Return the first repository root discovered from input paths."""
+    """Return the first repository root discovered from input paths.
+
+    Returns
+    -------
+    pathlib.Path | None
+        First repository root found, if any.
+    """
     for path in paths:
         root = discover_repo_root(path)
         if root is not None:
@@ -62,7 +76,13 @@ def discover_repo_root_from_paths(paths: Iterable[PathLike]) -> Path | None:
 
 
 def github_name_with_owner(origin_url: str | None) -> str | None:
-    """Return a nameWithOwner slug for GitHub origins when possible."""
+    """Return a nameWithOwner slug for GitHub origins when possible.
+
+    Returns
+    -------
+    str | None
+        GitHub nameWithOwner slug when derivable.
+    """
     if not origin_url:
         return None
     parsed = urlparse(origin_url)
@@ -81,7 +101,13 @@ def github_name_with_owner(origin_url: str | None) -> str | None:
 
 
 def default_project_name(repo_root: Path) -> str:
-    """Return a default project name derived from a repo root."""
+    """Return a default project name derived from a repo root.
+
+    Returns
+    -------
+    str
+        Project name derived from the repo root.
+    """
     return repo_root.name or str(repo_root)
 
 

@@ -3,20 +3,28 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, overload
 
+from diskcache import memoize_stampede, throttle
+
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import PathLike, ensure_path
-from datafusion_engine.extract_registry import dataset_query, normalize_options
+from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
 from extract.cache_utils import (
     cache_for_kind_optional,
     cache_ttl_seconds,
     diskcache_profile_from_ctx,
     stable_cache_key,
 )
+from extract.git_authorship import blame_hunks
+from extract.git_context import open_git_context
+from extract.git_delta import diff_paths
+from extract.git_remotes import remote_callbacks_from_env
+from extract.git_submodules import submodule_roots, update_submodules, worktree_roots
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -58,6 +66,18 @@ class RepoScanOptions:
     include_sha256: bool = True
     max_file_bytes: int | None = None
     max_files: int | None = 200_000
+    diff_base_ref: str | None = None
+    diff_head_ref: str | None = None
+    changed_only: bool = False
+    include_submodules: bool = False
+    include_worktrees: bool = False
+    update_submodules: bool = False
+    submodule_update_init: bool = True
+    submodule_update_depth: int | None = None
+    submodule_use_remote_auth: bool = False
+    record_blame: bool = False
+    blame_max_files: int | None = None
+    blame_ref: str | None = None
 
 
 def default_repo_scan_options() -> RepoScanOptions:
@@ -101,6 +121,117 @@ def _sha256_path(path: Path) -> str:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
+def _diff_filter_paths(
+    repo_root: Path,
+    *,
+    options: RepoScanOptions,
+) -> frozenset[str] | None:
+    if not options.changed_only:
+        return None
+    if options.diff_base_ref is None or options.diff_head_ref is None:
+        return None
+    diff_result = diff_paths(
+        repo_root,
+        base_ref=options.diff_base_ref,
+        head_ref=options.diff_head_ref,
+    )
+    if diff_result is None:
+        return None
+    return diff_result.changed_paths
+
+
+def _iter_repo_root_files(
+    root: Path,
+    *,
+    include_globs: Sequence[str],
+    exclude_globs: Sequence[str],
+    options: RepoScanOptions,
+    diff_filter: frozenset[str] | None,
+) -> Iterator[Path]:
+    git_files = iter_repo_files_pygit2(
+        root,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        exclude_dirs=options.exclude_dirs,
+        follow_symlinks=options.follow_symlinks,
+    )
+    repo_iter = iter(git_files) if git_files is not None else iter_repo_files_fs(
+        root,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        exclude_dirs=options.exclude_dirs,
+        follow_symlinks=options.follow_symlinks,
+    )
+    for rel in repo_iter:
+        if diff_filter is not None and rel.as_posix() not in diff_filter:
+            continue
+        yield rel
+
+
+def _record_if_new(seen: set[str], rel: Path) -> bool:
+    rel_posix = rel.as_posix()
+    if rel_posix in seen:
+        return False
+    seen.add(rel_posix)
+    return True
+
+
+def _maybe_update_submodules(repo_root: Path, options: RepoScanOptions) -> None:
+    if not options.include_submodules or not options.update_submodules or options.changed_only:
+        return
+    callbacks = remote_callbacks_from_env() if options.submodule_use_remote_auth else None
+    update_submodules(
+        repo_root,
+        init=options.submodule_update_init,
+        depth=options.submodule_update_depth,
+        callbacks=callbacks,
+    )
+
+
+@dataclass
+class _RepoIterContext:
+    include_globs: Sequence[str]
+    exclude_globs: Sequence[str]
+    options: RepoScanOptions
+    seen: set[str]
+    diff_filter: frozenset[str] | None
+
+
+def _iter_prefixed_roots(
+    roots: Iterable[tuple[Path, Path]],
+    *,
+    context: _RepoIterContext,
+) -> Iterator[Path]:
+    for root, prefix in roots:
+        for rel in _iter_repo_root_files(
+            root,
+            include_globs=context.include_globs,
+            exclude_globs=context.exclude_globs,
+            options=context.options,
+            diff_filter=context.diff_filter,
+        ):
+            prefixed = prefix / rel if prefix.parts else rel
+            if _record_if_new(context.seen, prefixed):
+                yield prefixed
+
+
+def _submodule_prefixes(repo_root: Path, options: RepoScanOptions) -> list[tuple[Path, Path]]:
+    if not options.include_submodules or options.changed_only:
+        return []
+    return [(submodule.repo_root, submodule.prefix) for submodule in submodule_roots(repo_root)]
+
+
+def _worktree_prefixes(repo_root: Path, options: RepoScanOptions) -> list[tuple[Path, Path]]:
+    if not options.include_worktrees:
+        return []
+    prefixes: list[tuple[Path, Path]] = []
+    for worktree in worktree_roots(repo_root):
+        if worktree.repo_root == repo_root:
+            continue
+        prefixes.append((worktree.repo_root, Path(".worktrees") / worktree.name))
+    return prefixes
+
+
 def iter_repo_files(repo_root: Path, options: RepoScanOptions) -> Iterator[Path]:
     """Iterate over repo files that match include/exclude rules.
 
@@ -118,23 +249,41 @@ def iter_repo_files(repo_root: Path, options: RepoScanOptions) -> Iterator[Path]
     """
     repo_root = repo_root.resolve()
     include_globs, exclude_globs = repo_scan_globs_from_options(options)
-    git_files = iter_repo_files_pygit2(
-        repo_root,
+    diff_paths_set = _diff_filter_paths(repo_root, options=options)
+    _maybe_update_submodules(repo_root, options)
+    seen: set[str] = set()
+    base_context = _RepoIterContext(
         include_globs=include_globs,
         exclude_globs=exclude_globs,
-        exclude_dirs=options.exclude_dirs,
-        follow_symlinks=options.follow_symlinks,
+        options=options,
+        seen=seen,
+        diff_filter=diff_paths_set,
     )
-    if git_files is not None:
-        yield from git_files
-        return
-    yield from iter_repo_files_fs(
-        repo_root,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        exclude_dirs=options.exclude_dirs,
-        follow_symlinks=options.follow_symlinks,
-    )
+    yield from _iter_prefixed_roots([(repo_root, Path())], context=base_context)
+    if options.include_submodules:
+        submodule_context = _RepoIterContext(
+            include_globs=include_globs,
+            exclude_globs=exclude_globs,
+            options=options,
+            seen=seen,
+            diff_filter=None,
+        )
+        yield from _iter_prefixed_roots(
+            _submodule_prefixes(repo_root, options),
+            context=submodule_context,
+        )
+    if options.include_worktrees:
+        worktree_context = _RepoIterContext(
+            include_globs=include_globs,
+            exclude_globs=exclude_globs,
+            options=options,
+            seen=seen,
+            diff_filter=None,
+        )
+        yield from _iter_prefixed_roots(
+            _worktree_prefixes(repo_root, options),
+            context=worktree_context,
+        )
 
 
 def _build_repo_file_row(
@@ -274,6 +423,7 @@ def scan_repo_plan(
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
     cache_profile = diskcache_profile_from_ctx(session.exec_ctx)
     cache = cache_for_kind_optional(cache_profile, "repo_scan")
+    coord_cache = cache_for_kind_optional(cache_profile, "coordination")
     cache_ttl = cache_ttl_seconds(cache_profile, "repo_scan")
     cache_key = None
     if cache is not None:
@@ -281,17 +431,10 @@ def scan_repo_plan(
             "repo_scan",
             {
                 "repo_root": str(repo_root_path),
+                "schema_fingerprint": schema_fingerprint(dataset_schema("repo_files_v1")),
                 "options": to_builtins(options),
             },
         )
-        cached_rows = cache.get(cache_key, default=None, retry=True)
-        if isinstance(cached_rows, list):
-            return extract_plan_from_rows(
-                "repo_files_v1",
-                cached_rows,
-                session=session,
-                options=ExtractPlanOptions(normalize=normalize),
-            )
 
     def iter_rows() -> Iterator[dict[str, object]]:
         count = 0
@@ -304,20 +447,55 @@ def scan_repo_plan(
             if options.max_files is not None and count >= options.max_files:
                 break
 
+    def _compute_rows() -> list[dict[str, object]]:
+        rows = list(iter_rows())
+        _record_repo_blame(
+            repo_root_path,
+            rows,
+            options=options,
+            session=session,
+        )
+        return rows
+
+    if coord_cache is not None and cache_key is not None:
+        @throttle(
+            coord_cache,
+            count=1,
+            seconds=5,
+            name=f"repo_scan:{cache_key}",
+            expire=cache_ttl,
+        )
+        def _throttled_rows() -> list[dict[str, object]]:
+            return _compute_rows()
+        compute_rows = _throttled_rows
+    else:
+        compute_rows = _compute_rows
+
     if cache is None or cache_key is None:
+        rows = compute_rows()
         return extract_plan_from_rows(
             "repo_files_v1",
-            iter_rows(),
+            rows,
             session=session,
             options=ExtractPlanOptions(normalize=normalize),
         )
-    rows = list(iter_rows())
-    cache.set(
-        cache_key,
-        rows,
+
+    @memoize_stampede(
+        cache,
         expire=cache_ttl,
         tag=options.repo_id,
-        retry=True,
+        name="repo_scan",
+    )
+    def _cached_scan(key: str) -> list[dict[str, object]]:
+        _ = key
+        return compute_rows()
+
+    rows = _cached_scan(cache_key)
+    _record_repo_blame(
+        repo_root_path,
+        rows,
+        options=options,
+        session=session,
     )
     return extract_plan_from_rows(
         "repo_files_v1",
@@ -325,3 +503,87 @@ def scan_repo_plan(
         session=session,
         options=ExtractPlanOptions(normalize=normalize),
     )
+
+
+@dataclass
+class _AuthorStat:
+    name: str
+    email: str
+    lines: int
+    files: set[str]
+
+
+def _record_repo_blame(
+    repo_root: Path,
+    entries: Iterable[Path | Mapping[str, object]],
+    *,
+    options: RepoScanOptions,
+    session: ExtractSession,
+) -> None:
+    if not options.record_blame:
+        return
+    runtime_profile = session.exec_ctx.runtime.datafusion
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    git_ctx = open_git_context(repo_root)
+    if git_ctx is None:
+        return
+    paths = _blame_paths(entries, limit=options.blame_max_files)
+    if not paths:
+        return
+    author_stats: dict[str, _AuthorStat] = {}
+    for path_posix in paths:
+        for hunk in blame_hunks(git_ctx.repo, path_posix=path_posix, ref=options.blame_ref):
+            key = hunk.author_email or hunk.author_name
+            if not key:
+                continue
+            stat = author_stats.get(key)
+            if stat is None:
+                stat = _AuthorStat(
+                    name=hunk.author_name,
+                    email=hunk.author_email,
+                    lines=0,
+                    files=set(),
+                )
+                author_stats[key] = stat
+            stat.lines += hunk.lines
+            stat.files.add(path_posix)
+    payload = {
+        "blame_ref": options.blame_ref,
+        "total_files": len(paths),
+        "authors": [
+            {
+                "author_name": stat.name,
+                "author_email": stat.email,
+                "lines": stat.lines,
+                "files": len(stat.files),
+            }
+            for stat in sorted(author_stats.values(), key=lambda item: (-item.lines, item.email))
+        ],
+    }
+    runtime_profile.diagnostics_sink.record_artifact("repo_scan_blame_v1", payload)
+
+
+def _blame_paths(
+    entries: Iterable[Path | Mapping[str, object]],
+    *,
+    limit: int | None,
+) -> list[str]:
+    paths: list[str] = []
+    for entry in entries:
+        path = _path_from_entry(entry)
+        if not path:
+            continue
+        paths.append(path)
+        if limit is not None and len(paths) >= limit:
+            break
+    return paths
+
+
+def _path_from_entry(entry: Path | Mapping[str, object]) -> str | None:
+    if isinstance(entry, Path):
+        return entry.as_posix()
+    path_value = entry.get("path")
+    if isinstance(path_value, str):
+        return path_value
+    return None

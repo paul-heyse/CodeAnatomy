@@ -17,10 +17,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.schema.serialization import schema_fingerprint
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.extract_registry import normalize_options
+from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from extract.cache_utils import (
     cache_for_extract,
+    cache_get,
+    cache_lock,
+    cache_set,
     cache_ttl_seconds,
     diskcache_profile_from_ctx,
     stable_cache_key,
@@ -40,7 +44,7 @@ from extract.helpers import (
 )
 from extract.parallel import resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
-from extract.worklists import iter_worklist_contexts
+from extract.worklists import iter_worklist_contexts, worklist_queue_name
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -51,12 +55,17 @@ if TYPE_CHECKING:
 
 type RowValue = str | int | bool | list[str] | list[dict[str, object]] | None
 type Row = dict[str, RowValue]
-type BytecodeCacheKey = tuple[str, str, int, bool, bool, bool, tuple[str, ...]]
+type BytecodeCacheKey = tuple[str, str, str, int, bool, bool, bool, tuple[str, ...]]
 
 BC_LINE_BASE = 1
 CACHE_ENTRY_FIELDS = 3
 PYTHON_VERSION = sys.version.split()[0]
 PYTHON_MAGIC = importlib.util.MAGIC_NUMBER.hex()
+
+
+@functools.cache
+def _bytecode_schema_fingerprint() -> str:
+    return schema_fingerprint(dataset_schema("bytecode_files_v1"))
 
 
 @dataclass(frozen=True)
@@ -84,6 +93,7 @@ class BytecodeExtractOptions:
         "RERAISE",
     )
     repo_id: str | None = None
+    use_worklist_queue: bool = True
 
 
 @dataclass(frozen=True)
@@ -538,6 +548,7 @@ def _bytecode_cache_key(
     return (
         file_ctx.file_id,
         file_ctx.file_sha256,
+        _bytecode_schema_fingerprint(),
         int(options.optimize),
         bool(options.dont_inherit),
         bool(options.adaptive),
@@ -1398,29 +1409,34 @@ def _code_objects_from_buffers(buffers: BytecodeRowBuffers) -> list[dict[str, ob
     return [_code_object_entry(row, groups) for row in buffers.code_unit_rows]
 
 
-def _bytecode_file_row(
+def _cached_bytecode_payload(
+    *,
+    cache: Cache | FanoutCache | None,
+    cache_key: str | None,
     file_ctx: FileContext,
+    options: BytecodeExtractOptions,
+) -> dict[str, object] | None:
+    if cache is None or cache_key is None:
+        return None
+    cached = cache_get(cache, key=cache_key, default=None)
+    if not isinstance(cached, BytecodeCacheResult):
+        return None
+    return _bytecode_row_payload(
+        file_ctx,
+        options=options,
+        code_objects=cached.code_objects,
+        errors=cached.errors,
+    )
+
+
+def _bytecode_row_from_context(
+    bc_ctx: BytecodeFileContext,
     *,
     options: BytecodeExtractOptions,
     cache: Cache | FanoutCache | None,
+    cache_key: str | None,
     cache_ttl: float | None,
 ) -> dict[str, object] | None:
-    bc_ctx = _context_from_file_ctx(file_ctx, options)
-    if bc_ctx is None:
-        return None
-    cache_key = _bytecode_cache_key(file_ctx, options=options)
-    cache_key_str = None
-    if cache_key is not None:
-        cache_key_str = stable_cache_key("bytecode", {"key": cache_key})
-        if cache is not None:
-            cached = cache.get(cache_key_str, default=None, retry=True)
-            if isinstance(cached, BytecodeCacheResult):
-                return _bytecode_row_payload(
-                    file_ctx,
-                    options=options,
-                    code_objects=cached.code_objects,
-                    errors=cached.errors,
-                )
     text = text_from_file_ctx(bc_ctx.file_ctx)
     if text is None:
         return None
@@ -1442,21 +1458,65 @@ def _bytecode_file_row(
         _extract_code_unit_rows(top, bc_ctx, code_unit_keys, buffers)
     code_objects = _code_objects_from_buffers(buffers)
     errors = [_error_entry(row) for row in buffers.error_rows]
-    if cache_key is not None and cache is not None:
-        if cache_key_str is None:
-            cache_key_str = stable_cache_key("bytecode", {"key": cache_key})
-        cache.set(
-            cache_key_str,
-            BytecodeCacheResult(code_objects=code_objects, errors=errors),
+    if cache is not None and cache_key is not None:
+        cache_set(
+            cache,
+            key=cache_key,
+            value=BytecodeCacheResult(code_objects=code_objects, errors=errors),
             expire=cache_ttl,
             tag=options.repo_id,
-            retry=True,
         )
     return _bytecode_row_payload(
-        file_ctx,
+        bc_ctx.file_ctx,
         options=options,
         code_objects=code_objects,
         errors=errors,
+    )
+
+
+def _bytecode_file_row(
+    file_ctx: FileContext,
+    *,
+    options: BytecodeExtractOptions,
+    cache: Cache | FanoutCache | None,
+    cache_ttl: float | None,
+) -> dict[str, object] | None:
+    bc_ctx = _context_from_file_ctx(file_ctx, options)
+    if bc_ctx is None:
+        return None
+    cache_key = _bytecode_cache_key(file_ctx, options=options)
+    cache_key_str = stable_cache_key("bytecode", {"key": cache_key}) if cache_key else None
+    cached = _cached_bytecode_payload(
+        cache=cache,
+        cache_key=cache_key_str,
+        file_ctx=file_ctx,
+        options=options,
+    )
+    if cached is not None:
+        return cached
+    if cache is not None and cache_key_str is not None:
+        with cache_lock(cache, key=cache_key_str):
+            cached = _cached_bytecode_payload(
+                cache=cache,
+                cache_key=cache_key_str,
+                file_ctx=file_ctx,
+                options=options,
+            )
+            if cached is not None:
+                return cached
+            return _bytecode_row_from_context(
+                bc_ctx,
+                options=options,
+                cache=cache,
+                cache_key=cache_key_str,
+                cache_ttl=cache_ttl,
+            )
+    return _bytecode_row_from_context(
+        bc_ctx,
+        options=options,
+        cache=cache,
+        cache_key=cache_key_str,
+        cache_ttl=cache_ttl,
     )
 
 
@@ -1473,6 +1533,11 @@ def _collect_bytecode_file_rows(
             output_table="bytecode_files_v1",
             ctx=ctx,
             file_contexts=file_contexts,
+            queue_name=(
+                worklist_queue_name(output_table="bytecode_files_v1", repo_id=options.repo_id)
+                if options.use_worklist_queue
+                else None
+            ),
         )
     )
     if not contexts:

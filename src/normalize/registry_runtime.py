@@ -108,7 +108,12 @@ def register_normalize_output_tables(
             location=location,
             file_format="delta",
         )
-        register_dataset_ddl(ctx, registration, sql_options=options)
+        register_dataset_ddl(
+            ctx,
+            registration,
+            sql_options=options,
+            runtime_profile=runtime_profile,
+        )
     return locations
 
 

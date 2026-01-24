@@ -19,6 +19,12 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
+from extract.cache_utils import (
+    cache_for_extract,
+    cache_ttl_seconds,
+    diskcache_profile_from_ctx,
+    stable_cache_key,
+)
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -38,6 +44,8 @@ from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
+    from diskcache import Cache, FanoutCache
+
     from extract.evidence_plan import EvidencePlan
     from extract.session import ExtractSession
 
@@ -225,9 +233,6 @@ class BytecodeRowBuffers:
     line_rows: list[Row]
     dfg_edge_rows: list[Row]
     error_rows: list[Row]
-
-
-_BYTECODE_CACHE: dict[BytecodeCacheKey, BytecodeCacheResult] = {}
 
 
 @dataclass(frozen=True)
@@ -1397,20 +1402,25 @@ def _bytecode_file_row(
     file_ctx: FileContext,
     *,
     options: BytecodeExtractOptions,
+    cache: Cache | FanoutCache | None,
+    cache_ttl: float | None,
 ) -> dict[str, object] | None:
     bc_ctx = _context_from_file_ctx(file_ctx, options)
     if bc_ctx is None:
         return None
     cache_key = _bytecode_cache_key(file_ctx, options=options)
+    cache_key_str = None
     if cache_key is not None:
-        cached = _BYTECODE_CACHE.get(cache_key)
-        if cached is not None:
-            return _bytecode_row_payload(
-                file_ctx,
-                options=options,
-                code_objects=cached.code_objects,
-                errors=cached.errors,
-            )
+        cache_key_str = stable_cache_key("bytecode", {"key": cache_key})
+        if cache is not None:
+            cached = cache.get(cache_key_str, default=None, retry=True)
+            if isinstance(cached, BytecodeCacheResult):
+                return _bytecode_row_payload(
+                    file_ctx,
+                    options=options,
+                    code_objects=cached.code_objects,
+                    errors=cached.errors,
+                )
     text = text_from_file_ctx(bc_ctx.file_ctx)
     if text is None:
         return None
@@ -1432,10 +1442,15 @@ def _bytecode_file_row(
         _extract_code_unit_rows(top, bc_ctx, code_unit_keys, buffers)
     code_objects = _code_objects_from_buffers(buffers)
     errors = [_error_entry(row) for row in buffers.error_rows]
-    if cache_key is not None:
-        _BYTECODE_CACHE[cache_key] = BytecodeCacheResult(
-            code_objects=code_objects,
-            errors=errors,
+    if cache_key is not None and cache is not None:
+        if cache_key_str is None:
+            cache_key_str = stable_cache_key("bytecode", {"key": cache_key})
+        cache.set(
+            cache_key_str,
+            BytecodeCacheResult(code_objects=code_objects, errors=errors),
+            expire=cache_ttl,
+            tag=options.repo_id,
+            retry=True,
         )
     return _bytecode_row_payload(
         file_ctx,
@@ -1462,15 +1477,28 @@ def _collect_bytecode_file_rows(
     )
     if not contexts:
         return []
+    cache_profile = diskcache_profile_from_ctx(ctx)
+    cache = cache_for_extract(cache_profile)
+    cache_ttl = cache_ttl_seconds(cache_profile, "extract")
     max_workers = _effective_max_workers(options, ctx=ctx)
     if not _should_parallelize(contexts, options=options, max_workers=max_workers):
         rows: list[dict[str, object]] = []
         for file_ctx in contexts:
-            row = _bytecode_file_row(file_ctx, options=options)
+            row = _bytecode_file_row(
+                file_ctx,
+                options=options,
+                cache=cache,
+                cache_ttl=cache_ttl,
+            )
             if row is not None:
                 rows.append(row)
         return rows
-    worker = functools.partial(_bytecode_file_row, options=options)
+    worker = functools.partial(
+        _bytecode_file_row,
+        options=options,
+        cache=cache,
+        cache_ttl=cache_ttl,
+    )
     rows = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for row in executor.map(worker, contexts):

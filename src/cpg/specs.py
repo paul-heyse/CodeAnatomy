@@ -228,3 +228,11 @@ class PropTableSpec:
     node_kind: NodeKindId | None = None
     fields: tuple[PropFieldSpec, ...] = field(default_factory=tuple)
     include_if_id: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskIdentity:
+    """Task identity metadata for CPG outputs."""
+
+    name: str
+    priority: int

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from cache.diskcache_factory import DiskCacheProfile, cache_for_kind, default_diskcache_profile
 
 
 @dataclass(frozen=True)
@@ -12,6 +15,16 @@ class PlanCacheKey:
     plan_hash: str
     profile_hash: str
     substrait_hash: str
+
+    def as_key(self) -> str:
+        """Return a stable cache key string.
+
+        Returns
+        -------
+        str
+            Stable cache key.
+        """
+        return f"plan:{self.plan_hash}:{self.profile_hash}:{self.substrait_hash}"
 
 
 @dataclass(frozen=True)
@@ -41,9 +54,20 @@ class PlanCacheEntry:
 
 @dataclass
 class PlanCache:
-    """In-memory cache of Substrait plan bytes."""
+    """DiskCache-backed cache of Substrait plan bytes."""
 
-    entries: dict[PlanCacheKey, PlanCacheEntry] = field(default_factory=dict)
+    cache_profile: DiskCacheProfile | None = field(default_factory=default_diskcache_profile)
+    _cache: Cache | FanoutCache | None = field(default=None, init=False, repr=False)
+
+    def _ensure_cache(self) -> Cache | FanoutCache | None:
+        if self._cache is not None:
+            return self._cache
+        profile = self.cache_profile
+        if profile is None:
+            return None
+        cache = cache_for_kind(profile, "plan")
+        self._cache = cache
+        return cache
 
     def get(self, key: PlanCacheKey) -> bytes | None:
         """Return cached plan bytes for the key when present.
@@ -53,12 +77,24 @@ class PlanCache:
         bytes | None
             Cached plan bytes, or None when missing.
         """
-        entry = self.entries.get(key)
-        return entry.plan_bytes if entry is not None else None
+        cache = self._ensure_cache()
+        if cache is None:
+            return None
+        value = cache.get(key.as_key(), default=None, retry=True)
+        if value is None:
+            return None
+        if isinstance(value, PlanCacheEntry):
+            return value.plan_bytes
+        if isinstance(value, bytes):
+            return value
+        return None
 
     def put(self, entry: PlanCacheEntry) -> None:
         """Store a Substrait plan entry in the cache."""
-        self.entries[entry.key()] = entry
+        cache = self._ensure_cache()
+        if cache is None:
+            return
+        cache.set(entry.key().as_key(), entry, tag=entry.profile_hash, retry=True)
 
     def contains(self, key: PlanCacheKey) -> bool:
         """Return whether the cache contains an entry for the key.
@@ -68,7 +104,12 @@ class PlanCache:
         bool
             ``True`` when the cache has the key.
         """
-        return key in self.entries
+        cache = self._ensure_cache()
+        if cache is None:
+            return False
+        sentinel = object()
+        value = cache.get(key.as_key(), default=sentinel, retry=True)
+        return value is not sentinel
 
     def snapshot(self) -> list[PlanCacheEntry]:
         """Return a list of cached plan entries.
@@ -78,7 +119,19 @@ class PlanCache:
         list[PlanCacheEntry]
             Snapshot of cached entries.
         """
-        return list(self.entries.values())
+        cache = self._ensure_cache()
+        if cache is None:
+            return []
+        entries: list[PlanCacheEntry] = []
+        for key in cache.iterkeys():
+            value = cache.get(key, default=None, retry=True)
+            if isinstance(value, PlanCacheEntry):
+                entries.append(value)
+        return entries
+
+
+if TYPE_CHECKING:
+    from diskcache import Cache, FanoutCache
 
 
 __all__ = ["PlanCache", "PlanCacheEntry", "PlanCacheKey"]

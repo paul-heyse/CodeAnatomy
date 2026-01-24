@@ -12,6 +12,12 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
+from extract.cache_utils import (
+    cache_for_extract,
+    cache_ttl_seconds,
+    diskcache_profile_from_ctx,
+    stable_cache_key,
+)
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -31,6 +37,8 @@ from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
+    from diskcache import Cache, FanoutCache
+
     from extract.evidence_plan import EvidencePlan
     from extract.session import ExtractSession
 
@@ -101,10 +109,7 @@ class SymtableContext:
         return file_identity_row(self.file_ctx)
 
 
-_SYMTABLE_CACHE: dict[
-    tuple[str, str, str],
-    tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]],
-] = {}
+_SYMTABLE_CACHE_PARTS = 3
 
 
 def _symtable_cache_key(file_ctx: FileContext, *, compile_type: str) -> tuple[str, str, str] | None:
@@ -290,6 +295,8 @@ def _extract_symtable_for_context(
     file_ctx: FileContext,
     *,
     compile_type: str,
+    cache: Cache | FanoutCache | None,
+    cache_ttl: float | None,
 ) -> tuple[
     list[dict[str, object]],
     list[dict[str, object]],
@@ -299,10 +306,16 @@ def _extract_symtable_for_context(
         return [], [], []
 
     cache_key = _symtable_cache_key(file_ctx, compile_type=compile_type)
+    cache_key_str = None
     if cache_key is not None:
-        cached = _SYMTABLE_CACHE.get(cache_key)
-        if cached is not None:
-            return cached
+        cache_key_str = stable_cache_key("symtable", {"key": cache_key})
+        if cache is not None:
+            cached = cache.get(cache_key_str, default=None, retry=True)
+            if isinstance(cached, tuple) and len(cached) == _SYMTABLE_CACHE_PARTS:
+                return cast(
+                    "tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]",
+                    cached,
+                )
 
     text = text_from_file_ctx(file_ctx)
     if not text:
@@ -315,8 +328,16 @@ def _extract_symtable_for_context(
 
     ctx = SymtableContext(file_ctx=file_ctx)
     result = _walk_symtable(top, ctx)
-    if cache_key is not None:
-        _SYMTABLE_CACHE[cache_key] = result
+    if cache_key is not None and cache is not None:
+        if cache_key_str is None:
+            cache_key_str = stable_cache_key("symtable", {"key": cache_key})
+        cache.set(
+            cache_key_str,
+            result,
+            expire=cache_ttl,
+            tag=ctx.file_ctx.file_id,
+            retry=True,
+        )
     return result
 
 
@@ -445,10 +466,14 @@ def _symtable_file_row(
     file_ctx: FileContext,
     *,
     options: SymtableExtractOptions,
+    cache: Cache | FanoutCache | None,
+    cache_ttl: float | None,
 ) -> dict[str, object] | None:
     scope_rows, symbol_rows, scope_edge_rows = _extract_symtable_for_context(
         file_ctx,
         compile_type=options.compile_type,
+        cache=cache,
+        cache_ttl=cache_ttl,
     )
     if not scope_rows and not symbol_rows and not scope_edge_rows:
         return None
@@ -594,16 +619,32 @@ def _collect_symtable_file_rows(
             file_contexts=file_contexts,
         )
     )
+    cache_profile = diskcache_profile_from_ctx(ctx)
+    cache = cache_for_extract(cache_profile)
+    cache_ttl = cache_ttl_seconds(cache_profile, "extract")
     max_workers = _effective_max_workers(options, ctx=ctx)
     if max_workers <= 1:
         return [
             row
             for file_ctx in contexts
-            if (row := _symtable_file_row(file_ctx, options=options)) is not None
+            if (
+                row := _symtable_file_row(
+                    file_ctx,
+                    options=options,
+                    cache=cache,
+                    cache_ttl=cache_ttl,
+                )
+            )
+            is not None
         ]
 
     def _extract_row(file_ctx: FileContext) -> dict[str, object] | None:
-        return _symtable_file_row(file_ctx, options=options)
+        return _symtable_file_row(
+            file_ctx,
+            options=options,
+            cache=cache,
+            cache_ttl=cache_ttl,
+        )
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         return [row for row in executor.map(_extract_row, contexts) if row is not None]

@@ -11,7 +11,6 @@ from obs.metrics import (
     quality_from_ids,
 )
 
-
 ROLE_FLAG_SPECS: tuple[tuple[str, int, str], ...] = (
     ("generated", SCIP_ROLE_GENERATED, "scip_role_generated"),
     ("test", SCIP_ROLE_TEST, "scip_role_test"),

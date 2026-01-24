@@ -16,6 +16,13 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
+from extract.cache_utils import (
+    cache_for_extract,
+    cache_ttl_seconds,
+    diskcache_profile_from_ctx,
+    stable_cache_key,
+)
+from extract.git_context import discover_repo_root_from_paths
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -29,12 +36,15 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
-from extract.parallel import gil_disabled, parallel_map, resolve_max_workers
+from extract.parallel import parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
+    from diskcache import Cache, FanoutCache
+
+    from cache.diskcache_factory import DiskCacheProfile
     from extract.evidence_plan import EvidencePlan
     from extract.session import ExtractSession
 
@@ -103,6 +113,11 @@ def _feature_version_from_pyproject(repo_root: Path) -> tuple[int, int] | None:
 
 
 def _infer_repo_root(contexts: Sequence[FileContext]) -> Path | None:
+    candidate_paths = [ctx.abs_path for ctx in contexts if ctx.abs_path]
+    if candidate_paths:
+        git_root = discover_repo_root_from_paths(candidate_paths)
+        if git_root is not None:
+            return git_root
     for ctx in contexts:
         if not ctx.abs_path or not ctx.path:
             continue
@@ -626,14 +641,20 @@ def _cache_key(file_ctx: FileContext, *, options: ASTExtractOptions) -> tuple[ob
     )
 
 
-_AST_WORKER_CACHE: dict[tuple[object, ...], _AstWalkResult] = {}
-
-
 def _ast_row_worker(
-    file_ctx: FileContext, *, options: ASTExtractOptions
+    file_ctx: FileContext,
+    *,
+    options: ASTExtractOptions,
+    cache_profile: DiskCacheProfile | None,
+    cache_ttl: float | None,
 ) -> dict[str, object] | None:
-    cache = _AST_WORKER_CACHE if options.cache_by_sha and not gil_disabled() else None
-    return _extract_ast_for_context(file_ctx, options=options, cache=cache)
+    cache = cache_for_extract(cache_profile) if options.cache_by_sha else None
+    return _extract_ast_for_context(
+        file_ctx,
+        options=options,
+        cache=cache,
+        cache_ttl=cache_ttl,
+    )
 
 
 def _ast_row_from_walk(
@@ -880,14 +901,17 @@ def _extract_ast_for_context(
     file_ctx: FileContext,
     *,
     options: ASTExtractOptions,
-    cache: dict[tuple[object, ...], _AstWalkResult] | None = None,
+    cache: Cache | FanoutCache | None = None,
+    cache_ttl: float | None = None,
 ) -> dict[str, object] | None:
     if not file_ctx.file_id or not file_ctx.path:
         return None
     cache_key = _cache_key(file_ctx, options=options)
+    cache_key_str = None
     if cache is not None and cache_key is not None:
-        cached = cache.get(cache_key)
-        if cached is not None:
+        cache_key_str = stable_cache_key("ast", {"key": cache_key})
+        cached = cache.get(cache_key_str, default=None, retry=True)
+        if isinstance(cached, _AstWalkResult):
             return _ast_row_from_walk(file_ctx, options=options, walk=cached, errors=[])
     text = text_from_file_ctx(file_ctx)
     if text is None:
@@ -903,7 +927,15 @@ def _extract_ast_for_context(
         )
         error_rows.extend(parse_errors)
         if walk is not None and cache is not None and cache_key is not None and not parse_errors:
-            cache[cache_key] = walk
+            if cache_key_str is None:
+                cache_key_str = stable_cache_key("ast", {"key": cache_key})
+            cache.set(
+                cache_key_str,
+                walk,
+                expire=cache_ttl,
+                tag=options.repo_id,
+                retry=True,
+            )
     return _ast_row_from_walk(file_ctx, options=options, walk=walk, errors=error_rows)
 
 
@@ -1067,15 +1099,25 @@ def _iter_ast_rows(
     if not contexts:
         return
     resolved_options = _resolve_feature_version(options, contexts)
-    if resolved_options.cache_by_sha:
-        _AST_WORKER_CACHE.clear()
+    cache_profile = diskcache_profile_from_ctx(ctx)
+    cache_ttl = cache_ttl_seconds(cache_profile, "extract")
     if not resolved_options.parallel:
         for file_ctx in contexts:
-            row = _ast_row_worker(file_ctx, options=resolved_options)
+            row = _ast_row_worker(
+                file_ctx,
+                options=resolved_options,
+                cache_profile=cache_profile,
+                cache_ttl=cache_ttl,
+            )
             if row is not None:
                 yield row
         return
-    runner = partial(_ast_row_worker, options=resolved_options)
+    runner = partial(
+        _ast_row_worker,
+        options=resolved_options,
+        cache_profile=cache_profile,
+        cache_ttl=cache_ttl,
+    )
     max_workers = resolve_max_workers(
         resolved_options.max_workers,
         ctx=ctx,

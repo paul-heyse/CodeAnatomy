@@ -20,12 +20,9 @@ TaskSpec(
 
 ### Output Finalization (contract‑aligned)
 ```python
-# cpg/emit_nodes_ibis.py
-normalized = normalize_only(
-    table,
-    contract=CPG_NODES_CONTRACT,
-    ctx=ctx,
-)
+# hamilton_pipeline/modules/task_execution.py
+table = task_outputs.outputs.get("cpg_nodes_v1")
+final = normalize_only(table, contract=CPG_NODES_CONTRACT, ctx=ctx)
 ```
 
 ### Evidence‑safe plan inputs
@@ -56,10 +53,10 @@ Remove dormant spec surfaces and constants that no longer participate in inferen
 - `src/cpg/scip_roles.py` (remove if only referenced by deleted constants)
 
 ### Implementation Checklist
-- [ ] Remove `EdgePlanSpec`, `EDGE_FILTERS`, and `resolve_edge_filter` from `src/cpg/specs.py`.
-- [ ] Delete unused constants in `src/cpg/constants.py` (`CpgBuildArtifacts`, `EDGE_ID_BASE`, `EDGE_ID_SPAN`, `edge_hash_specs`) if unused after cleanup.
-- [ ] Remove `src/cpg/scip_roles.py` if no remaining references exist.
-- [ ] Update `__all__` exports accordingly.
+- [x] Remove `EdgePlanSpec`, `EDGE_FILTERS`, and `resolve_edge_filter` from `src/cpg/specs.py`.
+- [x] Delete unused constants in `src/cpg/constants.py` (`CpgBuildArtifacts`, `EDGE_ID_BASE`, `EDGE_ID_SPAN`, `edge_hash_specs`) if unused after cleanup.
+- [x] Keep `src/cpg/scip_roles.py` because it remains referenced by `ROLE_FLAG_SPECS`.
+- [x] Update `__all__` exports accordingly.
 
 ---
 
@@ -86,10 +83,10 @@ class EntityFamilySpec:
 - `src/cpg/plan_builders.py`
 
 ### Implementation Checklist
-- [ ] Remove `option_flag` fields from `NodePlanSpec` and `PropTableSpec`.
-- [ ] Remove `node_option_flag`/`prop_option_flag` from `EntityFamilySpec`.
-- [ ] Update `node_plan_specs()` and `prop_table_specs()` to ignore flags.
-- [ ] Ensure no downstream logic expects those flags.
+- [x] Remove `option_flag` fields from `NodePlanSpec` and `PropTableSpec`.
+- [x] Remove `node_option_flag`/`prop_option_flag` from `EntityFamilySpec`.
+- [x] Update `node_plan_specs()` and `prop_table_specs()` to ignore flags.
+- [x] Ensure no downstream logic expects those flags.
 
 ---
 
@@ -113,9 +110,9 @@ output = output.mutate(
 - `src/cpg/spec_registry.py` (optional prop fields for task metadata)
 
 ### Implementation Checklist
-- [ ] Add optional task identity fields to nodes/props schemas (if contract supports it).
-- [ ] Thread task identity into builders (or add property fields for task metadata).
-- [ ] Ensure output schemas remain validated.
+- [x] Register CPG schemas in `datafusion_engine.schema_registry` with task identity fields.
+- [x] Thread task identity into builders and emission helpers for nodes/props.
+- [x] Ensure output schemas remain validated.
 
 ---
 
@@ -137,9 +134,9 @@ normalized = normalize_only(table, contract=CPG_EDGES_CONTRACT, ctx=ctx)
 - `src/cpg/plan_builders.py` (if centralizing finalize step)
 
 ### Implementation Checklist
-- [ ] Introduce contract‑based normalization using `datafusion_engine.finalize.normalize_only`.
-- [ ] Replace `ensure_columns + select` with contract normalization where appropriate.
-- [ ] Keep ordering metadata behavior intact.
+- [x] Introduce contract‑based normalization using `datafusion_engine.finalize.normalize_only`.
+- [x] Finalize CPG outputs in the execution layer (`task_execution`) with contracts.
+- [x] Keep ordering metadata behavior intact.
 
 ---
 
@@ -159,9 +156,9 @@ rows = _batched_union(rows, batch_size=32)
 - Optional: `src/sqlglot_tools/` (if generating SQLGlot unions directly)
 
 ### Implementation Checklist
-- [ ] Add batching for union of property rows.
-- [ ] Optionally emit SQLGlot union SQL for large prop specs.
-- [ ] Validate resulting schema matches `CPG_PROPS_SCHEMA`.
+- [x] Add batching for union of property rows.
+- [x] Optionally emit SQLGlot union SQL for large prop specs.
+- [x] Validate resulting schema matches `CPG_PROPS_SCHEMA`.
 
 ---
 
@@ -181,9 +178,9 @@ preload_inputs(catalog, ctx=ctx, names=required_sources)
 - `src/datafusion_engine/schema_registry.py`
 
 ### Implementation Checklist
-- [ ] Add a pre‑compilation step that registers empty tables for missing sources.
-- [ ] Ensure missing source behavior is consistent and visible.
-- [ ] Maintain ordering metadata on empty tables.
+- [x] Add a pre‑compilation step that registers empty tables for missing sources.
+- [x] Ensure missing source behavior is consistent and visible.
+- [x] Maintain ordering metadata on empty tables.
 
 ---
 
@@ -192,7 +189,7 @@ preload_inputs(catalog, ctx=ctx, names=required_sources)
 ### Files/Types to Remove
 - `EdgePlanSpec`, `EDGE_FILTERS`, `resolve_edge_filter` from `src/cpg/specs.py`
 - `CpgBuildArtifacts`, `EDGE_ID_BASE`, `EDGE_ID_SPAN`, `edge_hash_specs` from `src/cpg/constants.py` (if unused)
-- `src/cpg/scip_roles.py` (if only referenced by removed constants)
+- `src/cpg/scip_roles.py` (retained; still referenced by `ROLE_FLAG_SPECS`)
 
 ### Optional Cleanups
 - Remove `option_flag` fields from spec dataclasses and registry.
@@ -215,4 +212,3 @@ preload_inputs(catalog, ctx=ctx, names=required_sources)
 - Task provenance is consistent across nodes/edges/props.
 - Property emission scales without excessive union overhead.
 - Missing inputs handled via a consistent catalog preload policy.
-

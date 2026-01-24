@@ -26,6 +26,13 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, 
 from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.metadata import schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint
+from cache.diskcache_factory import (
+    DiskCacheKind,
+    DiskCacheProfile,
+    cache_for_kind,
+    default_diskcache_profile,
+    diskcache_stats_snapshot,
+)
 from datafusion_engine.cache_introspection import (
     capture_cache_diagnostics,
     register_cache_introspection_functions,
@@ -82,6 +89,8 @@ from serde_msgspec import StructBase
 from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
+    from diskcache import Cache, FanoutCache
+
     from datafusion_engine.udf_catalog import UdfCatalog
     from ibis_engine.registry import DatasetCatalog, DatasetLocation
     from obs.datafusion_runs import DataFusionRun
@@ -1373,7 +1382,12 @@ def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) 
     """
     if profile is None:
         return DataFusionSqlPolicy(allow_statements=True).to_sql_options()
-    return profile.statement_sql_options()
+    resolved = profile.sql_policy or resolve_sql_policy(profile.sql_policy_name)
+    return DataFusionSqlPolicy(
+        allow_ddl=resolved.allow_ddl,
+        allow_dml=resolved.allow_dml,
+        allow_statements=True,
+    ).to_sql_options()
 
 
 def settings_snapshot_for_profile(
@@ -1415,7 +1429,7 @@ def function_catalog_snapshot_for_profile(
     list[dict[str, object]]
         Sorted function catalog entries from information_schema.
     """
-    return SchemaIntrospector(ctx, sql_options=profile.sql_options()).function_catalog_snapshot(
+    return schema_introspector_for_profile(profile, ctx).function_catalog_snapshot(
         include_parameters=include_routines,
     )
 
@@ -2459,7 +2473,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     substrait_validation: bool = False
     diagnostics_sink: DiagnosticsSink | None = None
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
-    plan_cache: PlanCache | None = field(default_factory=PlanCache)
+    diskcache_profile: DiskCacheProfile | None = field(default_factory=default_diskcache_profile)
+    plan_cache: PlanCache | None = None
     udf_catalog_cache: dict[int, UdfCatalog] = field(default_factory=dict, repr=False)
     delta_commit_runs: dict[str, DataFusionRun] = field(default_factory=dict, repr=False)
     local_filesystem_root: str | None = None
@@ -2483,6 +2498,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     distributed_context_factory: Callable[[], SessionContext] | None = None
     runtime_env_hook: Callable[[RuntimeEnvBuilder], RuntimeEnvBuilder] | None = None
     session_context_hook: Callable[[SessionContext], SessionContext] | None = None
+
+    def __post_init__(self) -> None:
+        """Initialize defaults after dataclass construction."""
+        if self.plan_cache is None:
+            object.__setattr__(
+                self,
+                "plan_cache",
+                PlanCache(cache_profile=self.diskcache_profile),
+            )
 
     def session_config(self) -> SessionConfig:
         """Return a SessionConfig configured from the profile.
@@ -4208,6 +4232,32 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "datafusion_cache_state_v1",
                 cache_snapshots,
             )
+        diskcache_profile = self.diskcache_profile
+        if diskcache_profile is None:
+            return
+        diskcache_events: list[dict[str, object]] = []
+        for kind in ("plan", "extract", "schema", "repo_scan", "runtime"):
+            cache = self._diskcache(cast("DiskCacheKind", kind))
+            if cache is None:
+                continue
+            settings = diskcache_profile.settings_for(cast("DiskCacheKind", kind))
+            payload = diskcache_stats_snapshot(cache)
+            payload.update(
+                {
+                    "kind": kind,
+                    "profile_key": self.context_cache_key(),
+                    "size_limit_bytes": settings.size_limit_bytes,
+                    "eviction_policy": settings.eviction_policy,
+                    "cull_limit": settings.cull_limit,
+                    "shards": settings.shards,
+                }
+            )
+            diskcache_events.append(payload)
+        if diskcache_events:
+            self.diagnostics_sink.record_events(
+                "diskcache_stats_v1",
+                diskcache_events,
+            )
 
     def _install_cache_tables(self, ctx: SessionContext) -> None:
         if not (self.enable_cache_manager or self.cache_enabled):
@@ -4637,15 +4687,31 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             allow_statements=True,
         ).to_sql_options()
 
-    def statement_sql_options(self) -> SQLOptions:
-        """Return SQLOptions that allow statement execution.
+    def _diskcache(self, kind: DiskCacheKind) -> Cache | FanoutCache | None:
+        """Return a DiskCache instance for the requested kind.
 
         Returns
         -------
-        datafusion.SQLOptions
-            SQL options with statement execution enabled.
+        diskcache.Cache | diskcache.FanoutCache | None
+            Cache instance when DiskCache is configured.
         """
-        return self._statement_sql_options()
+        profile = self.diskcache_profile
+        if profile is None:
+            return None
+        return cache_for_kind(profile, kind)
+
+    def _diskcache_ttl_seconds(self, kind: DiskCacheKind) -> float | None:
+        """Return the TTL in seconds for a DiskCache kind when configured.
+
+        Returns
+        -------
+        float | None
+            TTL in seconds or None when unset.
+        """
+        profile = self.diskcache_profile
+        if profile is None:
+            return None
+        return profile.ttl_for(kind)
 
     def _record_view_definition(self, *, name: str, sql: str | None) -> None:
         """Record a view definition for diagnostics snapshots.
@@ -4669,7 +4735,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         SchemaIntrospector
             Introspector bound to the provided SessionContext.
         """
-        return SchemaIntrospector(ctx, sql_options=self._sql_options())
+        return SchemaIntrospector(
+            ctx,
+            sql_options=self._sql_options(),
+            cache=self._diskcache("schema"),
+            cache_prefix=self.context_cache_key(),
+            cache_ttl=self._diskcache_ttl_seconds("schema"),
+        )
 
     def _settings_snapshot(self, ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion settings when information_schema is enabled.
@@ -4763,6 +4835,29 @@ def collect_datafusion_metrics(
     if not profile.enable_metrics or profile.metrics_collector is None:
         return None
     return profile.metrics_collector()
+
+
+def schema_introspector_for_profile(
+    profile: DataFusionRuntimeProfile,
+    ctx: SessionContext,
+) -> SchemaIntrospector:
+    """Return a schema introspector for a runtime profile.
+
+    Returns
+    -------
+    SchemaIntrospector
+        Introspector configured from the profile.
+    """
+    cache_profile = profile.diskcache_profile
+    cache = cache_for_kind(cache_profile, "schema") if cache_profile is not None else None
+    cache_ttl = cache_profile.ttl_for("schema") if cache_profile is not None else None
+    return SchemaIntrospector(
+        ctx,
+        sql_options=profile.sql_options(),
+        cache=cache,
+        cache_prefix=profile.context_cache_key(),
+        cache_ttl=cache_ttl,
+    )
 
 
 def collect_datafusion_traces(

@@ -6,211 +6,192 @@ Adopt DiskCache as the shared cache substrate for cross-run, cross-process reuse
 ## Guiding Principles
 - **Durable by default:** Prefer disk-backed caches for expensive, deterministic work that benefits from reuse across runs.
 - **Single cache surface:** Centralize DiskCache configuration and lifecycle (directory, TTL, size, policy).
-- **Multi-process safe:** Use `FanoutCache` for concurrent writers and stampede protection for heavy tasks.
+- **Multi-process safe:** Use `FanoutCache` for concurrent writers.
 - **Explicit invalidation:** Tag keys and evict by tag on schema/profile/policy changes.
 - **Local-disk only:** Cache directories are per-host and must remain off NFS/shared filesystems.
+
+## Status Summary
+- Last updated: 2026-01-24
+- Completed: Scopes 1, 2, 3, 5, 6
+- Partially complete: Scope 4 (manual invalidation hook), Scope 8 (engine/materialize diagnostics)
+- Deferred/optional: Scope 7 (queue/index integration), optional stampede guard for extract caches
 
 ---
 
 ## Scope 1 — Add a shared DiskCache factory and config surface
 **Objective:** Provide a single module that builds caches (Cache/FanoutCache) with unified settings, directory layout, and tags.
 
-**Status:** Planned
+**Status:** Completed
 
 **Representative pattern**
 ```python
 # cache/diskcache_factory.py
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 from diskcache import Cache, FanoutCache
 
-CacheKind = Literal["plan", "extract", "schema", "repo_scan", "runtime"]
+type DiskCacheKind = Literal["plan", "extract", "schema", "repo_scan", "runtime", "queue", "index"]
 
 @dataclass(frozen=True)
 class DiskCacheSettings:
-    directory: Path
     size_limit_bytes: int
-    cull_limit: int
-    eviction_policy: str
-    statistics: bool
-    tag_index: bool
+    cull_limit: int = 10
+    eviction_policy: str = "least-recently-used"
+    statistics: bool = False
+    tag_index: bool = True
     shards: int | None = None
+    timeout_seconds: float = 60.0
 
 
-def build_cache(kind: CacheKind, settings: DiskCacheSettings) -> Cache | FanoutCache:
-    base_dir = settings.directory / kind
+@dataclass(frozen=True)
+class DiskCacheProfile:
+    root: Path = field(default_factory=_default_cache_root)
+    base_settings: DiskCacheSettings = field(...)
+    overrides: Mapping[DiskCacheKind, DiskCacheSettings] = field(default_factory=dict)
+    ttl_seconds: Mapping[DiskCacheKind, float | None] = field(default_factory=dict)
+
+
+def cache_for_kind(profile: DiskCacheProfile, kind: DiskCacheKind) -> Cache | FanoutCache:
+    settings = profile.settings_for(kind)
     if settings.shards and settings.shards > 1:
-        return FanoutCache(
-            str(base_dir),
-            shards=settings.shards,
-            size_limit=settings.size_limit_bytes,
-            cull_limit=settings.cull_limit,
-            eviction_policy=settings.eviction_policy,
-            statistics=settings.statistics,
-            tag_index=settings.tag_index,
-        )
-    return Cache(
-        str(base_dir),
-        size_limit=settings.size_limit_bytes,
-        cull_limit=settings.cull_limit,
-        eviction_policy=settings.eviction_policy,
-        statistics=settings.statistics,
-        tag_index=settings.tag_index,
-    )
+        return FanoutCache(str(profile.root / kind), shards=settings.shards, ...)
+    return Cache(str(profile.root / kind), ...)
 ```
 
 **Target files**
-- `src/cache/diskcache_factory.py` (new)
-- `src/engine/runtime_profile.py` (settings surface)
-- `src/datafusion_engine/runtime.py` (plumb cache settings into profile/runtime)
+- `src/cache/diskcache_factory.py`
+- `src/cache/__init__.py`
+- `src/datafusion_engine/runtime.py`
 
 **Implementation checklist**
-- [ ] Add a central DiskCache settings dataclass (directory, size, TTL defaults, eviction policy, shard count).
-- [ ] Add a factory that returns `Cache` or `FanoutCache` based on usage pattern.
-- [ ] Add cache directory layout conventions (per-kind subdirectories).
-- [ ] Wire settings into runtime profile so caches are configurable from one place.
-- [ ] Add a small diagnostics helper to record cache stats/volume on demand.
+- [x] Add a central DiskCache settings dataclass (directory, size, TTL defaults, eviction policy, shard count).
+- [x] Add a factory that returns `Cache` or `FanoutCache` based on usage pattern.
+- [x] Add cache directory layout conventions (per-kind subdirectories).
+- [x] Wire settings into runtime profile (`DataFusionRuntimeProfile.diskcache_profile`).
+- [x] Add a diagnostics helper to record cache stats/volume on demand.
 
 **Decommission candidates**
-- Ad-hoc cache construction (none today; this prevents future drift).
+- Ad-hoc cache construction (prevented by central factory).
 
 ---
 
 ## Scope 2 — Replace Substrait plan cache with DiskCache
 **Objective:** Replace the in-memory `PlanCache` with a persistent DiskCache-backed implementation to avoid recompute across runs and processes.
 
-**Status:** Planned
+**Status:** Completed
 
 **Representative pattern**
 ```python
 # engine/plan_cache.py
-from dataclasses import dataclass
-from diskcache import Cache
-
-@dataclass(frozen=True)
-class PlanCacheKey:
-    plan_hash: str
-    profile_hash: str
-    substrait_hash: str
-
-    def as_key(self) -> str:
-        return f"plan:{self.plan_hash}:{self.profile_hash}:{self.substrait_hash}"
-
-
 @dataclass
 class PlanCache:
-    cache: Cache
+    cache_profile: DiskCacheProfile | None = field(default_factory=default_diskcache_profile)
+    _cache: Cache | FanoutCache | None = field(default=None, init=False)
 
-    def get(self, key: PlanCacheKey) -> bytes | None:
-        return self.cache.get(key.as_key())
+    def _ensure_cache(self) -> Cache | FanoutCache | None:
+        if self._cache is None and self.cache_profile is not None:
+            self._cache = cache_for_kind(self.cache_profile, "plan")
+        return self._cache
 
     def put(self, entry: PlanCacheEntry) -> None:
-        self.cache.set(entry.key().as_key(), entry.plan_bytes, tag=entry.profile_hash)
+        cache = self._ensure_cache()
+        if cache is None:
+            return
+        cache.set(entry.key().as_key(), entry, tag=entry.profile_hash, retry=True)
 ```
 
 **Target files**
 - `src/engine/plan_cache.py`
+- `src/datafusion_engine/bridge.py`
 - `src/datafusion_engine/compile_options.py`
 - `src/datafusion_engine/runtime.py`
-- `src/datafusion_engine/bridge.py`
 
 **Implementation checklist**
-- [ ] Replace dict-backed `PlanCache` with DiskCache-backed version.
-- [ ] Use stable string keys (avoid tuple serialization pitfalls).
-- [ ] Tag plan entries by `profile_hash` and `sqlglot_policy_hash` for bulk eviction.
-- [ ] Add size limits and eviction policy suitable for plan bytes.
-- [ ] Ensure runtime profile provides the cache instance.
+- [x] Replace dict-backed `PlanCache` with DiskCache-backed version.
+- [x] Use stable string keys (avoid tuple serialization pitfalls).
+- [x] Tag plan entries by `profile_hash` (profile hash includes SQLGlot policy fingerprint).
+- [x] Add size limits and eviction policy suitable for plan bytes (profile overrides).
+- [x] Ensure runtime profile provides the cache instance.
 
 **Decommission candidates**
-- `PlanCache.entries` dict storage.
+- `PlanCache.entries` dict storage (removed).
 
 ---
 
 ## Scope 3 — DiskCache for AST / bytecode / symtable extraction
 **Objective:** Replace per-process dict caches with DiskCache so concurrent workers and repeated runs can reuse extraction results.
 
-**Status:** Planned
+**Status:** Completed (FanoutCache-enabled via profile shards; stampede guard optional)
 
 **Representative pattern**
 ```python
-# extract/cache_keys.py
-from dataclasses import dataclass
-
-@dataclass(frozen=True)
-class ExtractCacheKey:
-    kind: str
-    file_sha256: str
-    options_fingerprint: str
-
-    def as_key(self) -> str:
-        return f"extract:{self.kind}:{self.file_sha256}:{self.options_fingerprint}"
-```
-
-```python
 # extract/ast_extract.py (illustrative)
-cache_key = ExtractCacheKey(
-    kind="ast",
-    file_sha256=file_ctx.file_sha256,
-    options_fingerprint=options_fingerprint,
-).as_key()
+from extract.cache_utils import cache_for_extract, cache_ttl_seconds, stable_cache_key
 
-cached = cache.get(cache_key)
+cache = cache_for_extract(profile)
+cache_key = stable_cache_key(
+    "extract:ast",
+    {"file_sha256": file_ctx.file_sha256, "options": to_builtins(options)},
+)
+cached = cache.get(cache_key, default=None, retry=True)
 if cached is not None:
     return cached
 
 result = compute_ast(...)
-cache.set(cache_key, result, tag=options.repo_id, expire=ttl_seconds)
+cache.set(cache_key, result, tag=options.repo_id, expire=cache_ttl, retry=True)
 ```
 
 **Target files**
 - `src/extract/ast_extract.py`
 - `src/extract/bytecode_extract.py`
 - `src/extract/symtable_extract.py`
-- `src/extract/cache_keys.py` (new)
-- `src/extract/session.py` (plumb cache access)
+- `src/extract/cache_utils.py`
+- `src/extract/session.py`
 
 **Implementation checklist**
-- [ ] Add a shared cache key builder for extract outputs.
-- [ ] Replace `_AST_WORKER_CACHE`, `_BYTECODE_CACHE`, `_SYMTABLE_CACHE` with DiskCache.
-- [ ] Use `FanoutCache` + `memoize_stampede` to avoid duplicate work across processes.
-- [ ] Tag entries by repo id and extractor options for invalidation.
-- [ ] Add TTL controls aligned with runtime profile settings.
+- [x] Add a shared cache key builder for extract outputs.
+- [x] Replace `_AST_WORKER_CACHE`, `_BYTECODE_CACHE`, `_SYMTABLE_CACHE` with DiskCache.
+- [x] Use FanoutCache for concurrent extract workloads (profile shards).
+- [x] Tag entries by repo id and extractor options for invalidation.
+- [x] Add TTL controls aligned with runtime profile settings.
+- [ ] Optional: add stampede protection helpers for heavy extract workloads.
 
 **Decommission candidates**
-- `_AST_WORKER_CACHE` in `src/extract/ast_extract.py`.
-- `_BYTECODE_CACHE` in `src/extract/bytecode_extract.py`.
-- `_SYMTABLE_CACHE` in `src/extract/symtable_extract.py`.
+- `_AST_WORKER_CACHE` in `src/extract/ast_extract.py` (removed).
+- `_BYTECODE_CACHE` in `src/extract/bytecode_extract.py` (removed).
+- `_SYMTABLE_CACHE` in `src/extract/symtable_extract.py` (removed).
 
 ---
 
 ## Scope 4 — Cache schema introspection and contract metadata
 **Objective:** Persist expensive schema introspection queries (information_schema lookups, constraint queries) across runs.
 
-**Status:** Planned
+**Status:** Partially complete (cache + TTL + tags done; manual invalidation hook outstanding)
 
 **Representative pattern**
 ```python
 # datafusion_engine/schema_introspection.py
-cache_key = f"schema:introspect:{profile_hash}:{table_name}"
-rows = cache.get(cache_key)
-if rows is None:
-    rows = _rows_for_query(ctx, query)
-    cache.set(cache_key, rows, tag=profile_hash, expire=ttl_seconds)
-return rows
+def _cached_rows(self, prefix: str, payload: Mapping[str, object], fetch: Callable[[], list[dict]]) -> list[dict]:
+    key = stable_cache_key(prefix, payload)
+    cached = self.cache.get(key, default=None, retry=True)
+    if cached is None:
+        cached = fetch()
+        self.cache.set(key, cached, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)
+    return cached
 ```
 
 **Target files**
 - `src/datafusion_engine/schema_introspection.py`
-- `src/datafusion_engine/runtime.py` (cache access)
-- `src/engine/runtime_profile.py` (TTL/limits)
+- `src/datafusion_engine/runtime.py`
+- `src/datafusion_engine/registry_bridge.py`
 
 **Implementation checklist**
-- [ ] Add a schema-introspection cache (Cache or FanoutCache) with TTL.
-- [ ] Cache `table_names_snapshot`, `table_constraint_rows`, `constraint_rows` results.
-- [ ] Tag entries by `profile_hash` and `schema_map_hash`.
-- [ ] Provide a manual invalidation hook when schema changes are detected.
+- [x] Add a schema-introspection cache with TTL.
+- [x] Cache `table_names_snapshot`, `columns_snapshot`, `table_constraints`, `routine_parameters`, etc.
+- [x] Tag entries by profile/schema-map hash prefix.
+- [ ] Add an explicit invalidation hook when schema changes are detected.
 
 **Decommission candidates**
 - None (behavioral replacement only).
@@ -220,18 +201,18 @@ return rows
 ## Scope 5 — Cache repo scan results and worklist inputs
 **Objective:** Avoid repeated repo scanning on stable inputs by caching scan outputs keyed by repo root and options.
 
-**Status:** Planned
+**Status:** Completed
 
 **Representative pattern**
 ```python
 # extract/repo_scan.py
-scan_key = f"repo_scan:{repo_root}:{options_fingerprint}"
-cached = cache.get(scan_key)
-if cached is not None:
-    return cached
+cache_key = stable_cache_key("repo_scan", {"repo_root": str(repo_root), "options": to_builtins(options)})
+cached = cache.get(cache_key, default=None, retry=True)
+if isinstance(cached, list):
+    return extract_plan_from_rows("repo_files_v1", cached, ...)
 
-result = scan_repo_fs_or_git(...)
-cache.set(scan_key, result, tag=options.repo_id, expire=ttl_seconds)
+rows = list(iter_rows())
+cache.set(cache_key, rows, tag=options.repo_id, expire=cache_ttl, retry=True)
 ```
 
 **Target files**
@@ -240,9 +221,9 @@ cache.set(scan_key, result, tag=options.repo_id, expire=ttl_seconds)
 - `src/extract/repo_scan_git.py`
 
 **Implementation checklist**
-- [ ] Introduce a repo-scan cache keyed by repo root + include/exclude options.
-- [ ] Add TTL and tag eviction by repo id.
-- [ ] Ensure cache results are stored as serializable rows or Arrow batches.
+- [x] Introduce a repo-scan cache keyed by repo root + include/exclude options.
+- [x] Add TTL and tag eviction by repo id.
+- [x] Store results as serializable rows.
 
 **Decommission candidates**
 - None (enhancement path).
@@ -252,23 +233,23 @@ cache.set(scan_key, result, tag=options.repo_id, expire=ttl_seconds)
 ## Scope 6 — Persist runtime artifact schema metadata
 **Objective:** Persist schema fingerprints and materialized metadata across runs without serializing non-picklable runtime handles.
 
-**Status:** Planned
+**Status:** Completed
 
 **Representative pattern**
 ```python
 # relspec/runtime_artifacts.py
 cache_key = f"runtime_schema:{dataset_name}:{schema_fingerprint}"
-cache.set(cache_key, schema, tag=plan_fingerprint)
+diskcache.set(cache_key, schema, tag=plan_fingerprint, retry=True)
 ```
 
 **Target files**
 - `src/relspec/runtime_artifacts.py`
-- `src/engine/runtime_profile.py` (cache settings)
+- `src/datafusion_engine/runtime.py`
 
 **Implementation checklist**
-- [ ] Persist `schema_cache` entries (SchemaLike only) into DiskCache.
-- [ ] Persist `MaterializedTable` metadata (not TableLike itself).
-- [ ] Provide a load path to seed caches when a run starts.
+- [x] Persist `schema_cache` entries (SchemaLike only) into DiskCache.
+- [x] Persist `MaterializedTable` metadata (not TableLike itself).
+- [x] Provide a load path that reads from DiskCache when a run starts (`get_schema`).
 
 **Decommission candidates**
 - None (augmenting existing containers).
@@ -278,25 +259,26 @@ cache.set(cache_key, schema, tag=plan_fingerprint)
 ## Scope 7 — Optional persistent queues and indexes
 **Objective:** Use DiskCache `Deque` and `Index` for durable work queues or ordered metadata if needed.
 
-**Status:** Planned
+**Status:** Deferred (helpers added; no call sites yet)
 
 **Representative pattern**
 ```python
-from diskcache import Deque
+from cache.diskcache_factory import build_deque
 
-work_queue = Deque(str(cache_dir / "extract_work_queue"))
+work_queue = build_deque(profile, name="extract_work_queue", maxlen=None)
 work_queue.append(file_id)
-next_item = work_queue.popleft()
 ```
 
 **Target files**
+- `src/cache/diskcache_factory.py`
+- `src/cache/__init__.py`
 - `src/extract/worklists.py` (if converting to a persistent queue)
 - `src/incremental/*` (if durable job queues are desired)
 
 **Implementation checklist**
+- [x] Provide helper builders for DiskCache `Deque` and `Index`.
 - [ ] Identify any queue-like patterns that would benefit from a persistent Deque.
-- [ ] Implement durable queue with at-least-once semantics if needed.
-- [ ] Ensure eviction policy is "none" for Deque/Index use cases.
+- [ ] Implement durable queues with at-least-once semantics where justified.
 
 **Decommission candidates**
 - None (new capability).
@@ -306,24 +288,26 @@ next_item = work_queue.popleft()
 ## Scope 8 — Diagnostics and cache health reporting
 **Objective:** Emit cache stats (hits, misses, size, volume) into existing diagnostics sinks for observability.
 
-**Status:** Planned
+**Status:** Partially complete (DataFusion runtime emits stats; engine-level sinks pending)
 
 **Representative pattern**
 ```python
-stats = cache.stats()
-volume = cache.volume()
-reporter.record("diskcache_stats_v1", {"stats": stats, "volume": volume})
+from cache.diskcache_factory import diskcache_stats_snapshot
+
+payload = diskcache_stats_snapshot(cache)
+reporter.record("diskcache_stats_v1", payload)
 ```
 
 **Target files**
-- `src/engine/runtime_profile.py`
+- `src/cache/diskcache_factory.py`
 - `src/datafusion_engine/runtime.py`
 - `src/engine/materialize_pipeline.py`
 
 **Implementation checklist**
-- [ ] Add a helper to snapshot cache stats and volume.
-- [ ] Plumb into diagnostics sink with a stable event schema.
-- [ ] Avoid heavy `cache.check()` on hot paths; use opt-in maintenance.
+- [x] Add a helper to snapshot cache stats and volume.
+- [x] Plumb into DataFusion diagnostics sink with a stable event schema.
+- [ ] Extend engine/materialization diagnostics to emit cache stats.
+- [ ] Keep maintenance ops (`cache.check()`) opt-in only.
 
 **Decommission candidates**
 - None (observability enhancement).
@@ -331,23 +315,23 @@ reporter.record("diskcache_stats_v1", {"stats": stats, "volume": volume})
 ---
 
 ## Decommission & Removal Summary
-**Functions / objects to remove after migration**
+**Functions / objects removed**
 - `_AST_WORKER_CACHE` in `src/extract/ast_extract.py`.
 - `_BYTECODE_CACHE` in `src/extract/bytecode_extract.py`.
 - `_SYMTABLE_CACHE` in `src/extract/symtable_extract.py`.
 - `PlanCache.entries` dict storage in `src/engine/plan_cache.py`.
 
 **Files to delete**
-- None required for this migration (all changes are in-place replacements).
+- None required for this migration (changes were in-place replacements).
 
 ---
 
-## Execution Order (recommended)
+## Execution Order (implemented)
 1. Scope 1 (DiskCache factory + config surface)
 2. Scope 2 (Plan cache persistence)
 3. Scope 3 (Extract caches)
-4. Scope 4 (Schema introspection caching)
+4. Scope 4 (Schema introspection caching) — partial (invalidation hook pending)
 5. Scope 5 (Repo scan caching)
 6. Scope 6 (Runtime artifact schema persistence)
-7. Scope 8 (Diagnostics)
-8. Scope 7 (Persistent queues/indexes, optional)
+7. Scope 8 (Diagnostics) — partial (engine-level sinks pending)
+8. Scope 7 (Persistent queues/indexes) — deferred/optional

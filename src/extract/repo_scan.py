@@ -11,6 +11,12 @@ from typing import Literal, overload
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from core_types import PathLike, ensure_path
 from datafusion_engine.extract_registry import dataset_query, normalize_options
+from extract.cache_utils import (
+    cache_for_kind_optional,
+    cache_ttl_seconds,
+    diskcache_profile_from_ctx,
+    stable_cache_key,
+)
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -19,16 +25,16 @@ from extract.helpers import (
     materialize_extract_plan,
 )
 from extract.repo_scan_fs import iter_repo_files_fs
-from extract.repo_scan_git import iter_repo_files_git
+from extract.repo_scan_pygit2 import iter_repo_files_pygit2
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.session import ExtractSession
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec
+from serde_msgspec import to_builtins
 
 SCHEMA_VERSION = 1
 
 
-@dataclass(frozen=True)
 @dataclass(frozen=True)
 class RepoScanOptions:
     """Configure repository scanning behavior."""
@@ -112,7 +118,7 @@ def iter_repo_files(repo_root: Path, options: RepoScanOptions) -> Iterator[Path]
     """
     repo_root = repo_root.resolve()
     include_globs, exclude_globs = repo_scan_globs_from_options(options)
-    git_files = iter_repo_files_git(
+    git_files = iter_repo_files_pygit2(
         repo_root,
         include_globs=include_globs,
         exclude_globs=exclude_globs,
@@ -266,6 +272,26 @@ def scan_repo_plan(
     """
     repo_root_path = ensure_path(repo_root).resolve()
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
+    cache_profile = diskcache_profile_from_ctx(session.exec_ctx)
+    cache = cache_for_kind_optional(cache_profile, "repo_scan")
+    cache_ttl = cache_ttl_seconds(cache_profile, "repo_scan")
+    cache_key = None
+    if cache is not None:
+        cache_key = stable_cache_key(
+            "repo_scan",
+            {
+                "repo_root": str(repo_root_path),
+                "options": to_builtins(options),
+            },
+        )
+        cached_rows = cache.get(cache_key, default=None, retry=True)
+        if isinstance(cached_rows, list):
+            return extract_plan_from_rows(
+                "repo_files_v1",
+                cached_rows,
+                session=session,
+                options=ExtractPlanOptions(normalize=normalize),
+            )
 
     def iter_rows() -> Iterator[dict[str, object]]:
         count = 0
@@ -278,9 +304,24 @@ def scan_repo_plan(
             if options.max_files is not None and count >= options.max_files:
                 break
 
+    if cache is None or cache_key is None:
+        return extract_plan_from_rows(
+            "repo_files_v1",
+            iter_rows(),
+            session=session,
+            options=ExtractPlanOptions(normalize=normalize),
+        )
+    rows = list(iter_rows())
+    cache.set(
+        cache_key,
+        rows,
+        expire=cache_ttl,
+        tag=options.repo_id,
+        retry=True,
+    )
     return extract_plan_from_rows(
         "repo_files_v1",
-        iter_rows(),
+        rows,
         session=session,
         options=ExtractPlanOptions(normalize=normalize),
     )

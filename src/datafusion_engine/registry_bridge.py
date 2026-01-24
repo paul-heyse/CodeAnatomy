@@ -26,6 +26,7 @@ from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import ensure_path
+from datafusion_engine.runtime import schema_introspector_for_profile
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     table_constraint_rows,
@@ -572,7 +573,10 @@ def _validate_constraints_and_defaults(
     if not key_fields and not expected_defaults:
         return
     sql_options = _sql_options_for_profile(context.runtime_profile)
-    introspector = SchemaIntrospector(context.ctx, sql_options=sql_options)
+    if context.runtime_profile is not None:
+        introspector = schema_introspector_for_profile(context.runtime_profile, context.ctx)
+    else:
+        introspector = SchemaIntrospector(context.ctx, sql_options=sql_options)
     if key_fields:
         constraint_rows = table_constraint_rows(
             context.ctx,
@@ -1445,6 +1449,7 @@ def _record_listing_table_artifact(
         name=context.name,
         enable_information_schema=profile.enable_information_schema,
         sql_options=_sql_options_for_profile(profile),
+        runtime_profile=profile,
     )
     expected_schema = context.options.schema
     expected_schema_fingerprint = _schema_fingerprint(expected_schema)
@@ -1455,11 +1460,13 @@ def _record_listing_table_artifact(
         else None
     )
     observed_ddl_fingerprint = _ddl_fingerprint(
-        context.ctx,
+        _DdlFingerprintContext(
+            ctx=context.ctx,
+            enable_information_schema=profile.enable_information_schema,
+            runtime_profile=profile,
+        ),
         name=context.name,
         schema=expected_schema,
-        enable_information_schema=profile.enable_information_schema,
-        sql_options=_sql_options_for_profile(profile),
     )
     table_schema_snapshot = _table_schema_snapshot(
         schema=context.options.schema,
@@ -1543,11 +1550,13 @@ def _record_listing_table_artifact(
         "read_options": dict(context.options.read_options),
     }
     payload["partition_schema_validation"] = _partition_schema_validation(
-        context.ctx,
-        table_name=context.name,
+        _PartitionSchemaContext(
+            ctx=context.ctx,
+            table_name=context.name,
+            enable_information_schema=profile.enable_information_schema,
+            runtime_profile=profile,
+        ),
         expected_partition_cols=details.table_partition_cols,
-        enable_information_schema=profile.enable_information_schema,
-        sql_options=_sql_options_for_profile(profile),
     )
     payload.update(provenance)
     profile.diagnostics_sink.record_artifact("datafusion_listing_tables_v1", payload)
@@ -1882,16 +1891,30 @@ def _schema_evolution_adapter_factory() -> object:
     return factory()
 
 
+@dataclass(frozen=True)
+class _DdlFingerprintContext:
+    ctx: SessionContext
+    enable_information_schema: bool
+    runtime_profile: DataFusionRuntimeProfile | None = None
+
+
 def _ddl_fingerprint(
-    ctx: SessionContext,
+    context: _DdlFingerprintContext,
     *,
     name: str,
     schema: pa.Schema | None,
-    enable_information_schema: bool,
-    sql_options: SQLOptions,
 ) -> str | None:
-    if enable_information_schema:
-        ddl = SchemaIntrospector(ctx, sql_options=sql_options).table_definition(name)
+    if context.enable_information_schema:
+        if context.runtime_profile is not None:
+            ddl = schema_introspector_for_profile(
+                context.runtime_profile,
+                context.ctx,
+            ).table_definition(name)
+        else:
+            ddl = SchemaIntrospector(
+                context.ctx,
+                sql_options=_sql_options_for_profile(None),
+            ).table_definition(name)
         if ddl is not None:
             return ddl_fingerprint_from_definition(ddl)
     _ = schema
@@ -1973,8 +1996,12 @@ def _table_provenance_snapshot(
     name: str,
     enable_information_schema: bool,
     sql_options: SQLOptions,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> dict[str, object]:
-    introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+    if runtime_profile is not None:
+        introspector = schema_introspector_for_profile(runtime_profile, ctx)
+    else:
+        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
     table_definition = introspector.table_definition(name)
     constraints: tuple[str, ...] = ()
     column_defaults: dict[str, object] | None = None
@@ -2029,12 +2056,19 @@ def _partition_column_rows(
     ctx: SessionContext,
     *,
     table_name: str,
-    sql_options: SQLOptions,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> tuple[list[dict[str, object]] | None, str | None]:
     try:
-        table = SchemaIntrospector(ctx, sql_options=sql_options).table_columns_with_ordinal(
-            table_name
-        )
+        if runtime_profile is not None:
+            table = schema_introspector_for_profile(
+                runtime_profile,
+                ctx,
+            ).table_columns_with_ordinal(table_name)
+        else:
+            sql_options = _sql_options_for_profile(runtime_profile)
+            table = SchemaIntrospector(ctx, sql_options=sql_options).table_columns_with_ordinal(
+                table_name
+            )
     except (RuntimeError, TypeError, ValueError) as exc:
         return None, str(exc)
     return table, None
@@ -2099,24 +2133,29 @@ def _table_schema_partition_snapshot(
     return table_schema_types, missing, mismatches
 
 
+@dataclass(frozen=True)
+class _PartitionSchemaContext:
+    ctx: SessionContext
+    table_name: str
+    enable_information_schema: bool
+    runtime_profile: DataFusionRuntimeProfile | None = None
+
+
 def _partition_schema_validation(
-    ctx: SessionContext,
+    context: _PartitionSchemaContext,
     *,
-    table_name: str,
     expected_partition_cols: Sequence[tuple[str, str]] | None,
-    enable_information_schema: bool,
-    sql_options: SQLOptions,
 ) -> dict[str, object] | None:
-    if not enable_information_schema:
+    if not context.enable_information_schema:
         return None
     if not expected_partition_cols:
         return None
     expected_names = [name for name, _ in expected_partition_cols]
     expected_types = {name: str(dtype) for name, dtype in expected_partition_cols}
     rows, error = _partition_column_rows(
-        ctx,
-        table_name=table_name,
-        sql_options=sql_options,
+        context.ctx,
+        table_name=context.table_name,
+        runtime_profile=context.runtime_profile,
     )
     if error is not None:
         return {
@@ -2138,8 +2177,8 @@ def _partition_schema_validation(
         expected_names,
     )
     table_schema_types, table_missing, table_type_mismatches = _table_schema_partition_snapshot(
-        ctx,
-        table_name=table_name,
+        context.ctx,
+        table_name=context.table_name,
         expected_types=expected_types,
         expected_names=expected_names,
     )
@@ -2158,19 +2197,13 @@ def _partition_schema_validation(
 
 
 def _require_partition_schema_validation(
-    ctx: SessionContext,
+    context: _PartitionSchemaContext,
     *,
-    table_name: str,
     expected_partition_cols: Sequence[tuple[str, str]] | None,
-    enable_information_schema: bool,
-    sql_options: SQLOptions,
 ) -> None:
     validation = _partition_schema_validation(
-        ctx,
-        table_name=table_name,
+        context,
         expected_partition_cols=expected_partition_cols,
-        enable_information_schema=enable_information_schema,
-        sql_options=sql_options,
     )
     if validation is None:
         return
@@ -2193,7 +2226,7 @@ def _require_partition_schema_validation(
     else:
         type_mismatches = []
     if missing or order_matches is False or type_mismatches:
-        msg = f"Partition schema validation failed for {table_name}: {validation}."
+        msg = f"Partition schema validation failed for {context.table_name}: {validation}."
         raise ValueError(msg)
 
 

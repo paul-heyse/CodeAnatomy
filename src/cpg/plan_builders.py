@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
@@ -21,6 +21,7 @@ from cpg.spec_registry import (
     prop_table_specs,
     scip_role_flag_prop_spec,
 )
+from cpg.specs import TaskIdentity
 from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import ensure_columns
@@ -31,14 +32,15 @@ if TYPE_CHECKING:
     from ibis.expr.types import Table
 
     from cpg.specs import PropOptions
+    from sqlglot_tools.bridge import IbisCompilerBackend
+    from sqlglot_tools.compat import Expression
 
 
 def build_cpg_nodes_plan(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
     backend: BaseBackend,
-    task_name: str | None = None,
-    task_priority: int | None = None,
+    task_identity: TaskIdentity | None = None,
 ) -> IbisPlan:
     """Return the CPG nodes plan compiled from node specs.
 
@@ -47,8 +49,12 @@ def build_cpg_nodes_plan(
     IbisPlan
         Plan for CPG nodes.
     """
+    specs = node_plan_specs()
+    _preload_sources(catalog, ctx=ctx, names={spec.table_ref for spec in specs})
+    task_name = task_identity.name if task_identity is not None else None
+    task_priority = task_identity.priority if task_identity is not None else None
     plans: list[IbisPlan] = []
-    for spec in node_plan_specs():
+    for spec in specs:
         table = _resolve_table(catalog, ctx=ctx, name=spec.table_ref)
         plan = emit_nodes_ibis(
             table,
@@ -73,6 +79,7 @@ def build_cpg_edges_plan(
         Plan for CPG edges.
     """
     _ = backend
+    _preload_sources(catalog, ctx=ctx, names={RELATION_OUTPUT_NAME})
     relation_expr = _resolve_table(catalog, ctx=ctx, name=RELATION_OUTPUT_NAME)
     plan = emit_edges_from_relation_output(relation_expr)
     return _ensure_plan_schema(plan, schema=CPG_EDGES_SCHEMA)
@@ -83,8 +90,7 @@ def build_cpg_props_plan(
     ctx: ExecutionContext,
     backend: BaseBackend,
     options: PropOptions | None = None,
-    task_name: str | None = None,
-    task_priority: int | None = None,
+    task_identity: TaskIdentity | None = None,
 ) -> IbisPlan:
     """Return the CPG props plan compiled from prop specs.
 
@@ -95,9 +101,11 @@ def build_cpg_props_plan(
     """
     resolved_options = options or CpgPropOptions()
     source_columns_lookup = _source_columns_lookup(catalog, ctx=ctx)
+    union_builder = _sqlglot_union_builder(backend)
     prop_specs = list(prop_table_specs(source_columns_lookup=source_columns_lookup))
     prop_specs.append(scip_role_flag_prop_spec())
     prop_specs.append(edge_prop_spec())
+    _preload_sources(catalog, ctx=ctx, names={spec.table_ref for spec in prop_specs})
     plans: list[IbisPlan] = []
     for spec in prop_specs:
         table = _resolve_table(catalog, ctx=ctx, name=spec.table_ref)
@@ -105,8 +113,8 @@ def build_cpg_props_plan(
             table,
             spec=spec,
             options=resolved_options,
-            task_name=task_name,
-            task_priority=task_priority,
+            task_identity=task_identity,
+            union_builder=union_builder,
         )
         plans.append(plan)
     return _union_plans(plans, schema=CPG_PROPS_SCHEMA, backend=backend)
@@ -125,6 +133,70 @@ def _source_columns_lookup(
         return tuple(table.columns)
 
     return _lookup
+
+
+def _sqlglot_union_builder(
+    backend: BaseBackend,
+) -> Callable[[Sequence[Table]], Table] | None:
+    if not _supports_sqlglot_union(backend):
+        return None
+
+    def _builder(rows: Sequence[Table]) -> Table:
+        from sqlglot_tools.bridge import ibis_to_sqlglot
+        from sqlglot_tools.optimizer import SqlGlotSurface, resolve_sqlglot_policy, sqlglot_sql
+
+        compiler_backend = cast("IbisCompilerBackend", backend)
+        expressions = [ibis_to_sqlglot(row, backend=compiler_backend) for row in rows]
+        union_expr = _balanced_union(expressions)
+        sql = sqlglot_sql(
+            union_expr,
+            policy=resolve_sqlglot_policy(name=SqlGlotSurface.DATAFUSION_COMPILE),
+        )
+        return compiler_backend.sql(sql)
+
+    return _builder
+
+
+def _supports_sqlglot_union(backend: BaseBackend) -> bool:
+    return hasattr(backend, "compiler") and hasattr(backend, "sql")
+
+
+def _balanced_union(
+    exprs: Sequence[Expression],
+) -> Expression:
+    from sqlglot_tools.compat import exp
+
+    if len(exprs) == 1:
+        return exprs[0]
+    mid = len(exprs) // 2
+    left = _balanced_union(exprs[:mid])
+    right = _balanced_union(exprs[mid:])
+    return exp.Union(this=left, expression=right, distinct=False)
+
+
+def _preload_sources(
+    catalog: IbisPlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    names: set[str],
+) -> None:
+    for name in sorted(names):
+        if catalog.resolve_plan(name, ctx=ctx, label=name) is not None:
+            continue
+        schema = _schema_for(name)
+        if schema is None:
+            msg = f"Missing schema for CPG input {name!r}."
+            raise KeyError(msg)
+        empty = empty_table(schema)
+        plan = register_ibis_table(
+            empty,
+            options=SourceToIbisOptions(
+                backend=catalog.backend,
+                name=name,
+                ordering=Ordering.unordered(),
+            ),
+        )
+        catalog.add(name, plan)
 
 
 def _resolve_table(catalog: IbisPlanCatalog, *, ctx: ExecutionContext, name: str) -> Table:

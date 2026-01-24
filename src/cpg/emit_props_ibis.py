@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import ibis
@@ -17,6 +17,7 @@ from cpg.specs import (
     PropFieldSpec,
     PropOptions,
     PropTableSpec,
+    TaskIdentity,
     filter_fields,
     resolve_prop_transform,
 )
@@ -27,6 +28,8 @@ from ibis_engine.schema_utils import (
     ibis_dtype_from_arrow,
     ibis_null_literal,
 )
+
+SQLGLOT_UNION_THRESHOLD = 96
 
 
 @dataclass(frozen=True)
@@ -41,8 +44,8 @@ def emit_props_ibis(
     *,
     spec: PropTableSpec,
     options: PropOptions | None = None,
-    task_name: str | None = None,
-    task_priority: int | None = None,
+    task_identity: TaskIdentity | None = None,
+    union_builder: Callable[[Sequence[Table]], Table] | None = None,
 ) -> IbisPlan:
     """Emit CPG properties from a relation table using Ibis expressions.
 
@@ -56,6 +59,8 @@ def emit_props_ibis(
     fields = filter_fields(spec.fields, options=resolved_options)
     if not fields:
         return _empty_props_plan()
+    task_name = task_identity.name if task_identity is not None else None
+    task_priority = task_identity.priority if task_identity is not None else None
     rows: list[Table] = []
     for field in fields:
         row_expr = _prop_row_expr(
@@ -70,7 +75,10 @@ def emit_props_ibis(
         rows.append(row_expr)
     if not rows:
         return _empty_props_plan()
-    combined = _union_rows(rows)
+    if union_builder is not None and len(rows) >= SQLGLOT_UNION_THRESHOLD:
+        combined = union_builder(rows)
+    else:
+        combined = _union_rows(rows)
     combined = ensure_columns(combined, schema=CPG_PROPS_SCHEMA, only_missing=True)
     combined = combined.select(*CPG_PROPS_SCHEMA.names)
     return IbisPlan(expr=combined, ordering=Ordering.unordered())
@@ -194,12 +202,21 @@ def _literal_or_null(value: object | None, dtype: pa.DataType) -> Value:
     return ibis.literal(value)
 
 
-def _union_rows(rows: Iterable[Table]) -> Table:
-    iterator = iter(rows)
-    first = next(iterator)
-    combined = first
-    for row in iterator:
-        combined = combined.union(row)
+def _union_rows(rows: Sequence[Table], *, batch_size: int = 32) -> Table:
+    if len(rows) <= batch_size:
+        return _union_exprs(rows)
+    batches = [
+        _union_exprs(rows[index : index + batch_size])
+        for index in range(0, len(rows), batch_size)
+    ]
+    return _union_exprs(batches)
+
+
+def _union_exprs(exprs: Sequence[Table]) -> Table:
+    iterator = iter(exprs)
+    combined = next(iterator)
+    for expr in iterator:
+        combined = combined.union(expr)
     return combined
 
 

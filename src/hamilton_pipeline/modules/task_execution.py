@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-import pyarrow as pa
 import rustworkx as rx
 from hamilton.function_modifiers import tag
 
+from arrowdsl.core.interop import TableLike as ArrowTableLike
 from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.serialization import schema_fingerprint
+from cpg.schemas import CPG_EDGES_CONTRACT, CPG_NODES_CONTRACT, CPG_PROPS_CONTRACT
+from datafusion_engine.finalize import Contract, normalize_only
 from relspec.evidence import EvidenceCatalog
 from relspec.execution import TaskExecutionRequest, execute_plan_artifact
 from relspec.graph_inference import TaskGraph
@@ -31,6 +33,18 @@ class TaskExecutionResults:
     """Collected outputs from task execution."""
 
     outputs: Mapping[str, TableLike]
+
+
+def _finalize_cpg_table(
+    table: TableLike,
+    *,
+    contract: Contract,
+    ctx: ExecutionContext,
+) -> TableLike:
+    schema_names = getattr(table.schema, "names", [])
+    if not schema_names:
+        return empty_table(contract.schema)
+    return normalize_only(cast("ArrowTableLike", table), contract=contract, ctx=ctx)
 
 
 @dataclass(frozen=True)
@@ -225,7 +239,7 @@ def allowed_task_names(
 
 
 @tag(layer="execution", artifact="cpg_nodes_final", kind="table")
-def cpg_nodes_final(task_outputs: TaskExecutionResults) -> TableLike:
+def cpg_nodes_final(task_outputs: TaskExecutionResults, ctx: ExecutionContext) -> TableLike:
     """Return the final CPG nodes table.
 
     Returns
@@ -233,11 +247,14 @@ def cpg_nodes_final(task_outputs: TaskExecutionResults) -> TableLike:
     TableLike
         Final nodes table.
     """
-    return task_outputs.outputs.get("cpg_nodes_v1", empty_table(pa.schema([])))
+    table = task_outputs.outputs.get("cpg_nodes_v1")
+    if table is None:
+        return empty_table(CPG_NODES_CONTRACT.schema)
+    return _finalize_cpg_table(table, contract=CPG_NODES_CONTRACT, ctx=ctx)
 
 
 @tag(layer="execution", artifact="cpg_edges_final", kind="table")
-def cpg_edges_final(task_outputs: TaskExecutionResults) -> TableLike:
+def cpg_edges_final(task_outputs: TaskExecutionResults, ctx: ExecutionContext) -> TableLike:
     """Return the final CPG edges table.
 
     Returns
@@ -245,11 +262,14 @@ def cpg_edges_final(task_outputs: TaskExecutionResults) -> TableLike:
     TableLike
         Final edges table.
     """
-    return task_outputs.outputs.get("cpg_edges_v1", empty_table(pa.schema([])))
+    table = task_outputs.outputs.get("cpg_edges_v1")
+    if table is None:
+        return empty_table(CPG_EDGES_CONTRACT.schema)
+    return _finalize_cpg_table(table, contract=CPG_EDGES_CONTRACT, ctx=ctx)
 
 
 @tag(layer="execution", artifact="cpg_props_final", kind="table")
-def cpg_props_final(task_outputs: TaskExecutionResults) -> TableLike:
+def cpg_props_final(task_outputs: TaskExecutionResults, ctx: ExecutionContext) -> TableLike:
     """Return the final CPG properties table.
 
     Returns
@@ -257,7 +277,10 @@ def cpg_props_final(task_outputs: TaskExecutionResults) -> TableLike:
     TableLike
         Final properties table.
     """
-    return task_outputs.outputs.get("cpg_props_v1", empty_table(pa.schema([])))
+    table = task_outputs.outputs.get("cpg_props_v1")
+    if table is None:
+        return empty_table(CPG_PROPS_CONTRACT.schema)
+    return _finalize_cpg_table(table, contract=CPG_PROPS_CONTRACT, ctx=ctx)
 
 
 __all__ = [

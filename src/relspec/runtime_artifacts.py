@@ -11,9 +11,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.schema.serialization import schema_fingerprint
+from cache.diskcache_factory import DiskCacheProfile, cache_for_kind
 
 if TYPE_CHECKING:
     import pyarrow as pa
+    from diskcache import Cache, FanoutCache
 
     from ibis_engine.execution import IbisExecutionContext
 
@@ -116,6 +119,33 @@ class RuntimeArtifacts:
     schema_cache: dict[str, SchemaLike] = field(default_factory=dict)
     table_metadata: dict[str, MaterializedTable] = field(default_factory=dict)
     execution_order: list[str] = field(default_factory=list)
+    diskcache_profile: DiskCacheProfile | None = None
+    _diskcache: Cache | FanoutCache | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Resolve DiskCache profile defaults after initialization."""
+        if self.diskcache_profile is None and self.execution is not None:
+            runtime = self.execution.ctx.runtime
+            if runtime.datafusion is not None:
+                self.diskcache_profile = runtime.datafusion.diskcache_profile
+
+    def _cache(self) -> Cache | FanoutCache | None:
+        if self._diskcache is not None:
+            return self._diskcache
+        profile = self.diskcache_profile
+        if profile is None:
+            return None
+        cache = cache_for_kind(profile, "runtime")
+        self._diskcache = cache
+        return cache
+
+    @staticmethod
+    def _schema_cache_key(name: str) -> str:
+        return f"runtime_schema:{name}"
+
+    @staticmethod
+    def _metadata_cache_key(name: str) -> str:
+        return f"runtime_metadata:{name}"
 
     def register_view(
         self,
@@ -196,6 +226,14 @@ class RuntimeArtifacts:
             storage_path=spec.storage_path,
         )
         self.table_metadata[name] = metadata
+        cache = self._cache()
+        if cache is not None:
+            cache.set(
+                self._metadata_cache_key(name),
+                metadata,
+                tag=spec.source_task,
+                retry=True,
+            )
         return metadata
 
     def cache_schema(self, name: str, schema: SchemaLike) -> None:
@@ -209,6 +247,14 @@ class RuntimeArtifacts:
             Schema to cache.
         """
         self.schema_cache[name] = schema
+        cache = self._cache()
+        if cache is not None:
+            cache.set(
+                self._schema_cache_key(name),
+                schema,
+                tag=schema_fingerprint(schema),
+                retry=True,
+            )
 
     def get_schema(self, name: str) -> SchemaLike | None:
         """Retrieve a cached schema.
@@ -223,7 +269,18 @@ class RuntimeArtifacts:
         SchemaLike | None
             Cached schema or None if not found.
         """
-        return self.schema_cache.get(name)
+        cached = self.schema_cache.get(name)
+        if cached is not None:
+            return cached
+        cache = self._cache()
+        if cache is None:
+            return None
+        cached = cache.get(self._schema_cache_key(name), default=None, retry=True)
+        if cached is None:
+            return None
+        schema = cast("SchemaLike", cached)
+        self.schema_cache[name] = schema
+        return schema
 
     def record_execution(self, task_name: str) -> None:
         """Record that a task was executed.
@@ -284,6 +341,7 @@ class RuntimeArtifacts:
             schema_cache=dict(self.schema_cache),
             table_metadata=dict(self.table_metadata),
             execution_order=list(self.execution_order),
+            diskcache_profile=self.diskcache_profile,
         )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from cpg.plan_builders import build_cpg_edges_plan, build_cpg_nodes_plan, build_cpg_props_plan
+from cpg.specs import TaskIdentity
 from relspec.task_catalog import TaskBuildContext, TaskCatalog, TaskSpec
 
 if TYPE_CHECKING:
@@ -19,11 +20,13 @@ def cpg_task_catalog() -> TaskCatalog:
     TaskCatalog
         Catalog with task specs for CPG outputs.
     """
-
     cpg_task_priority = 100
     cpg_nodes_task = "cpg.nodes"
     cpg_edges_task = "cpg.edges"
     cpg_props_task = "cpg.props"
+
+    nodes_identity = TaskIdentity(name=cpg_nodes_task, priority=cpg_task_priority)
+    props_identity = TaskIdentity(name=cpg_props_task, priority=cpg_task_priority)
 
     def _build_nodes(context: TaskBuildContext) -> IbisPlan:
         if context.ibis_catalog is None:
@@ -33,8 +36,7 @@ def cpg_task_catalog() -> TaskCatalog:
             context.ibis_catalog,
             context.ctx,
             context.backend,
-            task_name=cpg_nodes_task,
-            task_priority=cpg_task_priority,
+            task_identity=nodes_identity,
         )
 
     def _build_edges(context: TaskBuildContext) -> IbisPlan:
@@ -55,8 +57,7 @@ def cpg_task_catalog() -> TaskCatalog:
             context.ibis_catalog,
             context.ctx,
             context.backend,
-            task_name=cpg_props_task,
-            task_priority=cpg_task_priority,
+            task_identity=props_identity,
         )
 
     tasks = (

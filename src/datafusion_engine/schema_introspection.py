@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
@@ -14,7 +16,11 @@ from datafusion_engine.sql_options import (
 )
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from ibis_engine.schema_utils import sqlglot_column_defs
+from serde_msgspec import dumps_msgpack, to_builtins
 from sqlglot_tools.optimizer import SchemaMapping, schema_map_fingerprint_from_mapping
+
+if TYPE_CHECKING:
+    from diskcache import Cache, FanoutCache
 
 
 def _read_only_sql_options() -> SQLOptions:
@@ -23,6 +29,12 @@ def _read_only_sql_options() -> SQLOptions:
 
 def _statement_sql_options() -> SQLOptions:
     return statement_sql_options_for_profile(None)
+
+
+def _stable_cache_key(prefix: str, payload: Mapping[str, object]) -> str:
+    raw = dumps_msgpack(to_builtins(payload))
+    digest = hashlib.sha256(raw).hexdigest()
+    return f"{prefix}:{digest}"
 
 
 def _table_for_query(
@@ -288,6 +300,47 @@ class SchemaIntrospector:
 
     ctx: SessionContext
     sql_options: SQLOptions | None = None
+    cache: Cache | FanoutCache | None = None
+    cache_prefix: str | None = None
+    cache_ttl: float | None = None
+
+    def _cache_key(self, kind: str, *, payload: Mapping[str, object] | None = None) -> str:
+        key_payload = {
+            "prefix": self.cache_prefix,
+            "kind": kind,
+            "payload": payload or {},
+        }
+        return _stable_cache_key("schema", key_payload)
+
+    def _cached_rows(
+        self,
+        kind: str,
+        *,
+        query: str,
+        prepared_name: str | None = None,
+        sql_options: SQLOptions | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        cache = self.cache
+        if cache is None:
+            return _rows_for_query(
+                self.ctx,
+                query,
+                sql_options=sql_options or self.sql_options,
+                prepared_name=prepared_name,
+            )
+        key = self._cache_key(kind, payload=payload)
+        cached = cache.get(key, default=None, retry=True)
+        if isinstance(cached, list):
+            return cached
+        rows = _rows_for_query(
+            self.ctx,
+            query,
+            sql_options=sql_options or self.sql_options,
+            prepared_name=prepared_name,
+        )
+        cache.set(key, rows, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)
+        return rows
 
     def describe_query(self, sql: str) -> list[dict[str, object]]:
         """Return the computed output schema for a SQL query.
@@ -297,7 +350,12 @@ class SchemaIntrospector:
         list[dict[str, object]]
             ``DESCRIBE`` rows for the query.
         """
-        return _rows_for_query(self.ctx, f"DESCRIBE {sql}", sql_options=self.sql_options)
+        query = f"DESCRIBE {sql}"
+        return self._cached_rows(
+            "describe_query",
+            query=query,
+            payload={"sql": sql},
+        )
 
     def table_columns(self, table_name: str) -> list[dict[str, object]]:
         """Return column metadata from information_schema for a table.
@@ -313,7 +371,11 @@ class SchemaIntrospector:
             "FROM information_schema.columns "
             f"WHERE table_name = {_sql_literal(table_name)}"
         )
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+        return self._cached_rows(
+            "table_columns",
+            query=query,
+            payload={"table_name": table_name},
+        )
 
     def table_columns_with_ordinal(self, table_name: str) -> list[dict[str, object]]:
         """Return ordered column metadata rows for a table.
@@ -330,7 +392,11 @@ class SchemaIntrospector:
             f"WHERE table_name = {_sql_literal(table_name)} "
             "ORDER BY ordinal_position"
         )
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+        return self._cached_rows(
+            "table_columns_with_ordinal",
+            query=query,
+            payload={"table_name": table_name},
+        )
 
     def tables_snapshot(self) -> list[dict[str, object]]:
         """Return table inventory rows from information_schema.
@@ -344,7 +410,7 @@ class SchemaIntrospector:
             "SELECT table_catalog, table_schema, table_name, table_type "
             "FROM information_schema.tables"
         )
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+        return self._cached_rows("tables_snapshot", query=query)
 
     def catalogs_snapshot(self) -> list[dict[str, object]]:
         """Return catalog inventory rows from information_schema.
@@ -355,7 +421,7 @@ class SchemaIntrospector:
             Catalog inventory rows.
         """
         query = "SELECT DISTINCT catalog_name FROM information_schema.schemata"
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+        return self._cached_rows("catalogs_snapshot", query=query)
 
     def schemata_snapshot(self) -> list[dict[str, object]]:
         """Return schema inventory rows from information_schema.
@@ -366,7 +432,7 @@ class SchemaIntrospector:
             Schema inventory rows including catalog and schema names.
         """
         query = "SELECT catalog_name, schema_name FROM information_schema.schemata"
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+        return self._cached_rows("schemata_snapshot", query=query)
 
     def columns_snapshot(self) -> list[dict[str, object]]:
         """Return all column metadata rows from information_schema.
@@ -381,7 +447,7 @@ class SchemaIntrospector:
             "is_nullable, column_default "
             "FROM information_schema.columns"
         )
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+        return self._cached_rows("columns_snapshot", query=query)
 
     def schema_map(self) -> dict[str, dict[str, str]]:
         """Return a SQLGlot schema mapping derived from information_schema.
@@ -430,10 +496,9 @@ class SchemaIntrospector:
             Routine inventory rows including name and type.
         """
         query = "SELECT * FROM information_schema.routines"
-        return _rows_for_query(
-            self.ctx,
-            query,
-            sql_options=self.sql_options,
+        return self._cached_rows(
+            "routines_snapshot",
+            query=query,
             prepared_name="routines_snapshot",
         )
 
@@ -450,10 +515,9 @@ class SchemaIntrospector:
             "data_type, ordinal_position "
             "FROM information_schema.parameters"
         )
-        return _rows_for_query(
-            self.ctx,
-            query,
-            sql_options=self.sql_options,
+        return self._cached_rows(
+            "parameters_snapshot",
+            query=query,
             prepared_name="parameters_snapshot",
         )
 
@@ -535,7 +599,7 @@ class SchemaIntrospector:
             Session settings rows with name/value pairs.
         """
         query = "SELECT name, value FROM information_schema.df_settings"
-        return _rows_for_query(self.ctx, query, sql_options=self.sql_options)
+        return self._cached_rows("settings_snapshot", query=query)
 
     def table_column_defaults(self, table_name: str) -> dict[str, object]:
         """Return column default metadata for a table when available.
@@ -603,10 +667,11 @@ class SchemaIntrospector:
         """
         try:
             sql_options = self.sql_options or _statement_sql_options()
-            rows = _rows_for_query(
-                self.ctx,
-                f"SHOW CREATE TABLE {table_name}",
+            rows = self._cached_rows(
+                "table_definition",
+                query=f"SHOW CREATE TABLE {table_name}",
                 sql_options=sql_options,
+                payload={"table_name": table_name},
             )
         except (RuntimeError, TypeError, ValueError):
             metadata = table_provider_metadata(id(self.ctx), table_name=table_name)
@@ -633,12 +698,14 @@ class SchemaIntrospector:
             Constraint expressions or identifiers.
         """
         try:
-            rows = _rows_for_query(
-                self.ctx,
-                "SELECT constraint_name, constraint_type, constraint_definition "
-                "FROM information_schema.table_constraints "
-                f"WHERE table_name = {_sql_literal(table_name)}",
-                sql_options=self.sql_options,
+            rows = self._cached_rows(
+                "table_constraints",
+                query=(
+                    "SELECT constraint_name, constraint_type, constraint_definition "
+                    "FROM information_schema.table_constraints "
+                    f"WHERE table_name = {_sql_literal(table_name)}"
+                ),
+                payload={"table_name": table_name},
             )
         except (RuntimeError, TypeError, ValueError):
             return ()

@@ -14,6 +14,7 @@ from ibis_engine.sources import DatasetSource
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
+    from relspec.plan_catalog import PlanCatalog
 
 
 @dataclass
@@ -101,6 +102,111 @@ class EvidenceCatalog:
             ``True`` when all sources are available.
         """
         return set(sources).issubset(self.sources)
+
+
+@dataclass
+class EvidenceRequirements:
+    """Aggregated evidence requirements for inferred tasks."""
+
+    sources: set[str] = field(default_factory=set)
+    columns: dict[str, set[str]] = field(default_factory=dict)
+    types: dict[str, dict[str, str]] = field(default_factory=dict)
+    metadata: dict[str, dict[bytes, bytes]] = field(default_factory=dict)
+
+
+def evidence_requirements_from_plan(
+    catalog: PlanCatalog,
+    *,
+    task_names: set[str] | None = None,
+) -> EvidenceRequirements:
+    """Return evidence requirements aggregated from plan artifacts.
+
+    Returns
+    -------
+    EvidenceRequirements
+        Aggregated evidence requirements for the selected tasks.
+    """
+    requirements = EvidenceRequirements()
+    for artifact in catalog.artifacts:
+        if task_names is not None and artifact.task.name not in task_names:
+            continue
+        requirements.sources.update(artifact.deps.inputs)
+        _merge_required_columns(requirements.columns, artifact.deps.required_columns)
+        _merge_required_types(requirements.types, artifact.deps.required_types)
+        _merge_required_metadata(requirements.metadata, artifact.deps.required_metadata)
+    return requirements
+
+
+def initial_evidence_from_plan(
+    catalog: PlanCatalog,
+    *,
+    ctx_id: int | None = None,
+    task_names: set[str] | None = None,
+) -> EvidenceCatalog:
+    """Build initial evidence catalog seeded from plan requirements.
+
+    Returns
+    -------
+    EvidenceCatalog
+        Evidence catalog with known sources registered.
+    """
+    outputs = {
+        artifact.task.output
+        for artifact in catalog.artifacts
+        if task_names is None or artifact.task.name in task_names
+    }
+    requirements = evidence_requirements_from_plan(catalog, task_names=task_names)
+    seed_sources = requirements.sources - outputs
+    evidence = EvidenceCatalog(sources=set(seed_sources))
+    for source in seed_sources:
+        if evidence.register_from_registry(source, ctx_id=ctx_id):
+            continue
+        _seed_evidence_from_requirements(evidence, source, requirements)
+    return evidence
+
+
+def _merge_required_columns(
+    target: dict[str, set[str]],
+    incoming: Mapping[str, tuple[str, ...]],
+) -> None:
+    for source, cols in incoming.items():
+        target.setdefault(source, set()).update(cols)
+
+
+def _merge_required_types(
+    target: dict[str, dict[str, str]],
+    incoming: Mapping[str, tuple[tuple[str, str], ...]],
+) -> None:
+    for source, pairs in incoming.items():
+        types_map = target.setdefault(source, {})
+        for name, dtype in pairs:
+            types_map.setdefault(name, dtype)
+
+
+def _merge_required_metadata(
+    target: dict[str, dict[bytes, bytes]],
+    incoming: Mapping[str, tuple[tuple[bytes, bytes], ...]],
+) -> None:
+    for source, pairs in incoming.items():
+        meta_map = target.setdefault(source, {})
+        for key, value in pairs:
+            meta_map.setdefault(key, value)
+
+
+def _seed_evidence_from_requirements(
+    evidence: EvidenceCatalog,
+    source: str,
+    requirements: EvidenceRequirements,
+) -> None:
+    cols = requirements.columns.get(source)
+    if cols is not None:
+        evidence.columns_by_dataset[source] = set(cols)
+    types = requirements.types.get(source)
+    if types is not None:
+        evidence.types_by_dataset[source] = dict(types)
+    metadata = requirements.metadata.get(source)
+    if metadata is not None:
+        evidence.metadata_by_dataset[source] = dict(metadata)
 
 
 def _schema_from_source(source: object) -> SchemaLike | None:
@@ -205,4 +311,9 @@ def _schema_metadata(schema: SchemaLike) -> dict[bytes, bytes]:
     return dict(metadata)
 
 
-__all__ = ["EvidenceCatalog"]
+__all__ = [
+    "EvidenceCatalog",
+    "EvidenceRequirements",
+    "evidence_requirements_from_plan",
+    "initial_evidence_from_plan",
+]

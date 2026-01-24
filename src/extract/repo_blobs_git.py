@@ -41,8 +41,9 @@ def read_blob_at_ref(
         commit = obj.peel(pygit2.Commit)
     except (KeyError, ValueError, pygit2.GitError):
         return None
-    entry = commit.tree.get(path_posix)
-    if entry is None:
+    try:
+        entry = commit.tree[path_posix]
+    except KeyError:
         return None
     try:
         blob = repo[entry.id]

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
 
-from hamilton.function_modifiers import tag
+from hamilton.function_modifiers import cache, tag
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.determinism import DeterminismTier
@@ -21,6 +21,7 @@ from engine.session import EngineSession
 from engine.session_factory import build_engine_session
 from extract.repo_scan import default_repo_scan_options, repo_scan_globs_from_options
 from extract.scip_extract import ScipExtractOptions, SCIPParseOptions
+from hamilton_pipeline.lifecycle import get_hamilton_diagnostics_collector
 from hamilton_pipeline.pipeline_types import (
     OutputConfig,
     OutputStoragePolicy,
@@ -115,6 +116,7 @@ def runtime_profile_spec(
     return resolve_runtime_profile(runtime_profile_name, determinism=determinism_override)
 
 
+@cache(behavior="ignore")
 @tag(layer="inputs", kind="runtime")
 def ctx(runtime_profile_spec: RuntimeProfileSpec) -> ExecutionContext:
     """Build the execution context for Arrow DSL execution.
@@ -129,6 +131,7 @@ def ctx(runtime_profile_spec: RuntimeProfileSpec) -> ExecutionContext:
     return ExecutionContext(runtime=runtime)
 
 
+@cache(behavior="ignore")
 @tag(layer="inputs", kind="runtime")
 def diagnostics_collector() -> DiagnosticsCollector:
     """Return a diagnostics collector for the run.
@@ -138,9 +141,11 @@ def diagnostics_collector() -> DiagnosticsCollector:
     DiagnosticsCollector
         Collector for diagnostics events and artifacts.
     """
-    return DiagnosticsCollector()
+    collector = get_hamilton_diagnostics_collector()
+    return collector if collector is not None else DiagnosticsCollector()
 
 
+@cache(behavior="ignore")
 @tag(layer="inputs", kind="runtime")
 def engine_session(
     ctx: ExecutionContext,
@@ -177,6 +182,7 @@ def ibis_backend_config(engine_session: EngineSession) -> IbisBackendConfig:
     return engine_session.engine_runtime.ibis_config
 
 
+@cache(behavior="ignore")
 @tag(layer="inputs", kind="runtime")
 def ibis_backend(engine_session: EngineSession) -> BaseBackend:
     """Return a configured Ibis backend for pipeline execution.
@@ -189,6 +195,7 @@ def ibis_backend(engine_session: EngineSession) -> BaseBackend:
     return engine_session.ibis_backend
 
 
+@cache(behavior="ignore")
 @tag(layer="inputs", kind="runtime")
 def ibis_execution(
     engine_session: EngineSession,
@@ -208,6 +215,7 @@ def ibis_execution(
     )
 
 
+@cache(behavior="ignore")
 @tag(layer="inputs", kind="runtime")
 def streaming_table_provider(incremental_config: IncrementalConfig) -> object | None:
     """Return an optional streaming table provider (placeholder).
@@ -501,19 +509,6 @@ def overwrite_intermediate_datasets() -> bool:
         True to delete and rewrite intermediate datasets.
     """
     return True
-
-
-@tag(layer="inputs", kind="scalar")
-def hamilton_tags() -> JsonDict:
-    """Return optional metadata tags for introspection.
-
-    Returns
-    -------
-    JsonDict
-        Optional tag metadata.
-    """
-    tags: JsonDict = {}
-    return tags
 
 
 @tag(layer="inputs", kind="object")

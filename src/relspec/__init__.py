@@ -41,8 +41,13 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
         "ready_tasks_with_column_validation",
     ),
     "task_graph_diagnostics": ("relspec.rustworkx_graph", "task_graph_diagnostics"),
+    "task_graph_impact_subgraph": ("relspec.rustworkx_graph", "task_graph_impact_subgraph"),
+    "task_graph_isolate_labels": ("relspec.rustworkx_graph", "task_graph_isolate_labels"),
+    "task_graph_node_label": ("relspec.rustworkx_graph", "task_graph_node_label"),
+    "task_graph_node_link_json": ("relspec.rustworkx_graph", "task_graph_node_link_json"),
     "task_graph_signature": ("relspec.rustworkx_graph", "task_graph_signature"),
     "task_graph_snapshot": ("relspec.rustworkx_graph", "task_graph_snapshot"),
+    "task_graph_subgraph": ("relspec.rustworkx_graph", "task_graph_subgraph"),
     "task_schedule_metadata": ("relspec.rustworkx_schedule", "task_schedule_metadata"),
     "schedule_tasks": ("relspec.rustworkx_schedule", "schedule_tasks"),
     "task_graph_from_catalog": ("relspec.graph_inference", "task_graph_from_catalog"),
@@ -87,8 +92,13 @@ if TYPE_CHECKING:
     provenance_for_task: Any
     ready_tasks_with_column_validation: Any
     task_graph_diagnostics: Any
+    task_graph_impact_subgraph: Any
+    task_graph_isolate_labels: Any
+    task_graph_node_label: Any
+    task_graph_node_link_json: Any
     task_graph_signature: Any
     task_graph_snapshot: Any
+    task_graph_subgraph: Any
     task_schedule_metadata: Any
     schedule_tasks: Any
     task_graph_from_catalog: Any
@@ -145,8 +155,13 @@ __all__ = (
     "schedule_tasks",
     "task_graph_diagnostics",
     "task_graph_from_catalog",
+    "task_graph_impact_subgraph",
+    "task_graph_isolate_labels",
+    "task_graph_node_label",
+    "task_graph_node_link_json",
     "task_graph_signature",
     "task_graph_snapshot",
+    "task_graph_subgraph",
     "task_schedule_metadata",
     "validate_edge_requirements",
     "validate_edge_requirements_detailed",

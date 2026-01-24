@@ -32,7 +32,6 @@ from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_table
 from arrowdsl.schema.validation import ArrowValidationOptions
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.specs import TableSchemaSpec
@@ -494,6 +493,7 @@ def _raise_on_errors_if_strict(
 
 def _error_code_counts_table(errors: TableLike) -> pa.Table:
     from datafusion_engine.bridge import datafusion_from_arrow
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     ctx = DataFusionRuntimeProfile().ephemeral_context()
     datafusion_from_arrow(ctx, name="errors", value=errors)

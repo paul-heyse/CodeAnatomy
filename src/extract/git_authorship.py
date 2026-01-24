@@ -70,7 +70,12 @@ def blame_hunks(
     mailmap = resolve_mailmap(repo)
     hunks: list[BlameHunk] = []
     for hunk in blame:
-        author = hunk.final_signature
+        signature = getattr(hunk, "final_signature", None)
+        if not isinstance(signature, pygit2.Signature):
+            signature = getattr(hunk, "orig_signature", None)
+        if not isinstance(signature, pygit2.Signature):
+            signature = pygit2.Signature("unknown", "unknown")
+        author = signature
         if mailmap is not None:
             author = mailmap.resolve_signature(author)
         hunks.append(

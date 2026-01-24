@@ -33,7 +33,6 @@ from arrowdsl.schema.schema import (
     required_field_names,
     required_non_null_mask,
 )
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import table_constraint_rows
 
 
@@ -203,6 +202,8 @@ def _resolve_key_fields(
 
 @lru_cache(maxsize=128)
 def _datafusion_type_name(dtype: DataTypeLike) -> str:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
     ctx = DataFusionRuntimeProfile().ephemeral_context()
     table = pa.Table.from_arrays(
         [pa.array([None], type=dtype)],

@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, TypedDict, cast
 
 from diskcache import Cache, Deque, FanoutCache, Index
 
@@ -77,6 +77,17 @@ class DiskCacheSettings:
                 "sqlite_synchronous": self.sqlite_synchronous,
             }
         )
+
+
+class DiskCacheKwargs(TypedDict, total=False):
+    cull_limit: int
+    eviction_policy: str
+    statistics: bool
+    tag_index: bool
+    disk_min_file_size: int
+    sqlite_journal_mode: str
+    sqlite_mmap_size: int
+    sqlite_synchronous: str
 
 @dataclass(frozen=True)
 class DiskCacheProfile:
@@ -352,8 +363,8 @@ def _stats_mapping(stats: object) -> dict[str, object]:
     return {}
 
 
-def _settings_kwargs(settings: DiskCacheSettings) -> dict[str, object]:
-    kwargs: dict[str, object] = {
+def _settings_kwargs(settings: DiskCacheSettings) -> DiskCacheKwargs:
+    kwargs: DiskCacheKwargs = {
         "cull_limit": settings.cull_limit,
         "eviction_policy": settings.eviction_policy,
         "statistics": settings.statistics,
@@ -436,8 +447,8 @@ def build_index(profile: DiskCacheProfile, *, name: str) -> Index:
 
 
 __all__ = [
-    "DiskCacheMaintenance",
     "DiskCacheKind",
+    "DiskCacheMaintenance",
     "DiskCacheProfile",
     "DiskCacheSettings",
     "build_deque",

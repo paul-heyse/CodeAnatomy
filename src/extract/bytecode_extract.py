@@ -17,10 +17,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.schema.serialization import schema_fingerprint
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from extract.cache_utils import (
+    CacheSetOptions,
     cache_for_extract,
     cache_get,
     cache_lock,
@@ -1463,8 +1464,10 @@ def _bytecode_row_from_context(
             cache,
             key=cache_key,
             value=BytecodeCacheResult(code_objects=code_objects, errors=errors),
-            expire=cache_ttl,
-            tag=options.repo_id,
+            options=CacheSetOptions(
+                expire=cache_ttl,
+                tag=options.repo_id,
+            ),
         )
     return _bytecode_row_payload(
         bc_ctx.file_ctx,

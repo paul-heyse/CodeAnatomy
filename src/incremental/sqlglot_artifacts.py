@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
 from cache.diskcache_factory import cache_for_kind
-from datafusion_engine.schema_introspection import schema_map_snapshot
+from datafusion_engine.schema_introspection import SchemaMapCacheOptions, schema_map_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from incremental.runtime import IncrementalRuntime
 from sqlglot_tools.bridge import (
@@ -76,13 +76,20 @@ def record_sqlglot_plan_artifact(
         else None
     )
     cache_ttl = cache_profile.ttl_for("schema") if cache_profile is not None else None
+    cache_options = (
+        SchemaMapCacheOptions(
+            cache=cache,
+            key=cache_key,
+            ttl=cache_ttl,
+            tag=runtime.profile.context_cache_key(),
+        )
+        if cache is not None and cache_key is not None
+        else None
+    )
     schema_map, schema_map_hash = schema_map_snapshot(
         runtime.session_context(),
         sql_options=sql_options_for_profile(runtime.profile),
-        cache=cache,
-        cache_key=cache_key,
-        cache_ttl=cache_ttl,
-        cache_tag=runtime.profile.context_cache_key(),
+        cache_options=cache_options,
     )
     artifacts = collect_sqlglot_plan_artifacts(
         expr,

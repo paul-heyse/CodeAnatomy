@@ -18,6 +18,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from extract.cache_utils import (
+    CacheSetOptions,
     cache_for_extract,
     cache_get,
     cache_lock,
@@ -950,8 +951,10 @@ def _extract_ast_for_context(
                     cache,
                     key=cache_key_str,
                     value=walk,
-                    expire=cache_ttl,
-                    tag=options.repo_id,
+                    options=CacheSetOptions(
+                        expire=cache_ttl,
+                        tag=options.repo_id,
+                    ),
                 )
         return _ast_row_from_walk(file_ctx, options=options, walk=walk, errors=error_rows)
 

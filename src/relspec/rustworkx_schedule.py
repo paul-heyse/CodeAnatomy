@@ -50,7 +50,6 @@ def schedule_tasks(
     seed_nodes = _seed_nodes(graph, working.sources)
     sorter = _make_sorter(graph, seed_nodes=seed_nodes)
     ordered: list[str] = []
-    generations: list[tuple[str, ...]] = []
     visited_tasks: set[str] = set()
     while sorter.is_active():
         ready = list(sorter.get_ready())
@@ -75,12 +74,11 @@ def schedule_tasks(
             output_schema_for=output_schema_for,
         )
         sorter.done([*ready_evidence, *[graph.task_idx[task.name] for task in valid_tasks]])
-        if valid_tasks:
-            generations.append(tuple(task.name for task in valid_tasks))
     missing = tuple(sorted(set(graph.task_idx) - visited_tasks))
     if missing and not allow_partial:
         msg = f"Task graph cannot resolve evidence for: {list(missing)}."
         raise RelspecValidationError(msg)
+    generations = _task_generations(graph, visited_tasks=visited_tasks)
     return TaskSchedule(
         ordered_tasks=tuple(ordered),
         generations=tuple(generations),
@@ -254,6 +252,92 @@ def _has_task_predecessor(graph: TaskGraph, node_idx: int) -> bool:
         if pred.kind == "task":
             return True
     return False
+
+
+def _task_generations(
+    graph: TaskGraph,
+    *,
+    visited_tasks: set[str],
+) -> tuple[tuple[str, ...], ...]:
+    dependency_graph = _task_dependency_graph(graph)
+    if dependency_graph.num_nodes() == 0:
+        return ()
+    generations = rx.topological_generations(dependency_graph)
+    output: list[tuple[str, ...]] = []
+    for generation in generations:
+        payloads: list[TaskNode] = []
+        for node_idx in generation:
+            node = dependency_graph[node_idx]
+            if not isinstance(node, TaskNode):
+                continue
+            if node.name not in visited_tasks:
+                continue
+            payloads.append(node)
+        payloads.sort(key=lambda task: (task.priority, task.name))
+        if payloads:
+            output.append(tuple(task.name for task in payloads))
+    return tuple(output)
+
+
+def _task_dependency_graph(graph: TaskGraph) -> rx.PyDiGraph:
+    tasks: list[TaskNode] = []
+    for name in sorted(graph.task_idx):
+        node_idx = graph.task_idx[name]
+        node = graph.graph[node_idx]
+        if node.kind != "task":
+            continue
+        payload = node.payload
+        if not isinstance(payload, TaskNode):
+            msg = "Expected TaskNode payload for task graph node."
+            raise TypeError(msg)
+        tasks.append(payload)
+    dependency_edges = _task_dependency_edges(graph)
+    dep_graph = rx.PyDiGraph(
+        multigraph=False,
+        check_cycle=False,
+        node_count_hint=len(tasks),
+        edge_count_hint=len(dependency_edges),
+    )
+    node_indices = dep_graph.add_nodes_from(tasks)
+    task_idx = dict(zip([task.name for task in tasks], node_indices, strict=True))
+    edge_payloads: list[tuple[int, int, tuple[str, ...]]] = []
+    for (source, target), evidence_names in dependency_edges.items():
+        source_idx = task_idx.get(source)
+        target_idx = task_idx.get(target)
+        if source_idx is None or target_idx is None:
+            continue
+        edge_payloads.append((source_idx, target_idx, tuple(sorted(evidence_names))))
+    dep_graph.add_edges_from(edge_payloads)
+    return dep_graph
+
+
+def _task_dependency_edges(graph: TaskGraph) -> dict[tuple[str, str], set[str]]:
+    edges: dict[tuple[str, str], set[str]] = {}
+    for evidence_name, evidence_idx in graph.evidence_idx.items():
+        producers = _task_neighbors(graph, graph.graph.predecessor_indices(evidence_idx))
+        consumers = _task_neighbors(graph, graph.graph.successor_indices(evidence_idx))
+        if not producers or not consumers:
+            continue
+        for producer in producers:
+            for consumer in consumers:
+                if producer == consumer:
+                    continue
+                edges.setdefault((producer, consumer), set()).add(evidence_name)
+    return edges
+
+
+def _task_neighbors(graph: TaskGraph, nodes: Iterable[int]) -> list[str]:
+    names: list[str] = []
+    for idx in nodes:
+        node = graph.graph[idx]
+        if node.kind != "task":
+            continue
+        payload = node.payload
+        if not isinstance(payload, TaskNode):
+            msg = "Expected TaskNode payload for task graph node."
+            raise TypeError(msg)
+        names.append(payload.name)
+    return sorted(set(names))
 
 
 __all__ = [

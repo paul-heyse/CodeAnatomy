@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 from diskcache import memoize_stampede, throttle
 
@@ -39,6 +39,9 @@ from extract.session import ExtractSession
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec
 from serde_msgspec import to_builtins
+
+if TYPE_CHECKING:
+    from diskcache import Cache, FanoutCache
 
 SCHEMA_VERSION = 1
 
@@ -422,75 +425,22 @@ def scan_repo_plan(
     repo_root_path = ensure_path(repo_root).resolve()
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
     cache_profile = diskcache_profile_from_ctx(session.exec_ctx)
-    cache = cache_for_kind_optional(cache_profile, "repo_scan")
-    coord_cache = cache_for_kind_optional(cache_profile, "coordination")
-    cache_ttl = cache_ttl_seconds(cache_profile, "repo_scan")
-    cache_key = None
-    if cache is not None:
-        cache_key = stable_cache_key(
-            "repo_scan",
-            {
-                "repo_root": str(repo_root_path),
-                "schema_fingerprint": schema_fingerprint(dataset_schema("repo_files_v1")),
-                "options": to_builtins(options),
-            },
-        )
-
-    def iter_rows() -> Iterator[dict[str, object]]:
-        count = 0
-        for rel in sorted(iter_repo_files(repo_root_path, options), key=lambda p: p.as_posix()):
-            row = _build_repo_file_row(rel=rel, repo_root=repo_root_path, options=options)
-            if row is None:
-                continue
-            yield row
-            count += 1
-            if options.max_files is not None and count >= options.max_files:
-                break
-
-    def _compute_rows() -> list[dict[str, object]]:
-        rows = list(iter_rows())
-        _record_repo_blame(
-            repo_root_path,
-            rows,
-            options=options,
-            session=session,
-        )
-        return rows
-
-    if coord_cache is not None and cache_key is not None:
-        @throttle(
-            coord_cache,
-            count=1,
-            seconds=5,
-            name=f"repo_scan:{cache_key}",
-            expire=cache_ttl,
-        )
-        def _throttled_rows() -> list[dict[str, object]]:
-            return _compute_rows()
-        compute_rows = _throttled_rows
-    else:
-        compute_rows = _compute_rows
-
-    if cache is None or cache_key is None:
-        rows = compute_rows()
-        return extract_plan_from_rows(
-            "repo_files_v1",
-            rows,
-            session=session,
-            options=ExtractPlanOptions(normalize=normalize),
-        )
-
-    @memoize_stampede(
-        cache,
-        expire=cache_ttl,
-        tag=options.repo_id,
-        name="repo_scan",
+    cache_options = RepoScanCacheOptions(
+        cache=cache_for_kind_optional(cache_profile, "repo_scan"),
+        coord_cache=cache_for_kind_optional(cache_profile, "coordination"),
+        cache_key=None,
+        cache_ttl=cache_ttl_seconds(cache_profile, "repo_scan"),
     )
-    def _cached_scan(key: str) -> list[dict[str, object]]:
-        _ = key
-        return compute_rows()
-
-    rows = _cached_scan(cache_key)
+    cache_options = _with_repo_scan_cache_key(
+        cache_options,
+        repo_root_path,
+        options=options,
+    )
+    rows = _load_repo_scan_rows(
+        repo_root_path,
+        options=options,
+        cache_options=cache_options,
+    )
     _record_repo_blame(
         repo_root_path,
         rows,
@@ -503,6 +453,103 @@ def scan_repo_plan(
         session=session,
         options=ExtractPlanOptions(normalize=normalize),
     )
+
+
+@dataclass(frozen=True)
+class RepoScanCacheOptions:
+    """Cache options for repository scanning."""
+
+    cache: Cache | FanoutCache | None
+    coord_cache: Cache | FanoutCache | None
+    cache_key: str | None
+    cache_ttl: float | None
+
+
+def _with_repo_scan_cache_key(
+    cache_options: RepoScanCacheOptions,
+    repo_root_path: Path,
+    *,
+    options: RepoScanOptions,
+) -> RepoScanCacheOptions:
+    if cache_options.cache is None:
+        return cache_options
+    cache_key = stable_cache_key(
+        "repo_scan",
+        {
+            "repo_root": str(repo_root_path),
+            "schema_fingerprint": schema_fingerprint(dataset_schema("repo_files_v1")),
+            "options": to_builtins(options),
+        },
+    )
+    return replace(cache_options, cache_key=cache_key)
+
+
+def _load_repo_scan_rows(
+    repo_root_path: Path,
+    *,
+    options: RepoScanOptions,
+    cache_options: RepoScanCacheOptions,
+) -> list[dict[str, object]]:
+    compute_rows = _select_row_loader(
+        repo_root_path,
+        options=options,
+        cache_options=cache_options,
+    )
+    if cache_options.cache is None or cache_options.cache_key is None:
+        return compute_rows()
+
+    @memoize_stampede(
+        cache_options.cache,
+        expire=cache_options.cache_ttl,
+        tag=options.repo_id,
+        name="repo_scan",
+    )
+    def _cached_scan(key: str) -> list[dict[str, object]]:
+        _ = key
+        return compute_rows()
+
+    return _cached_scan(cache_options.cache_key)
+
+
+def _select_row_loader(
+    repo_root_path: Path,
+    *,
+    options: RepoScanOptions,
+    cache_options: RepoScanCacheOptions,
+) -> Callable[[], list[dict[str, object]]]:
+    def _compute_rows() -> list[dict[str, object]]:
+        return list(_iter_repo_scan_rows(repo_root_path, options=options))
+
+    if cache_options.coord_cache is None or cache_options.cache_key is None:
+        return _compute_rows
+
+    @throttle(
+        cache_options.coord_cache,
+        count=1,
+        seconds=5,
+        name=f"repo_scan:{cache_options.cache_key}",
+        expire=cache_options.cache_ttl,
+    )
+    def _throttled_rows() -> list[dict[str, object]]:
+        return _compute_rows()
+
+    return _throttled_rows
+
+
+def _iter_repo_scan_rows(
+    repo_root_path: Path,
+    *,
+    options: RepoScanOptions,
+) -> Iterator[dict[str, object]]:
+    count = 0
+    for rel in sorted(iter_repo_files(repo_root_path, options), key=lambda p: p.as_posix()):
+        row = _build_repo_file_row(rel=rel, repo_root=repo_root_path, options=options)
+        if row is None:
+            continue
+        yield row
+        count += 1
+        if options.max_files is not None and count >= options.max_files:
+            break
 
 
 @dataclass

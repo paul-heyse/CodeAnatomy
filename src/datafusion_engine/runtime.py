@@ -4891,7 +4891,7 @@ def run_diskcache_maintenance(
         kinds=kinds,
         include_check=include_check,
     )
-    payloads = [
+    payloads: list[dict[str, object]] = [
         {
             "kind": result.kind,
             "expired": result.expired,
@@ -5484,8 +5484,8 @@ __all__ = [
     "feature_state_snapshot",
     "read_delta_as_reader",
     "register_view_specs",
-    "snapshot_plans",
     "run_diskcache_maintenance",
+    "snapshot_plans",
     "sql_options_for_profile",
     "statement_sql_options_for_profile",
 ]

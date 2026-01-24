@@ -2,37 +2,37 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-import rustworkx as rx
-from hamilton.function_modifiers import tag
+from hamilton.function_modifiers import pipe_input, source, step, tag
+from hamilton.htypes import Collect, Parallelizable
 
 from arrowdsl.core.interop import TableLike as ArrowTableLike
 from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.serialization import schema_fingerprint
-from cpg.schemas import CPG_EDGES_CONTRACT, CPG_NODES_CONTRACT, CPG_PROPS_CONTRACT
 from datafusion_engine.finalize import Contract, normalize_only
-from relspec.evidence import EvidenceCatalog
+from relspec.evidence import EvidenceCatalog, initial_evidence_from_plan
 from relspec.execution import TaskExecutionRequest, execute_plan_artifact
-from relspec.graph_inference import TaskGraph
 from relspec.plan_catalog import PlanArtifact, PlanCatalog
 from relspec.runtime_artifacts import MaterializedTableSpec, RuntimeArtifacts, TableLike
-from relspec.rustworkx_graph import GraphNode, TaskNode
-from relspec.rustworkx_schedule import schedule_tasks
+from relspec.rustworkx_graph import task_graph_impact_subgraph
 
 if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
     from ibis_engine.execution import IbisExecutionContext
+    from relspec.graph_inference import TaskGraph
     from relspec.incremental import IncrementalDiff
 
 
 @dataclass(frozen=True)
-class TaskExecutionResults:
-    """Collected outputs from task execution."""
+class TaskExecutionInputs:
+    """Shared inputs for task execution."""
 
-    outputs: Mapping[str, TableLike]
+    plan_catalog: PlanCatalog
+    runtime: RuntimeArtifacts
+    evidence: EvidenceCatalog
 
 
 def _finalize_cpg_table(
@@ -47,88 +47,34 @@ def _finalize_cpg_table(
     return normalize_only(cast("ArrowTableLike", table), contract=contract, ctx=ctx)
 
 
-@dataclass(frozen=True)
-class TaskRequirements:
-    """Aggregated dependency requirements for task scheduling."""
+@tag(layer="execution", artifact="cpg_nodes_finalize", kind="stage")
+def _finalize_cpg_nodes_stage(table: TableLike, ctx: ExecutionContext) -> TableLike:
+    from cpg.schemas import CPG_NODES_CONTRACT
 
-    sources: set[str]
-    columns: dict[str, set[str]]
-    types: dict[str, dict[str, str]]
-    metadata: dict[str, dict[bytes, bytes]]
+    return _finalize_cpg_table(table, contract=CPG_NODES_CONTRACT, ctx=ctx)
 
 
-def _initial_evidence(catalog: PlanCatalog, *, ctx_id: int | None = None) -> EvidenceCatalog:
-    outputs = {artifact.task.output for artifact in catalog.artifacts}
-    requirements = _collect_task_requirements(catalog)
-    seed_sources = requirements.sources - outputs
-    evidence = EvidenceCatalog(sources=set(seed_sources))
-    for source in seed_sources:
-        if evidence.register_from_registry(source, ctx_id=ctx_id):
-            continue
-        _seed_evidence_from_requirements(evidence, source, requirements)
-    return evidence
+@tag(layer="execution", artifact="cpg_edges_finalize", kind="stage")
+def _finalize_cpg_edges_stage(table: TableLike, ctx: ExecutionContext) -> TableLike:
+    from cpg.schemas import CPG_EDGES_CONTRACT
+
+    return _finalize_cpg_table(table, contract=CPG_EDGES_CONTRACT, ctx=ctx)
 
 
-def _collect_task_requirements(catalog: PlanCatalog) -> TaskRequirements:
-    required_sources: set[str] = set()
-    required_columns: dict[str, set[str]] = {}
-    required_types: dict[str, dict[str, str]] = {}
-    required_metadata: dict[str, dict[bytes, bytes]] = {}
-    for artifact in catalog.artifacts:
-        required_sources.update(artifact.deps.inputs)
-        _merge_required_columns(required_columns, artifact.deps.required_columns)
-        _merge_required_types(required_types, artifact.deps.required_types)
-        _merge_required_metadata(required_metadata, artifact.deps.required_metadata)
-    return TaskRequirements(
-        sources=required_sources,
-        columns=required_columns,
-        types=required_types,
-        metadata=required_metadata,
-    )
+@tag(layer="execution", artifact="cpg_props_finalize", kind="stage")
+def _finalize_cpg_props_stage(table: TableLike, ctx: ExecutionContext) -> TableLike:
+    from cpg.schemas import CPG_PROPS_CONTRACT
+
+    return _finalize_cpg_table(table, contract=CPG_PROPS_CONTRACT, ctx=ctx)
 
 
-def _merge_required_columns(
-    target: dict[str, set[str]],
-    incoming: Mapping[str, tuple[str, ...]],
-) -> None:
-    for source, cols in incoming.items():
-        target.setdefault(source, set()).update(cols)
-
-
-def _merge_required_types(
-    target: dict[str, dict[str, str]],
-    incoming: Mapping[str, tuple[tuple[str, str], ...]],
-) -> None:
-    for source, pairs in incoming.items():
-        types_map = target.setdefault(source, {})
-        for name, dtype in pairs:
-            types_map.setdefault(name, dtype)
-
-
-def _merge_required_metadata(
-    target: dict[str, dict[bytes, bytes]],
-    incoming: Mapping[str, tuple[tuple[bytes, bytes], ...]],
-) -> None:
-    for source, pairs in incoming.items():
-        meta_map = target.setdefault(source, {})
-        for key, value in pairs:
-            meta_map.setdefault(key, value)
-
-
-def _seed_evidence_from_requirements(
-    evidence: EvidenceCatalog,
-    source: str,
-    requirements: TaskRequirements,
-) -> None:
-    cols = requirements.columns.get(source)
-    if cols is not None:
-        evidence.columns_by_dataset[source] = set(cols)
-    types = requirements.types.get(source)
-    if types is not None:
-        evidence.types_by_dataset[source] = dict(types)
-    metadata = requirements.metadata.get(source)
-    if metadata is not None:
-        evidence.metadata_by_dataset[source] = dict(metadata)
+def _initial_evidence(
+    catalog: PlanCatalog,
+    *,
+    ctx_id: int | None = None,
+    task_names: set[str] | None = None,
+) -> EvidenceCatalog:
+    return initial_evidence_from_plan(catalog, ctx_id=ctx_id, task_names=task_names)
 
 
 def _artifact_by_task(catalog: PlanCatalog) -> dict[str, PlanArtifact]:
@@ -157,89 +103,201 @@ def _record_output(
     )
 
 
-@tag(layer="execution", artifact="task_outputs", kind="bundle")
-def task_outputs(
-    plan_catalog: PlanCatalog,
-    task_graph: TaskGraph,
-    _ctx: ExecutionContext,
+@tag(layer="execution", artifact="runtime_artifacts", kind="context")
+def runtime_artifacts(
     ibis_execution: IbisExecutionContext,
-    incremental_plan_diff: IncrementalDiff | None = None,
-) -> TaskExecutionResults:
-    """Execute tasks in inferred order and return output tables.
+) -> RuntimeArtifacts:
+    """Return the runtime artifacts container for task execution.
 
     Returns
     -------
-    TaskExecutionResults
-        Output tables keyed by dataset name.
+    RuntimeArtifacts
+        Runtime artifacts container.
+    """
+    return RuntimeArtifacts(execution=ibis_execution)
+
+
+@tag(layer="execution", artifact="task_execution_inputs", kind="context")
+def task_execution_inputs(
+    plan_catalog: PlanCatalog,
+    runtime_artifacts: RuntimeArtifacts,
+    evidence_catalog: EvidenceCatalog,
+) -> TaskExecutionInputs:
+    """Bundle shared execution inputs for per-task nodes.
+
+    Returns
+    -------
+    TaskExecutionInputs
+        Bundled inputs for task execution.
+    """
+    return TaskExecutionInputs(
+        plan_catalog=plan_catalog,
+        runtime=runtime_artifacts,
+        evidence=evidence_catalog,
+    )
+
+
+@tag(layer="execution", artifact="evidence_catalog", kind="catalog")
+def evidence_catalog(
+    plan_catalog: PlanCatalog,
+    ibis_execution: IbisExecutionContext,
+) -> EvidenceCatalog:
+    """Return an initialized EvidenceCatalog for task execution.
+
+    Returns
+    -------
+    EvidenceCatalog
+        Evidence catalog seeded from plan requirements.
     """
     df_profile = ibis_execution.ctx.runtime.datafusion
     ctx_id = id(df_profile.session_context()) if df_profile is not None else None
-    evidence = _initial_evidence(plan_catalog, ctx_id=ctx_id)
-    runtime = RuntimeArtifacts(execution=ibis_execution)
-    schedule = schedule_tasks(
-        task_graph,
-        evidence=evidence,
-        allow_partial=True,
-    )
-    by_task = _artifact_by_task(plan_catalog)
-    allowed_tasks = allowed_task_names(task_graph, incremental_plan_diff)
-    outputs: dict[str, TableLike] = {}
-    for task_name in schedule.ordered_tasks:
-        if allowed_tasks is not None and task_name not in allowed_tasks:
-            continue
-        artifact = by_task.get(task_name)
-        if artifact is None:
-            continue
-        table = execute_plan_artifact(TaskExecutionRequest(artifact=artifact, runtime=runtime))
-        _record_output(
-            artifact,
-            table=table,
-            outputs=outputs,
-            evidence=evidence,
-            runtime=runtime,
-        )
-    return TaskExecutionResults(outputs=outputs)
+    return _initial_evidence(plan_catalog, ctx_id=ctx_id)
 
 
-def allowed_task_names(
+def task_graph_for_diff(
     task_graph: TaskGraph,
     diff: IncrementalDiff | None,
-) -> set[str] | None:
-    """Return allowed task names based on an incremental diff.
+) -> TaskGraph:
+    """Return the execution graph for an incremental diff.
 
     Returns
     -------
-    set[str] | None
-        Allowed task names when diff is provided, otherwise ``None``.
+    TaskGraph
+        Impact subgraph when diff is provided, otherwise the full graph.
     """
     if diff is None:
-        return None
+        return task_graph
     changed = (*diff.changed_tasks, *diff.added_tasks)
     if not changed:
-        return None
-    graph = task_graph.graph
-    allowed: set[str] = set()
-    for name in changed:
-        idx = task_graph.task_idx.get(name)
-        if idx is None:
+        return task_graph
+    return task_graph_impact_subgraph(task_graph, task_names=changed)
+
+
+def execute_task_from_catalog(
+    *,
+    inputs: TaskExecutionInputs,
+    task_name: str,
+    task_output: str,
+    dependencies: Sequence[TableLike],
+) -> TableLike:
+    """Execute a single plan artifact from a catalog.
+
+    Returns
+    -------
+    TableLike
+        Materialized table output.
+
+    Raises
+    ------
+    KeyError
+        Raised when the task artifact is missing from the catalog.
+    """
+    _touch_dependencies(dependencies)
+    plan_catalog = inputs.plan_catalog
+    runtime = inputs.runtime
+    evidence = inputs.evidence
+    existing = runtime.materialized_tables.get(task_output)
+    if existing is not None:
+        if task_output not in evidence.sources:
+            evidence.register(task_output, existing.schema)
+        return existing
+    by_task = plan_catalog.by_task()
+    artifact = by_task.get(task_name)
+    if artifact is None:
+        msg = f"Missing plan artifact for task {task_name!r}."
+        raise KeyError(msg)
+    table = execute_plan_artifact(TaskExecutionRequest(artifact=artifact, runtime=runtime))
+    outputs: dict[str, TableLike] = {}
+    _record_output(
+        artifact,
+        table=table,
+        outputs=outputs,
+        evidence=evidence,
+        runtime=runtime,
+    )
+    return outputs.get(task_output, table)
+
+
+def _touch_dependencies(dependencies: Sequence[TableLike]) -> int:
+    return len(dependencies)
+
+
+@tag(layer="execution", artifact="task_generation_wave", kind="parallel")
+def task_generation_wave(
+    task_generations: tuple[tuple[str, ...], ...],
+) -> Parallelizable[tuple[str, ...]]:
+    """Yield task generations for dynamic execution.
+
+    Yields
+    ------
+    tuple[str, ...]
+        Task names for a single generation wave.
+    """
+    yield from task_generations
+
+
+@tag(layer="execution", artifact="generation_outputs", kind="parallel")
+def generation_outputs(
+    task_generation_wave: tuple[str, ...],
+    task_execution_inputs: TaskExecutionInputs,
+) -> list[TableLike]:
+    """Execute a generation of tasks sequentially and return outputs.
+
+    Returns
+    -------
+    list[TableLike]
+        Outputs produced for the generation.
+    """
+    outputs: list[TableLike] = []
+    by_task = task_execution_inputs.plan_catalog.by_task()
+    for task_name in task_generation_wave:
+        artifact = by_task.get(task_name)
+        if artifact is None:
             continue
-        allowed.add(name)
-        impacted = rx.ancestors(graph, idx) | rx.descendants(graph, idx)
-        for node_idx in impacted:
-            node = graph[node_idx]
-            if not isinstance(node, GraphNode):
-                continue
-            if node.kind != "task":
-                continue
-            payload = node.payload
-            if not isinstance(payload, TaskNode):
-                continue
-            allowed.add(payload.name)
-    return allowed
+        outputs.append(
+            execute_task_from_catalog(
+                inputs=task_execution_inputs,
+                task_name=task_name,
+                task_output=artifact.task.output,
+                dependencies=(),
+            )
+        )
+    return outputs
 
 
+@tag(layer="execution", artifact="generation_outputs_all", kind="parallel")
+def generation_outputs_all(
+    generation_outputs: Collect[list[TableLike]],
+) -> list[list[TableLike]]:
+    """Collect outputs from all generations.
+
+    Returns
+    -------
+    list[list[TableLike]]
+        Outputs grouped by generation.
+    """
+    return list(generation_outputs)
+
+
+@tag(layer="execution", artifact="generation_execution_gate", kind="gate")
+def generation_execution_gate(generation_outputs_all: list[list[TableLike]]) -> int:
+    """Return the total count of generation outputs executed.
+
+    Returns
+    -------
+    int
+        Count of outputs executed across generations.
+    """
+    return sum(len(outputs) for outputs in generation_outputs_all)
+
+
+@pipe_input(
+    step(_finalize_cpg_nodes_stage, ctx=source("ctx")),
+    on_input="cpg_nodes_v1",
+    namespace="cpg_nodes_final",
+)
 @tag(layer="execution", artifact="cpg_nodes_final", kind="table")
-def cpg_nodes_final(task_outputs: TaskExecutionResults, ctx: ExecutionContext) -> TableLike:
+def cpg_nodes_final(cpg_nodes_v1: TableLike) -> TableLike:
     """Return the final CPG nodes table.
 
     Returns
@@ -247,14 +305,16 @@ def cpg_nodes_final(task_outputs: TaskExecutionResults, ctx: ExecutionContext) -
     TableLike
         Final nodes table.
     """
-    table = task_outputs.outputs.get("cpg_nodes_v1")
-    if table is None:
-        return empty_table(CPG_NODES_CONTRACT.schema)
-    return _finalize_cpg_table(table, contract=CPG_NODES_CONTRACT, ctx=ctx)
+    return cpg_nodes_v1
 
 
+@pipe_input(
+    step(_finalize_cpg_edges_stage, ctx=source("ctx")),
+    on_input="cpg_edges_v1",
+    namespace="cpg_edges_final",
+)
 @tag(layer="execution", artifact="cpg_edges_final", kind="table")
-def cpg_edges_final(task_outputs: TaskExecutionResults, ctx: ExecutionContext) -> TableLike:
+def cpg_edges_final(cpg_edges_v1: TableLike) -> TableLike:
     """Return the final CPG edges table.
 
     Returns
@@ -262,14 +322,16 @@ def cpg_edges_final(task_outputs: TaskExecutionResults, ctx: ExecutionContext) -
     TableLike
         Final edges table.
     """
-    table = task_outputs.outputs.get("cpg_edges_v1")
-    if table is None:
-        return empty_table(CPG_EDGES_CONTRACT.schema)
-    return _finalize_cpg_table(table, contract=CPG_EDGES_CONTRACT, ctx=ctx)
+    return cpg_edges_v1
 
 
+@pipe_input(
+    step(_finalize_cpg_props_stage, ctx=source("ctx")),
+    on_input="cpg_props_v1",
+    namespace="cpg_props_final",
+)
 @tag(layer="execution", artifact="cpg_props_final", kind="table")
-def cpg_props_final(task_outputs: TaskExecutionResults, ctx: ExecutionContext) -> TableLike:
+def cpg_props_final(cpg_props_v1: TableLike) -> TableLike:
     """Return the final CPG properties table.
 
     Returns
@@ -277,17 +339,24 @@ def cpg_props_final(task_outputs: TaskExecutionResults, ctx: ExecutionContext) -
     TableLike
         Final properties table.
     """
-    table = task_outputs.outputs.get("cpg_props_v1")
-    if table is None:
-        return empty_table(CPG_PROPS_CONTRACT.schema)
-    return _finalize_cpg_table(table, contract=CPG_PROPS_CONTRACT, ctx=ctx)
+    return cpg_props_v1
 
 
 __all__ = [
-    "TaskExecutionResults",
-    "allowed_task_names",
+    "TaskExecutionInputs",
+    "_finalize_cpg_edges_stage",
+    "_finalize_cpg_nodes_stage",
+    "_finalize_cpg_props_stage",
     "cpg_edges_final",
     "cpg_nodes_final",
     "cpg_props_final",
-    "task_outputs",
+    "evidence_catalog",
+    "execute_task_from_catalog",
+    "generation_execution_gate",
+    "generation_outputs",
+    "generation_outputs_all",
+    "runtime_artifacts",
+    "task_execution_inputs",
+    "task_generation_wave",
+    "task_graph_for_diff",
 ]

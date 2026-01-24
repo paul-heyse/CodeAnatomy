@@ -24,24 +24,23 @@ def _task_graph() -> TaskGraph:
     return build_task_graph_from_inferred_deps((deps_a, deps_b))
 
 
-def test_allowed_task_names_from_diff() -> None:
-    """Allow changed tasks and their task ancestors/descendants."""
+def test_task_graph_for_diff_from_diff() -> None:
+    """Include changed tasks and their task ancestors/descendants."""
     task_graph = _task_graph()
     diff = IncrementalDiff(changed_tasks=("task.beta",))
-    allowed = task_execution.allowed_task_names(task_graph, diff)
-    assert allowed is not None
-    assert "task.alpha" in allowed
-    assert "task.beta" in allowed
+    impact_graph = task_execution.task_graph_for_diff(task_graph, diff)
+    assert impact_graph is not task_graph
+    assert set(impact_graph.task_idx) == {"task.alpha", "task.beta"}
 
 
-def test_allowed_task_names_none_when_empty() -> None:
-    """Return None when there are no changed or added tasks."""
+def test_task_graph_for_diff_when_empty() -> None:
+    """Return the original graph when there are no changed or added tasks."""
     task_graph = _task_graph()
     diff = IncrementalDiff(changed_tasks=())
-    assert task_execution.allowed_task_names(task_graph, diff) is None
+    assert task_execution.task_graph_for_diff(task_graph, diff) is task_graph
 
 
-def test_allowed_task_names_none_when_diff_missing() -> None:
-    """Return None when diff is not provided."""
+def test_task_graph_for_diff_when_diff_missing() -> None:
+    """Return the original graph when diff is not provided."""
     task_graph = _task_graph()
-    assert task_execution.allowed_task_names(task_graph, None) is None
+    assert task_execution.task_graph_for_diff(task_graph, None) is task_graph

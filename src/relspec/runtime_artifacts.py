@@ -313,10 +313,11 @@ class RuntimeArtifacts:
         if cache is None:
             return None
         cached = cache.get(self._schema_cache_key(name), default=None, retry=True)
-        if cached is None or not isinstance(cached, SchemaLike):
+        schema = _coerce_schema_like(cached)
+        if schema is None:
             return None
-        self.schema_cache[name] = cached
-        return cached
+        self.schema_cache[name] = schema
+        return schema
 
     def record_execution(self, task_name: str) -> None:
         """Record that a task was executed.
@@ -407,6 +408,31 @@ class RuntimeArtifactsSummary:
     execution_order: tuple[str, ...]
     view_names: tuple[str, ...] = ()
     materialized_names: tuple[str, ...] = ()
+
+
+def _coerce_schema_like(value: object) -> SchemaLike | None:
+    if value is None:
+        return None
+    if not _looks_like_schema(value):
+        return None
+    return cast("SchemaLike", value)
+
+
+def _looks_like_schema(value: object) -> bool:
+    has_names = hasattr(value, "names")
+    has_metadata = hasattr(value, "metadata")
+    has_with_metadata = callable(getattr(value, "with_metadata", None))
+    has_field = callable(getattr(value, "field", None))
+    has_index = callable(getattr(value, "get_field_index", None))
+    has_iter = callable(getattr(value, "__iter__", None))
+    return (
+        has_names
+        and has_metadata
+        and has_with_metadata
+        and has_field
+        and has_index
+        and has_iter
+    )
 
 
 def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:

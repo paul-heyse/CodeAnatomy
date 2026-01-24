@@ -236,7 +236,8 @@ def _drain_worklist_queue(queue: Deque, *, index: Index) -> Iterator[FileContext
             continue
         file_id = item.file_id
         if file_id:
-            index.pop(file_id, None)
+            with contextlib.suppress(KeyError):
+                index.pop(file_id)
         yield item
 
 

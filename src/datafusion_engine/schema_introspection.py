@@ -429,18 +429,6 @@ class SchemaIntrospector:
         )
         return self._cached_rows("tables_snapshot", query=query)
 
-    def _catalogs_snapshot(self) -> list[dict[str, object]]:
-        """Return catalog inventory rows from information_schema.
-
-        Returns
-        -------
-        list[dict[str, object]]
-            Catalog inventory rows.
-        """
-        query = "SELECT DISTINCT catalog_name FROM information_schema.schemata"
-        return self._cached_rows("catalogs_snapshot", query=query)
-
-
     def schemata_snapshot(self) -> list[dict[str, object]]:
         """Return schema inventory rows from information_schema.
 
@@ -774,10 +762,7 @@ def schema_map_snapshot(
     ctx: SessionContext,
     *,
     sql_options: SQLOptions | None,
-    cache: Cache | FanoutCache | None = None,
-    cache_key: str | None = None,
-    cache_ttl: float | None = None,
-    cache_tag: str | None = None,
+    cache_options: SchemaMapCacheOptions | None = None,
 ) -> tuple[SchemaMapping | None, str | None]:
     """Return a SQLGlot schema mapping and fingerprint snapshot.
 
@@ -794,20 +779,30 @@ def schema_map_snapshot(
         except (RuntimeError, TypeError, ValueError):
             return None, None
 
-    if cache is None or cache_key is None:
+    if cache_options is None:
         return _compute()
 
     @memoize_stampede(
-        cache,
-        expire=cache_ttl,
-        tag=cache_tag,
+        cache_options.cache,
+        expire=cache_options.ttl,
+        tag=cache_options.tag,
         name="schema_map_snapshot",
     )
     def _cached(key: str) -> tuple[SchemaMapping | None, str | None]:
         _ = key
         return _compute()
 
-    return _cached(cache_key)
+    return _cached(cache_options.key)
+
+
+@dataclass(frozen=True)
+class SchemaMapCacheOptions:
+    """Cache options for schema map snapshots."""
+
+    cache: Cache | FanoutCache
+    key: str
+    ttl: float | None = None
+    tag: str | None = None
 
 
 def find_struct_field_keys(
@@ -887,11 +882,23 @@ def catalogs_snapshot(introspector: SchemaIntrospector) -> list[dict[str, object
     list[dict[str, object]]
         Catalog inventory rows.
     """
-    return introspector._catalogs_snapshot()
+    seen: set[str] = set()
+    rows: list[dict[str, object]] = []
+    for row in introspector.schemata_snapshot():
+        name = row.get("catalog_name")
+        if name is None:
+            continue
+        catalog = str(name)
+        if catalog in seen:
+            continue
+        seen.add(catalog)
+        rows.append({"catalog_name": catalog})
+    return rows
 
 
 __all__ = [
     "SchemaIntrospector",
+    "SchemaMapCacheOptions",
     "catalogs_snapshot",
     "find_struct_field_keys",
     "routines_snapshot_table",

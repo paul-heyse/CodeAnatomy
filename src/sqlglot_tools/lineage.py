@@ -12,7 +12,6 @@ from sqlglot.lineage import Node, lineage
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import build_scope
 
-from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
@@ -26,6 +25,8 @@ from sqlglot_tools.optimizer import (
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
+
+    from sqlglot_tools.bridge import IbisCompilerBackend
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,8 @@ def required_columns_by_table(
     dict[str, tuple[str, ...]]
         Mapping of table name to required column names.
     """
+    from sqlglot_tools.bridge import ibis_to_sqlglot
+
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = schema_map or _schema_map_from_backend(backend)
     policy = policy or default_sqlglot_policy()
@@ -277,6 +280,8 @@ def lineage_graph_by_output(
     dict[str, tuple[str, ...]]
         Mapping of output column name to source column references.
     """
+    from sqlglot_tools.bridge import ibis_to_sqlglot
+
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = schema_map or _schema_map_from_backend(backend)
     policy = policy or default_sqlglot_policy()

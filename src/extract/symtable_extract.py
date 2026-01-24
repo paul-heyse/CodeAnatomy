@@ -15,9 +15,9 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from extract.cache_utils import (
+    CacheSetOptions,
     cache_for_extract,
     cache_get,
-    cache_lock,
     cache_set,
     cache_ttl_seconds,
     diskcache_profile_from_ctx,
@@ -318,7 +318,7 @@ def _extract_symtable_for_context(
     list[dict[str, object]],
 ]:
     if not file_ctx.file_id or not file_ctx.path:
-        return [], [], []
+        return _empty_symtable_rows()
 
     cache_key = _symtable_cache_key(file_ctx, compile_type=compile_type)
     use_cache = cache is not None and cache_key is not None
@@ -336,21 +336,25 @@ def _extract_symtable_for_context(
     ]:
         text = text_from_file_ctx(file_ctx)
         if not text:
-            return [], [], []
+            return _empty_symtable_rows()
         try:
             top = symtable.symtable(text, file_ctx.path, compile_type)
         except (SyntaxError, TypeError, ValueError):
-            return [], [], []
+            return _empty_symtable_rows()
         ctx = SymtableContext(file_ctx=file_ctx)
-        result = _walk_symtable(top, ctx)
-        if use_cache and cache is not None and cache_key_str is not None:
-            cache_set(
-                cache,
-                key=cache_key_str,
-                value=result,
+        return _walk_symtable(top, ctx)
+
+    result = _build_result()
+    if use_cache and cache is not None and cache_key_str is not None:
+        cache_set(
+            cache,
+            key=cache_key_str,
+            value=result,
+            options=CacheSetOptions(
                 expire=cache_ttl,
-                tag=ctx.file_ctx.file_id,
-            )
+                tag=file_ctx.file_id,
+            ),
+        )
     return result
 
 
@@ -372,16 +376,13 @@ def _coerce_symtable_cache(
         rows.append(part)
     return (rows[0], rows[1], rows[2])
 
-    if use_cache and cache_key_str is not None:
-        with cache_lock(cache, key=cache_key_str):
-            cached = cache_get(cache, key=cache_key_str, default=None)
-            if isinstance(cached, tuple) and len(cached) == _SYMTABLE_CACHE_PARTS:
-                return cast(
-                    "tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]",
-                    cached,
-                )
-            return _build_result()
-    return _build_result()
+
+def _empty_symtable_rows() -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    return [], [], []
 
 
 def _walk_symtable(

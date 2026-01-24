@@ -15,6 +15,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
 from extract.cache_utils import (
+    CacheSetOptions,
     cache_for_extract,
     cache_get,
     cache_set,
@@ -40,6 +41,7 @@ from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
     import pygit2
+    from diskcache import Cache, FanoutCache
 
 
 @dataclass(frozen=True)
@@ -274,56 +276,112 @@ def scan_repo_blobs_plan(
     cache_ttl = cache_ttl_seconds(cache_profile, "extract")
 
     def iter_rows() -> Iterator[dict[str, object]]:
-        count = 0
-        repo: pygit2.Repository | None = None
-        for row in iter_table_rows(repo_files):
-            file_ctx = FileContext.from_repo_row(row)
-            cache_key = _repo_blob_cache_key(file_ctx, options=options)
-            if cache is not None and cache_key is not None:
-                cached = cache_get(cache, key=cache_key, default=None)
-                if isinstance(cached, dict):
-                    yield cached
-                    count += 1
-                    if options.max_files is not None and count >= options.max_files:
-                        break
-                    continue
-            data_override: bytes | None = None
-            if options.source_ref:
-                if file_ctx.abs_path and file_ctx.path:
-                    if repo is None:
-                        repo = open_repo_for_path(Path(file_ctx.abs_path))
-                    if repo is not None:
-                        data_override = read_blob_at_ref(
-                            repo,
-                            ref=options.source_ref,
-                            path_posix=file_ctx.path,
-                        )
-            blob_row = _build_repo_blob_row(
-                row,
-                options=options,
-                data_override=data_override,
-            )
-            if blob_row is None:
-                continue
-            if cache is not None and cache_key is not None:
-                cache_set(
-                    cache,
-                    key=cache_key,
-                    value=blob_row,
-                    expire=cache_ttl,
-                    tag=options.repo_id,
-                    read=options.include_bytes,
-                )
-            yield blob_row
-            count += 1
-            if options.max_files is not None and count >= options.max_files:
-                break
+        yield from _iter_repo_blob_rows(
+            repo_files,
+            options=options,
+            cache=cache,
+            cache_ttl=cache_ttl,
+        )
 
     return extract_plan_from_rows(
         "repo_file_blobs_v1",
         iter_rows(),
         session=session,
         options=ExtractPlanOptions(normalize=normalize),
+    )
+
+
+def _iter_repo_blob_rows(
+    repo_files: TableLike,
+    *,
+    options: RepoBlobOptions,
+    cache: Cache | FanoutCache | None,
+    cache_ttl: float | None,
+) -> Iterator[dict[str, object]]:
+    count = 0
+    repo: pygit2.Repository | None = None
+    for row in iter_table_rows(repo_files):
+        if options.max_files is not None and count >= options.max_files:
+            break
+        file_ctx = FileContext.from_repo_row(row)
+        cache_key = _repo_blob_cache_key(file_ctx, options=options)
+        cached = _load_cached_blob_row(cache, cache_key)
+        if cached is not None:
+            yield cached
+            count += 1
+            continue
+        data_override, repo = _resolve_blob_override(repo, file_ctx, source_ref=options.source_ref)
+        blob_row = _build_repo_blob_row(
+            row,
+            options=options,
+            data_override=data_override,
+        )
+        if blob_row is None:
+            continue
+        _store_cached_blob_row(
+            cache,
+            cache_key=cache_key,
+            blob_row=blob_row,
+            options=options,
+            cache_ttl=cache_ttl,
+        )
+        yield blob_row
+        count += 1
+
+
+def _load_cached_blob_row(
+    cache: Cache | FanoutCache | None,
+    cache_key: str | None,
+) -> dict[str, object] | None:
+    if cache is None or cache_key is None:
+        return None
+    cached = cache_get(cache, key=cache_key, default=None)
+    if isinstance(cached, dict):
+        return cached
+    return None
+
+
+def _resolve_blob_override(
+    repo: pygit2.Repository | None,
+    file_ctx: FileContext,
+    *,
+    source_ref: str | None,
+) -> tuple[bytes | None, pygit2.Repository | None]:
+    if source_ref is None or not file_ctx.abs_path or not file_ctx.path:
+        return None, repo
+    if repo is None:
+        repo = open_repo_for_path(Path(file_ctx.abs_path))
+    if repo is None:
+        return None, repo
+    return (
+        read_blob_at_ref(
+            repo,
+            ref=source_ref,
+            path_posix=file_ctx.path,
+        ),
+        repo,
+    )
+
+
+def _store_cached_blob_row(
+    cache: Cache | FanoutCache | None,
+    *,
+    cache_key: str | None,
+    blob_row: dict[str, object],
+    options: RepoBlobOptions,
+    cache_ttl: float | None,
+) -> None:
+    if cache is None or cache_key is None:
+        return
+    cache_set(
+        cache,
+        key=cache_key,
+        value=blob_row,
+        options=CacheSetOptions(
+            expire=cache_ttl,
+            tag=options.repo_id,
+            read=options.include_bytes,
+        ),
     )
 
 

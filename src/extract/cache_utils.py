@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from diskcache import Lock
@@ -123,9 +124,7 @@ def cache_set(
     *,
     key: str,
     value: object,
-    expire: float | None = None,
-    tag: str | None = None,
-    read: bool = False,
+    options: CacheSetOptions | None = None,
 ) -> bool:
     """Set a cache entry with retry enabled.
 
@@ -136,16 +135,26 @@ def cache_set(
     """
     if cache is None:
         return False
+    cache_options = options or CacheSetOptions()
     return bool(
         cache.set(
             key,
             value,
-            expire=expire,
-            tag=tag,
-            read=read,
+            expire=cache_options.expire,
+            tag=cache_options.tag,
+            read=cache_options.read,
             retry=True,
         )
     )
+
+
+@dataclass(frozen=True)
+class CacheSetOptions:
+    """Options for storing a value in DiskCache."""
+
+    expire: float | None = None
+    tag: str | None = None
+    read: bool = False
 
 
 def cache_ttl_seconds(profile: DiskCacheProfile | None, kind: DiskCacheKind) -> float | None:

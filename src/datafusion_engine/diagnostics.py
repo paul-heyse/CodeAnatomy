@@ -99,9 +99,9 @@ class InMemoryDiagnosticsSink:
         List of (name, properties) tuples for recorded events.
     """
 
-    artifacts: list[tuple[str, dict]] = field(default_factory=list)
-    metrics: list[tuple[str, float, dict]] = field(default_factory=list)
-    events: list[tuple[str, dict]] = field(default_factory=list)
+    artifacts: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    metrics: list[tuple[str, float, dict[str, str]]] = field(default_factory=list)
+    events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     def record_artifact(self, name: str, payload: dict[str, Any]) -> None:
         """Record a named artifact.
@@ -141,7 +141,7 @@ class InMemoryDiagnosticsSink:
         """
         self.events.append((name, properties))
 
-    def get_artifacts(self, name: str) -> list[dict]:
+    def get_artifacts(self, name: str) -> list[dict[str, Any]]:
         """Get all artifacts with given name.
 
         Parameters
@@ -387,7 +387,7 @@ class DiagnosticsRecorder:
         name: str,
         registration_type: str,  # "table", "view", "object_store"
         location: str | None = None,
-        schema: dict | None = None,
+        schema: dict[str, Any] | None = None,
     ) -> None:
         """Record table/view/store registration diagnostics.
 

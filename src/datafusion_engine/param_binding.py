@@ -9,8 +9,9 @@ This module provides a security-focused parameter binding system that:
 
 from __future__ import annotations
 
+import contextlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -112,11 +113,18 @@ def resolve_param_bindings(
         - Table-like values (DataFrame, Table) → named_tables
     validate_names
         Whether to validate parameter names against allowlist.
+    allowlist
+        Optional allowlist of parameter names permitted for binding.
 
     Returns
     -------
     DataFusionParamBindings
         Resolved bindings ready for execution.
+
+    Raises
+    ------
+    ValueError
+        If a parameter name fails validation or is not allowlisted.
     """
     if values is None:
         return DataFusionParamBindings()
@@ -174,10 +182,54 @@ def apply_bindings_to_context(
         Resolved parameter bindings containing named tables.
     """
     for name, table in bindings.named_tables.items():
-        if isinstance(table, pa.Table):
-            ctx.register_table(name, table)
-        elif hasattr(table, "to_pyarrow"):
-            # Type guard: table has to_pyarrow method
-            ctx.register_table(name, table.to_pyarrow())  # type: ignore[union-attr]
-        else:
-            ctx.register_table(name, table)
+        _register_table_like(ctx, name, table)
+
+
+@contextlib.contextmanager
+def register_table_params(
+    ctx: SessionContext,
+    bindings: DataFusionParamBindings,
+) -> Iterator[None]:
+    """Register table-like bindings into context with automatic cleanup.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion SessionContext to register tables into.
+    bindings
+        Resolved parameter bindings containing named tables.
+    """
+    if not bindings.named_tables:
+        yield
+        return
+    registered: list[str] = []
+    try:
+        for name, table in bindings.named_tables.items():
+            _ensure_table_slot(ctx, name)
+            _register_table_like(ctx, name, table)
+            registered.append(name)
+        yield
+    finally:
+        for name in registered:
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                ctx.deregister_table(name)
+
+
+def _ensure_table_slot(ctx: SessionContext, name: str) -> None:
+    try:
+        ctx.table(name)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        return
+    msg = f"Named parameter {name!r} collides with an existing table."
+    raise ValueError(msg)
+
+
+def _register_table_like(ctx: SessionContext, name: str, table: object) -> None:
+    if isinstance(table, pa.Table):
+        ctx.register_table(name, table)
+        return
+    to_pyarrow = getattr(table, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        ctx.register_table(name, to_pyarrow())
+        return
+    ctx.register_table(name, table)

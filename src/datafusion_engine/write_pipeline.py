@@ -8,16 +8,21 @@ with consistent semantics.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from datafusion import SQLOptions
 
 from sqlglot_tools.compat import exp
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
 
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+    from schema_spec.policies import DataFusionWritePolicy, ParquetColumnPolicy
 
 
 class WriteFormat(Enum):
@@ -106,7 +111,7 @@ class ParquetWritePolicy:
         """
         options = {
             "compression": self.compression,
-            "row_group_size": str(self.row_group_size),
+            "max_row_group_size": str(self.row_group_size),
             "data_page_size": str(self.data_page_size),
             "dictionary_enabled": str(self.dictionary_enabled).lower(),
             "statistics_enabled": self.statistics_enabled,
@@ -125,6 +130,25 @@ class ParquetWritePolicy:
                 options[f"{opt}::{col}"] = val
 
         return options
+
+    def to_dataset_options(self) -> dict[str, object]:
+        """Convert to PyArrow dataset write options.
+
+        Returns
+        -------
+        dict[str, object]
+            PyArrow dataset write options compatible with ParquetFileFormat.
+        """
+        options: dict[str, object] = {
+            "compression": self.compression,
+            "compression_level": self.compression_level,
+            "data_page_size": self.data_page_size,
+            "use_dictionary": self.dictionary_enabled,
+        }
+        stats_value = _statistics_flag(self.statistics_enabled)
+        if stats_value is not None:
+            options["write_statistics"] = stats_value
+        return {key: value for key, value in options.items() if value is not None}
 
 
 @dataclass(frozen=True)
@@ -148,6 +172,10 @@ class WriteRequest:
         Column names for Hive-style partitioning.
     parquet_policy
         Parquet-specific write options, if format is PARQUET.
+    format_options
+        Format-specific COPY/streaming options for the underlying writer.
+    single_file_output
+        Hint to prefer single-file output when supported.
 
     Examples
     --------
@@ -167,6 +195,8 @@ class WriteRequest:
     mode: WriteMode = WriteMode.ERROR
     partition_by: tuple[str, ...] = ()
     parquet_policy: ParquetWritePolicy | None = None
+    format_options: dict[str, object] | None = None
+    single_file_output: bool | None = None
 
     def to_copy_ast(
         self,
@@ -204,6 +234,8 @@ class WriteRequest:
 
         # Build options
         options: dict[str, object] = {"format": self.format.name}
+        if self.format_options:
+            options.update(self.format_options)
 
         if self.parquet_policy:
             options.update(self.parquet_policy.to_copy_options())
@@ -250,6 +282,8 @@ class WritePipeline:
         self,
         ctx: SessionContext,
         profile: SQLPolicyProfile,
+        *,
+        sql_options: SQLOptions | None = None,
     ) -> None:
         """Initialize write pipeline.
 
@@ -259,14 +293,17 @@ class WritePipeline:
             DataFusion session context.
         profile
             SQL policy profile for SQL generation.
+        sql_options
+            Optional SQL execution options for COPY statements.
         """
         self.ctx = ctx
         self.profile = profile
+        self.sql_options = sql_options
 
     def write_via_copy(
         self,
         request: WriteRequest,
-    ) -> None:
+    ) -> str:
         """Write using SQL COPY statement.
 
         Executes a COPY TO statement to write query results to disk.
@@ -283,15 +320,42 @@ class WritePipeline:
         COPY statements are executed synchronously and fully materialize
         the result before writing. For large datasets with custom
         partitioning needs, consider `write_via_streaming`.
-        """
-        copy_ast = request.to_copy_ast(self.profile)
-        sql = copy_ast.sql(dialect=self.profile.write_dialect)
 
-        # Execute COPY
-        self.ctx.sql(sql).collect()
+        Returns
+        -------
+        str
+            Rendered COPY statement SQL.
+        """
+        sql, df = self.copy_dataframe(request)
+        df.collect()
 
         # Record artifact
         self._record_write_artifact(request, sql)
+        return sql
+
+    def copy_dataframe(
+        self,
+        request: WriteRequest,
+    ) -> tuple[str, DataFrame]:
+        """Return the COPY statement SQL and DataFrame without collecting.
+
+        Parameters
+        ----------
+        request
+            Write request specification.
+
+        Returns
+        -------
+        tuple[str, DataFrame]
+            COPY statement SQL text and DataFusion DataFrame.
+        """
+        copy_ast = request.to_copy_ast(self.profile)
+        sql = copy_ast.sql(dialect=self.profile.write_dialect)
+        if self.sql_options is not None:
+            df = self.ctx.sql_with_options(sql, self.sql_options)
+        else:
+            df = self.ctx.sql(sql)
+        return sql, df
 
     def write_via_streaming(
         self,
@@ -333,12 +397,18 @@ class WritePipeline:
         # Write based on format
         if request.format == WriteFormat.PARQUET:
             if request.partition_by:
+                policy = request.parquet_policy or ParquetWritePolicy()
                 # pipe_to_dataset accepts **format_options, but these need to be
                 # passed separately from the copy options which are string-based
+                dataset_options: dict[str, Any] = dict(policy.to_dataset_options())
+                if request.format_options:
+                    dataset_options.update(request.format_options)
                 result.pipe_to_dataset(
                     request.destination,
                     partitioning=list(request.partition_by),
                     existing_data_behavior=self._mode_to_behavior(request.mode),
+                    max_rows_per_group=policy.row_group_size,
+                    **dataset_options,
                 )
             else:
                 policy = request.parquet_policy or ParquetWritePolicy()
@@ -359,7 +429,7 @@ class WritePipeline:
         request: WriteRequest,
         *,
         prefer_streaming: bool = True,
-    ) -> None:
+    ) -> str | None:
         """Write using best available method.
 
         Chooses between COPY-based and streaming write paths based on
@@ -372,6 +442,11 @@ class WritePipeline:
         prefer_streaming
             If True, prefer streaming write for PARQUET format.
 
+        Returns
+        -------
+        str | None
+            COPY statement SQL when COPY was used, otherwise None.
+
         Notes
         -----
         The decision logic is:
@@ -379,10 +454,14 @@ class WritePipeline:
         - PARQUET with prefer_streaming: use streaming
         - All other cases: use COPY
         """
-        if prefer_streaming and request.format == WriteFormat.PARQUET:
-            self.write_via_streaming(request)
-        else:
-            self.write_via_copy(request)
+        if request.format == WriteFormat.PARQUET:
+            if request.partition_by:
+                self.write_via_streaming(request)
+                return None
+            if prefer_streaming and request.single_file_output is not False:
+                self.write_via_streaming(request)
+                return None
+        return self.write_via_copy(request)
 
     @staticmethod
     def _mode_to_behavior(mode: WriteMode) -> str:
@@ -423,3 +502,70 @@ class WritePipeline:
         Implementation depends on diagnostics infrastructure.
         Currently a no-op placeholder for future diagnostic collection.
         """
+
+
+def parquet_policy_from_datafusion(
+    policy: DataFusionWritePolicy | None,
+) -> ParquetWritePolicy | None:
+    """Translate DataFusionWritePolicy into ParquetWritePolicy.
+
+    Parameters
+    ----------
+    policy
+        DataFusion write policy to translate.
+
+    Returns
+    -------
+    ParquetWritePolicy | None
+        Converted Parquet write policy, or None when policy is missing.
+    """
+    if policy is None:
+        return None
+    column_overrides = _column_overrides_from_policy(policy.parquet_column_options)
+    return ParquetWritePolicy(
+        compression=policy.parquet_compression or "zstd",
+        row_group_size=policy.parquet_row_group_size or 1_000_000,
+        dictionary_enabled=policy.parquet_dictionary_enabled
+        if policy.parquet_dictionary_enabled is not None
+        else True,
+        statistics_enabled=policy.parquet_statistics_enabled or "page",
+        bloom_filter_enabled=policy.parquet_bloom_filter_on_write or False,
+        column_overrides=column_overrides,
+    )
+
+
+def _column_overrides_from_policy(
+    options: Mapping[str, ParquetColumnPolicy] | None,
+) -> dict[str, dict[str, str]]:
+    if not options:
+        return {}
+    overrides: dict[str, dict[str, str]] = {}
+    for name, option in options.items():
+        payload = option.payload()
+        converted = {
+            key: value
+            for key, value in (
+                (key, _option_value_to_str(value)) for key, value in payload.items()
+            )
+            if value is not None
+        }
+        if converted:
+            overrides[name] = converted
+    return overrides
+
+
+def _option_value_to_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _statistics_flag(value: str) -> bool | None:
+    normalized = value.strip().lower()
+    return normalized != "none"

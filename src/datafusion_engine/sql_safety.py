@@ -61,6 +61,11 @@ class ExecutionPolicy:
         -------
         ExecutionPolicy
             Policy configured for the context.
+
+        Raises
+        ------
+        ValueError
+            If the execution context is not recognized.
         """
         match context:
             case ExecutionContext.QUERY_ONLY:
@@ -73,6 +78,9 @@ class ExecutionPolicy:
                 return cls(allow_ddl=True, allow_dml=True, allow_statements=True)
             case ExecutionContext.ADMIN:
                 return cls(allow_ddl=True, allow_dml=True, allow_statements=True)
+            case _:
+                msg = f"Unsupported execution context: {context}"
+                raise ValueError(msg)
 
     def to_sql_options(self) -> SQLOptions:
         """Convert to DataFusion SQLOptions.

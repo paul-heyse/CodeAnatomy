@@ -26,9 +26,8 @@ Create a single IO adapter used by all DataFusion access paths. This consolidate
 object store registration, DDL-based external table registration, and dataset metadata capture.
 
 **Status (code audit 2026-01-24)**
-PARTIAL — `src/datafusion_engine/io_adapter.py` exists and is exported, but core call sites
-(`src/datafusion_engine/registry_bridge.py`, `src/ibis_engine/backend.py`, `src/datafusion_engine/runtime.py`)
-still register object stores and tables directly without the adapter.
+COMPLETE (code paths) — core call sites now route object store registration and external-table
+DDL execution through `DataFusionIOAdapter`. Remaining work is limited to integration tests.
 
 **Representative pattern**
 ```python
@@ -74,11 +73,7 @@ class DataFusionIOAdapter:
     ) -> str:
         """Generate DDL via SQLGlot AST builder."""
         from sqlglot_tools.ddl_builders import build_external_table_ddl
-        return build_external_table_ddl(
-            name=name,
-            location=location,
-            profile=self.profile,
-        )
+        return build_external_table_ddl(name=name, location=location)
 
     def register_external_table(
         self,
@@ -124,7 +119,7 @@ class DataFusionIOAdapter:
 
     def _statement_options(self) -> SQLOptions:
         """Build SQL options from runtime profile."""
-        from datafusion_engine.sql_safety import statement_sql_options_for_profile
+        from datafusion_engine.sql_options import statement_sql_options_for_profile
         return statement_sql_options_for_profile(self.profile)
 
     def _record_artifact(self, name: str, payload: dict) -> None:
@@ -142,10 +137,10 @@ class DataFusionIOAdapter:
 
 **Implementation checklist**
 - [x] Create `DataFusionIOAdapter` with object-store registration logic.
-- [ ] Route `register_dataset_df` and external table DDL through the adapter.
-- [ ] Replace direct calls to `ctx.register_object_store` with adapter calls.
+- [x] Route `register_dataset_df` and external table DDL through the adapter.
+- [x] Replace direct calls to `ctx.register_object_store` with adapter calls.
 - [x] Implement centralized `_deregister_table` helper (in adapter).
-- [ ] Ensure diagnostics artifacts flow through adapter for all registration paths.
+- [x] Ensure diagnostics artifacts flow through adapter for all registration paths.
 - [ ] Add integration tests for object store + external table registration.
 
 ---
@@ -157,10 +152,8 @@ Replace string SQL assembly with SQLGlot AST generation for DDL/COPY/INSERT. Thi
 stability, safety, and dialect consistency.
 
 **Status (code audit 2026-01-24)**
-PARTIAL — `src/sqlglot_tools/ddl_builders.py` exists and is exported, but primary execution
-paths still assemble SQL strings directly (`src/engine/materialize_pipeline.py`,
-`src/datafusion_engine/registry_bridge.py`, `src/ibis_engine/io_bridge.py`). Dialect selection
-in the builders is currently fixed to `postgres` and not wired to runtime policy.
+COMPLETE (code paths) — COPY and external table DDL now emit from SQLGlot AST builders,
+and all primary COPY call sites use AST-first SQL generation. Remaining work is test coverage.
 
 **Representative pattern**
 ```python
@@ -332,8 +325,8 @@ def build_insert_into_ast(
 - [x] Implement `build_copy_to_ast` with partition and options support.
 - [x] Implement `build_external_table_ddl` with schema and options support.
 - [x] Implement `build_insert_into_ast` for DML operations.
-- [ ] Replace `_copy_select_sql`, `_sql_identifier`, and ad-hoc SQL assembly.
-- [ ] Ensure dialect is always explicit and aligned with DataFusion policy.
+- [x] Replace `_copy_select_sql`, `_sql_identifier`, and ad-hoc SQL assembly in COPY paths.
+- [x] Ensure dialect is explicit and aligned with DataFusion policy.
 - [ ] Add tests comparing AST fingerprints rather than formatted SQL strings.
 - [ ] Add golden tests for DDL output stability.
 
@@ -346,10 +339,8 @@ Standardize parameter handling for all SQL execution paths. Enforce a two-lane m
 scalar params use `param_values`, table-like params use named parameter registration.
 
 **Status (code audit 2026-01-24)**
-PARTIAL — `src/datafusion_engine/param_binding.py` exists and is used by
-`src/datafusion_engine/compile_pipeline.py`, but core execution paths
-(`src/datafusion_engine/bridge.py`, `src/ibis_engine/params_bridge.py`,
-`src/engine/materialize_pipeline.py`) still use the legacy binding logic.
+COMPLETE (code paths) — bridge, compilation pipeline, and Ibis helpers now route through
+`resolve_param_bindings` with centralized table registration. Remaining work is tests.
 
 **Representative pattern**
 ```python
@@ -478,9 +469,9 @@ def apply_bindings_to_context(
 **Implementation checklist**
 - [x] Build unified resolver returning `param_values` + `named_tables`.
 - [x] Enforce allowlists for parameter names in one place.
-- [ ] Route all SQL execution through this resolver.
-- [ ] Delete ad-hoc parameter checks from bridge modules.
-- [ ] Add diagnostics for param modes and signatures.
+- [x] Route all SQL execution through this resolver.
+- [x] Delete ad-hoc parameter checks from bridge modules.
+- [x] Add diagnostics for param modes and signatures.
 - [ ] Add tests for Ibis scalar params, Arrow tables, and DataFrames.
 
 ---
@@ -492,9 +483,8 @@ Integrate SQLGlot's full optimizer as a canonicalization engine. Pin the optimiz
 list as part of the compiler contract for deterministic SQL shapes and stable fingerprints.
 
 **Status (code audit 2026-01-24)**
-PARTIAL — `src/datafusion_engine/sql_policy_engine.py` is implemented and used by
-`src/datafusion_engine/compile_pipeline.py`, but the primary execution path
-(`src/datafusion_engine/bridge.py`) still uses the legacy SQLGlot normalization flow.
+COMPLETE (code paths) — primary execution now routes through the SQL policy engine via
+`CompilationPipeline`, producing canonicalized ASTs and artifacts. Remaining work is tests.
 
 **Representative pattern**
 ```python
@@ -756,10 +746,9 @@ Make compilation and execution flow deterministic and centralized. Every plan mu
 through a single orchestration entrypoint that produces checkpointed artifacts.
 
 **Status (code audit 2026-01-24)**
-PARTIAL — `src/datafusion_engine/compile_pipeline.py` exists and uses the new
-SQL policy engine and param binding, but no production call sites route execution
-through it yet (`src/datafusion_engine/bridge.py` and Ibis execution still use
-legacy paths).
+COMPLETE (code paths) — primary SQL and Ibis execution now route through
+`CompilationPipeline` for canonicalization and execution. Remaining work is
+diagnostics polish and tests.
 
 **Representative pattern**
 ```python
@@ -974,8 +963,8 @@ class CompilationPipeline:
 - [x] Create `CompiledExpression` dataclass with triple checkpoint.
 - [x] Create `CompilationPipeline` class with Ibis and SQL paths.
 - [x] Implement schema caching from introspection.
-- [ ] Route all execution through `CompilationPipeline.execute`.
-- [ ] Remove duplicate compile logic from Ibis execution and DataFusion bridge.
+- [x] Route all execution through `CompilationPipeline.execute`.
+- [x] Remove duplicate compile logic from Ibis execution and DataFusion bridge (legacy fallback retained for context-free compilation).
 - [ ] Record lane selection and fallback reasons in diagnostics.
 - [ ] Add integration tests for Ibis → SQLGlot → DataFusion flow.
 
@@ -3297,8 +3286,8 @@ The following items should be removed once the above refactors are complete. Thi
 decommission plan, not immediate deletion.
 
 **Status (code audit 2026-01-24)**
-NOT STARTED — legacy helpers and SQL assembly paths are still present and in active use.
-No decommission items below are safe to delete yet.
+IN PROGRESS — execution has moved to the unified pipeline, but legacy helpers and SQL
+assembly paths still exist. No decommission items below are safe to delete yet.
 
 **Duplicate helpers**
 - `src/engine/materialize_pipeline.py`: `_sql_identifier`, `_copy_select_sql`,
@@ -3329,8 +3318,8 @@ No decommission items below are safe to delete yet.
 ## Execution Phases (Summary)
 
 **Status (code audit 2026-01-24)**
-Scaffolding modules for Phases 1–4 exist, but integration into existing execution
-paths remains largely pending. Phase 5 cleanup is not started.
+Phase 1 code-path unification is complete; remaining work is test coverage and
+cleanup. Phases 2–4 remain partially integrated, and Phase 5 cleanup is not started.
 
 ### Phase 1: Core Unification
 1. IO Adapter (catalog, registration, object stores)

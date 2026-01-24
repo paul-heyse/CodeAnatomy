@@ -9,7 +9,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
@@ -64,14 +64,22 @@ from datafusion_engine.compile_options import (
     ExplainRows,
     resolve_sql_policy,
 )
-from datafusion_engine.df_builder import TranslationError, df_from_sqlglot
+from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.registry_bridge import (
     apply_projection_overrides,
     apply_projection_scan_overrides,
 )
 from datafusion_engine.schema_registry import has_schema, schema_for
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
+from datafusion_engine.write_pipeline import (
+    WriteFormat,
+    WriteMode,
+    WritePipeline,
+    WriteRequest,
+    parquet_policy_from_datafusion,
+)
 from engine.plan_cache import PlanCacheEntry, PlanCacheKey
 from ibis_engine.param_tables import scalar_param_signature
 from ibis_engine.plan import IbisPlan
@@ -294,7 +302,7 @@ def _plan_cache_key(
 ) -> PlanCacheKey | None:
     if options.plan_cache is None or options.profile_hash is None:
         return None
-    if options.params is not None:
+    if options.params is not None or options.named_params is not None:
         return None
     policy_hash = _sqlglot_policy_hash(options)
     plan_hash = options.plan_hash or plan_fingerprint(
@@ -327,7 +335,7 @@ def _plan_cache_key_from_substrait(
 ) -> PlanCacheKey | None:
     if options.plan_cache is None or options.profile_hash is None:
         return None
-    if options.params is not None:
+    if options.params is not None or options.named_params is not None:
         return None
     policy_hash = _sqlglot_policy_hash(options)
     plan_hash = options.plan_hash or plan_fingerprint(
@@ -426,55 +434,6 @@ def validate_substrait_plan(plan_bytes: bytes, *, df: DataFrame) -> Mapping[str,
     return _substrait_validation_payload(plan_bytes, df=df)
 
 
-def _try_replay_substrait(
-    ctx: SessionContext,
-    expr: Expression,
-    *,
-    options: DataFusionCompileOptions,
-) -> DataFrame | None:
-    cache_key = _plan_cache_key(expr, ctx=ctx, options=options)
-    if cache_key is None or options.plan_cache is None:
-        return None
-    cached = options.plan_cache.get(cache_key)
-    if cached is None:
-        return None
-    try:
-        return replay_substrait_bytes(ctx, cached)
-    except (
-        RuntimeError,
-        TypeError,
-        ValueError,
-    ) as exc:  # pragma: no cover - defensive around FFI errors.
-        logger.warning("Substrait replay failed; recompiling. error=%s", exc)
-        return None
-
-
-def _maybe_store_substrait(
-    ctx: SessionContext,
-    expr: Expression,
-    *,
-    options: DataFusionCompileOptions,
-) -> None:
-    cache_key = _plan_cache_key(expr, ctx=ctx, options=options)
-    if cache_key is None or options.plan_cache is None:
-        return
-    if options.plan_cache.contains(cache_key):
-        return
-    _ensure_dialect(options.dialect)
-    sql = _emit_sql(expr, options=options)
-    plan_bytes = _substrait_bytes(ctx, sql)
-    if plan_bytes is None:
-        return
-    substrait_hash = hashlib.sha256(plan_bytes).hexdigest()
-    entry = PlanCacheEntry(
-        plan_hash=cache_key.plan_hash,
-        profile_hash=cache_key.profile_hash,
-        substrait_hash=substrait_hash,
-        plan_bytes=plan_bytes,
-        compilation_lane="sql",
-    )
-    options.plan_cache.put(entry)
-
 
 def _default_sql_policy() -> DataFusionSqlPolicy:
     return DataFusionSqlPolicy()
@@ -506,6 +465,68 @@ def _sql_options_for_options(options: DataFusionCompileOptions) -> SQLOptions:
 def _ensure_dialect(name: str) -> None:
     if name == "datafusion_ext":
         register_datafusion_dialect()
+
+
+def _sql_policy_profile_from_options(
+    options: DataFusionCompileOptions,
+) -> SQLPolicyProfile:
+    if options.sql_policy_profile is not None:
+        return options.sql_policy_profile
+    if options.sqlglot_policy is not None:
+        base = SQLPolicyProfile(
+            read_dialect=options.sqlglot_policy.read_dialect,
+            write_dialect=options.sqlglot_policy.write_dialect,
+            optimizer_rules=tuple(options.sqlglot_policy.rules),
+            normalize_distance_limit=options.sqlglot_policy.normalization_distance,
+            expand_stars=options.sqlglot_policy.expand_stars,
+            validate_qualify_columns=options.sqlglot_policy.validate_qualify_columns,
+            identify_mode=options.sqlglot_policy.identify,
+        )
+    else:
+        base = SQLPolicyProfile(
+            read_dialect=options.dialect,
+            write_dialect=options.dialect,
+        )
+    if not options.optimize:
+        base = replace(
+            base,
+            optimizer_rules=(),
+            pushdown_predicates=False,
+            pushdown_projections=False,
+        )
+    return base
+
+
+def _compilation_rewrite_hook(
+    *,
+    ctx: SessionContext,
+    options: DataFusionCompileOptions,
+) -> Callable[[Expression], Expression]:
+    def _hook(expr: Expression) -> Expression:
+        rewritten = _apply_rewrite_hook(expr, options=options)
+        _maybe_enforce_preflight(rewritten, options=options)
+        rewritten = _apply_dynamic_projection(rewritten, options=options)
+        _apply_projection_overrides_for_expr(ctx, rewritten, options=options)
+        return rewritten
+
+    return _hook
+
+
+def _compilation_pipeline(
+    ctx: SessionContext,
+    *,
+    options: DataFusionCompileOptions,
+) -> CompilationPipeline:
+    profile = _sql_policy_profile_from_options(options)
+    compile_options = CompileOptions(
+        prefer_substrait=options.prefer_substrait,
+        prefer_ast_execution=options.prefer_ast_execution,
+        profile=profile,
+        schema=options.schema_map,
+        enable_rewrites=True,
+        rewrite_hook=_compilation_rewrite_hook(ctx=ctx, options=options),
+    )
+    return CompilationPipeline(ctx, compile_options)
 
 
 def _sqlglot_emit_policy(options: DataFusionCompileOptions) -> SqlGlotPolicy:
@@ -553,12 +574,12 @@ def df_from_sqlglot_or_sql(
 ) -> DataFrame:
     """Translate a SQLGlot expression into a DataFusion DataFrame.
 
-    Uses the SQLGlot AST translation path for DataFusion execution.
+    Uses the unified compilation pipeline for DataFusion execution.
 
     Raises
     ------
-    TranslationError
-        Raised when the SQLGlot expression cannot be translated.
+    ValueError
+        Raised when named parameters violate read-only SQL policy.
 
     Returns
     -------
@@ -566,45 +587,37 @@ def df_from_sqlglot_or_sql(
         DataFusion DataFrame representing the expression.
     """
     resolved = options or DataFusionCompileOptions()
-    if resolved.dynamic_projection:
-        projection_map = _projection_requirements(expr)
-        if projection_map:
-            apply_projection_scan_overrides(
-                ctx,
-                projection_map=projection_map,
-                runtime_profile=resolved.runtime_profile,
-            )
-            apply_projection_overrides(
-                ctx,
-                projection_map=projection_map,
-                sql_options=_sql_options_for_options(resolved),
-            )
-    if resolved.prefer_ast_execution:
-        bound_expr = expr
-        if resolved.params and _contains_params(expr):
-            bound_expr = _bind_params_for_ast(expr, options=resolved)
-        df = df_from_sqlglot_ast(ctx, bound_expr, options=resolved)
-        _maybe_explain(ctx, bound_expr, options=resolved)
-        _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
-        return df
-    bound_expr = expr
-    replayed = _try_replay_substrait(ctx, bound_expr, options=resolved)
-    if replayed is not None:
-        if not (resolved.params and _contains_params(expr)):
-            _maybe_explain(ctx, bound_expr, options=resolved)
-        _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=replayed)
-        return replayed
-    if resolved.params and _contains_params(expr):
-        bound_expr = _bind_params_for_ast(expr, options=resolved)
-    try:
-        df = df_from_sqlglot(ctx, bound_expr)
-    except TranslationError as exc:
-        msg = "DataFusion SQLGlot translation failed."
-        raise TranslationError(msg) from exc
-    _maybe_store_substrait(ctx, bound_expr, options=resolved)
-    _maybe_explain(ctx, bound_expr, options=resolved)
-    _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
-    return df
+    named_params = _validated_named_params(
+        resolved.named_params,
+        allowlist=resolved.param_identifier_allowlist,
+    )
+    if named_params:
+        read_only_policy = DataFusionSqlPolicy()
+        violations = _policy_violations(expr, read_only_policy)
+        if violations:
+            msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
+            raise ValueError(msg)
+    pipeline = _compilation_pipeline(ctx, options=resolved)
+    compiled = pipeline.compile_ast(expr)
+    resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
+    bindings = _validated_param_bindings(
+        resolved.params,
+        allowlist=resolved.param_identifier_allowlist,
+    )
+    sql_options = (
+        _sql_options_for_named_params(resolved)
+        if named_params
+        else _sql_options_for_options(resolved)
+    )
+    df = pipeline.execute(
+        compiled,
+        params=bindings or None,
+        named_params=named_params or None,
+        sql_options=sql_options,
+    )
+    _maybe_explain(ctx, compiled.sqlglot_ast, options=resolved)
+    _maybe_collect_plan_artifacts(ctx, compiled.sqlglot_ast, options=resolved, df=df)
+    return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
 
 
 def validate_table_constraints(
@@ -668,22 +681,51 @@ def sqlglot_to_datafusion(
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame representing the expression.
+
+    Raises
+    ------
+    ValueError
+        Raised when named parameters violate read-only SQL policy.
     """
-    options = options or DataFusionCompileOptions()
-    rewritten = _apply_rewrite_hook(expr, options=options)
-    _maybe_enforce_preflight(rewritten, options=options)
-    rewritten = _apply_dynamic_projection(rewritten, options=options)
-    return df_from_sqlglot_or_sql(
-        ctx,
-        rewritten,
-        options=options,
+    resolved = options or DataFusionCompileOptions()
+    named_params = _validated_named_params(
+        resolved.named_params,
+        allowlist=resolved.param_identifier_allowlist,
     )
+    if named_params:
+        read_only_policy = DataFusionSqlPolicy()
+        violations = _policy_violations(expr, read_only_policy)
+        if violations:
+            msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
+            raise ValueError(msg)
+    pipeline = _compilation_pipeline(ctx, options=resolved)
+    compiled = pipeline.compile_ast(expr)
+    resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
+    bindings = _validated_param_bindings(
+        resolved.params,
+        allowlist=resolved.param_identifier_allowlist,
+    )
+    sql_options = (
+        _sql_options_for_named_params(resolved)
+        if named_params
+        else _sql_options_for_options(resolved)
+    )
+    df = pipeline.execute(
+        compiled,
+        params=bindings or None,
+        named_params=named_params or None,
+        sql_options=sql_options,
+    )
+    _maybe_explain(ctx, compiled.sqlglot_ast, options=resolved)
+    _maybe_collect_plan_artifacts(ctx, compiled.sqlglot_ast, options=resolved, df=df)
+    return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
 
 
 def compile_sqlglot_expr(
     expr: IbisTable,
     *,
     backend: IbisCompilerBackend,
+    ctx: SessionContext | None = None,
     options: DataFusionCompileOptions | None = None,
 ) -> Expression:
     """Compile an Ibis expression into a SQLGlot expression.
@@ -694,6 +736,8 @@ def compile_sqlglot_expr(
         Ibis expression to compile.
     backend:
         Backend providing SQLGlot compilation support.
+    ctx:
+        Optional DataFusion session context for schema-aware canonicalization.
     options:
         Optional compilation options controlling rewrites and normalization.
 
@@ -705,23 +749,18 @@ def compile_sqlglot_expr(
     resolved = options or DataFusionCompileOptions()
     if resolved.ibis_expr is None:
         resolved = replace(resolved, ibis_expr=expr)
-    policy = _sqlglot_emit_policy(resolved)
-    sg_expr = ibis_to_sqlglot(
-        expr,
-        backend=backend,
-        params=_ibis_param_bindings(resolved.params),
-    )
-    sg_expr = _apply_rewrite_hook(sg_expr, options=resolved)
-    if resolved.optimize:
-        sg_expr = normalize_expr(
-            sg_expr,
-            options=NormalizeExprOptions(
-                schema=resolved.schema_map,
-                policy=policy,
-            ),
+    if ctx is None:
+        sg_expr = ibis_to_sqlglot(
+            expr,
+            backend=backend,
+            params=_ibis_param_bindings(resolved.params),
         )
-    _maybe_enforce_preflight(sg_expr, options=resolved)
-    return _apply_dynamic_projection(sg_expr, options=resolved)
+        sg_expr = _apply_rewrite_hook(sg_expr, options=resolved)
+        _maybe_enforce_preflight(sg_expr, options=resolved)
+        return _apply_dynamic_projection(sg_expr, options=resolved)
+    pipeline = _compilation_pipeline(ctx, options=resolved)
+    compiled = pipeline.compile_ibis(expr, backend=backend)
+    return compiled.sqlglot_ast
 
 
 def ibis_to_datafusion(
@@ -739,13 +778,25 @@ def ibis_to_datafusion(
         DataFusion DataFrame for the Ibis expression.
     """
     resolved = options or DataFusionCompileOptions()
-    sg_expr = compile_sqlglot_expr(expr, backend=backend, options=resolved)
-    resolved, cache_reason = _resolve_cache_policy(sg_expr, ctx=ctx, options=resolved)
-    df = df_from_sqlglot_or_sql(
-        ctx,
-        sg_expr,
-        options=resolved,
+    pipeline = _compilation_pipeline(ctx, options=resolved)
+    compiled = pipeline.compile_ibis(expr, backend=backend)
+    resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
+    bindings = _validated_param_bindings(
+        resolved.params,
+        allowlist=resolved.param_identifier_allowlist,
     )
+    named_params = _validated_named_params(
+        resolved.named_params,
+        allowlist=resolved.param_identifier_allowlist,
+    )
+    df = pipeline.execute(
+        compiled,
+        params=bindings or None,
+        named_params=named_params or None,
+        sql_options=_sql_options_for_options(resolved),
+    )
+    _maybe_explain(ctx, compiled.sqlglot_ast, options=resolved)
+    _maybe_collect_plan_artifacts(ctx, compiled.sqlglot_ast, options=resolved, df=df)
     return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
 
 
@@ -852,7 +903,7 @@ def _attempt_substrait_lane(
         if validation_result.get("status") == "mismatch":
             logger.warning("Substrait validation mismatch detected: %s", validation_result)
 
-    sg_expr = compile_sqlglot_expr(expr, backend=backend, options=options)
+    sg_expr = compile_sqlglot_expr(expr, backend=backend, ctx=ctx, options=options)
     resolved_cached, cache_reason = _resolve_cache_policy(sg_expr, ctx=ctx, options=options)
     cached_df = (
         df.cache() if _should_cache_df(df, options=resolved_cached, reason=cache_reason) else df
@@ -1226,6 +1277,29 @@ def _apply_dynamic_projection(
     return _rewrite_tables_with_projections(expr, projection_map=projection_map)
 
 
+def _apply_projection_overrides_for_expr(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> None:
+    if not options.dynamic_projection:
+        return
+    projection_map = _projection_requirements(expr)
+    if not projection_map:
+        return
+    apply_projection_scan_overrides(
+        ctx,
+        projection_map=projection_map,
+        runtime_profile=options.runtime_profile,
+    )
+    apply_projection_overrides(
+        ctx,
+        projection_map=projection_map,
+        sql_options=_sql_options_for_options(options),
+    )
+
+
 def _projection_requirements(expr: Expression) -> dict[str, tuple[str, ...]]:
     alias_map = _alias_to_table_map(expr)
     required: dict[str, set[str]] = {}
@@ -1465,12 +1539,16 @@ def _ibis_param_bindings(
 def _param_mode(values: Mapping[str, object] | Mapping[IbisValue, object] | None) -> str:
     if not values:
         return "none"
-    keys = list(values.keys())
-    if all(isinstance(key, str) for key in keys):
-        return "named"
-    if all(isinstance(key, IbisValue) for key in keys):
-        return "ibis"
-    return "mixed"
+    bindings = resolve_param_bindings(values)
+    has_scalar = bool(bindings.param_values)
+    has_tables = bool(bindings.named_tables)
+    if has_scalar and has_tables:
+        return "mixed"
+    if has_tables:
+        return "table"
+    if has_scalar:
+        return "scalar"
+    return "none"
 
 
 def _validated_param_bindings(
@@ -1501,7 +1579,7 @@ def _validated_named_params(
     params: Mapping[str, object] | None,
     *,
     allowlist: Sequence[str] | None,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     bindings = resolve_param_bindings(params, allowlist=allowlist)
     if bindings.param_values:
         msg = "Named parameters must be table-like."
@@ -1550,35 +1628,6 @@ def _sql_options_for_named_params(options: DataFusionCompileOptions) -> SQLOptio
         .with_allow_statements(allow_statements)
     )
 
-
-def _ensure_named_param_slot(ctx: SessionContext, name: str) -> None:
-    try:
-        ctx.table(name)
-    except (KeyError, RuntimeError, TypeError, ValueError):
-        return
-    msg = f"Named parameter {name!r} collides with an existing table."
-    raise ValueError(msg)
-
-
-@contextlib.contextmanager
-def _register_named_params(
-    ctx: SessionContext,
-    params: Mapping[str, object],
-) -> Iterator[None]:
-    if not params:
-        yield
-        return
-    registered: list[str] = []
-    try:
-        for name, value in params.items():
-            _ensure_named_param_slot(ctx, name)
-            ctx.register_table(name, value)
-            registered.append(name)
-        yield
-    finally:
-        for name in registered:
-            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                ctx.deregister_table(name)
 
 
 @dataclass(frozen=True)
@@ -1847,6 +1896,51 @@ def merge_format_options(
     return merged
 
 
+def _write_format(value: str | None) -> WriteFormat:
+    if value is None:
+        return WriteFormat.PARQUET
+    normalized = value.strip().lower()
+    mapping = {
+        "parquet": WriteFormat.PARQUET,
+        "csv": WriteFormat.CSV,
+        "json": WriteFormat.JSON,
+        "arrow": WriteFormat.ARROW,
+    }
+    resolved = mapping.get(normalized)
+    if resolved is None:
+        msg = f"Unsupported write format: {value!r}."
+        raise ValueError(msg)
+    return resolved
+
+
+def _write_pipeline_profile_for_dml(
+    options: DataFusionDmlOptions | None,
+) -> SQLPolicyProfile:
+    dialect = options.dialect if options is not None else "datafusion_ext"
+    _ensure_dialect(dialect)
+    return SQLPolicyProfile(read_dialect=dialect, write_dialect=dialect)
+
+
+def _sql_options_for_dml(
+    options: DataFusionDmlOptions | None,
+) -> SQLOptions | None:
+    if options is None:
+        return None
+    if options.sql_options is not None:
+        return options.sql_options
+    policy = options.sql_policy or resolve_sql_policy(
+        options.sql_policy_name,
+        fallback=_default_sql_policy(),
+    )
+    merged = _merge_sql_policies(
+        DataFusionSqlPolicy(allow_dml=True, allow_statements=True),
+        options.session_policy,
+        options.table_policy,
+        policy,
+    )
+    return merged.to_sql_options()
+
+
 def copy_to_path(
     ctx: SessionContext,
     *,
@@ -1860,10 +1954,50 @@ def copy_to_path(
     -------
     datafusion.dataframe.DataFrame
         DataFrame representing the COPY statement.
+
+    Raises
+    ------
+    ValueError
+        If file output is disallowed by the COPY options.
     """
-    statement = copy_to_statement(sql, path=path, options=options)
     resolved = options or CopyToOptions()
-    return execute_dml(ctx, statement, options=resolved.dml)
+    if not resolved.allow_file_output:
+        msg = "COPY TO file outputs are disabled; use Delta writes instead."
+        raise ValueError(msg)
+    profile = _write_pipeline_profile_for_dml(resolved.dml)
+    request = WriteRequest(
+        source=sql,
+        destination=path,
+        format=_write_format(resolved.file_format),
+        mode=WriteMode.ERROR,
+        partition_by=tuple(resolved.partition_by),
+        format_options=(
+            merge_format_options(
+                session_defaults=resolved.session_defaults,
+                table_options=resolved.table_options,
+                statement_overrides=resolved.statement_overrides,
+            )
+            or None
+        ),
+    )
+    pipeline = WritePipeline(
+        ctx,
+        profile,
+        sql_options=_sql_options_for_dml(resolved.dml),
+    )
+    copy_sql, df = pipeline.copy_dataframe(request)
+    if resolved.dml is not None and resolved.dml.record_hook is not None:
+        param_mode = _param_mode(resolved.dml.params)
+        resolved.dml.record_hook(
+            {
+                "sql": copy_sql,
+                "dialect": profile.write_dialect,
+                "policy_violations": [],
+                "sql_policy_name": resolved.dml.sql_policy_name,
+                "param_mode": param_mode,
+            }
+        )
+    return df
 
 
 def copy_to_statement(
@@ -2459,25 +2593,20 @@ def execute_sql(
         dialect=options.dialect,
         preserve_params=bool(bindings),
     )
+    resolved = replace(options, params=bindings or None, named_params=named_params or None)
     if named_params:
         read_only_policy = DataFusionSqlPolicy()
         violations = _policy_violations(expr, read_only_policy)
         if violations:
             msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
             raise ValueError(msg)
-        safe_options = replace(
-            options,
-            params=bindings or None,
-            named_params=None,
-            sql_options=_sql_options_for_named_params(options),
+        resolved = replace(
+            resolved,
+            sql_options=_sql_options_for_named_params(resolved),
             sql_policy=read_only_policy,
             sql_policy_name=None,
         )
-        _emit_named_param_diagnostics(safe_options, params=named_params)
-        with _register_named_params(ctx, named_params):
-            df = df_from_sqlglot_or_sql(ctx, expr, options=safe_options)
-            return _collect_reader(df)
-    resolved = replace(options, params=bindings or None)
+        _emit_named_param_diagnostics(resolved, params=named_params)
     df = df_from_sqlglot_or_sql(ctx, expr, options=resolved)
     return _collect_reader(df)
 
@@ -2529,6 +2658,7 @@ def datafusion_write_parquet(
     *,
     path: str,
     policy: DataFusionWritePolicy | None = None,
+    ctx: SessionContext | None = None,
 ) -> dict[str, object]:
     """Write a DataFusion DataFrame to Parquet using policy options.
 
@@ -2537,6 +2667,26 @@ def datafusion_write_parquet(
     dict[str, object]
         Payload describing the write policy applied.
     """
+    if ctx is None:
+        return _direct_parquet_write(df, path=path, policy=policy)
+    sql = datafusion_view_sql(df)
+    if sql is None:
+        return _direct_parquet_write(df, path=path, policy=policy)
+    return _pipeline_write_parquet(
+        ctx,
+        df=df,
+        sql=sql,
+        path=path,
+        policy=policy,
+    )
+
+
+def _direct_parquet_write(
+    df: DataFrame,
+    *,
+    path: str,
+    policy: DataFusionWritePolicy | None,
+) -> dict[str, object]:
     write_options, parquet_options = datafusion_write_options(policy)
     if parquet_options is None:
         df.write_parquet(path, write_options=write_options)
@@ -2546,6 +2696,84 @@ def datafusion_write_parquet(
         "path": str(path),
         "write_policy": policy.payload() if policy is not None else None,
         "parquet_options": _parquet_options_payload(parquet_options),
+    }
+
+
+def _available_column_names(df: DataFrame) -> set[str] | None:
+    schema = df.schema()
+    if isinstance(schema, pa.Schema):
+        return set(schema.names)
+    return None
+
+
+def _policy_columns(
+    names: Sequence[str] | None,
+    *,
+    available: set[str] | None,
+) -> tuple[str, ...]:
+    if not names:
+        return ()
+    if available is None:
+        return tuple(names)
+    return tuple(name for name in names if name in available)
+
+
+def _build_sorted_source(
+    sql: str,
+    *,
+    sort_by: tuple[str, ...],
+    profile: SQLPolicyProfile,
+) -> str | exp.Expression:
+    if not sort_by:
+        return sql
+    try:
+        parsed = parse_one(sql, dialect=profile.read_dialect)
+    except SqlglotError:
+        return sql
+    subquery = exp.Subquery(this=parsed)
+    source_expr = exp.select("*").from_(subquery)
+    order_exprs = [exp.Ordered(this=exp.column(name)) for name in sort_by]
+    source_expr.set("order", exp.Order(expressions=order_exprs))
+    return source_expr
+
+
+def _pipeline_write_parquet(
+    ctx: SessionContext,
+    *,
+    df: DataFrame,
+    sql: str,
+    path: str,
+    policy: DataFusionWritePolicy | None,
+) -> dict[str, object]:
+    profile = _write_pipeline_profile_for_dml(None)
+    available = _available_column_names(df)
+    partition_by = _policy_columns(
+        policy.partition_by if policy is not None else None,
+        available=available,
+    )
+    sort_by = _policy_columns(
+        policy.sort_by if policy is not None else None,
+        available=available,
+    )
+    source = _build_sorted_source(sql, sort_by=sort_by, profile=profile)
+    parquet_policy = parquet_policy_from_datafusion(policy)
+    request = WriteRequest(
+        source=source,
+        destination=path,
+        format=WriteFormat.PARQUET,
+        mode=WriteMode.OVERWRITE,
+        partition_by=partition_by,
+        parquet_policy=parquet_policy,
+        single_file_output=policy.single_file_output if policy is not None else None,
+    )
+    pipeline = WritePipeline(ctx, profile)
+    pipeline.write(request, prefer_streaming=True)
+    return {
+        "path": str(path),
+        "write_policy": policy.payload() if policy is not None else None,
+        "parquet_options": (
+            parquet_policy.to_copy_options() if parquet_policy is not None else None
+        ),
     }
 
 

@@ -10,6 +10,7 @@ import ibis
 import ibis.expr.datatypes as dt
 from ibis.expr.types import BooleanValue, Table, Value
 
+from datafusion_engine.param_binding import resolve_param_bindings
 from ibis_engine.param_tables import scalar_param_signature
 
 type JoinHow = Literal[
@@ -242,17 +243,11 @@ def datafusion_param_bindings(
     ValueError
         Raised when a parameter expression lacks a stable name.
     """
-    bindings: dict[str, object] = {}
-    for key, value in values.items():
-        if isinstance(key, str):
-            bindings[_normalize_sql_param_name(key)] = value
-            continue
-        name = _param_name(key)
-        if not name:
-            msg = "Parameter expression is missing a stable name."
-            raise ValueError(msg)
-        bindings[name] = value
-    return bindings
+    bindings = resolve_param_bindings(values)
+    if bindings.named_tables:
+        msg = "Scalar bindings cannot include table-like parameters."
+        raise ValueError(msg)
+    return bindings.param_values
 
 
 def param_binding_signature(
@@ -292,17 +287,21 @@ def param_binding_mode(values: Mapping[str, object] | Mapping[Value, object] | N
     Returns
     -------
     str
-        ``"none"`` when no parameters are provided, otherwise ``"named"``,
-        ``"typed"``, or ``"mixed"`` based on the binding keys.
+        ``"none"`` when no parameters are provided, otherwise ``"scalar"``,
+        ``"table"``, or ``"mixed"`` based on resolved binding lanes.
     """
     if not values:
         return "none"
-    keys = list(values.keys())
-    if all(isinstance(key, str) for key in keys):
-        return "named"
-    if all(isinstance(key, Value) for key in keys):
-        return "typed"
-    return "mixed"
+    bindings = resolve_param_bindings(values)
+    has_scalar = bool(bindings.param_values)
+    has_tables = bool(bindings.named_tables)
+    if has_scalar and has_tables:
+        return "mixed"
+    if has_tables:
+        return "table"
+    if has_scalar:
+        return "scalar"
+    return "none"
 
 
 def list_param_join(

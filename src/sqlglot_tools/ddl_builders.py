@@ -8,12 +8,52 @@ dialect-specific SQL.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sqlglot_tools.compat import exp
+from sqlglot_tools.optimizer import (
+    ExternalTableCompressionProperty,
+    ExternalTableOptionsProperty,
+    ExternalTableOrderProperty,
+)
 
 if TYPE_CHECKING:
     from ibis_engine.registry import DatasetLocation
+
+
+@dataclass(frozen=True)
+class ExternalTableDDLConfig:
+    """Configuration for external table DDL generation.
+
+    Parameters
+    ----------
+    schema
+        Explicit column definitions (name -> type).
+    file_format
+        File format (PARQUET, CSV, JSON, ARROW).
+    options
+        Format-specific options for the table provider.
+    compression
+        Compression type for external table registration.
+    partitioned_by
+        Partition columns for hive-style partitioning.
+    file_sort_order
+        File sort order columns for DataFusion listing tables.
+    unbounded
+        Whether to mark the table as UNBOUNDED EXTERNAL (streaming).
+    dialect
+        SQL dialect name for rendering.
+    """
+
+    schema: dict[str, str] | None = None
+    file_format: str = "PARQUET"
+    options: dict[str, str] | None = None
+    compression: str | None = None
+    partitioned_by: tuple[str, ...] | None = None
+    file_sort_order: tuple[str, ...] | None = None
+    unbounded: bool = False
+    dialect: str | None = "datafusion"
 
 
 def build_copy_to_ast(
@@ -103,10 +143,7 @@ def build_external_table_ddl(
     *,
     name: str,
     location: DatasetLocation,
-    schema: dict[str, str] | None = None,
-    file_format: str = "PARQUET",
-    options: dict[str, str] | None = None,
-    dialect: str | None = "datafusion",
+    config: ExternalTableDDLConfig | None = None,
 ) -> str:
     """
     Build CREATE EXTERNAL TABLE DDL via SQLGlot AST.
@@ -121,31 +158,35 @@ def build_external_table_ddl(
         Table name for registration.
     location
         Dataset location metadata including path and storage options.
-    schema
-        Explicit column definitions (name -> type).
-    file_format
-        File format (PARQUET, CSV, JSON, ARROW).
-    options
-        Format-specific options for the table provider.
+    config
+        Configuration for schema, format, options, and SQL dialect.
 
     Returns
     -------
     str
-        Rendered SQL DDL statement for postgres dialect.
+        Rendered SQL DDL statement for the configured dialect.
 
     Examples
     --------
     >>> from ibis_engine.registry import DatasetLocation
     >>> location = DatasetLocation(path="/data/events.parquet")
-    >>> ddl = build_external_table_ddl(
-    ...     name="events",
-    ...     location=location,
+    >>> config = ExternalTableDDLConfig(
     ...     schema={"id": "BIGINT", "timestamp": "TIMESTAMP"},
     ...     file_format="PARQUET",
     ... )
+    >>> ddl = build_external_table_ddl(name="events", location=location, config=config)
     >>> print(ddl)
     CREATE EXTERNAL TABLE events (id BIGINT, timestamp TIMESTAMP) ...
     """
+    ddl_config = config or ExternalTableDDLConfig()
+    schema = ddl_config.schema
+    file_format = ddl_config.file_format
+    options = ddl_config.options
+    compression = ddl_config.compression
+    partitioned_by = ddl_config.partitioned_by
+    file_sort_order = ddl_config.file_sort_order
+    unbounded = ddl_config.unbounded
+
     # Build column definitions if schema provided
     columns = None
     if schema:
@@ -159,37 +200,79 @@ def build_external_table_ddl(
             ]
         )
 
+    stored_as = "DELTATABLE" if file_format.lower() == "delta" else file_format.upper()
+    properties: list[exp.Expression] = [
+        exp.FileFormatProperty(this=exp.Var(this=stored_as)),
+        exp.LocationProperty(this=exp.Literal.string(str(location.path))),
+    ]
+    if compression:
+        properties.append(ExternalTableCompressionProperty(this=exp.Var(this=compression)))
+    if partitioned_by:
+        properties.append(
+            exp.PartitionedByProperty(
+                this=exp.Tuple(
+                    expressions=[exp.Identifier(this=name) for name in partitioned_by]
+                )
+            )
+        )
+    if file_sort_order:
+        properties.append(
+            ExternalTableOrderProperty(
+                expressions=[exp.Identifier(this=name) for name in file_sort_order]
+            )
+        )
+    options_property = _external_table_options_property(options)
+    if options_property is not None:
+        properties.append(options_property)
+
     # Build CREATE EXTERNAL TABLE expression
     create_expr = exp.Create(
         this=exp.Table(this=exp.to_identifier(name)),
-        kind="EXTERNAL TABLE",
+        kind="UNBOUNDED EXTERNAL" if unbounded else "EXTERNAL",
         expression=columns,
-        properties=exp.Properties(
-            expressions=[
-                exp.FileFormatProperty(this=exp.Var(this=file_format)),
-                exp.LocationProperty(this=exp.Literal.string(str(location.path))),
-            ]
-        ),
+        properties=exp.Properties(expressions=properties),
     )
 
-    # Add OPTIONS if provided
-    if options:
-        option_props = [
-            exp.Property(
-                this=exp.Literal.string(k),
-                value=exp.Literal.string(v),
-            )
-            for k, v in options.items()
-        ]
-        create_expr.args["properties"].append(exp.SettingsProperty(expressions=option_props))
-
     # Render with appropriate dialect (default to datafusion)
-    dialect_name = dialect or "datafusion"
+    dialect_name = ddl_config.dialect or "datafusion"
     if dialect_name in {"datafusion", "datafusion_ext"}:
         from sqlglot_tools.optimizer import register_datafusion_dialect
 
         register_datafusion_dialect()
     return create_expr.sql(dialect=dialect_name)
+
+
+def _external_table_options_property(
+    options: dict[str, str] | None,
+) -> ExternalTableOptionsProperty | None:
+    if not options:
+        return None
+    entries: list[exp.Expression] = []
+    for key, value in options.items():
+        rendered = _option_literal_value(value)
+        if rendered is None:
+            continue
+        entries.append(
+            exp.Tuple(
+                expressions=[
+                    exp.Literal.string(str(key)),
+                    exp.Literal.string(rendered),
+                ]
+            )
+        )
+    if not entries:
+        return None
+    return ExternalTableOptionsProperty(expressions=entries)
+
+
+def _option_literal_value(value: object) -> str | None:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    return None
 
 
 def build_insert_into_ast(

@@ -114,16 +114,15 @@ class DataFusionIOAdapter:
         """
         from sqlglot_tools.ddl_builders import build_external_table_ddl
 
-        return build_external_table_ddl(
-            name=name,
-            location=location,
-        )
+        return build_external_table_ddl(name=name, location=location)
 
     def register_external_table(
         self,
         *,
         name: str,
-        location: DatasetLocation,
+        location: DatasetLocation | str,
+        ddl: str | None = None,
+        sql_options: SQLOptions | None = None,
     ) -> None:
         """Register external table with full diagnostics.
 
@@ -137,22 +136,36 @@ class DataFusionIOAdapter:
             Table name for registration.
         location
             Dataset location metadata including path and storage options.
+        ddl
+            Optional pre-rendered DDL statement for registration.
+        sql_options
+            Optional SQL options override for the registration statement.
 
         Notes
         -----
         This method records a diagnostics artifact containing the
         generated DDL and location information when a diagnostics
         sink is configured in the runtime profile.
+
+        Raises
+        ------
+        ValueError
+            If DDL is not provided and location is not a DatasetLocation.
         """
-        ddl = self.external_table_ddl(name=name, location=location)
-        options = self._statement_options()
-        self.ctx.sql_with_options(ddl, options).collect()
+        resolved_ddl = ddl
+        if resolved_ddl is None:
+            if isinstance(location, str):
+                msg = "DatasetLocation is required when DDL is not provided."
+                raise ValueError(msg)
+            resolved_ddl = self.external_table_ddl(name=name, location=location)
+        options = sql_options or self._statement_options()
+        self.ctx.sql_with_options(resolved_ddl, options).collect()
         self._record_artifact(
             "external_table_registered",
             {
                 "name": name,
-                "location": str(location),
-                "ddl": ddl,
+                "location": _location_payload(location),
+                "ddl": resolved_ddl,
             },
         )
 
@@ -245,7 +258,7 @@ class DataFusionIOAdapter:
         Uses the `statement_sql_options_for_profile` function from
         `datafusion_engine.sql_safety` to generate SQL options.
         """
-        from datafusion_engine.sql_safety import statement_sql_options_for_profile
+        from datafusion_engine.sql_options import statement_sql_options_for_profile
 
         return statement_sql_options_for_profile(self.profile)
 
@@ -268,3 +281,9 @@ class DataFusionIOAdapter:
         """
         if self.profile and self.profile.diagnostics_sink:
             self.profile.diagnostics_sink.record_artifact(name, payload)
+
+
+def _location_payload(location: DatasetLocation | str) -> str:
+    if isinstance(location, str):
+        return location
+    return str(location.path)

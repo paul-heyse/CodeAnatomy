@@ -26,12 +26,8 @@ from arrowdsl.core.interop import (
 from arrowdsl.core.streaming import to_reader
 from core_types import PathLike
 from datafusion_engine.bridge import (
-    CopyToOptions,
-    DataFusionDmlOptions,
     DeltaInsertOptions,
     DeltaInsertResult,
-    copy_to_path,
-    copy_to_statement,
     datafusion_from_arrow,
     datafusion_insert_delta,
     datafusion_insert_from_dataframe,
@@ -40,10 +36,12 @@ from datafusion_engine.bridge import (
     ibis_plan_to_datafusion,
     ibis_to_datafusion,
 )
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.table_provider_metadata import (
     all_table_provider_metadata,
     table_provider_metadata,
 )
+from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.plan_policy import WriterStrategy
 from engine.plan_product import PlanProduct
 from ibis_engine.execution import (
@@ -65,6 +63,7 @@ from ibis_engine.sources import (
     write_delta_ibis,
 )
 from sqlglot_tools.bridge import IbisCompilerBackend
+from sqlglot_tools.compat import exp
 from storage.deltalake import (
     DeltaDataCheckRequest,
     DeltaWriteResult,
@@ -1113,7 +1112,7 @@ def _delta_insert_select_sql(
         return sql
     if temp_name is None:
         return None
-    return f"SELECT * FROM {_sql_identifier(temp_name)}"
+    return exp.select("*").from_(exp.table_(temp_name)).sql(dialect="datafusion")
 
 
 def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
@@ -1234,15 +1233,55 @@ def write_ibis_dataset_parquet(
     -------
     str
         Path to the parquet dataset directory.
+
+    Raises
+    ------
+    ValueError
+        If the runtime profile or Ibis backend is unavailable.
     """
-    table = _coerce_parquet_table(data, options=options, name=None)
+    from datafusion_engine.runtime import statement_sql_options_for_profile
+
+    runtime_profile = options.execution.ctx.runtime.datafusion
+    backend = options.execution.ibis_backend
+    if runtime_profile is None or backend is None:
+        msg = "Parquet exports require a runtime profile and Ibis backend."
+        raise ValueError(msg)
+    df_ctx = runtime_profile.session_context()
+    batch_size = options.execution.batch_size
+    df_obj, temp_name = _datafusion_df_for_write(
+        name="parquet",
+        value=data,
+        backend=cast("IbisCompilerBackend", backend),
+        ctx=df_ctx,
+        batch_size=batch_size,
+    )
+    df = cast("DataFrame", df_obj)
     path = Path(base_dir)
     _prepare_parquet_dir(path, overwrite=options.overwrite)
-    dataset_options = dict(options.dataset_options) if options.dataset_options is not None else {}
-    if options.partition_by is not None:
-        dataset_options.setdefault("partition_by", list(options.partition_by))
-    params = _parquet_params(options.execution.params)
-    table.to_parquet_dir(str(path), params=params, **dataset_options)
+    format_options: dict[str, object] = (
+        dict(options.dataset_options) if options.dataset_options is not None else {}
+    )
+    format_options.pop("partition_by", None)
+    partition_by = _copy_partition_by(options.partition_by, df)
+    request = WriteRequest(
+        source=_write_source(df, temp_name=temp_name),
+        destination=str(path),
+        format=WriteFormat.PARQUET,
+        mode=WriteMode.OVERWRITE if options.overwrite else WriteMode.ERROR,
+        partition_by=partition_by,
+        format_options=format_options or None,
+    )
+    profile = _write_pipeline_profile()
+    pipeline = WritePipeline(
+        df_ctx,
+        profile,
+        sql_options=statement_sql_options_for_profile(runtime_profile),
+    )
+    try:
+        pipeline.write(request, prefer_streaming=True)
+    finally:
+        if temp_name is not None:
+            _deregister_table(df_ctx, name=temp_name)
     return str(path)
 
 
@@ -1294,50 +1333,95 @@ def write_ibis_named_datasets_copy(
     df_ctx = runtime_profile.session_context()
     backend = cast("IbisCompilerBackend", options.execution.ibis_backend)
     batch_size = options.execution.batch_size
+    profile = _write_pipeline_profile()
+    pipeline = WritePipeline(
+        df_ctx,
+        profile,
+        sql_options=statement_sql_options_for_profile(runtime_profile),
+    )
+    write_format = _write_format(options.file_format)
+    context = _NamedCopyContext(
+        base_dir=base_dir,
+        options=options,
+        ctx=df_ctx,
+        backend=backend,
+        batch_size=batch_size,
+        pipeline=pipeline,
+        profile=profile,
+        write_format=write_format,
+    )
     results: dict[str, IbisCopyWriteResult] = {}
     for name, value in datasets.items():
-        df_obj, temp_name = _datafusion_df_for_write(
+        results[name] = _write_named_dataset_copy(
+            context,
             name=name,
             value=value,
-            backend=backend,
-            ctx=df_ctx,
-            batch_size=batch_size,
-        )
-        df = cast("DataFrame", df_obj)
-        target_path = Path(base_dir) / name
-        _prepare_copy_dir(target_path, overwrite=options.overwrite)
-        partition_by = _copy_partition_by(options.partition_by, df)
-        copy_options = CopyToOptions(
-            file_format=options.file_format,
-            partition_by=partition_by,
-            statement_overrides=options.statement_overrides,
-            allow_file_output=True,
-            dml=DataFusionDmlOptions(
-                sql_options=statement_sql_options_for_profile(runtime_profile),
-                record_hook=options.record_hook,
-            ),
-        )
-        copy_sql: str | None = None
-        try:
-            select_sql = _copy_select_sql(df, temp_name=temp_name)
-            copy_sql = copy_to_statement(select_sql, path=str(target_path), options=copy_options)
-            copy_to_path(
-                df_ctx, sql=select_sql, path=str(target_path), options=copy_options
-            ).collect()
-        finally:
-            if temp_name is not None:
-                _deregister_table(df_ctx, name=temp_name)
-        if copy_sql is None:
-            msg = "COPY writer failed to produce a SQL statement."
-            raise ValueError(msg)
-        results[name] = IbisCopyWriteResult(
-            path=str(target_path),
-            sql=copy_sql,
-            file_format=options.file_format,
-            partition_by=partition_by,
-            statement_overrides=options.statement_overrides,
         )
     return results
+
+
+@dataclass(frozen=True)
+class _NamedCopyContext:
+    base_dir: PathLike
+    options: IbisCopyWriteOptions
+    ctx: SessionContext
+    backend: IbisCompilerBackend
+    batch_size: int | None
+    pipeline: WritePipeline
+    profile: SQLPolicyProfile
+    write_format: WriteFormat
+
+
+def _write_named_dataset_copy(
+    context: _NamedCopyContext,
+    name: str,
+    value: IbisWriteInput,
+) -> IbisCopyWriteResult:
+    df_obj, temp_name = _datafusion_df_for_write(
+        name=name,
+        value=value,
+        backend=context.backend,
+        ctx=context.ctx,
+        batch_size=context.batch_size,
+    )
+    df = cast("DataFrame", df_obj)
+    target_path = Path(context.base_dir) / name
+    _prepare_copy_dir(target_path, overwrite=context.options.overwrite)
+    partition_by = _copy_partition_by(context.options.partition_by, df)
+    try:
+        request = WriteRequest(
+            source=_write_source(df, temp_name=temp_name),
+            destination=str(target_path),
+            format=context.write_format,
+            mode=WriteMode.OVERWRITE if context.options.overwrite else WriteMode.ERROR,
+            partition_by=partition_by,
+            format_options=(
+                dict(context.options.statement_overrides)
+                if context.options.statement_overrides
+                else None
+            ),
+        )
+        copy_sql = context.pipeline.write_via_copy(request)
+        if context.options.record_hook is not None:
+            context.options.record_hook(
+                {
+                    "sql": copy_sql,
+                    "dialect": context.profile.write_dialect,
+                    "policy_violations": [],
+                    "sql_policy_name": None,
+                    "param_mode": "none",
+                }
+            )
+    finally:
+        if temp_name is not None:
+            _deregister_table(context.ctx, name=temp_name)
+    return IbisCopyWriteResult(
+        path=str(target_path),
+        sql=copy_sql,
+        file_format=context.options.file_format,
+        partition_by=partition_by,
+        statement_overrides=context.options.statement_overrides,
+    )
 
 
 def _prepare_copy_dir(path: Path, *, overwrite: bool) -> None:
@@ -1345,20 +1429,44 @@ def _prepare_copy_dir(path: Path, *, overwrite: bool) -> None:
         shutil.rmtree(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+def _write_pipeline_profile() -> SQLPolicyProfile:
+    from sqlglot_tools.optimizer import register_datafusion_dialect, resolve_sqlglot_policy
 
-def _copy_select_sql(df: DataFrame, *, temp_name: str | None) -> str:
+    policy = resolve_sqlglot_policy(name="datafusion_dml")
+    register_datafusion_dialect(policy.write_dialect)
+    return SQLPolicyProfile(
+        read_dialect=policy.read_dialect,
+        write_dialect=policy.write_dialect,
+    )
+
+
+def _write_format(value: str) -> WriteFormat:
+    normalized = value.strip().lower()
+    mapping = {
+        "parquet": WriteFormat.PARQUET,
+        "csv": WriteFormat.CSV,
+        "json": WriteFormat.JSON,
+        "arrow": WriteFormat.ARROW,
+    }
+    resolved = mapping.get(normalized)
+    if resolved is None:
+        msg = f"Unsupported write format: {value!r}."
+        raise ValueError(msg)
+    return resolved
+
+
+def _write_source(
+    df: DataFrame,
+    *,
+    temp_name: str | None,
+) -> str | exp.Expression:
     sql = datafusion_view_sql(df)
     if sql is not None:
         return sql
     if temp_name is None:
-        msg = "COPY writer requires SQL for the DataFusion DataFrame."
+        msg = "Write pipeline requires SQL for the DataFusion DataFrame."
         raise ValueError(msg)
-    from sqlglot_tools.compat import exp
-    from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_emit
-
-    policy = resolve_sqlglot_policy(name="datafusion_dml")
-    query = exp.select("*").from_(exp.table_(temp_name))
-    return sqlglot_emit(query, policy=policy)
+    return exp.select("*").from_(exp.table_(temp_name))
 
 
 def _copy_partition_by(

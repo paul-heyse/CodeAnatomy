@@ -13,13 +13,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from datafusion import DataFrame, SessionContext
+from datafusion import DataFrame, SessionContext, SQLOptions
 from sqlglot import exp  # type: ignore[attr-defined]
 
 if TYPE_CHECKING:
-    from ibis.backends.datafusion import Backend
     from ibis.expr.types import Table as IbisTable
     from ibis.expr.types import Value as IbisValue
 
@@ -27,7 +26,9 @@ if TYPE_CHECKING:
         CompilationArtifacts,
         SQLPolicyProfile,
     )
+    from sqlglot_tools.bridge import IbisCompilerBackend
     from sqlglot_tools.compat import Expression
+    from sqlglot_tools.optimizer import SchemaMapping
 
 
 @dataclass(frozen=True)
@@ -96,7 +97,7 @@ class CompileOptions:
     prefer_substrait: bool = False
     prefer_ast_execution: bool = True
     profile: SQLPolicyProfile | None = None
-    schema: dict | None = None
+    schema: SchemaMapping | None = None
     enable_rewrites: bool = True
     rewrite_hook: Callable[[Expression], Expression] | None = None
 
@@ -139,13 +140,13 @@ class CompilationPipeline:
         """
         self.ctx = ctx
         self.options = options
-        self._schema_cache: dict | None = None
+        self._schema_cache: SchemaMapping | None = None
 
     def compile_ibis(
         self,
         expr: IbisTable,
         *,
-        backend: Backend | None = None,
+        backend: IbisCompilerBackend | None = None,
     ) -> CompiledExpression:
         """Compile Ibis expression through SQLGlot canonicalization.
 
@@ -169,10 +170,11 @@ class CompilationPipeline:
         )
 
         if backend is None:
-            backend = Backend.from_connection(self.ctx)
+            backend = cast("IbisCompilerBackend", Backend.from_connection(self.ctx))
+        compiler_backend = backend
 
         # 1. Ibis → SQLGlot AST (documented internal API)
-        raw_ast = backend.compiler.to_sqlglot(expr)
+        raw_ast = compiler_backend.compiler.to_sqlglot(expr)
         if self.options.enable_rewrites and self.options.rewrite_hook is not None:
             raw_ast = self.options.rewrite_hook(raw_ast)
 
@@ -250,11 +252,60 @@ class CompilationPipeline:
             artifacts=artifacts,
         )
 
+    def compile_ast(
+        self,
+        expr: exp.Expression,
+        *,
+        original_sql: str | None = None,
+    ) -> CompiledExpression:
+        """Compile SQLGlot AST through SQL policy canonicalization.
+
+        Parameters
+        ----------
+        expr
+            SQLGlot AST to compile.
+        original_sql
+            Optional original SQL string for error context.
+
+        Returns
+        -------
+        CompiledExpression
+            Compiled expression with AST, SQL, and artifacts.
+        """
+        from datafusion_engine.sql_policy_engine import (
+            compile_sql_policy,
+            render_for_execution,
+        )
+
+        # Type narrowing: profile is always non-None after __post_init__
+        assert self.options.profile is not None
+
+        raw_ast = expr
+        if self.options.enable_rewrites and self.options.rewrite_hook is not None:
+            raw_ast = self.options.rewrite_hook(raw_ast)
+
+        schema = self._get_schema()
+        canonical_ast, artifacts = compile_sql_policy(
+            raw_ast,
+            schema=schema,
+            profile=self.options.profile,
+            original_sql=original_sql,
+        )
+        rendered = render_for_execution(canonical_ast, self.options.profile)
+        return CompiledExpression(
+            ibis_expr=None,
+            sqlglot_ast=canonical_ast,
+            rendered_sql=rendered,
+            artifacts=artifacts,
+        )
+
     def execute(
         self,
         compiled: CompiledExpression,
         *,
         params: Mapping[str, object] | Mapping[IbisValue, object] | None = None,
+        named_params: Mapping[str, object] | None = None,
+        sql_options: SQLOptions | None = None,
         **kwargs: object,
     ) -> DataFrame:
         """Execute compiled expression and return DataFrame.
@@ -265,6 +316,10 @@ class CompilationPipeline:
             Compiled expression to execute.
         params
             Parameter bindings for execution (scalars and tables).
+        named_params
+            Table-like parameters to register for execution.
+        sql_options
+            Optional SQLOptions to use for execution.
         **kwargs
             Convenience keyword bindings (str keys). Mutually exclusive with params.
 
@@ -272,9 +327,14 @@ class CompilationPipeline:
         -------
         DataFrame
             DataFusion DataFrame result.
+
+        Raises
+        ------
+        ValueError
+            If both ``params`` and keyword arguments are provided.
         """
         from datafusion_engine.param_binding import (
-            apply_bindings_to_context,
+            register_table_params,
             resolve_param_bindings,
         )
 
@@ -285,21 +345,30 @@ class CompilationPipeline:
 
         # Resolve parameters
         bindings = resolve_param_bindings(bound_params)
+        if named_params is not None:
+            named_bindings = resolve_param_bindings(named_params)
+            if named_bindings.param_values:
+                msg = "Named parameters must be table-like."
+                raise ValueError(msg)
+            bindings = bindings.merge(named_bindings)
 
-        # Register table params
-        apply_bindings_to_context(self.ctx, bindings)
-
-        # Execute with scalar params
-        if self.options.prefer_ast_execution:
-            # DataFusion backend supports raw_sql(sge.Expression)
+        # Register table params with cleanup
+        with register_table_params(self.ctx, bindings):
+            if sql_options is not None:
+                return self.ctx.sql_with_options(
+                    compiled.rendered_sql,
+                    sql_options,
+                    **bindings.param_values,
+                )
             return self.ctx.sql(compiled.rendered_sql, **bindings.param_values)
-        return self.ctx.sql(compiled.rendered_sql, **bindings.param_values)
 
     def compile_and_execute(
         self,
         expr: IbisTable | str,
         *,
         params: Mapping[str, object] | Mapping[IbisValue, object] | None = None,
+        named_params: Mapping[str, object] | None = None,
+        sql_options: SQLOptions | None = None,
         **kwargs: object,
     ) -> DataFrame:
         """Compile and execute expression in single operation.
@@ -310,6 +379,10 @@ class CompilationPipeline:
             Ibis expression or SQL string to compile and execute.
         params
             Parameter bindings for execution.
+        named_params
+            Table-like parameters to register for execution.
+        sql_options
+            Optional SQLOptions to use for execution.
         **kwargs
             Convenience keyword bindings (str keys). Mutually exclusive with params.
 
@@ -319,14 +392,20 @@ class CompilationPipeline:
             DataFusion DataFrame result.
         """
         compiled = self.compile_sql(expr) if isinstance(expr, str) else self.compile_ibis(expr)
-        return self.execute(compiled, params=params, **kwargs)
+        return self.execute(
+            compiled,
+            params=params,
+            named_params=named_params,
+            sql_options=sql_options,
+            **kwargs,
+        )
 
-    def _get_schema(self) -> dict:
+    def _get_schema(self) -> SchemaMapping:
         """Get schema from introspection or cache.
 
         Returns
         -------
-        dict
+        SchemaMapping
             SQLGlot-compatible schema mapping.
         """
         if self._schema_cache is not None:
@@ -341,7 +420,7 @@ class CompilationPipeline:
         return self._schema_cache
 
 
-def build_schema_from_introspection(ctx: SessionContext) -> dict[str, dict]:
+def build_schema_from_introspection(ctx: SessionContext) -> SchemaMapping:
     """Build SQLGlot-compatible schema mapping from DataFusion context.
 
     This function introspects the DataFusion SessionContext to extract
@@ -355,7 +434,7 @@ def build_schema_from_introspection(ctx: SessionContext) -> dict[str, dict]:
 
     Returns
     -------
-    dict[str, dict]
+    SchemaMapping
         Nested schema mapping: {catalog: {schema: {table: {column: type}}}}.
     """
     from datafusion_engine.schema_introspection import (
@@ -364,5 +443,4 @@ def build_schema_from_introspection(ctx: SessionContext) -> dict[str, dict]:
     )
 
     introspector = SchemaIntrospector(ctx, sql_options=None)
-    # SchemaMapping is compatible with dict[str, dict]
-    return dict(schema_map_for_sqlglot(introspector))  # type: ignore[arg-type,return-value]
+    return schema_map_for_sqlglot(introspector)

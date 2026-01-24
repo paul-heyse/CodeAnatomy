@@ -923,9 +923,16 @@ def register_dataset_ddl(
         file_format=registration.file_format,
     )
     ddl = registration.spec.external_table_sql(config)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+    from ibis_engine.registry import DatasetLocation
 
-    options = sql_options or _statement_sql_options_for_profile(None)
-    ctx.sql_with_options(ddl, options).collect()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    adapter.register_external_table(
+        name=registration.name,
+        location=DatasetLocation(path=registration.location, format=registration.file_format),
+        ddl=ddl,
+        sql_options=sql_options or _statement_sql_options_for_profile(runtime_profile),
+    )
 
     # Record metadata for diagnostics
     record_table_provider_metadata(
@@ -1289,10 +1296,14 @@ def _register_external_table(
         sql_options=_statement_sql_options_for_profile(context.runtime_profile),
     )
     try:
-        context.ctx.sql_with_options(
-            context.external_table_sql,
-            _statement_sql_options_for_profile(context.runtime_profile),
-        ).collect()
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
+        adapter.register_external_table(
+            name=context.name,
+            location=context.location,
+            ddl=context.external_table_sql,
+        )
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Failed to register unbounded external table: {exc}"
         raise ValueError(msg) from exc

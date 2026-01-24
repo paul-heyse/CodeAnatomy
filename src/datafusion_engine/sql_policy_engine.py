@@ -12,6 +12,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlglot import exp, serde  # type: ignore[attr-defined]
 from sqlglot.optimizer import RULES, optimize
@@ -23,6 +24,9 @@ from sqlglot.optimizer.pushdown_projections import pushdown_projections
 from sqlglot.optimizer.qualify_columns import validate_qualify_columns
 from sqlglot.optimizer.simplify import simplify
 from sqlglot.schema import MappingSchema
+
+if TYPE_CHECKING:
+    from sqlglot_tools.optimizer import SchemaMapping
 
 
 @dataclass(frozen=True)
@@ -58,7 +62,9 @@ class SQLPolicyProfile:
 
     read_dialect: str = "postgres"
     write_dialect: str = "postgres"
-    optimizer_rules: tuple[Callable, ...] = RULES
+    optimizer_rules: tuple[Callable[..., object], ...] = field(
+        default_factory=lambda: cast("tuple[Callable[..., object], ...]", RULES),
+    )
     normalize_distance_limit: int = 128
     pushdown_projections: bool = True
     pushdown_predicates: bool = True
@@ -108,7 +114,7 @@ class CompilationArtifacts:
         Measured complexity of normalization operation.
     """
 
-    serde_payload: list
+    serde_payload: list[dict[str, Any]]
     ast_fingerprint: str
     lineage_by_column: dict[str, set[tuple[str, str]]]
     qualification_errors: list[str] = field(default_factory=list)
@@ -153,7 +159,7 @@ class CompilationArtifacts:
 def compile_sql_policy(
     expr: exp.Expression,
     *,
-    schema: MappingSchema | dict,
+    schema: MappingSchema | SchemaMapping,
     profile: SQLPolicyProfile,
     original_sql: str | None = None,
 ) -> tuple[exp.Expression, CompilationArtifacts]:
@@ -167,7 +173,7 @@ def compile_sql_policy(
     expr
         Parsed SQLGlot expression.
     schema
-        Schema for qualification and type inference. Can be dict or MappingSchema.
+        Schema for qualification and type inference.
     profile
         Compiler policy settings controlling optimization behavior.
     original_sql
@@ -179,8 +185,8 @@ def compile_sql_policy(
         Canonicalized AST and compilation artifacts including fingerprint and lineage.
     """
     # Ensure schema is MappingSchema
-    if isinstance(schema, dict):
-        schema = MappingSchema(schema)
+    if not isinstance(schema, MappingSchema):
+        schema = MappingSchema(dict(schema))
 
     # 1. Run optimizer with pinned rules
     qualified = optimize(

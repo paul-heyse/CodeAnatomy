@@ -17,13 +17,8 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
 from datafusion_engine.bridge import (
-    CopyToOptions,
-    DataFusionDmlOptions,
-    copy_to_path,
-    copy_to_statement,
     datafusion_from_arrow,
     datafusion_to_reader,
-    datafusion_write_parquet,
 )
 from datafusion_engine.dataset_locations import resolve_dataset_location
 from datafusion_engine.runtime import (
@@ -31,6 +26,15 @@ from datafusion_engine.runtime import (
     diagnostics_arrow_ingest_hook,
     diagnostics_dml_hook,
     statement_sql_options_for_profile,
+)
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+from datafusion_engine.write_pipeline import (
+    ParquetWritePolicy,
+    WriteFormat,
+    WriteMode,
+    WritePipeline,
+    WriteRequest,
+    parquet_policy_from_datafusion,
 )
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
@@ -46,6 +50,7 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import resolve_delta_log_storage_options
 from ibis_engine.runner import IbisCachePolicy
 from schema_spec.policies import DataFusionWritePolicy
+from sqlglot_tools.compat import exp
 from storage.deltalake import DeltaWriteResult
 
 if TYPE_CHECKING:
@@ -328,95 +333,101 @@ def _record_diskcache_stats(runtime_profile: DataFusionRuntimeProfile) -> None:
         sink.record_events("diskcache_stats_v1", events)
 
 
-def _copy_statement_overrides(
-    policy: DataFusionWritePolicy | None,
-    file_format: str,
-) -> dict[str, object] | None:
-    if policy is None or file_format != "parquet":
-        return None
-    options: dict[str, object] = {}
-    if policy.parquet_compression is not None:
-        options["compression"] = policy.parquet_compression
-    if policy.parquet_statistics_enabled is not None:
-        options["statistics_enabled"] = policy.parquet_statistics_enabled
-    if policy.parquet_row_group_size is not None:
-        options["max_row_group_size"] = int(policy.parquet_row_group_size)
-    return options or None
+def _write_pipeline_profile() -> SQLPolicyProfile:
+    from sqlglot_tools.optimizer import register_datafusion_dialect, resolve_sqlglot_policy
+
+    policy = resolve_sqlglot_policy(name="datafusion_dml")
+    register_datafusion_dialect(policy.write_dialect)
+    return SQLPolicyProfile(
+        read_dialect=policy.read_dialect,
+        write_dialect=policy.write_dialect,
+    )
 
 
-def _copy_options_payload(
-    *,
-    file_format: str,
-    partition_by: Sequence[str],
-    statement_overrides: Mapping[str, object] | None,
-) -> dict[str, object] | None:
-    payload: dict[str, object] = {
-        "file_format": file_format,
-        "partition_by": list(partition_by) if partition_by else None,
+def _write_format(value: str) -> WriteFormat:
+    normalized = value.strip().lower()
+    mapping = {
+        "parquet": WriteFormat.PARQUET,
+        "csv": WriteFormat.CSV,
+        "json": WriteFormat.JSON,
     }
-    if statement_overrides is not None:
-        payload["statement_overrides"] = dict(statement_overrides)
-    return payload
+    resolved = mapping.get(normalized)
+    if resolved is None:
+        msg = f"DataFusion writes only support parquet/csv/json, got {value!r}."
+        raise ValueError(msg)
+    return resolved
 
 
-def _copy_select_sql(
+def _write_partition_by(
+    policy: DataFusionWritePolicy | None,
+    *,
+    schema: pa.Schema,
+) -> tuple[str, ...]:
+    if policy is None or not policy.partition_by:
+        return ()
+    available = set(schema.names)
+    return tuple(name for name in policy.partition_by if name in available)
+
+
+def _write_sort_by(
+    policy: DataFusionWritePolicy | None,
+    *,
+    schema: pa.Schema,
+) -> tuple[str, ...]:
+    if policy is None or not policy.sort_by:
+        return ()
+    available = set(schema.names)
+    return tuple(name for name in policy.sort_by if name in available)
+
+
+def _write_select_expr(
     table_name: str,
     *,
     sort_by: Sequence[str],
     schema: pa.Schema,
-) -> str:
+) -> exp.Expression:
     available = set(schema.names)
     order_by = [name for name in sort_by if name in available]
-    from sqlglot_tools.compat import exp
-    from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_emit
-
-    policy = resolve_sqlglot_policy(name="datafusion_dml")
     query = exp.select("*").from_(exp.table_(table_name))
     if order_by:
         order_exprs = [exp.Ordered(this=exp.column(name)) for name in order_by]
         query.set("order", exp.Order(expressions=order_exprs))
-    return sqlglot_emit(query, policy=policy)
+    return query
 
 
-def _copy_options(
-    runtime_profile: DataFusionRuntimeProfile,
+def _copy_options_payload(
+    request: WriteRequest,
+) -> dict[str, object] | None:
+    payload: dict[str, object] = {
+        "file_format": request.format.name.lower(),
+        "partition_by": list(request.partition_by) if request.partition_by else None,
+    }
+    statement_overrides: dict[str, object] = {}
+    if request.format_options:
+        statement_overrides.update(request.format_options)
+    if request.parquet_policy is not None:
+        statement_overrides.update(request.parquet_policy.to_copy_options())
+    if statement_overrides:
+        payload["statement_overrides"] = statement_overrides
+    return payload
+
+
+def _parquet_payload(
     *,
-    dataset: str,
+    path: str,
     policy: DataFusionWritePolicy | None,
-    file_format: str,
-    schema: pa.Schema,
-) -> CopyToOptions:
-    partition_by: tuple[str, ...] = ()
-    if policy is not None:
-        available = set(schema.names)
-        partition_by = tuple(name for name in policy.partition_by if name in available)
-    statement_overrides = _copy_statement_overrides(policy, file_format)
-    record_hook = None
-    if runtime_profile.diagnostics_sink is not None:
-        base_hook = diagnostics_dml_hook(runtime_profile.diagnostics_sink)
-
-        def _hook(payload: Mapping[str, object]) -> None:
-            merged = dict(payload)
-            merged["dataset"] = dataset
-            merged["statement_type"] = "COPY"
-            merged["file_format"] = file_format
-            merged["partition_by"] = list(partition_by) if partition_by else None
-            merged["copy_options"] = (
-                dict(statement_overrides) if statement_overrides is not None else None
-            )
-            base_hook(merged)
-
-        record_hook = _hook
-    return CopyToOptions(
-        file_format=file_format,
-        partition_by=partition_by,
-        statement_overrides=statement_overrides,
-        allow_file_output=True,
-        dml=DataFusionDmlOptions(
-            sql_options=statement_sql_options_for_profile(runtime_profile),
-            record_hook=record_hook,
+    parquet_policy: ParquetWritePolicy | None,
+) -> dict[str, object] | None:
+    if policy is None and parquet_policy is None:
+        return None
+    payload: dict[str, object] = {
+        "path": path,
+        "write_policy": policy.payload() if policy is not None else None,
+        "parquet_options": (
+            parquet_policy.to_copy_options() if parquet_policy is not None else None
         ),
-    )
+    }
+    return payload
 
 
 def _ibis_execution_from_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
@@ -534,19 +545,115 @@ class _DeltaWriteContext:
     execution: IbisExecutionContext
 
 
+@dataclass(frozen=True)
+class _ExternalCopyDiagnosticsContext:
+    runtime_profile: DataFusionRuntimeProfile
+    dataset: str
+    request: WriteRequest
+    copy_sql: str | None
+    profile: SQLPolicyProfile
+    parquet_policy: ParquetWritePolicy | None
+    rows: int | None
+    write_policy: DataFusionWritePolicy | None
+
+
+def _build_external_write_request(
+    *,
+    context: _ExternalWriteContext,
+    temp_name: str,
+    df: DataFrame,
+    write_format: WriteFormat,
+) -> tuple[WriteRequest, ParquetWritePolicy | None]:
+    schema = cast("pa.Schema", df.schema())
+    sort_by = _write_sort_by(context.write_policy, schema=schema)
+    select_expr = _write_select_expr(temp_name, sort_by=sort_by, schema=schema)
+    partition_by = _write_partition_by(context.write_policy, schema=schema)
+    parquet_policy = parquet_policy_from_datafusion(context.write_policy)
+    request = WriteRequest(
+        source=select_expr,
+        destination=str(context.location.path),
+        format=write_format,
+        mode=WriteMode.OVERWRITE,
+        partition_by=partition_by,
+        parquet_policy=parquet_policy,
+        single_file_output=(
+            context.write_policy.single_file_output if context.write_policy is not None else None
+        ),
+    )
+    return request, parquet_policy
+
+
+def _build_external_write_pipeline(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> tuple[WritePipeline, SQLPolicyProfile]:
+    profile = _write_pipeline_profile()
+    pipeline = WritePipeline(
+        runtime_profile.session_context(),
+        profile,
+        sql_options=statement_sql_options_for_profile(runtime_profile),
+    )
+    return pipeline, profile
+
+
+def _emit_external_copy_diagnostics(context: _ExternalCopyDiagnosticsContext) -> None:
+    if context.copy_sql is not None and context.runtime_profile.diagnostics_sink is not None:
+        copy_payload = _copy_options_payload(context.request)
+        copy_options = copy_payload.get("statement_overrides") if copy_payload else None
+        record_hook = diagnostics_dml_hook(context.runtime_profile.diagnostics_sink)
+        record_hook(
+            {
+                "sql": context.copy_sql,
+                "dialect": context.profile.write_dialect,
+                "policy_violations": [],
+                "sql_policy_name": None,
+                "param_mode": "none",
+                "dataset": context.dataset,
+                "statement_type": "COPY",
+                "file_format": context.request.format.name.lower(),
+                "partition_by": (
+                    list(context.request.partition_by) if context.request.partition_by else None
+                ),
+                "copy_options": copy_options,
+            }
+        )
+    parquet_payload = (
+        _parquet_payload(
+            path=str(context.request.destination),
+            policy=context.write_policy,
+            parquet_policy=context.parquet_policy,
+        )
+        if context.request.format == WriteFormat.PARQUET
+        else None
+    )
+    copy_payload = (
+        _copy_options_payload(context.request) if context.copy_sql is not None else None
+    )
+    _record_extract_write(
+        context.runtime_profile,
+        record=_ExtractWriteRecord(
+            dataset=context.dataset,
+            mode="copy",
+            path=str(context.request.destination),
+            file_format=context.request.format.name.lower(),
+            rows=context.rows,
+            write_policy=context.write_policy,
+            parquet_payload=parquet_payload,
+            copy_sql=context.copy_sql,
+            copy_options=copy_payload,
+            delta_result=None,
+        ),
+    )
+
+
 def _write_external(
     reader: RecordBatchReaderLike,
     *,
     context: _ExternalWriteContext,
 ) -> None:
     location = context.location
-    normalized_format = location.format.lower()
-    if normalized_format not in {"parquet", "csv", "json"}:
-        msg = f"DataFusion writes only support parquet/csv/json, got {context.location.format!r}."
-        raise ValueError(msg)
+    write_format = _write_format(location.format)
     df_ctx = context.runtime_profile.session_context()
     temp_name = f"__extract_write_{uuid.uuid4().hex}"
-    view_name: str | None = None
     ingest_hook = (
         diagnostics_arrow_ingest_hook(context.runtime_profile.diagnostics_sink)
         if context.runtime_profile.diagnostics_sink is not None
@@ -559,77 +666,28 @@ def _write_external(
         ingest_hook=ingest_hook,
     )
     try:
-        if normalized_format == "parquet":
-            parquet_payload = datafusion_write_parquet(
-                df,
-                path=str(location.path),
-                policy=context.write_policy,
-            )
-            _record_extract_write(
-                context.runtime_profile,
-                record=_ExtractWriteRecord(
-                    dataset=context.dataset,
-                    mode="copy",
-                    path=str(location.path),
-                    file_format=normalized_format,
-                    rows=context.rows,
-                    write_policy=context.write_policy,
-                    parquet_payload=parquet_payload,
-                    copy_sql=None,
-                    copy_options=None,
-                    delta_result=None,
-                ),
-            )
-            return
-        copy_options = _copy_options(
-            context.runtime_profile,
-            dataset=context.dataset,
-            policy=context.write_policy,
-            file_format=normalized_format,
-            schema=df.schema(),
+        request, parquet_policy = _build_external_write_request(
+            context=context,
+            temp_name=temp_name,
+            df=df,
+            write_format=write_format,
         )
-        view_name = f"__extract_view_{uuid.uuid4().hex}"
-        df_ctx.register_table(view_name, df)
-        select_sql = _copy_select_sql(
-            view_name,
-            sort_by=context.write_policy.sort_by if context.write_policy else (),
-            schema=df.schema(),
-        )
-        copy_payload = _copy_options_payload(
-            file_format=normalized_format,
-            partition_by=copy_options.partition_by,
-            statement_overrides=copy_options.statement_overrides,
-        )
-        copy_sql = copy_to_statement(
-            select_sql,
-            path=str(location.path),
-            options=copy_options,
-        )
-        copy_to_path(
-            df_ctx,
-            sql=select_sql,
-            path=str(location.path),
-            options=copy_options,
-        ).collect()
-        _record_extract_write(
-            context.runtime_profile,
-            record=_ExtractWriteRecord(
+        pipeline, profile = _build_external_write_pipeline(context.runtime_profile)
+        copy_sql = pipeline.write(request, prefer_streaming=True)
+        _emit_external_copy_diagnostics(
+            _ExternalCopyDiagnosticsContext(
+                runtime_profile=context.runtime_profile,
                 dataset=context.dataset,
-                mode="copy",
-                path=str(location.path),
-                file_format=normalized_format,
+                request=request,
+                copy_sql=copy_sql,
+                profile=profile,
+                parquet_policy=parquet_policy,
                 rows=context.rows,
                 write_policy=context.write_policy,
-                parquet_payload=None,
-                copy_sql=copy_sql,
-                copy_options=copy_payload,
-                delta_result=None,
-            ),
+            )
         )
     finally:
         _deregister_table(df_ctx, name=temp_name)
-        if view_name is not None:
-            _deregister_table(df_ctx, name=view_name)
 
 
 def _write_delta(

@@ -15,7 +15,10 @@ from sqlglot import exp, parse_one  # type: ignore[attr-defined]
 from sqlglot.diff import Insert, Keep, Move, Remove, Update, diff  # type: ignore[attr-defined]
 
 if TYPE_CHECKING:
+    from sqlglot.diff import Edit
+
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+    from sqlglot_tools.optimizer import SchemaMapping
 
 
 class ChangeCategory(Enum):
@@ -159,7 +162,7 @@ class SemanticDiff:
         Categorized semantic changes.
     """
 
-    edits: list = field(default_factory=list)
+    edits: list[Edit] = field(default_factory=list)
     changes: list[SemanticChange] = field(default_factory=list)
 
     @classmethod
@@ -293,7 +296,7 @@ def compute_rebuild_needed(
     new_sql: str,
     *,
     profile: SQLPolicyProfile,
-    schema: dict,
+    schema: SchemaMapping,
     policy: RebuildPolicy = RebuildPolicy.CONSERVATIVE,
 ) -> tuple[bool, SemanticDiff]:
     """Determine if SQL change requires downstream rebuild.

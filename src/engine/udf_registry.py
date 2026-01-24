@@ -56,7 +56,7 @@ class UDFSignature:
     return_type: str
 
     @classmethod
-    def from_annotations(cls, func: Callable) -> UDFSignature:
+    def from_annotations(cls, func: Callable[..., object]) -> UDFSignature:
         """
         Extract signature from function annotations.
 
@@ -134,7 +134,7 @@ class UDFSpec:
 
     name: str
     lane: UDFLane
-    implementation: Callable
+    implementation: Callable[..., object]
     signature: UDFSignature
     description: str | None = None
     catalog: str | None = None
@@ -271,7 +271,7 @@ class FunctionRegistry:
     def register_pyarrow(
         self,
         name: str,
-        func: Callable,
+        func: Callable[..., object],
         signature: UDFSignature | None = None,
     ) -> None:
         """
@@ -301,7 +301,7 @@ class FunctionRegistry:
     def register_pandas(
         self,
         name: str,
-        func: Callable,
+        func: Callable[..., object],
         signature: UDFSignature | None = None,
     ) -> None:
         """
@@ -331,7 +331,7 @@ class FunctionRegistry:
     def register_python(
         self,
         name: str,
-        func: Callable,
+        func: Callable[..., object],
         signature: UDFSignature | None = None,
     ) -> None:
         """

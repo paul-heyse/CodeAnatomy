@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     from engine.plan_cache import PlanCache
     from sqlglot_tools.compat import Expression
     from sqlglot_tools.optimizer import SqlGlotPolicy
@@ -176,6 +177,7 @@ class DataFusionCompileOptions:
     runtime_profile: DataFusionRuntimeProfile | None = None
     sqlglot_policy: SqlGlotPolicy | None = None
     sqlglot_policy_hash: str | None = None
+    sql_policy_profile: SQLPolicyProfile | None = None
     run_id: str | None = None
     prefer_substrait: bool = False
     prefer_ast_execution: bool = False

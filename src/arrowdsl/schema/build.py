@@ -453,12 +453,7 @@ def record_batches_from_row_batches(
     for batch in row_batches:
         if not batch:
             continue
-        aligned = table_from_rows(schema, batch)
-        extra = pa.Table.from_pylist(batch)
-        for name in extra.column_names:
-            if name in aligned.column_names:
-                continue
-            aligned = aligned.append_column(name, extra[name])
+        aligned = _table_from_row_batch(schema, batch)
         yield from aligned.to_batches()
 
 
@@ -490,7 +485,36 @@ def record_batch_reader_from_row_batches(
     pyarrow.RecordBatchReader
         Reader yielding schema-aligned record batches.
     """
-    return pa.RecordBatchReader.from_batches(schema, record_batches_from_row_batches(schema, row_batches))
+    iterator = iter(row_batches)
+    first_batch: Sequence[Mapping[str, object]] | None = None
+    for batch in iterator:
+        if batch:
+            first_batch = batch
+            break
+    if first_batch is None:
+        return pa.RecordBatchReader.from_batches(schema, [])
+    first_table = _table_from_row_batch(schema, first_batch)
+    reader_schema = first_table.schema
+
+    def _iter_batches() -> Iterator[pa.RecordBatch]:
+        yield from first_table.to_batches()
+        for batch in iterator:
+            if not batch:
+                continue
+            table = table_from_rows(reader_schema, batch)
+            yield from table.to_batches()
+
+    return pa.RecordBatchReader.from_batches(reader_schema, _iter_batches())
+
+
+def _table_from_row_batch(schema: pa.Schema, batch: Sequence[Mapping[str, object]]) -> pa.Table:
+    aligned = table_from_rows(schema, batch)
+    extra = pa.Table.from_pylist(batch)
+    for name in extra.column_names:
+        if name in aligned.column_names:
+            continue
+        aligned = aligned.append_column(name, extra[name])
+    return aligned
 
 
 __all__ = [
@@ -518,11 +542,11 @@ __all__ = [
     "maybe_dictionary",
     "nested_array_factory",
     "pick_first",
-    "resolve_float_col",
-    "resolve_string_col",
-    "record_batches_from_row_batches",
     "record_batch_reader_from_row_batches",
     "record_batch_reader_from_rows",
+    "record_batches_from_row_batches",
+    "resolve_float_col",
+    "resolve_string_col",
     "rows_from_table",
     "rows_to_table",
     "set_or_append_column",

@@ -1569,6 +1569,66 @@ RELATION_OUTPUT_SCHEMA = _schema_with_metadata(
     ),
 )
 
+CPG_NODES_SCHEMA = _schema_with_metadata(
+    "cpg_nodes_v1",
+    pa.schema(
+        [
+            pa.field("node_id", pa.string(), nullable=True),
+            pa.field("node_kind", pa.string(), nullable=True),
+            pa.field("path", pa.string(), nullable=True),
+            pa.field("bstart", pa.int64(), nullable=True),
+            pa.field("bend", pa.int64(), nullable=True),
+            pa.field("file_id", pa.string(), nullable=True),
+            pa.field("task_name", pa.string(), nullable=True),
+            pa.field("task_priority", pa.int32(), nullable=True),
+        ]
+    ),
+)
+
+CPG_EDGES_SCHEMA = _schema_with_metadata(
+    "cpg_edges_v1",
+    pa.schema(
+        [
+            pa.field("edge_id", pa.string(), nullable=True),
+            pa.field("edge_kind", pa.string(), nullable=True),
+            pa.field("src_node_id", pa.string(), nullable=True),
+            pa.field("dst_node_id", pa.string(), nullable=True),
+            pa.field("path", pa.string(), nullable=True),
+            pa.field("bstart", pa.int64(), nullable=True),
+            pa.field("bend", pa.int64(), nullable=True),
+            pa.field("origin", pa.string(), nullable=True),
+            pa.field("resolution_method", pa.string(), nullable=True),
+            pa.field("confidence", pa.float32(), nullable=True),
+            pa.field("score", pa.float32(), nullable=True),
+            pa.field("symbol_roles", pa.int32(), nullable=True),
+            pa.field("qname_source", pa.string(), nullable=True),
+            pa.field("ambiguity_group_id", pa.string(), nullable=True),
+            pa.field("task_name", pa.string(), nullable=True),
+            pa.field("task_priority", pa.int32(), nullable=True),
+        ]
+    ),
+)
+
+CPG_PROPS_SCHEMA = _schema_with_metadata(
+    "cpg_props_v1",
+    pa.schema(
+        [
+            pa.field("entity_kind", pa.string(), nullable=True),
+            pa.field("entity_id", pa.string(), nullable=True),
+            pa.field("node_kind", pa.string(), nullable=True),
+            pa.field("prop_key", pa.string(), nullable=True),
+            pa.field("value_type", pa.string(), nullable=True),
+            pa.field("value_string", pa.string(), nullable=True),
+            pa.field("value_int", pa.int64(), nullable=True),
+            pa.field("value_float", pa.float64(), nullable=True),
+            pa.field("value_bool", pa.bool_(), nullable=True),
+            pa.field("value_json", pa.string(), nullable=True),
+            pa.field("task_name", pa.string(), nullable=True),
+            pa.field("task_priority", pa.int32(), nullable=True),
+        ]
+    ),
+)
+
 SCALAR_PARAM_SIGNATURE_SCHEMA = _schema_with_metadata(
     "scalar_param_signature_v1",
     pa.schema(
@@ -1617,6 +1677,9 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "ast_files_v1": AST_FILES_SCHEMA,
     "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
     "callsite_qname_candidates_v1": CALLSITE_QNAME_CANDIDATES_SCHEMA,
+    "cpg_edges_v1": CPG_EDGES_SCHEMA,
+    "cpg_nodes_v1": CPG_NODES_SCHEMA,
+    "cpg_props_v1": CPG_PROPS_SCHEMA,
     "dataset_fingerprint_v1": DATASET_FINGERPRINT_SCHEMA,
     "datafusion_cache_state_v1": DATAFUSION_CACHE_STATE_SCHEMA,
     "datafusion_ddl_fingerprints_v1": DATAFUSION_DDL_FINGERPRINTS_SCHEMA,
@@ -4325,6 +4388,9 @@ __all__ = [
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
     "CST_VIEW_NAMES",
+    "CPG_EDGES_SCHEMA",
+    "CPG_NODES_SCHEMA",
+    "CPG_PROPS_SCHEMA",
     "DIAG_DETAILS_TYPE",
     "DIAG_DETAIL_STRUCT",
     "DIAG_TAGS_TYPE",

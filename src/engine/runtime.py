@@ -96,12 +96,21 @@ def _apply_diagnostics_policy(
         Updated runtime profile with diagnostics settings applied.
     """
     capture_explain = policy.capture_datafusion_explains
+    enable_metrics = policy.capture_datafusion_metrics
+    enable_tracing = policy.capture_datafusion_traces
+    capture_plan_artifacts = capture_explain
     return replace(
         profile,
         capture_explain=capture_explain,
         explain_analyze=policy.explain_analyze,
         explain_analyze_level=policy.explain_analyze_level,
         explain_collector=profile.explain_collector if capture_explain else None,
+        capture_plan_artifacts=capture_plan_artifacts,
+        plan_collector=profile.plan_collector if capture_plan_artifacts else None,
+        enable_metrics=enable_metrics,
+        metrics_collector=profile.metrics_collector if enable_metrics else None,
+        enable_tracing=enable_tracing,
+        tracing_collector=profile.tracing_collector if enable_tracing else None,
     )
 
 

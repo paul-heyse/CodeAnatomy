@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import symtable
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -26,6 +25,7 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
+from extract.parallel import resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
@@ -113,11 +113,13 @@ def _symtable_cache_key(file_ctx: FileContext, *, compile_type: str) -> tuple[st
     return (file_ctx.file_id, file_ctx.file_sha256, compile_type)
 
 
-def _effective_max_workers(options: SymtableExtractOptions) -> int:
-    if options.max_workers is None:
-        cpu_count = os.cpu_count() or 1
-        return max(1, min(32, cpu_count))
-    return max(1, options.max_workers)
+def _effective_max_workers(
+    options: SymtableExtractOptions,
+    *,
+    ctx: ExecutionContext | None,
+) -> int:
+    max_workers = resolve_max_workers(options.max_workers, ctx=ctx, kind="cpu")
+    return max(1, min(32, max_workers))
 
 
 def _scope_type_str(tbl: symtable.SymbolTable) -> str:
@@ -592,7 +594,7 @@ def _collect_symtable_file_rows(
             file_contexts=file_contexts,
         )
     )
-    max_workers = _effective_max_workers(options)
+    max_workers = _effective_max_workers(options, ctx=ctx)
     if max_workers <= 1:
         return [
             row

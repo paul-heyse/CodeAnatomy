@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from ibis.expr.types import Value
 
-from arrowdsl.core.interop import TableLike
 from cpg.kind_catalog import EntityKind
 from cpg.prop_transforms import (
     expr_context_expr,
@@ -20,7 +19,6 @@ from cpg.prop_transforms import (
 if TYPE_CHECKING:
     from cpg.kind_catalog import EdgeKindId, NodeKindId
 
-type TableFilter = Callable[[TableLike], TableLike]
 type PropValueType = Literal["string", "int", "float", "bool", "json"]
 type PropTransformFn = Callable[[object | None], object | None]
 type PropTransformExprFn = Callable[[Value], Value]
@@ -67,9 +65,6 @@ def _include_heavy_json(options: PropOptions) -> bool:
 PROP_INCLUDES: dict[str, PropIncludeFn] = {
     INCLUDE_HEAVY_JSON: _include_heavy_json,
 }
-
-
-EDGE_FILTERS: dict[str, TableFilter] = {}
 
 
 def resolve_prop_transform(transform_id: str | None) -> PropTransformSpec | None:
@@ -137,28 +132,6 @@ def filter_fields(
     return selected
 
 
-def resolve_edge_filter(filter_id: str | None) -> TableFilter | None:
-    """Return the relation filter for a filter id.
-
-    Returns
-    -------
-    TableFilter | None
-        Relation filter for the id, if registered.
-
-    Raises
-    ------
-    ValueError
-        Raised when the filter id is not registered.
-    """
-    if filter_id is None:
-        return None
-    fn = EDGE_FILTERS.get(filter_id)
-    if fn is None:
-        msg = f"Unknown edge filter id: {filter_id!r}"
-        raise ValueError(msg)
-    return fn
-
-
 @dataclass(frozen=True)
 class EdgeEmitSpec:
     """Mapping for emitting edges from a relation table."""
@@ -171,17 +144,6 @@ class EdgeEmitSpec:
     path_cols: tuple[str, ...] = ("path",)
     bstart_cols: tuple[str, ...] = ("bstart",)
     bend_cols: tuple[str, ...] = ("bend",)
-
-
-@dataclass(frozen=True)
-class EdgePlanSpec:
-    """Spec for emitting a family of edges."""
-
-    name: str
-    option_flag: str
-    relation_ref: str
-    emit: EdgeEmitSpec
-    filter_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -201,7 +163,6 @@ class NodePlanSpec:
     """Spec for emitting a node family from a table."""
 
     name: str
-    option_flag: str
     table_ref: str
     emit: NodeEmitSpec
     preprocessor_id: str | None = None
@@ -261,7 +222,6 @@ class PropTableSpec:
     """Spec for emitting properties from a table."""
 
     name: str
-    option_flag: str
     table_ref: str
     entity_kind: EntityKind
     id_cols: tuple[str, ...]

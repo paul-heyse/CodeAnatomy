@@ -15,7 +15,6 @@ from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
     ExtractPlanOptions,
-    empty_ibis_plan,
     extract_plan_from_rows,
     materialize_extract_plan,
 )
@@ -222,7 +221,12 @@ def scan_repo(
     )
     max_files = normalized_options.max_files
     if max_files is not None and max_files <= 0:
-        empty_plan = empty_ibis_plan("repo_files_v1", session=session)
+        empty_plan = extract_plan_from_rows(
+            "repo_files_v1",
+            [],
+            session=session,
+            options=ExtractPlanOptions(normalize=normalize),
+        )
         return materialize_extract_plan(
             "repo_files_v1",
             empty_plan,

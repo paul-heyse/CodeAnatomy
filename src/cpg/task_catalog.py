@@ -20,6 +20,11 @@ def cpg_task_catalog() -> TaskCatalog:
         Catalog with task specs for CPG outputs.
     """
 
+    cpg_task_priority = 100
+    cpg_nodes_task = "cpg.nodes"
+    cpg_edges_task = "cpg.edges"
+    cpg_props_task = "cpg.props"
+
     def _build_nodes(context: TaskBuildContext) -> IbisPlan:
         if context.ibis_catalog is None:
             msg = "TaskBuildContext.ibis_catalog is required for CPG tasks."
@@ -28,6 +33,8 @@ def cpg_task_catalog() -> TaskCatalog:
             context.ibis_catalog,
             context.ctx,
             context.backend,
+            task_name=cpg_nodes_task,
+            task_priority=cpg_task_priority,
         )
 
     def _build_edges(context: TaskBuildContext) -> IbisPlan:
@@ -48,12 +55,32 @@ def cpg_task_catalog() -> TaskCatalog:
             context.ibis_catalog,
             context.ctx,
             context.backend,
+            task_name=cpg_props_task,
+            task_priority=cpg_task_priority,
         )
 
     tasks = (
-        TaskSpec(name="cpg.nodes", output="cpg_nodes_v1", build=_build_nodes, kind="compute"),
-        TaskSpec(name="cpg.edges", output="cpg_edges_v1", build=_build_edges, kind="compute"),
-        TaskSpec(name="cpg.props", output="cpg_props_v1", build=_build_props, kind="compute"),
+        TaskSpec(
+            name=cpg_nodes_task,
+            output="cpg_nodes_v1",
+            build=_build_nodes,
+            kind="compute",
+            priority=cpg_task_priority,
+        ),
+        TaskSpec(
+            name=cpg_edges_task,
+            output="cpg_edges_v1",
+            build=_build_edges,
+            kind="compute",
+            priority=cpg_task_priority,
+        ),
+        TaskSpec(
+            name=cpg_props_task,
+            output="cpg_props_v1",
+            build=_build_props,
+            kind="compute",
+            priority=cpg_task_priority,
+        ),
     )
     return TaskCatalog(tasks=tasks)
 

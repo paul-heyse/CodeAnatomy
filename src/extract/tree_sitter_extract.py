@@ -41,7 +41,7 @@ from extract.helpers import (
     materialize_extract_plan,
     span_dict,
 )
-from extract.parallel import parallel_map
+from extract.parallel import parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.tree_sitter_cache import TreeSitterCache, TreeSitterParseResult
 from extract.tree_sitter_queries import TreeSitterQueryPack, compile_query_pack
@@ -1024,7 +1024,7 @@ def _collect_ts_rows(
     )
     if not contexts:
         return rows
-    rows.extend(_iter_ts_rows_for_contexts(contexts, options=options))
+    rows.extend(_iter_ts_rows_for_contexts(contexts, options=options, ctx=ctx))
     return rows
 
 
@@ -1032,6 +1032,7 @@ def _iter_ts_rows_for_contexts(
     contexts: Sequence[FileContext],
     *,
     options: TreeSitterExtractOptions,
+    ctx: ExecutionContext | None,
 ) -> Iterator[Row]:
     if not options.parallel:
         for file_ctx in contexts:
@@ -1040,7 +1041,8 @@ def _iter_ts_rows_for_contexts(
                 yield row
         return
     runner = partial(_ts_row_worker, options=options)
-    for row in parallel_map(contexts, runner, max_workers=options.max_workers):
+    max_workers = resolve_max_workers(options.max_workers, ctx=ctx, kind="cpu")
+    for row in parallel_map(contexts, runner, max_workers=max_workers):
         if row is not None:
             yield row
 
@@ -1064,7 +1066,7 @@ def _iter_ts_row_batches(
     )
     if not contexts:
         return
-    for row in _iter_ts_rows_for_contexts(contexts, options=options):
+    for row in _iter_ts_rows_for_contexts(contexts, options=options, ctx=ctx):
         batch.append(row)
         if len(batch) >= batch_size:
             yield batch

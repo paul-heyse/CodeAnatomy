@@ -85,7 +85,7 @@ return materialize_extract_plan(name, plan, ctx=session.exec_ctx, options=option
 ## Scope 3 — SQLGlot policy normalization for worklists and SQL execution
 **Objective:** Enforce centralized SQLGlot policy on worklist queries and DataFusion execution.
 
-**Status:** Not started.
+**Status:** Completed (worklist SQLGlot expressions normalized via `datafusion_compile` policy; output datasets registered from Delta locations).
 
 **Representative pattern**
 ```python
@@ -100,19 +100,19 @@ df = df_from_sqlglot(ctx, expr)
 - `src/datafusion_engine/df_builder.py` (if needed for policy hooks)
 
 **Implementation checklist**
-- Normalize worklist SQLGlot expressions via policy before execution.
-- Replace custom INFO_SCHEMA SQL with DataFusion schema introspector helpers.
-- Introduce a `SqlExprSpec` wrapper for worklist expressions (optional) for diagnostics/fingerprints.
+- ✅ Normalize worklist SQLGlot expressions via policy before execution.
+- ✅ Replace custom INFO_SCHEMA SQL checks with `table_names_snapshot`.
+- ⏸️ `SqlExprSpec` wrapper for diagnostics/fingerprints (optional; skipped).
 
 **Decommission candidates**
-- `_table_exists` manual INFO_SCHEMA query in `src/extract/worklists.py` (replace with introspector helper)
+- `_table_exists` manual INFO_SCHEMA query in `src/extract/worklists.py` (replaced with introspector helper).
 
 ---
 
 ## Scope 4 — Centralize schema normalization via finalize pipeline
 **Objective:** Remove custom schema alignment/encoding paths in extract and route normalization through the unified finalize pipeline.
 
-**Status:** Not started.
+**Status:** Completed (normalize-only lane via finalize; extract normalization now uses finalize schema policy).
 
 **Representative pattern**
 ```python
@@ -127,19 +127,19 @@ normalized = result.good
 - `src/datafusion_engine/finalize.py` (add normalization mode if needed)
 
 **Implementation checklist**
-- Add a finalize “normalize‑only” lane for extract outputs (no invariants if desired).
-- Replace `normalize_extract_output` and `normalize_extract_reader` logic with finalize pipeline.
-- Ensure streaming normalization uses finalize’s schema policy when compatible.
+- ✅ Add a finalize “normalize‑only” lane for extract outputs.
+- ✅ Replace `normalize_extract_output` logic to use finalize normalization.
+- ✅ Ensure streaming normalization uses finalize’s schema policy when compatible.
 
 **Decommission candidates**
-- `normalize_extract_output` / `normalize_extract_reader` if fully replaced
+- Custom align/encode logic inside `normalize_extract_output` (replaced by finalize normalization).
 
 ---
 
 ## Scope 5 — Delta‑native repo scans and worklists
 **Objective:** Store repo scans as Delta datasets and drive worklists with SQL/DataFusion rather than Python diffs.
 
-**Status:** Not started.
+**Status:** Completed (repo scans write via extract materialization; worklists register Delta datasets).
 
 **Representative pattern**
 ```python
@@ -156,19 +156,19 @@ write_delta_dataset(table, location=location)
 - `src/storage/deltalake/*`
 
 **Implementation checklist**
-- Persist repo scan outputs to Delta.
-- Replace hash‑index cache with Delta CDF or SQL diff query.
-- Update worklist pipeline to query Delta table state directly.
+- ✅ Persist repo scan outputs via extract materialization (Delta when configured).
+- ✅ Replace hash‑index cache with SQL diff query (removed hash index reuse).
+- ✅ Register output datasets from Delta locations before worklist SQL execution.
 
 **Decommission candidates**
-- `RepoFileFingerprint` + `repo_scan_hash_index` logic (if Delta CDF replaces hash caching)
+- `RepoFileFingerprint` + `repo_scan_hash_index` (removed).
 
 ---
 
 ## Scope 6 — Consolidate row‑batch conversion utilities
 **Objective:** Remove duplicated row‑batch conversion utilities and centralize in Arrow/Storage utilities.
 
-**Status:** Not started.
+**Status:** Completed (row‑batch conversion helpers centralized in `arrowdsl.schema.build`).
 
 **Representative pattern**
 ```python
@@ -182,19 +182,19 @@ reader = record_batch_reader_from_rows(schema, rows)
 - `src/arrowdsl/schema/build.py` or `src/storage/ipc.py` (new canonical helper)
 
 **Implementation checklist**
-- Choose a single canonical row‑batch conversion helper.
-- Replace all call sites in extract pipeline.
-- Remove redundant helpers in extract.
+- ✅ Centralize row‑batch conversion helpers in `arrowdsl.schema.build`.
+- ✅ Route extract helper wrappers to the canonical helpers.
+- ✅ Remove redundant `src/extract/batching.py`.
 
 **Decommission candidates**
-- `src/extract/batching.py` or duplicate helpers in `src/extract/helpers.py` (keep one canonical source)
+- `src/extract/batching.py` (removed).
 
 ---
 
 ## Scope 7 — Evidence projection moved into registry query specs
 **Objective:** Make evidence projection an explicit part of registry query specs instead of extract‑side ad‑hoc projections.
 
-**Status:** Not started.
+**Status:** Completed (evidence projection resolved via registry query projection).
 
 **Representative pattern**
 ```python
@@ -208,19 +208,19 @@ spec = dataset_query(name, repo_id=repo_id, projection=required_columns)
 - `src/extract/evidence_plan.py`
 
 **Implementation checklist**
-- Add “evidence projection” inputs to dataset query construction.
-- Remove `apply_evidence_projection` from extract pipeline when registry handles it.
-- Ensure evidence requirements are injected into query spec generation.
+- ✅ Add evidence-driven projection to `dataset_query`.
+- ✅ Remove `apply_evidence_projection` from extract pipeline.
+- ✅ Inject evidence-required columns into query spec generation.
 
 **Decommission candidates**
-- `apply_evidence_projection` and `_projection_columns` in `src/extract/helpers.py` (if registry handles projections)
+- `apply_evidence_projection` (removed).
 
 ---
 
 ## Scope 8 — Runtime‑aware parallelism
 **Objective:** Make extract parallelism honor runtime CPU/I/O thread settings.
 
-**Status:** Not started.
+**Status:** Completed (parallel workers resolved from runtime profile).
 
 **Representative pattern**
 ```python
@@ -233,8 +233,8 @@ parallel_map(items, fn, max_workers=max_workers)
 - `src/extract/*_extract.py` (sites calling `parallel_map`)
 
 **Implementation checklist**
-- Thread/process selection based on `ExecutionContext.runtime` policy.
-- Default to engine‑configured concurrency values.
+- ✅ Resolve max_workers from `ExecutionContext.runtime` when unset.
+- ✅ Update extractors to use runtime-aware worker counts.
 
 **Decommission candidates**
 - None (behavioral refactor only)

@@ -8,7 +8,6 @@ import functools
 import importlib.util
 import inspect
 import json
-import os
 import sys
 import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -33,6 +32,7 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
+from extract.parallel import resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
@@ -541,11 +541,13 @@ def _bytecode_cache_key(
     )
 
 
-def _effective_max_workers(options: BytecodeExtractOptions) -> int:
-    if options.max_workers is None:
-        cpu_count = os.cpu_count() or 1
-        return max(1, min(32, cpu_count))
-    return max(1, options.max_workers)
+def _effective_max_workers(
+    options: BytecodeExtractOptions,
+    *,
+    ctx: ExecutionContext | None,
+) -> int:
+    max_workers = resolve_max_workers(options.max_workers, ctx=ctx, kind="cpu")
+    return max(1, min(32, max_workers))
 
 
 def _estimate_context_bytes(file_ctx: FileContext) -> int | None:
@@ -1460,7 +1462,7 @@ def _collect_bytecode_file_rows(
     )
     if not contexts:
         return []
-    max_workers = _effective_max_workers(options)
+    max_workers = _effective_max_workers(options, ctx=ctx)
     if not _should_parallelize(contexts, options=options, max_workers=max_workers):
         rows: list[dict[str, object]] = []
         for file_ctx in contexts:

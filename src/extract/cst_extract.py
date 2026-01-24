@@ -48,7 +48,7 @@ from extract.helpers import (
     materialize_extract_plan,
     span_dict,
 )
-from extract.parallel import parallel_map, supports_fork
+from extract.parallel import parallel_map, resolve_max_workers, supports_fork
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
 from extract.worklists import iter_worklist_contexts
@@ -1463,7 +1463,11 @@ def _collect_cst_file_rows(
         try:
             rows.extend(
                 row
-                for row in parallel_map(contexts, runner, max_workers=options.max_workers)
+                for row in parallel_map(
+                    contexts,
+                    runner,
+                    max_workers=resolve_max_workers(options.max_workers, ctx=ctx, kind="cpu"),
+                )
                 if row is not None
             )
         finally:
@@ -1535,9 +1539,7 @@ def _iter_cst_row_batches(
     yield from _iter_cst_batches_for_contexts(
         contexts,
         repo_manager=repo_manager,
-        options=context.options,
-        evidence_plan=context.evidence_plan,
-        batch_size=context.batch_size,
+        context=context,
     )
 
 
@@ -1545,18 +1547,24 @@ def _iter_cst_batches_for_contexts(
     contexts: Sequence[FileContext],
     *,
     repo_manager: FullRepoManager | None,
-    options: CSTExtractOptions,
-    evidence_plan: EvidencePlan | None,
-    batch_size: int,
+    context: _CstBatchContext,
 ) -> Iterable[Sequence[Mapping[str, object]]]:
     batch: list[dict[str, object]] = []
+    options = context.options
+    evidence_plan = context.evidence_plan
+    batch_size = context.batch_size
+    ctx = context.ctx
     use_parallel = options.parallel and (repo_manager is None or supports_fork())
     if use_parallel:
         _warm_cst_parser()
         _set_worker_repo_manager(repo_manager)
         runner = partial(_cst_row_worker, options=options, evidence_plan=evidence_plan)
         try:
-            for row in parallel_map(contexts, runner, max_workers=options.max_workers):
+            for row in parallel_map(
+                contexts,
+                runner,
+                max_workers=resolve_max_workers(options.max_workers, ctx=ctx, kind="cpu"),
+            ):
                 if row is None:
                     continue
                 batch.append(row)

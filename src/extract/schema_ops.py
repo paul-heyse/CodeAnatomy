@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import cast
 
 import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.extract_registry import (
@@ -17,12 +16,7 @@ from datafusion_engine.extract_registry import (
     dataset_schema_policy,
     dataset_spec,
 )
-from datafusion_engine.finalize import (
-    FinalizeContext,
-    FinalizeOptions,
-    FinalizeResult,
-    normalize_only,
-)
+from datafusion_engine.finalize import FinalizeContext, FinalizeResult
 from datafusion_engine.runtime import sql_options_for_profile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 
@@ -128,92 +122,6 @@ def metadata_specs_for_datasets(
     }
 
 
-def normalize_extract_output(
-    name: str,
-    table: TableLike,
-    *,
-    ctx: ExecutionContext,
-    normalize: ExtractNormalizeOptions | None = None,
-    apply_post_kernels: bool = True,
-) -> TableLike:
-    """Align, encode, and postprocess a table using registry policy.
-
-    Returns
-    -------
-    TableLike
-        Normalized table aligned to the dataset schema policy.
-    """
-    normalize = normalize or ExtractNormalizeOptions()
-    processed = apply_pipeline_kernels(name, table) if apply_post_kernels else table
-    policy = _policy_with_information_schema_order(
-        name,
-        policy=schema_policy_for_dataset(
-            name,
-            ctx=ctx,
-            options=normalize.options,
-            repo_id=normalize.repo_id,
-            enable_encoding=normalize.enable_encoding,
-        ),
-        ctx=ctx,
-    )
-    contract = dataset_spec(name).contract()
-    return normalize_only(
-        processed,
-        contract=contract,
-        ctx=ctx,
-        options=FinalizeOptions(schema_policy=policy),
-    )
-
-
-def normalize_extract_reader(
-    name: str,
-    reader: RecordBatchReaderLike,
-    *,
-    ctx: ExecutionContext,
-    normalize: ExtractNormalizeOptions | None = None,
-    apply_post_kernels: bool = True,
-) -> RecordBatchReaderLike:
-    """Normalize a RecordBatchReader for extract output streaming.
-
-    Returns
-    -------
-    RecordBatchReaderLike
-        Reader yielding normalized record batches.
-
-    Raises
-    ------
-    ValueError
-        Raised when streaming normalization is incompatible with the dataset policy.
-    """
-    normalize = normalize or ExtractNormalizeOptions()
-    policy = _policy_with_information_schema_order(
-        name,
-        policy=schema_policy_for_dataset(
-            name,
-            ctx=ctx,
-            options=normalize.options,
-            repo_id=normalize.repo_id,
-            enable_encoding=normalize.enable_encoding,
-        ),
-        ctx=ctx,
-    )
-    schema = policy.resolved_schema()
-    if policy.keep_extra_columns:
-        msg = f"Streaming normalization does not support keep_extra_columns for {name!r}."
-        raise ValueError(msg)
-
-    def _iter_batches() -> Iterator[pa.RecordBatch]:
-        for batch in reader:
-            table = pa.Table.from_batches([batch], schema=batch.schema)
-            processed = apply_pipeline_kernels(name, table) if apply_post_kernels else table
-            aligned = policy.apply(processed)
-            if aligned.column_names != schema.names:
-                aligned = aligned.select(schema.names)
-            yield from cast("pa.Table", aligned).to_batches()
-
-    return pa.RecordBatchReader.from_batches(schema, _iter_batches())
-
-
 def apply_pipeline_kernels(_name: str, table: TableLike) -> TableLike:
     """Apply postprocess kernels for a dataset name.
 
@@ -238,6 +146,24 @@ def finalize_context_for_dataset(
     FinalizeContext
         Finalize context configured with schema policy and contract.
     """
+    policy = normalized_schema_policy_for_dataset(name, ctx=ctx, normalize=normalize)
+    contract = dataset_spec(name).contract()
+    return FinalizeContext(contract=contract, schema_policy=policy)
+
+
+def normalized_schema_policy_for_dataset(
+    name: str,
+    *,
+    ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions | None = None,
+) -> SchemaPolicy:
+    """Return schema policy with information_schema column ordering applied.
+
+    Returns
+    -------
+    SchemaPolicy
+        Schema policy with ordered schema when available.
+    """
     normalize = normalize or ExtractNormalizeOptions()
     policy = schema_policy_for_dataset(
         name,
@@ -246,16 +172,6 @@ def finalize_context_for_dataset(
         repo_id=normalize.repo_id,
         enable_encoding=normalize.enable_encoding,
     )
-    contract = dataset_spec(name).contract()
-    return FinalizeContext(contract=contract, schema_policy=policy)
-
-
-def _policy_with_information_schema_order(
-    name: str,
-    *,
-    policy: SchemaPolicy,
-    ctx: ExecutionContext,
-) -> SchemaPolicy:
     ordered = _information_schema_column_order(name, ctx=ctx)
     if ordered is None:
         return policy
@@ -290,7 +206,7 @@ __all__ = [
     "finalize_context_for_dataset",
     "metadata_spec_for_dataset",
     "metadata_specs_for_datasets",
-    "normalize_extract_output",
+    "normalized_schema_policy_for_dataset",
     "schema_policy_for_dataset",
     "validate_extract_output",
 ]

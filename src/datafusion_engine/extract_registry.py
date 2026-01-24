@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import cache
 
 import pyarrow as pa
@@ -112,7 +112,12 @@ def dataset_schema_policy(
     )
 
 
-def dataset_query(name: str, *, repo_id: str | None = None) -> IbisQuerySpec:
+def dataset_query(
+    name: str,
+    *,
+    repo_id: str | None = None,
+    projection: Sequence[str] | None = None,
+) -> IbisQuerySpec:
     """Return a simple query spec for extract datasets.
 
     Returns
@@ -126,6 +131,12 @@ def dataset_query(name: str, *, repo_id: str | None = None) -> IbisQuerySpec:
     for derived in row.derived:
         if derived.name not in columns:
             columns.append(derived.name)
+    if projection:
+        projection_set = set(projection)
+        schema = dataset_schema(name)
+        filtered = [field.name for field in schema if field.name in projection_set]
+        if filtered:
+            columns = filtered
     return IbisQuerySpec.simple(*columns)
 
 

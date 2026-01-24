@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 from hamilton.function_modifiers import tag
 
 from incremental.delta_context import DeltaAccessContext
-from incremental.plan_fingerprints import read_plan_fingerprints, write_plan_fingerprints
+from incremental.plan_fingerprints import read_plan_snapshots, write_plan_snapshots
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig
-from relspec.incremental import diff_plan_fingerprints, plan_fingerprint_map
+from relspec.incremental import diff_plan_snapshots, plan_snapshot_map
 from relspec.plan_catalog import PlanCatalog
 
 if TYPE_CHECKING:
@@ -42,11 +42,11 @@ def incremental_plan_diff(
         return None
     state_store = StateStore(root=incremental_config.state_dir)
     context = DeltaAccessContext(runtime=runtime)
-    previous = read_plan_fingerprints(state_store, context=context)
-    current = plan_fingerprint_map(plan_catalog)
-    diff = diff_plan_fingerprints(previous, current)
+    previous = read_plan_snapshots(state_store, context=context)
+    current = plan_snapshot_map(plan_catalog)
+    diff = diff_plan_snapshots(previous, current)
     _record_plan_diff(diff, ctx=ctx, total_tasks=len(current))
-    write_plan_fingerprints(state_store, current, execution=ibis_execution)
+    write_plan_snapshots(state_store, current, execution=ibis_execution)
     return diff
 
 
@@ -59,7 +59,7 @@ def _record_plan_diff(
     profile = ctx.runtime.datafusion
     if profile is None or profile.diagnostics_sink is None:
         return
-    payload = {
+    payload: dict[str, object] = {
         "total_tasks": total_tasks,
         "changed_tasks": list(diff.changed_tasks),
         "added_tasks": list(diff.added_tasks),
@@ -70,6 +70,16 @@ def _record_plan_diff(
         "removed_count": len(diff.removed_tasks),
         "unchanged_count": len(diff.unchanged_tasks),
     }
+    if diff.semantic_changes:
+        payload["semantic_changes"] = [
+            {
+                "task_name": name,
+                "breaking": change.breaking,
+                "changed": change.changed,
+                "changes": list(change.changes),
+            }
+            for name, change in diff.semantic_changes.items()
+        ]
     profile.diagnostics_sink.record_artifact("incremental_plan_diff_v1", payload)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,15 +25,24 @@ if TYPE_CHECKING:
     from ibis_engine.execution import IbisExecutionContext
     from storage.deltalake import StorageOptions
 
-PLAN_FINGERPRINTS_VERSION = 1
+PLAN_FINGERPRINTS_VERSION = 2
 _PLAN_FINGERPRINTS_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32(), nullable=False),
         pa.field("task_name", pa.string(), nullable=False),
         pa.field("plan_fingerprint", pa.string(), nullable=False),
+        pa.field("plan_sql", pa.string(), nullable=True),
     ]
 )
 _PLAN_FINGERPRINTS_DIRNAME = "plan_fingerprints"
+
+
+@dataclass(frozen=True)
+class PlanFingerprintSnapshot:
+    """Plan fingerprint snapshot with optional SQL."""
+
+    plan_fingerprint: str
+    plan_sql: str | None = None
 
 
 def _plan_fingerprints_path(state_store: StateStore) -> Path:
@@ -44,6 +54,47 @@ def _plan_fingerprints_path(state_store: StateStore) -> Path:
         Path to the plan fingerprint metadata directory.
     """
     return state_store.metadata_dir() / _PLAN_FINGERPRINTS_DIRNAME
+
+
+def read_plan_snapshots(
+    state_store: StateStore,
+    *,
+    context: DeltaAccessContext,
+) -> dict[str, PlanFingerprintSnapshot]:
+    """Read plan fingerprints from the state store.
+
+    Returns
+    -------
+    dict[str, PlanFingerprintSnapshot]
+        Mapping of task names to plan snapshot metadata.
+    """
+    path = _plan_fingerprints_path(state_store)
+    if not path.exists():
+        return {}
+    storage = context.storage
+    version = delta_table_version(
+        str(path),
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+    )
+    if version is None:
+        return {}
+    table = _read_delta_table(context, path, name="plan_fingerprints_read")
+    results: dict[str, PlanFingerprintSnapshot] = {}
+    for row in table.to_pylist():
+        if not isinstance(row, Mapping):
+            continue
+        name = row.get("task_name")
+        fingerprint = row.get("plan_fingerprint")
+        if name is None or fingerprint is None:
+            continue
+        plan_sql = row.get("plan_sql")
+        sql_value = str(plan_sql) if plan_sql is not None else None
+        results[str(name)] = PlanFingerprintSnapshot(
+            plan_fingerprint=str(fingerprint),
+            plan_sql=sql_value,
+        )
+    return results
 
 
 def read_plan_fingerprints(
@@ -58,33 +109,13 @@ def read_plan_fingerprints(
     dict[str, str]
         Mapping of task names to plan fingerprints.
     """
-    path = _plan_fingerprints_path(state_store)
-    if not path.exists():
-        return {}
-    storage = context.storage
-    version = delta_table_version(
-        str(path),
-        storage_options=storage.storage_options,
-        log_storage_options=storage.log_storage_options,
-    )
-    if version is None:
-        return {}
-    table = _read_delta_table(context, path, name="plan_fingerprints_read")
-    results: dict[str, str] = {}
-    for row in table.to_pylist():
-        if not isinstance(row, Mapping):
-            continue
-        name = row.get("task_name")
-        fingerprint = row.get("plan_fingerprint")
-        if name is None or fingerprint is None:
-            continue
-        results[str(name)] = str(fingerprint)
-    return results
+    snapshots = read_plan_snapshots(state_store, context=context)
+    return {name: snap.plan_fingerprint for name, snap in snapshots.items()}
 
 
-def write_plan_fingerprints(
+def write_plan_snapshots(
     state_store: StateStore,
-    fingerprints: Mapping[str, str],
+    snapshots: Mapping[str, PlanFingerprintSnapshot],
     *,
     execution: IbisExecutionContext,
     storage_options: StorageOptions | None = None,
@@ -100,19 +131,20 @@ def write_plan_fingerprints(
     state_store.ensure_dirs()
     path = _plan_fingerprints_path(state_store)
     path.parent.mkdir(parents=True, exist_ok=True)
-    names = sorted(fingerprints)
+    names = sorted(snapshots)
     if not names:
         table = table_from_arrays(_PLAN_FINGERPRINTS_SCHEMA, columns={}, num_rows=0)
     else:
         versions = [PLAN_FINGERPRINTS_VERSION] * len(names)
+        fingerprints = [snapshots[name].plan_fingerprint for name in names]
+        sql_payload = [snapshots[name].plan_sql for name in names]
         table = table_from_arrays(
             _PLAN_FINGERPRINTS_SCHEMA,
             columns={
                 "version": pa.array(versions, type=pa.int32()),
                 "task_name": pa.array(names, type=pa.string()),
-                "plan_fingerprint": pa.array(
-                    [fingerprints[name] for name in names], type=pa.string()
-                ),
+                "plan_fingerprint": pa.array(fingerprints, type=pa.string()),
+                "plan_sql": pa.array(sql_payload, type=pa.string()),
             },
             num_rows=len(names),
         )
@@ -139,6 +171,34 @@ def write_plan_fingerprints(
     return result.path
 
 
+def write_plan_fingerprints(
+    state_store: StateStore,
+    fingerprints: Mapping[str, str],
+    *,
+    execution: IbisExecutionContext,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
+) -> str:
+    """Persist plan fingerprints to the state store.
+
+    Returns
+    -------
+    str
+        Delta table path where fingerprints were written.
+    """
+    snapshots = {
+        name: PlanFingerprintSnapshot(plan_fingerprint=fingerprint)
+        for name, fingerprint in fingerprints.items()
+    }
+    return write_plan_snapshots(
+        state_store,
+        snapshots,
+        execution=execution,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
+
+
 def _read_delta_table(
     context: DeltaAccessContext,
     path: Path,
@@ -154,4 +214,10 @@ def _read_delta_table(
     return ibis_expr_to_table(table, runtime=context.runtime, name=name)
 
 
-__all__ = ["read_plan_fingerprints", "write_plan_fingerprints"]
+__all__ = [
+    "PlanFingerprintSnapshot",
+    "read_plan_fingerprints",
+    "read_plan_snapshots",
+    "write_plan_fingerprints",
+    "write_plan_snapshots",
+]

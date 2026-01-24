@@ -37,6 +37,8 @@ def build_cpg_nodes_plan(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
     backend: BaseBackend,
+    task_name: str | None = None,
+    task_priority: int | None = None,
 ) -> IbisPlan:
     """Return the CPG nodes plan compiled from node specs.
 
@@ -48,7 +50,12 @@ def build_cpg_nodes_plan(
     plans: list[IbisPlan] = []
     for spec in node_plan_specs():
         table = _resolve_table(catalog, ctx=ctx, name=spec.table_ref)
-        plan = emit_nodes_ibis(table, spec=spec.emit)
+        plan = emit_nodes_ibis(
+            table,
+            spec=spec.emit,
+            task_name=task_name,
+            task_priority=task_priority,
+        )
         plans.append(plan)
     return _union_plans(plans, schema=CPG_NODES_SCHEMA, backend=backend)
 
@@ -76,6 +83,8 @@ def build_cpg_props_plan(
     ctx: ExecutionContext,
     backend: BaseBackend,
     options: PropOptions | None = None,
+    task_name: str | None = None,
+    task_priority: int | None = None,
 ) -> IbisPlan:
     """Return the CPG props plan compiled from prop specs.
 
@@ -92,7 +101,13 @@ def build_cpg_props_plan(
     plans: list[IbisPlan] = []
     for spec in prop_specs:
         table = _resolve_table(catalog, ctx=ctx, name=spec.table_ref)
-        plan = emit_props_ibis(table, spec=spec, options=resolved_options)
+        plan = emit_props_ibis(
+            table,
+            spec=spec,
+            options=resolved_options,
+            task_name=task_name,
+            task_priority=task_priority,
+        )
         plans.append(plan)
     return _union_plans(plans, schema=CPG_PROPS_SCHEMA, backend=backend)
 

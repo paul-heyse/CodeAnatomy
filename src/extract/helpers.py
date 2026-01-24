@@ -10,14 +10,18 @@ from typing import TYPE_CHECKING, cast
 import ibis
 import msgspec
 import pyarrow as pa
-from ibis.backends import BaseBackend
 
 from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, ScalarLike, TableLike
 from arrowdsl.core.ordering import Ordering
-from arrowdsl.schema.build import empty_table, table_from_rows
-from arrowdsl.schema.schema import align_table
+from arrowdsl.schema.build import (
+    record_batch_reader_from_row_batches as schema_record_batch_reader_from_row_batches,
+)
+from arrowdsl.schema.build import (
+    record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
+)
+from arrowdsl.schema.policy import SchemaPolicy
 from datafusion_engine.extract_extractors import (
     ExtractorSpec,
     extractor_specs,
@@ -25,20 +29,19 @@ from datafusion_engine.extract_extractors import (
     select_extractors_for_outputs,
 )
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
+from datafusion_engine.finalize import FinalizeContext, FinalizeOptions, normalize_only
 from engine.materialize_pipeline import write_extract_outputs
 from extract.evidence_plan import EvidencePlan
 from extract.schema_ops import (
     ExtractNormalizeOptions,
-    normalize_extract_output,
-    normalize_extract_reader,
-    schema_policy_for_dataset,
+    apply_pipeline_kernels,
+    finalize_context_for_dataset,
+    normalized_schema_policy_for_dataset,
 )
 from extract.session import ExtractSession, build_extract_session
 from extract.spec_helpers import ExtractExecutionOptions, plan_requires_row, rule_execution_options
-from ibis_engine.execution_factory import ibis_backend_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
-from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
@@ -305,41 +308,8 @@ def iter_contexts(
     yield from file_contexts
 
 
-def empty_ibis_plan(
-    name: str,
-    *,
-    session: ExtractSession | None = None,
-    ctx: ExecutionContext | None = None,
-    backend: BaseBackend | None = None,
-    profile: str = "default",
-) -> IbisPlan:
-    """Return an empty Ibis plan for a dataset name.
-
-    Returns
-    -------
-    IbisPlan
-        Empty Ibis plan backed by an empty table.
-    """
-    resolved = _resolve_backend(session=session, ctx=ctx, backend=backend, profile=profile)
-    table = empty_table(dataset_schema(name))
-    return register_ibis_table(
-        table,
-        options=SourceToIbisOptions(
-            backend=resolved,
-            name=None,
-            ordering=Ordering.unordered(),
-        ),
-    )
-
-
-def _table_from_row_batch(schema: pa.Schema, batch: Sequence[Mapping[str, object]]) -> pa.Table:
-    aligned = table_from_rows(schema, batch)
-    extra_table = pa.Table.from_pylist(batch)
-    for col in extra_table.column_names:
-        if col in aligned.column_names:
-            continue
-        aligned = aligned.append_column(col, extra_table[col])
-    return aligned
+def _empty_plan_from_table(table: IbisTable) -> IbisPlan:
+    return IbisPlan(expr=table.limit(0), ordering=Ordering.unordered())
 
 
 def record_batch_reader_from_row_batches(
@@ -354,35 +324,7 @@ def record_batch_reader_from_row_batches(
         Reader yielding schema-aligned record batches.
     """
     schema = dataset_schema(name)
-    iterator = iter(row_batches)
-    first_batch: Sequence[Mapping[str, object]] | None = None
-    for batch in iterator:
-        if batch:
-            first_batch = batch
-            break
-    if first_batch is None:
-        return pa.RecordBatchReader.from_batches(schema, [])
-    first_table = _table_from_row_batch(schema, first_batch)
-    reader_schema = first_table.schema
-
-    def _iter_batches() -> Iterator[pa.RecordBatch]:
-        yield from first_table.to_batches()
-        for batch in iterator:
-            if not batch:
-                continue
-            table = _table_from_row_batch(schema, batch)
-            aligned = cast(
-                "pa.Table",
-                align_table(
-                    table,
-                    schema=reader_schema,
-                    keep_extra_columns=True,
-                    safe_cast=True,
-                ),
-            )
-            yield from aligned.to_batches()
-
-    return pa.RecordBatchReader.from_batches(reader_schema, _iter_batches())
+    return schema_record_batch_reader_from_row_batches(schema, row_batches)
 
 
 def record_batch_reader_from_rows(
@@ -396,8 +338,8 @@ def record_batch_reader_from_rows(
     pyarrow.RecordBatchReader
         Reader yielding schema-aligned record batches.
     """
-    row_sequence = rows if isinstance(rows, Sequence) else list(rows)
-    return record_batch_reader_from_row_batches(name, [row_sequence])
+    schema = dataset_schema(name)
+    return schema_record_batch_reader_from_rows(schema, rows)
 
 
 def ibis_plan_from_reader(
@@ -538,21 +480,6 @@ def extract_plan_from_row_batches(
     )
 
 
-def _resolve_backend(
-    *,
-    session: ExtractSession | None,
-    ctx: ExecutionContext | None,
-    backend: BaseBackend | None,
-    profile: str,
-) -> BaseBackend:
-    if backend is not None:
-        return backend
-    if session is not None:
-        return session.ibis_backend
-    exec_ctx = ctx or execution_context_factory(profile)
-    return ibis_backend_from_ctx(exec_ctx)
-
-
 def apply_query_and_project(
     name: str,
     table: IbisTable,
@@ -570,14 +497,27 @@ def apply_query_and_project(
     """
     row = extract_metadata(name)
     if evidence_plan is not None and not plan_requires_row(evidence_plan, row):
-        return empty_ibis_plan(name)
+        return _empty_plan_from_table(table)
     overrides = _options_overrides(normalize.options if normalize else None)
     execution = rule_execution_options(row.template or name, evidence_plan, overrides=overrides)
     if row.enabled_when is not None and not _stage_enabled(row.enabled_when, execution):
-        return empty_ibis_plan(name)
-    spec = dataset_query(name, repo_id=repo_id)
+        return _empty_plan_from_table(table)
+    projection: tuple[str, ...] = ()
+    if evidence_plan is not None:
+        required = set(evidence_plan.required_columns_for(name))
+        required.update(row.join_keys)
+        required.update(spec.name for spec in row.derived)
+        if row.evidence_required_columns:
+            required.update(row.evidence_required_columns)
+        if required:
+            schema = dataset_schema(name)
+            projection = tuple(field.name for field in schema if field.name in required)
+    spec = dataset_query(
+        name,
+        repo_id=repo_id,
+        projection=projection if projection else None,
+    )
     expr = apply_query_spec(table, spec=spec)
-    expr = apply_evidence_projection(name, expr, evidence_plan=evidence_plan)
     return IbisPlan(expr=expr, ordering=Ordering.unordered())
 
 
@@ -588,6 +528,71 @@ class ExtractMaterializeOptions:
     normalize: ExtractNormalizeOptions | None = None
     prefer_reader: bool = False
     apply_post_kernels: bool = False
+
+
+@dataclass(frozen=True)
+class _NormalizationContext:
+    name: str
+    exec_ctx: ExecutionContext
+    finalize_ctx: FinalizeContext
+    apply_post_kernels: bool
+
+
+def _require_schema_policy(name: str, policy: SchemaPolicy | None) -> SchemaPolicy:
+    if policy is None:
+        msg = f"Missing schema policy for {name!r} normalization."
+        raise ValueError(msg)
+    return policy
+
+
+def _normalize_reader(
+    context: _NormalizationContext,
+    reader: RecordBatchReaderLike,
+) -> RecordBatchReaderLike:
+    resolved_policy = _require_schema_policy(
+        context.name,
+        context.finalize_ctx.schema_policy,
+    )
+    if resolved_policy.keep_extra_columns:
+        msg = f"Streaming normalization does not support keep_extra_columns for {context.name!r}."
+        raise ValueError(msg)
+    schema = resolved_policy.resolved_schema()
+
+    def _iter_batches() -> Iterator[pa.RecordBatch]:
+        for batch in reader:
+            table = pa.Table.from_batches([batch], schema=batch.schema)
+            processed = (
+                apply_pipeline_kernels(context.name, table)
+                if context.apply_post_kernels
+                else table
+            )
+            aligned = resolved_policy.apply(processed)
+            if aligned.column_names != schema.names:
+                aligned = aligned.select(schema.names)
+            yield from cast("pa.Table", aligned).to_batches()
+
+    return pa.RecordBatchReader.from_batches(schema, _iter_batches())
+
+
+def _normalize_table(
+    context: _NormalizationContext,
+    table: TableLike,
+) -> TableLike:
+    resolved_policy = _require_schema_policy(
+        context.name,
+        context.finalize_ctx.schema_policy,
+    )
+    processed = (
+        apply_pipeline_kernels(context.name, table)
+        if context.apply_post_kernels
+        else table
+    )
+    return normalize_only(
+        processed,
+        contract=context.finalize_ctx.contract,
+        ctx=context.exec_ctx,
+        options=FinalizeOptions(schema_policy=resolved_policy),
+    )
 
 
 def extract_dataset_location_or_raise(
@@ -639,42 +644,29 @@ def materialize_extract_plan(
     if runtime_profile is None or runtime_profile.dataset_location(name) is None:
         streaming_supported = False
     else:
-        policy = schema_policy_for_dataset(
+        policy = normalized_schema_policy_for_dataset(
             name,
             ctx=ctx,
-            options=normalize.options if normalize is not None else None,
-            repo_id=normalize.repo_id if normalize is not None else None,
-            enable_encoding=normalize.enable_encoding if normalize is not None else True,
+            normalize=normalize,
         )
         if policy.keep_extra_columns:
             streaming_supported = False
+    finalize_ctx = finalize_context_for_dataset(name, ctx=ctx, normalize=normalize)
+    normalization_ctx = _NormalizationContext(
+        name=name,
+        exec_ctx=ctx,
+        finalize_ctx=finalize_ctx,
+        apply_post_kernels=resolved.apply_post_kernels,
+    )
     wrote_streaming = False
     if streaming_supported:
-        reader_for_write = normalize_extract_reader(
-            name,
-            plan.to_reader(),
-            ctx=ctx,
-            normalize=normalize,
-            apply_post_kernels=resolved.apply_post_kernels,
-        )
+        reader_for_write = _normalize_reader(normalization_ctx, plan.to_reader())
         write_extract_outputs(name, reader_for_write, ctx=ctx)
         wrote_streaming = True
         if resolved.prefer_reader:
-            return normalize_extract_reader(
-                name,
-                plan.to_reader(),
-                ctx=ctx,
-                normalize=normalize,
-                apply_post_kernels=resolved.apply_post_kernels,
-            )
+            return _normalize_reader(normalization_ctx, plan.to_reader())
     table = plan.to_table()
-    normalized = normalize_extract_output(
-        name,
-        table,
-        ctx=ctx,
-        normalize=normalize,
-        apply_post_kernels=resolved.apply_post_kernels,
-    )
+    normalized = _normalize_table(normalization_ctx, table)
     if not wrote_streaming:
         write_extract_outputs(name, normalized, ctx=ctx)
     if resolved.prefer_reader:
@@ -805,52 +797,6 @@ def template_outputs(plan: EvidencePlan | None, template: str) -> tuple[str, ...
     return outputs_for_template(template)
 
 
-def _projection_columns(name: str, *, evidence_plan: EvidencePlan | None) -> tuple[str, ...]:
-    if evidence_plan is None:
-        return ()
-    required = set(evidence_plan.required_columns_for(name))
-    row = extract_metadata(name)
-    required.update(row.join_keys)
-    required.update(spec.name for spec in row.derived)
-    if row.evidence_required_columns:
-        required.update(row.evidence_required_columns)
-    if not required:
-        return ()
-    schema = dataset_schema(name)
-    schema_names = {field.name for field in schema}
-    resolved: set[str] = set()
-    for key in required:
-        if key in schema_names:
-            resolved.add(key)
-    return tuple(field.name for field in schema if field.name in resolved)
-
-
-def apply_evidence_projection(
-    name: str,
-    table: IbisTable,
-    *,
-    evidence_plan: EvidencePlan | None,
-) -> IbisTable:
-    """Apply evidence-minimized projection to an Ibis table.
-
-    Returns
-    -------
-    ibis.expr.types.Table
-        Ibis table projected to evidence-required columns.
-    """
-    columns = _projection_columns(name, evidence_plan=evidence_plan)
-    if not columns:
-        return table
-    schema = dataset_schema(name)
-    field_types = {field.name: field.type for field in schema}
-    exprs = []
-    for column in columns:
-        if column in table.columns:
-            exprs.append(table[column])
-            continue
-        dtype = ibis.dtype(field_types[column])
-        exprs.append(ibis.literal(None, type=dtype).name(column))
-    return table.select(exprs)
 
 
 def ast_def_nodes_plan(plan: IbisPlan) -> IbisPlan:
@@ -902,14 +848,12 @@ __all__ = [
     "ExtractPlanOptions",
     "FileContext",
     "SpanSpec",
-    "apply_evidence_projection",
     "apply_query_and_project",
     "ast_def_nodes",
     "ast_def_nodes_plan",
     "attrs_map",
     "byte_span_dict",
     "bytes_from_file_ctx",
-    "empty_ibis_plan",
     "extract_dataset_location_or_raise",
     "extract_plan_from_reader",
     "extract_plan_from_row_batches",

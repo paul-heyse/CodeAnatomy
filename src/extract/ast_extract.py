@@ -29,7 +29,7 @@ from extract.helpers import (
     span_dict,
     text_from_file_ctx,
 )
-from extract.parallel import gil_disabled, parallel_map
+from extract.parallel import gil_disabled, parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import iter_worklist_contexts
 from ibis_engine.plan import IbisPlan
@@ -1076,7 +1076,12 @@ def _iter_ast_rows(
                 yield row
         return
     runner = partial(_ast_row_worker, options=resolved_options)
-    for row in parallel_map(contexts, runner, max_workers=resolved_options.max_workers):
+    max_workers = resolve_max_workers(
+        resolved_options.max_workers,
+        ctx=ctx,
+        kind="cpu",
+    )
+    for row in parallel_map(contexts, runner, max_workers=max_workers):
         if row is not None:
             yield row
 

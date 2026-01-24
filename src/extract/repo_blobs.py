@@ -17,7 +17,6 @@ from extract.helpers import (
     ExtractPlanOptions,
     FileContext,
     bytes_from_file_ctx,
-    empty_ibis_plan,
     extract_plan_from_rows,
     materialize_extract_plan,
 )
@@ -185,7 +184,12 @@ def scan_repo_blobs(
         repo_id=normalized_options.repo_id,
     )
     if not normalized_options.include_bytes and not normalized_options.include_text:
-        empty_plan = empty_ibis_plan("repo_file_blobs_v1", session=session)
+        empty_plan = extract_plan_from_rows(
+            "repo_file_blobs_v1",
+            [],
+            session=session,
+            options=ExtractPlanOptions(normalize=normalize),
+        )
         return materialize_extract_plan(
             "repo_file_blobs_v1",
             empty_plan,

@@ -41,6 +41,8 @@ def emit_props_ibis(
     *,
     spec: PropTableSpec,
     options: PropOptions | None = None,
+    task_name: str | None = None,
+    task_priority: int | None = None,
 ) -> IbisPlan:
     """Emit CPG properties from a relation table using Ibis expressions.
 
@@ -56,7 +58,13 @@ def emit_props_ibis(
         return _empty_props_plan()
     rows: list[Table] = []
     for field in fields:
-        row_expr = _prop_row_expr(expr, spec=spec, field=field)
+        row_expr = _prop_row_expr(
+            expr,
+            spec=spec,
+            field=field,
+            task_name=task_name,
+            task_priority=task_priority,
+        )
         if row_expr is None:
             continue
         rows.append(row_expr)
@@ -68,7 +76,14 @@ def emit_props_ibis(
     return IbisPlan(expr=combined, ordering=Ordering.unordered())
 
 
-def _prop_row_expr(expr: Table, *, spec: PropTableSpec, field: PropFieldSpec) -> Table | None:
+def _prop_row_expr(
+    expr: Table,
+    *,
+    spec: PropTableSpec,
+    field: PropFieldSpec,
+    task_name: str | None,
+    task_priority: int | None,
+) -> Table | None:
     value_expr = _field_value_expr(expr, field)
     if value_expr is None:
         return None
@@ -90,6 +105,10 @@ def _prop_row_expr(expr: Table, *, spec: PropTableSpec, field: PropFieldSpec) ->
     value_type = field.value_type or "string"
     if "value_type" in schema_names:
         columns["value_type"] = ibis.literal(value_type)
+    if "task_name" in schema_names:
+        columns["task_name"] = _literal_or_null(task_name, pa.string())
+    if "task_priority" in schema_names:
+        columns["task_priority"] = _literal_or_null(task_priority, pa.int32())
     columns.update(_value_columns(schema, value_expr, value_type=value_type))
     row = expr.select(**columns)
     row = ensure_columns(row, schema=CPG_PROPS_SCHEMA, only_missing=True)
@@ -169,7 +188,7 @@ def _resolve_value_column(names: set[str], value_type: str) -> str | None:
     return None
 
 
-def _literal_or_null(value: str | None, dtype: pa.DataType) -> Value:
+def _literal_or_null(value: object | None, dtype: pa.DataType) -> Value:
     if value is None:
         return ibis_null_literal(dtype)
     return ibis.literal(value)

@@ -93,6 +93,29 @@ def _record_tracing_snapshot(
     )
 
 
+def _record_metrics_snapshot(
+    execution: DataFusionExecutionOptions,
+    *,
+    run_id: str,
+) -> None:
+    runtime_profile = execution.runtime_profile
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    from datafusion_engine.runtime import collect_datafusion_metrics
+
+    metrics = collect_datafusion_metrics(runtime_profile)
+    if metrics is None:
+        return
+    runtime_profile.diagnostics_sink.record_artifact(
+        "datafusion_metrics_v1",
+        {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "run_id": run_id,
+            "metrics": dict(metrics),
+        },
+    )
+
+
 @dataclass(frozen=True)
 class DataFusionExecutionOptions:
     """Execution options for DataFusion-backed Ibis plans."""
@@ -390,6 +413,7 @@ def plan_to_datafusion(
             ctx=execution.ctx,
             options=replace(options, run_id=run.run_id),
         )
+        _record_metrics_snapshot(execution, run_id=run.run_id)
         _record_tracing_snapshot(execution, run_id=run.run_id)
         return result.df
 

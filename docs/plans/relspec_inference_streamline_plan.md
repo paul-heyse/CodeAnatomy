@@ -50,6 +50,9 @@ metadata = table_provider_metadata(session_id, table_name=source)
 ### Why
 Remove stale rule-era helpers and unreferenced components that duplicate engine/runtime capabilities.
 
+### Status
+**Completed**
+
 ### Representative Code Pattern
 ```python
 # relspec/__init__.py
@@ -72,10 +75,10 @@ _EXPORT_MAP = {
 - Update: `src/relspec/pipeline_policy.py` (trim to diagnostics only or move to engine)
 
 ### Implementation Checklist
-- [ ] Delete the unused modules listed above.
-- [ ] Remove all exports of deleted symbols from `src/relspec/__init__.py`.
-- [ ] Remove unused imports in Hamilton modules that referenced deleted config/policy types.
-- [ ] Ensure no runtime or test modules import deleted files.
+- [x] Delete the unused modules listed above.
+- [x] Remove all exports of deleted symbols from `src/relspec/__init__.py`.
+- [x] Remove unused imports in Hamilton modules that referenced deleted config/policy types.
+- [x] Ensure no runtime or test modules import deleted files.
 
 ---
 
@@ -83,6 +86,9 @@ _EXPORT_MAP = {
 
 ### Why
 Declared input comparisons are legacy. Inference-first means dependencies are derived solely from the plan AST.
+
+### Status
+**Completed**
 
 ### Representative Code Pattern
 ```python
@@ -104,10 +110,10 @@ class InferredDeps:
 - Update: `src/relspec/rustworkx_graph.py`
 
 ### Implementation Checklist
-- [ ] Remove `declared_inputs`, `inputs_match`, and comparison helper APIs.
-- [ ] Remove `compare_deps`, `summarize_inferred_deps`, and `log_inferred_deps_comparison`.
-- [ ] Ensure all call sites use inference-only fields.
-- [ ] Update any diagnostics to log inferred dependencies directly.
+- [x] Remove `declared_inputs`, `inputs_match`, and comparison helper APIs.
+- [x] Remove `compare_deps`, `summarize_inferred_deps`, and `log_inferred_deps_comparison`.
+- [x] Ensure all call sites use inference-only fields.
+- [x] Update any diagnostics to log inferred dependencies directly.
 
 ---
 
@@ -115,6 +121,9 @@ class InferredDeps:
 
 ### Why
 Plan identity is duplicated in relspec. Consolidate on SQLGlot compiler checkpoints for canonical fingerprints and policy hashes.
+
+### Status
+**Completed**
 
 ### Representative Code Pattern
 ```python
@@ -144,10 +153,10 @@ return PlanArtifact(
 - Consider: `src/ibis_engine/compiler_checkpoint.py` (source of truth)
 
 ### Implementation Checklist
-- [ ] Replace ad-hoc `plan_fingerprint` usage with `compile_checkpoint` output.
-- [ ] Use checkpoint.normalized AST for lineage inference.
-- [ ] Store policy/schema hash in artifact metadata if needed for caching.
-- [ ] Remove `ExecutionBundle` and related signature helpers.
+- [x] Replace ad-hoc `plan_fingerprint` usage with `compile_checkpoint` output.
+- [x] Use checkpoint.normalized AST for lineage inference.
+- [x] Store policy/schema hash in artifact metadata if needed for caching.
+- [x] Remove `ExecutionBundle` and related signature helpers.
 
 ---
 
@@ -155,6 +164,9 @@ return PlanArtifact(
 
 ### Why
 `task_name` in relation output data should match `TaskSpec.name` everywhere to maintain consistent identity across diagnostics and downstream tables.
+
+### Status
+**Completed**
 
 ### Representative Code Pattern
 ```python
@@ -171,9 +183,9 @@ output = output.mutate(
 - Update: `src/cpg/emit_edges_ibis.py` (ensure literal matches task name)
 
 ### Implementation Checklist
-- [ ] Pass task identity into plan builders (via TaskBuildContext or builder closure).
-- [ ] Remove hard-coded `infer.*` task names in relation output tables.
-- [ ] Ensure `task_priority` is derived from TaskSpec metadata.
+- [x] Pass task identity into plan builders (via TaskBuildContext or builder closure).
+- [x] Remove hard-coded `infer.*` task names in relation output tables.
+- [x] Ensure `task_priority` is derived from TaskSpec metadata.
 
 ---
 
@@ -181,6 +193,9 @@ output = output.mutate(
 
 ### Why
 Execution logic should be unified through `ibis_engine` and `datafusion_engine`, not duplicated in relspec.
+
+### Status
+**Completed** — lane helpers removed; diagnostics (metrics/traces/explain) now flow from runtime policy.
 
 ### Representative Code Pattern
 ```python
@@ -197,9 +212,9 @@ return materialize_ibis_plan(
 - Update: `src/ibis_engine/runner.py` or `src/datafusion_engine/bridge.py` (single execution path)
 
 ### Implementation Checklist
-- [ ] Remove relspec lane selection helpers.
-- [ ] Route execution through the engine-native runner.
-- [ ] Centralize diagnostics (explain, substrait capture) in DataFusion runtime profile.
+- [x] Remove relspec lane selection helpers.
+- [x] Route execution through the engine-native runner (already via `materialize_ibis_plan`).
+- [x] Centralize diagnostics (explain, substrait capture) in DataFusion runtime profile.
 
 ---
 
@@ -207,6 +222,9 @@ return materialize_ibis_plan(
 
 ### Why
 Evidence catalogs should be derived from the same schema and provider metadata used by the engine.
+
+### Status
+**Completed** — evidence now hydrates from schema registry and provider metadata.
 
 ### Representative Code Pattern
 ```python
@@ -222,9 +240,9 @@ provider = table_provider_metadata(session_id, table_name=name)
 - Reference: `src/datafusion_engine/schema_registry.py`, `src/datafusion_engine/table_provider_metadata.py`
 
 ### Implementation Checklist
-- [ ] Use DataFusion schema registry for evidence schemas.
-- [ ] Populate evidence metadata from provider metadata when available.
-- [ ] Validate column requirements with authoritative schema metadata.
+- [x] Use DataFusion schema registry for evidence schemas.
+- [x] Populate evidence metadata from provider metadata when available.
+- [x] Validate column requirements with authoritative schema metadata (via evidence catalog).
 
 ---
 
@@ -232,6 +250,9 @@ provider = table_provider_metadata(session_id, table_name=name)
 
 ### Why
 Param dependencies are currently typed but never produced. Replace `relspec.param_deps` with inference integrated into the plan compilation layer.
+
+### Status
+**Completed** — inference moved to Hamilton params module with types relocated.
 
 ### Representative Code Pattern
 ```python
@@ -246,13 +267,12 @@ report = TaskDependencyReport(task_name=task.name, param_tables=param_tables)
 ### Target Files
 - Remove: `src/relspec/param_deps.py`
 - Update: `src/hamilton_pipeline/modules/params.py`
-- Update: `src/hamilton_pipeline/modules/plan_catalog.py` (emit dependency reports)
-- New: `src/ibis_engine/params_bridge.py` or `src/hamilton_pipeline/modules/param_deps.py`
+- Update: `src/hamilton_pipeline/pipeline_types.py` (relocated `TaskDependencyReport`, `ActiveParamSet`)
 
 ### Implementation Checklist
-- [ ] Compute param dependencies from SQLGlot table refs during plan compilation.
-- [ ] Feed `ActiveParamSet` from actual plan-derived reports.
-- [ ] Remove relspec module and re-home data structures if still needed.
+- [x] Compute param dependencies from plan inputs during Hamilton param wiring.
+- [x] Feed `ActiveParamSet` from plan-derived reports.
+- [x] Remove relspec module and re-home data structures.
 
 ---
 
@@ -260,6 +280,9 @@ report = TaskDependencyReport(task_name=task.name, param_tables=param_tables)
 
 ### Why
 Most of `PipelinePolicy` is unused. Keep only diagnostics settings in engine runtime.
+
+### Status
+**Completed**
 
 ### Representative Code Pattern
 ```python
@@ -275,9 +298,9 @@ if diagnostics_policy is not None:
 - Update: `src/hamilton_pipeline/modules/inputs.py` (remove relspec config usage)
 
 ### Implementation Checklist
-- [ ] Move `DiagnosticsPolicy` into engine or keep minimal relspec policy.
-- [ ] Remove `PolicyRegistry`, `KernelLanePolicy`, and list-filter policy unless explicitly wired.
-- [ ] Remove `RelspecConfig` and related config plumbing.
+- [x] Keep minimal relspec policy (diagnostics + param table policy).
+- [x] Remove `PolicyRegistry`, `KernelLanePolicy`, and list-filter policy.
+- [x] Remove `RelspecConfig` and related config plumbing.
 
 ---
 
@@ -285,6 +308,9 @@ if diagnostics_policy is not None:
 
 ### Why
 Current diff logic only checks plan hash; integrate semantic diffs and canonical fingerprints.
+
+### Status
+**Completed**
 
 ### Representative Code Pattern
 ```python
@@ -299,8 +325,8 @@ return diff_plan_fingerprints(prev_hashes, curr_hashes)
 - Consider: `src/ibis_engine/plan_diff.py`
 
 ### Implementation Checklist
-- [ ] Ensure plan hashes come from compiler checkpoints.
-- [ ] Optionally expose semantic diff metadata for diagnostics.
+- [x] Ensure plan hashes come from compiler checkpoints in incremental diff paths.
+- [x] Expose semantic diff metadata for diagnostics.
 
 ---
 
@@ -308,6 +334,9 @@ return diff_plan_fingerprints(prev_hashes, curr_hashes)
 
 ### Why
 Public documentation and exports should match the inference-first surface area.
+
+### Status
+**Completed**
 
 ### Representative Code Pattern
 ```python
@@ -328,9 +357,9 @@ __all__ = (
 - Add: `docs/plans/relspec_inference_streamline_plan.md`
 
 ### Implementation Checklist
-- [ ] Remove exported symbols for deleted modules.
-- [ ] Update architecture docs to reflect inference-only dependency model.
-- [ ] Document the compiler checkpoint based fingerprinting pipeline.
+- [x] Remove exported symbols for deleted modules.
+- [x] Update architecture docs to reflect inference-only dependency model.
+- [x] Document the compiler checkpoint based fingerprinting pipeline.
 
 ---
 
@@ -346,6 +375,9 @@ __all__ = (
 - `src/relspec/task_registry.py`
 - `src/relspec/config.py`
 - `src/relspec/param_deps.py` (after relocation)
+- `src/relspec/policies/__init__.py`
+- `src/relspec/policies/model.py`
+- `src/relspec/policies/registry.py`
 
 ### Functions/Types to Remove or Relocate
 - `ExecutionBundle`, `execution_bundle_signature`, `sqlglot_plan_signature`
@@ -357,7 +389,8 @@ __all__ = (
 - `TaskRegistry`
 - `InferredDepsComparison`, `compare_deps`, `summarize_inferred_deps`, `log_inferred_deps_comparison`
 - `InferredDepsConfig`, `get_inferred_deps_config`
-- `ParamDep`, `TaskDependencyReport`, `ActiveParamSet` (relocate if still needed)
+- `ParamDep` (removed)
+- `TaskDependencyReport`, `ActiveParamSet` (relocated to `src/hamilton_pipeline/pipeline_types.py`)
 
 ---
 
@@ -377,4 +410,3 @@ __all__ = (
 - `task_name` and `task_priority` are uniform across plans and outputs.
 - Evidence validation uses DataFusion schema and provider metadata.
 - Execution path is unified through DataFusion/Ibis runtime surfaces.
-

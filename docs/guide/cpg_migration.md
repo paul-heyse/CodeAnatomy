@@ -20,19 +20,15 @@ architecture introduced in `cpg_dedup_acero_plan.md`.
 
 ## API changes
 
-The `build_cpg_*` functions now return `CpgBuildArtifacts`, which contains:
+The `build_cpg_*_plan` helpers return `IbisPlan` instances that are consumed
+by the task pipeline:
 
-- `finalize`: the `FinalizeResult` (good/errors/stats/alignment)
-- `quality`: quality artifact table
+- `build_cpg_nodes_plan(catalog, ctx, backend) -> IbisPlan`
+- `build_cpg_edges_plan(catalog, ctx, backend) -> IbisPlan`
+- `build_cpg_props_plan(catalog, ctx, backend, options=...) -> IbisPlan`
 
-Downstream consumers should access the final tables via
-`result.finalize.good`.
-
-Plan-returning surfaces now require an execution context:
-
-- `build_cpg_nodes_raw(ctx=..., ...) -> Plan`
-- `build_cpg_edges_raw(ctx=..., ...) -> Plan`
-- `build_cpg_props_raw(ctx=..., ...) -> Plan`
+Downstream consumers should materialize these plans through the task/plan
+catalog (or the Hamilton outputs) rather than expecting a finalize wrapper.
 
 ## Hamilton artifacts
 

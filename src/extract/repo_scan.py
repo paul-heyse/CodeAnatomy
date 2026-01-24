@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, overload
@@ -30,14 +30,6 @@ SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
-class RepoFileFingerprint:
-    """Stable fingerprint metadata for cached repo files."""
-
-    size_bytes: int
-    mtime_ns: int
-    file_sha256: str | None
-
-
 @dataclass(frozen=True)
 class RepoScanOptions:
     """Configure repository scanning behavior."""
@@ -61,7 +53,6 @@ class RepoScanOptions:
     include_sha256: bool = True
     max_file_bytes: int | None = None
     max_files: int | None = 200_000
-    hash_index: Mapping[str, RepoFileFingerprint] | None = None
 
 
 def default_repo_scan_options() -> RepoScanOptions:
@@ -159,12 +150,10 @@ def _build_repo_file_row(
     mtime_ns = int(stat.st_mtime_ns)
     file_sha256: str | None = None
     if options.include_sha256:
-        file_sha256 = _reuse_sha256(rel_posix, size_bytes, mtime_ns, options)
-        if file_sha256 is None:
-            try:
-                file_sha256 = _sha256_path(abs_path)
-            except OSError:
-                return None
+        try:
+            file_sha256 = _sha256_path(abs_path)
+        except OSError:
+            return None
 
     return {
         "file_id": None,
@@ -176,48 +165,6 @@ def _build_repo_file_row(
     }
 
 
-def _reuse_sha256(
-    path: str,
-    size_bytes: int,
-    mtime_ns: int,
-    options: RepoScanOptions,
-) -> str | None:
-    if options.hash_index is None:
-        return None
-    fingerprint = options.hash_index.get(path)
-    if fingerprint is None:
-        return None
-    if fingerprint.size_bytes != size_bytes or fingerprint.mtime_ns != mtime_ns:
-        return None
-    return fingerprint.file_sha256
-
-
-def repo_scan_hash_index(repo_files: TableLike) -> dict[str, RepoFileFingerprint]:
-    """Build a path keyed hash index from a repo_files table.
-
-    Returns
-    -------
-    dict[str, RepoFileFingerprint]
-        Mapping from repo-relative path to cached hash fingerprint.
-    """
-    from arrowdsl.core.array_iter import iter_table_rows
-
-    index: dict[str, RepoFileFingerprint] = {}
-    for row in iter_table_rows(repo_files):
-        path = row.get("path")
-        size_bytes = row.get("size_bytes")
-        mtime_ns = row.get("mtime_ns")
-        file_sha256 = row.get("file_sha256")
-        if not isinstance(path, str):
-            continue
-        if not isinstance(size_bytes, int) or not isinstance(mtime_ns, int):
-            continue
-        index[path] = RepoFileFingerprint(
-            size_bytes=size_bytes,
-            mtime_ns=mtime_ns,
-            file_sha256=file_sha256 if isinstance(file_sha256, str) else None,
-        )
-    return index
 
 
 @overload

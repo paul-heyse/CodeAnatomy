@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 import pyarrow as pa
@@ -11,13 +11,18 @@ import pyarrow as pa
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.policy import SchemaPolicy
-from arrowdsl.schema.schema import SchemaMetadataSpec, align_table, encode_table
+from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.extract_registry import (
     dataset_metadata_with_options,
     dataset_schema_policy,
     dataset_spec,
 )
-from datafusion_engine.finalize import FinalizeContext, FinalizeResult
+from datafusion_engine.finalize import (
+    FinalizeContext,
+    FinalizeOptions,
+    FinalizeResult,
+    normalize_only,
+)
 from datafusion_engine.runtime import sql_options_for_profile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 
@@ -140,28 +145,24 @@ def normalize_extract_output(
     """
     normalize = normalize or ExtractNormalizeOptions()
     processed = apply_pipeline_kernels(name, table) if apply_post_kernels else table
-    policy = schema_policy_for_dataset(
+    policy = _policy_with_information_schema_order(
         name,
+        policy=schema_policy_for_dataset(
+            name,
+            ctx=ctx,
+            options=normalize.options,
+            repo_id=normalize.repo_id,
+            enable_encoding=normalize.enable_encoding,
+        ),
         ctx=ctx,
-        options=normalize.options,
-        repo_id=normalize.repo_id,
-        enable_encoding=normalize.enable_encoding,
     )
-    schema = policy.resolved_schema()
-    ordered = _information_schema_column_order(name, ctx=ctx)
-    if ordered is not None:
-        schema = _ordered_schema(schema, ordered)
-    aligned = align_table(
+    contract = dataset_spec(name).contract()
+    return normalize_only(
         processed,
-        schema=schema,
-        safe_cast=policy.safe_cast,
-        keep_extra_columns=policy.keep_extra_columns,
-        on_error=policy.on_error,
+        contract=contract,
+        ctx=ctx,
+        options=FinalizeOptions(schema_policy=policy),
     )
-    if policy.encoding is None or not policy.encoding.dictionary_cols:
-        return aligned
-    columns = [field.name for field in schema if field.name in policy.encoding.dictionary_cols]
-    return encode_table(aligned, columns=columns)
 
 
 def normalize_extract_reader(
@@ -185,39 +186,29 @@ def normalize_extract_reader(
         Raised when streaming normalization is incompatible with the dataset policy.
     """
     normalize = normalize or ExtractNormalizeOptions()
-    policy = schema_policy_for_dataset(
+    policy = _policy_with_information_schema_order(
         name,
+        policy=schema_policy_for_dataset(
+            name,
+            ctx=ctx,
+            options=normalize.options,
+            repo_id=normalize.repo_id,
+            enable_encoding=normalize.enable_encoding,
+        ),
         ctx=ctx,
-        options=normalize.options,
-        repo_id=normalize.repo_id,
-        enable_encoding=normalize.enable_encoding,
     )
     schema = policy.resolved_schema()
-    ordered = _information_schema_column_order(name, ctx=ctx)
-    if ordered is not None:
-        schema = _ordered_schema(schema, ordered)
     if policy.keep_extra_columns:
         msg = f"Streaming normalization does not support keep_extra_columns for {name!r}."
         raise ValueError(msg)
-    encode_columns = None
-    if policy.encoding is not None and policy.encoding.dictionary_cols:
-        encode_columns = tuple(
-            field.name for field in schema if field.name in policy.encoding.dictionary_cols
-        )
 
     def _iter_batches() -> Iterator[pa.RecordBatch]:
         for batch in reader:
             table = pa.Table.from_batches([batch], schema=batch.schema)
             processed = apply_pipeline_kernels(name, table) if apply_post_kernels else table
-            aligned = align_table(
-                processed,
-                schema=schema,
-                safe_cast=policy.safe_cast,
-                keep_extra_columns=False,
-                on_error=policy.on_error,
-            )
-            if encode_columns:
-                aligned = encode_table(aligned, columns=encode_columns)
+            aligned = policy.apply(processed)
+            if aligned.column_names != schema.names:
+                aligned = aligned.select(schema.names)
             yield from cast("pa.Table", aligned).to_batches()
 
     return pa.RecordBatchReader.from_batches(schema, _iter_batches())
@@ -257,6 +248,19 @@ def finalize_context_for_dataset(
     )
     contract = dataset_spec(name).contract()
     return FinalizeContext(contract=contract, schema_policy=policy)
+
+
+def _policy_with_information_schema_order(
+    name: str,
+    *,
+    policy: SchemaPolicy,
+    ctx: ExecutionContext,
+) -> SchemaPolicy:
+    ordered = _information_schema_column_order(name, ctx=ctx)
+    if ordered is None:
+        return policy
+    schema = _ordered_schema(policy.resolved_schema(), ordered)
+    return replace(policy, schema=schema, metadata=None)
 
 
 def validate_extract_output(

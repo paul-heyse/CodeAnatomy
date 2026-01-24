@@ -55,6 +55,9 @@ There are three stable representation layers:
 - Nodes, edges, and properties are emitted deterministically.
 - Relationships are *consumed* and projected into final graph edges (and sometimes new nodes).
 
+**Implementation note (inference-first scheduling)**  
+Relationship compilation is now orchestrated via a **Task/Plan Catalog** where dependencies are inferred from SQLGlot lineage, not declared rule inputs. The task graph and execution order are derived from inferred inputs/columns rather than rule registries.
+
 ---
 
 ## 1.2 “New insight” is generated only by linkages

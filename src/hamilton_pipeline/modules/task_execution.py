@@ -43,13 +43,13 @@ class TaskRequirements:
     metadata: dict[str, dict[bytes, bytes]]
 
 
-def _initial_evidence(catalog: PlanCatalog) -> EvidenceCatalog:
+def _initial_evidence(catalog: PlanCatalog, *, ctx_id: int | None = None) -> EvidenceCatalog:
     outputs = {artifact.task.output for artifact in catalog.artifacts}
     requirements = _collect_task_requirements(catalog)
     seed_sources = requirements.sources - outputs
     evidence = EvidenceCatalog(sources=set(seed_sources))
     for source in seed_sources:
-        if evidence.register_from_registry(source):
+        if evidence.register_from_registry(source, ctx_id=ctx_id):
             continue
         _seed_evidence_from_requirements(evidence, source, requirements)
     return evidence
@@ -158,7 +158,9 @@ def task_outputs(
     TaskExecutionResults
         Output tables keyed by dataset name.
     """
-    evidence = _initial_evidence(plan_catalog)
+    df_profile = ibis_execution.ctx.runtime.datafusion
+    ctx_id = id(df_profile.session_context()) if df_profile is not None else None
+    evidence = _initial_evidence(plan_catalog, ctx_id=ctx_id)
     runtime = RuntimeArtifacts(execution=ibis_execution)
     schedule = schedule_tasks(
         task_graph,

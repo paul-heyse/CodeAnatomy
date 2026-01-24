@@ -15,7 +15,12 @@ from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict
 from datafusion_engine.runtime import read_delta_as_reader
 from engine.session import EngineSession
-from hamilton_pipeline.pipeline_types import OutputConfig, ParamBundle
+from hamilton_pipeline.pipeline_types import (
+    ActiveParamSet,
+    OutputConfig,
+    ParamBundle,
+    TaskDependencyReport,
+)
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
@@ -35,8 +40,8 @@ from ibis_engine.param_tables import (
 from ibis_engine.param_tables import (
     scalar_param_signature as build_scalar_param_signature,
 )
-from relspec.param_deps import ActiveParamSet, TaskDependencyReport
 from relspec.pipeline_policy import PipelinePolicy
+from relspec.plan_catalog import PlanCatalog
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
@@ -135,6 +140,36 @@ def param_table_inputs(
         delta_paths=normalized_paths,
         active_set=active_set,
     )
+
+
+@tag(layer="params", artifact="relspec_param_dependency_reports", kind="bundle")
+def relspec_param_dependency_reports(
+    plan_catalog: PlanCatalog,
+    param_table_policy: ParamTablePolicy,
+) -> tuple[TaskDependencyReport, ...]:
+    """Infer param-table dependencies from plan catalog inputs.
+
+    Returns
+    -------
+    tuple[TaskDependencyReport, ...]
+        Per-task parameter dependency reports.
+    """
+    prefix = param_table_policy.prefix
+    reports: list[TaskDependencyReport] = []
+    for artifact in plan_catalog.artifacts:
+        inputs = artifact.deps.inputs
+        param_tables = {
+            name[len(prefix) :] for name in inputs if prefix and name.startswith(prefix)
+        }
+        dataset_tables = {name for name in inputs if not name.startswith(prefix)}
+        reports.append(
+            TaskDependencyReport(
+                task_name=artifact.task.name,
+                param_tables=tuple(sorted(param_tables)),
+                dataset_tables=tuple(sorted(dataset_tables)),
+            )
+        )
+    return tuple(reports)
 
 
 @tag(layer="params", artifact="param_bundle", kind="object")

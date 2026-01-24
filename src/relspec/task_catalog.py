@@ -42,6 +42,8 @@ class TaskSpec:
         Builder for the Ibis plan.
     kind : TaskKind
         Execution classification for scheduling.
+    priority : int
+        Scheduling priority (lower runs earlier).
     cache_policy : CachePolicy
         Cache policy for runtime artifacts.
     metadata : Mapping[str, str]
@@ -52,6 +54,7 @@ class TaskSpec:
     output: str
     build: Callable[[TaskBuildContext], IbisPlan]
     kind: TaskKind = "view"
+    priority: int = 100
     cache_policy: CachePolicy = "none"
     metadata: Mapping[str, str] = field(default_factory=dict)
 

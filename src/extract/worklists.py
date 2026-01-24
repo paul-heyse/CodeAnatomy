@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from collections.abc import Iterable, Iterator
+from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
@@ -12,8 +13,15 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.df_builder import df_from_sqlglot
+from datafusion_engine.registry_bridge import register_dataset_df
+from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.helpers import FileContext, iter_file_contexts
 from sqlglot_tools.compat import Expression, exp
+from sqlglot_tools.optimizer import NormalizeExprOptions, normalize_expr, resolve_sqlglot_policy
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from ibis_engine.registry import DatasetLocation
 
 
 def _is_null(expr: Expression) -> Expression:
@@ -87,26 +95,38 @@ def iter_worklist_contexts(
     if ctx is None or ctx.runtime.datafusion is None:
         yield from iter_file_contexts(repo_files)
         return
-    df_ctx = ctx.runtime.datafusion.session_context()
-    yield from _worklist_stream(df_ctx, repo_files=repo_files, output_table=output_table)
+    yield from _worklist_stream(ctx, repo_files=repo_files, output_table=output_table)
 
 
 def _worklist_stream(
-    ctx: SessionContext,
+    ctx: ExecutionContext,
     *,
     repo_files: TableLike,
     output_table: str,
 ) -> Iterator[FileContext]:
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        yield from iter_file_contexts(repo_files)
+        return
+    df_ctx = runtime_profile.session_context()
     repo_name = f"__repo_files_{uuid.uuid4().hex}"
-    output_exists = _table_exists(ctx, output_table)
-    output_name = output_table if output_exists else None
+    output_exists = _table_exists(df_ctx, output_table)
+    output_location = None if output_exists else runtime_profile.dataset_location(output_table)
+    use_output = output_exists or output_location is not None
+    output_name = output_table if use_output else None
     expr = worklist_expr(
-        output_table if output_exists else None,
+        output_table if use_output else None,
         repo_table=repo_name,
         output_table_name=output_name,
     )
-    with _registered_table(ctx, name=repo_name, table=repo_files):
-        stream = df_from_sqlglot(ctx, expr).execute_stream()
+    expr = _normalize_worklist_expr(expr)
+    with _registered_table(df_ctx, name=repo_name, table=repo_files), _registered_output_table(
+        df_ctx,
+        name=output_table,
+        location=output_location,
+        runtime_profile=runtime_profile,
+    ):
+        stream = df_from_sqlglot(df_ctx, expr).execute_stream()
         for batch in stream:
             arrow_batch = batch.to_pyarrow()
             rows = arrow_batch.to_pylist()
@@ -115,6 +135,10 @@ def _worklist_stream(
 
 
 def _table_exists(ctx: SessionContext, name: str) -> bool:
+    try:
+        return name in table_names_snapshot(ctx)
+    except (RuntimeError, TypeError, ValueError):
+        pass
     tables_expr = (
         exp.select("table_name")
         .from_(exp.to_table("tables", db="information_schema"))
@@ -132,6 +156,12 @@ def _table_exists(ctx: SessionContext, name: str) -> bool:
     return any(batch.to_pyarrow().num_rows for batch in stream)
 
 
+def _normalize_worklist_expr(expr: Expression) -> Expression:
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
+    options = NormalizeExprOptions(policy=policy)
+    return normalize_expr(expr, options=options)
+
+
 @contextlib.contextmanager
 def _registered_table(
     ctx: SessionContext,
@@ -140,6 +170,32 @@ def _registered_table(
     table: TableLike,
 ) -> Iterator[None]:
     datafusion_from_arrow(ctx, name=name, value=table)
+    try:
+        yield None
+    finally:
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                deregister(name)
+
+
+@contextlib.contextmanager
+def _registered_output_table(
+    ctx: SessionContext,
+    *,
+    name: str,
+    location: DatasetLocation | None,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> Iterator[None]:
+    if location is None:
+        yield None
+        return
+    register_dataset_df(
+        ctx,
+        name=name,
+        location=location,
+        runtime_profile=runtime_profile,
+    )
     try:
         yield None
     finally:

@@ -54,7 +54,7 @@ class EvidenceCatalog:
         self.types_by_dataset[name] = _schema_types(schema)
         self.metadata_by_dataset[name] = _schema_metadata(schema)
 
-    def register_from_registry(self, name: str) -> bool:
+    def register_from_registry(self, name: str, *, ctx_id: int | None = None) -> bool:
         """Register an evidence dataset using the schema registry.
 
         Returns
@@ -66,6 +66,10 @@ class EvidenceCatalog:
         if schema is None:
             return False
         self.register(name, schema)
+        if ctx_id is not None:
+            provider_metadata = _provider_metadata(ctx_id, name)
+            if provider_metadata:
+                self.metadata_by_dataset.setdefault(name, {}).update(provider_metadata)
         return True
 
     def clone(self) -> EvidenceCatalog:
@@ -139,6 +143,20 @@ def _schema_from_registry(name: str) -> SchemaLike | None:
         return schema_for(name)
     except KeyError:
         return None
+
+
+def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:
+    try:
+        from datafusion_engine.table_provider_metadata import table_provider_metadata
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return {}
+    provider = table_provider_metadata(ctx_id, table_name=name)
+    if provider is None:
+        return {}
+    return {
+        key.encode("utf-8"): str(value).encode("utf-8")
+        for key, value in provider.metadata.items()
+    }
 
 
 def _schema_names(schema: SchemaLike) -> tuple[str, ...]:

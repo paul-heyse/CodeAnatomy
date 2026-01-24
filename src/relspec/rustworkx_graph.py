@@ -159,6 +159,7 @@ def build_task_graph_from_inferred_deps(
     *,
     output_policy: OutputPolicy = "all_producers",
     priority: int = 100,
+    priorities: Mapping[str, int] | None = None,
 ) -> TaskGraph:
     """Build a task graph from inferred dependencies.
 
@@ -167,13 +168,14 @@ def build_task_graph_from_inferred_deps(
     TaskGraph
         Graph constructed from inferred dependencies.
     """
+    priority_map = priorities or {}
     task_nodes = tuple(
         TaskNode(
             name=dep.task_name,
             output=dep.output,
             inputs=dep.inputs,
             sources=dep.inputs,
-            priority=priority,
+            priority=priority_map.get(dep.task_name, priority),
         )
         for dep in deps
     )

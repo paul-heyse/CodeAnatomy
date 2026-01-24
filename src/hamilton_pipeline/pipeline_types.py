@@ -118,6 +118,22 @@ class IncrementalImpactUpdates:
 
 
 @dataclass(frozen=True)
+class TaskDependencyReport:
+    """Task-level dependency report for parameter tables."""
+
+    task_name: str
+    param_tables: tuple[str, ...]
+    dataset_tables: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ActiveParamSet:
+    """Active param-table logical names inferred for a run."""
+
+    active: frozenset[str]
+
+
+@dataclass(frozen=True)
 class TreeSitterConfig:
     """Configuration for tree-sitter extraction."""
 

@@ -812,26 +812,7 @@ def finalize(
         Finalized table bundle.
     """
     options = options or FinalizeOptions()
-    schema_policy = options.schema_policy
-    if schema_policy is None:
-        schema_spec = contract.schema_spec
-        if schema_spec is None:
-            schema_spec = _table_spec_from_schema(
-                contract.name,
-                contract.schema,
-                version=contract.version,
-            )
-            policy_options = SchemaPolicyOptions(
-                schema=contract.with_versioned_schema(),
-                encoding=EncodingPolicy(dictionary_cols=frozenset()),
-                validation=contract.validation,
-            )
-        else:
-            policy_options = SchemaPolicyOptions(
-                schema=contract.with_versioned_schema(),
-                validation=contract.validation,
-            )
-        schema_policy = schema_policy_factory(schema_spec, ctx=ctx, options=policy_options)
+    schema_policy = _resolve_schema_policy(contract, ctx=ctx, schema_policy=options.schema_policy)
     schema = schema_policy.resolved_schema()
     aligned, align_info = schema_policy.apply_with_info(table)
     if schema_policy.encoding is None:
@@ -890,6 +871,59 @@ def finalize(
     )
 
 
+def normalize_only(
+    table: TableLike,
+    *,
+    contract: Contract,
+    ctx: ExecutionContext,
+    options: FinalizeOptions | None = None,
+) -> TableLike:
+    """Normalize a table using finalize schema policy without invariants.
+
+    Returns
+    -------
+    TableLike
+        Normalized (aligned/encoded) table.
+    """
+    options = options or FinalizeOptions()
+    schema_policy = _resolve_schema_policy(contract, ctx=ctx, schema_policy=options.schema_policy)
+    schema = schema_policy.resolved_schema()
+    aligned, _ = schema_policy.apply_with_info(table)
+    if schema_policy.encoding is None:
+        aligned = (options.chunk_policy or ChunkPolicy()).apply(aligned)
+    if not schema_policy.keep_extra_columns and aligned.column_names != schema.names:
+        aligned = aligned.select(schema.names)
+    return aligned
+
+
+def _resolve_schema_policy(
+    contract: Contract,
+    *,
+    ctx: ExecutionContext,
+    schema_policy: SchemaPolicy | None,
+) -> SchemaPolicy:
+    if schema_policy is not None:
+        return schema_policy
+    schema_spec = contract.schema_spec
+    if schema_spec is None:
+        schema_spec = _table_spec_from_schema(
+            contract.name,
+            contract.schema,
+            version=contract.version,
+        )
+        policy_options = SchemaPolicyOptions(
+            schema=contract.with_versioned_schema(),
+            encoding=EncodingPolicy(dictionary_cols=frozenset()),
+            validation=contract.validation,
+        )
+    else:
+        policy_options = SchemaPolicyOptions(
+            schema=contract.with_versioned_schema(),
+            validation=contract.validation,
+        )
+    return schema_policy_factory(schema_spec, ctx=ctx, options=policy_options)
+
+
 @dataclass(frozen=True)
 class FinalizeContext:
     """Reusable finalize configuration for a contract."""
@@ -932,4 +966,5 @@ __all__ = [
     "InvariantFn",
     "InvariantResult",
     "finalize",
+    "normalize_only",
 ]

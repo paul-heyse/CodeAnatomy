@@ -22,7 +22,8 @@ def build_task_graph(artifacts: Sequence[PlanArtifact]) -> TaskGraph:
         Task graph built from inferred dependencies.
     """
     deps = tuple(artifact.deps for artifact in artifacts)
-    return build_task_graph_from_inferred_deps(deps)
+    priorities = {artifact.task.name: artifact.task.priority for artifact in artifacts}
+    return build_task_graph_from_inferred_deps(deps, priorities=priorities)
 
 
 def task_graph_from_catalog(catalog: PlanCatalog) -> TaskGraph:

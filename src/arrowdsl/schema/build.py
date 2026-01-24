@@ -432,6 +432,67 @@ def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> T
     return table_from_rows(schema, rows)
 
 
+def record_batches_from_row_batches(
+    schema: pa.Schema,
+    row_batches: Iterable[Sequence[Mapping[str, object]]],
+) -> Iterator[pa.RecordBatch]:
+    """Yield record batches aligned to a schema from row batches.
+
+    Parameters
+    ----------
+    schema:
+        Target schema for alignment.
+    row_batches:
+        Iterable of row batches (list of row mappings).
+
+    Yields
+    ------
+    pyarrow.RecordBatch
+        Record batches aligned to the requested schema.
+    """
+    for batch in row_batches:
+        if not batch:
+            continue
+        aligned = table_from_rows(schema, batch)
+        extra = pa.Table.from_pylist(batch)
+        for name in extra.column_names:
+            if name in aligned.column_names:
+                continue
+            aligned = aligned.append_column(name, extra[name])
+        yield from aligned.to_batches()
+
+
+def record_batch_reader_from_rows(
+    schema: pa.Schema,
+    rows: Iterable[Mapping[str, object]],
+) -> pa.RecordBatchReader:
+    """Return a RecordBatchReader aligned to a schema from rows.
+
+    Returns
+    -------
+    pyarrow.RecordBatchReader
+        Reader yielding schema-aligned record batches.
+    """
+    row_list = [dict(row) for row in rows]
+    if not row_list:
+        return pa.RecordBatchReader.from_batches(schema, [])
+    return record_batch_reader_from_row_batches(schema, [row_list])
+
+
+def record_batch_reader_from_row_batches(
+    schema: pa.Schema,
+    row_batches: Iterable[Sequence[Mapping[str, object]]],
+) -> pa.RecordBatchReader:
+    """Return a RecordBatchReader aligned to a schema from row batches.
+
+    Returns
+    -------
+    pyarrow.RecordBatchReader
+        Reader yielding schema-aligned record batches.
+    """
+    return pa.RecordBatchReader.from_batches(schema, record_batches_from_row_batches(schema, row_batches))
+
+
 __all__ = [
     "CoalesceExpr",
     "ColumnDefaultsSpec",
@@ -459,6 +520,9 @@ __all__ = [
     "pick_first",
     "resolve_float_col",
     "resolve_string_col",
+    "record_batches_from_row_batches",
+    "record_batch_reader_from_row_batches",
+    "record_batch_reader_from_rows",
     "rows_from_table",
     "rows_to_table",
     "set_or_append_column",

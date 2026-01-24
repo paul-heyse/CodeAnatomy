@@ -6,18 +6,21 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from incremental import delta_updates
     from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
 
 __all__ = [
     "IncrementalConfig",
     "IncrementalFileChanges",
     "IncrementalImpact",
+    "delta_updates",
 ]
 
 _LAZY_IMPORTS: dict[str, str] = {
     "IncrementalConfig": "incremental.types",
     "IncrementalFileChanges": "incremental.types",
     "IncrementalImpact": "incremental.types",
+    "delta_updates": "incremental.delta_updates",
 }
 
 
@@ -25,7 +28,7 @@ def __getattr__(name: str) -> object:
     module_path = _LAZY_IMPORTS.get(name)
     if module_path is not None:
         module = import_module(module_path)
-        value = getattr(module, name)
+        value = getattr(module, name, module)
         globals()[name] = value
         return value
     try:

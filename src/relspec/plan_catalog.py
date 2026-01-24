@@ -108,7 +108,7 @@ def compile_task_plan(
     deps = infer_deps_from_ibis_plan(
         plan,
         backend=compiler_backend,
-        request=InferredDepsRequest(rule_name=task.name, output=task.output),
+        request=InferredDepsRequest(task_name=task.name, output=task.output),
         sqlglot_expr=sg_expr,
     )
     fingerprint = deps.plan_fingerprint or plan_fingerprint(sg_expr)

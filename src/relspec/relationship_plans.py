@@ -76,8 +76,8 @@ def build_rel_name_symbol_plan(
         resolution_method=ibis.literal("cst_ref_text"),
         confidence=ibis.literal(0.5),
         score=ibis.literal(0.5),
-        rule_name=ibis.literal("infer.rel_name_symbol"),
-        rule_priority=ibis.literal(100),
+        task_name=ibis.literal("infer.rel_name_symbol"),
+        task_priority=ibis.literal(100),
     )
     return _select_plan(output, schema=REL_NAME_SYMBOL_SCHEMA)
 
@@ -113,8 +113,8 @@ def build_rel_import_symbol_plan(
         resolution_method=ibis.literal("cst_import_name"),
         confidence=ibis.literal(0.5),
         score=ibis.literal(0.5),
-        rule_name=ibis.literal("infer.rel_import_symbol"),
-        rule_priority=ibis.literal(100),
+        task_name=ibis.literal("infer.rel_import_symbol"),
+        task_priority=ibis.literal(100),
     )
     return _select_plan(output, schema=REL_IMPORT_SYMBOL_SCHEMA)
 
@@ -145,8 +145,8 @@ def build_rel_def_symbol_plan(
         resolution_method=ibis.literal("cst_def_name"),
         confidence=ibis.literal(0.6),
         score=ibis.literal(0.6),
-        rule_name=ibis.literal("infer.rel_def_symbol"),
-        rule_priority=ibis.literal(100),
+        task_name=ibis.literal("infer.rel_def_symbol"),
+        task_priority=ibis.literal(100),
     )
     return _select_plan(output, schema=REL_DEF_SYMBOL_SCHEMA)
 
@@ -180,8 +180,8 @@ def build_rel_callsite_symbol_plan(
         resolution_method=ibis.literal("cst_callsite"),
         confidence=ibis.literal(0.6),
         score=ibis.literal(0.6),
-        rule_name=ibis.literal("infer.rel_callsite_symbol"),
-        rule_priority=ibis.literal(100),
+        task_name=ibis.literal("infer.rel_callsite_symbol"),
+        task_priority=ibis.literal(100),
     )
     return _select_plan(output, schema=REL_CALLSITE_SYMBOL_SCHEMA)
 
@@ -212,8 +212,8 @@ def build_rel_callsite_qname_plan(
         confidence=ibis.literal(0.5),
         score=ibis.literal(0.5),
         ambiguity_group_id=_col(candidates, "ambiguity_group_id", pa.string()),
-        rule_name=ibis.literal("infer.rel_callsite_qname"),
-        rule_priority=ibis.literal(100),
+        task_name=ibis.literal("infer.rel_callsite_qname"),
+        task_priority=ibis.literal(100),
     )
     return _select_plan(output, schema=REL_CALLSITE_QNAME_SCHEMA)
 
@@ -357,8 +357,8 @@ def _relation_output_base(expr: Table, spec: RelationOutputSpec) -> Table:
         or _col(expr, "ambiguity_group_id", pa.string()),
         diag_source=_col(expr, "diag_source", pa.string()),
         severity=_col(expr, "severity", pa.string()),
-        rule_name=_col(expr, "rule_name", pa.string()),
-        rule_priority=_col(expr, "rule_priority", pa.int32()),
+        task_name=_col(expr, "task_name", pa.string()),
+        task_priority=_col(expr, "task_priority", pa.int32()),
     )
 
 

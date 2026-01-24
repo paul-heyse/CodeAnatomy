@@ -1,7 +1,7 @@
 """Runtime artifacts container for DataFusion handles and materialized tables.
 
 This module provides data structures for managing runtime state during
-rule execution, including DataFusion context handles, materialized tables,
+task execution, including DataFusion context handles, materialized tables,
 view references, and schema caches.
 """
 
@@ -32,8 +32,8 @@ class ViewReference:
     ----------
     name : str
         View name as registered in the context.
-    source_rule : str
-        Name of the rule that produced this view.
+    source_task : str
+        Name of the task that produced this view.
     schema_fingerprint : str | None
         Hash of the view schema for validation.
     plan_fingerprint : str | None
@@ -41,7 +41,7 @@ class ViewReference:
     """
 
     name: str
-    source_rule: str
+    source_task: str
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
 
@@ -54,8 +54,8 @@ class MaterializedTable:
     ----------
     name : str
         Table name.
-    source_rule : str
-        Name of the rule that produced this table.
+    source_task : str
+        Name of the task that produced this table.
     row_count : int
         Number of rows in the table.
     schema_fingerprint : str | None
@@ -67,7 +67,7 @@ class MaterializedTable:
     """
 
     name: str
-    source_rule: str
+    source_task: str
     row_count: int = 0
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
@@ -78,7 +78,7 @@ class MaterializedTable:
 class MaterializedTableSpec:
     """Metadata for registering a materialized table."""
 
-    source_rule: str
+    source_task: str
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
     storage_path: str | None = None
@@ -86,7 +86,7 @@ class MaterializedTableSpec:
 
 @dataclass
 class RuntimeArtifacts:
-    """Container for runtime artifacts during rule execution.
+    """Container for runtime artifacts during task execution.
 
     Manages DataFusion context handles, materialized tables, view references,
     and schema caches. Mutable to allow progressive population during execution.
@@ -106,7 +106,7 @@ class RuntimeArtifacts:
     table_metadata : dict[str, MaterializedTable]
         Metadata for materialized tables.
     execution_order : list[str]
-        Order in which rules were executed.
+        Order in which tasks were executed.
     """
 
     execution: IbisExecutionContext | None = None
@@ -121,7 +121,7 @@ class RuntimeArtifacts:
         self,
         name: str,
         *,
-        source_rule: str,
+        source_task: str,
         schema_fingerprint: str | None = None,
         plan_fingerprint: str | None = None,
     ) -> ViewReference:
@@ -131,8 +131,8 @@ class RuntimeArtifacts:
         ----------
         name : str
             View name.
-        source_rule : str
-            Rule that produced the view.
+        source_task : str
+            Task that produced the view.
         schema_fingerprint : str | None
             Schema hash for validation.
         plan_fingerprint : str | None
@@ -145,7 +145,7 @@ class RuntimeArtifacts:
         """
         ref = ViewReference(
             name=name,
-            source_rule=source_rule,
+            source_task=source_task,
             schema_fingerprint=schema_fingerprint,
             plan_fingerprint=plan_fingerprint,
         )
@@ -189,7 +189,7 @@ class RuntimeArtifacts:
 
         metadata = MaterializedTable(
             name=name,
-            source_rule=spec.source_rule,
+            source_task=spec.source_task,
             row_count=row_count,
             schema_fingerprint=spec.schema_fingerprint,
             plan_fingerprint=spec.plan_fingerprint,
@@ -225,15 +225,15 @@ class RuntimeArtifacts:
         """
         return self.schema_cache.get(name)
 
-    def record_execution(self, rule_name: str) -> None:
-        """Record that a rule was executed.
+    def record_execution(self, task_name: str) -> None:
+        """Record that a task was executed.
 
         Parameters
         ----------
-        rule_name : str
-            Name of the executed rule.
+        task_name : str
+            Name of the executed task.
         """
-        self.execution_order.append(rule_name)
+        self.execution_order.append(task_name)
 
     def has_artifact(self, name: str) -> bool:
         """Check if an artifact exists (view or materialized).
@@ -251,7 +251,7 @@ class RuntimeArtifacts:
         return name in self.view_references or name in self.materialized_tables
 
     def artifact_source(self, name: str) -> str | None:
-        """Get the source rule for an artifact.
+        """Get the source task for an artifact.
 
         Parameters
         ----------
@@ -261,12 +261,12 @@ class RuntimeArtifacts:
         Returns
         -------
         str | None
-            Source rule name or None if not found.
+            Source task name or None if not found.
         """
         if name in self.view_references:
-            return self.view_references[name].source_rule
+            return self.view_references[name].source_task
         if name in self.table_metadata:
-            return self.table_metadata[name].source_rule
+            return self.table_metadata[name].source_task
         return None
 
     def clone(self) -> RuntimeArtifacts:
@@ -300,7 +300,7 @@ class RuntimeArtifactsSummary:
     total_rows : int
         Total rows across all materialized tables.
     execution_order : tuple[str, ...]
-        Order of rule execution.
+        Order of task execution.
     view_names : tuple[str, ...]
         Names of registered views.
     materialized_names : tuple[str, ...]

@@ -23,6 +23,15 @@ UNION_ENCODING_META = b"arrowdsl.union_encoding"
 UNION_TYPE_META = b"arrowdsl.union_type"
 UNION_ENCODING_STRUCT = b"struct"
 
+SCALAR_UNION_FIELDS: tuple[tuple[str, pa.DataType], ...] = (
+    ("bool", pa.bool_()),
+    ("int", pa.int64()),
+    ("float", pa.float64()),
+    ("string", pa.string()),
+    ("binary", pa.binary()),
+)
+SCALAR_UNION_TYPE = pa.union(list(SCALAR_UNION_FIELDS), mode="dense")
+
 
 @dataclass(frozen=True)
 class _UnionEncodeInputs:
@@ -970,6 +979,8 @@ def _coerce_chunked(
 
 
 __all__ = [
+    "SCALAR_UNION_FIELDS",
+    "SCALAR_UNION_TYPE",
     "UNION_ENCODING_META",
     "UNION_TAG_FIELD",
     "UNION_TYPE_META",

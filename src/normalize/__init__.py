@@ -36,6 +36,7 @@ if TYPE_CHECKING:
         build_cfg_edges,
         build_def_use_events,
         collect_diags,
+        ensure_execution_context,
         normalize_cst_callsites_spans,
         normalize_cst_defs_spans,
         normalize_cst_imports_spans,
@@ -57,12 +58,6 @@ if TYPE_CHECKING:
         dataset_specs,
         dataset_table_spec,
     )
-    from normalize.runner import (
-        NormalizeFinalizeSpec,
-        NormalizeRunOptions,
-        ensure_execution_context,
-        run_normalize,
-    )
     from normalize.utils import add_span_id_column, span_id
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
@@ -76,8 +71,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "TYPE_EXPR_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_EXPR_ID_SPEC"),
     "TYPE_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_ID_SPEC"),
     "DiagnosticsSources": ("normalize.ibis_api", "DiagnosticsSources"),
-    "NormalizeFinalizeSpec": ("normalize.runner", "NormalizeFinalizeSpec"),
-    "NormalizeRunOptions": ("normalize.runner", "NormalizeRunOptions"),
+    "ensure_execution_context": ("normalize.ibis_api", "ensure_execution_context"),
     "add_ast_byte_spans": ("normalize.ibis_api", "add_ast_byte_spans"),
     "add_scip_occurrence_byte_spans": ("normalize.ibis_api", "add_scip_occurrence_byte_spans"),
     "add_span_id_column": ("normalize.utils", "add_span_id_column"),
@@ -99,7 +93,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "dataset_spec": ("normalize.registry_runtime", "dataset_spec"),
     "dataset_specs": ("normalize.registry_runtime", "dataset_specs"),
     "dataset_table_spec": ("normalize.registry_runtime", "dataset_table_spec"),
-    "ensure_execution_context": ("normalize.runner", "ensure_execution_context"),
     "field": ("normalize.dataset_fields", "field"),
     "field_name": ("normalize.dataset_fields", "field_name"),
     "fields": ("normalize.dataset_fields", "fields"),
@@ -118,7 +111,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "normalize_evidence_spec": ("normalize.contracts", "normalize_evidence_spec"),
     "normalize_type_exprs": ("normalize.ibis_api", "normalize_type_exprs"),
     "normalize_types": ("normalize.ibis_api", "normalize_types"),
-    "run_normalize": ("normalize.runner", "run_normalize"),
     "run_reaching_defs": ("normalize.ibis_api", "run_reaching_defs"),
     "span_id": ("normalize.utils", "span_id"),
 }
@@ -149,8 +141,6 @@ __all__ = [
     "TYPE_EXPR_ID_SPEC",
     "TYPE_ID_SPEC",
     "DiagnosticsSources",
-    "NormalizeFinalizeSpec",
-    "NormalizeRunOptions",
     "add_ast_byte_spans",
     "add_scip_occurrence_byte_spans",
     "add_span_id_column",
@@ -185,7 +175,6 @@ __all__ = [
     "normalize_evidence_spec",
     "normalize_type_exprs",
     "normalize_types",
-    "run_normalize",
     "run_reaching_defs",
     "span_id",
 ]

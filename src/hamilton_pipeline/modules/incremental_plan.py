@@ -45,8 +45,32 @@ def incremental_plan_diff(
     previous = read_plan_fingerprints(state_store, context=context)
     current = plan_fingerprint_map(plan_catalog)
     diff = diff_plan_fingerprints(previous, current)
+    _record_plan_diff(diff, ctx=ctx, total_tasks=len(current))
     write_plan_fingerprints(state_store, current, execution=ibis_execution)
     return diff
+
+
+def _record_plan_diff(
+    diff: IncrementalDiff,
+    *,
+    ctx: ExecutionContext,
+    total_tasks: int,
+) -> None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return
+    payload = {
+        "total_tasks": total_tasks,
+        "changed_tasks": list(diff.changed_tasks),
+        "added_tasks": list(diff.added_tasks),
+        "removed_tasks": list(diff.removed_tasks),
+        "unchanged_tasks": list(diff.unchanged_tasks),
+        "changed_count": len(diff.changed_tasks),
+        "added_count": len(diff.added_tasks),
+        "removed_count": len(diff.removed_tasks),
+        "unchanged_count": len(diff.unchanged_tasks),
+    }
+    profile.diagnostics_sink.record_artifact("incremental_plan_diff_v1", payload)
 
 
 __all__ = ["incremental_plan_diff"]

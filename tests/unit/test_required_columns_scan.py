@@ -6,7 +6,7 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
 
-from arrowdsl.core.scan_telemetry import ScanTelemetryOptions, fragment_telemetry
+from obs.scan_telemetry import ScanTelemetryOptions, fragment_telemetry
 from sqlglot_tools.lineage import required_columns_by_table
 
 ibis = pytest.importorskip("ibis")

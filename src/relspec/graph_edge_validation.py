@@ -1,4 +1,4 @@
-"""Edge-based validation for rule graphs with column-level requirements.
+"""Edge-based validation for task graphs with column-level requirements.
 
 This module provides validation functions that check whether graph edges
 have their column-level requirements satisfied by the evidence catalog.
@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from relspec.evidence import EvidenceCatalog
-from relspec.rustworkx_graph import GraphEdge, GraphNode, RuleGraph, RuleNode
+from relspec.rustworkx_graph import GraphEdge, GraphNode, TaskGraph, TaskNode
 
 
 @dataclass(frozen=True)
@@ -21,8 +21,8 @@ class EdgeValidationResult:
     ----------
     source_name : str
         Name of the source evidence dataset.
-    target_rule : str
-        Name of the target rule.
+    target_task : str
+        Name of the target task.
     is_valid : bool
         Whether all requirements are satisfied.
     missing_columns : tuple[str, ...]
@@ -40,7 +40,7 @@ class EdgeValidationResult:
     """
 
     source_name: str
-    target_rule: str
+    target_task: str
     is_valid: bool
     missing_columns: tuple[str, ...] = ()
     missing_types: tuple[tuple[str, str], ...] = ()
@@ -51,13 +51,13 @@ class EdgeValidationResult:
 
 
 @dataclass(frozen=True)
-class RuleValidationResult:
-    """Result of validating all edges for a rule.
+class TaskValidationResult:
+    """Result of validating all edges for a task.
 
     Attributes
     ----------
-    rule_name : str
-        Name of the rule being validated.
+    task_name : str
+        Name of the task being validated.
     is_valid : bool
         Whether all predecessor edges are satisfied.
     edge_results : tuple[EdgeValidationResult, ...]
@@ -66,7 +66,7 @@ class RuleValidationResult:
         Names of edges that failed validation.
     """
 
-    rule_name: str
+    task_name: str
     is_valid: bool
     edge_results: tuple[EdgeValidationResult, ...] = ()
     unsatisfied_edges: tuple[str, ...] = ()
@@ -74,38 +74,38 @@ class RuleValidationResult:
 
 @dataclass(frozen=True)
 class GraphValidationSummary:
-    """Summary of validation across all rules in a graph.
+    """Summary of validation across all tasks in a graph.
 
     Attributes
     ----------
-    total_rules : int
-        Total number of rules validated.
-    valid_rules : int
-        Number of rules with all edges satisfied.
-    invalid_rules : int
-        Number of rules with unsatisfied edges.
+    total_tasks : int
+        Total number of tasks validated.
+    valid_tasks : int
+        Number of tasks with all edges satisfied.
+    invalid_tasks : int
+        Number of tasks with unsatisfied edges.
     total_edges : int
         Total number of edges validated.
     valid_edges : int
         Number of edges with requirements satisfied.
     invalid_edges : int
         Number of edges with missing requirements.
-    rule_results : tuple[RuleValidationResult, ...]
-        Per-rule validation results.
+    task_results : tuple[TaskValidationResult, ...]
+        Per-task validation results.
     """
 
-    total_rules: int
-    valid_rules: int
-    invalid_rules: int
+    total_tasks: int
+    valid_tasks: int
+    invalid_tasks: int
     total_edges: int
     valid_edges: int
     invalid_edges: int
-    rule_results: tuple[RuleValidationResult, ...] = ()
+    task_results: tuple[TaskValidationResult, ...] = ()
 
 
 def validate_edge_requirements(
-    graph: RuleGraph,
-    rule_idx: int,
+    graph: TaskGraph,
+    task_idx: int,
     *,
     catalog: EvidenceCatalog,
 ) -> bool:
@@ -116,10 +116,10 @@ def validate_edge_requirements(
 
     Parameters
     ----------
-    graph : RuleGraph
-        The rule graph containing the rule.
-    rule_idx : int
-        Node index of the rule to validate.
+    graph : TaskGraph
+        The task graph containing the task.
+    task_idx : int
+        Node index of the task to validate.
     catalog : EvidenceCatalog
         Evidence catalog with available datasets and columns.
 
@@ -128,34 +128,40 @@ def validate_edge_requirements(
     bool
         True if all predecessor edge requirements are satisfied.
     """
-    for pred_idx in graph.graph.predecessor_indices(rule_idx):
-        edge_data = graph.graph.get_edge_data(pred_idx, rule_idx)
+    for pred_idx in graph.graph.predecessor_indices(task_idx):
+        edge_data = graph.graph.get_edge_data(pred_idx, task_idx)
         if not isinstance(edge_data, GraphEdge):
             continue
-        available_cols = catalog.columns_by_dataset.get(edge_data.name, set())
-        if edge_data.required_columns and not set(edge_data.required_columns).issubset(
-            available_cols
+        available_cols = catalog.columns_by_dataset.get(edge_data.name)
+        if (
+            edge_data.required_columns
+            and available_cols is not None
+            and not set(edge_data.required_columns).issubset(available_cols)
         ):
             return False
-        available_types = catalog.types_by_dataset.get(edge_data.name, {})
-        if edge_data.required_types and _missing_required_types(
-            edge_data.required_types, available_types
+        available_types = catalog.types_by_dataset.get(edge_data.name)
+        if (
+            edge_data.required_types
+            and available_types is not None
+            and _missing_required_types(edge_data.required_types, available_types)
         ):
             return False
-        available_metadata = catalog.metadata_by_dataset.get(edge_data.name, {})
-        if edge_data.required_metadata and _missing_required_metadata(
-            edge_data.required_metadata, available_metadata
+        available_metadata = catalog.metadata_by_dataset.get(edge_data.name)
+        if (
+            edge_data.required_metadata
+            and available_metadata is not None
+            and _missing_required_metadata(edge_data.required_metadata, available_metadata)
         ):
             return False
     return True
 
 
 def validate_edge_requirements_detailed(
-    graph: RuleGraph,
-    rule_idx: int,
+    graph: TaskGraph,
+    task_idx: int,
     *,
     catalog: EvidenceCatalog,
-) -> RuleValidationResult:
+) -> TaskValidationResult:
     """Validate predecessor edges with detailed results.
 
     Similar to validate_edge_requirements but returns detailed information
@@ -163,47 +169,55 @@ def validate_edge_requirements_detailed(
 
     Parameters
     ----------
-    graph : RuleGraph
-        The rule graph containing the rule.
-    rule_idx : int
-        Node index of the rule to validate.
+    graph : TaskGraph
+        The task graph containing the task.
+    task_idx : int
+        Node index of the task to validate.
     catalog : EvidenceCatalog
         Evidence catalog with available datasets and columns.
 
     Returns
     -------
-    RuleValidationResult
-        Detailed validation result for the rule.
+    TaskValidationResult
+        Detailed validation result for the task.
 
     Raises
     ------
     TypeError
-        Raised when the graph node at rule_idx is not a RuleNode.
+        Raised when the graph node at task_idx is not a TaskNode.
     """
-    node = graph.graph[rule_idx]
-    if not isinstance(node, GraphNode) or not isinstance(node.payload, RuleNode):
-        msg = f"Expected RuleNode at index {rule_idx}"
+    node = graph.graph[task_idx]
+    if not isinstance(node, GraphNode) or not isinstance(node.payload, TaskNode):
+        msg = f"Expected TaskNode at index {task_idx}"
         raise TypeError(msg)
 
-    rule_name = node.payload.name
+    task_name = node.payload.name
     edge_results: list[EdgeValidationResult] = []
     unsatisfied: list[str] = []
 
-    for pred_idx in graph.graph.predecessor_indices(rule_idx):
-        edge_data = graph.graph.get_edge_data(pred_idx, rule_idx)
+    for pred_idx in graph.graph.predecessor_indices(task_idx):
+        edge_data = graph.graph.get_edge_data(pred_idx, task_idx)
         if not isinstance(edge_data, GraphEdge):
             continue
 
-        available_cols = catalog.columns_by_dataset.get(edge_data.name, set())
+        available_cols = catalog.columns_by_dataset.get(edge_data.name)
         required_cols = set(edge_data.required_columns)
-        missing_cols = required_cols - available_cols
+        missing_cols = (
+            required_cols - available_cols if available_cols is not None else set()
+        )
 
-        available_types = catalog.types_by_dataset.get(edge_data.name, {})
-        missing_types = _missing_required_types(edge_data.required_types, available_types)
+        available_types = catalog.types_by_dataset.get(edge_data.name)
+        missing_types = (
+            _missing_required_types(edge_data.required_types, available_types)
+            if available_types is not None
+            else ()
+        )
 
-        available_metadata = catalog.metadata_by_dataset.get(edge_data.name, {})
-        missing_metadata = _missing_required_metadata(
-            edge_data.required_metadata, available_metadata
+        available_metadata = catalog.metadata_by_dataset.get(edge_data.name)
+        missing_metadata = (
+            _missing_required_metadata(edge_data.required_metadata, available_metadata)
+            if available_metadata is not None
+            else ()
         )
 
         is_valid = not missing_cols and not missing_types and not missing_metadata
@@ -213,19 +227,19 @@ def validate_edge_requirements_detailed(
         edge_results.append(
             EdgeValidationResult(
                 source_name=edge_data.name,
-                target_rule=rule_name,
+                target_task=task_name,
                 is_valid=is_valid,
                 missing_columns=tuple(sorted(missing_cols)),
                 missing_types=missing_types,
                 missing_metadata=missing_metadata,
-                available_columns=tuple(sorted(available_cols)),
-                available_types=_sorted_type_pairs(available_types),
-                available_metadata=_sorted_metadata_pairs(available_metadata),
+                available_columns=tuple(sorted(available_cols or ())),
+                available_types=_sorted_type_pairs(available_types or {}),
+                available_metadata=_sorted_metadata_pairs(available_metadata or {}),
             )
         )
 
-    return RuleValidationResult(
-        rule_name=rule_name,
+    return TaskValidationResult(
+        task_name=task_name,
         is_valid=len(unsatisfied) == 0,
         edge_results=tuple(edge_results),
         unsatisfied_edges=tuple(unsatisfied),
@@ -233,46 +247,46 @@ def validate_edge_requirements_detailed(
 
 
 def validate_graph_edges(
-    graph: RuleGraph,
+    graph: TaskGraph,
     *,
     catalog: EvidenceCatalog,
 ) -> GraphValidationSummary:
-    """Validate all edges in a rule graph against the evidence catalog.
+    """Validate all edges in a task graph against the evidence catalog.
 
     Parameters
     ----------
-    graph : RuleGraph
-        The rule graph to validate.
+    graph : TaskGraph
+        The task graph to validate.
     catalog : EvidenceCatalog
         Evidence catalog with available datasets and columns.
 
     Returns
     -------
     GraphValidationSummary
-        Summary of validation across all rules.
+        Summary of validation across all tasks.
     """
-    rule_results: list[RuleValidationResult] = []
+    task_results: list[TaskValidationResult] = []
     total_edges = 0
     valid_edges = 0
 
-    for rule_idx in graph.rule_idx.values():
-        result = validate_edge_requirements_detailed(graph, rule_idx, catalog=catalog)
-        rule_results.append(result)
+    for task_idx in graph.task_idx.values():
+        result = validate_edge_requirements_detailed(graph, task_idx, catalog=catalog)
+        task_results.append(result)
         total_edges += len(result.edge_results)
         valid_edges += sum(1 for e in result.edge_results if e.is_valid)
 
-    valid_rules = sum(1 for r in rule_results if r.is_valid)
-    invalid_rules = len(rule_results) - valid_rules
+    valid_tasks = sum(1 for r in task_results if r.is_valid)
+    invalid_tasks = len(task_results) - valid_tasks
     invalid_edges = total_edges - valid_edges
 
     return GraphValidationSummary(
-        total_rules=len(rule_results),
-        valid_rules=valid_rules,
-        invalid_rules=invalid_rules,
+        total_tasks=len(task_results),
+        valid_tasks=valid_tasks,
+        invalid_tasks=invalid_tasks,
         total_edges=total_edges,
         valid_edges=valid_edges,
         invalid_edges=invalid_edges,
-        rule_results=tuple(rule_results),
+        task_results=tuple(task_results),
     )
 
 
@@ -308,47 +322,47 @@ def _sorted_metadata_pairs(
     return tuple(sorted(items.items(), key=lambda pair: pair[0]))
 
 
-def ready_rules_with_column_validation(
-    graph: RuleGraph,
+def ready_tasks_with_column_validation(
+    graph: TaskGraph,
     *,
     catalog: EvidenceCatalog,
     completed: set[str],
 ) -> Sequence[str]:
-    """Return rules that are ready for execution with column validation.
+    """Return tasks that are ready for execution with column validation.
 
-    A rule is ready if:
-    1. All its predecessor rules have completed
+    A task is ready if:
+    1. All its predecessor tasks have completed
     2. All column requirements on incoming edges are satisfied
 
     Parameters
     ----------
-    graph : RuleGraph
-        The rule graph.
+    graph : TaskGraph
+        The task graph.
     catalog : EvidenceCatalog
         Evidence catalog with available datasets and columns.
     completed : set[str]
-        Set of completed rule names.
+        Set of completed task names.
 
     Returns
     -------
     Sequence[str]
-        Names of rules ready for execution.
+        Names of tasks ready for execution.
     """
     ready: list[str] = []
 
-    for rule_name, rule_idx in graph.rule_idx.items():
-        if rule_name in completed:
+    for task_name, task_idx in graph.task_idx.items():
+        if task_name in completed:
             continue
 
-        # Check predecessor rules are complete
+        # Check predecessor tasks are complete
         all_preds_complete = True
-        for pred_idx in graph.graph.predecessor_indices(rule_idx):
+        for pred_idx in graph.graph.predecessor_indices(task_idx):
             pred_node = graph.graph[pred_idx]
             if not isinstance(pred_node, GraphNode):
                 continue
             if (
-                pred_node.kind == "rule"
-                and isinstance(pred_node.payload, RuleNode)
+                pred_node.kind == "task"
+                and isinstance(pred_node.payload, TaskNode)
                 and pred_node.payload.name not in completed
             ):
                 all_preds_complete = False
@@ -358,8 +372,8 @@ def ready_rules_with_column_validation(
             continue
 
         # Check column requirements
-        if validate_edge_requirements(graph, rule_idx, catalog=catalog):
-            ready.append(rule_name)
+        if validate_edge_requirements(graph, task_idx, catalog=catalog):
+            ready.append(task_name)
 
     return tuple(sorted(ready))
 
@@ -367,8 +381,8 @@ def ready_rules_with_column_validation(
 __all__ = [
     "EdgeValidationResult",
     "GraphValidationSummary",
-    "RuleValidationResult",
-    "ready_rules_with_column_validation",
+    "TaskValidationResult",
+    "ready_tasks_with_column_validation",
     "validate_edge_requirements",
     "validate_edge_requirements_detailed",
     "validate_graph_edges",

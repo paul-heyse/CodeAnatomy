@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from arrowdsl.core.ids import SpanIdSpec, add_span_id_column, span_id
 from arrowdsl.core.interop import TableLike
-from arrowdsl.core.joins import code_unit_meta_config, left_join
 from arrowdsl.schema.metadata import (
     DICT_INDEX_META,
     DICT_ORDERED_META,
@@ -19,6 +18,7 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
+from normalize.join_utils import code_unit_meta_config, left_join
 
 
 def join_code_unit_meta(table: TableLike, code_units: TableLike) -> TableLike:

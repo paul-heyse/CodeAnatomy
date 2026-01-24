@@ -17,11 +17,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "IncrementalDiff": ("relspec.incremental", "IncrementalDiff"),
     "PlanArtifact": ("relspec.plan_catalog", "PlanArtifact"),
     "PlanCatalog": ("relspec.plan_catalog", "PlanCatalog"),
-    "RuleGraph": ("relspec.rustworkx_graph", "RuleGraph"),
-    "RuleGraphSnapshot": ("relspec.rustworkx_graph", "RuleGraphSnapshot"),
-    "RuleNode": ("relspec.rustworkx_graph", "RuleNode"),
-    "RuleSchedule": ("relspec.rustworkx_schedule", "RuleSchedule"),
-    "RuleValidationResult": ("relspec.graph_edge_validation", "RuleValidationResult"),
+    "TaskGraphSnapshot": ("relspec.rustworkx_graph", "TaskGraphSnapshot"),
+    "TaskNode": ("relspec.rustworkx_graph", "TaskNode"),
+    "TaskSchedule": ("relspec.rustworkx_schedule", "TaskSchedule"),
+    "TaskValidationResult": ("relspec.graph_edge_validation", "TaskValidationResult"),
     "TaskBuildContext": ("relspec.task_catalog", "TaskBuildContext"),
     "TaskCatalog": ("relspec.task_catalog", "TaskCatalog"),
     "TaskExecutionRequest": ("relspec.execution", "TaskExecutionRequest"),
@@ -35,18 +34,18 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "compile_task_plan": ("relspec.plan_catalog", "compile_task_plan"),
     "diff_plan_catalog": ("relspec.incremental", "diff_plan_catalog"),
     "execute_plan_artifact": ("relspec.execution", "execute_plan_artifact"),
-    "impacted_rules": ("relspec.rustworkx_schedule", "impacted_rules"),
-    "impacted_rules_for_evidence": ("relspec.rustworkx_schedule", "impacted_rules_for_evidence"),
-    "provenance_for_rule": ("relspec.rustworkx_schedule", "provenance_for_rule"),
-    "ready_rules_with_column_validation": (
+    "impacted_tasks": ("relspec.rustworkx_schedule", "impacted_tasks"),
+    "impacted_tasks_for_evidence": ("relspec.rustworkx_schedule", "impacted_tasks_for_evidence"),
+    "provenance_for_task": ("relspec.rustworkx_schedule", "provenance_for_task"),
+    "ready_tasks_with_column_validation": (
         "relspec.graph_edge_validation",
-        "ready_rules_with_column_validation",
+        "ready_tasks_with_column_validation",
     ),
-    "rule_graph_diagnostics": ("relspec.rustworkx_graph", "rule_graph_diagnostics"),
-    "rule_graph_signature": ("relspec.rustworkx_graph", "rule_graph_signature"),
-    "rule_graph_snapshot": ("relspec.rustworkx_graph", "rule_graph_snapshot"),
-    "rule_schedule_metadata": ("relspec.rustworkx_schedule", "rule_schedule_metadata"),
-    "schedule_rules": ("relspec.rustworkx_schedule", "schedule_rules"),
+    "task_graph_diagnostics": ("relspec.rustworkx_graph", "task_graph_diagnostics"),
+    "task_graph_signature": ("relspec.rustworkx_graph", "task_graph_signature"),
+    "task_graph_snapshot": ("relspec.rustworkx_graph", "task_graph_snapshot"),
+    "task_schedule_metadata": ("relspec.rustworkx_schedule", "task_schedule_metadata"),
+    "schedule_tasks": ("relspec.rustworkx_schedule", "schedule_tasks"),
     "task_graph_from_catalog": ("relspec.graph_inference", "task_graph_from_catalog"),
     "validate_edge_requirements": ("relspec.graph_edge_validation", "validate_edge_requirements"),
     "validate_edge_requirements_detailed": (
@@ -68,11 +67,10 @@ if TYPE_CHECKING:
     IncrementalDiff: Any
     PlanArtifact: Any
     PlanCatalog: Any
-    RuleGraph: Any
-    RuleGraphSnapshot: Any
-    RuleNode: Any
-    RuleSchedule: Any
-    RuleValidationResult: Any
+    TaskGraphSnapshot: Any
+    TaskNode: Any
+    TaskSchedule: Any
+    TaskValidationResult: Any
     TaskBuildContext: Any
     TaskCatalog: Any
     TaskExecutionRequest: Any
@@ -86,15 +84,15 @@ if TYPE_CHECKING:
     compile_task_plan: Any
     diff_plan_catalog: Any
     execute_plan_artifact: Any
-    impacted_rules: Any
-    impacted_rules_for_evidence: Any
-    provenance_for_rule: Any
-    ready_rules_with_column_validation: Any
-    rule_graph_diagnostics: Any
-    rule_graph_signature: Any
-    rule_graph_snapshot: Any
-    rule_schedule_metadata: Any
-    schedule_rules: Any
+    impacted_tasks: Any
+    impacted_tasks_for_evidence: Any
+    provenance_for_task: Any
+    ready_tasks_with_column_validation: Any
+    task_graph_diagnostics: Any
+    task_graph_signature: Any
+    task_graph_snapshot: Any
+    task_schedule_metadata: Any
+    schedule_tasks: Any
     task_graph_from_catalog: Any
     validate_edge_requirements: Any
     validate_edge_requirements_detailed: Any
@@ -126,34 +124,33 @@ __all__ = (
     "IncrementalDiff",
     "PlanArtifact",
     "PlanCatalog",
-    "RuleGraph",
-    "RuleGraphSnapshot",
-    "RuleNode",
-    "RuleSchedule",
-    "RuleValidationResult",
     "TaskBuildContext",
     "TaskCatalog",
     "TaskExecutionRequest",
     "TaskGraph",
+    "TaskGraphSnapshot",
     "TaskKind",
+    "TaskNode",
     "TaskRegistry",
+    "TaskSchedule",
     "TaskSpec",
+    "TaskValidationResult",
     "build_task_catalog",
     "build_task_graph",
     "compile_task_catalog",
     "compile_task_plan",
     "diff_plan_catalog",
     "execute_plan_artifact",
-    "impacted_rules",
-    "impacted_rules_for_evidence",
-    "provenance_for_rule",
-    "ready_rules_with_column_validation",
-    "rule_graph_diagnostics",
-    "rule_graph_signature",
-    "rule_graph_snapshot",
-    "rule_schedule_metadata",
-    "schedule_rules",
+    "impacted_tasks",
+    "impacted_tasks_for_evidence",
+    "provenance_for_task",
+    "ready_tasks_with_column_validation",
+    "schedule_tasks",
+    "task_graph_diagnostics",
     "task_graph_from_catalog",
+    "task_graph_signature",
+    "task_graph_snapshot",
+    "task_schedule_metadata",
     "validate_edge_requirements",
     "validate_edge_requirements_detailed",
     "validate_graph_edges",

@@ -6,18 +6,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.core.metrics import (
+from cpg.scip_roles import SCIP_ROLE_FORWARD_DEFINITION, SCIP_ROLE_GENERATED, SCIP_ROLE_TEST
+from datafusion_engine.finalize import FinalizeResult
+from ibis_engine.hashing import HashExprSpec
+from ibis_engine.hashing import hash_expr_spec_factory as hash_spec_factory
+from obs.metrics import (
     QUALITY_SCHEMA,
     QualityPlanSpec,
     concat_quality_tables,
     empty_quality_table,
     quality_from_ids,
 )
-from arrowdsl.core.scan_telemetry import ScanTelemetry
-from cpg.scip_roles import SCIP_ROLE_FORWARD_DEFINITION, SCIP_ROLE_GENERATED, SCIP_ROLE_TEST
-from datafusion_engine.finalize import FinalizeResult
-from ibis_engine.hashing import HashExprSpec
-from ibis_engine.hashing import hash_expr_spec_factory as hash_spec_factory
+from obs.scan_telemetry import ScanTelemetry
 
 
 @dataclass(frozen=True)

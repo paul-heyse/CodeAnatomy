@@ -9,12 +9,12 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import merge_metadata_specs, ordering_metadata_spec
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from arrowdsl.spec.infra import DatasetRegistration, register_dataset
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from normalize.dataset_bundles import bundle
 from normalize.dataset_fields import field, field_name, fields
 from normalize.dataset_rows import ContractRow, DatasetRow
 from normalize.dataset_templates import template
+from schema_spec.registration import DatasetRegistration, register_dataset
 from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec
 from schema_spec.system import (
     ContractSpec,

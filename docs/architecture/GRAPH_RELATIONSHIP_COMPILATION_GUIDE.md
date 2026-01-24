@@ -696,7 +696,7 @@ Every relationship dataset that can produce multiple candidates must include:
 - `confidence` (0..1)
 - optional `score` (for ranking among candidates)
 - `ambiguity_group_id` for grouping alternatives (often derived from the left entity id)
-- `origin` / `provider` / `rule_name` metadata for explainability
+- `origin` / `provider` / `task_name` metadata for explainability
 
 ## 6.3 “Superior evidence” policy (ranking precedence)
 When multiple sources can answer the same question, prefer in this order:

@@ -2,7 +2,7 @@
 
 This module provides calculation-driven dependency inference as an alternative
 to declared-dependency scheduling. The dependency graph is derived from actual
-Ibis/DataFusion expression analysis rather than bespoke rule specifications.
+Ibis/DataFusion expression analysis rather than bespoke task specifications.
 """
 
 from __future__ import annotations
@@ -19,10 +19,13 @@ from sqlglot_tools.lineage import referenced_tables, required_columns_by_table
 from sqlglot_tools.optimizer import plan_fingerprint
 
 if TYPE_CHECKING:
+    import pyarrow as pa
+
     from ibis_engine.plan import IbisPlan
     from sqlglot_tools.compat import Expression
 
 _LOG = logging.getLogger(__name__)
+_SCHEMA_SUFFIX_PARTS = 2
 
 
 @dataclass(frozen=True)
@@ -34,14 +37,18 @@ class InferredDeps:
 
     Attributes
     ----------
-    rule_name : str
-        Name of the rule these dependencies apply to.
+    task_name : str
+        Name of the task these dependencies apply to.
     output : str
-        Output dataset name produced by the rule.
+        Output dataset name produced by the task.
     inputs : tuple[str, ...]
         Table names inferred from expression analysis.
     required_columns : Mapping[str, tuple[str, ...]]
         Per-table columns required by the expression.
+    required_types : Mapping[str, tuple[tuple[str, str], ...]]
+        Per-table required column/type pairs.
+    required_metadata : Mapping[str, tuple[tuple[bytes, bytes], ...]]
+        Per-table required metadata entries.
     plan_fingerprint : str
         Stable hash for caching and comparison.
     declared_inputs : tuple[str, ...] | None
@@ -54,10 +61,12 @@ class InferredDeps:
         Tables declared but not inferred.
     """
 
-    rule_name: str
+    task_name: str
     output: str
     inputs: tuple[str, ...]
     required_columns: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    required_types: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+    required_metadata: Mapping[str, tuple[tuple[bytes, bytes], ...]] = field(default_factory=dict)
     plan_fingerprint: str = ""
     declared_inputs: tuple[str, ...] | None = None
     inputs_match: bool = True
@@ -71,23 +80,23 @@ class InferredDepsComparison:
 
     Attributes
     ----------
-    total_rules : int
-        Total number of rules compared.
-    matched_rules : int
-        Rules where declared and inferred inputs match.
-    mismatched_rules : int
-        Rules with discrepancies.
+    total_tasks : int
+        Total number of tasks compared.
+    matched_tasks : int
+        Tasks where declared and inferred inputs match.
+    mismatched_tasks : int
+        Tasks with discrepancies.
     extra_inferred_total : int
-        Total count of extra inferred tables across all rules.
+        Total count of extra inferred tables across all tasks.
     missing_declared_total : int
-        Total count of missing declared tables across all rules.
+        Total count of missing declared tables across all tasks.
     mismatches : tuple[InferredDeps, ...]
-        Detailed mismatch information for each discrepant rule.
+        Detailed mismatch information for each discrepant task.
     """
 
-    total_rules: int
-    matched_rules: int
-    mismatched_rules: int
+    total_tasks: int
+    matched_tasks: int
+    mismatched_tasks: int
     extra_inferred_total: int
     missing_declared_total: int
     mismatches: tuple[InferredDeps, ...] = ()
@@ -97,7 +106,7 @@ class InferredDepsComparison:
 class InferredDepsRequest:
     """Inputs for dependency inference."""
 
-    rule_name: str
+    task_name: str
     output: str
     declared_inputs: tuple[str, ...] | None = None
     dialect: str = "datafusion"
@@ -124,7 +133,7 @@ def infer_deps_from_ibis_plan(
     backend : IbisCompilerBackend
         Ibis backend with SQLGlot compiler.
     request : InferredDepsRequest
-        Request payload including rule name, output, and optional declared inputs.
+        Request payload including task name, output, and optional declared inputs.
     sqlglot_expr : Expression | None
         Optional precompiled SQLGlot expression for the plan.
 
@@ -133,7 +142,7 @@ def infer_deps_from_ibis_plan(
     InferredDeps
         Inferred dependencies with comparison metadata.
     """
-    rule_name = request.rule_name
+    task_name = request.task_name
     output = request.output
     declared_inputs = request.declared_inputs
     dialect = request.dialect
@@ -154,10 +163,13 @@ def infer_deps_from_ibis_plan(
         )
     except (SqlglotError, TypeError, ValueError):
         _LOG.debug(
-            "Column-level lineage extraction failed for rule %r, using table-level only",
-            rule_name,
+            "Column-level lineage extraction failed for task %r, using table-level only",
+            task_name,
             exc_info=True,
         )
+
+    required_types = _required_types_for_tables(columns_by_table, backend=backend)
+    required_metadata = _required_metadata_for_tables(columns_by_table)
 
     # Compute plan fingerprint
     fingerprint = plan_fingerprint(sg_expr, dialect=dialect)
@@ -175,10 +187,12 @@ def infer_deps_from_ibis_plan(
         inputs_match = not extra_inferred and not missing_declared
 
     return InferredDeps(
-        rule_name=rule_name,
+        task_name=task_name,
         output=output,
         inputs=tables,
         required_columns=columns_by_table,
+        required_types=required_types,
+        required_metadata=required_metadata,
         plan_fingerprint=fingerprint,
         declared_inputs=declared_inputs,
         inputs_match=inputs_match,
@@ -190,7 +204,7 @@ def infer_deps_from_ibis_plan(
 def infer_deps_from_sqlglot_expr(
     expr: object,
     *,
-    rule_name: str,
+    task_name: str,
     output: str,
     declared_inputs: tuple[str, ...] | None = None,
     dialect: str = "datafusion",
@@ -204,8 +218,8 @@ def infer_deps_from_sqlglot_expr(
     ----------
     expr : Expression
         SQLGlot expression to analyze.
-    rule_name : str
-        Name of the rule being analyzed.
+    task_name : str
+        Name of the task being analyzed.
     output : str
         Output dataset name.
     declared_inputs : tuple[str, ...] | None
@@ -231,6 +245,10 @@ def infer_deps_from_sqlglot_expr(
 
     # Extract table references
     tables = referenced_tables(expr)
+    columns_by_table = _required_columns_from_sqlglot(expr)
+
+    required_types = _required_types_from_registry(columns_by_table)
+    required_metadata = _required_metadata_for_tables(columns_by_table)
 
     # Compute plan fingerprint
     fingerprint = plan_fingerprint(expr, dialect=dialect)
@@ -248,10 +266,12 @@ def infer_deps_from_sqlglot_expr(
         inputs_match = not extra_inferred and not missing_declared
 
     return InferredDeps(
-        rule_name=rule_name,
+        task_name=task_name,
         output=output,
         inputs=tables,
-        required_columns={},  # Cannot extract without Ibis schema context
+        required_columns=columns_by_table,
+        required_types=required_types,
+        required_metadata=required_metadata,
         plan_fingerprint=fingerprint,
         declared_inputs=declared_inputs,
         inputs_match=inputs_match,
@@ -288,10 +308,12 @@ def compare_deps(
     inputs_match = not extra_inferred and not missing_declared
 
     return InferredDeps(
-        rule_name=inferred.rule_name,
+        task_name=inferred.task_name,
         output=inferred.output,
         inputs=inferred.inputs,
         required_columns=inferred.required_columns,
+        required_types=inferred.required_types,
+        required_metadata=inferred.required_metadata,
         plan_fingerprint=inferred.plan_fingerprint,
         declared_inputs=declared,
         inputs_match=inputs_match,
@@ -303,12 +325,12 @@ def compare_deps(
 def summarize_inferred_deps(
     deps: Sequence[InferredDeps],
 ) -> InferredDepsComparison:
-    """Summarize comparison results across multiple rules.
+    """Summarize comparison results across multiple tasks.
 
     Parameters
     ----------
     deps : Sequence[InferredDeps]
-        Inferred dependencies for multiple rules.
+        Inferred dependencies for multiple tasks.
 
     Returns
     -------
@@ -323,9 +345,9 @@ def summarize_inferred_deps(
     mismatches = tuple(d for d in deps if not d.inputs_match)
 
     return InferredDepsComparison(
-        total_rules=total,
-        matched_rules=matched,
-        mismatched_rules=mismatched,
+        total_tasks=total,
+        matched_tasks=matched,
+        mismatched_tasks=mismatched,
         extra_inferred_total=extra_total,
         missing_declared_total=missing_total,
         mismatches=mismatches,
@@ -351,20 +373,20 @@ def log_inferred_deps_comparison(
     """
     log = logger or _LOG
 
-    if comparison.mismatched_rules == 0:
+    if comparison.mismatched_tasks == 0:
         log.info(
-            "Dependency inference: %d/%d rules match declared inputs",
-            comparison.matched_rules,
-            comparison.total_rules,
+            "Dependency inference: %d/%d tasks match declared inputs",
+            comparison.matched_tasks,
+            comparison.total_tasks,
         )
         return
 
     log.log(
         level,
-        "Dependency inference: %d/%d rules have mismatches "
+        "Dependency inference: %d/%d tasks have mismatches "
         "(extra_inferred=%d, missing_declared=%d)",
-        comparison.mismatched_rules,
-        comparison.total_rules,
+        comparison.mismatched_tasks,
+        comparison.total_tasks,
         comparison.extra_inferred_total,
         comparison.missing_declared_total,
     )
@@ -372,11 +394,150 @@ def log_inferred_deps_comparison(
     for mismatch in comparison.mismatches:
         log.log(
             level,
-            "  Rule %r: extra=%s, missing=%s",
-            mismatch.rule_name,
+            "  Task %r: extra=%s, missing=%s",
+            mismatch.task_name,
             list(mismatch.extra_inferred),
             list(mismatch.missing_declared),
         )
+
+
+def _required_types_for_tables(
+    columns_by_table: Mapping[str, tuple[str, ...]],
+    *,
+    backend: IbisCompilerBackend,
+) -> dict[str, tuple[tuple[str, str], ...]]:
+    required: dict[str, tuple[tuple[str, str], ...]] = {}
+    if not columns_by_table:
+        return required
+    schema_lookup = _schema_lookup_map(backend)
+    for table_name, columns in columns_by_table.items():
+        schema = _schema_for_table(table_name)
+        if schema is not None:
+            pairs = _types_from_schema(schema, columns)
+        else:
+            pairs = _types_from_lookup(schema_lookup, table_name, columns)
+        if pairs:
+            required[table_name] = pairs
+    return required
+
+
+def _required_metadata_for_tables(
+    columns_by_table: Mapping[str, tuple[str, ...]],
+) -> dict[str, tuple[tuple[bytes, bytes], ...]]:
+    required: dict[str, tuple[tuple[bytes, bytes], ...]] = {}
+    for table_name in columns_by_table:
+        schema = _schema_for_table(table_name)
+        if schema is None:
+            continue
+        metadata = _metadata_from_schema(schema)
+        if metadata:
+            required[table_name] = metadata
+    return required
+
+
+def _required_columns_from_sqlglot(
+    expr: Expression,
+) -> dict[str, tuple[str, ...]]:
+    from sqlglot_tools.compat import exp
+
+    required: dict[str, set[str]] = {}
+    for column in expr.find_all(exp.Column):
+        table = column.table
+        if not table:
+            continue
+        required.setdefault(table, set()).add(column.name)
+    return {table: tuple(sorted(cols)) for table, cols in required.items()}
+
+
+def _required_types_from_registry(
+    columns_by_table: Mapping[str, tuple[str, ...]],
+) -> dict[str, tuple[tuple[str, str], ...]]:
+    required: dict[str, tuple[tuple[str, str], ...]] = {}
+    for table_name, columns in columns_by_table.items():
+        schema = _schema_for_table(table_name)
+        if schema is None:
+            continue
+        pairs = _types_from_schema(schema, columns)
+        if pairs:
+            required[table_name] = pairs
+    return required
+
+
+def _schema_for_table(name: str) -> pa.Schema | None:
+    try:
+        from datafusion_engine.schema_registry import schema_for
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
+    try:
+        return schema_for(name)
+    except KeyError:
+        return None
+
+
+def _schema_lookup_map(
+    backend: IbisCompilerBackend,
+) -> Mapping[str, Mapping[str, str]]:
+    try:
+        from datafusion_engine.runtime import sql_options_for_profile
+        from datafusion_engine.schema_introspection import SchemaIntrospector
+        from ibis_engine.registry import datafusion_context
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return {}
+    try:
+        ctx = datafusion_context(backend)
+    except (TypeError, ValueError):
+        return {}
+    introspector = SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None))
+    schema_map = introspector.schema_map()
+    return _expand_schema_lookup(schema_map)
+
+
+def _expand_schema_lookup(
+    schema_map: Mapping[str, Mapping[str, str]],
+) -> dict[str, Mapping[str, str]]:
+    lookup: dict[str, Mapping[str, str]] = {}
+    for table_key, columns in schema_map.items():
+        lookup.setdefault(table_key, columns)
+        parts = table_key.split(".")
+        if parts:
+            lookup.setdefault(parts[-1], columns)
+        if len(parts) >= _SCHEMA_SUFFIX_PARTS:
+            lookup.setdefault(".".join(parts[-2:]), columns)
+    return lookup
+
+
+def _types_from_schema(
+    schema: pa.Schema,
+    columns: tuple[str, ...],
+) -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    for name in columns:
+        if name in schema.names:
+            dtype = schema.field(name).type
+            pairs.append((name, str(dtype)))
+    return tuple(pairs)
+
+
+def _types_from_lookup(
+    lookup: Mapping[str, Mapping[str, str]],
+    table_name: str,
+    columns: tuple[str, ...],
+) -> tuple[tuple[str, str], ...]:
+    columns_map = lookup.get(table_name)
+    if columns_map is None:
+        return ()
+    pairs: list[tuple[str, str]] = []
+    for name in columns:
+        dtype = columns_map.get(name)
+        if dtype is not None:
+            pairs.append((name, str(dtype)))
+    return tuple(pairs)
+
+
+def _metadata_from_schema(schema: pa.Schema) -> tuple[tuple[bytes, bytes], ...]:
+    if schema.metadata is None:
+        return ()
+    return tuple(sorted(schema.metadata.items(), key=lambda item: item[0]))
 
 
 __all__ = [

@@ -18,7 +18,7 @@ EXPECTED_ONE: int = 1
 def test_inferred_deps_creation() -> None:
     """Create InferredDeps with all fields."""
     deps = InferredDeps(
-        rule_name="test_rule",
+        task_name="test_task",
         output="test_output",
         inputs=("table_a", "table_b"),
         required_columns={"table_a": ("col1", "col2"), "table_b": ("col3",)},
@@ -26,7 +26,7 @@ def test_inferred_deps_creation() -> None:
         declared_inputs=("table_a", "table_b"),
         inputs_match=True,
     )
-    assert deps.rule_name == "test_rule"
+    assert deps.task_name == "test_task"
     assert deps.output == "test_output"
     assert deps.inputs == ("table_a", "table_b")
     assert deps.inputs_match is True
@@ -37,7 +37,7 @@ def test_inferred_deps_creation() -> None:
 def test_inferred_deps_mismatch() -> None:
     """Detect mismatches between declared and inferred inputs."""
     deps = InferredDeps(
-        rule_name="test_rule",
+        task_name="test_task",
         output="test_output",
         inputs=("table_a", "table_c"),  # inferred
         declared_inputs=("table_a", "table_b"),  # declared
@@ -53,7 +53,7 @@ def test_inferred_deps_mismatch() -> None:
 def test_compare_deps_matching() -> None:
     """Compare matching declared and inferred inputs."""
     inferred = InferredDeps(
-        rule_name="test_rule",
+        task_name="test_task",
         output="test_output",
         inputs=("table_a", "table_b"),
     )
@@ -66,7 +66,7 @@ def test_compare_deps_matching() -> None:
 def test_compare_deps_extra_inferred() -> None:
     """Detect tables inferred but not declared."""
     inferred = InferredDeps(
-        rule_name="test_rule",
+        task_name="test_task",
         output="test_output",
         inputs=("table_a", "table_b", "table_c"),
     )
@@ -79,7 +79,7 @@ def test_compare_deps_extra_inferred() -> None:
 def test_compare_deps_missing_declared() -> None:
     """Detect tables declared but not inferred."""
     inferred = InferredDeps(
-        rule_name="test_rule",
+        task_name="test_task",
         output="test_output",
         inputs=("table_a",),
     )
@@ -92,7 +92,7 @@ def test_compare_deps_missing_declared() -> None:
 def test_compare_deps_both_differences() -> None:
     """Detect both extra and missing tables."""
     inferred = InferredDeps(
-        rule_name="test_rule",
+        task_name="test_task",
         output="test_output",
         inputs=("table_a", "table_c"),
     )
@@ -103,17 +103,17 @@ def test_compare_deps_both_differences() -> None:
 
 
 def test_summarize_inferred_deps_all_match() -> None:
-    """Summarize when all rules match."""
+    """Summarize when all tasks match."""
     deps = [
         InferredDeps(
-            rule_name="rule1",
+            task_name="task1",
             output="out1",
             inputs=("a",),
             declared_inputs=("a",),
             inputs_match=True,
         ),
         InferredDeps(
-            rule_name="rule2",
+            task_name="task2",
             output="out2",
             inputs=("b",),
             declared_inputs=("b",),
@@ -121,24 +121,24 @@ def test_summarize_inferred_deps_all_match() -> None:
         ),
     ]
     summary = summarize_inferred_deps(deps)
-    assert summary.total_rules == EXPECTED_TWO
-    assert summary.matched_rules == EXPECTED_TWO
-    assert summary.mismatched_rules == 0
+    assert summary.total_tasks == EXPECTED_TWO
+    assert summary.matched_tasks == EXPECTED_TWO
+    assert summary.mismatched_tasks == 0
     assert summary.mismatches == ()
 
 
 def test_summarize_inferred_deps_with_mismatches() -> None:
-    """Summarize when some rules have mismatches."""
+    """Summarize when some tasks have mismatches."""
     deps = [
         InferredDeps(
-            rule_name="rule1",
+            task_name="task1",
             output="out1",
             inputs=("a",),
             declared_inputs=("a",),
             inputs_match=True,
         ),
         InferredDeps(
-            rule_name="rule2",
+            task_name="task2",
             output="out2",
             inputs=("b", "c"),
             declared_inputs=("b",),
@@ -147,13 +147,13 @@ def test_summarize_inferred_deps_with_mismatches() -> None:
         ),
     ]
     summary = summarize_inferred_deps(deps)
-    assert summary.total_rules == EXPECTED_TWO
-    assert summary.matched_rules == EXPECTED_ONE
-    assert summary.mismatched_rules == EXPECTED_ONE
+    assert summary.total_tasks == EXPECTED_TWO
+    assert summary.matched_tasks == EXPECTED_ONE
+    assert summary.mismatched_tasks == EXPECTED_ONE
     assert summary.extra_inferred_total == EXPECTED_ONE
     assert summary.missing_declared_total == 0
     assert len(summary.mismatches) == EXPECTED_ONE
-    assert summary.mismatches[0].rule_name == "rule2"
+    assert summary.mismatches[0].task_name == "task2"
 
 
 def test_infer_deps_from_sqlglot_expr() -> None:
@@ -163,11 +163,11 @@ def test_infer_deps_from_sqlglot_expr() -> None:
     expr = parse_one("SELECT a.x, b.y FROM table_a a JOIN table_b b ON a.id = b.id")
     deps = infer_deps_from_sqlglot_expr(
         expr,
-        rule_name="join_rule",
+        task_name="join_task",
         output="joined",
         declared_inputs=("table_a", "table_b"),
     )
-    assert deps.rule_name == "join_rule"
+    assert deps.task_name == "join_task"
     assert deps.output == "joined"
     assert "table_a" in deps.inputs or "a" in deps.inputs
     assert deps.plan_fingerprint
@@ -178,6 +178,6 @@ def test_infer_deps_from_sqlglot_expr_invalid_type() -> None:
     with pytest.raises(TypeError, match="Expected SQLGlot Expression"):
         infer_deps_from_sqlglot_expr(
             "not an expression",  # type: ignore[arg-type]
-            rule_name="test",
+            task_name="test",
             output="out",
         )

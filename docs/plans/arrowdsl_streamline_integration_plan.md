@@ -14,6 +14,8 @@ Minimize legacy surfaces in `src/arrowdsl` while preserving the core runtime/sch
 ## Scope 1 — Kernel Registry: migrate ArrowDSL kernel registry into datafusion_engine
 **Objective:** Treat kernel metadata as engine‑owned, not ArrowDSL‑owned.
 
+**Status:** Completed.
+
 **Representative pattern**
 ```python
 # datafusion_engine/kernel_registry.py (new home)
@@ -49,10 +51,17 @@ class KernelDef:
 - Update imports at call sites.
 - Remove ArrowDSL kernel registry module after migration.
 
+**Completed work**
+- Moved `KernelLane`, `KernelDef`, and registry constants into `src/datafusion_engine/kernel_registry.py`.
+- Updated import sites (e.g., `src/relspec/pipeline_policy.py`).
+- Deleted `src/arrowdsl/kernel/registry.py` and `src/arrowdsl/kernel/__init__.py`.
+
 ---
 
 ## Scope 2 — Replace ArrowDSL spec tables + ExprIR with SQLGlot‑based spec serialization
 **Objective:** Decommission `arrowdsl.spec.*` by representing predicates/derived fields/specs as SQLGlot AST or SQL text, compiled via `sqlglot_tools` and executed through Ibis/DataFusion.
+
+**Status:** Completed.
 
 **Representative pattern**
 ```python
@@ -92,10 +101,28 @@ def compile_predicate(sql: str, *, dialect: str, sink: DiagnosticsSink) -> str:
 - Replace ExprIR usage with SQLGlot payload parsing/compilation.
 - Delete ArrowDSL spec modules after call sites are migrated.
 
+**Completed work**
+- Introduced SQLGlot‑backed expression spec at `src/sqlglot_tools/expr_spec.py`.
+- Repointed all ExprIR usage sites to `sqlglot_tools.expr_spec.ExprIR`.
+- Added `src/schema_spec/registration.py` (dataset registration) and `src/schema_spec/literals.py` (scalar literals).
+- Removed all ArrowDSL spec modules:
+  - `src/arrowdsl/spec/expr_ir.py`
+  - `src/arrowdsl/spec/literals.py`
+  - `src/arrowdsl/spec/scalar_union.py`
+  - `src/arrowdsl/spec/io.py`
+  - `src/arrowdsl/spec/infra.py`
+  - `src/arrowdsl/spec/tables/*`
+  - `src/arrowdsl/spec/__init__.py`
+- Updated schema_spec exports to remove spec table adapters and deprecated helpers.
+- Migrated predicate/derived fields to SQL‑text `SqlExprSpec` payloads.
+- Updated query compilation to SQL‑first predicates/derived expressions.
+
 ---
 
 ## Scope 3 — Consolidate IPC + payload hashing into storage/engine
 **Objective:** Remove ArrowDSL IPC helpers and unify IPC/hashing with storage utilities.
+
+**Status:** Completed.
 
 **Representative pattern**
 ```python
@@ -124,10 +151,17 @@ def payload_hash(payload: Mapping[str, object], schema: pa.Schema) -> str:
 - Update all imports to new storage IO module.
 - Delete ArrowDSL IPC modules after migration.
 
+**Completed work**
+- Added `src/storage/ipc.py` with IPC + payload hashing API.
+- Updated all imports to use `storage.ipc`.
+- Deleted `src/arrowdsl/io/ipc.py` and `src/arrowdsl/io/__init__.py`.
+
 ---
 
 ## Scope 4 — Move finalize gate into datafusion_engine + ibis execution patterns
 **Objective:** Relocate `arrowdsl.finalize` to engine‑owned execution, using Ibis plans and DataFusion kernels without ArrowDSL‑specific entry points.
+
+**Status:** Completed.
 
 **Representative pattern**
 ```python
@@ -158,10 +192,17 @@ def finalize_table(
 - Ensure finalize uses `ExecutionContext` + `DataFusionRuntimeProfile`.
 - Delete ArrowDSL finalize package.
 
+**Completed work**
+- Moved finalize implementation to `src/datafusion_engine/finalize.py`.
+- Updated imports in `normalize`, `extract`, `relspec`, and `cpg`.
+- Deleted `src/arrowdsl/finalize/*`.
+
 ---
 
 ## Scope 5 — ArrowDSL core streamlining (retain but trim)
 **Objective:** Keep only core runtime/schema/interop utilities; drop legacy, low‑value modules that can move or be retired.
+
+**Status:** Completed.
 
 **Core to keep**
 - `src/arrowdsl/core/execution_context.py`
@@ -172,8 +213,8 @@ def finalize_table(
 - `src/arrowdsl/schema/*` (encoding, metadata, validation, serialization)
 
 **Candidates to retire or re‑home**
-- `src/arrowdsl/core/metrics.py` → move to `datafusion_engine` or `storage` if still needed
-- `src/arrowdsl/core/scan_telemetry.py` → move to `datafusion_engine`
+- `src/arrowdsl/core/metrics.py` → move to `obs`
+- `src/arrowdsl/core/scan_telemetry.py` → move to `obs`
 - `src/arrowdsl/core/joins.py` → migrate to `datafusion_engine.kernels` or `ibis_engine`
 - `src/arrowdsl/core/validity.py` → keep only if used broadly; otherwise move/retire
 - `src/arrowdsl/core/ids.py`, `src/arrowdsl/core/array_iter.py` → keep only if used across packages
@@ -183,21 +224,29 @@ def finalize_table(
 - For each used module: move to `datafusion_engine`/`engine` with updated imports.
 - Remove unused modules outright after import cleanup.
 
+**Completed work**
+- Moved join helpers to `src/normalize/join_utils.py` and updated callers.
+- Removed `src/arrowdsl/core/joins.py`.
+- Removed unused `src/arrowdsl/core/validity.py`.
+- Added union type constants to `src/arrowdsl/schema/union_codec.py` to replace spec‑package dependency.
+- Moved metrics + scan telemetry into `src/obs` and updated imports.
+
 ---
 
 ## Decommission List (after plan is complete)
 **Files**
-- `src/arrowdsl/kernel/registry.py`
-- `src/arrowdsl/spec/expr_ir.py`
-- `src/arrowdsl/spec/literals.py`
-- `src/arrowdsl/spec/scalar_union.py`
-- `src/arrowdsl/spec/io.py`
-- `src/arrowdsl/spec/infra.py`
-- `src/arrowdsl/spec/tables/*`
-- `src/arrowdsl/io/ipc.py`
-- `src/arrowdsl/finalize/*`
-- (optional, based on audit) `src/arrowdsl/core/metrics.py`, `src/arrowdsl/core/scan_telemetry.py`,
-  `src/arrowdsl/core/joins.py`, `src/arrowdsl/core/validity.py`
+- ✅ `src/arrowdsl/kernel/registry.py`
+- ✅ `src/arrowdsl/spec/expr_ir.py`
+- ✅ `src/arrowdsl/spec/literals.py`
+- ✅ `src/arrowdsl/spec/scalar_union.py`
+- ✅ `src/arrowdsl/spec/io.py`
+- ✅ `src/arrowdsl/spec/infra.py`
+- ✅ `src/arrowdsl/spec/tables/*`
+- ✅ `src/arrowdsl/io/ipc.py`
+- ✅ `src/arrowdsl/finalize/*`
+- ✅ `src/arrowdsl/core/joins.py`
+- ✅ `src/arrowdsl/core/validity.py`
+- (optional, based on audit) `src/arrowdsl/core/metrics.py`, `src/arrowdsl/core/scan_telemetry.py`
 
 **Functions to remove/migrate**
 - Kernel registry functions: `kernel_def`, `KERNEL_REGISTRY` (to datafusion_engine)
@@ -221,3 +270,8 @@ def finalize_table(
 - SQLGlot policy used for diagnostics and compile paths where ExprIR existed.
 - Kernel metadata lives in `datafusion_engine`.
 - ArrowDSL left as a minimal core runtime/schema/interop utility library.
+
+---
+
+## Remaining Scope (Explicit TODOs)
+- ✅ All remaining items completed (SQL‑text payloads migrated, spec serialization added, and core relocations finished).

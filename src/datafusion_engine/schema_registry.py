@@ -1453,8 +1453,8 @@ REL_NAME_SYMBOL_SCHEMA = _schema_with_metadata(
             pa.field("resolution_method", pa.string()),
             pa.field("confidence", pa.float32()),
             pa.field("score", pa.float32()),
-            pa.field("rule_name", pa.string()),
-            pa.field("rule_priority", pa.int32()),
+            pa.field("task_name", pa.string()),
+            pa.field("task_priority", pa.int32()),
         ]
     ),
 )
@@ -1473,8 +1473,8 @@ REL_IMPORT_SYMBOL_SCHEMA = _schema_with_metadata(
             pa.field("resolution_method", pa.string()),
             pa.field("confidence", pa.float32()),
             pa.field("score", pa.float32()),
-            pa.field("rule_name", pa.string()),
-            pa.field("rule_priority", pa.int32()),
+            pa.field("task_name", pa.string()),
+            pa.field("task_priority", pa.int32()),
         ]
     ),
 )
@@ -1493,8 +1493,8 @@ REL_DEF_SYMBOL_SCHEMA = _schema_with_metadata(
             pa.field("resolution_method", pa.string()),
             pa.field("confidence", pa.float32()),
             pa.field("score", pa.float32()),
-            pa.field("rule_name", pa.string()),
-            pa.field("rule_priority", pa.int32()),
+            pa.field("task_name", pa.string()),
+            pa.field("task_priority", pa.int32()),
         ]
     ),
 )
@@ -1513,8 +1513,8 @@ REL_CALLSITE_SYMBOL_SCHEMA = _schema_with_metadata(
             pa.field("resolution_method", pa.string()),
             pa.field("confidence", pa.float32()),
             pa.field("score", pa.float32()),
-            pa.field("rule_name", pa.string()),
-            pa.field("rule_priority", pa.int32()),
+            pa.field("task_name", pa.string()),
+            pa.field("task_priority", pa.int32()),
         ]
     ),
 )
@@ -1533,8 +1533,8 @@ REL_CALLSITE_QNAME_SCHEMA = _schema_with_metadata(
             pa.field("confidence", pa.float32()),
             pa.field("score", pa.float32()),
             pa.field("ambiguity_group_id", pa.string()),
-            pa.field("rule_name", pa.string()),
-            pa.field("rule_priority", pa.int32()),
+            pa.field("task_name", pa.string()),
+            pa.field("task_priority", pa.int32()),
         ]
     ),
 )
@@ -1563,8 +1563,8 @@ RELATION_OUTPUT_SCHEMA = _schema_with_metadata(
             pa.field("ambiguity_group_id", pa.string(), nullable=True),
             pa.field("diag_source", pa.string(), nullable=True),
             pa.field("severity", pa.string(), nullable=True),
-            pa.field("rule_name", pa.string(), nullable=True),
-            pa.field("rule_priority", pa.int32(), nullable=True),
+            pa.field("task_name", pa.string(), nullable=True),
+            pa.field("task_priority", pa.int32(), nullable=True),
         ]
     ),
 )

@@ -122,7 +122,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     tie_breakers=(
                         SortKeySpec(column="score", order="descending"),
                         SortKeySpec(column="confidence", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
+                        SortKeySpec(column="task_priority", order="ascending"),
                     ),
                     strategy="KEEP_FIRST_AFTER_SORT",
                 ),
@@ -141,7 +141,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     tie_breakers=(
                         SortKeySpec(column="score", order="descending"),
                         SortKeySpec(column="confidence", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
+                        SortKeySpec(column="task_priority", order="ascending"),
                     ),
                     strategy="KEEP_FIRST_AFTER_SORT",
                 ),
@@ -160,7 +160,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     tie_breakers=(
                         SortKeySpec(column="score", order="descending"),
                         SortKeySpec(column="confidence", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
+                        SortKeySpec(column="task_priority", order="ascending"),
                     ),
                     strategy="KEEP_FIRST_AFTER_SORT",
                 ),
@@ -179,7 +179,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     tie_breakers=(
                         SortKeySpec(column="score", order="descending"),
                         SortKeySpec(column="confidence", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
+                        SortKeySpec(column="task_priority", order="ascending"),
                     ),
                     strategy="KEEP_FIRST_AFTER_SORT",
                 ),
@@ -198,7 +198,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     tie_breakers=(
                         SortKeySpec(column="score", order="descending"),
                         SortKeySpec(column="confidence", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
+                        SortKeySpec(column="task_priority", order="ascending"),
                     ),
                     strategy="KEEP_FIRST_AFTER_SORT",
                 ),

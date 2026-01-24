@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal, cast
 
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
-from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import empty_table
+from arrowdsl.schema.metadata import merge_metadata_specs
+from arrowdsl.schema.policy import SchemaPolicy
+from arrowdsl.schema.schema import SchemaMetadataSpec
+from datafusion_engine.finalize import FinalizeOptions, finalize
 from ibis_engine.catalog import IbisPlanCatalog, IbisPlanSource
 from ibis_engine.execution import materialize_ibis_plan
 from ibis_engine.execution_factory import ibis_execution_from_ctx
@@ -42,12 +46,6 @@ from normalize.registry_runtime import (
     dataset_schema,
     dataset_schema_policy,
     dataset_spec,
-)
-from normalize.runner import (
-    NormalizeFinalizeSpec,
-    NormalizeRunOptions,
-    ensure_execution_context,
-    run_normalize,
 )
 from normalize.runtime import NormalizeRuntime
 from normalize.schemas import SPAN_ERROR_SCHEMA
@@ -79,6 +77,23 @@ def _require_runtime(runtime: NormalizeRuntime | None) -> NormalizeRuntime:
         msg = "Normalize runtime is required for normalize Ibis APIs."
         raise ValueError(msg)
     return runtime
+
+
+def ensure_execution_context(
+    ctx: ExecutionContext | None,
+    *,
+    profile: str,
+) -> ExecutionContext:
+    """Return an execution context, building one when missing.
+
+    Returns
+    -------
+    ExecutionContext
+        Execution context derived from inputs.
+    """
+    if ctx is not None:
+        return ctx
+    return execution_context_factory(profile)
 
 
 def _materialize_table_expr(expr: Table, *, runtime: NormalizeRuntime) -> TableLike:
@@ -128,20 +143,43 @@ def _finalize_plan(
 ) -> TableLike:
     if plan is None:
         return empty_table(dataset_schema(output))
-    finalize_spec = NormalizeFinalizeSpec(
-        metadata_spec=dataset_spec(output).metadata_spec,
-        schema_policy=dataset_schema_policy(output, ctx=ctx),
-    )
-    return run_normalize(
-        plan=plan,
-        post=(),
-        contract=dataset_contract(output),
+    execution = ibis_execution_from_ctx(ctx, backend=runtime.ibis_backend)
+    table = materialize_ibis_plan(plan, execution=execution)
+    contract_spec = dataset_contract(output)
+    contract = contract_spec.to_contract()
+    metadata_spec = _metadata_with_determinism(dataset_spec(output).metadata_spec, ctx)
+    schema_policy = dataset_schema_policy(output, ctx=ctx)
+    schema_policy = _merge_policy_metadata(schema_policy, metadata_spec)
+    return finalize(
+        table,
+        contract=contract,
         ctx=ctx,
-        options=NormalizeRunOptions(
-            finalize_spec=finalize_spec,
-            runtime=runtime,
-        ),
+        options=FinalizeOptions(schema_policy=schema_policy),
     ).good
+
+
+def _metadata_with_determinism(
+    metadata_spec: SchemaMetadataSpec | None,
+    ctx: ExecutionContext,
+) -> SchemaMetadataSpec | None:
+    if metadata_spec is None:
+        return None
+    schema_meta = dict(metadata_spec.schema_metadata)
+    schema_meta[b"determinism_tier"] = ctx.determinism.value.encode("utf-8")
+    return SchemaMetadataSpec(
+        schema_metadata=schema_meta,
+        field_metadata=metadata_spec.field_metadata,
+    )
+
+
+def _merge_policy_metadata(
+    policy: SchemaPolicy,
+    metadata: SchemaMetadataSpec | None,
+) -> SchemaPolicy:
+    if metadata is None:
+        return policy
+    merged = merge_metadata_specs(policy.metadata, metadata)
+    return replace(policy, metadata=merged)
 
 
 def _build_normalize_output(

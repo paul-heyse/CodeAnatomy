@@ -62,10 +62,10 @@ from storage.dataset_sources import (
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
-    from sqlglot_tools.expr_spec import ExprIR
     from ibis_engine.execution import IbisExecutionContext
     from ibis_engine.sources import PlanSource
     from schema_spec.view_specs import ViewSpec
+    from sqlglot_tools.expr_spec import SqlExprSpec
 
 
 def validate_arrow_table(
@@ -334,8 +334,8 @@ class DatasetSpec:
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_constraints: tuple[str, ...] = ()
     derived_fields: tuple[DerivedFieldSpec, ...] = ()
-    predicate: ExprIR | None = None
-    pushdown_predicate: ExprIR | None = None
+    predicate: SqlExprSpec | None = None
+    pushdown_predicate: SqlExprSpec | None = None
     evolution_spec: SchemaEvolutionSpec = field(default_factory=SchemaEvolutionSpec)
     metadata_spec: SchemaMetadataSpec = field(default_factory=SchemaMetadataSpec)
     validation: ArrowValidationOptions | None = None
@@ -696,70 +696,6 @@ def _duplicate_key_rows_plan(plan: IbisPlan, *, keys: Sequence[str]) -> IbisPlan
     return IbisPlan(expr=filtered, ordering=Ordering.unordered())
 
 
-class _SpecTablesModule(Protocol):
-    SchemaSpecTables: type[SchemaSpecTables]
-
-    def table_specs_from_tables(
-        self,
-        field_table: pa.Table,
-        *,
-        constraints_table: pa.Table | None = None,
-    ) -> dict[str, TableSchemaSpec]: ...
-
-    def contract_specs_from_table(
-        self,
-        contract_table: pa.Table,
-        table_specs: dict[str, TableSchemaSpec],
-    ) -> dict[str, ContractSpec]: ...
-
-    def dataset_specs_from_tables(
-        self,
-        field_table: pa.Table,
-        *,
-        constraints_table: pa.Table | None = None,
-        contract_table: pa.Table | None = None,
-    ) -> dict[str, DatasetSpec]: ...
-
-
-def _spec_tables_module() -> _SpecTablesModule:
-    return cast("_SpecTablesModule", importlib.import_module("arrowdsl.spec.tables.schema"))
-
-
-def _schema_spec_tables_class() -> type[SchemaSpecTables]:
-    return _spec_tables_module().SchemaSpecTables
-
-
-def _table_specs_from_tables(
-    field_table: pa.Table,
-    *,
-    constraints_table: pa.Table | None = None,
-) -> dict[str, TableSchemaSpec]:
-    return _spec_tables_module().table_specs_from_tables(
-        field_table,
-        constraints_table=constraints_table,
-    )
-
-
-def _contract_specs_from_table(
-    contract_table: pa.Table,
-    table_specs: dict[str, TableSchemaSpec],
-) -> dict[str, ContractSpec]:
-    return _spec_tables_module().contract_specs_from_table(contract_table, table_specs)
-
-
-def _dataset_specs_from_tables(
-    field_table: pa.Table,
-    *,
-    constraints_table: pa.Table | None = None,
-    contract_table: pa.Table | None = None,
-) -> dict[str, DatasetSpec]:
-    return _spec_tables_module().dataset_specs_from_tables(
-        field_table,
-        constraints_table=constraints_table,
-        contract_table=contract_table,
-    )
-
-
 class _ReadDatasetParams(Protocol):
     def __init__(self, **kwargs: object) -> None: ...
 
@@ -928,8 +864,8 @@ class DatasetSpecKwargs(TypedDict, total=False):
     delta_schema_policy: DeltaSchemaPolicy | None
     delta_constraints: Sequence[str]
     derived_fields: Sequence[DerivedFieldSpec]
-    predicate: ExprIR | None
-    pushdown_predicate: ExprIR | None
+    predicate: SqlExprSpec | None
+    pushdown_predicate: SqlExprSpec | None
     evolution_spec: SchemaEvolutionSpec | None
     metadata_spec: SchemaMetadataSpec | None
     validation: ArrowValidationOptions | None
@@ -1368,27 +1304,6 @@ def dataset_spec_from_path(
     return dataset_spec_from_dataset(name, dataset, version=version)
 
 
-def contract_catalog_spec_from_tables(
-    *,
-    field_table: pa.Table,
-    constraints_table: pa.Table | None = None,
-    contract_table: pa.Table | None = None,
-) -> ContractCatalogSpec:
-    """Build a ContractCatalogSpec from schema spec tables.
-
-    Returns
-    -------
-    ContractCatalogSpec
-        Catalog spec derived from the provided tables.
-    """
-    table_specs = _table_specs_from_tables(field_table, constraints_table=constraints_table)
-    if contract_table is None:
-        return ContractCatalogSpec(contracts={})
-    return ContractCatalogSpec(
-        contracts=_contract_specs_from_table(contract_table, table_specs),
-    )
-
-
 SCHEMA_EVOLUTION_PRESETS: Mapping[str, SchemaEvolutionSpec] = {
     name: SchemaEvolutionSpec(
         allow_missing=True,
@@ -1461,7 +1376,6 @@ __all__ = [
     "TableSpecConstraints",
     "ValidationPlans",
     "VirtualFieldSpec",
-    "contract_catalog_spec_from_tables",
     "dataset_spec_from_contract",
     "dataset_spec_from_dataset",
     "dataset_spec_from_path",

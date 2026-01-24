@@ -20,8 +20,8 @@
 class TaskSpec:
     name: str
     output: str
-    build: Callable[[ExecutionContext], IbisTable]
-    kind: Literal["view", "compute", "materialization"] = "view"
+    build: Callable[[TaskBuildContext], IbisPlan]
+    kind: TaskKind = "view"
     cache_policy: CachePolicy = "none"
 
 
@@ -35,16 +35,24 @@ class PlanArtifact:
     plan_fingerprint: str
 
 
-def compile_task_plan(task: TaskSpec, *, backend: IbisCompilerBackend, ctx: ExecutionContext) -> PlanArtifact:
-    table = task.build(ctx)
-    plan = compile_ibis_plan(table, backend=backend, ctx=ctx)
-    sg_expr = ibis_to_sqlglot(plan.expr, backend=backend, params=None)
-    deps = infer_deps_from_sqlglot_expr(
-        sg_expr,
-        rule_name=task.name,
-        output=task.output,
+def compile_task_plan(
+    task: TaskSpec,
+    *,
+    backend: BaseBackend,
+    ctx: ExecutionContext,
+    build_context: TaskBuildContext | None = None,
+) -> PlanArtifact:
+    resolved = build_context or TaskBuildContext(ctx=ctx, backend=backend)
+    plan = task.build(resolved)
+    compiler_backend = cast("IbisCompilerBackend", backend)
+    sg_expr = ibis_to_sqlglot(plan.expr, backend=compiler_backend, params=None)
+    deps = infer_deps_from_ibis_plan(
+        plan,
+        backend=compiler_backend,
+        request=InferredDepsRequest(task_name=task.name, output=task.output),
+        sqlglot_expr=sg_expr,
     )
-    fp = plan_fingerprint(sg_expr)
+    fp = deps.plan_fingerprint or plan_fingerprint(sg_expr)
     return PlanArtifact(task=task, plan=plan, sqlglot_ast=sg_expr, deps=deps, plan_fingerprint=fp)
 ```
 
@@ -112,7 +120,7 @@ class TaskGraph:
 
 def build_task_graph(artifacts: Sequence[PlanArtifact]) -> TaskGraph:
     deps = [artifact.deps for artifact in artifacts]
-    return build_rule_graph_from_inferred_deps(deps)
+    return build_task_graph_from_inferred_deps(deps)
 ```
 
 ### Target Files
@@ -120,7 +128,7 @@ def build_task_graph(artifacts: Sequence[PlanArtifact]) -> TaskGraph:
 - **Update**: `src/relspec/rustworkx_graph.py` (keep inferred builder, remove legacy paths)
 
 ### Implementation Checklist
-- [x] Introduce `TaskGraph` wrapper (optional; or reuse existing `RuleGraph`).
+- [x] Introduce `TaskGraph` and `TaskNode` types in the rustworkx layer.
 - [x] Provide `build_task_graph(PlanCatalog)` that uses inferred deps.
 - [x] Remove/disable `build_rule_graph_from_definitions` and other legacy constructors.
 
@@ -132,12 +140,12 @@ def build_task_graph(artifacts: Sequence[PlanArtifact]) -> TaskGraph:
 Guarantee readiness based on **inferred column requirements** instead of declared inputs.
 
 ### Status
-**Completed** — column/type/metadata edge validation wired into scheduling.
+**Completed** — task-first scheduler + edge validation wired to inferred columns/types/metadata.
 
 ### Representative Code Snippets
 ```python
 # src/relspec/rustworkx_schedule.py (updated)
-if not validate_edge_requirements(graph, rule_idx, catalog=evidence):
+if not validate_edge_requirements(graph, task_idx, catalog=evidence):
     continue
 ```
 
@@ -147,7 +155,7 @@ if not validate_edge_requirements(graph, rule_idx, catalog=evidence):
 
 ### Implementation Checklist
 - [x] Ensure scheduler only validates through `GraphEdge` requirements.
-- [x] Include required column/types/metadata checks.
+- [x] Include required column/types/metadata checks with graceful fallback when evidence lacks schema.
 - [x] Provide diagnostics for failed edges (column‑level).
 
 ---
@@ -194,25 +202,29 @@ class TaskRegistry:
 The current execution pipeline expects rule definitions; inference pivot should compile plans directly from tasks.
 
 ### Status
-**Completed** — plan execution is wired into Hamilton with RuntimeArtifacts + EvidenceCatalog updates.
+**Completed** — Hamilton executes PlanCatalog artifacts; `normalize/runner.py` removed in favor of `normalize/ibis_api.py`.
 
 ### Representative Code Snippets
 ```python
 # src/relspec/execution.py (new)
 @dataclass(frozen=True)
-class TaskExecutionContext:
+class TaskExecutionRequest:
+    artifact: PlanArtifact
     runtime: RuntimeArtifacts
-    backend: IbisCompilerBackend
 
 
-def execute_task_plan(artifact: PlanArtifact, *, ctx: TaskExecutionContext) -> TableLike:
-    return materialize_ibis_plan(artifact.plan, execution=ctx.runtime)
+def execute_plan_artifact(request: TaskExecutionRequest) -> TableLike:
+    exec_ctx = request.runtime.execution
+    if exec_ctx is None:
+        raise ValueError("RuntimeArtifacts.execution is required.")
+    return materialize_ibis_plan(request.artifact.plan, execution=exec_ctx)
 ```
 
 ### Target Files
 - **New**: `src/relspec/execution.py`
-- **Update**: `src/normalize/runner.py` (use TaskCatalog + PlanCatalog)
-- **Update**: `src/hamilton_pipeline/modules/*` (consume PlanArtifacts)
+- **Update**: `src/normalize/ibis_api.py` (Ibis entrypoints for normalize outputs)
+- **Update**: `src/hamilton_pipeline/modules/task_execution.py` (consume PlanArtifacts)
+- **Remove**: `src/normalize/runner.py` (decommissioned)
 
 ### Implementation Checklist
 - [x] Introduce a minimal execution harness for PlanArtifacts.
@@ -244,8 +256,9 @@ def diff_plan_catalog(prev: PlanCatalog, curr: PlanCatalog) -> IncrementalDiff:
 ```
 
 ### Target Files
-- **Replace**: `src/relspec/incremental.py` with plan‑diff logic
-- **Update**: `src/relspec/rules/cache.py` (if retained, rewire to PlanCatalog)
+- **Update**: `src/relspec/incremental.py` (plan-diff logic)
+- **Add**: `src/incremental/plan_fingerprints.py` (fingerprint persistence)
+- **Update**: `src/hamilton_pipeline/modules/incremental_plan.py` (persist + diagnostics)
 
 ### Implementation Checklist
 - [x] Implement fingerprint‑diff for Task/Plan catalogs.
@@ -259,7 +272,7 @@ def diff_plan_catalog(prev: PlanCatalog, curr: PlanCatalog) -> IncrementalDiff:
 Once all pipelines use Task/Plan catalog, the rule registry, spec tables, and rule handlers are obsolete.
 
 ### Status
-**Mostly complete** — rule registry/spec modules deleted; some rule‑named models remain but are inert.
+**Completed** — rule registry/spec modules deleted; policy types moved to `relspec.policies.model`.
 
 ### Files to Decommission/Delete
 > **Status (current repo):**
@@ -273,7 +286,10 @@ Once all pipelines use Task/Plan catalog, the rule registry, spec tables, and ru
 - [x] `src/relspec/plan.py`
 - [x] `src/relspec/validate.py`
 - [x] `src/relspec/graph.py` (rule‑level graph plan path)
-- [x] `src/relspec/incremental.py` (replaced with PlanCatalog diff implementation)
+
+### Retained (intentional)
+- `src/relspec/policies/*` (policy defaults for confidence/ambiguity)
+- `src/relspec/policies/model.py` (policy dataclasses)
 
 ### Implementation Checklist
 - [x] Remove all imports of rule registry/spec tables.
@@ -323,7 +339,6 @@ flowchart LR
 - [x] `relspec.engine.*` (rule execution engine)
 - [x] `relspec.plan.*` (rule plan composition)
 - [x] `relspec.validate.*` (rule validation pipeline)
-- [x] `relspec.incremental.*` (rule‑based incremental)
 - [x] `relspec.graph.compile_graph_plan` (rule‑based graph plan)
 
 ---
@@ -351,7 +366,6 @@ flowchart LR
 ---
 
 ## Next Steps (if you want me to proceed)
-1. Populate `GraphEdge.required_types` / `required_metadata` from schema-aware inference (currently validated but always empty).
-2. Add targeted tests for edge validation (types/metadata) and incremental plan gating.
-3. Decide whether legacy `normalize/runner.py` should be refactored to consume TaskCatalogs or explicitly marked as legacy-only.
-4. Add small diagnostics for incremental plan diff (counts + changed task names) to the diagnostics sink.
+1. Sweep any external consumers (pipelines, BI queries, dashboards) that still expect `rule_name`/`rule_priority` to ensure they read `task_name`/`task_priority`.
+2. If needed, add explicit migration notes in docs for the `task_allowlist` param table.
+3. Resolve remaining unrelated lint/type errors (out of scope for this plan).

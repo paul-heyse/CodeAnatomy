@@ -783,8 +783,8 @@ def edge_prop_spec() -> PropTableSpec:
             PropFieldSpec(
                 prop_key="ambiguity_group_id", source_col="ambiguity_group_id", value_type="string"
             ),
-            PropFieldSpec(prop_key="rule_name", source_col="rule_name", value_type="string"),
-            PropFieldSpec(prop_key="rule_priority", source_col="rule_priority", value_type="int"),
+            PropFieldSpec(prop_key="task_name", source_col="task_name", value_type="string"),
+            PropFieldSpec(prop_key="task_priority", source_col="task_priority", value_type="int"),
         ),
     )
 

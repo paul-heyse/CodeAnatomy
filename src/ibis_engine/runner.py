@@ -51,7 +51,7 @@ def _datafusion_run_label(
     label = execution.execution_label
     if label is None:
         return f"datafusion_{operation}"
-    base = label.output_dataset or label.rule_name
+    base = label.output_dataset or label.task_name
     if base:
         return f"{base}_{operation}"
     return f"datafusion_{operation}"
@@ -65,7 +65,7 @@ def _datafusion_run_metadata(
     label = execution.execution_label
     payload: dict[str, object] = {"operation": operation}
     if label is not None:
-        payload["rule"] = label.rule_name
+        payload["task_name"] = label.task_name
         payload["output"] = label.output_dataset
     return payload
 
@@ -488,7 +488,7 @@ def _record_support_matrix(
         "backend": type(execution.backend).__name__,
         "missing": list(missing),
         "execution_label": {
-            "rule": label.rule_name,
+            "task_name": label.task_name,
             "output": label.output_dataset,
         }
         if label is not None

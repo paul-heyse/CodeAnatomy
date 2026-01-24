@@ -2,8 +2,8 @@
 
 import pytest
 
-from relspec.model import AmbiguityPolicy, ConfidencePolicy
 from relspec.policies import PolicyRegistry
+from relspec.policies.model import AmbiguityPolicy, ConfidencePolicy
 
 
 def test_policy_registry_resolves_cpg_confidence() -> None:

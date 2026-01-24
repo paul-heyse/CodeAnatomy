@@ -6,12 +6,12 @@ import pyarrow as pa
 
 from arrowdsl.schema.nested_builders import nested_array_factory, union_array_from_tagged_values
 from arrowdsl.schema.union_codec import (
+    SCALAR_UNION_TYPE,
     decode_union_table,
     encode_union_table,
     schema_has_union_encoding,
     schema_has_union_types,
 )
-from arrowdsl.spec.infra import SCALAR_UNION_TYPE
 
 
 def test_union_codec_round_trip() -> None:

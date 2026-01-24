@@ -93,7 +93,7 @@ def execute_plan_datafusion(
         capture_plan_artifacts = inputs.runtime_profile.diagnostics_sink is not None
     run_id = None
     if inputs.execution_label is not None:
-        run_id = f"{inputs.execution_label.rule_name}:{inputs.execution_label.output_dataset}"
+        run_id = f"{inputs.execution_label.task_name}:{inputs.execution_label.output_dataset}"
     compile_options = inputs.runtime_profile.compile_options(
         options=DataFusionCompileOptions(
             prefer_substrait=resolved.prefer_substrait,
@@ -161,7 +161,7 @@ def record_execution_lane(
         "fallback_reason": record.fallback_reason,
     }
     if record.execution_label is not None:
-        payload["rule_name"] = record.execution_label.rule_name
+        payload["task_name"] = record.execution_label.task_name
         payload["output_dataset"] = record.execution_label.output_dataset
     if record.options is not None:
         payload["prefer_substrait"] = record.options.prefer_substrait

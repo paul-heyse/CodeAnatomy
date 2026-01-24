@@ -4,24 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import cast
 
 import ibis
 import pyarrow as pa
-from ibis.expr.types import BooleanValue, Table, Value
+from ibis.expr.types import Table, Value
 
-from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.interop import SchemaLike
-from sqlglot_tools.expr_spec import ExprIR
-from ibis_engine.expr_compiler import (
-    ExprIRLike,
-    IbisExprRegistry,
-    default_expr_registry,
-    expr_ir_to_ibis,
-)
 from ibis_engine.macros import IbisMacroSpec, apply_macros
 from ibis_engine.param_tables import ParamTablePolicy, ParamTableRegistry, ParamTableSpec
 from ibis_engine.params_bridge import list_param_join
+from sqlglot_tools.expr_spec import SqlExprSpec
 
 FILE_ID_PARAM_THRESHOLD = 500
 
@@ -55,7 +47,7 @@ class IbisProjectionSpec:
     """Projection spec for Ibis query compilation."""
 
     base: tuple[str, ...]
-    derived: Mapping[str, ExprIRLike] = field(default_factory=dict)
+    derived: Mapping[str, SqlExprSpec] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -63,8 +55,8 @@ class IbisQuerySpec:
     """Declarative query spec for Ibis execution."""
 
     projection: IbisProjectionSpec
-    predicate: ExprIRLike | None = None
-    pushdown_predicate: ExprIRLike | None = None
+    predicate: SqlExprSpec | None = None
+    pushdown_predicate: SqlExprSpec | None = None
     macros: tuple[IbisMacroSpec, ...] = ()
 
     @staticmethod
@@ -138,7 +130,7 @@ def dataset_query_for_file_ids(
             raise ValueError(msg)
         columns = list(schema.names)
     if not file_ids:
-        predicate = _literal_expr(value=False)
+        predicate = _false_predicate()
         return IbisQuerySpec(
             projection=IbisProjectionSpec(base=tuple(columns)),
             predicate=predicate,
@@ -183,7 +175,6 @@ def apply_query_spec(
     table: Table,
     *,
     spec: IbisQuerySpec,
-    registry: IbisExprRegistry | None = None,
 ) -> Table:
     """Apply a query spec to an Ibis table.
 
@@ -192,19 +183,16 @@ def apply_query_spec(
     ibis.expr.types.Table
         Ibis table with filters and projections applied.
     """
-    registry = registry or default_expr_registry()
     if spec.macros:
         table = apply_macros(table, macros=spec.macros)
-    table = _apply_derived(table, spec.projection.derived, registry=registry)
+    table = _apply_derived(table, spec.projection.derived)
     cols = _projection_columns(table, spec.projection.base, spec.projection.derived)
     if cols:
         table = table.select(cols)
     if spec.pushdown_predicate is not None:
-        predicate = expr_ir_to_ibis(spec.pushdown_predicate, table, registry=registry)
-        table = table.filter(cast("BooleanValue", predicate))
+        table = _apply_predicate(table, spec.pushdown_predicate)
     if spec.predicate is not None:
-        predicate = expr_ir_to_ibis(spec.predicate, table, registry=registry)
-        table = table.filter(cast("BooleanValue", predicate))
+        table = _apply_predicate(table, spec.predicate)
     return table
 
 
@@ -212,8 +200,7 @@ def apply_projection(
     table: Table,
     *,
     base: Sequence[str],
-    derived: Mapping[str, ExprIRLike] | None = None,
-    registry: IbisExprRegistry | None = None,
+    derived: Mapping[str, SqlExprSpec] | None = None,
 ) -> Table:
     """Apply a projection with optional derived columns.
 
@@ -223,8 +210,7 @@ def apply_projection(
         Ibis table with projection applied.
     """
     derived = derived or {}
-    registry = registry or default_expr_registry()
-    table = _apply_derived(table, derived, registry=registry)
+    table = _apply_derived(table, derived)
     cols = _projection_columns(table, base, derived)
     if not cols:
         return table
@@ -233,20 +219,17 @@ def apply_projection(
 
 def _apply_derived(
     table: Table,
-    derived: Mapping[str, ExprIRLike],
-    *,
-    registry: IbisExprRegistry,
+    derived: Mapping[str, SqlExprSpec],
 ) -> Table:
-    out = table
-    for name, expr in derived.items():
-        out = out.mutate(**{name: expr_ir_to_ibis(expr, out, registry=registry)})
-    return out
+    if not derived:
+        return table
+    return _apply_sql_derived(table, derived)
 
 
 def _projection_columns(
     table: Table,
     base: Sequence[str],
-    derived: Mapping[str, ExprIRLike],
+    derived: Mapping[str, SqlExprSpec],
 ) -> list[Value]:
     cols: list[Value] = []
     seen: set[str] = set()
@@ -261,27 +244,64 @@ def _projection_columns(
     return cols
 
 
-def _field_expr(name: str) -> ExprIR:
-    return ExprIR(op="field", name=name)
+def _apply_predicate(
+    table: Table,
+    predicate: SqlExprSpec,
+) -> Table:
+    return _apply_sql_filter(table, predicate)
 
 
-def _literal_expr(value: ScalarValue) -> ExprIR:
-    return ExprIR(op="literal", value=value)
+def _resolve_sql_dialect(specs: Sequence[SqlExprSpec]) -> str:
+    dialects = {spec.resolved_dialect() for spec in specs}
+    if not dialects:
+        return "datafusion"
+    if len(dialects) > 1:
+        msg = f"Mixed SQL dialects in SQL expression specs: {sorted(dialects)}."
+        raise ValueError(msg)
+    return next(iter(dialects))
 
 
-def _call_expr(name: str, *args: ExprIR) -> ExprIR:
-    return ExprIR(op="call", name=name, args=tuple(args))
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
 
 
-def _or_exprs(exprs: Sequence[ExprIR]) -> ExprIR:
-    if not exprs:
-        return _literal_expr(value=False)
-    out = exprs[0]
-    for expr in exprs[1:]:
-        out = _call_expr("bit_wise_or", out, expr)
-    return out
+def _apply_sql_derived(
+    table: Table,
+    derived: Mapping[str, SqlExprSpec],
+) -> Table:
+    if not derived:
+        return table
+    dialect = _resolve_sql_dialect(list(derived.values()))
+    existing_cols = [name for name in table.columns if name not in derived]
+    select_cols = [_sql_identifier(name) for name in existing_cols]
+    for name, expr in derived.items():
+        select_cols.append(f"{expr.normalized_sql()} AS {_sql_identifier(name)}")
+    sql = f"SELECT {', '.join(select_cols)} FROM {{self}}"
+    return table.sql(sql, dialect=dialect)
 
 
-def _in_set_expr(name: str, values: Sequence[str]) -> ExprIR:
-    exprs = [_call_expr("equal", _field_expr(name), _literal_expr(value)) for value in values]
-    return _or_exprs(exprs)
+def _apply_sql_filter(
+    table: Table,
+    predicate: SqlExprSpec,
+) -> Table:
+    dialect = predicate.resolved_dialect()
+    sql = f"SELECT * FROM {{self}} WHERE {predicate.normalized_sql()}"
+    return table.sql(sql, dialect=dialect)
+
+
+def _false_predicate() -> SqlExprSpec:
+    return SqlExprSpec(sql="FALSE")
+
+
+def _sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _in_set_expr(name: str, values: Sequence[str]) -> SqlExprSpec:
+    if not values:
+        return _false_predicate()
+    literals = ", ".join(_sql_literal(value) for value in values)
+    sql = f"{_sql_identifier(name)} IN ({literals})"
+    return SqlExprSpec(sql=sql)

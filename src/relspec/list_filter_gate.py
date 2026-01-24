@@ -22,7 +22,7 @@ class ListFilterGateError(ValueError):
 
 def validate_no_inline_inlists(
     *,
-    rule_name: str,
+    task_name: str,
     sg_ast: Expression,
     param_policy: ParamTablePolicy,
     policy: ListFilterGatePolicy | None = None,
@@ -35,7 +35,7 @@ def validate_no_inline_inlists(
             continue
         _validate_in_rhs(
             rhs,
-            rule_name=rule_name,
+            task_name=task_name,
             param_policy=param_policy,
             policy=policy,
         )
@@ -44,7 +44,7 @@ def validate_no_inline_inlists(
 def _validate_in_rhs(
     rhs: object,
     *,
-    rule_name: str,
+    task_name: str,
     param_policy: ParamTablePolicy,
     policy: ListFilterGatePolicy,
 ) -> None:
@@ -54,8 +54,8 @@ def _validate_in_rhs(
     ----------
     rhs
         Right-hand side payload from a SQLGlot IN expression.
-    rule_name
-        Rule name used in diagnostics.
+    task_name
+        Task name used in diagnostics.
     param_policy
         Param table policy for allowed sources.
     policy
@@ -70,21 +70,21 @@ def _validate_in_rhs(
         if _subquery_is_from_param_table(rhs, param_prefix=param_policy.prefix):
             return
         msg = (
-            f"[list-filter-gate] Rule '{rule_name}' uses IN-subquery not sourced from "
+            f"[list-filter-gate] Task '{task_name}' uses IN-subquery not sourced from "
             f"declared param tables; use params.{param_policy.prefix}<name> join instead."
         )
         raise ListFilterGateError(msg)
     if isinstance(rhs, (exp.Tuple, exp.Array)):
         _validate_in_literals(
             rhs.expressions,
-            rule_name=rule_name,
+            task_name=task_name,
             policy=policy,
         )
         return
     if isinstance(rhs, list):
         _validate_in_literals(
             rhs,
-            rule_name=rule_name,
+            task_name=task_name,
             policy=policy,
         )
         return
@@ -93,7 +93,7 @@ def _validate_in_rhs(
 def _validate_in_literals(
     items: list[Expression],
     *,
-    rule_name: str,
+    task_name: str,
     policy: ListFilterGatePolicy,
 ) -> None:
     """Validate literal IN-list usage against policy settings.
@@ -102,8 +102,8 @@ def _validate_in_literals(
     ----------
     items
         Literal expressions used in the IN list.
-    rule_name
-        Rule name used in diagnostics.
+    task_name
+        Task name used in diagnostics.
     policy
         List-filter validation policy.
 
@@ -117,7 +117,7 @@ def _validate_in_literals(
         return
     if policy.reject_literal_inlist:
         msg = (
-            f"[list-filter-gate] Rule '{rule_name}' contains literal IN-list "
+            f"[list-filter-gate] Task '{task_name}' contains literal IN-list "
             f"({lit_count} literals). Use a declared param table join."
         )
         raise ListFilterGateError(msg)

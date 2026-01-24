@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.schema.metadata import metadata_map_bytes, metadata_scalar_map_bytes
 from arrowdsl.schema.validation import ArrowValidationOptions
-from sqlglot_tools.expr_spec import ExprIR
 from datafusion_engine.normalize_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -20,6 +19,7 @@ from ibis_engine.hashing import hash_expr_ir, hash_expr_ir_from_parts, masked_ha
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 from schema_spec.specs import DerivedFieldSpec
 from schema_spec.system import DedupeSpecSpec, SortKeySpec
+from sqlglot_tools.expr_spec import SqlExprSpec
 
 SCHEMA_VERSION = 1
 _DEF_USE_PREFIXES = ("STORE_", "DELETE_")
@@ -27,27 +27,28 @@ _USE_PREFIXES = ("LOAD_",)
 _DEF_USE_OPS = ("IMPORT_NAME", "IMPORT_FROM")
 
 
-def _field_expr(name: str) -> ExprIR:
-    return ExprIR(op="field", name=name)
+def _field_expr(name: str) -> str:
+    return _sql_identifier(name)
 
 
-def _literal_expr(value: ScalarValue) -> ExprIR:
-    return ExprIR(op="literal", value=value)
+def _literal_expr(value: ScalarValue) -> str:
+    return _sql_literal(value)
 
 
-def _call_expr(name: str, *args: ExprIR) -> ExprIR:
-    return ExprIR(op="call", name=name, args=tuple(args))
+def _call_expr(name: str, *args: str) -> str:
+    joined = ", ".join(args)
+    return f"{name}({joined})"
 
 
-def _stringify_expr(expr: ExprIR) -> ExprIR:
+def _stringify_expr(expr: str) -> str:
     return _call_expr("stringify", expr)
 
 
-def _trim_expr(column: str) -> ExprIR:
+def _trim_expr(column: str) -> str:
     return _call_expr("utf8_trim_whitespace", _field_expr(column))
 
 
-def _coalesce_expr(exprs: Sequence[ExprIR]) -> ExprIR:
+def _coalesce_expr(exprs: Sequence[str]) -> str:
     if not exprs:
         return _literal_expr(None)
     if len(exprs) == 1:
@@ -55,17 +56,41 @@ def _coalesce_expr(exprs: Sequence[ExprIR]) -> ExprIR:
     return _call_expr("coalesce", *exprs)
 
 
-def _coalesce_string_expr(columns: Sequence[str]) -> ExprIR:
+def _coalesce_string_expr(columns: Sequence[str]) -> str:
     return _coalesce_expr([_field_expr(name) for name in columns])
 
 
-def _or_exprs(exprs: Sequence[ExprIR]) -> ExprIR:
+def _or_exprs(exprs: Sequence[str]) -> str:
     if not exprs:
         return _literal_expr(value=False)
     out = exprs[0]
     for expr in exprs[1:]:
         out = _call_expr("bit_wise_or", out, expr)
     return out
+
+
+def _sql_spec(sql: str) -> SqlExprSpec:
+    return SqlExprSpec(sql=sql)
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_literal(value: ScalarValue) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (str, bytes)):
+        text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+        escaped = text.replace("'", "''")
+        return f"'{escaped}'"
+    msg = f"Unsupported literal type: {type(value).__name__}."
+    raise TypeError(msg)
 
 
 @dataclass(frozen=True)
@@ -96,7 +121,7 @@ class DatasetRow:
     metadata_extra: dict[bytes, bytes] = field(default_factory=dict)
 
 
-def _def_use_kind_expr() -> ExprIR:
+def _def_use_kind_expr() -> str:
     opname = _stringify_expr(_field_expr("opname"))
     def_ops = tuple(_call_expr("equal", opname, _literal_expr(value)) for value in _DEF_USE_OPS)
     def_prefixes = tuple(
@@ -124,13 +149,13 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             "role",
             "confidence",
             "ambiguity_group_id",
-            "rule_name",
+            "task_name",
         ),
-        join_keys=("span_id", "rule_name"),
+        join_keys=("span_id", "task_name"),
         contract=ContractRow(
             canonical_sort=(
                 SortKeySpec(column="span_id", order="ascending"),
-                SortKeySpec(column="rule_name", order="ascending"),
+                SortKeySpec(column="task_name", order="ascending"),
             ),
         ),
         template="normalize_evidence",
@@ -151,7 +176,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         input_fields=("bstart", "bend", "line_base", "col_unit", "end_exclusive"),
         derived=(
-            DerivedFieldSpec(name="type_repr", expr=_trim_expr("expr_text")),
+            DerivedFieldSpec(name="type_repr", expr=_sql_spec(_trim_expr("expr_text"))),
             DerivedFieldSpec(
                 name="type_expr_id",
                 expr=masked_hash_expr_ir(
@@ -165,7 +190,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
                     prefix=TYPE_ID_SPEC.prefix,
                     as_string=TYPE_ID_SPEC.as_string,
                     null_sentinel=TYPE_ID_SPEC.null_sentinel,
-                    parts=(_trim_expr("expr_text"),),
+                    parts=(_sql_spec(_trim_expr("expr_text")),),
                 ),
             ),
         ),
@@ -247,9 +272,9 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         derived=(
             DerivedFieldSpec(
                 name="symbol",
-                expr=_coalesce_string_expr(("argval_str", "argrepr")),
+                expr=_sql_spec(_coalesce_string_expr(("argval_str", "argrepr"))),
             ),
-            DerivedFieldSpec(name="kind", expr=_def_use_kind_expr()),
+            DerivedFieldSpec(name="kind", expr=_sql_spec(_def_use_kind_expr())),
             DerivedFieldSpec(
                 name="event_id",
                 expr=hash_expr_ir_from_parts(
@@ -257,10 +282,10 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
                     as_string=DEF_USE_EVENT_ID_SPEC.as_string,
                     null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
                     parts=(
-                        _field_expr("code_unit_id"),
-                        _field_expr("instr_id"),
-                        _def_use_kind_expr(),
-                        _coalesce_string_expr(("argval_str", "argrepr")),
+                        _sql_spec(_field_expr("code_unit_id")),
+                        _sql_spec(_field_expr("instr_id")),
+                        _sql_spec(_def_use_kind_expr()),
+                        _sql_spec(_coalesce_string_expr(("argval_str", "argrepr"))),
                     ),
                 ),
             ),

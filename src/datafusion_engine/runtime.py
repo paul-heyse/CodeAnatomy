@@ -638,9 +638,9 @@ class AdapterExecutionPolicy:
 
 @dataclass(frozen=True)
 class ExecutionLabel:
-    """Execution label for rule-scoped diagnostics."""
+    """Execution label for task-scoped diagnostics."""
 
-    rule_name: str
+    task_name: str
     output_dataset: str
 
 
@@ -1594,7 +1594,7 @@ def labeled_explain_hook(
     def _hook(sql: str, rows: ExplainRows) -> None:
         sink.append(
             {
-                "rule": label.rule_name,
+                "task_name": label.task_name,
                 "output": label.output_dataset,
                 "sql": sql,
                 "rows": rows,

@@ -1,1 +1,0 @@
-"""ArrowDSL spec-table helpers."""

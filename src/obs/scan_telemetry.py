@@ -8,14 +8,9 @@ from dataclasses import dataclass
 import pyarrow.dataset as ds
 
 from arrowdsl.core.interop import ComputeExpression, SchemaLike
-from arrowdsl.core.metrics import (
-    fragment_file_hints,
-    list_fragments,
-    row_group_count,
-    scan_task_count,
-)
 from arrowdsl.schema.serialization import schema_to_dict
 from core_types import JsonDict
+from obs.metrics import fragment_file_hints, list_fragments, row_group_count, scan_task_count
 from serde_msgspec import StructBase
 
 

@@ -12,7 +12,7 @@ from arrowdsl.schema.metadata import (
     decode_metadata_map,
     decode_metadata_scalar_map,
 )
-from arrowdsl.spec.literals import parse_scalar_value
+from schema_spec.literals import parse_scalar_value
 
 if TYPE_CHECKING:
     from arrowdsl.core.expr_types import ScalarValue

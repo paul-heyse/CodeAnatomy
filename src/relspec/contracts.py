@@ -28,8 +28,8 @@ RELATION_OUTPUT_ORDERING_KEYS: tuple[tuple[str, str], ...] = (
     ("edge_owner_file_id", "ascending"),
     ("src", "ascending"),
     ("dst", "ascending"),
-    ("rule_priority", "ascending"),
-    ("rule_name", "ascending"),
+    ("task_priority", "ascending"),
+    ("task_name", "ascending"),
 )
 
 RELATION_OUTPUT_SCHEMA = ordering_metadata_spec(

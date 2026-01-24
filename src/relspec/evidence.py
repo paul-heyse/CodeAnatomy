@@ -54,6 +54,20 @@ class EvidenceCatalog:
         self.types_by_dataset[name] = _schema_types(schema)
         self.metadata_by_dataset[name] = _schema_metadata(schema)
 
+    def register_from_registry(self, name: str) -> bool:
+        """Register an evidence dataset using the schema registry.
+
+        Returns
+        -------
+        bool
+            ``True`` when a schema was found and registered.
+        """
+        schema = _schema_from_registry(name)
+        if schema is None:
+            return False
+        self.register(name, schema)
+        return True
+
     def clone(self) -> EvidenceCatalog:
         """Return a shallow copy for staged updates.
 
@@ -114,6 +128,17 @@ def _schema_from_source(source: object) -> SchemaLike | None:
         if candidate is not None and hasattr(candidate, "names"):
             schema = cast("SchemaLike", candidate)
     return schema
+
+
+def _schema_from_registry(name: str) -> SchemaLike | None:
+    try:
+        from datafusion_engine.schema_registry import schema_for
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
+    try:
+        return schema_for(name)
+    except KeyError:
+        return None
 
 
 def _schema_names(schema: SchemaLike) -> tuple[str, ...]:

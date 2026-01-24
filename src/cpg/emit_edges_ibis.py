@@ -55,8 +55,8 @@ def emit_edges_ibis(
         symbol_roles=output.symbol_roles,
         qname_source=output.qname_source,
         ambiguity_group_id=output.ambiguity_group_id,
-        rule_name=output.rule_name,
-        rule_priority=output.rule_priority,
+        task_name=output.task_name,
+        task_priority=output.task_priority,
     )
     validate_expr_schema(
         output,
@@ -93,8 +93,8 @@ def emit_edges_from_relation_output(rel: IbisPlan | Table) -> IbisPlan:
         symbol_roles=output.symbol_roles,
         qname_source=output.qname_source,
         ambiguity_group_id=output.ambiguity_group_id,
-        rule_name=output.rule_name,
-        rule_priority=output.rule_priority,
+        task_name=output.task_name,
+        task_priority=output.task_priority,
     )
     validate_expr_schema(output, expected=CPG_EDGES_SCHEMA, allow_extra_columns=False)
     return IbisPlan(expr=output, ordering=Ordering.unordered())
@@ -181,8 +181,8 @@ def _normalized_relation_expr(rel: Table, *, spec: EdgeEmitSpec) -> Table:
     symbol_roles = _optional_column(rel, "symbol_roles", pa.int32())
     qname_source = _optional_column(rel, "qname_source", pa.string())
     ambiguity_group_id = _optional_column(rel, "ambiguity_group_id", pa.string())
-    rule_name = _optional_column(rel, "rule_name", pa.string())
-    rule_priority = _optional_column(rel, "rule_priority", pa.int32())
+    task_name = _optional_column(rel, "task_name", pa.string())
+    task_priority = _optional_column(rel, "task_priority", pa.int32())
     return rel.mutate(
         src=src,
         dst=dst,
@@ -196,8 +196,8 @@ def _normalized_relation_expr(rel: Table, *, spec: EdgeEmitSpec) -> Table:
         symbol_roles=symbol_roles,
         qname_source=qname_source,
         ambiguity_group_id=ambiguity_group_id,
-        rule_name=rule_name,
-        rule_priority=rule_priority,
+        task_name=task_name,
+        task_priority=task_priority,
     )
 
 

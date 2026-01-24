@@ -14,7 +14,6 @@ from arrowdsl.schema.metadata import (
     ordering_metadata_spec,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from sqlglot_tools.expr_spec import ExprIR
 from datafusion_engine.extract_bundles import bundle
 from datafusion_engine.extract_ids import hash_spec
 from datafusion_engine.extract_metadata import ExtractMetadata
@@ -22,6 +21,7 @@ from datafusion_engine.extract_templates import config as extractor_config
 from datafusion_engine.extract_templates import template
 from ibis_engine.hashing import hash_expr_ir, masked_hash_expr_ir
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
+from sqlglot_tools.expr_spec import SqlExprSpec
 
 
 @dataclass(frozen=True)
@@ -54,30 +54,44 @@ def _template_extra_fields(row: ExtractMetadata) -> tuple[str, ...]:
     return tuple(extras)
 
 
-def _default_exprs(row: ExtractMetadata) -> dict[str, ExprIR]:
+def _default_exprs(row: ExtractMetadata) -> dict[str, SqlExprSpec]:
     if row.template is None:
         return {}
     templ = template(row.template)
-    defaults: dict[str, ExprIR] = {}
+    defaults: dict[str, SqlExprSpec] = {}
     if templ.evidence_rank is not None:
-        defaults["evidence_rank"] = ExprIR(
-            op="call",
-            name="coalesce",
-            args=(
-                ExprIR(op="field", name="evidence_rank"),
-                ExprIR(op="literal", value=templ.evidence_rank),
-            ),
+        defaults["evidence_rank"] = _coalesce_field_default(
+            "evidence_rank", templ.evidence_rank
         )
     if templ.confidence is not None:
-        defaults["confidence"] = ExprIR(
-            op="call",
-            name="coalesce",
-            args=(
-                ExprIR(op="field", name="confidence"),
-                ExprIR(op="literal", value=templ.confidence),
-            ),
-        )
+        defaults["confidence"] = _coalesce_field_default("confidence", templ.confidence)
     return defaults
+
+
+def _coalesce_field_default(name: str, value: object) -> SqlExprSpec:
+    literal = _sql_literal(value)
+    sql = f"coalesce({_sql_identifier(name)}, {literal})"
+    return SqlExprSpec(sql=sql)
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_literal(value: object) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (str, bytes)):
+        text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+        escaped = text.replace("'", "''")
+        return f"'{escaped}'"
+    msg = f"Unsupported default literal type: {type(value).__name__}."
+    raise TypeError(msg)
 
 
 def _bundle_field_keys(bundle_names: Sequence[str]) -> list[str]:
@@ -87,7 +101,7 @@ def _bundle_field_keys(bundle_names: Sequence[str]) -> list[str]:
     return keys
 
 
-def _derived_expr(spec: ExtractMetadata, *, ctx: QueryContext, name: str) -> ExprIR:
+def _derived_expr(spec: ExtractMetadata, *, ctx: QueryContext, name: str) -> SqlExprSpec:
     derived = next(item for item in spec.derived if item.name == name)
     hash_spec_obj = hash_spec(derived.spec, repo_id=ctx.repo_id)
     if derived.kind == "hash":
@@ -109,7 +123,7 @@ def build_query_spec(row: ExtractMetadata, *, ctx: QueryContext) -> IbisQuerySpe
         Ibis query specification for the dataset.
     """
     base_cols = _dedupe(_bundle_field_keys(row.bundles) + list(row.fields))
-    derived_map: dict[str, ExprIR] = {
+    derived_map: dict[str, SqlExprSpec] = {
         spec.name: _derived_expr(row, ctx=ctx, name=spec.name) for spec in row.derived
     }
     derived_map.update(_default_exprs(row))

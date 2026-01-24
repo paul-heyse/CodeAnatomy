@@ -1,11 +1,11 @@
-"""ExprIR helpers for UDF-backed hash identifiers."""
+"""SQL expression helpers for UDF-backed hash identifiers."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sqlglot_tools.expr_spec import ExprIR
+from sqlglot_tools.expr_spec import SqlExprSpec
 
 
 @dataclass(frozen=True)
@@ -114,20 +114,15 @@ def hash_expr_spec_factory(
 _NULL_SEPARATOR = "\x1f"
 
 
-def hash_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> ExprIR:
-    """Return an ExprIR hash expression for a HashExprSpec.
+def hash_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> SqlExprSpec:
+    """Return a SQL expression spec for a HashExprSpec.
 
     Returns
     -------
-    ExprIR
-        ExprIR call tree that compiles to DataFusion hash UDFs.
+    SqlExprSpec
+        SQL expression spec that compiles to DataFusion hash UDFs.
     """
-    joined = _join_parts(_hash_parts(spec))
-    hash_name = _hash_name(spec, use_128=use_128)
-    hashed = ExprIR(op="call", name=hash_name, args=(joined,))
-    if not spec.as_string:
-        return hashed
-    return _prefixed_hash(hashed, prefix=spec.prefix)
+    return SqlExprSpec(sql=_hash_expr_sql(spec, use_128=use_128))
 
 
 def masked_hash_expr_ir(
@@ -135,49 +130,73 @@ def masked_hash_expr_ir(
     spec: HashExprSpec,
     required: Sequence[str],
     use_128: bool | None = None,
-) -> ExprIR:
-    """Return an ExprIR hash expression with required-column masking.
+) -> SqlExprSpec:
+    """Return a SQL expression spec with required-column masking.
 
     Returns
     -------
-    ExprIR
-        ExprIR call tree that yields null when required inputs are missing.
+    SqlExprSpec
+        SQL expression spec that yields null when required inputs are missing.
     """
     if not required:
         return hash_expr_ir(spec=spec, use_128=use_128)
-    mask = _required_mask(required)
-    hashed = hash_expr_ir(spec=spec, use_128=use_128)
-    return ExprIR(
-        op="call",
-        name="if_else",
-        args=(mask, hashed, ExprIR(op="literal", value=None)),
-    )
+    mask_sql = _required_mask_sql(required)
+    hashed_sql = _hash_expr_sql(spec, use_128=use_128)
+    sql = _call_sql("if_else", mask_sql, hashed_sql, _sql_literal(None))
+    return SqlExprSpec(sql=sql)
 
 
 def hash_expr_ir_from_parts(
     *,
     prefix: str,
-    parts: Sequence[ExprIR],
+    parts: Sequence[SqlExprSpec],
     null_sentinel: str,
     as_string: bool,
     use_128: bool | None = None,
-) -> ExprIR:
-    """Return an ExprIR hash expression for expression parts.
+) -> SqlExprSpec:
+    """Return a SQL expression spec for expression parts.
 
     Returns
     -------
-    ExprIR
-        ExprIR call tree that hashes expression parts with a prefix.
+    SqlExprSpec
+        SQL expression spec that hashes expression parts with a prefix.
     """
-    prepared: list[ExprIR] = [_coalesced_expr(part, null_sentinel) for part in parts]
+    policy_name, dialect = _resolve_parts_policy(parts)
+    prepared = [_coalesced_expr_sql(_parenthesize(spec), null_sentinel) for spec in parts]
     if prefix:
-        prepared.insert(0, ExprIR(op="literal", value=prefix))
-    joined = _join_parts(prepared)
+        prepared.insert(0, _sql_literal(prefix))
+    joined = _join_parts_sql(prepared)
     hash_name = _hash_name_from_flags(as_string=as_string, use_128=use_128)
-    hashed = ExprIR(op="call", name=hash_name, args=(joined,))
+    hashed = _call_sql(hash_name, joined)
     if not as_string:
+        return SqlExprSpec(sql=hashed, policy_name=policy_name, dialect=dialect)
+    prefixed = _prefixed_hash_sql(hashed, prefix=prefix)
+    return SqlExprSpec(sql=prefixed, policy_name=policy_name, dialect=dialect)
+
+
+def _resolve_parts_policy(parts: Sequence[SqlExprSpec]) -> tuple[str, str | None]:
+    if not parts:
+        return "datafusion_compile", None
+    policy_names = {spec.policy_name for spec in parts}
+    if len(policy_names) > 1:
+        msg = f"Mixed SQL policy names in hash expression parts: {sorted(policy_names)}."
+        raise ValueError(msg)
+    dialects = {spec.dialect for spec in parts if spec.dialect is not None}
+    if len(dialects) > 1:
+        msg = f"Mixed SQL dialects in hash expression parts: {sorted(dialects)}."
+        raise ValueError(msg)
+    policy_name = next(iter(policy_names))
+    dialect = next(iter(dialects)) if dialects else None
+    return policy_name, dialect
+
+
+def _hash_expr_sql(spec: HashExprSpec, *, use_128: bool | None) -> str:
+    joined = _join_parts_sql(_hash_parts_sql(spec))
+    hash_name = _hash_name(spec, use_128=use_128)
+    hashed = _call_sql(hash_name, joined)
+    if not spec.as_string:
         return hashed
-    return _prefixed_hash(hashed, prefix=prefix)
+    return _prefixed_hash_sql(hashed, prefix=spec.prefix)
 
 
 def _hash_name(spec: HashExprSpec, *, use_128: bool | None) -> str:
@@ -192,65 +211,82 @@ def _hash_name_from_flags(*, as_string: bool, use_128: bool | None) -> str:
     return "stable_hash128" if use_128 else "stable_hash64"
 
 
-def _hash_parts(spec: HashExprSpec) -> list[ExprIR]:
-    parts: list[ExprIR] = []
-    parts.extend(ExprIR(op="literal", value=value) for value in spec.extra_literals)
-    parts.extend(_coalesced_field_expr(name, spec.null_sentinel) for name in spec.cols)
+def _hash_parts_sql(spec: HashExprSpec) -> list[str]:
+    parts: list[str] = []
     if spec.prefix:
-        parts.insert(0, ExprIR(op="literal", value=spec.prefix))
+        parts.append(_sql_literal(spec.prefix))
+    parts.extend(_sql_literal(value) for value in spec.extra_literals)
+    parts.extend(_coalesced_field_sql(name, spec.null_sentinel) for name in spec.cols)
     return parts
 
 
-def _coalesced_field_expr(name: str, null_sentinel: str) -> ExprIR:
-    field = ExprIR(op="field", name=name)
-    return _coalesced_expr(field, null_sentinel)
+def _coalesced_field_sql(name: str, null_sentinel: str) -> str:
+    return _coalesced_expr_sql(_sql_identifier(name), null_sentinel)
 
 
-def _coalesced_expr(expr: ExprIR, null_sentinel: str) -> ExprIR:
-    stringified = ExprIR(op="call", name="stringify", args=(expr,))
-    return ExprIR(
-        op="call",
-        name="coalesce",
-        args=(stringified, ExprIR(op="literal", value=null_sentinel)),
-    )
+def _coalesced_expr_sql(expr_sql: str, null_sentinel: str) -> str:
+    stringified = _call_sql("stringify", expr_sql)
+    return _call_sql("coalesce", stringified, _sql_literal(null_sentinel))
 
 
-def _join_parts(parts: Sequence[ExprIR]) -> ExprIR:
+def _join_parts_sql(parts: Sequence[str]) -> str:
     if not parts:
-        return ExprIR(op="literal", value="")
+        return _sql_literal("")
     if len(parts) == 1:
         return parts[0]
-    args = (*parts, ExprIR(op="literal", value=_NULL_SEPARATOR))
-    return ExprIR(op="call", name="binary_join_element_wise", args=args)
+    args = (*parts, _sql_literal(_NULL_SEPARATOR))
+    return _call_sql("binary_join_element_wise", *args)
 
 
-def _prefixed_hash(hashed: ExprIR, *, prefix: str) -> ExprIR:
+def _prefixed_hash_sql(hashed_sql: str, *, prefix: str) -> str:
     if not prefix:
-        return hashed
-    hashed_str = ExprIR(op="call", name="stringify", args=(hashed,))
-    return ExprIR(
-        op="call",
-        name="binary_join_element_wise",
-        args=(
-            ExprIR(op="literal", value=prefix),
-            hashed_str,
-            ExprIR(op="literal", value=":"),
-        ),
+        return hashed_sql
+    hashed_str = _call_sql("stringify", hashed_sql)
+    return _call_sql(
+        "binary_join_element_wise",
+        _sql_literal(prefix),
+        hashed_str,
+        _sql_literal(":"),
     )
 
 
-def _required_mask(required: Sequence[str]) -> ExprIR:
+def _required_mask_sql(required: Sequence[str]) -> str:
     if not required:
-        return ExprIR(op="literal", value=True)
-    exprs: list[ExprIR] = []
-    for name in required:
-        field = ExprIR(op="field", name=name)
-        is_null = ExprIR(op="call", name="is_null", args=(field,))
-        exprs.append(ExprIR(op="call", name="invert", args=(is_null,)))
+        return "TRUE"
+    exprs = [
+        _call_sql("invert", _call_sql("is_null", _sql_identifier(name)))
+        for name in required
+    ]
     mask = exprs[0]
     for expr in exprs[1:]:
-        mask = ExprIR(op="call", name="bit_wise_and", args=(mask, expr))
+        mask = _call_sql("bit_wise_and", mask, expr)
     return mask
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_literal(value: str | float | None) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = str(value).replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _call_sql(name: str, *args: str) -> str:
+    joined = ", ".join(args)
+    return f"{name}({joined})"
+
+
+def _parenthesize(spec: SqlExprSpec) -> str:
+    sql = spec.normalized_sql()
+    return f"({sql})"
 
 
 __all__ = [

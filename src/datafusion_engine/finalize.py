@@ -194,8 +194,8 @@ ERROR_DETAIL_FIELDS: tuple[tuple[str, DataTypeLike], ...] = (
     ("error_message", pa.string()),
     ("error_column", pa.string()),
     ("error_severity", pa.string()),
-    ("error_rule_name", pa.string()),
-    ("error_rule_priority", pa.int32()),
+    ("error_task_name", pa.string()),
+    ("error_task_priority", pa.int32()),
     ("error_source", pa.string()),
 )
 
@@ -223,8 +223,8 @@ class ErrorArtifactSpec:
             "error_message": message,
             "error_column": result.column,
             "error_severity": result.severity,
-            "error_rule_name": None,
-            "error_rule_priority": None,
+            "error_task_name": None,
+            "error_task_priority": None,
             "error_source": result.source,
         }
         defaults = tuple(

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class RuleScheduleMetadata:
+class TaskScheduleMetadata:
     """Schedule metadata for a task execution event."""
 
     schedule_index: int
@@ -15,4 +15,4 @@ class RuleScheduleMetadata:
     generation_size: int
 
 
-__all__ = ["RuleScheduleMetadata"]
+__all__ = ["TaskScheduleMetadata"]

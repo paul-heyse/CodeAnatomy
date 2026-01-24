@@ -13,12 +13,12 @@ from relspec.errors import RelspecValidationError
 from relspec.inferred_deps import InferredDeps
 from storage.ipc import payload_hash
 
-NodeKind = Literal["evidence", "rule"]
+NodeKind = Literal["evidence", "task"]
 EdgeKind = Literal["requires", "produces"]
 OutputPolicy = Literal["all_producers"]
 
-RULE_GRAPH_SNAPSHOT_VERSION = 1
-_RULE_GRAPH_NODE_SCHEMA = pa.struct(
+TASK_GRAPH_SNAPSHOT_VERSION = 1
+_TASK_GRAPH_NODE_SCHEMA = pa.struct(
     [
         pa.field("id", pa.int32(), nullable=False),
         pa.field("kind", pa.string(), nullable=False),
@@ -28,7 +28,7 @@ _RULE_GRAPH_NODE_SCHEMA = pa.struct(
         pa.field("signature", pa.string(), nullable=True),
     ]
 )
-_RULE_GRAPH_EDGE_SCHEMA = pa.struct(
+_TASK_GRAPH_EDGE_SCHEMA = pa.struct(
     [
         pa.field("source", pa.int32(), nullable=False),
         pa.field("target", pa.int32(), nullable=False),
@@ -61,13 +61,13 @@ _RULE_GRAPH_EDGE_SCHEMA = pa.struct(
         ),
     ]
 )
-_RULE_GRAPH_SCHEMA = pa.schema(
+_TASK_GRAPH_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32(), nullable=False),
         pa.field("label", pa.string(), nullable=False),
         pa.field("output_policy", pa.string(), nullable=False),
-        pa.field("nodes", pa.list_(_RULE_GRAPH_NODE_SCHEMA), nullable=False),
-        pa.field("edges", pa.list_(_RULE_GRAPH_EDGE_SCHEMA), nullable=False),
+        pa.field("nodes", pa.list_(_TASK_GRAPH_NODE_SCHEMA), nullable=False),
+        pa.field("edges", pa.list_(_TASK_GRAPH_EDGE_SCHEMA), nullable=False),
     ]
 )
 
@@ -80,7 +80,7 @@ class EvidenceNode:
 
 
 @dataclass(frozen=True)
-class RuleNode:
+class TaskNode:
     """Task node payload."""
 
     name: str
@@ -95,7 +95,7 @@ class GraphNode:
     """Graph node wrapper with explicit kind."""
 
     kind: NodeKind
-    payload: EvidenceNode | RuleNode
+    payload: EvidenceNode | TaskNode
 
 
 @dataclass(frozen=True)
@@ -112,18 +112,27 @@ class GraphEdge:
 
 
 @dataclass(frozen=True)
-class RuleGraph:
+class TaskEdgeRequirements:
+    """Required edge metadata for task graph construction."""
+
+    columns: Mapping[str, Mapping[str, tuple[str, ...]]]
+    types: Mapping[str, Mapping[str, tuple[tuple[str, str], ...]]]
+    metadata: Mapping[str, Mapping[str, tuple[tuple[bytes, bytes], ...]]]
+
+
+@dataclass(frozen=True)
+class TaskGraph:
     """Rustworkx graph plus lookup indices."""
 
     graph: rx.PyDiGraph
     evidence_idx: Mapping[str, int]
-    rule_idx: Mapping[str, int]
+    task_idx: Mapping[str, int]
     output_policy: OutputPolicy
 
 
 @dataclass(frozen=True)
-class RuleGraphSnapshot:
-    """Deterministic snapshot of a rule graph."""
+class TaskGraphSnapshot:
+    """Deterministic snapshot of a task graph."""
 
     version: int
     label: str
@@ -134,7 +143,7 @@ class RuleGraphSnapshot:
 
 @dataclass(frozen=True)
 class GraphDiagnostics:
-    """Diagnostics for rule graphs."""
+    """Diagnostics for task graphs."""
 
     status: Literal["ok", "cycle"]
     cycles: tuple[tuple[int, ...], ...] = ()
@@ -145,22 +154,22 @@ class GraphDiagnostics:
     node_map: dict[int, int] | None = None
 
 
-def build_rule_graph_from_inferred_deps(
+def build_task_graph_from_inferred_deps(
     deps: Sequence[InferredDeps],
     *,
     output_policy: OutputPolicy = "all_producers",
     priority: int = 100,
-) -> RuleGraph:
-    """Build a rule graph from inferred dependencies.
+) -> TaskGraph:
+    """Build a task graph from inferred dependencies.
 
     Returns
     -------
-    RuleGraph
+    TaskGraph
         Graph constructed from inferred dependencies.
     """
-    rule_nodes = tuple(
-        RuleNode(
-            name=dep.rule_name,
+    task_nodes = tuple(
+        TaskNode(
+            name=dep.task_name,
             output=dep.output,
             inputs=dep.inputs,
             sources=dep.inputs,
@@ -168,30 +177,34 @@ def build_rule_graph_from_inferred_deps(
         )
         for dep in deps
     )
-    fingerprints = {dep.rule_name: dep.plan_fingerprint for dep in deps}
-    required_columns = {dep.rule_name: dep.required_columns for dep in deps}
-    return _build_rule_graph_inferred(
-        rule_nodes,
+    fingerprints = {dep.task_name: dep.plan_fingerprint for dep in deps}
+    requirements = TaskEdgeRequirements(
+        columns={dep.task_name: dep.required_columns for dep in deps},
+        types={dep.task_name: dep.required_types for dep in deps},
+        metadata={dep.task_name: dep.required_metadata for dep in deps},
+    )
+    return _build_task_graph_inferred(
+        task_nodes,
         output_policy=output_policy,
         fingerprints=fingerprints,
-        required_columns=required_columns,
+        requirements=requirements,
     )
 
 
-def rule_graph_snapshot(
-    graph: RuleGraph,
+def task_graph_snapshot(
+    graph: TaskGraph,
     *,
     label: str,
-    rule_signatures: Mapping[str, str] | None = None,
-) -> RuleGraphSnapshot:
-    """Return a deterministic snapshot of a rule graph.
+    task_signatures: Mapping[str, str] | None = None,
+) -> TaskGraphSnapshot:
+    """Return a deterministic snapshot of a task graph.
 
     Returns
     -------
-    RuleGraphSnapshot
+    TaskGraphSnapshot
         Deterministic snapshot for hashing or diagnostics.
     """
-    signatures = dict(rule_signatures or {})
+    signatures = dict(task_signatures or {})
     node_map = {id(graph.graph[idx]): idx for idx in graph.graph.node_indices()}
     try:
         ordered_nodes = rx.lexicographical_topological_sort(
@@ -205,8 +218,8 @@ def rule_graph_snapshot(
         _node_payload(node_id, node, signatures=signatures) for node_id, node in ordered_pairs
     )
     edges = tuple(_edge_payloads(graph.graph))
-    return RuleGraphSnapshot(
-        version=RULE_GRAPH_SNAPSHOT_VERSION,
+    return TaskGraphSnapshot(
+        version=TASK_GRAPH_SNAPSHOT_VERSION,
         label=label,
         output_policy=graph.output_policy,
         nodes=nodes,
@@ -214,8 +227,8 @@ def rule_graph_snapshot(
     )
 
 
-def rule_graph_signature(snapshot: RuleGraphSnapshot) -> str:
-    """Return a stable signature for a rule graph snapshot.
+def task_graph_signature(snapshot: TaskGraphSnapshot) -> str:
+    """Return a stable signature for a task graph snapshot.
 
     Returns
     -------
@@ -229,11 +242,11 @@ def rule_graph_signature(snapshot: RuleGraphSnapshot) -> str:
         "nodes": list(snapshot.nodes),
         "edges": list(snapshot.edges),
     }
-    return payload_hash(payload, _RULE_GRAPH_SCHEMA)
+    return payload_hash(payload, _TASK_GRAPH_SCHEMA)
 
 
-def rule_graph_diagnostics(graph: RuleGraph) -> GraphDiagnostics:
-    """Return cycle and visualization diagnostics for a rule graph.
+def task_graph_diagnostics(graph: TaskGraph) -> GraphDiagnostics:
+    """Return cycle and visualization diagnostics for a task graph.
 
     Returns
     -------
@@ -257,85 +270,89 @@ def rule_graph_diagnostics(graph: RuleGraph) -> GraphDiagnostics:
     )
 
 
-def _build_rule_graph_inferred(
-    rules: Sequence[RuleNode],
+def _build_task_graph_inferred(
+    tasks: Sequence[TaskNode],
     *,
     output_policy: OutputPolicy,
     fingerprints: Mapping[str, str],
-    required_columns: Mapping[str, Mapping[str, tuple[str, ...]]],
-) -> RuleGraph:
+    requirements: TaskEdgeRequirements,
+) -> TaskGraph:
     if output_policy != "all_producers":
         msg = f"Unsupported output policy: {output_policy!r}."
         raise ValueError(msg)
-    _validate_rule_names(rules)
-    evidence_names = _collect_evidence_names(rules)
+    _validate_task_names(tasks)
+    evidence_names = _collect_evidence_names(tasks)
     graph = rx.PyDiGraph(multigraph=False, check_cycle=False, attrs={"label": "relspec"})
     evidence_idx: dict[str, int] = {}
-    rule_idx: dict[str, int] = {}
+    task_idx: dict[str, int] = {}
     for name in sorted(evidence_names):
         evidence_idx[name] = graph.add_node(GraphNode("evidence", EvidenceNode(name)))
-    for rule in sorted(rules, key=lambda item: item.name):
-        rule_idx[rule.name] = graph.add_node(GraphNode("rule", rule))
-    for rule in rules:
-        rule_node_idx = rule_idx[rule.name]
-        rule_required = required_columns.get(rule.name, {})
-        for source in rule.sources:
+    for task in sorted(tasks, key=lambda item: item.name):
+        task_idx[task.name] = graph.add_node(GraphNode("task", task))
+    for task in tasks:
+        task_node_idx = task_idx[task.name]
+        task_required = requirements.columns.get(task.name, {})
+        task_required_types = requirements.types.get(task.name, {})
+        task_required_metadata = requirements.metadata.get(task.name, {})
+        for source in task.sources:
             source_idx = evidence_idx[source]
             graph.add_edge(
                 source_idx,
-                rule_node_idx,
+                task_node_idx,
                 GraphEdge(
                     kind="requires",
                     name=source,
-                    required_columns=tuple(rule_required.get(source, ())),
+                    required_columns=tuple(task_required.get(source, ())),
+                    required_types=tuple(task_required_types.get(source, ())),
+                    required_metadata=tuple(task_required_metadata.get(source, ())),
                     inferred=True,
-                    plan_fingerprint=fingerprints.get(rule.name),
+                    plan_fingerprint=fingerprints.get(task.name),
                 ),
             )
-        output_idx = evidence_idx[rule.output]
+        output_idx = evidence_idx[task.output]
         graph.add_edge(
-            rule_node_idx,
+            task_node_idx,
             output_idx,
             GraphEdge(
                 kind="produces",
-                name=rule.output,
+                name=task.output,
                 inferred=True,
-                plan_fingerprint=fingerprints.get(rule.name),
+                plan_fingerprint=fingerprints.get(task.name),
             ),
         )
-    return RuleGraph(
+    return TaskGraph(
         graph=graph,
         evidence_idx=evidence_idx,
-        rule_idx=rule_idx,
+        task_idx=task_idx,
         output_policy=output_policy,
     )
 
 
-def _collect_evidence_names(rules: Sequence[RuleNode]) -> set[str]:
+def _collect_evidence_names(tasks: Sequence[TaskNode]) -> set[str]:
     names: set[str] = set()
-    for rule in rules:
-        names.add(rule.output)
-        names.update(rule.inputs)
+    for task in tasks:
+        names.add(task.output)
+        names.update(task.inputs)
     return names
 
 
-def _validate_rule_names(rules: Sequence[RuleNode]) -> None:
+def _validate_task_names(tasks: Sequence[TaskNode]) -> None:
     seen: set[str] = set()
-    for rule in rules:
-        if not rule.name:
-            msg = "Rule names must be non-empty."
+    for task in tasks:
+        if not task.name:
+            msg = "Task names must be non-empty."
             raise RelspecValidationError(msg)
-        if rule.name in seen:
-            msg = f"Duplicate rule name: {rule.name!r}."
+        if task.name in seen:
+            msg = f"Duplicate task name: {task.name!r}."
             raise RelspecValidationError(msg)
-        seen.add(rule.name)
+        seen.add(task.name)
 
 
 def _node_sort_key(node: GraphNode) -> str:
     if node.kind == "evidence":
         return f"0:{node.payload.name}"
     payload = node.payload
-    if isinstance(payload, RuleNode):
+    if isinstance(payload, TaskNode):
         return f"1:{payload.name}"
     return "1:"
 
@@ -360,8 +377,8 @@ def _node_payload(
             "signature": None,
         }
     payload = node.payload
-    if not isinstance(payload, RuleNode):
-        msg = "Expected RuleNode payload for rule graph node."
+    if not isinstance(payload, TaskNode):
+        msg = "Expected TaskNode payload for task graph node."
         raise TypeError(msg)
     return {
         "id": node_id,
@@ -401,11 +418,12 @@ __all__ = [
     "GraphDiagnostics",
     "GraphEdge",
     "GraphNode",
-    "RuleGraph",
-    "RuleGraphSnapshot",
-    "RuleNode",
-    "build_rule_graph_from_inferred_deps",
-    "rule_graph_diagnostics",
-    "rule_graph_signature",
-    "rule_graph_snapshot",
+    "TaskEdgeRequirements",
+    "TaskGraph",
+    "TaskGraphSnapshot",
+    "TaskNode",
+    "build_task_graph_from_inferred_deps",
+    "task_graph_diagnostics",
+    "task_graph_signature",
+    "task_graph_snapshot",
 ]

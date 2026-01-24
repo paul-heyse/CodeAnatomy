@@ -35,7 +35,7 @@ from ibis_engine.param_tables import (
 from ibis_engine.param_tables import (
     scalar_param_signature as build_scalar_param_signature,
 )
-from relspec.param_deps import ActiveParamSet, RuleDependencyReport
+from relspec.param_deps import ActiveParamSet, TaskDependencyReport
 from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
@@ -95,9 +95,9 @@ def param_table_specs() -> tuple[ParamTableSpec, ...]:
             schema=pa.schema([pa.field("symbol", pa.string())]),
         ),
         ListParamSpec(
-            logical_name="rule_allowlist",
-            key_col="rule_name",
-            schema=pa.schema([pa.field("rule_name", pa.string())]),
+            logical_name="task_allowlist",
+            key_col="task_name",
+            schema=pa.schema([pa.field("task_name", pa.string())]),
         ),
     )
 
@@ -335,7 +335,7 @@ def _delta_schema_policy_payload(policy: DeltaSchemaPolicy | None) -> JsonDict |
 
 @tag(layer="params", artifact="active_param_set", kind="object")
 def active_param_set(
-    relspec_param_dependency_reports: tuple[RuleDependencyReport, ...],
+    relspec_param_dependency_reports: tuple[TaskDependencyReport, ...],
 ) -> ActiveParamSet:
     """Return the set of active param tables for the run.
 

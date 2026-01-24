@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-from relspec.model import AmbiguityPolicy, ConfidencePolicy, WinnerSelectConfig
+from relspec.policies.model import AmbiguityPolicy, ConfidencePolicy, WinnerSelectConfig
 
 RuleDomain = Literal["cpg", "extract", "normalize"]
 

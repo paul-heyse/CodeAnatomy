@@ -52,7 +52,7 @@ _DDL_FINGERPRINT_SCHEMA = pa.schema(
 )
 
 if TYPE_CHECKING:
-    from sqlglot_tools.expr_spec import ExprIR
+    from sqlglot_tools.expr_spec import SqlExprSpec
 
 
 def _ddl_policy(dialect: str) -> SqlGlotPolicy:
@@ -334,7 +334,7 @@ class DerivedFieldSpec:
     """Specification for a derived column."""
 
     name: str
-    expr: ExprIR
+    expr: SqlExprSpec
 
 
 @dataclass(frozen=True)

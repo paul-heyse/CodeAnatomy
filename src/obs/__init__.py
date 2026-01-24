@@ -12,9 +12,9 @@ if TYPE_CHECKING:
     schema_fingerprint: object
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
-    "column_stats_table": ("arrowdsl.core.metrics", "column_stats_table"),
-    "dataset_stats_table": ("arrowdsl.core.metrics", "dataset_stats_table"),
-    "table_summary": ("arrowdsl.core.metrics", "table_summary"),
+    "column_stats_table": ("obs.metrics", "column_stats_table"),
+    "dataset_stats_table": ("obs.metrics", "dataset_stats_table"),
+    "table_summary": ("obs.metrics", "table_summary"),
     "schema_fingerprint": ("arrowdsl.schema.serialization", "schema_fingerprint"),
 }
 

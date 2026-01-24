@@ -62,7 +62,7 @@ _register_many(
         "role": _spec("role", pa.string()),
         "confidence": _spec("confidence", pa.float32()),
         "ambiguity_group_id": _spec("ambiguity_group_id", pa.string()),
-        "rule_name": _spec("rule_name", pa.string()),
+        "task_name": _spec("task_name", pa.string()),
         "type_expr_id": _spec("type_expr_id", pa.string()),
         "owner_def_id": _spec("owner_def_id", pa.string()),
         "param_name": _spec("param_name", pa.string()),

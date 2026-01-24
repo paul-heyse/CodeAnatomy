@@ -37,16 +37,15 @@ from datafusion_engine.schema_registry import default_attrs_value, schema_for
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
+    ExtractPlanOptions,
     FileContext,
     SpanSpec,
-    apply_query_and_project,
     attrs_map,
     bytes_from_file_ctx,
+    extract_plan_from_row_batches,
+    extract_plan_from_rows,
     file_identity_row,
-    ibis_plan_from_reader,
     materialize_extract_plan,
-    record_batch_reader_from_row_batches,
-    record_batch_reader_from_rows,
     span_dict,
 )
 from extract.parallel import parallel_map, supports_fork
@@ -1490,17 +1489,22 @@ def _build_cst_file_plan(
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
 ) -> IbisPlan:
-    if row_batches is not None:
-        reader = record_batch_reader_from_row_batches("libcst_files_v1", row_batches)
-    else:
-        reader = record_batch_reader_from_rows("libcst_files_v1", rows or [])
-    raw = ibis_plan_from_reader("libcst_files_v1", reader, session=session)
-    return apply_query_and_project(
-        "libcst_files_v1",
-        raw.expr,
+    plan_options = ExtractPlanOptions(
         normalize=normalize,
         evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
+    )
+    if row_batches is not None:
+        return extract_plan_from_row_batches(
+            "libcst_files_v1",
+            row_batches,
+            session=session,
+            options=plan_options,
+        )
+    return extract_plan_from_rows(
+        "libcst_files_v1",
+        rows or [],
+        session=session,
+        options=plan_options,
     )
 
 

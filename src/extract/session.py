@@ -8,18 +8,40 @@ from datafusion import SessionContext
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.execution_factory import ibis_backend_from_ctx
+from engine.session import EngineSession
+from engine.session_factory import build_engine_session
 
 
 @dataclass(frozen=True)
 class ExtractSession:
     """Execution surfaces for extract workloads."""
 
-    exec_ctx: ExecutionContext
-    df_profile: DataFusionRuntimeProfile
-    df_ctx: SessionContext
-    ibis_backend: BaseBackend
+    engine_session: EngineSession
+
+    @property
+    def exec_ctx(self) -> ExecutionContext:
+        """Return the ExecutionContext for extract workloads."""
+        return self.engine_session.ctx
+
+    @property
+    def ibis_backend(self) -> BaseBackend:
+        """Return the Ibis backend for extract workloads."""
+        return self.engine_session.ibis_backend
+
+    @property
+    def df_ctx(self) -> SessionContext:
+        """Return the DataFusion SessionContext for extract workloads.
+
+        Raises
+        ------
+        ValueError
+            Raised when the DataFusion SessionContext is unavailable.
+        """
+        ctx = self.engine_session.df_ctx()
+        if ctx is None:
+            msg = "DataFusion SessionContext is required for extract workloads."
+            raise ValueError(msg)
+        return ctx
 
 
 def build_extract_session(ctx: ExecutionContext) -> ExtractSession:
@@ -30,18 +52,8 @@ def build_extract_session(ctx: ExecutionContext) -> ExtractSession:
     ExtractSession
         DataFusion SessionContext plus Ibis backend bound to the runtime profile.
     """
-    df_profile = ctx.runtime.datafusion or DataFusionRuntimeProfile()
-    if ctx.runtime.datafusion is None:
-        runtime_profile = ctx.runtime.with_datafusion(df_profile)
-        ctx = ExecutionContext(runtime=runtime_profile)
-    df_ctx = df_profile.session_context()
-    backend = ibis_backend_from_ctx(ctx)
-    return ExtractSession(
-        exec_ctx=ctx,
-        df_profile=df_profile,
-        df_ctx=df_ctx,
-        ibis_backend=backend,
-    )
+    engine_session = build_engine_session(ctx=ctx)
+    return ExtractSession(engine_session=engine_session)
 
 
 __all__ = ["ExtractSession", "build_extract_session"]

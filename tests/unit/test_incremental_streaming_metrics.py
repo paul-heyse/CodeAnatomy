@@ -8,10 +8,10 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+import incremental.delta_updates
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from incremental import delta_updates
 from incremental.delta_context import DeltaAccessContext
 from incremental.delta_updates import OverwriteDatasetSpec, write_overwrite_dataset
 from incremental.runtime import IncrementalRuntime
@@ -33,7 +33,7 @@ def test_streaming_write_records_metrics(
     runtime_profile = replace(runtime_profile, datafusion=profile)
     exec_ctx = ExecutionContext(runtime=runtime_profile)
     runtime = IncrementalRuntime.build(ctx=exec_ctx, sqlglot_policy=default_sqlglot_policy())
-    monkeypatch.setattr(delta_updates, "_STREAMING_ROW_THRESHOLD", 1)
+    monkeypatch.setattr(incremental.delta_updates, "_STREAMING_ROW_THRESHOLD", 1)
 
     schema = pa.schema([("file_id", pa.string()), ("value", pa.int64())])
     table = pa.table({"file_id": ["a", "b"], "value": [1, 2]})

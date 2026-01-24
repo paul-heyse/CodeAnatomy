@@ -427,6 +427,117 @@ def ibis_plan_from_reader(
     return IbisPlan(expr=table, ordering=Ordering.unordered())
 
 
+@dataclass(frozen=True)
+class ExtractPlanOptions:
+    """Options for building extract plans."""
+
+    normalize: ExtractNormalizeOptions | None = None
+    evidence_plan: EvidencePlan | None = None
+    repo_id: str | None = None
+
+    def resolved_repo_id(self) -> str | None:
+        """Return the effective repo id for query construction.
+
+        Returns
+        -------
+        str | None
+            Repo id used for query construction.
+        """
+        if self.repo_id is not None:
+            return self.repo_id
+        if self.normalize is None:
+            return None
+        return self.normalize.repo_id
+
+
+def extract_plan_from_reader(
+    name: str,
+    reader: RecordBatchReaderLike,
+    *,
+    session: ExtractSession,
+    options: ExtractPlanOptions | None = None,
+) -> IbisPlan:
+    """Return an extract plan for a RecordBatchReader.
+
+    Returns
+    -------
+    IbisPlan
+        Extract plan with registry query and evidence projection applied.
+    """
+    resolved = options or ExtractPlanOptions()
+    raw_plan = ibis_plan_from_reader(name, reader, session=session)
+    return apply_query_and_project(
+        name,
+        raw_plan.expr,
+        normalize=resolved.normalize,
+        evidence_plan=resolved.evidence_plan,
+        repo_id=resolved.resolved_repo_id(),
+    )
+
+
+def raw_plan_from_rows(
+    name: str,
+    rows: Iterable[Mapping[str, object]],
+    *,
+    session: ExtractSession,
+) -> IbisPlan:
+    """Return a raw Ibis plan for a row iterator.
+
+    Returns
+    -------
+    IbisPlan
+        Extract plan without registry query or evidence projection applied.
+    """
+    reader = record_batch_reader_from_rows(name, rows)
+    return ibis_plan_from_reader(name, reader, session=session)
+
+
+def extract_plan_from_rows(
+    name: str,
+    rows: Iterable[Mapping[str, object]],
+    *,
+    session: ExtractSession,
+    options: ExtractPlanOptions | None = None,
+) -> IbisPlan:
+    """Return an extract plan for a row iterator.
+
+    Returns
+    -------
+    IbisPlan
+        Extract plan with registry query and evidence projection applied.
+    """
+    reader = record_batch_reader_from_rows(name, rows)
+    return extract_plan_from_reader(
+        name,
+        reader,
+        session=session,
+        options=options,
+    )
+
+
+def extract_plan_from_row_batches(
+    name: str,
+    row_batches: Iterable[Sequence[Mapping[str, object]]],
+    *,
+    session: ExtractSession,
+    options: ExtractPlanOptions | None = None,
+) -> IbisPlan:
+    """Return an extract plan for row batches.
+
+    Returns
+    -------
+    IbisPlan
+        Extract plan with registry query and evidence projection applied.
+    """
+    reader = record_batch_reader_from_row_batches(name, row_batches)
+    return extract_plan_from_reader(
+        name,
+        reader,
+        session=session,
+        options=options,
+    )
+
+
 def _resolve_backend(
     *,
     session: ExtractSession | None,
@@ -575,6 +686,45 @@ def materialize_extract_plan(
             )
         return normalized
     return normalized
+
+
+def materialize_extract_reader(
+    name: str,
+    reader: RecordBatchReaderLike,
+    *,
+    session: ExtractSession,
+    plan_options: ExtractPlanOptions | None = None,
+    materialize_options: ExtractMaterializeOptions | None = None,
+) -> TableLike | RecordBatchReaderLike:
+    """Materialize an extract plan derived from a reader.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Materialized extract output.
+    """
+    resolved_plan = plan_options or ExtractPlanOptions()
+    plan = extract_plan_from_reader(
+        name,
+        reader,
+        session=session,
+        options=resolved_plan,
+    )
+    resolved_materialize = materialize_options
+    if resolved_materialize is None:
+        resolved_materialize = ExtractMaterializeOptions(normalize=resolved_plan.normalize)
+    elif resolved_materialize.normalize is None and resolved_plan.normalize is not None:
+        resolved_materialize = ExtractMaterializeOptions(
+            normalize=resolved_plan.normalize,
+            prefer_reader=resolved_materialize.prefer_reader,
+            apply_post_kernels=resolved_materialize.apply_post_kernels,
+        )
+    return materialize_extract_plan(
+        name,
+        plan,
+        ctx=session.exec_ctx,
+        options=resolved_materialize,
+    )
 
 
 def ast_def_nodes(nodes: TableLike) -> TableLike:
@@ -749,6 +899,7 @@ def _stage_enabled(condition: str, execution: ExtractExecutionOptions) -> bool:
 __all__ = [
     "ExtractExecutionContext",
     "ExtractMaterializeOptions",
+    "ExtractPlanOptions",
     "FileContext",
     "SpanSpec",
     "apply_evidence_projection",
@@ -760,12 +911,17 @@ __all__ = [
     "bytes_from_file_ctx",
     "empty_ibis_plan",
     "extract_dataset_location_or_raise",
+    "extract_plan_from_reader",
+    "extract_plan_from_row_batches",
+    "extract_plan_from_rows",
     "file_identity_row",
     "ibis_plan_from_reader",
     "iter_contexts",
     "iter_file_contexts",
     "materialize_extract_plan",
+    "materialize_extract_reader",
     "pos_dict",
+    "raw_plan_from_rows",
     "record_batch_reader_from_row_batches",
     "record_batch_reader_from_rows",
     "required_extractors",

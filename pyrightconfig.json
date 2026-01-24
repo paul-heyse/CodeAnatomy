@@ -28,7 +28,7 @@
         "tests",
         "mkdocs_gen"
       ],
-      "pythonVersion": "3.14"
+      "pythonVersion": "3.13"
     },
     {
       "root": "tests",
@@ -37,7 +37,7 @@
         "src",
         "tests",
       ],
-      "pythonVersion": "3.14"
+      "pythonVersion": "3.13"
     },
     {
       "root": "mkdocs_gen",
@@ -45,7 +45,7 @@
         ".",
         "src"
       ],
-      "pythonVersion": "3.14"
+      "pythonVersion": "3.13"
     }
   ]
 }

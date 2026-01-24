@@ -23,14 +23,13 @@ from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
+    ExtractPlanOptions,
     FileContext,
     SpanSpec,
-    apply_query_and_project,
     attrs_map,
+    extract_plan_from_rows,
     file_identity_row,
-    ibis_plan_from_reader,
     materialize_extract_plan,
-    record_batch_reader_from_rows,
     span_dict,
     text_from_file_ctx,
 )
@@ -1485,14 +1484,14 @@ def _build_bytecode_file_plan(
     evidence_plan: EvidencePlan | None = None,
     session: ExtractSession,
 ) -> IbisPlan:
-    reader = record_batch_reader_from_rows("bytecode_files_v1", rows)
-    raw_plan = ibis_plan_from_reader("bytecode_files_v1", reader, session=session)
-    return apply_query_and_project(
+    return extract_plan_from_rows(
         "bytecode_files_v1",
-        raw_plan.expr,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
+        rows,
+        session=session,
+        options=ExtractPlanOptions(
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        ),
     )
 
 

@@ -19,9 +19,8 @@ from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
     apply_query_and_project,
-    ibis_plan_from_reader,
     materialize_extract_plan,
-    record_batch_reader_from_rows,
+    raw_plan_from_rows,
 )
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.session import ExtractSession
@@ -509,8 +508,7 @@ def _build_rt_objects(
     evidence_plan: EvidencePlan | None = None,
     session: ExtractSession,
 ) -> tuple[IbisPlan, IbisPlan]:
-    reader = record_batch_reader_from_rows("rt_objects_v1", obj_rows)
-    raw_plan = ibis_plan_from_reader("rt_objects_v1", reader, session=session)
+    raw_plan = raw_plan_from_rows("rt_objects_v1", obj_rows, session=session)
     raw_table = raw_plan.expr
     with_rt_id = _with_derived_columns(raw_table, dataset="rt_objects_v1")
     rt_keys = with_rt_id.select(with_rt_id["object_key"], with_rt_id["rt_id"])
@@ -533,8 +531,7 @@ def _build_rt_signatures(
     evidence_plan: EvidencePlan | None = None,
     session: ExtractSession,
 ) -> tuple[IbisPlan, IbisPlan | None]:
-    reader = record_batch_reader_from_rows("rt_signatures_v1", sig_rows)
-    raw_plan = ibis_plan_from_reader("rt_signatures_v1", reader, session=session)
+    raw_plan = raw_plan_from_rows("rt_signatures_v1", sig_rows, session=session)
     sig_table = raw_plan.expr
     if not sig_rows:
         empty_plan = apply_query_and_project(
@@ -578,8 +575,7 @@ def _build_rt_params(
     evidence_plan: EvidencePlan | None = None,
     session: ExtractSession,
 ) -> IbisPlan:
-    reader = record_batch_reader_from_rows("rt_signature_params_v1", param_rows)
-    raw_plan = ibis_plan_from_reader("rt_signature_params_v1", reader, session=session)
+    raw_plan = raw_plan_from_rows("rt_signature_params_v1", param_rows, session=session)
     params_table = raw_plan.expr
     if not param_rows or sig_meta_plan is None:
         return apply_query_and_project(
@@ -617,8 +613,7 @@ def _build_rt_members(
     evidence_plan: EvidencePlan | None = None,
     session: ExtractSession,
 ) -> IbisPlan:
-    reader = record_batch_reader_from_rows("rt_members_v1", member_rows)
-    raw_plan = ibis_plan_from_reader("rt_members_v1", reader, session=session)
+    raw_plan = raw_plan_from_rows("rt_members_v1", member_rows, session=session)
     member_table = raw_plan.expr
     if not member_rows:
         return apply_query_and_project(

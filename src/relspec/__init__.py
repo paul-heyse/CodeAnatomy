@@ -26,7 +26,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "TaskExecutionRequest": ("relspec.execution", "TaskExecutionRequest"),
     "TaskGraph": ("relspec.graph_inference", "TaskGraph"),
     "TaskKind": ("relspec.task_catalog", "TaskKind"),
-    "TaskRegistry": ("relspec.task_registry", "TaskRegistry"),
     "TaskSpec": ("relspec.task_catalog", "TaskSpec"),
     "build_task_catalog": ("relspec.task_catalog_builders", "build_task_catalog"),
     "build_task_graph": ("relspec.graph_inference", "build_task_graph"),
@@ -76,7 +75,6 @@ if TYPE_CHECKING:
     TaskExecutionRequest: Any
     TaskGraph: Any
     TaskKind: Any
-    TaskRegistry: Any
     TaskSpec: Any
     build_task_catalog: Any
     build_task_graph: Any
@@ -131,7 +129,6 @@ __all__ = (
     "TaskGraphSnapshot",
     "TaskKind",
     "TaskNode",
-    "TaskRegistry",
     "TaskSchedule",
     "TaskSpec",
     "TaskValidationResult",

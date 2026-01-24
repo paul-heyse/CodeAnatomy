@@ -3,15 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from datafusion_engine.compile_options import DataFusionSqlPolicy
 from datafusion_engine.kernel_registry import KernelLane
 from ibis_engine.param_tables import ParamTablePolicy
-from relspec.list_filter_gate import ListFilterGatePolicy
-
-if TYPE_CHECKING:
-    from relspec.config import RelspecConfig
 from relspec.policies import PolicyRegistry
 
 
@@ -40,30 +35,13 @@ class DiagnosticsPolicy:
 
 @dataclass(frozen=True)
 class PipelinePolicy:
-    """Centralized pipeline policy for rule execution and diagnostics."""
+    """Centralized pipeline policy for execution and diagnostics."""
 
     policy_registry: PolicyRegistry = field(default_factory=PolicyRegistry)
     param_table_policy: ParamTablePolicy = field(default_factory=ParamTablePolicy)
-    list_filter_gate_policy: ListFilterGatePolicy = field(default_factory=ListFilterGatePolicy)
     datafusion_sql_policy: DataFusionSqlPolicy = field(default_factory=DataFusionSqlPolicy)
     kernel_lanes: KernelLanePolicy = field(default_factory=KernelLanePolicy)
     diagnostics: DiagnosticsPolicy = field(default_factory=DiagnosticsPolicy)
-
-    def relspec_config(self) -> RelspecConfig:
-        """Return the rule registry config derived from this policy.
-
-        Returns
-        -------
-        RelspecConfig
-            Configuration payload for relspec registry wiring.
-        """
-        from relspec.config import RelspecConfig
-
-        return RelspecConfig(
-            param_table_policy=self.param_table_policy,
-            list_filter_gate_policy=self.list_filter_gate_policy,
-            kernel_lane_policy=self.kernel_lanes,
-        )
 
 
 __all__ = ["DiagnosticsPolicy", "KernelLanePolicy", "PipelinePolicy"]

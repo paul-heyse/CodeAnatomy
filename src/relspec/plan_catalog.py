@@ -6,14 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from relspec.inferred_deps import (
-    InferredDeps,
-    InferredDepsRequest,
-    infer_deps_from_ibis_plan,
-)
+from ibis_engine.compiler_checkpoint import compile_checkpoint
+from relspec.inferred_deps import InferredDeps, infer_deps_from_sqlglot_expr
 from relspec.task_catalog import TaskBuildContext, TaskCatalog, TaskSpec
-from sqlglot_tools.bridge import ibis_to_sqlglot
-from sqlglot_tools.optimizer import plan_fingerprint
 
 if TYPE_CHECKING:
     from ibis.backends import BaseBackend
@@ -104,18 +99,23 @@ def compile_task_plan(
     resolved_context = build_context or TaskBuildContext(ctx=ctx, backend=backend)
     plan = task.build(resolved_context)
     compiler_backend = cast("IbisCompilerBackend", backend)
-    sg_expr = ibis_to_sqlglot(plan.expr, backend=compiler_backend, params=None)
-    deps = infer_deps_from_ibis_plan(
-        plan,
+    checkpoint = compile_checkpoint(
+        plan.expr,
         backend=compiler_backend,
-        request=InferredDepsRequest(task_name=task.name, output=task.output),
-        sqlglot_expr=sg_expr,
+        schema_map=None,
+        dialect="datafusion",
     )
-    fingerprint = deps.plan_fingerprint or plan_fingerprint(sg_expr)
+    deps = infer_deps_from_sqlglot_expr(
+        checkpoint.normalized,
+        task_name=task.name,
+        output=task.output,
+        dialect="datafusion",
+    )
+    fingerprint = checkpoint.plan_hash
     return PlanArtifact(
         task=task,
         plan=plan,
-        sqlglot_ast=sg_expr,
+        sqlglot_ast=checkpoint.normalized,
         deps=deps,
         plan_fingerprint=fingerprint,
     )

@@ -22,10 +22,9 @@ from datafusion_engine.extract_registry import extract_metadata, normalize_optio
 from datafusion_engine.span_utils import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from extract.helpers import (
     ExtractMaterializeOptions,
-    apply_query_and_project,
-    ibis_plan_from_reader,
+    ExtractPlanOptions,
+    extract_plan_from_row_batches,
     materialize_extract_plan,
-    record_batch_reader_from_row_batches,
 )
 from extract.schema_ops import ExtractNormalizeOptions, schema_policy_for_dataset
 from extract.session import ExtractSession, build_extract_session
@@ -1095,14 +1094,14 @@ def _build_scip_plan(
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
 ) -> IbisPlan:
-    reader = record_batch_reader_from_row_batches(name, row_batches)
-    raw = ibis_plan_from_reader(name, reader, session=session)
-    return apply_query_and_project(
+    return extract_plan_from_row_batches(
         name,
-        raw.expr,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
+        row_batches,
+        session=session,
+        options=ExtractPlanOptions(
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        ),
     )
 
 

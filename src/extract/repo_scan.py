@@ -14,11 +14,10 @@ from datafusion_engine.extract_registry import dataset_query, normalize_options
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
-    apply_query_and_project,
+    ExtractPlanOptions,
     empty_ibis_plan,
-    ibis_plan_from_reader,
+    extract_plan_from_rows,
     materialize_extract_plan,
-    record_batch_reader_from_rows,
 )
 from extract.repo_scan_fs import iter_repo_files_fs
 from extract.repo_scan_git import iter_repo_files_git
@@ -328,12 +327,9 @@ def scan_repo_plan(
             if options.max_files is not None and count >= options.max_files:
                 break
 
-    reader = record_batch_reader_from_rows("repo_files_v1", iter_rows())
-    raw_plan = ibis_plan_from_reader("repo_files_v1", reader, session=session)
-    return apply_query_and_project(
+    return extract_plan_from_rows(
         "repo_files_v1",
-        raw_plan.expr,
-        normalize=normalize,
-        evidence_plan=None,
-        repo_id=normalize.repo_id,
+        iter_rows(),
+        session=session,
+        options=ExtractPlanOptions(normalize=normalize),
     )

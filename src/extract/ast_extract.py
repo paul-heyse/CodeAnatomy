@@ -19,14 +19,13 @@ from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
+    ExtractPlanOptions,
     FileContext,
     SpanSpec,
-    apply_query_and_project,
     attrs_map,
-    ibis_plan_from_reader,
+    extract_plan_from_row_batches,
+    extract_plan_from_rows,
     materialize_extract_plan,
-    record_batch_reader_from_row_batches,
-    record_batch_reader_from_rows,
     span_dict,
     text_from_file_ctx,
 )
@@ -1098,17 +1097,22 @@ def _build_ast_plan(
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None,
     plan_context: _AstPlanContext,
 ) -> IbisPlan:
-    if row_batches is not None:
-        reader = record_batch_reader_from_row_batches(name, row_batches)
-    else:
-        reader = record_batch_reader_from_rows(name, rows or [])
-    raw = ibis_plan_from_reader(name, reader, session=plan_context.session)
-    return apply_query_and_project(
-        name,
-        raw.expr,
+    plan_options = ExtractPlanOptions(
         normalize=plan_context.normalize,
         evidence_plan=plan_context.evidence_plan,
-        repo_id=plan_context.normalize.repo_id,
+    )
+    if row_batches is not None:
+        return extract_plan_from_row_batches(
+            name,
+            row_batches,
+            session=plan_context.session,
+            options=plan_options,
+        )
+    return extract_plan_from_rows(
+        name,
+        rows or [],
+        session=plan_context.session,
+        options=plan_options,
     )
 
 

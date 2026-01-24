@@ -8,7 +8,7 @@ Ibis/DataFusion expression analysis rather than bespoke task specifications.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -51,14 +51,8 @@ class InferredDeps:
         Per-table required metadata entries.
     plan_fingerprint : str
         Stable hash for caching and comparison.
-    declared_inputs : tuple[str, ...] | None
-        Original declared inputs for comparison, if available.
-    inputs_match : bool
-        Whether inferred inputs match declared inputs.
-    extra_inferred : tuple[str, ...]
-        Tables inferred but not declared.
-    missing_declared : tuple[str, ...]
-        Tables declared but not inferred.
+    plan_fingerprint : str
+        Stable hash for caching and comparison.
     """
 
     task_name: str
@@ -68,38 +62,6 @@ class InferredDeps:
     required_types: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     required_metadata: Mapping[str, tuple[tuple[bytes, bytes], ...]] = field(default_factory=dict)
     plan_fingerprint: str = ""
-    declared_inputs: tuple[str, ...] | None = None
-    inputs_match: bool = True
-    extra_inferred: tuple[str, ...] = ()
-    missing_declared: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class InferredDepsComparison:
-    """Summary of comparison between declared and inferred dependencies.
-
-    Attributes
-    ----------
-    total_tasks : int
-        Total number of tasks compared.
-    matched_tasks : int
-        Tasks where declared and inferred inputs match.
-    mismatched_tasks : int
-        Tasks with discrepancies.
-    extra_inferred_total : int
-        Total count of extra inferred tables across all tasks.
-    missing_declared_total : int
-        Total count of missing declared tables across all tasks.
-    mismatches : tuple[InferredDeps, ...]
-        Detailed mismatch information for each discrepant task.
-    """
-
-    total_tasks: int
-    matched_tasks: int
-    mismatched_tasks: int
-    extra_inferred_total: int
-    missing_declared_total: int
-    mismatches: tuple[InferredDeps, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -108,7 +70,6 @@ class InferredDepsRequest:
 
     task_name: str
     output: str
-    declared_inputs: tuple[str, ...] | None = None
     dialect: str = "datafusion"
 
 
@@ -144,7 +105,6 @@ def infer_deps_from_ibis_plan(
     """
     task_name = request.task_name
     output = request.output
-    declared_inputs = request.declared_inputs
     dialect = request.dialect
 
     # Compile Ibis to SQLGlot for analysis
@@ -174,18 +134,6 @@ def infer_deps_from_ibis_plan(
     # Compute plan fingerprint
     fingerprint = plan_fingerprint(sg_expr, dialect=dialect)
 
-    # Compare with declared inputs if provided
-    inputs_match = True
-    extra_inferred: tuple[str, ...] = ()
-    missing_declared: tuple[str, ...] = ()
-
-    if declared_inputs is not None:
-        inferred_set = set(tables)
-        declared_set = set(declared_inputs)
-        extra_inferred = tuple(sorted(inferred_set - declared_set))
-        missing_declared = tuple(sorted(declared_set - inferred_set))
-        inputs_match = not extra_inferred and not missing_declared
-
     return InferredDeps(
         task_name=task_name,
         output=output,
@@ -194,10 +142,6 @@ def infer_deps_from_ibis_plan(
         required_types=required_types,
         required_metadata=required_metadata,
         plan_fingerprint=fingerprint,
-        declared_inputs=declared_inputs,
-        inputs_match=inputs_match,
-        extra_inferred=extra_inferred,
-        missing_declared=missing_declared,
     )
 
 
@@ -206,7 +150,6 @@ def infer_deps_from_sqlglot_expr(
     *,
     task_name: str,
     output: str,
-    declared_inputs: tuple[str, ...] | None = None,
     dialect: str = "datafusion",
 ) -> InferredDeps:
     """Infer dependencies from a raw SQLGlot expression.
@@ -222,8 +165,6 @@ def infer_deps_from_sqlglot_expr(
         Name of the task being analyzed.
     output : str
         Output dataset name.
-    declared_inputs : tuple[str, ...] | None
-        Original declared inputs for comparison.
     dialect : str
         SQL dialect for fingerprinting.
 
@@ -253,18 +194,6 @@ def infer_deps_from_sqlglot_expr(
     # Compute plan fingerprint
     fingerprint = plan_fingerprint(expr, dialect=dialect)
 
-    # Compare with declared inputs if provided
-    inputs_match = True
-    extra_inferred: tuple[str, ...] = ()
-    missing_declared: tuple[str, ...] = ()
-
-    if declared_inputs is not None:
-        inferred_set = set(tables)
-        declared_set = set(declared_inputs)
-        extra_inferred = tuple(sorted(inferred_set - declared_set))
-        missing_declared = tuple(sorted(declared_set - inferred_set))
-        inputs_match = not extra_inferred and not missing_declared
-
     return InferredDeps(
         task_name=task_name,
         output=output,
@@ -273,132 +202,7 @@ def infer_deps_from_sqlglot_expr(
         required_types=required_types,
         required_metadata=required_metadata,
         plan_fingerprint=fingerprint,
-        declared_inputs=declared_inputs,
-        inputs_match=inputs_match,
-        extra_inferred=extra_inferred,
-        missing_declared=missing_declared,
     )
-
-
-def compare_deps(
-    declared: tuple[str, ...],
-    inferred: InferredDeps,
-) -> InferredDeps:
-    """Compare declared inputs against inferred dependencies.
-
-    Updates the InferredDeps with comparison results.
-
-    Parameters
-    ----------
-    declared : tuple[str, ...]
-        Declared input dependencies.
-    inferred : InferredDeps
-        Previously inferred dependencies.
-
-    Returns
-    -------
-    InferredDeps
-        Updated with comparison metadata.
-    """
-    declared_set = set(declared)
-    inferred_set = set(inferred.inputs)
-
-    extra_inferred = tuple(sorted(inferred_set - declared_set))
-    missing_declared = tuple(sorted(declared_set - inferred_set))
-    inputs_match = not extra_inferred and not missing_declared
-
-    return InferredDeps(
-        task_name=inferred.task_name,
-        output=inferred.output,
-        inputs=inferred.inputs,
-        required_columns=inferred.required_columns,
-        required_types=inferred.required_types,
-        required_metadata=inferred.required_metadata,
-        plan_fingerprint=inferred.plan_fingerprint,
-        declared_inputs=declared,
-        inputs_match=inputs_match,
-        extra_inferred=extra_inferred,
-        missing_declared=missing_declared,
-    )
-
-
-def summarize_inferred_deps(
-    deps: Sequence[InferredDeps],
-) -> InferredDepsComparison:
-    """Summarize comparison results across multiple tasks.
-
-    Parameters
-    ----------
-    deps : Sequence[InferredDeps]
-        Inferred dependencies for multiple tasks.
-
-    Returns
-    -------
-    InferredDepsComparison
-        Summary statistics and mismatches.
-    """
-    total = len(deps)
-    matched = sum(1 for d in deps if d.inputs_match)
-    mismatched = total - matched
-    extra_total = sum(len(d.extra_inferred) for d in deps)
-    missing_total = sum(len(d.missing_declared) for d in deps)
-    mismatches = tuple(d for d in deps if not d.inputs_match)
-
-    return InferredDepsComparison(
-        total_tasks=total,
-        matched_tasks=matched,
-        mismatched_tasks=mismatched,
-        extra_inferred_total=extra_total,
-        missing_declared_total=missing_total,
-        mismatches=mismatches,
-    )
-
-
-def log_inferred_deps_comparison(
-    comparison: InferredDepsComparison,
-    *,
-    logger: logging.Logger | None = None,
-    level: int = logging.WARNING,
-) -> None:
-    """Log comparison results for observability.
-
-    Parameters
-    ----------
-    comparison : InferredDepsComparison
-        Comparison summary to log.
-    logger : logging.Logger | None
-        Logger to use. Defaults to module logger.
-    level : int
-        Log level for mismatches.
-    """
-    log = logger or _LOG
-
-    if comparison.mismatched_tasks == 0:
-        log.info(
-            "Dependency inference: %d/%d tasks match declared inputs",
-            comparison.matched_tasks,
-            comparison.total_tasks,
-        )
-        return
-
-    log.log(
-        level,
-        "Dependency inference: %d/%d tasks have mismatches "
-        "(extra_inferred=%d, missing_declared=%d)",
-        comparison.mismatched_tasks,
-        comparison.total_tasks,
-        comparison.extra_inferred_total,
-        comparison.missing_declared_total,
-    )
-
-    for mismatch in comparison.mismatches:
-        log.log(
-            level,
-            "  Task %r: extra=%s, missing=%s",
-            mismatch.task_name,
-            list(mismatch.extra_inferred),
-            list(mismatch.missing_declared),
-        )
 
 
 def _required_types_for_tables(
@@ -542,11 +346,7 @@ def _metadata_from_schema(schema: pa.Schema) -> tuple[tuple[bytes, bytes], ...]:
 
 __all__ = [
     "InferredDeps",
-    "InferredDepsComparison",
     "InferredDepsRequest",
-    "compare_deps",
     "infer_deps_from_ibis_plan",
     "infer_deps_from_sqlglot_expr",
-    "log_inferred_deps_comparison",
-    "summarize_inferred_deps",
 ]

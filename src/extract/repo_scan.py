@@ -158,12 +158,16 @@ def _iter_repo_root_files(
         exclude_dirs=options.exclude_dirs,
         follow_symlinks=options.follow_symlinks,
     )
-    repo_iter = iter(git_files) if git_files is not None else iter_repo_files_fs(
-        root,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        exclude_dirs=options.exclude_dirs,
-        follow_symlinks=options.follow_symlinks,
+    repo_iter = (
+        iter(git_files)
+        if git_files is not None
+        else iter_repo_files_fs(
+            root,
+            include_globs=include_globs,
+            exclude_globs=exclude_globs,
+            exclude_dirs=options.exclude_dirs,
+            follow_symlinks=options.follow_symlinks,
+        )
     )
     for rel in repo_iter:
         if diff_filter is not None and rel.as_posix() not in diff_filter:
@@ -320,8 +324,6 @@ def _build_repo_file_row(
         "mtime_ns": mtime_ns,
         "file_sha256": file_sha256,
     }
-
-
 
 
 @overload

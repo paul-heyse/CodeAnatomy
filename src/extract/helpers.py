@@ -562,9 +562,7 @@ def _normalize_reader(
         for batch in reader:
             table = pa.Table.from_batches([batch], schema=batch.schema)
             processed = (
-                apply_pipeline_kernels(context.name, table)
-                if context.apply_post_kernels
-                else table
+                apply_pipeline_kernels(context.name, table) if context.apply_post_kernels else table
             )
             aligned = resolved_policy.apply(processed)
             if aligned.column_names != schema.names:
@@ -582,11 +580,7 @@ def _normalize_table(
         context.name,
         context.finalize_ctx.schema_policy,
     )
-    processed = (
-        apply_pipeline_kernels(context.name, table)
-        if context.apply_post_kernels
-        else table
-    )
+    processed = apply_pipeline_kernels(context.name, table) if context.apply_post_kernels else table
     return normalize_only(
         processed,
         contract=context.finalize_ctx.contract,
@@ -795,8 +789,6 @@ def template_outputs(plan: EvidencePlan | None, template: str) -> tuple[str, ...
     if not plan.requires_template(template):
         return ()
     return outputs_for_template(template)
-
-
 
 
 def ast_def_nodes_plan(plan: IbisPlan) -> IbisPlan:

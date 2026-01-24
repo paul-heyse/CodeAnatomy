@@ -89,7 +89,11 @@ def check_repo_path(
         )
     rel_posix = rel_path.as_posix()
     include_result = _check_spec(filters.include_spec, rel_posix)
-    if filters.include_spec is not None and include_result is not None and include_result.include is not True:
+    if (
+        filters.include_spec is not None
+        and include_result is not None
+        and include_result.include is not True
+    ):
         return PathspecCheck(
             include=False,
             excluded_by_dir=False,
@@ -99,7 +103,11 @@ def check_repo_path(
             ignored=False,
         )
     exclude_result = _check_spec(filters.exclude_spec, rel_posix)
-    if filters.exclude_spec is not None and exclude_result is not None and exclude_result.include is True:
+    if (
+        filters.exclude_spec is not None
+        and exclude_result is not None
+        and exclude_result.include is True
+    ):
         return PathspecCheck(
             include=False,
             excluded_by_dir=False,

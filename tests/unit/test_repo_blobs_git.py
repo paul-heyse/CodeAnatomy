@@ -44,8 +44,8 @@ def test_repo_blobs_source_ref_uses_committed_bytes(tmp_path: Path) -> None:
     """Ensure source_ref reads blob bytes from git, not the working tree."""
     repo = pygit2.init_repository(tmp_path, bare=False)
     repo_path = tmp_path / "file.py"
-    commit_id = _commit_file(repo, repo_path, "print(\"v1\")\n")
-    repo_path.write_text("print(\"v2\")\n", encoding="utf-8")
+    commit_id = _commit_file(repo, repo_path, 'print("v1")\n')
+    repo_path.write_text('print("v2")\n', encoding="utf-8")
     repo_files = pa.table(
         {
             "file_id": ["f1"],
@@ -61,7 +61,7 @@ def test_repo_blobs_source_ref_uses_committed_bytes(tmp_path: Path) -> None:
     rows = _rows_from_table(result)
     assert len(rows) == 1
     row = rows[0]
-    assert row["text"] == "print(\"v1\")\n"
+    assert row["text"] == 'print("v1")\n'
     assert row["encoding"] == "utf-8"
 
 
@@ -69,7 +69,7 @@ def test_repo_blobs_respects_size_limits_with_source_ref(tmp_path: Path) -> None
     """Ensure max_file_bytes still filters rows when reading from git."""
     repo = pygit2.init_repository(tmp_path, bare=False)
     repo_path = tmp_path / "file.py"
-    commit_id = _commit_file(repo, repo_path, "print(\"large\")\n")
+    commit_id = _commit_file(repo, repo_path, 'print("large")\n')
     repo_files = pa.table(
         {
             "file_id": ["f1"],

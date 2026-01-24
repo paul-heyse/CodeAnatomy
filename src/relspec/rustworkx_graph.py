@@ -448,10 +448,7 @@ def task_graph_subgraph(
     node_indices = subgraph.add_nodes_from([node for _, node in nodes_to_add])
     node_map = dict(zip([node_idx for node_idx, _ in nodes_to_add], node_indices, strict=True))
     subgraph.add_edges_from(
-        [
-            (node_map[source], node_map[target], payload)
-            for source, target, payload in edge_payloads
-        ]
+        [(node_map[source], node_map[target], payload) for source, target, payload in edge_payloads]
     )
     evidence_idx: dict[str, int] = {}
     task_idx: dict[str, int] = {}
@@ -576,9 +573,7 @@ def _add_inferred_task_edges(
 ) -> None:
     edge_payloads: list[tuple[int, int, GraphEdge]] = []
     for task in tasks_sorted:
-        edge_payloads.extend(
-            _task_edge_payloads(task, context=context)
-        )
+        edge_payloads.extend(_task_edge_payloads(task, context=context))
     graph.add_edges_from(edge_payloads)
 
 

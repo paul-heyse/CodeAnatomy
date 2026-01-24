@@ -106,6 +106,7 @@ if TYPE_CHECKING:
     validate_edge_requirements_detailed: Any
     validate_graph_edges: Any
 
+
 def __getattr__(name: str) -> object:
     target = _EXPORT_MAP.get(name)
     if target is None:

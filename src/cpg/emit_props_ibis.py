@@ -206,8 +206,7 @@ def _union_rows(rows: Sequence[Table], *, batch_size: int = 32) -> Table:
     if len(rows) <= batch_size:
         return _union_exprs(rows)
     batches = [
-        _union_exprs(rows[index : index + batch_size])
-        for index in range(0, len(rows), batch_size)
+        _union_exprs(rows[index : index + batch_size]) for index in range(0, len(rows), batch_size)
     ]
     return _union_exprs(batches)
 

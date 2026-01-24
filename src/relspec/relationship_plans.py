@@ -368,8 +368,7 @@ def _relation_output_base(expr: Table, spec: RelationOutputSpec) -> Table:
         score=_col(expr, "score", pa.float32()),
         symbol_roles=_col(expr, "symbol_roles", pa.int32()),
         qname_source=spec.qname_source or _col(expr, "qname_source", pa.string()),
-        ambiguity_group_id=spec.ambiguity_group_id
-        or _col(expr, "ambiguity_group_id", pa.string()),
+        ambiguity_group_id=spec.ambiguity_group_id or _col(expr, "ambiguity_group_id", pa.string()),
         diag_source=_col(expr, "diag_source", pa.string()),
         severity=_col(expr, "severity", pa.string()),
         task_name=_col(expr, "task_name", pa.string()),

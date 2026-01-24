@@ -425,14 +425,7 @@ def _looks_like_schema(value: object) -> bool:
     has_field = callable(getattr(value, "field", None))
     has_index = callable(getattr(value, "get_field_index", None))
     has_iter = callable(getattr(value, "__iter__", None))
-    return (
-        has_names
-        and has_metadata
-        and has_with_metadata
-        and has_field
-        and has_index
-        and has_iter
-    )
+    return has_names and has_metadata and has_with_metadata and has_field and has_index and has_iter
 
 
 def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:

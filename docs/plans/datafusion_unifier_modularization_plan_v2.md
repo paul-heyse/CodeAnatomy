@@ -25,6 +25,11 @@
 Create a single IO adapter used by all DataFusion access paths. This consolidates:
 object store registration, DDL-based external table registration, and dataset metadata capture.
 
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/io_adapter.py` exists and is exported, but core call sites
+(`src/datafusion_engine/registry_bridge.py`, `src/ibis_engine/backend.py`, `src/datafusion_engine/runtime.py`)
+still register object stores and tables directly without the adapter.
+
 **Representative pattern**
 ```python
 # src/datafusion_engine/io_adapter.py
@@ -136,10 +141,10 @@ class DataFusionIOAdapter:
 - `src/datafusion_engine/runtime.py`
 
 **Implementation checklist**
-- [ ] Create `DataFusionIOAdapter` with object-store registration logic.
+- [x] Create `DataFusionIOAdapter` with object-store registration logic.
 - [ ] Route `register_dataset_df` and external table DDL through the adapter.
 - [ ] Replace direct calls to `ctx.register_object_store` with adapter calls.
-- [ ] Implement centralized `_deregister_table` helper.
+- [x] Implement centralized `_deregister_table` helper (in adapter).
 - [ ] Ensure diagnostics artifacts flow through adapter for all registration paths.
 - [ ] Add integration tests for object store + external table registration.
 
@@ -150,6 +155,12 @@ class DataFusionIOAdapter:
 **Intent**
 Replace string SQL assembly with SQLGlot AST generation for DDL/COPY/INSERT. This improves
 stability, safety, and dialect consistency.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/sqlglot_tools/ddl_builders.py` exists and is exported, but primary execution
+paths still assemble SQL strings directly (`src/engine/materialize_pipeline.py`,
+`src/datafusion_engine/registry_bridge.py`, `src/ibis_engine/io_bridge.py`). Dialect selection
+in the builders is currently fixed to `postgres` and not wired to runtime policy.
 
 **Representative pattern**
 ```python
@@ -318,9 +329,9 @@ def build_insert_into_ast(
 - `src/ibis_engine/io_bridge.py`
 
 **Implementation checklist**
-- [ ] Implement `build_copy_to_ast` with partition and options support.
-- [ ] Implement `build_external_table_ddl` with schema and options support.
-- [ ] Implement `build_insert_into_ast` for DML operations.
+- [x] Implement `build_copy_to_ast` with partition and options support.
+- [x] Implement `build_external_table_ddl` with schema and options support.
+- [x] Implement `build_insert_into_ast` for DML operations.
 - [ ] Replace `_copy_select_sql`, `_sql_identifier`, and ad-hoc SQL assembly.
 - [ ] Ensure dialect is always explicit and aligned with DataFusion policy.
 - [ ] Add tests comparing AST fingerprints rather than formatted SQL strings.
@@ -333,6 +344,12 @@ def build_insert_into_ast(
 **Intent**
 Standardize parameter handling for all SQL execution paths. Enforce a two-lane model:
 scalar params use `param_values`, table-like params use named parameter registration.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/param_binding.py` exists and is used by
+`src/datafusion_engine/compile_pipeline.py`, but core execution paths
+(`src/datafusion_engine/bridge.py`, `src/ibis_engine/params_bridge.py`,
+`src/engine/materialize_pipeline.py`) still use the legacy binding logic.
 
 **Representative pattern**
 ```python
@@ -459,8 +476,8 @@ def apply_bindings_to_context(
 - `src/engine/materialize_pipeline.py`
 
 **Implementation checklist**
-- [ ] Build unified resolver returning `param_values` + `named_tables`.
-- [ ] Enforce allowlists for parameter names in one place.
+- [x] Build unified resolver returning `param_values` + `named_tables`.
+- [x] Enforce allowlists for parameter names in one place.
 - [ ] Route all SQL execution through this resolver.
 - [ ] Delete ad-hoc parameter checks from bridge modules.
 - [ ] Add diagnostics for param modes and signatures.
@@ -473,6 +490,11 @@ def apply_bindings_to_context(
 **Intent**
 Integrate SQLGlot's full optimizer as a canonicalization engine. Pin the optimizer rule
 list as part of the compiler contract for deterministic SQL shapes and stable fingerprints.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/sql_policy_engine.py` is implemented and used by
+`src/datafusion_engine/compile_pipeline.py`, but the primary execution path
+(`src/datafusion_engine/bridge.py`) still uses the legacy SQLGlot normalization flow.
 
 **Representative pattern**
 ```python
@@ -716,11 +738,11 @@ def render_for_execution(
 - `src/datafusion_engine/bridge.py`
 
 **Implementation checklist**
-- [ ] Create `SQLPolicyProfile` with all canonicalization knobs.
-- [ ] Implement `compile_sql_policy` with full optimizer integration.
-- [ ] Implement `extract_column_lineage` using SQLGlot lineage with scope caching.
-- [ ] Implement `CompilationArtifacts` with serde-based fingerprinting.
-- [ ] Add `policy_fingerprint` method for cache key inclusion.
+- [x] Create `SQLPolicyProfile` with all canonicalization knobs.
+- [x] Implement `compile_sql_policy` with full optimizer integration.
+- [x] Implement `extract_column_lineage` using SQLGlot lineage with scope caching.
+- [x] Implement `CompilationArtifacts` with serde-based fingerprinting.
+- [x] Add `policy_fingerprint` method for cache key inclusion.
 - [ ] Add tests for normalization distance gating.
 - [ ] Add tests for lineage extraction accuracy.
 - [ ] Add golden tests for canonical SQL output stability.
@@ -732,6 +754,12 @@ def render_for_execution(
 **Intent**
 Make compilation and execution flow deterministic and centralized. Every plan must pass
 through a single orchestration entrypoint that produces checkpointed artifacts.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/compile_pipeline.py` exists and uses the new
+SQL policy engine and param binding, but no production call sites route execution
+through it yet (`src/datafusion_engine/bridge.py` and Ibis execution still use
+legacy paths).
 
 **Representative pattern**
 ```python
@@ -943,9 +971,9 @@ class CompilationPipeline:
 - `src/ibis_engine/query_compiler.py`
 
 **Implementation checklist**
-- [ ] Create `CompiledExpression` dataclass with triple checkpoint.
-- [ ] Create `CompilationPipeline` class with Ibis and SQL paths.
-- [ ] Implement schema caching from introspection.
+- [x] Create `CompiledExpression` dataclass with triple checkpoint.
+- [x] Create `CompilationPipeline` class with Ibis and SQL paths.
+- [x] Implement schema caching from introspection.
 - [ ] Route all execution through `CompilationPipeline.execute`.
 - [ ] Remove duplicate compile logic from Ibis execution and DataFusion bridge.
 - [ ] Record lane selection and fallback reasons in diagnostics.
@@ -960,6 +988,11 @@ class CompilationPipeline:
 **Intent**
 Establish streaming-first execution via Arrow C Stream protocol. DataFusion DataFrames
 implement `__arrow_c_stream__`, enabling zero-copy streaming without full materialization.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/streaming_executor.py` exists and implements the
+streaming API, but current execution paths still materialize via
+`src/engine/materialize_pipeline.py` and `src/ibis_engine/io_bridge.py`.
 
 **Representative pattern**
 ```python
@@ -1162,12 +1195,12 @@ class StreamingExecutor:
 - `src/engine/materialize_pipeline.py`
 
 **Implementation checklist**
-- [ ] Create `StreamingExecutionResult` with Arrow C Stream support.
-- [ ] Implement `to_arrow_stream` using `pa.RecordBatchReader.from_stream`.
-- [ ] Implement `pipe_to_dataset` with full partitioning support.
-- [ ] Implement `pipe_to_parquet` for single-file output.
-- [ ] Create `StreamingExecutor` class wrapping SessionContext.
-- [ ] Add file visitor support for metadata sidecar generation.
+- [x] Create `StreamingExecutionResult` with Arrow C Stream support.
+- [x] Implement `to_arrow_stream` using `pa.RecordBatchReader.from_stream`.
+- [x] Implement `pipe_to_dataset` with full partitioning support.
+- [x] Implement `pipe_to_parquet` for single-file output.
+- [x] Create `StreamingExecutor` class wrapping SessionContext.
+- [x] Add file visitor support for metadata sidecar generation.
 - [ ] Add tests for streaming through large datasets.
 - [ ] Add benchmarks comparing streaming vs collect performance.
 
@@ -1178,6 +1211,11 @@ class StreamingExecutor:
 **Intent**
 Provide a single writing surface with explicit format policy, partitioning, and schema
 constraints, while avoiding inconsistent Ibis vs DataFusion write behavior.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/write_pipeline.py` exists and uses SQLGlot AST builders
+plus the streaming executor, but production write paths still run through
+`src/engine/materialize_pipeline.py` and `src/ibis_engine/io_bridge.py`.
 
 **Representative pattern**
 ```python
@@ -1409,9 +1447,9 @@ class WritePipeline:
 - `src/datafusion_engine/bridge.py`
 
 **Implementation checklist**
-- [ ] Define `WriteRequest` and `ParquetWritePolicy` dataclasses.
-- [ ] Implement `WritePipeline` with COPY and streaming paths.
-- [ ] Support per-column compression overrides in Parquet policy.
+- [x] Define `WriteRequest` and `ParquetWritePolicy` dataclasses.
+- [x] Implement `WritePipeline` with COPY and streaming paths.
+- [x] Support per-column compression overrides in Parquet policy.
 - [ ] Remove direct Parquet write paths where COPY/streaming is available.
 - [ ] Ensure DataFusion write policy is applied consistently.
 - [ ] Record write artifacts from a single source.
@@ -1427,6 +1465,11 @@ class WritePipeline:
 **Intent**
 Make information_schema-derived metadata the single source of truth for schema,
 function catalog, and settings. Avoid separate metadata caches.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/introspection.py` exists, but core call sites still use
+`SchemaIntrospector` and direct information_schema queries. Function registry
+and schema validation paths are not yet routed through the snapshot cache.
 
 **Representative pattern**
 ```python
@@ -1642,10 +1685,10 @@ class IntrospectionCache:
 - `src/engine/function_registry.py`
 
 **Implementation checklist**
-- [ ] Create `IntrospectionSnapshot` dataclass with all info_schema queries.
-- [ ] Implement `schema_map` for SQLGlot optimizer integration.
-- [ ] Implement `function_signatures` for UDF registry.
-- [ ] Create `IntrospectionCache` with invalidation support.
+- [x] Create `IntrospectionSnapshot` dataclass with all info_schema queries.
+- [x] Implement `schema_map` for SQLGlot optimizer integration.
+- [x] Implement `function_signatures` for UDF registry.
+- [x] Create `IntrospectionCache` with invalidation support.
 - [ ] Route function registry build to use snapshot, not direct queries.
 - [ ] Invalidate snapshots centrally when DDL changes tables.
 - [ ] Add tests for snapshot accuracy.
@@ -1658,6 +1701,11 @@ class IntrospectionCache:
 **Intent**
 Provide declarative schema contracts that can be validated against introspection
 and used to generate DDL. Catch schema drift at compile time.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/schema_contracts.py` exists, but the runtime still
+uses `schema_spec.system.TableSchemaContract` and related validation paths.
+No production flows reference the new contract registry.
 
 **Representative pattern**
 ```python
@@ -1938,11 +1986,11 @@ class ContractRegistry:
 - `src/cpg/schema_definitions.py`
 
 **Implementation checklist**
-- [ ] Create `SchemaContract` and `ColumnContract` dataclasses.
-- [ ] Implement `validate_against_introspection` method.
-- [ ] Implement `to_sqlglot_ddl` using Ibis schema → SQLGlot interop.
-- [ ] Create `ContractRegistry` for managing multiple contracts.
-- [ ] Define evolution policies (STRICT, ADDITIVE, RELAXED).
+- [x] Create `SchemaContract` and `ColumnContract` dataclasses.
+- [x] Implement `validate_against_introspection` method.
+- [x] Implement `to_sqlglot_ddl` using Ibis schema → SQLGlot interop.
+- [x] Create `ContractRegistry` for managing multiple contracts.
+- [x] Define evolution policies (STRICT, ADDITIVE, RELAXED).
 - [ ] Add tests for validation with various violation types.
 - [ ] Add tests for DDL generation.
 
@@ -1953,6 +2001,11 @@ class ContractRegistry:
 **Intent**
 Use SQLGlot diff to detect semantic changes between query versions. Enable fine-grained
 rebuild decisions based on what actually changed, not just text differences.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/semantic_diff.py` exists, but incremental workflows still
+use `src/ibis_engine/plan_diff.py` and no call sites wire the new diff into
+incremental scheduling.
 
 **Representative pattern**
 ```python
@@ -2223,11 +2276,11 @@ def compute_rebuild_needed(
 - `src/relspec/rustworkx_schedule.py`
 
 **Implementation checklist**
-- [ ] Create `SemanticDiff` class wrapping SQLGlot diff.
-- [ ] Implement `SemanticChange` with categorization logic.
-- [ ] Implement `ChangeCategory` enum with rebuild semantics.
-- [ ] Create `RebuildPolicy` enum for configurable rebuild decisions.
-- [ ] Implement `compute_rebuild_needed` end-to-end function.
+- [x] Create `SemanticDiff` class wrapping SQLGlot diff.
+- [x] Implement `SemanticChange` with categorization logic.
+- [x] Implement `ChangeCategory` enum with rebuild semantics.
+- [x] Create `RebuildPolicy` enum for configurable rebuild decisions.
+- [x] Implement `compute_rebuild_needed` end-to-end function.
 - [ ] Add tests for various change types (additive, breaking, etc.).
 - [ ] Add tests for row-multiplying detection (joins, unnest).
 - [ ] Add golden tests for diff stability.
@@ -2241,6 +2294,10 @@ def compute_rebuild_needed(
 **Intent**
 Leverage Ibis `ibis.param` for templated rulepacks that compile once and execute
 with different parameter values. Enables efficient multi-configuration runs.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/parameterized_execution.py` exists, but no
+Hamilton / relspec / pipeline modules reference it yet.
 
 **Representative pattern**
 ```python
@@ -2442,11 +2499,11 @@ def create_edge_filter_rulepack(edges: IbisTable) -> ParameterizedRulepack:
 - `src/relspec/runtime_artifacts.py`
 
 **Implementation checklist**
-- [ ] Create `ParameterSpec` for typed parameter definitions.
-- [ ] Create `ParameterizedRulepack` with execute methods.
-- [ ] Implement parameter validation against specs.
-- [ ] Support streaming execution with params.
-- [ ] Support SQL compilation with/without values.
+- [x] Create `ParameterSpec` for typed parameter definitions.
+- [x] Create `ParameterizedRulepack` with execute methods.
+- [x] Implement parameter validation against specs.
+- [x] Support streaming execution with params.
+- [x] Support SQL compilation with/without values.
 - [ ] Add tests for various parameter types.
 - [ ] Add tests for missing/unknown parameter handling.
 
@@ -2457,6 +2514,11 @@ def create_edge_filter_rulepack(edges: IbisTable) -> ParameterizedRulepack:
 **Intent**
 Define one function registry with explicit lane precedence (builtin → pyarrow → pandas → python)
 and a single source-of-truth for built-ins, UDFs, and SQL expressions.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/engine/udf_registry.py` exists, but existing execution still uses
+`src/engine/function_registry.py` and `src/datafusion_engine/udf_registry.py`.
+No call sites merge the new registry with the runtime.
 
 **Representative pattern**
 ```python
@@ -2713,12 +2775,12 @@ class FunctionRegistry:
 - `src/ibis_engine/builtin_udfs.py`
 
 **Implementation checklist**
-- [ ] Define `UDFLane` enum with performance tiers.
-- [ ] Create `UDFSpec` with lane selection and registration.
-- [ ] Create `FunctionRegistry` with lane-aware registration.
-- [ ] Implement lane precedence (prefer faster lanes).
-- [ ] Add warning for Python lane usage.
-- [ ] Merge builtins from introspection.
+- [x] Define `UDFLane` enum with performance tiers.
+- [x] Create `UDFSpec` with lane selection and registration.
+- [x] Create `FunctionRegistry` with lane-aware registration.
+- [x] Implement lane precedence (prefer faster lanes).
+- [x] Add warning for Python lane usage.
+- [x] Merge builtins from introspection (implemented in registry module).
 - [ ] Add tests for lane selection precedence.
 - [ ] Add tests for backend registration.
 
@@ -2729,6 +2791,11 @@ class FunctionRegistry:
 **Intent**
 Use DataFusion's SQLOptions to gate SQL execution. Provide defense-in-depth even
 when SQL is generated correctly.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/sql_safety.py` exists, but existing
+`statement_sql_options_for_profile` and execution paths still route through
+`src/datafusion_engine/runtime.py` and `src/datafusion_engine/sql_options.py`.
 
 **Representative pattern**
 ```python
@@ -2940,12 +3007,12 @@ class SafeExecutor:
 - `src/datafusion_engine/bridge.py`
 
 **Implementation checklist**
-- [ ] Create `ExecutionPolicy` with DDL/DML/statement flags.
-- [ ] Create `ExecutionContext` enum for common policy patterns.
-- [ ] Implement `execute_with_policy` using SQLOptions.
-- [ ] Implement `validate_sql_safety` for pre-execution checks.
-- [ ] Add external location detection for high-risk operations.
-- [ ] Create `SafeExecutor` class for convenient safe execution.
+- [x] Create `ExecutionPolicy` with DDL/DML/statement flags.
+- [x] Create `ExecutionContext` enum for common policy patterns.
+- [x] Implement `execute_with_policy` using SQLOptions.
+- [x] Implement `validate_sql_safety` for pre-execution checks.
+- [x] Add external location detection for high-risk operations.
+- [x] Create `SafeExecutor` class for convenient safe execution.
 - [ ] Add tests for each policy level.
 - [ ] Add tests for violation detection.
 
@@ -2956,6 +3023,11 @@ class SafeExecutor:
 **Intent**
 All diagnostics should be emitted from a shared adapter/pipeline rather than from each
 local subsystem. Ensure consistent payload shape across execution lanes.
+
+**Status (code audit 2026-01-24)**
+PARTIAL — `src/datafusion_engine/diagnostics.py` exists, but most call sites still
+record artifacts directly on `diagnostics_sink`. No central recorder is wired
+into runtime or execution flows.
 
 **Representative pattern**
 ```python
@@ -3208,12 +3280,12 @@ def record_artifact(
 - `src/obs/*`
 
 **Implementation checklist**
-- [ ] Define `DiagnosticsSink` protocol.
-- [ ] Create `InMemoryDiagnosticsSink` for testing.
-- [ ] Create `DiagnosticsRecorder` with typed recording methods.
-- [ ] Implement consistent payload shapes for each artifact type.
+- [x] Define `DiagnosticsSink` protocol.
+- [x] Create `InMemoryDiagnosticsSink` for testing.
+- [x] Create `DiagnosticsRecorder` with typed recording methods.
+- [x] Implement consistent payload shapes for each artifact type.
 - [ ] Route all existing diagnostics through `DiagnosticsRecorder`.
-- [ ] Add metrics recording alongside artifacts.
+- [x] Add metrics recording alongside artifacts.
 - [ ] Add tests for artifact recording.
 - [ ] Add tests for payload shape consistency.
 
@@ -3223,6 +3295,10 @@ def record_artifact(
 
 The following items should be removed once the above refactors are complete. This is a
 decommission plan, not immediate deletion.
+
+**Status (code audit 2026-01-24)**
+NOT STARTED — legacy helpers and SQL assembly paths are still present and in active use.
+No decommission items below are safe to delete yet.
 
 **Duplicate helpers**
 - `src/engine/materialize_pipeline.py`: `_sql_identifier`, `_copy_select_sql`,
@@ -3251,6 +3327,10 @@ decommission plan, not immediate deletion.
 ---
 
 ## Execution Phases (Summary)
+
+**Status (code audit 2026-01-24)**
+Scaffolding modules for Phases 1–4 exist, but integration into existing execution
+paths remains largely pending. Phase 5 cleanup is not started.
 
 ### Phase 1: Core Unification
 1. IO Adapter (catalog, registration, object stores)

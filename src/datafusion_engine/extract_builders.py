@@ -60,9 +60,7 @@ def _default_exprs(row: ExtractMetadata) -> dict[str, SqlExprSpec]:
     templ = template(row.template)
     defaults: dict[str, SqlExprSpec] = {}
     if templ.evidence_rank is not None:
-        defaults["evidence_rank"] = _coalesce_field_default(
-            "evidence_rank", templ.evidence_rank
-        )
+        defaults["evidence_rank"] = _coalesce_field_default("evidence_rank", templ.evidence_rank)
     if templ.confidence is not None:
         defaults["confidence"] = _coalesce_field_default("confidence", templ.confidence)
     return defaults

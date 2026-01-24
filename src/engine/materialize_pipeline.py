@@ -359,11 +359,6 @@ def _copy_options_payload(
     return payload
 
 
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
-
-
 def _copy_select_sql(
     table_name: str,
     *,
@@ -372,11 +367,15 @@ def _copy_select_sql(
 ) -> str:
     available = set(schema.names)
     order_by = [name for name in sort_by if name in available]
-    base = f"SELECT * FROM {_sql_identifier(table_name)}"
-    if not order_by:
-        return base
-    ordering = ", ".join(_sql_identifier(name) for name in order_by)
-    return f"{base} ORDER BY {ordering}"
+    from sqlglot_tools.compat import exp
+    from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_emit
+
+    policy = resolve_sqlglot_policy(name="datafusion_dml")
+    query = exp.select("*").from_(exp.table_(table_name))
+    if order_by:
+        order_exprs = [exp.Ordered(this=exp.column(name)) for name in order_by]
+        query.set("order", exp.Order(expressions=order_exprs))
+    return sqlglot_emit(query, policy=policy)
 
 
 def _copy_options(

@@ -253,10 +253,7 @@ def _prefixed_hash_sql(hashed_sql: str, *, prefix: str) -> str:
 def _required_mask_sql(required: Sequence[str]) -> str:
     if not required:
         return "TRUE"
-    exprs = [
-        _call_sql("invert", _call_sql("is_null", _sql_identifier(name)))
-        for name in required
-    ]
+    exprs = [_call_sql("invert", _call_sql("is_null", _sql_identifier(name))) for name in required]
     mask = exprs[0]
     for expr in exprs[1:]:
         mask = _call_sql("bit_wise_and", mask, expr)

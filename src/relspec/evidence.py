@@ -260,8 +260,7 @@ def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:
     if provider is None:
         return {}
     return {
-        key.encode("utf-8"): str(value).encode("utf-8")
-        for key, value in provider.metadata.items()
+        key.encode("utf-8"): str(value).encode("utf-8") for key, value in provider.metadata.items()
     }
 
 

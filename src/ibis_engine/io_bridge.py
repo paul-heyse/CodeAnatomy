@@ -1353,7 +1353,12 @@ def _copy_select_sql(df: DataFrame, *, temp_name: str | None) -> str:
     if temp_name is None:
         msg = "COPY writer requires SQL for the DataFusion DataFrame."
         raise ValueError(msg)
-    return f"SELECT * FROM {_sql_identifier(temp_name)}"
+    from sqlglot_tools.compat import exp
+    from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_emit
+
+    policy = resolve_sqlglot_policy(name="datafusion_dml")
+    query = exp.select("*").from_(exp.table_(temp_name))
+    return sqlglot_emit(query, policy=policy)
 
 
 def _copy_partition_by(
@@ -1371,11 +1376,6 @@ def _copy_partition_by(
             return tuple(partition_by)
     available = set(names)
     return tuple(name for name in partition_by if name in available)
-
-
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
 
 
 def _parquet_params(

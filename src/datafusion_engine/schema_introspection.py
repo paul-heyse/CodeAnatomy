@@ -771,6 +771,7 @@ def schema_map_snapshot(
     tuple[SchemaMapping | None, str | None]
         Schema mapping with its fingerprint, or ``(None, None)`` on failure.
     """
+
     def _compute() -> tuple[SchemaMapping | None, str | None]:
         try:
             introspector = SchemaIntrospector(ctx, sql_options=sql_options)

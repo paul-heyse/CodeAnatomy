@@ -78,6 +78,7 @@ class TaskNodeContext:
 
 def _build_task_node(context: TaskNodeContext) -> Callable[..., TableLike]:
     output_name = context.output_name
+
     def _execute_task_with_gate(
         task_execution_inputs: task_execution.TaskExecutionInputs,
         dependencies: list[TableLike],

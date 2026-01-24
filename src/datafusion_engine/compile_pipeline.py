@@ -1,0 +1,368 @@
+"""Unified compilation pipeline for Ibis expressions and SQL.
+
+This module provides a centralized compilation orchestration layer that
+routes all expression types through a single deterministic pipeline:
+Ibis → SQLGlot AST → Canonicalization → Rendered SQL → Execution.
+
+The compilation pipeline produces checkpointed artifacts (AST fingerprint,
+lineage metadata, rendered SQL) that enable caching, incremental compilation,
+and diagnostic tracing.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from datafusion import DataFrame, SessionContext
+from sqlglot import exp  # type: ignore[attr-defined]
+
+if TYPE_CHECKING:
+    from ibis.backends.datafusion import Backend
+    from ibis.expr.types import Table as IbisTable
+    from ibis.expr.types import Value as IbisValue
+
+    from datafusion_engine.sql_policy_engine import (
+        CompilationArtifacts,
+        SQLPolicyProfile,
+    )
+    from sqlglot_tools.compat import Expression
+
+
+@dataclass(frozen=True)
+class CompiledExpression:
+    """Triple checkpoint: Ibis IR + SQLGlot AST + rendered SQL.
+
+    This is the canonical compilation result that flows through
+    the execution pipeline.
+
+    Parameters
+    ----------
+    ibis_expr
+        Original Ibis expression (None if compiled from raw SQL).
+    sqlglot_ast
+        Canonicalized SQLGlot AST after policy application.
+    rendered_sql
+        Final SQL string ready for execution.
+    artifacts
+        Compilation artifacts including fingerprint and lineage.
+    """
+
+    ibis_expr: IbisTable | None
+    sqlglot_ast: exp.Expression
+    rendered_sql: str
+    artifacts: CompilationArtifacts
+
+    @property
+    def fingerprint(self) -> str:
+        """Cache key combining AST fingerprint and policy.
+
+        Returns
+        -------
+        str
+            AST fingerprint for cache keying.
+        """
+        return self.artifacts.ast_fingerprint
+
+    @property
+    def lineage(self) -> dict[str, set[tuple[str, str]]]:
+        """Column-level lineage graph.
+
+        Returns
+        -------
+        dict[str, set[tuple[str, str]]]
+            Mapping of output_column -> {(source_table, source_column)}.
+        """
+        return self.artifacts.lineage_by_column
+
+
+@dataclass(frozen=True)
+class CompileOptions:
+    """Options controlling compilation behavior.
+
+    Parameters
+    ----------
+    prefer_substrait
+        Prefer Substrait serialization when available (future use).
+    prefer_ast_execution
+        Use raw_sql(ast) when available for execution.
+    profile
+        SQL policy profile controlling canonicalization and optimization.
+    schema
+        Schema mapping for qualification. If None, will be introspected from context.
+    """
+
+    prefer_substrait: bool = False
+    prefer_ast_execution: bool = True
+    profile: SQLPolicyProfile | None = None
+    schema: dict | None = None
+    enable_rewrites: bool = True
+    rewrite_hook: Callable[[Expression], Expression] | None = None
+
+    def __post_init__(self) -> None:
+        """Initialize default profile if not provided."""
+        if self.profile is None:
+            from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+
+            # Frozen dataclass requires object.__setattr__
+            object.__setattr__(self, "profile", SQLPolicyProfile())  # type: ignore[arg-type]
+
+
+class CompilationPipeline:
+    """Unified compilation pipeline for all expression types.
+
+    Supports Ibis expressions, raw SQL, and SQLGlot ASTs. All expressions
+    flow through the same canonicalization and policy application pipeline.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion SessionContext for execution and schema introspection.
+    options
+        Compilation options controlling behavior.
+    """
+
+    def __init__(
+        self,
+        ctx: SessionContext,
+        options: CompileOptions,
+    ) -> None:
+        """Initialize compilation pipeline with context and options.
+
+        Parameters
+        ----------
+        ctx
+            DataFusion SessionContext for execution and schema introspection.
+        options
+            Compilation options controlling behavior.
+        """
+        self.ctx = ctx
+        self.options = options
+        self._schema_cache: dict | None = None
+
+    def compile_ibis(
+        self,
+        expr: IbisTable,
+        *,
+        backend: Backend | None = None,
+    ) -> CompiledExpression:
+        """Compile Ibis expression through SQLGlot canonicalization.
+
+        Parameters
+        ----------
+        expr
+            Ibis table expression to compile.
+        backend
+            Optional Ibis backend. If None, will create from context.
+
+        Returns
+        -------
+        CompiledExpression
+            Compiled expression with AST, SQL, and artifacts.
+        """
+        from ibis.backends.datafusion import Backend
+
+        from datafusion_engine.sql_policy_engine import (
+            compile_sql_policy,
+            render_for_execution,
+        )
+
+        if backend is None:
+            backend = Backend.from_connection(self.ctx)
+
+        # 1. Ibis → SQLGlot AST (documented internal API)
+        raw_ast = backend.compiler.to_sqlglot(expr)
+        if self.options.enable_rewrites and self.options.rewrite_hook is not None:
+            raw_ast = self.options.rewrite_hook(raw_ast)
+
+        # 2. Get schema from introspection or cache
+        schema = self._get_schema()
+
+        # 3. Apply policy canonicalization
+        # Type narrowing: profile is always non-None after __post_init__
+        assert self.options.profile is not None
+        canonical_ast, artifacts = compile_sql_policy(
+            raw_ast,
+            schema=schema,
+            profile=self.options.profile,
+        )
+
+        # 4. Render for execution
+        rendered = render_for_execution(canonical_ast, self.options.profile)
+
+        return CompiledExpression(
+            ibis_expr=expr,
+            sqlglot_ast=canonical_ast,
+            rendered_sql=rendered,
+            artifacts=artifacts,
+        )
+
+    def compile_sql(
+        self,
+        sql: str,
+    ) -> CompiledExpression:
+        """Compile raw SQL through SQLGlot canonicalization.
+
+        Parameters
+        ----------
+        sql
+            Raw SQL string to compile.
+
+        Returns
+        -------
+        CompiledExpression
+            Compiled expression with AST, SQL, and artifacts.
+        """
+        from datafusion_engine.sql_policy_engine import (
+            compile_sql_policy,
+            render_for_execution,
+        )
+
+        # Type narrowing: profile is always non-None after __post_init__
+        assert self.options.profile is not None
+
+        # Parse with source dialect
+        from sqlglot import parse_one  # type: ignore[attr-defined]
+
+        raw_ast = parse_one(sql, dialect=self.options.profile.read_dialect)
+        if self.options.enable_rewrites and self.options.rewrite_hook is not None:
+            raw_ast = self.options.rewrite_hook(raw_ast)
+
+        # Get schema
+        schema = self._get_schema()
+
+        # Canonicalize
+        canonical_ast, artifacts = compile_sql_policy(
+            raw_ast,
+            schema=schema,
+            profile=self.options.profile,
+            original_sql=sql,
+        )
+
+        # Render
+        rendered = render_for_execution(canonical_ast, self.options.profile)
+
+        return CompiledExpression(
+            ibis_expr=None,
+            sqlglot_ast=canonical_ast,
+            rendered_sql=rendered,
+            artifacts=artifacts,
+        )
+
+    def execute(
+        self,
+        compiled: CompiledExpression,
+        *,
+        params: Mapping[str, object] | Mapping[IbisValue, object] | None = None,
+        **kwargs: object,
+    ) -> DataFrame:
+        """Execute compiled expression and return DataFrame.
+
+        Parameters
+        ----------
+        compiled
+            Compiled expression to execute.
+        params
+            Parameter bindings for execution (scalars and tables).
+        **kwargs
+            Convenience keyword bindings (str keys). Mutually exclusive with params.
+
+        Returns
+        -------
+        DataFrame
+            DataFusion DataFrame result.
+        """
+        from datafusion_engine.param_binding import (
+            apply_bindings_to_context,
+            resolve_param_bindings,
+        )
+
+        if params is not None and kwargs:
+            msg = "Pass either params mapping or keyword parameters, not both."
+            raise ValueError(msg)
+        bound_params = params if params is not None else kwargs
+
+        # Resolve parameters
+        bindings = resolve_param_bindings(bound_params)
+
+        # Register table params
+        apply_bindings_to_context(self.ctx, bindings)
+
+        # Execute with scalar params
+        if self.options.prefer_ast_execution:
+            # DataFusion backend supports raw_sql(sge.Expression)
+            return self.ctx.sql(compiled.rendered_sql, **bindings.param_values)
+        return self.ctx.sql(compiled.rendered_sql, **bindings.param_values)
+
+    def compile_and_execute(
+        self,
+        expr: IbisTable | str,
+        *,
+        params: Mapping[str, object] | Mapping[IbisValue, object] | None = None,
+        **kwargs: object,
+    ) -> DataFrame:
+        """Compile and execute expression in single operation.
+
+        Parameters
+        ----------
+        expr
+            Ibis expression or SQL string to compile and execute.
+        params
+            Parameter bindings for execution.
+        **kwargs
+            Convenience keyword bindings (str keys). Mutually exclusive with params.
+
+        Returns
+        -------
+        DataFrame
+            DataFusion DataFrame result.
+        """
+        compiled = self.compile_sql(expr) if isinstance(expr, str) else self.compile_ibis(expr)
+        return self.execute(compiled, params=params, **kwargs)
+
+    def _get_schema(self) -> dict:
+        """Get schema from introspection or cache.
+
+        Returns
+        -------
+        dict
+            SQLGlot-compatible schema mapping.
+        """
+        if self._schema_cache is not None:
+            return self._schema_cache
+
+        if self.options.schema:
+            self._schema_cache = self.options.schema
+        else:
+            # Build from introspection
+            self._schema_cache = build_schema_from_introspection(self.ctx)
+
+        return self._schema_cache
+
+
+def build_schema_from_introspection(ctx: SessionContext) -> dict[str, dict]:
+    """Build SQLGlot-compatible schema mapping from DataFusion context.
+
+    This function introspects the DataFusion SessionContext to extract
+    all registered tables and their column schemas, returning a nested
+    mapping structure compatible with SQLGlot's qualification system.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion SessionContext to introspect.
+
+    Returns
+    -------
+    dict[str, dict]
+        Nested schema mapping: {catalog: {schema: {table: {column: type}}}}.
+    """
+    from datafusion_engine.schema_introspection import (
+        SchemaIntrospector,
+        schema_map_for_sqlglot,
+    )
+
+    introspector = SchemaIntrospector(ctx, sql_options=None)
+    # SchemaMapping is compatible with dict[str, dict]
+    return dict(schema_map_for_sqlglot(introspector))  # type: ignore[arg-type,return-value]

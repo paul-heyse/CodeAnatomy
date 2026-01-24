@@ -952,7 +952,7 @@ def _build_registration_context(
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFusionRegistrationContext:
     location = _apply_scan_defaults(name, location)
-    _register_object_store(ctx, location)
+    _register_object_store(ctx, location, runtime_profile=runtime_profile)
     if runtime_profile is not None:
         runtime_profile = _populate_schema_adapter_factories(runtime_profile)
     if runtime_profile is not None:
@@ -2388,10 +2388,12 @@ def _cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object] |
     }
 
 
-def _register_object_store(ctx: SessionContext, location: DatasetLocation) -> None:
-    register = getattr(ctx, "register_object_store", None)
-    if not callable(register):
-        return
+def _register_object_store(
+    ctx: SessionContext,
+    location: DatasetLocation,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> None:
     if location.filesystem is None:
         return
     scheme = _scheme_prefix(location.path)
@@ -2401,7 +2403,10 @@ def _register_object_store(ctx: SessionContext, location: DatasetLocation) -> No
     registered = _REGISTERED_OBJECT_STORES.setdefault(ctx_key, set())
     if scheme in registered:
         return
-    register(scheme, location.filesystem, None)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    adapter.register_object_store(scheme=scheme, store=location.filesystem, host=None)
     registered.add(scheme)
 
 

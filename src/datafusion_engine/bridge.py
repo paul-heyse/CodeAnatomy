@@ -65,6 +65,7 @@ from datafusion_engine.compile_options import (
     resolve_sql_policy,
 )
 from datafusion_engine.df_builder import TranslationError, df_from_sqlglot
+from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.registry_bridge import (
     apply_projection_overrides,
     apply_projection_scan_overrides,
@@ -73,7 +74,6 @@ from datafusion_engine.schema_registry import has_schema, schema_for
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from engine.plan_cache import PlanCacheEntry, PlanCacheKey
 from ibis_engine.param_tables import scalar_param_signature
-from ibis_engine.params_bridge import datafusion_param_bindings
 from ibis_engine.plan import IbisPlan
 from ibis_engine.substrait_bridge import (
     record_substrait_gap,
@@ -1478,25 +1478,11 @@ def _validated_param_bindings(
     *,
     allowlist: Sequence[str] | None,
 ) -> dict[str, object]:
-    bindings = datafusion_param_bindings(values or {})
-    for name in bindings:
-        if not (name.isidentifier() or name.isdigit()):
-            msg = f"SQL parameter name {name!r} is not a valid identifier or index."
-            raise ValueError(msg)
-    if not allowlist:
-        return bindings
-    allowed = set(allowlist)
-    unknown = sorted(name for name in bindings if name not in allowed)
-    if unknown:
-        msg = f"SQL parameter names not allowlisted: {', '.join(unknown)}."
+    bindings = resolve_param_bindings(values, allowlist=allowlist)
+    if bindings.named_tables:
+        msg = "Table-like parameters must be passed via named params."
         raise ValueError(msg)
-    return bindings
-
-
-def _is_named_param_value(value: object) -> bool:
-    if isinstance(value, (DataFrame, TableProviderCapsule, TableLike, RecordBatchReaderLike)):
-        return True
-    return hasattr(value, "__datafusion_table_provider__")
+    return bindings.param_values
 
 
 def _named_param_type(value: object) -> str:
@@ -1516,22 +1502,11 @@ def _validated_named_params(
     *,
     allowlist: Sequence[str] | None,
 ) -> dict[str, object]:
-    if not params:
-        return {}
-    validated: dict[str, object] = {}
-    allowed = set(allowlist) if allowlist is not None else None
-    for name, value in params.items():
-        if not isinstance(name, str) or not name.isidentifier():
-            msg = f"Named parameter {name!r} is not a valid identifier."
-            raise ValueError(msg)
-        if allowed is not None and name not in allowed:
-            msg = f"Named parameter {name!r} is not allowlisted."
-            raise ValueError(msg)
-        if not _is_named_param_value(value):
-            msg = f"Named parameter {name!r} must be table-like."
-            raise ValueError(msg)
-        validated[name] = value
-    return validated
+    bindings = resolve_param_bindings(params, allowlist=allowlist)
+    if bindings.param_values:
+        msg = "Named parameters must be table-like."
+        raise ValueError(msg)
+    return bindings.named_tables
 
 
 def _emit_named_param_diagnostics(
@@ -1927,28 +1902,19 @@ def copy_to_statement(
         table_options=resolved.table_options,
         statement_overrides=resolved.statement_overrides,
     )
-    clause = _copy_options_clause(merged)
-    format_clause = _copy_format_clause(resolved.file_format)
-    partition_clause = _copy_partition_clause(resolved.partition_by)
-    return f"COPY ({sql}) TO {_sql_literal(path)}{format_clause}{partition_clause}{clause}"
+    from sqlglot_tools.ddl_builders import build_copy_to_ast
+    from sqlglot_tools.optimizer import parse_sql_strict, resolve_sqlglot_policy, sqlglot_emit
 
-
-def _copy_format_clause(file_format: str | None) -> str:
-    if not file_format:
-        return ""
-    return f" STORED AS {file_format.upper()}"
-
-
-def _copy_partition_clause(partition_by: Sequence[str]) -> str:
-    if not partition_by:
-        return ""
-    cols = ", ".join(_sql_identifier(name) for name in partition_by)
-    return f" PARTITIONED BY ({cols})"
-
-
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
+    policy = resolve_sqlglot_policy(name="datafusion_dml")
+    query = parse_sql_strict(sql, dialect=policy.read_dialect)
+    copy_expr = build_copy_to_ast(
+        query=query,
+        path=path,
+        file_format=resolved.file_format,
+        options=merged,
+        partition_by=tuple(resolved.partition_by),
+    )
+    return sqlglot_emit(copy_expr, policy=policy)
 
 
 def prepare_statement(
@@ -2037,27 +2003,6 @@ def _sql_literal(value: object) -> str:
         return str(value)
     escaped = str(value).replace("'", "''")
     return f"'{escaped}'"
-
-
-def _copy_options_clause(options: Mapping[str, object]) -> str:
-    """Return a COPY OPTIONS clause for provided key/value pairs.
-
-    Returns
-    -------
-    str
-        SQL OPTIONS clause or empty string.
-    """
-    if not options:
-        return ""
-    formatted: list[str] = []
-    for key, value in options.items():
-        literal = _option_literal(value)
-        if literal is None:
-            continue
-        formatted.append(f"{_sql_literal(str(key))} {literal}")
-    if not formatted:
-        return ""
-    return f" OPTIONS ({', '.join(formatted)})"
 
 
 def _option_literal(value: object) -> str | None:
@@ -2505,10 +2450,14 @@ def execute_sql(
         options.named_params,
         allowlist=options.param_identifier_allowlist,
     )
+    bindings = _validated_param_bindings(
+        options.params,
+        allowlist=options.param_identifier_allowlist,
+    )
     expr = parse_sql_strict(
         sql,
         dialect=options.dialect,
-        preserve_params=options.params is not None,
+        preserve_params=bool(bindings),
     )
     if named_params:
         read_only_policy = DataFusionSqlPolicy()
@@ -2518,6 +2467,8 @@ def execute_sql(
             raise ValueError(msg)
         safe_options = replace(
             options,
+            params=bindings or None,
+            named_params=None,
             sql_options=_sql_options_for_named_params(options),
             sql_policy=read_only_policy,
             sql_policy_name=None,
@@ -2526,7 +2477,8 @@ def execute_sql(
         with _register_named_params(ctx, named_params):
             df = df_from_sqlglot_or_sql(ctx, expr, options=safe_options)
             return _collect_reader(df)
-    df = df_from_sqlglot_or_sql(ctx, expr, options=options)
+    resolved = replace(options, params=bindings or None)
+    df = df_from_sqlglot_or_sql(ctx, expr, options=resolved)
     return _collect_reader(df)
 
 

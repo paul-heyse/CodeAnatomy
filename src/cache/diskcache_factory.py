@@ -89,6 +89,7 @@ class DiskCacheKwargs(TypedDict, total=False):
     sqlite_mmap_size: int
     sqlite_synchronous: str
 
+
 @dataclass(frozen=True)
 class DiskCacheProfile:
     """DiskCache profile with per-kind overrides and TTL defaults."""
@@ -245,8 +246,7 @@ def run_profile_maintenance(
     """
     targets = kinds or ("plan", "extract", "schema", "repo_scan", "runtime")
     return [
-        run_cache_maintenance(profile, kind=kind, include_check=include_check)
-        for kind in targets
+        run_cache_maintenance(profile, kind=kind, include_check=include_check) for kind in targets
     ]
 
 

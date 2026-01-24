@@ -73,11 +73,14 @@ def _register_object_stores(
     if not callable(register_store):
         msg = "DataFusion SessionContext does not support register_object_store."
         raise TypeError(msg)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)  # type: ignore[arg-type]
     for store in cfg.object_stores:
         if not store.scheme:
             msg = "ObjectStoreConfig.scheme must be non-empty."
             raise ValueError(msg)
-        register_store(store.scheme, store.store, store.host)
+        adapter.register_object_store(scheme=store.scheme, store=store.store, host=store.host)
         if profile.diagnostics_sink is not None:
             profile.diagnostics_sink.record_artifact(
                 "datafusion_object_stores_v1",

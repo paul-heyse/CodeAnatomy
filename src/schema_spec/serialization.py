@@ -340,9 +340,7 @@ def _query_payload(spec: IbisQuerySpec) -> IbisQueryPayload:
         projection=_projection_payload(spec.projection),
         predicate=_expr_payload(spec.predicate) if spec.predicate is not None else None,
         pushdown_predicate=(
-            _expr_payload(spec.pushdown_predicate)
-            if spec.pushdown_predicate is not None
-            else None
+            _expr_payload(spec.pushdown_predicate) if spec.pushdown_predicate is not None else None
         ),
     )
 
@@ -642,9 +640,7 @@ def dataset_spec_payload(spec: DatasetSpec) -> DatasetSpecPayload:
         derived_fields=tuple(_derived_payload(item) for item in spec.derived_fields),
         predicate=_expr_payload(spec.predicate) if spec.predicate is not None else None,
         pushdown_predicate=(
-            _expr_payload(spec.pushdown_predicate)
-            if spec.pushdown_predicate is not None
-            else None
+            _expr_payload(spec.pushdown_predicate) if spec.pushdown_predicate is not None else None
         ),
         evolution_spec=_schema_evolution_payload(spec.evolution_spec),
         metadata_spec=_metadata_payload(spec.metadata_spec),
@@ -678,9 +674,7 @@ def dataset_spec_from_payload(payload: DatasetSpecPayload) -> DatasetSpec:
             else None
         ),
         delta_scan=(
-            _delta_scan_from_payload(payload.delta_scan)
-            if payload.delta_scan is not None
-            else None
+            _delta_scan_from_payload(payload.delta_scan) if payload.delta_scan is not None else None
         ),
         delta_write_policy=(
             _delta_write_policy_from_payload(payload.delta_write_policy)

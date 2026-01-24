@@ -202,9 +202,7 @@ def validate_edge_requirements_detailed(
 
         available_cols = catalog.columns_by_dataset.get(edge_data.name)
         required_cols = set(edge_data.required_columns)
-        missing_cols = (
-            required_cols - available_cols if available_cols is not None else set()
-        )
+        missing_cols = required_cols - available_cols if available_cols is not None else set()
 
         available_types = catalog.types_by_dataset.get(edge_data.name)
         missing_types = (

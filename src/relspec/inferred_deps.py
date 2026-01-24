@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from sqlglot_tools.compat import Expression
 
 
-
 @dataclass(frozen=True)
 class InferredDeps:
     """Dependencies inferred from Ibis/SQLGlot expression analysis.

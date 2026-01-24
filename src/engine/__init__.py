@@ -24,6 +24,11 @@ if TYPE_CHECKING:
     from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
     from engine.session import EngineSession
     from engine.session_factory import build_engine_session
+    from engine.udf_registry import (
+        UDFLane,
+        UDFSignature,
+        UDFSpec,
+    )
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaHistorySnapshot": ("engine.delta_tools", "DeltaHistorySnapshot"),
@@ -44,6 +49,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "resolve_cache_policy": ("engine.materialize_pipeline", "resolve_cache_policy"),
     "resolve_prefer_reader": ("engine.materialize_pipeline", "resolve_prefer_reader"),
     "resolve_runtime_profile": ("engine.runtime_profile", "resolve_runtime_profile"),
+    # UDF Registry (new modular architecture)
+    "UDFLane": ("engine.udf_registry", "UDFLane"),
+    "UDFSignature": ("engine.udf_registry", "UDFSignature"),
+    "UDFSpec": ("engine.udf_registry", "UDFSpec"),
 }
 
 
@@ -70,6 +79,9 @@ __all__ = [
     "FunctionRegistry",
     "PlanProduct",
     "RuntimeProfileSpec",
+    "UDFLane",
+    "UDFSignature",
+    "UDFSpec",
     "WriterStrategy",
     "build_engine_runtime",
     "build_engine_session",

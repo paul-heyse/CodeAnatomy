@@ -11,6 +11,11 @@ from sqlglot_tools.bridge import (
     relation_diff,
     sqlglot_diagnostics,
 )
+from sqlglot_tools.ddl_builders import (
+    build_copy_to_ast,
+    build_external_table_ddl,
+    build_insert_into_ast,
+)
 from sqlglot_tools.lineage import referenced_columns, referenced_identifiers, referenced_tables
 from sqlglot_tools.optimizer import (
     CanonicalizationRules,
@@ -61,6 +66,9 @@ __all__ = [
     "SqlGlotSurface",
     "SqlGlotSurfacePolicy",
     "apply_transforms",
+    "build_copy_to_ast",
+    "build_external_table_ddl",
+    "build_insert_into_ast",
     "canonical_ast_fingerprint",
     "canonicalize_expr",
     "compile_expr",

@@ -45,9 +45,7 @@ def test_compile_task_plan_infers_inputs() -> None:
     task = TaskSpec(name="task.infer", output="out_table", build=_build)
     artifact = compile_task_plan(task, backend=backend, ctx=ctx)
     assert "source_table" in artifact.deps.inputs
-    required_cols = {
-        col for cols in artifact.deps.required_columns.values() for col in cols
-    }
+    required_cols = {col for cols in artifact.deps.required_columns.values() for col in cols}
     assert "col_a" in required_cols
     assert artifact.plan_fingerprint
 

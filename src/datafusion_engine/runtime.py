@@ -4307,7 +4307,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.local_filesystem_root is None:
             return
         store = LocalFileSystem(prefix=self.local_filesystem_root)
-        ctx.register_object_store("file://", store, None)
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
+        adapter.register_object_store(scheme="file://", store=store, host=None)
 
     def _install_function_factory(self, ctx: SessionContext) -> None:
         if not self.enable_function_factory:

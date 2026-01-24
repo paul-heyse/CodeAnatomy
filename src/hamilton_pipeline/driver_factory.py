@@ -58,7 +58,6 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
     hamilton_adapters = None
 
 
-
 def default_modules() -> list[ModuleType]:
     """Return the default Hamilton module set for the pipeline.
 
@@ -181,7 +180,9 @@ def _task_graph_metadata(
         if hasattr(artifact, "task")
     }
     graph = build_task_graph_from_inferred_deps(deps, priorities=priorities)
-    snapshot = task_graph_snapshot(graph, label="hamilton_pipeline", task_signatures=task_signatures)
+    snapshot = task_graph_snapshot(
+        graph, label="hamilton_pipeline", task_signatures=task_signatures
+    )
     signature = task_graph_signature(snapshot)
     evidence = initial_evidence_from_plan(plan_catalog)
     schedule = schedule_tasks(graph, evidence=evidence, allow_partial=True)
@@ -368,7 +369,9 @@ def _apply_cache(
     cache_opt_in = bool(config.get("cache_opt_in", True))
     if cache_opt_in:
         # cache only nodes annotated for caching
-        return builder.with_cache(path=str(cache_path), default_behavior="disable", log_to_file=True)
+        return builder.with_cache(
+            path=str(cache_path), default_behavior="disable", log_to_file=True
+        )
     # cache everything (aggressive)
     return builder.with_cache(path=str(cache_path), log_to_file=True)
 

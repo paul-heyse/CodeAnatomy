@@ -159,11 +159,14 @@ def _worklist_stream(
         output_table_name=output_name,
     )
     expr = _normalize_worklist_expr(expr)
-    with _registered_table(df_ctx, name=repo_name, table=repo_files), _registered_output_table(
-        df_ctx,
-        name=output_table,
-        location=output_location,
-        runtime_profile=runtime_profile,
+    with (
+        _registered_table(df_ctx, name=repo_name, table=repo_files),
+        _registered_output_table(
+            df_ctx,
+            name=output_table,
+            location=output_location,
+            runtime_profile=runtime_profile,
+        ),
     ):
         stream = df_from_sqlglot(df_ctx, expr).execute_stream()
         for batch in stream:

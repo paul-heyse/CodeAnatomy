@@ -23,6 +23,7 @@ class ScipIdentity:
     project_version: str
     project_namespace: str | None
 
+
 def resolve_scip_identity(
     repo_root: Path,
     *,

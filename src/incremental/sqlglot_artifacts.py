@@ -71,9 +71,7 @@ def record_sqlglot_plan_artifact(
     cache_profile = runtime.profile.diskcache_profile
     cache = cache_for_kind(cache_profile, "schema") if cache_profile is not None else None
     cache_key = (
-        f"schema_map:{runtime.profile.context_cache_key()}"
-        if cache_profile is not None
-        else None
+        f"schema_map:{runtime.profile.context_cache_key()}" if cache_profile is not None else None
     )
     cache_ttl = cache_profile.ttl_for("schema") if cache_profile is not None else None
     cache_options = (

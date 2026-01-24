@@ -360,11 +360,14 @@ def _extract_symtable_for_context(
 
 def _coerce_symtable_cache(
     cached: object,
-) -> tuple[
-    list[dict[str, object]],
-    list[dict[str, object]],
-    list[dict[str, object]],
-] | None:
+) -> (
+    tuple[
+        list[dict[str, object]],
+        list[dict[str, object]],
+        list[dict[str, object]],
+    ]
+    | None
+):
     if not isinstance(cached, tuple) or len(cached) != _SYMTABLE_CACHE_PARTS:
         return None
     rows: list[list[dict[str, object]]] = []

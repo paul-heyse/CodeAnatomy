@@ -145,7 +145,14 @@ def _sql_table(
     *,
     sql_options: SQLOptions,
 ) -> ArrowTable:
-    return ctx.sql_with_options(sql, sql_options).to_arrow_table()
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    return execute_with_profile(
+        ctx,
+        sql,
+        profile=None,
+        options=ExecutionProfileOptions(sql_options=sql_options),
+    ).to_arrow_table()
 
 
 def _constraint_key_fields(rows: Sequence[Mapping[str, object]]) -> list[str]:
@@ -211,8 +218,10 @@ def _datafusion_type_name(dtype: DataTypeLike) -> str:
         names=["value"],
     )
     batches = list(table.to_batches())
-    ctx.register_record_batches("t", [batches])
-    invalidate_introspection_cache(ctx)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_record_batches("t", [batches], overwrite=True)
     from datafusion_engine.sql_options import sql_options_for_profile
 
     options = sql_options_for_profile(None)

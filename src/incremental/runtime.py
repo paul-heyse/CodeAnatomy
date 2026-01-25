@@ -135,8 +135,10 @@ class TempTableRegistry:
             Registered table name.
         """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
-        self._ctx.register_record_batches(name, table.to_batches())
-        invalidate_introspection_cache(self._ctx)
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=self._ctx, profile=None)
+        adapter.register_record_batches(name, [list(table.to_batches())])
         self._names.append(name)
         return name
 
@@ -149,8 +151,10 @@ class TempTableRegistry:
             Registered table name.
         """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
-        self._ctx.register_record_batches(name, batches)
-        invalidate_introspection_cache(self._ctx)
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=self._ctx, profile=None)
+        adapter.register_record_batches(name, [batches])
         self._names.append(name)
         return name
 

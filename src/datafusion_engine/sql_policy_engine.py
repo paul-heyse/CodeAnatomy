@@ -25,6 +25,8 @@ from sqlglot.optimizer.qualify_columns import validate_qualify_columns
 from sqlglot.optimizer.simplify import simplify
 from sqlglot.schema import MappingSchema
 
+from sqlglot_tools.compat import ErrorLevel
+
 if TYPE_CHECKING:
     from sqlglot_tools.optimizer import SchemaMapping
 
@@ -58,6 +60,10 @@ class SQLPolicyProfile:
         Quote mode: False (no quotes), True (quote all), "safe" (quote when needed).
     pretty_output
         Enable pretty-printing for rendered SQL.
+    error_level
+        Strictness for SQL parsing/compilation errors.
+    unsupported_level
+        Strictness for unsupported SQL constructs.
     """
 
     read_dialect: str = "postgres"
@@ -72,6 +78,8 @@ class SQLPolicyProfile:
     validate_qualify_columns: bool = True
     identify_mode: bool | str = False
     pretty_output: bool = False
+    error_level: ErrorLevel = ErrorLevel.IMMEDIATE
+    unsupported_level: ErrorLevel = ErrorLevel.RAISE
 
     def policy_fingerprint(self) -> str:
         """Generate hash of policy settings for cache keys.
@@ -90,6 +98,8 @@ class SQLPolicyProfile:
             "pushdown_pred": self.pushdown_predicates,
             "expand_stars": self.expand_stars,
             "identify": self.identify_mode,
+            "error_level": self.error_level.name,
+            "unsupported_level": self.unsupported_level.name,
         }
         return hashlib.sha256(json.dumps(policy_dict, sort_keys=True).encode()).hexdigest()[:16]
 

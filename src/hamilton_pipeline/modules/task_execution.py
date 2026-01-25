@@ -163,11 +163,9 @@ def evidence_catalog(
     df_profile = ibis_execution.ctx.runtime.datafusion
     session = df_profile.session_context() if df_profile is not None else None
     evidence = _initial_evidence(plan_catalog, ctx=session)
-    if (
-        df_profile is not None
-        and df_profile.diagnostics_sink is not None
-        and evidence.contract_violations_by_dataset
-    ):
+    if df_profile is not None and evidence.contract_violations_by_dataset:
+        from datafusion_engine.diagnostics import record_artifact
+
         payload = [
             {
                 "dataset": name,
@@ -175,7 +173,8 @@ def evidence_catalog(
             }
             for name, violations in evidence.contract_violations_by_dataset.items()
         ]
-        df_profile.diagnostics_sink.record_artifact(
+        record_artifact(
+            df_profile,
             "evidence_contract_violations_v1",
             {"violations": payload},
         )

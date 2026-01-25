@@ -216,15 +216,6 @@ class SchemaMapFingerprintRecord(DiagnosticsStruct, frozen=True):
     column_count: int | None = None
 
 
-class DdlFingerprintRecord(DiagnosticsStruct, frozen=True):
-    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
-    table_catalog: str | None = None
-    table_schema: str | None = None
-    table_name: str | None = None
-    table_type: str | None = None
-    ddl_fingerprint: str | None = None
-
-
 class FeatureStateEvent(DiagnosticsStruct, frozen=True):
     profile_name: str | None = None
     determinism_tier: str | None = None
@@ -289,6 +280,18 @@ class DatafusionPlanArtifactRecord(DiagnosticsStruct, frozen=True):
     graphviz: str | None = None
     partition_count: int | None = None
     join_operators: Sequence[object] | object | None = None
+
+
+class DatafusionSemanticDiffRecord(DiagnosticsStruct, frozen=True):
+    event_time_unix_ms: EventTimeMs | msgspec.UnsetType | None = msgspec.UNSET
+    run_id: str | None = None
+    plan_hash: str | None = None
+    base_plan_hash: str | None = None
+    category: str | None = None
+    changed: bool = False
+    breaking: bool = False
+    row_multiplying: bool = False
+    change_count: int | None = None
 
 
 class IbisSqlIngestRecord(DiagnosticsStruct, frozen=True):
@@ -517,39 +520,6 @@ def datafusion_schema_map_fingerprints_table(
     return table_from_rows(schema, rows)
 
 
-def datafusion_ddl_fingerprints_table(
-    records: Sequence[Mapping[str, object]],
-) -> pa.Table:
-    """Build a DataFusion DDL fingerprint diagnostics table.
-
-    Returns
-    -------
-    pyarrow.Table
-        Diagnostics table aligned to DATAFUSION_DDL_FINGERPRINTS_V1.
-    """
-    now = _now_ms()
-    rows = []
-    for record in records:
-        event = _convert_event(record, target_type=DdlFingerprintRecord)
-        rows.append(
-            {
-                "event_time_unix_ms": _coalesce_event_time(
-                    event.event_time_unix_ms,
-                    default=now,
-                ),
-                "table_catalog": str(event.table_catalog or ""),
-                "table_schema": str(event.table_schema or ""),
-                "table_name": str(event.table_name or ""),
-                "table_type": str(event.table_type) if event.table_type is not None else None,
-                "ddl_fingerprint": (
-                    str(event.ddl_fingerprint) if event.ddl_fingerprint is not None else None
-                ),
-            }
-        )
-    schema = schema_for("datafusion_ddl_fingerprints_v1")
-    return table_from_rows(schema, rows)
-
-
 def _explain_rows_metadata(rows: object) -> tuple[str | None, str | None, str | None]:
     if isinstance(rows, (RecordBatchReaderLike, TableLike)):
         return None, "ipc_file", _schema_fingerprint(rows.schema)
@@ -677,6 +647,42 @@ def datafusion_plan_artifacts_table(
     now = _now_ms()
     rows = [_plan_artifact_row(artifact, default_time=now) for artifact in artifacts]
     schema = schema_for("datafusion_plan_artifacts_v1")
+    return table_from_rows(schema, rows)
+
+
+def datafusion_semantic_diff_table(
+    records: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build a DataFusion semantic diff diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to DATAFUSION_SEMANTIC_DIFF_V1.
+    """
+    now = _now_ms()
+    rows: list[dict[str, object]] = []
+    for record in records:
+        entry = _convert_event(record, target_type=DatafusionSemanticDiffRecord)
+        rows.append(
+            {
+                "event_time_unix_ms": _coalesce_event_time(
+                    entry.event_time_unix_ms,
+                    default=now,
+                ),
+                "run_id": str(entry.run_id) if entry.run_id is not None else None,
+                "plan_hash": str(entry.plan_hash) if entry.plan_hash is not None else None,
+                "base_plan_hash": (
+                    str(entry.base_plan_hash) if entry.base_plan_hash is not None else None
+                ),
+                "category": str(entry.category or ""),
+                "changed": bool(entry.changed),
+                "breaking": bool(entry.breaking),
+                "row_multiplying": bool(entry.row_multiplying),
+                "change_count": _optional_int(entry.change_count),
+            }
+        )
+    schema = schema_for("datafusion_semantic_diff_v1")
     return table_from_rows(schema, rows)
 
 
@@ -1139,13 +1145,13 @@ __all__ = [
     "FilePruningDiagnosticsSpec",
     "build_file_pruning_diagnostics_row",
     "datafusion_cache_state_table",
-    "datafusion_ddl_fingerprints_table",
     "datafusion_explains_table",
     "datafusion_object_stores_table",
     "datafusion_plan_artifacts_table",
     "datafusion_runs_table",
     "datafusion_schema_map_fingerprints_table",
     "datafusion_schema_registry_validation_table",
+    "datafusion_semantic_diff_table",
     "datafusion_udf_validation_table",
     "encode_diagnostics_rows",
     "engine_runtime_table",

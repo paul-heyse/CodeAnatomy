@@ -42,13 +42,17 @@ from datafusion_engine.compile_options import (
     DataFusionSubstraitFallbackEvent,
     resolve_sql_policy,
 )
-from datafusion_engine.diagnostics import DiagnosticsSink, ensure_recorder_sink
+from datafusion_engine.diagnostics import (
+    DiagnosticsSink,
+    ensure_recorder_sink,
+    record_artifact,
+    record_events,
+)
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
 from datafusion_engine.introspection import (
     capture_cache_diagnostics,
     introspection_cache_for_ctx,
-    invalidate_introspection_cache,
     register_cache_introspection_functions,
 )
 from datafusion_engine.schema_introspection import (
@@ -81,7 +85,11 @@ from datafusion_engine.schema_registry import (
     validate_symtable_views,
     validate_ts_views,
 )
-from datafusion_engine.sql_safety import execution_policy_for_profile
+from datafusion_engine.sql_safety import (
+    ExecutionProfileOptions,
+    execute_with_profile,
+    execution_policy_for_profile,
+)
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.udf_runtime import register_rust_udfs
@@ -116,6 +124,7 @@ else:
 
 ExplainHook = Callable[[str, ExplainRows], None]
 PlanArtifactsHook = Callable[[Mapping[str, object]], None]
+SemanticDiffHook = Callable[[Mapping[str, object]], None]
 SqlIngestHook = Callable[[Mapping[str, object]], None]
 CacheEventHook = Callable[[DataFusionCacheEvent], None]
 SubstraitFallbackHook = Callable[[DataFusionSubstraitFallbackEvent], None]
@@ -1044,8 +1053,10 @@ def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) ->
     """Register a schema-only table via an empty table provider."""
     arrays = [pa.array([], type=field.type) for field in schema]
     table = pa.Table.from_arrays(arrays, schema=schema)
-    ctx.register_table(name, table)
-    invalidate_introspection_cache(ctx)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_arrow_table(name, table)
 
 
 def _apply_config_int(
@@ -1336,9 +1347,18 @@ def _sql_with_options(
     sql: str,
     *,
     sql_options: SQLOptions | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+    allow_statements: bool | None = None,
 ) -> DataFrame:
-    options = sql_options or _read_only_sql_options()
-    return ctx.sql_with_options(sql, options)
+    return execute_with_profile(
+        ctx,
+        sql,
+        profile=runtime_profile,
+        options=ExecutionProfileOptions(
+            sql_options=sql_options or _read_only_sql_options(),
+            allow_statements=allow_statements,
+        ),
+    )
 
 
 def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
@@ -1637,7 +1657,8 @@ def diagnostics_substrait_fallback_hook(
     """
 
     def _hook(event: DataFusionSubstraitFallbackEvent) -> None:
-        sink.record_events(
+        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink.record_events(
             "substrait_fallbacks_v1",
             [
                 {
@@ -1668,7 +1689,8 @@ def diagnostics_explain_hook(
     """
 
     def _hook(sql: str, rows: ExplainRows) -> None:
-        sink.record_events(
+        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink.record_events(
             "datafusion_explains_v1",
             [
                 {
@@ -1695,7 +1717,26 @@ def diagnostics_plan_artifacts_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        sink.record_artifact("datafusion_plan_artifacts_v1", payload)
+        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink.record_artifact("datafusion_plan_artifacts_v1", payload)
+
+    return _hook
+
+
+def diagnostics_semantic_diff_hook(
+    sink: DiagnosticsSink,
+) -> Callable[[Mapping[str, object]], None]:
+    """Return a semantic diff hook that records diagnostics payloads.
+
+    Returns
+    -------
+    Callable[[Mapping[str, object]], None]
+        Hook that records semantic diff diagnostics in the sink.
+    """
+
+    def _hook(payload: Mapping[str, object]) -> None:
+        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink.record_artifact("datafusion_semantic_diff_v1", payload)
 
     return _hook
 
@@ -1712,7 +1753,8 @@ def diagnostics_sql_ingest_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        sink.record_artifact("ibis_sql_ingest_v1", payload)
+        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink.record_artifact("ibis_sql_ingest_v1", payload)
 
     return _hook
 
@@ -1729,7 +1771,8 @@ def diagnostics_arrow_ingest_hook(
     """
 
     def _hook(payload: Mapping[str, object]) -> None:
-        sink.record_artifact("datafusion_arrow_ingest_v1", payload)
+        recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
+        recorder_sink.record_artifact("datafusion_arrow_ingest_v1", payload)
 
     return _hook
 
@@ -1784,6 +1827,7 @@ def _attach_cache_manager(
 class _ResolvedCompileHooks:
     explain_hook: Callable[[str, ExplainRows], None] | None
     plan_artifacts_hook: Callable[[Mapping[str, object]], None] | None
+    semantic_diff_hook: Callable[[Mapping[str, object]], None] | None
     sql_ingest_hook: Callable[[Mapping[str, object]], None] | None
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None
     substrait_fallback_hook: Callable[[DataFusionSubstraitFallbackEvent], None] | None
@@ -1802,6 +1846,7 @@ class _CompileOptionResolution:
     explain_analyze: bool
     substrait_validation: bool
     capture_plan_artifacts: bool
+    capture_semantic_diff: bool
     sql_policy: DataFusionSqlPolicy | None
     sql_policy_name: str | None
 
@@ -2015,6 +2060,16 @@ def _extra_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]
 
 
 class _RuntimeDiagnosticsMixin:
+    def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
+        """Record an artifact through DiagnosticsRecorder when configured."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        record_artifact(profile, name, payload)
+
+    def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
+        """Record events through DiagnosticsRecorder when configured."""
+        profile = cast("DataFusionRuntimeProfile", self)
+        record_events(profile, name, rows)
+
     def view_registry_snapshot(self) -> list[dict[str, object]] | None:
         """Return a stable snapshot of recorded view definitions.
 
@@ -2102,7 +2157,7 @@ class _RuntimeDiagnosticsMixin:
             "ast_external_location": profile.ast_external_location,
             "ast_external_format": profile.ast_external_format,
             "ast_external_provider": profile.ast_external_provider,
-            "ast_external_ordering": list(profile.ast_external_ordering),
+            "ast_external_ordering": [list(key) for key in profile.ast_external_ordering],
             "ast_external_partitions": ast_partitions or None,
             "ast_external_schema_force_view_types": profile.ast_external_schema_force_view_types,
             "ast_external_skip_arrow_metadata": profile.ast_external_skip_arrow_metadata,
@@ -2126,7 +2181,7 @@ class _RuntimeDiagnosticsMixin:
             "bytecode_external_location": profile.bytecode_external_location,
             "bytecode_external_format": profile.bytecode_external_format,
             "bytecode_external_provider": profile.bytecode_external_provider,
-            "bytecode_external_ordering": list(profile.bytecode_external_ordering),
+            "bytecode_external_ordering": [list(key) for key in profile.bytecode_external_ordering],
             "bytecode_external_partitions": bytecode_partitions or None,
             "bytecode_external_schema_force_view_types": (
                 profile.bytecode_external_schema_force_view_types
@@ -2182,6 +2237,7 @@ class _RuntimeDiagnosticsMixin:
             "explain_analyze_level": profile.explain_analyze_level,
             "explain_collector": bool(profile.explain_collector),
             "capture_plan_artifacts": profile.capture_plan_artifacts,
+            "capture_semantic_diff": profile.capture_semantic_diff,
             "plan_collector": bool(profile.plan_collector),
             "substrait_validation": profile.substrait_validation,
             "diagnostics_sink": bool(profile.diagnostics_sink),
@@ -2367,7 +2423,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     ast_external_location: str | None = None
     ast_external_format: str = "parquet"
     ast_external_provider: Literal["listing", "parquet"] | None = None
-    ast_external_ordering: tuple[str, ...] = ("repo", "path")
+    ast_external_ordering: tuple[tuple[str, str], ...] = (
+        ("repo", "ascending"),
+        ("path", "ascending"),
+    )
     ast_external_partition_cols: tuple[tuple[str, pa.DataType], ...] = (
         ("repo", pa.string()),
         ("path", pa.string()),
@@ -2390,7 +2449,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     bytecode_external_location: str | None = None
     bytecode_external_format: str = "parquet"
     bytecode_external_provider: Literal["listing", "parquet"] | None = None
-    bytecode_external_ordering: tuple[str, ...] = ("path", "file_id")
+    bytecode_external_ordering: tuple[tuple[str, str], ...] = (
+        ("path", "ascending"),
+        ("file_id", "ascending"),
+    )
     bytecode_external_partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
     bytecode_external_schema_force_view_types: bool | None = False
     bytecode_external_skip_arrow_metadata: bool | None = False
@@ -2445,6 +2507,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         default_factory=DataFusionExplainCollector
     )
     capture_plan_artifacts: bool = True
+    capture_semantic_diff: bool = False
     plan_collector: DataFusionPlanCollector | None = field(default_factory=DataFusionPlanCollector)
     view_registry: DataFusionViewRegistry | None = field(default_factory=DataFusionViewRegistry)
     substrait_validation: bool = False
@@ -2886,7 +2949,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             missing.append(name)
         if missing:
             if self.diagnostics_sink is not None:
-                self.diagnostics_sink.record_artifact(
+                self.record_artifact(
                     "datafusion_udf_validation_v1",
                     {
                         "event_time_unix_ms": int(time.time() * 1000),
@@ -2960,7 +3023,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "metadata": dict(run.metadata),
                 "commit_metadata": commit_meta_payload,
             }
-            self.diagnostics_sink.record_artifact("datafusion_delta_commit_v1", payload)
+            self.record_artifact("datafusion_delta_commit_v1", payload)
         return options, updated
 
     def finalize_delta_commit(
@@ -2987,7 +3050,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "status": "finalized",
             "metadata": dict(run.metadata),
         }
-        self.diagnostics_sink.record_artifact("datafusion_delta_commit_v1", payload)
+        self.record_artifact("datafusion_delta_commit_v1", payload)
 
     def _validate_rule_function_allowlist(self, ctx: SessionContext) -> None:
         """Validate rulepack function demands against information_schema.
@@ -3080,7 +3143,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             if parse_errors:
                 payload["sql_parse_errors"] = parse_errors
                 payload["sql_parser_dialect"] = parser_dialect
-        self.diagnostics_sink.record_artifact("datafusion_schema_registry_validation_v1", payload)
+        self.record_artifact("datafusion_schema_registry_validation_v1", payload)
 
     def _record_catalog_autoload_snapshot(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -3109,7 +3172,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             payload["tables"] = tables
         except (RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
-        self.diagnostics_sink.record_artifact("datafusion_catalog_autoload_v1", payload)
+        self.record_artifact("datafusion_catalog_autoload_v1", payload)
 
     @staticmethod
     def _ast_feature_gates(
@@ -3156,7 +3219,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def _record_ast_feature_gates(self, payload: Mapping[str, object]) -> None:
         if self.diagnostics_sink is None:
             return
-        self.diagnostics_sink.record_artifact("datafusion_ast_feature_gates_v1", payload)
+        self.record_artifact("datafusion_ast_feature_gates_v1", payload)
 
     def _record_ast_span_metadata(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -3180,7 +3243,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         version = _datafusion_version(ctx)
         if version is not None:
             payload["datafusion_version"] = version
-        self.diagnostics_sink.record_artifact("datafusion_ast_span_metadata_v1", payload)
+        self.record_artifact("datafusion_ast_span_metadata_v1", payload)
 
     def _ast_dataset_location(self) -> DatasetLocation | None:
         if self.ast_external_location and self.ast_delta_location:
@@ -3508,7 +3571,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "location": str(location.path),
             "format": location.format,
             "datafusion_provider": location.datafusion_provider,
-            "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
+            "file_sort_order": (
+                [list(key) for key in scan.file_sort_order] if scan is not None else None
+            ),
             "partition_cols": [
                 {"name": name, "dtype": str(dtype)}
                 for name, dtype in (scan.partition_cols if scan is not None else ())
@@ -3530,7 +3595,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "delta_timestamp": location.delta_timestamp,
             "delta_constraints": list(location.delta_constraints),
         }
-        self.diagnostics_sink.record_artifact("datafusion_ast_dataset_v1", payload)
+        self.record_artifact("datafusion_ast_dataset_v1", payload)
 
     def _record_bytecode_registration(self, *, location: DatasetLocation) -> None:
         if self.diagnostics_sink is None:
@@ -3542,7 +3607,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "location": str(location.path),
             "format": location.format,
             "datafusion_provider": location.datafusion_provider,
-            "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
+            "file_sort_order": (
+                [list(key) for key in scan.file_sort_order] if scan is not None else None
+            ),
             "partition_cols": [
                 {"name": name, "dtype": str(dtype)}
                 for name, dtype in (scan.partition_cols if scan is not None else ())
@@ -3564,7 +3631,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "delta_timestamp": location.delta_timestamp,
             "delta_constraints": list(location.delta_constraints),
         }
-        self.diagnostics_sink.record_artifact("datafusion_bytecode_dataset_v1", payload)
+        self.record_artifact("datafusion_bytecode_dataset_v1", payload)
 
     def _record_scip_registration(
         self,
@@ -3582,7 +3649,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "location": str(location.path),
             "format": location.format,
             "datafusion_provider": location.datafusion_provider,
-            "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
+            "file_sort_order": (
+                [list(key) for key in scan.file_sort_order] if scan is not None else None
+            ),
             "partition_cols": [
                 {"name": col_name, "dtype": str(dtype)}
                 for col_name, dtype in (scan.partition_cols if scan is not None else ())
@@ -3607,7 +3676,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "observed_schema_fingerprint": snapshot.actual_fingerprint,
             "schema_match": snapshot.schema_match,
         }
-        self.diagnostics_sink.record_artifact("datafusion_scip_datasets_v1", payload)
+        self.record_artifact("datafusion_scip_datasets_v1", payload)
 
     def _validate_ast_catalog_autoload(self, ctx: SessionContext) -> None:
         if self.ast_catalog_location is None and self.ast_catalog_format is None:
@@ -3667,7 +3736,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             )
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
-        self.diagnostics_sink.record_artifact("datafusion_cst_schema_diagnostics_v1", payload)
+        self.record_artifact("datafusion_cst_schema_diagnostics_v1", payload)
 
     def _record_tree_sitter_stats(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -3693,7 +3762,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             )
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
-        self.diagnostics_sink.record_artifact("datafusion_tree_sitter_stats_v1", payload)
+        self.record_artifact("datafusion_tree_sitter_stats_v1", payload)
 
     def _record_tree_sitter_view_schemas(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -3729,7 +3798,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         version = _datafusion_version(ctx)
         if version is not None:
             payload["datafusion_version"] = version
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_tree_sitter_plan_schema_v1",
             payload,
         )
@@ -3789,7 +3858,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 errors[name] = str(exc)
         if errors:
             payload["errors"] = errors
-        self.diagnostics_sink.record_artifact("datafusion_tree_sitter_cross_checks_v1", payload)
+        self.record_artifact("datafusion_tree_sitter_cross_checks_v1", payload)
         return payload
 
     def _record_cst_view_plans(self, ctx: SessionContext) -> None:
@@ -3814,7 +3883,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         version = _datafusion_version(ctx)
         if version is not None:
             payload["datafusion_version"] = version
-        self.diagnostics_sink.record_artifact("datafusion_cst_view_plans_v1", payload)
+        self.record_artifact("datafusion_cst_view_plans_v1", payload)
 
     def _record_cst_dfschema_snapshots(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -3838,7 +3907,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         version = _datafusion_version(ctx)
         if version is not None:
             payload["datafusion_version"] = version
-        self.diagnostics_sink.record_artifact("datafusion_cst_dfschema_v1", payload)
+        self.record_artifact("datafusion_cst_dfschema_v1", payload)
 
     def _record_bytecode_metadata(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -3866,7 +3935,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             )
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
-        self.diagnostics_sink.record_artifact("datafusion_bytecode_metadata_v1", payload)
+        self.record_artifact("datafusion_bytecode_metadata_v1", payload)
 
     def _record_schema_snapshots(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -3903,7 +3972,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 payload["datafusion_version"] = version
         except (RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_schema_introspection_v1",
             payload,
         )
@@ -4098,7 +4167,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def _record_prepared_statement(self, statement: PreparedStatementSpec) -> None:
         if self.diagnostics_sink is None:
             return
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_prepared_statements_v1",
             {
                 "name": statement.name,
@@ -4159,7 +4228,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def _record_udf_snapshot(self, snapshot: Mapping[str, object]) -> None:
         if self.diagnostics_sink is None:
             return
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_udf_registry_v1",
             dict(snapshot),
         )
@@ -4167,7 +4236,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def _record_delta_plan_codecs(self, *, available: bool, installed: bool) -> None:
         if self.diagnostics_sink is None:
             return
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_delta_plan_codecs_v1",
             {
                 "enabled": self.enable_delta_plan_codecs,
@@ -4187,7 +4256,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     ) -> None:
         if self.diagnostics_sink is None:
             return
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_delta_session_defaults_v1",
             {
                 "enabled": self.enable_delta_session_defaults,
@@ -4204,7 +4273,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         payload["event_time_unix_ms"] = int(time.time() * 1000)
         payload["profile_name"] = self.config_policy_name
         payload["settings_hash"] = self.settings_hash()
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_extension_parity_v1",
             payload,
         )
@@ -4220,13 +4289,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.diagnostics_sink is None:
             return
         cache_diag = capture_cache_diagnostics(ctx)
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_cache_config_v1",
             cache_diag.get("config", {}),
         )
         cache_snapshots = cache_diag.get("cache_snapshots", [])
         if cache_snapshots:
-            self.diagnostics_sink.record_events(
+            self.record_events(
                 "datafusion_cache_state_v1",
                 cache_snapshots,
             )
@@ -4258,7 +4327,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             )
             diskcache_events.append(payload)
         if diskcache_events:
-            self.diagnostics_sink.record_events(
+            self.record_events(
                 "diskcache_stats_v1",
                 diskcache_events,
             )
@@ -4398,7 +4467,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     ) -> None:
         if self.diagnostics_sink is None:
             return
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_expr_planners_v1",
             {
                 "enabled": self.enable_expr_planners,
@@ -4420,7 +4489,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     ) -> None:
         if self.diagnostics_sink is None:
             return
-        self.diagnostics_sink.record_artifact(
+        self.record_artifact(
             "datafusion_function_factory_v1",
             {
                 "enabled": self.enable_function_factory,
@@ -4463,10 +4532,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         capture_explain: bool,
         explain_analyze: bool,
         capture_plan_artifacts: bool,
+        capture_semantic_diff: bool,
     ) -> _ResolvedCompileHooks:
         hooks: dict[str, object | None] = {
             "explain": resolved.explain_hook,
             "plan_artifacts": resolved.plan_artifacts_hook,
+            "semantic_diff": resolved.semantic_diff_hook,
             "sql_ingest": resolved.sql_ingest_hook,
             "cache_event": resolved.cache_event_hook,
             "substrait_fallback": resolved.substrait_fallback_hook,
@@ -4493,6 +4564,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     cast("PlanArtifactsHook", hooks["plan_artifacts"]),
                     diagnostics_plan_artifacts_hook(self.diagnostics_sink),
                 )
+            if capture_semantic_diff or hooks["semantic_diff"] is not None:
+                hooks["semantic_diff"] = _chain_plan_artifacts_hooks(
+                    cast("PlanArtifactsHook", hooks["semantic_diff"]),
+                    diagnostics_semantic_diff_hook(self.diagnostics_sink),
+                )
             hooks["sql_ingest"] = _chain_sql_ingest_hooks(
                 cast("SqlIngestHook", hooks["sql_ingest"]),
                 diagnostics_sql_ingest_hook(self.diagnostics_sink),
@@ -4508,6 +4584,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         return _ResolvedCompileHooks(
             explain_hook=cast("ExplainHook | None", hooks["explain"]),
             plan_artifacts_hook=cast("PlanArtifactsHook | None", hooks["plan_artifacts"]),
+            semantic_diff_hook=cast("SemanticDiffHook | None", hooks["semantic_diff"]),
             sql_ingest_hook=cast("SqlIngestHook | None", hooks["sql_ingest"]),
             cache_event_hook=cast("CacheEventHook | None", hooks["cache_event"]),
             substrait_fallback_hook=cast(
@@ -4556,6 +4633,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             or capture_explain
             or substrait_validation
         )
+        capture_semantic_diff = (
+            resolved.capture_semantic_diff or self.capture_semantic_diff
+        )
         resolution = _CompileOptionResolution(
             cache=resolved.cache if resolved.cache is not None else self.cache_enabled,
             cache_max_columns=(
@@ -4576,6 +4656,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             explain_analyze=explain_analyze,
             substrait_validation=substrait_validation,
             capture_plan_artifacts=capture_plan_artifacts,
+            capture_semantic_diff=capture_semantic_diff,
             sql_policy=self._resolve_sql_policy(resolved),
             sql_policy_name=(
                 resolved.sql_policy_name
@@ -4588,6 +4669,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             capture_explain=resolution.capture_explain,
             explain_analyze=resolution.explain_analyze,
             capture_plan_artifacts=resolution.capture_plan_artifacts,
+            capture_semantic_diff=resolution.capture_semantic_diff,
         )
         unchanged = (
             resolution.cache == resolved.cache,
@@ -4600,6 +4682,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             resolution.substrait_validation == resolved.substrait_validation,
             resolution.capture_plan_artifacts == resolved.capture_plan_artifacts,
             hooks.plan_artifacts_hook == resolved.plan_artifacts_hook,
+            resolution.capture_semantic_diff == resolved.capture_semantic_diff,
+            hooks.semantic_diff_hook == resolved.semantic_diff_hook,
             hooks.sql_ingest_hook == resolved.sql_ingest_hook,
             hooks.cache_event_hook == resolved.cache_event_hook,
             hooks.substrait_fallback_hook == resolved.substrait_fallback_hook,
@@ -4625,6 +4709,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             substrait_validation=resolution.substrait_validation,
             capture_plan_artifacts=resolution.capture_plan_artifacts,
             plan_artifacts_hook=hooks.plan_artifacts_hook,
+            capture_semantic_diff=resolution.capture_semantic_diff,
+            semantic_diff_hook=hooks.semantic_diff_hook,
             sql_ingest_hook=hooks.sql_ingest_hook,
             cache_event_hook=hooks.cache_event_hook,
             substrait_fallback_hook=hooks.substrait_fallback_hook,
@@ -4895,8 +4981,8 @@ def run_diskcache_maintenance(
         }
         for result in results
     ]
-    if record and profile.diagnostics_sink is not None and payloads:
-        profile.diagnostics_sink.record_events("diskcache_maintenance_v1", payloads)
+    if record and payloads:
+        record_events(profile, "diskcache_maintenance_v1", payloads)
     return payloads
 
 
@@ -5206,8 +5292,10 @@ def apply_execution_policy(
 def _datafusion_type_name(dtype: pa.DataType) -> str:
     ctx = DataFusionRuntimeProfile().ephemeral_context()
     table = pa.Table.from_arrays([pa.array([None], type=dtype)], names=["value"])
-    ctx.register_table("t", ctx.from_arrow(table))
-    invalidate_introspection_cache(ctx)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_table_provider("t", ctx.from_arrow(table))
     result = _sql_with_options(ctx, "SELECT arrow_typeof(value) AS dtype FROM t").to_arrow_table()
     value = result["dtype"][0].as_py()
     if not isinstance(value, str):
@@ -5295,8 +5383,10 @@ def align_table_to_schema(
         resolved_table = cast("pa.Table", resolved)
     session = ctx or DataFusionRuntimeProfile().session_context()
     temp_name = f"__schema_align_{uuid.uuid4().hex}"
-    session.register_record_batches(temp_name, resolved_table.to_batches())
-    invalidate_introspection_cache(session)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=session, profile=None)
+    adapter.register_record_batches(temp_name, resolved_table.to_batches())
     try:
         selections = _align_projection_exprs(
             schema=resolved_schema,
@@ -5307,9 +5397,6 @@ def align_table_to_schema(
         df = _sql_with_options(session, f"SELECT {select_sql} FROM {_sql_identifier(temp_name)}")
         aligned = df.to_arrow_table()
     finally:
-        from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-        adapter = DataFusionIOAdapter(ctx=session, profile=None)
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table(temp_name)
     return _apply_table_schema_metadata(

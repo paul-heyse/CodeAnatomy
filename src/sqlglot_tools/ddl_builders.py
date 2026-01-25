@@ -54,7 +54,7 @@ class ExternalTableDDLConfig:
     options: dict[str, str] | None = None
     compression: str | None = None
     partitioned_by: tuple[str, ...] | None = None
-    file_sort_order: tuple[str, ...] | None = None
+    file_sort_order: tuple[tuple[str, str], ...] | None = None
     unbounded: bool = False
     dialect: str | None = "datafusion"
 
@@ -182,27 +182,20 @@ def build_external_table_ddl(
     CREATE EXTERNAL TABLE events (id BIGINT, timestamp TIMESTAMP) ...
     """
     ddl_config = config or ExternalTableDDLConfig()
-    schema = ddl_config.schema
-    schema_expressions = ddl_config.schema_expressions
     file_format = ddl_config.file_format
-    options = ddl_config.options
-    compression = ddl_config.compression
-    partitioned_by = ddl_config.partitioned_by
-    file_sort_order = ddl_config.file_sort_order
-    unbounded = ddl_config.unbounded
 
     # Build column definitions if schema provided
     columns = None
-    if schema_expressions:
-        columns = exp.Schema(expressions=list(schema_expressions))
-    elif schema:
+    if ddl_config.schema_expressions:
+        columns = exp.Schema(expressions=list(ddl_config.schema_expressions))
+    elif ddl_config.schema:
         columns = exp.Schema(
             expressions=[
                 exp.ColumnDef(
                     this=exp.to_identifier(col_name),
                     kind=exp.DataType.build(col_type),
                 )
-                for col_name, col_type in schema.items()
+                for col_name, col_type in ddl_config.schema.items()
             ]
         )
 
@@ -211,30 +204,41 @@ def build_external_table_ddl(
         exp.FileFormatProperty(this=exp.Var(this=stored_as)),
         exp.LocationProperty(this=exp.Literal.string(str(location.path))),
     ]
-    if compression:
-        properties.append(ExternalTableCompressionProperty(this=exp.Var(this=compression)))
-    if partitioned_by:
+    if ddl_config.compression:
+        properties.append(
+            ExternalTableCompressionProperty(this=exp.Var(this=ddl_config.compression))
+        )
+    if ddl_config.partitioned_by:
         properties.append(
             exp.PartitionedByProperty(
                 this=exp.Tuple(
-                    expressions=[exp.Identifier(this=name) for name in partitioned_by]
+                    expressions=[
+                        exp.Identifier(this=name) for name in ddl_config.partitioned_by
+                    ]
                 )
             )
         )
-    if file_sort_order:
-        properties.append(
-            ExternalTableOrderProperty(
-                expressions=[exp.Identifier(this=name) for name in file_sort_order]
+    if ddl_config.file_sort_order:
+        order_exprs: list[exp.Expression] = []
+        for item in ddl_config.file_sort_order:
+            if isinstance(item, str):
+                column_name = item
+                direction = "ascending"
+            else:
+                column_name, direction = item
+            desc = str(direction).lower() in {"desc", "descending"}
+            order_exprs.append(
+                exp.Ordered(this=exp.Identifier(this=column_name), desc=desc)
             )
-        )
-    options_property = _external_table_options_property(options)
+        properties.append(ExternalTableOrderProperty(expressions=order_exprs))
+    options_property = _external_table_options_property(ddl_config.options)
     if options_property is not None:
         properties.append(options_property)
 
     # Build CREATE EXTERNAL TABLE expression
     create_expr = exp.Create(
         this=exp.Table(this=exp.to_identifier(name)),
-        kind="UNBOUNDED EXTERNAL" if unbounded else "EXTERNAL",
+        kind="UNBOUNDED EXTERNAL" if ddl_config.unbounded else "EXTERNAL",
         expression=columns,
         properties=exp.Properties(expressions=properties),
     )

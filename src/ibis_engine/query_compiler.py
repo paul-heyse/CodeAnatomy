@@ -6,8 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
-import ibis
 import pyarrow as pa
+from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, Table, Value
 
 from arrowdsl.core.interop import SchemaLike
@@ -101,6 +101,7 @@ def dataset_query_for_file_ids(
     schema: SchemaLike | None = None,
     columns: Sequence[str] | None = None,
     options: FileIdQueryOptions | None = None,
+    backend: BaseBackend | None = None,
 ) -> IbisQuerySpec:
     """Return an IbisQuerySpec filtering to the provided file ids.
 
@@ -114,6 +115,8 @@ def dataset_query_for_file_ids(
         Optional explicit projection columns.
     options:
         Optional file-id query options including param-table tuning.
+    backend:
+        Backend used to register parameter tables when needed.
 
     Returns
     -------
@@ -139,6 +142,9 @@ def dataset_query_for_file_ids(
             pushdown_predicate=predicate,
         )
     if len(file_ids) >= resolved_options.param_table_threshold:
+        if backend is None:
+            msg = "dataset_query_for_file_ids requires a backend for param table registration."
+            raise ValueError(msg)
         key_column = resolved_options.param_key_column or resolved_options.file_id_column
         logical_name = resolved_options.param_table_name or "file_id_params"
         schema = pa.schema([pa.field(key_column, pa.string())])
@@ -154,7 +160,7 @@ def dataset_query_for_file_ids(
             policy=ParamTablePolicy(prefix=resolved_options.param_table_prefix),
         )
         artifact = registry.register_values(logical_name, list(file_ids))
-        param_table = ibis.memtable(artifact.table)
+        param_table = registry.ibis_tables(backend)[artifact.logical_name]
         return IbisQuerySpec(
             projection=IbisProjectionSpec(base=tuple(columns)),
             macros=(

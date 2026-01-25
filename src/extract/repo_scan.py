@@ -610,7 +610,9 @@ def _record_repo_blame(
             for stat in sorted(author_stats.values(), key=lambda item: (-item.lines, item.email))
         ],
     }
-    runtime_profile.diagnostics_sink.record_artifact("repo_scan_blame_v1", payload)
+    from datafusion_engine.diagnostics import record_artifact
+
+    record_artifact(runtime_profile, "repo_scan_blame_v1", payload)
 
 
 def _blame_paths(

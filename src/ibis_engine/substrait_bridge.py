@@ -50,11 +50,10 @@ def _coerce_diagnostics_sink(
 ) -> DiagnosticsSink | None:
     if sink is None:
         return None
-    if session_id is None:
-        return sink
     from datafusion_engine.diagnostics import ensure_recorder_sink
 
-    return ensure_recorder_sink(sink, session_id=session_id)
+    resolved_session = session_id or "substrait"
+    return ensure_recorder_sink(sink, session_id=resolved_session)
 
 
 def ibis_to_substrait_bytes(

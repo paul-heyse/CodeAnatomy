@@ -86,8 +86,10 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     df_ctx = _datafusion_context()
     resolved = _ensure_table(table)
     table_name = f"_encoding_{uuid.uuid4().hex}"
-    df_ctx.register_record_batches(table_name, [resolved.to_batches()])
-    invalidate_introspection_cache(df_ctx)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=df_ctx, profile=None)
+    adapter.register_record_batches(table_name, [resolved.to_batches()])
     try:
         sql_options = _sql_options_for_profile(None)
         selections: list[str] = []
@@ -110,7 +112,14 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
             )
             selections.append(f"arrow_cast({identifier}, '{dict_type}') AS {identifier}")
         sql = f"SELECT {', '.join(selections)} FROM {table_name}"
-        return df_ctx.sql_with_options(sql, sql_options).to_arrow_table()
+        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+        return execute_with_profile(
+            df_ctx,
+            sql,
+            profile=None,
+            options=ExecutionProfileOptions(sql_options=sql_options),
+        ).to_arrow_table()
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
@@ -148,10 +157,20 @@ def _sql_identifier(name: str) -> str:
 def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     temp_name = f"_dtype_{uuid.uuid4().hex}"
     table = pa.table({"value": pa.array([None], type=dtype)})
-    ctx.register_record_batches(temp_name, [list(table.to_batches())])
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_record_batches(temp_name, [list(table.to_batches())])
     try:
         sql = f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}"
-        result = ctx.sql_with_options(sql, _sql_options_for_profile(None)).to_arrow_table()
+        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+        result = execute_with_profile(
+            ctx,
+            sql,
+            profile=None,
+            options=ExecutionProfileOptions(sql_options=_sql_options_for_profile(None)),
+        ).to_arrow_table()
         value = result["dtype"][0].as_py()
     finally:
         deregister = getattr(ctx, "deregister_table", None)

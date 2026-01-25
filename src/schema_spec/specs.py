@@ -90,6 +90,70 @@ def _table_schema_expr(
     )
 
 
+def _external_table_properties(
+    *,
+    config: ExternalTableConfig,
+) -> list[exp.Expression]:
+    """Return SQLGlot properties for external table DDL.
+
+    Returns
+    -------
+    list[exp.Expression]
+        SQLGlot property expressions for the external table.
+    """
+    stored_as = (
+        "DELTATABLE" if config.file_format.lower() == "delta" else config.file_format.upper()
+    )
+    properties: list[exp.Expression] = [
+        exp.FileFormatProperty(this=exp.Var(this=stored_as)),
+        exp.LocationProperty(this=exp.Literal.string(config.location)),
+    ]
+    if config.compression:
+        properties.append(ExternalTableCompressionProperty(this=exp.Var(this=config.compression)))
+    if config.partitioned_by:
+        properties.append(
+            exp.PartitionedByProperty(
+                this=exp.Tuple(
+                    expressions=[
+                        exp.Identifier(this=column_name) for column_name in config.partitioned_by
+                    ]
+                )
+            )
+        )
+    if config.file_sort_order:
+        properties.append(
+            ExternalTableOrderProperty(
+                expressions=_file_sort_order_exprs(config.file_sort_order)
+            )
+        )
+    options_property = _external_table_options_property(config.options)
+    if options_property is not None:
+        properties.append(options_property)
+    return properties
+
+
+def _file_sort_order_exprs(
+    file_sort_order: Sequence[str | tuple[str, str]],
+) -> list[exp.Expression]:
+    """Return SQLGlot order expressions for file sort metadata.
+
+    Returns
+    -------
+    list[exp.Expression]
+        SQLGlot ordering expressions for the file sort metadata.
+    """
+    order_exprs: list[exp.Expression] = []
+    for item in file_sort_order:
+        if isinstance(item, str):
+            column_name = item
+            direction = "ascending"
+        else:
+            column_name, direction = item
+        desc = str(direction).lower() in {"desc", "descending"}
+        order_exprs.append(exp.Ordered(this=exp.Identifier(this=column_name), desc=desc))
+    return order_exprs
+
+
 def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:
     """Return schema metadata for name/version tagging.
 
@@ -347,7 +411,7 @@ class ExternalTableConfig:
     dialect: str | None = None
     options: Mapping[str, object] | None = None
     partitioned_by: Sequence[str] | None = None
-    file_sort_order: Sequence[str] | None = None
+    file_sort_order: Sequence[tuple[str, str]] | None = None
     compression: str | None = None
     unbounded: bool = False
 
@@ -360,7 +424,7 @@ class ExternalTableConfigOverrides:
     dialect: str | None = None
     options: Mapping[str, object] | None = None
     partitioned_by: Sequence[str] | None = None
-    file_sort_order: Sequence[str] | None = None
+    file_sort_order: Sequence[tuple[str, str]] | None = None
     compression: str | None = None
     unbounded: bool | None = None
 
@@ -593,33 +657,7 @@ class TableSchemaSpec:
             expressions.append(
                 exp.PrimaryKey(expressions=[exp.to_identifier(field) for field in self.key_fields])
             )
-        file_format = config.file_format
-        stored_as = "DELTATABLE" if file_format.lower() == "delta" else file_format.upper()
-        properties: list[exp.Expression] = [
-            exp.FileFormatProperty(this=exp.Var(this=stored_as)),
-            exp.LocationProperty(this=exp.Literal.string(config.location)),
-        ]
-        if config.compression:
-            properties.append(
-                ExternalTableCompressionProperty(this=exp.Var(this=config.compression))
-            )
-        if config.partitioned_by:
-            properties.append(
-                exp.PartitionedByProperty(
-                    this=exp.Tuple(
-                        expressions=[exp.Identifier(this=name) for name in config.partitioned_by]
-                    )
-                )
-            )
-        if config.file_sort_order:
-            properties.append(
-                ExternalTableOrderProperty(
-                    expressions=[exp.Identifier(this=name) for name in config.file_sort_order]
-                )
-            )
-        options_property = _external_table_options_property(config.options)
-        if options_property is not None:
-            properties.append(options_property)
+        properties = _external_table_properties(config=config)
         kind = "UNBOUNDED EXTERNAL" if config.unbounded else "EXTERNAL"
         schema_expr = _table_schema_expr(name, expressions=expressions)
         create_expr = exp.Create(

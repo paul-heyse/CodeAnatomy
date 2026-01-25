@@ -27,11 +27,8 @@ from arrowdsl.core.interop import (
 from arrowdsl.core.streaming import to_reader
 from core_types import PathLike
 from datafusion_engine.bridge import (
-    DeltaInsertOptions,
     DeltaInsertResult,
     datafusion_from_arrow,
-    datafusion_insert_delta,
-    datafusion_insert_from_dataframe,
     datafusion_to_table,
     datafusion_view_sql,
     ibis_plan_to_datafusion,
@@ -39,6 +36,7 @@ from datafusion_engine.bridge import (
 )
 from datafusion_engine.diagnostics import recorder_for_profile
 from datafusion_engine.io_adapter import DataFusionIOAdapter
+from datafusion_engine.runtime import statement_sql_options_for_profile
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.table_provider_metadata import (
     all_table_provider_metadata,
@@ -1118,14 +1116,20 @@ def _delta_constraints_for_table(
 def _delta_insert_select_sql(
     df: DataFrame,
     *,
+    ctx: SessionContext,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    table_name: str,
     temp_name: str | None,
-) -> str | None:
+) -> tuple[str, str | None]:
     sql = datafusion_view_sql(df)
     if sql is not None:
-        return sql
+        return sql, temp_name
     if temp_name is None:
-        return None
-    return exp.select("*").from_(exp.table_(temp_name)).sql(dialect="datafusion")
+        temp_name = f"__delta_insert_{table_name}_{uuid.uuid4().hex}"
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+        adapter.register_view(temp_name, df, overwrite=True, temporary=True)
+    sql = exp.select("*").from_(exp.table_(temp_name)).sql(dialect="datafusion")
+    return sql, temp_name
 
 
 def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
@@ -1169,22 +1173,37 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
                         location=location,
                     )
                 )
-        select_sql = _delta_insert_select_sql(df, temp_name=temp_name)
-        options = DeltaInsertOptions(mode=request.mode, constraints=request.constraints)
-        if select_sql is None:
-            result = datafusion_insert_from_dataframe(
-                request.ctx,
-                request.table_name,
-                df,
-                options=options,
-            )
-        else:
-            result = datafusion_insert_delta(
-                request.ctx,
-                request.table_name,
-                select_sql,
-                options=options,
-            )
+        select_sql, temp_name = _delta_insert_select_sql(
+            df,
+            ctx=request.ctx,
+            runtime_profile=request.runtime_profile,
+            table_name=request.table_name,
+            temp_name=temp_name,
+        )
+        write_request = WriteRequest(
+            source=select_sql,
+            destination=request.table_name,
+            format=WriteFormat.PARQUET,
+            mode=WriteMode.OVERWRITE if request.mode == "overwrite" else WriteMode.APPEND,
+            table_name=request.table_name,
+            constraints=request.constraints,
+        )
+        profile = _write_pipeline_profile()
+        pipeline = WritePipeline(
+            request.ctx,
+            profile,
+            sql_options=statement_sql_options_for_profile(request.runtime_profile),
+            recorder=recorder_for_profile(
+                request.runtime_profile,
+                operation_id="delta_insert_write",
+            ),
+        )
+        pipeline.write(write_request, prefer_streaming=False)
+        result = DeltaInsertResult(
+            table_name=request.table_name,
+            mode=request.mode,
+            rows_affected=None,
+        )
     except (RuntimeError, TypeError, ValueError) as exc:
         if _is_insert_unsupported_error(exc):
             return None
@@ -1257,8 +1276,6 @@ def write_ibis_dataset_parquet(
     ValueError
         If the runtime profile or Ibis backend is unavailable.
     """
-    from datafusion_engine.runtime import statement_sql_options_for_profile
-
     runtime_profile = options.execution.ctx.runtime.datafusion
     backend = options.execution.ibis_backend
     if runtime_profile is None or backend is None:
@@ -1345,8 +1362,6 @@ def write_ibis_named_datasets_copy(
     ValueError
         If the runtime profile or Ibis backend is unavailable.
     """
-    from datafusion_engine.runtime import statement_sql_options_for_profile
-
     runtime_profile = options.execution.ctx.runtime.datafusion
     if runtime_profile is None or options.execution.ibis_backend is None:
         msg = "COPY writer requires a runtime profile and Ibis backend."

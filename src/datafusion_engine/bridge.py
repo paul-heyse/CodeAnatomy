@@ -72,7 +72,11 @@ from datafusion_engine.registry_bridge import (
 )
 from datafusion_engine.schema_registry import has_schema, schema_for
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-from datafusion_engine.sql_safety import ExecutionPolicy, validate_sql_safety
+from datafusion_engine.sql_safety import (
+    ExecutionPolicy,
+    execute_with_policy,
+    validate_sql_safety,
+)
 from datafusion_engine.write_pipeline import (
     WriteFormat,
     WriteMode,
@@ -426,6 +430,28 @@ def _sql_options_for_options(options: DataFusionCompileOptions) -> SQLOptions:
     return policy.to_sql_options()
 
 
+def _safe_sql(
+    ctx: SessionContext,
+    sql: str,
+    *,
+    options: DataFusionCompileOptions,
+    sql_options: SQLOptions,
+    allow_statements: bool | None = None,
+) -> DataFrame:
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    return execute_with_profile(
+        ctx,
+        sql,
+        profile=options.runtime_profile,
+        options=ExecutionProfileOptions(
+            sql_options=sql_options,
+            allow_statements=allow_statements,
+            dialect=options.dialect,
+        ),
+    )
+
+
 def _ensure_dialect(name: str) -> None:
     if name == "datafusion_ext":
         register_datafusion_dialect()
@@ -591,6 +617,7 @@ def df_from_sqlglot_or_sql(
     )
     _maybe_explain(ctx, compiled.sqlglot_ast, options=resolved)
     _maybe_collect_plan_artifacts(ctx, compiled.sqlglot_ast, options=resolved, df=df)
+    _maybe_collect_semantic_diff(ctx, compiled.sqlglot_ast, options=resolved)
     return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
 
 
@@ -610,8 +637,8 @@ def validate_table_constraints(
     """
     if not constraints:
         return []
-    ctx.register_record_batches(name, [table.to_batches()])
-    invalidate_introspection_cache(ctx)
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_record_batches(name, [table.to_batches()])
     violations: list[str] = []
     sql_options = _default_sql_policy().to_sql_options()
     policy = resolve_sqlglot_policy(name="datafusion_compile")
@@ -627,7 +654,12 @@ def validate_table_constraints(
                 limit=1,
             )
             query = sqlglot_emit(query_expr, policy=policy)
-            df = ctx.sql_with_options(query, sql_options)
+            df = _safe_sql(
+                ctx,
+                query,
+                options=DataFusionCompileOptions(),
+                sql_options=sql_options,
+            )
             if _df_has_rows(df):
                 violations.append(constraint)
     finally:
@@ -777,6 +809,7 @@ def ibis_to_datafusion(
                 options=diagnostics_options,
                 df=df,
             )
+            _maybe_collect_semantic_diff(ctx, fallback_expr, options=diagnostics_options)
             return df
         df = replay_substrait_bytes(ctx, plan_bytes)
         plan_expr = compile_sqlglot_expr(
@@ -797,6 +830,7 @@ def ibis_to_datafusion(
             df=df,
             substrait_plan_override=plan_bytes,
         )
+        _maybe_collect_semantic_diff(ctx, plan_expr, options=diagnostics_options)
         return df
     pipeline = _compilation_pipeline(ctx, options=resolved)
     compiled = pipeline.compile_ibis(expr, backend=backend)
@@ -824,6 +858,7 @@ def ibis_to_datafusion(
     )
     _maybe_explain(ctx, compiled.sqlglot_ast, options=resolved)
     _maybe_collect_plan_artifacts(ctx, compiled.sqlglot_ast, options=resolved, df=df)
+    _maybe_collect_semantic_diff(ctx, compiled.sqlglot_ast, options=resolved)
     return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
 
 
@@ -963,9 +998,10 @@ def datafusion_read_table(
         DataFusion DataFrame for the table provider.
     """
     df = ctx.read_table(table)
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
-        return df
-    runtime_profile.diagnostics_sink.record_artifact(
+    from datafusion_engine.diagnostics import record_artifact
+
+    record_artifact(
+        runtime_profile,
         "datafusion_read_table_v1",
         {
             "event_time_unix_ms": int(time.time() * 1000),
@@ -1240,11 +1276,15 @@ def _collect_plan_artifacts_details(
         )
 
     sql_options = _sql_options_for_options(options)
-    plan_df = df or ctx.sql_with_options(sql, sql_options)
-    explain_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN {sql}", sql_options))
+    plan_df = df or _safe_sql(ctx, sql, options=options, sql_options=sql_options)
+    explain_rows = _collect_reader(
+        _safe_sql(ctx, f"EXPLAIN {sql}", options=options, sql_options=sql_options)
+    )
     analyze_rows = None
     if options.explain_analyze:
-        analyze_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN ANALYZE {sql}", sql_options))
+        analyze_rows = _collect_reader(
+            _safe_sql(ctx, f"EXPLAIN ANALYZE {sql}", options=options, sql_options=sql_options)
+        )
     substrait_plan = substrait_plan_override or _substrait_bytes(ctx, sql)
     substrait_validation = None
     if substrait_plan is not None and options.substrait_validation:
@@ -1672,14 +1712,23 @@ def execute_dml(
         msg = "Table-like parameters must be passed via named params."
         raise ValueError(msg)
     param_mode = _param_mode(resolved.params)
-    if bindings.param_values:
-        try:
-            df = ctx.sql_with_options(sql, sql_options, param_values=bindings.param_values)
-        except TypeError as exc:
-            msg = "DataFusion does not support param_values for DML execution."
-            raise ValueError(msg) from exc
-    else:
-        df = ctx.sql_with_options(sql, sql_options)
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    try:
+        df = execute_with_profile(
+            ctx,
+            sql,
+            profile=resolved.runtime_profile,
+            options=ExecutionProfileOptions(
+                policy=_execution_policy_from_sql_policy(policy),
+                sql_options=sql_options,
+                dialect=resolved.dialect,
+                param_values=bindings.param_values or None,
+            ),
+        )
+    except TypeError as exc:
+        msg = "DataFusion does not support param_values for DML execution."
+        raise ValueError(msg) from exc
     if resolved.record_hook is not None:
         resolved.record_hook(
             {
@@ -1902,7 +1951,17 @@ def prepare_statement(
         param_types=tuple(options.param_types),
     )
     prepare_sql = f"PREPARE {name}({', '.join(spec.param_types)}) AS {sql}"
-    ctx.sql_with_options(prepare_sql, opts)
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    execute_with_profile(
+        ctx,
+        prepare_sql,
+        profile=None,
+        options=ExecutionProfileOptions(
+            sql_options=opts,
+            allow_statements=True,
+        ),
+    )
     if options.record_hook is not None:
         options.record_hook(spec)
     return spec
@@ -1936,7 +1995,17 @@ def execute_prepared_statement(
     policy = _merge_sql_policies(DataFusionSqlPolicy(allow_statements=True), sql_options)
     opts = policy.to_sql_options()
     arg_sql = ", ".join(_sql_literal(param) for param in params)
-    return ctx.sql_with_options(f"EXECUTE {name}({arg_sql})", opts)
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    return execute_with_profile(
+        ctx,
+        f"EXECUTE {name}({arg_sql})",
+        profile=None,
+        options=ExecutionProfileOptions(
+            sql_options=opts,
+            allow_statements=True,
+        ),
+    )
 
 
 def _sql_literal(value: object) -> str:
@@ -2004,7 +2073,12 @@ def _maybe_explain(
     sql = _emit_sql(expr, options=options)
     prefix = "EXPLAIN ANALYZE" if options.explain_analyze else "EXPLAIN"
     sql_options = _sql_options_for_options(options)
-    explain_df = ctx.sql_with_options(f"{prefix} {sql}", sql_options)
+    explain_df = _safe_sql(
+        ctx,
+        f"{prefix} {sql}",
+        options=options,
+        sql_options=sql_options,
+    )
     rows = _explain_reader(explain_df)
     if options.explain_hook is not None:
         options.explain_hook(sql, rows)
@@ -2033,6 +2107,69 @@ def _maybe_collect_plan_artifacts(
         return
     if options.plan_artifacts_hook is not None:
         options.plan_artifacts_hook(artifacts.structured_explain_payload())
+
+
+def _semantic_plan_hash(expr: Expression, *, options: DataFusionCompileOptions) -> str:
+    policy = _sqlglot_emit_policy(options)
+    policy_hash = _sqlglot_policy_hash(options, policy=policy)
+    return plan_fingerprint(
+        expr,
+        dialect=options.dialect,
+        policy_hash=policy_hash,
+        schema_map_hash=options.schema_map_hash,
+    )
+
+
+def _semantic_diff_base_expr(
+    ctx: SessionContext,
+    *,
+    options: DataFusionCompileOptions,
+) -> Expression | None:
+    if options.semantic_diff_base_expr is None and options.semantic_diff_base_sql is None:
+        return None
+    base_options = replace(options, dynamic_projection=False)
+    pipeline = _compilation_pipeline(ctx, options=base_options)
+    if options.semantic_diff_base_expr is not None:
+        compiled = pipeline.compile_ast(options.semantic_diff_base_expr)
+        return compiled.sqlglot_ast
+    if options.semantic_diff_base_sql is None:
+        return None
+    compiled = pipeline.compile_sql(options.semantic_diff_base_sql)
+    return compiled.sqlglot_ast
+
+
+def _maybe_collect_semantic_diff(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> None:
+    hook = options.semantic_diff_hook
+    if hook is None:
+        return
+    base_expr = _semantic_diff_base_expr(ctx, options=options)
+    if base_expr is None:
+        return
+    from datafusion_engine.semantic_diff import ChangeCategory, SemanticDiff
+
+    diff = SemanticDiff.compute(base_expr, expr)
+    plan_hash = options.plan_hash or _semantic_plan_hash(expr, options=options)
+    base_hash = _semantic_plan_hash(base_expr, options=options)
+    row_multiplying = diff.overall_category == ChangeCategory.ROW_MULTIPLYING
+    breaking = diff.overall_category in {ChangeCategory.BREAKING, ChangeCategory.ROW_MULTIPLYING}
+    change_count = len([change for change in diff.changes if change.category != ChangeCategory.NONE])
+    payload = {
+        "event_time_unix_ms": int(time.time() * 1000),
+        "run_id": options.run_id,
+        "plan_hash": plan_hash,
+        "base_plan_hash": base_hash,
+        "category": diff.overall_category.name.lower(),
+        "changed": diff.overall_category != ChangeCategory.NONE,
+        "breaking": breaking,
+        "row_multiplying": row_multiplying,
+        "change_count": change_count,
+    }
+    hook(payload)
 
 
 def _explain_reader(df: DataFrame) -> pa.RecordBatchReader:
@@ -2839,12 +2976,13 @@ def datafusion_insert_delta(
             policy=policy,
         )
 
-    # Use DML-enabled SQL options
-    allow_dml = True
-    sql_options = SQLOptions().with_allow_dml(allow_dml)
-
     # Execute the INSERT
-    df = ctx.sql_with_options(sql, sql_options)
+    policy = ExecutionPolicy(allow_ddl=False, allow_dml=True, allow_statements=True)
+    violations = validate_sql_safety(sql, policy, dialect="datafusion")
+    if violations:
+        msg = f"SQL policy violations: {', '.join(violations)}."
+        raise ValueError(msg)
+    df = execute_with_policy(ctx, sql, policy)
     batches = df.collect()
 
     # Try to extract rows affected from result
@@ -2888,7 +3026,12 @@ def _validate_sql_constraints(
             limit=1,
         )
         query = sqlglot_emit(query_expr, policy=policy)
-        df = ctx.sql_with_options(query, sql_options)
+        df = _safe_sql(
+            ctx,
+            query,
+            options=DataFusionCompileOptions(),
+            sql_options=sql_options,
+        )
         if _df_has_rows(df):
             msg = f"Delta constraint violated: {constraint}"
             raise ValueError(msg)

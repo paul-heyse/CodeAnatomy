@@ -7,9 +7,9 @@ from pathlib import Path
 import ibis
 import pytest
 
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.io_bridge import IbisMaterializeOptions, materialize_table
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from obs.diagnostics import DiagnosticsCollector
 
 pytest.importorskip("duckdb")

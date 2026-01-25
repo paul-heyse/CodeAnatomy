@@ -85,9 +85,14 @@ class IntrospectionSnapshot:
             Snapshot containing all available catalog metadata
         """
         def _table(sql: str) -> pa.Table:
-            if sql_options is None:
-                return ctx.sql(sql).to_arrow_table()
-            return ctx.sql_with_options(sql, sql_options).to_arrow_table()
+            from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+            return execute_with_profile(
+                ctx,
+                sql,
+                profile=None,
+                options=ExecutionProfileOptions(sql_options=sql_options),
+            ).to_arrow_table()
 
         tables = _table("""
             SELECT table_catalog, table_schema, table_name, table_type
@@ -454,7 +459,14 @@ def _cache_snapshot_from_table(
 ) -> CacheStateSnapshot | None:
     query = f"SELECT * FROM {table_name}()"
     try:
-        table = ctx.sql_with_options(query, sql_options_for_profile(None)).to_arrow_table()
+        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+        table = execute_with_profile(
+            ctx,
+            query,
+            profile=None,
+            options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
+        ).to_arrow_table()
     except (RuntimeError, TypeError, ValueError):
         return None
     rows = table.to_pylist()

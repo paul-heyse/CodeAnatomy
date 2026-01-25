@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from datafusion_engine.diagnostics import ensure_recorder_sink
 from serde_msgspec import StructBase
 
 
@@ -90,7 +91,8 @@ def prepared_statement_hook(
     """
 
     def _hook(spec: PreparedStatementSpec) -> None:
-        sink.record_artifact("datafusion_prepared_statements_v1", spec.payload())
+        recorder_sink = ensure_recorder_sink(sink, session_id="obs")
+        recorder_sink.record_artifact("datafusion_prepared_statements_v1", spec.payload())
 
     return _hook
 

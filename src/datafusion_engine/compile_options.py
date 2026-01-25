@@ -131,6 +131,7 @@ class DataFusionDmlOptions:
     param_identifier_allowlist: tuple[str, ...] | None = None
     params: Mapping[str, object] | None = None
     named_params: Mapping[str, object] | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
     dialect: str = field(
         default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_DML).dialect
     )
@@ -173,6 +174,10 @@ class DataFusionCompileOptions:
     substrait_validation: bool = False
     diagnostics_allow_sql: bool = False
     substrait_plan_override: bytes | None = None
+    capture_semantic_diff: bool = False
+    semantic_diff_base_expr: Expression | None = None
+    semantic_diff_base_sql: str | None = None
+    semantic_diff_hook: Callable[[Mapping[str, object]], None] | None = None
     plan_cache: PlanCache | None = None
     plan_hash: str | None = None
     profile_hash: str | None = None

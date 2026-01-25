@@ -58,7 +58,7 @@ def _record_plan_diff(
     total_tasks: int,
 ) -> None:
     profile = ctx.runtime.datafusion
-    if profile is None or profile.diagnostics_sink is None:
+    if profile is None:
         return
     payload: dict[str, object] = {
         "total_tasks": total_tasks,
@@ -87,7 +87,9 @@ def _record_plan_diff(
             }
             for name, change in diff.semantic_changes.items()
         ]
-    profile.diagnostics_sink.record_artifact("incremental_plan_diff_v1", payload)
+    from datafusion_engine.diagnostics import record_artifact
+
+    record_artifact(profile, "incremental_plan_diff_v1", payload)
 
 
 __all__ = ["incremental_plan_diff"]

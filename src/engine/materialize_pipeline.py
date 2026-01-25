@@ -21,7 +21,7 @@ from datafusion_engine.bridge import (
     datafusion_to_reader,
 )
 from datafusion_engine.dataset_locations import resolve_dataset_location
-from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import (
     DataFusionRuntimeProfile,
@@ -278,9 +278,6 @@ def _record_extract_write(
     *,
     record: _ExtractWriteRecord,
 ) -> None:
-    sink = runtime_profile.diagnostics_sink
-    if sink is None:
-        return
     parquet_options: dict[str, object] | None = None
     if record.parquet_payload is not None:
         options_value = record.parquet_payload.get("parquet_options")
@@ -299,13 +296,10 @@ def _record_extract_write(
         "copy_options": dict(record.copy_options) if record.copy_options is not None else None,
         "delta_version": record.delta_result.version if record.delta_result is not None else None,
     }
-    sink.record_artifact("datafusion_extract_output_writes_v1", payload)
+    record_artifact(runtime_profile, "datafusion_extract_output_writes_v1", payload)
 
 
 def _record_diskcache_stats(runtime_profile: DataFusionRuntimeProfile) -> None:
-    sink = runtime_profile.diagnostics_sink
-    if sink is None:
-        return
     profile = runtime_profile.diskcache_profile
     if profile is None:
         return
@@ -332,7 +326,7 @@ def _record_diskcache_stats(runtime_profile: DataFusionRuntimeProfile) -> None:
         )
         events.append(payload)
     if events:
-        sink.record_events("diskcache_stats_v1", events)
+        record_events(runtime_profile, "diskcache_stats_v1", events)
 
 
 def _write_pipeline_profile() -> SQLPolicyProfile:
@@ -436,7 +430,7 @@ def _write_policy_for_dataset(
             name for name, _ in runtime_profile.ast_external_partition_cols if name in available
         )
         default_sort = tuple(
-            name for name in runtime_profile.ast_external_ordering if name in available
+            name for name, _ in runtime_profile.ast_external_ordering if name in available
         )
     elif dataset == "bytecode_files_v1":
         default_partition = tuple(
@@ -445,7 +439,7 @@ def _write_policy_for_dataset(
             if name in available
         )
         default_sort = tuple(
-            name for name in runtime_profile.bytecode_external_ordering if name in available
+            name for name, _ in runtime_profile.bytecode_external_ordering if name in available
         )
     else:
         default_partition = tuple(name for name in ("repo",) if name in available)

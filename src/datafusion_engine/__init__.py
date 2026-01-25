@@ -37,6 +37,12 @@ if TYPE_CHECKING:
         DiagnosticsSink,
         InMemoryDiagnosticsSink,
     )
+    from datafusion_engine.execution_facade import (
+        CompiledPlan,
+        DataFusionExecutionFacade,
+        ExecutionResult,
+        ExecutionResultKind,
+    )
     from datafusion_engine.introspection import (
         IntrospectionCache,
         IntrospectionSnapshot,
@@ -128,49 +134,41 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
-    # Runtime and configuration
     "DEFAULT_DF_POLICY",
     "SCHEMA_HARDENING_PRESETS",
     "AdapterExecutionPolicy",
-    # New modular architecture - Semantic Diff
     "ChangeCategory",
-    # New modular architecture - Schema Contracts
     "ColumnContract",
     "CompilationArtifacts",
-    # New modular architecture - Compilation Pipeline
     "CompilationPipeline",
     "CompileOptions",
     "CompiledExpression",
+    "CompiledPlan",
     "ContractRegistry",
     "DataFusionCompileOptions",
     "DataFusionConfigPolicy",
-    # New modular architecture - IO Adapter
+    "DataFusionExecutionFacade",
     "DataFusionIOAdapter",
-    # New modular architecture - Parameter Binding
     "DataFusionParamBindings",
     "DataFusionRuntimeProfile",
     "DataFusionSqlPolicy",
-    # New modular architecture - Diagnostics
     "DiagnosticsContext",
     "DiagnosticsRecorder",
     "DiagnosticsSink",
     "EvolutionPolicy",
-    # New modular architecture - SQL Safety
     "ExecutionContext",
     "ExecutionLabel",
     "ExecutionPolicy",
+    "ExecutionResult",
+    "ExecutionResultKind",
     "InMemoryDiagnosticsSink",
-    # New modular architecture - Introspection
     "IntrospectionCache",
     "IntrospectionSnapshot",
     "MemoryPool",
     "ParameterSpec",
-    # New modular architecture - Parameterized Execution
     "ParameterizedRulepack",
-    # New modular architecture - Write Pipeline
     "ParquetWritePolicy",
     "RebuildPolicy",
-    # Catalog and schema
     "RegistryCatalogProvider",
     "RegistrySchemaProvider",
     "RegistryTarget",
@@ -184,7 +182,6 @@ __all__ = [
     "SchemaViolationType",
     "SemanticChange",
     "SemanticDiff",
-    # New modular architecture - Streaming Execution
     "StreamingExecutionResult",
     "StreamingExecutor",
     "WriteFormat",
@@ -196,7 +193,6 @@ __all__ = [
     "apply_execution_policy",
     "compile_sql_policy",
     "compute_rebuild_needed",
-    # Bridge and execution
     "datafusion_read_table",
     "datafusion_to_table",
     "execute_with_policy",
@@ -327,6 +323,14 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "DiagnosticsRecorder": ("datafusion_engine.diagnostics", "DiagnosticsRecorder"),
     "DiagnosticsSink": ("datafusion_engine.diagnostics", "DiagnosticsSink"),
     "InMemoryDiagnosticsSink": ("datafusion_engine.diagnostics", "InMemoryDiagnosticsSink"),
+    # Execution Facade
+    "CompiledPlan": ("datafusion_engine.execution_facade", "CompiledPlan"),
+    "DataFusionExecutionFacade": (
+        "datafusion_engine.execution_facade",
+        "DataFusionExecutionFacade",
+    ),
+    "ExecutionResult": ("datafusion_engine.execution_facade", "ExecutionResult"),
+    "ExecutionResultKind": ("datafusion_engine.execution_facade", "ExecutionResultKind"),
     # IO Adapter
     "DataFusionIOAdapter": ("datafusion_engine.io_adapter", "DataFusionIOAdapter"),
     # Write Pipeline

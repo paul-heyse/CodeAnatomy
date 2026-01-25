@@ -36,6 +36,10 @@ class TableProviderMetadata:
         True if this table represents a streaming/unbounded source.
     ddl_fingerprint : str | None
         Stable fingerprint for the DDL statement, if available.
+    supports_insert : bool | None
+        Whether the provider supports INSERT operations.
+    supports_cdf : bool | None
+        Whether the provider exposes change data feed support.
     """
 
     table_name: str
@@ -49,6 +53,8 @@ class TableProviderMetadata:
     metadata: dict[str, str] = field(default_factory=dict)
     unbounded: bool = False
     ddl_fingerprint: str | None = None
+    supports_insert: bool | None = None
+    supports_cdf: bool | None = None
 
     def with_ddl(self, ddl: str) -> TableProviderMetadata:
         """Return a copy with updated DDL.
@@ -75,6 +81,8 @@ class TableProviderMetadata:
             metadata=self.metadata,
             unbounded=self.unbounded,
             ddl_fingerprint=self.ddl_fingerprint,
+            supports_insert=self.supports_insert,
+            supports_cdf=self.supports_cdf,
         )
 
     def with_constraints(self, constraints: tuple[str, ...]) -> TableProviderMetadata:
@@ -102,6 +110,8 @@ class TableProviderMetadata:
             metadata=self.metadata,
             unbounded=self.unbounded,
             ddl_fingerprint=self.ddl_fingerprint,
+            supports_insert=self.supports_insert,
+            supports_cdf=self.supports_cdf,
         )
 
     def with_schema_fingerprint(self, fingerprint: str) -> TableProviderMetadata:
@@ -129,6 +139,8 @@ class TableProviderMetadata:
             metadata=self.metadata,
             unbounded=self.unbounded,
             ddl_fingerprint=self.ddl_fingerprint,
+            supports_insert=self.supports_insert,
+            supports_cdf=self.supports_cdf,
         )
 
 

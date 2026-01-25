@@ -7,11 +7,12 @@ from dataclasses import dataclass
 
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.interop import ScalarLike
-from sqlglot_tools.compat import Expression, exp, parse_one
+from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SqlGlotPolicy,
     normalize_expr,
+    parse_sql_strict,
     resolve_sqlglot_policy,
     sqlglot_sql,
 )
@@ -182,7 +183,12 @@ class SqlExprSpec:
             msg = "SqlExprSpec requires sql or expr_ir."
             raise ValueError(msg)
         read_dialect = self.dialect or policy.read_dialect
-        return parse_one(self.sql, read=read_dialect)
+        return parse_sql_strict(
+            self.sql,
+            dialect=read_dialect,
+            error_level=policy.error_level,
+            unsupported_level=policy.unsupported_level,
+        )
 
 
 __all__ = ["ExprIR", "SqlExprSpec"]

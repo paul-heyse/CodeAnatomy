@@ -178,7 +178,9 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "partition_cols": [
                     (col, str(dtype)) for col, dtype in loc.datafusion_scan.partition_cols
                 ],
-                "file_sort_order": list(loc.datafusion_scan.file_sort_order),
+                "file_sort_order": [
+                    list(key) for key in loc.datafusion_scan.file_sort_order
+                ],
                 "parquet_pruning": loc.datafusion_scan.parquet_pruning,
                 "skip_metadata": loc.datafusion_scan.skip_metadata,
                 "skip_arrow_metadata": loc.datafusion_scan.skip_arrow_metadata,
@@ -227,13 +229,14 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "schema_mode": loc.delta_schema_policy.schema_mode,
                 "column_mapping_mode": loc.delta_schema_policy.column_mapping_mode,
             }
+        provider = resolve_datafusion_provider(loc)
         snapshot.append(
             {
                 "name": name,
                 "path": str(loc.path),
                 "format": loc.format,
                 "partitioning": loc.partitioning,
-                "datafusion_provider": loc.datafusion_provider,
+                "datafusion_provider": provider,
                 "storage_options": dict(loc.storage_options) if loc.storage_options else None,
                 "delta_log_storage_options": (
                     dict(loc.delta_log_storage_options) if loc.delta_log_storage_options else None
@@ -308,14 +311,31 @@ def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScan
     if scan.file_sort_order:
         return scan
     ordering = location.dataset_spec.ordering()
-    file_sort_order: tuple[str, ...] = ()
+    file_sort_order: tuple[tuple[str, str], ...] = ()
     if ordering.level == OrderingLevel.EXPLICIT and ordering.keys:
-        file_sort_order = tuple(key for key, _order in ordering.keys)
+        file_sort_order = tuple(ordering.keys)
     elif location.dataset_spec.table_spec.key_fields:
-        file_sort_order = tuple(location.dataset_spec.table_spec.key_fields)
+        file_sort_order = tuple(
+            (name, "ascending") for name in location.dataset_spec.table_spec.key_fields
+        )
     if not file_sort_order:
         return scan
     return replace(scan, file_sort_order=file_sort_order)
+
+
+def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider | None:
+    """Return the effective DataFusion provider for a dataset location.
+
+    Returns
+    -------
+    DataFusionProvider | None
+        Resolved provider for the dataset location, when available.
+    """
+    if location.datafusion_provider is not None:
+        return location.datafusion_provider
+    if location.dataset_spec is not None and location.dataset_spec.dataset_kind == "delta_cdf":
+        return "delta_cdf"
+    return None
 
 
 def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | None:
@@ -490,6 +510,9 @@ def _read_via_datafusion_registry(
     scan = resolve_datafusion_scan_options(location)
     if scan is not None and scan is not location.datafusion_scan:
         location = replace(location, datafusion_scan=scan)
+    provider = resolve_datafusion_provider(location)
+    if provider is not None and provider != location.datafusion_provider:
+        location = replace(location, datafusion_provider=provider)
     deregister = getattr(ctx, "deregister_table", None)
     if callable(deregister):
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
@@ -700,6 +723,7 @@ __all__ = [
     "ibis_struct",
     "read_dataset",
     "registry_snapshot",
+    "resolve_datafusion_provider",
     "resolve_datafusion_scan_options",
     "resolve_dataset_schema",
     "resolve_delta_constraints",

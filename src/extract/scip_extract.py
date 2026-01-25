@@ -631,11 +631,13 @@ def _record_scip_index_stats(
     if ctx is None:
         return
     runtime = ctx.runtime.datafusion
-    if runtime is None or runtime.diagnostics_sink is None:
+    if runtime is None:
         return
     payload = _index_stats_row(counts, index_id=index_id, index_path=index_path)
     payload["event_time_unix_ms"] = int(time.time() * 1000)
-    runtime.diagnostics_sink.record_artifact("scip_index_stats_v1", payload)
+    from datafusion_engine.diagnostics import record_artifact
+
+    record_artifact(runtime, "scip_index_stats_v1", payload)
 
 
 def _log_scip_counts(counts: Mapping[str, int], parse_opts: SCIPParseOptions) -> None:

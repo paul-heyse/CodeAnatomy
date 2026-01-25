@@ -1098,7 +1098,7 @@ def _record_op_fallback(
     payload: OpFallbackPayload,
 ) -> None:
     profile = ctx.runtime.datafusion
-    if profile is None or profile.diagnostics_sink is None:
+    if profile is None:
         return
     record = {
         "event_time_unix_ms": int(time.time() * 1000),
@@ -1109,7 +1109,9 @@ def _record_op_fallback(
         "fallback_reason": payload.fallback_reason,
         "error": payload.error,
     }
-    profile.diagnostics_sink.record_artifact("ibis_op_fallback_v1", record)
+    from datafusion_engine.diagnostics import record_artifact
+
+    record_artifact(profile, "ibis_op_fallback_v1", record)
 
 
 def _apply_portability_fallback(

@@ -8,7 +8,7 @@ from typing import Any
 
 import pyarrow.dataset as ds
 
-from datafusion_engine.diagnostics import DiagnosticsSink
+from datafusion_engine.diagnostics import DiagnosticsSink, ensure_recorder_sink
 from storage.deltalake import StorageOptions, build_delta_file_index, open_delta_table
 from storage.deltalake.file_pruning import FilePruningResult
 
@@ -108,6 +108,7 @@ def record_pruning_metrics(
     """Record pruning diagnostics when a sink is configured."""
     if sink is None:
         return
+    recorder_sink = ensure_recorder_sink(sink, session_id="incremental")
     payload = {
         "dataset_name": dataset_name,
         "candidate_count": result.candidate_count,
@@ -116,7 +117,7 @@ def record_pruning_metrics(
         "pruned_percentage": result.pruned_percentage,
         "retention_percentage": result.retention_percentage,
     }
-    sink.record_artifact("incremental_file_pruning_v1", payload)
+    recorder_sink.record_artifact("incremental_file_pruning_v1", payload)
 
 
 def _filter_paths_by_partition(

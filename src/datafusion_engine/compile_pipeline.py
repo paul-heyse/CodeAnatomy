@@ -226,10 +226,14 @@ class CompilationPipeline:
         # Type narrowing: profile is always non-None after __post_init__
         assert self.options.profile is not None
 
-        # Parse with source dialect
-        from sqlglot import parse_one  # type: ignore[attr-defined]
+        from sqlglot_tools.optimizer import parse_sql_strict
 
-        raw_ast = parse_one(sql, dialect=self.options.profile.read_dialect)
+        raw_ast = parse_sql_strict(
+            sql,
+            dialect=self.options.profile.read_dialect,
+            error_level=self.options.profile.error_level,
+            unsupported_level=self.options.profile.unsupported_level,
+        )
         if self.options.enable_rewrites and self.options.rewrite_hook is not None:
             raw_ast = self.options.rewrite_hook(raw_ast)
 
@@ -357,11 +361,21 @@ class CompilationPipeline:
         resolved_options = sql_options or DataFusionSqlPolicy().to_sql_options()
 
         # Register table params with cleanup
+        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+        profile = self.options.profile
+        assert profile is not None
+
         with register_table_params(self.ctx, bindings):
-            return self.ctx.sql_with_options(
+            return execute_with_profile(
+                self.ctx,
                 compiled.rendered_sql,
-                resolved_options,
-                **bindings.param_values,
+                profile=None,
+                options=ExecutionProfileOptions(
+                    sql_options=resolved_options,
+                    dialect=profile.write_dialect,
+                    param_values=bindings.param_values,
+                ),
             )
 
     def compile_and_execute(

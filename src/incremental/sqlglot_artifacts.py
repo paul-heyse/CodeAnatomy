@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
 from cache.diskcache_factory import cache_for_kind
+from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.schema_introspection import SchemaMapCacheOptions, schema_map_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from incremental.runtime import IncrementalRuntime
@@ -64,9 +65,6 @@ def record_sqlglot_plan_artifact(
     expr: IbisTable,
 ) -> None:
     """Record SQLGlot plan artifacts for an Ibis expression."""
-    sink = runtime.profile.diagnostics_sink
-    if sink is None:
-        return
     backend = cast("IbisCompilerBackend", runtime.ibis_backend())
     cache_profile = runtime.profile.diskcache_profile
     cache = cache_for_kind(cache_profile, "schema") if cache_profile is not None else None
@@ -102,7 +100,7 @@ def record_sqlglot_plan_artifact(
         name=name,
         artifacts=artifacts,
     )
-    sink.record_artifact("incremental_sqlglot_plan_v1", payload)
+    record_artifact(runtime.profile, "incremental_sqlglot_plan_v1", payload)
 
 
 def _lineage_payload(lineage: LineagePayload | None) -> Mapping[str, object] | None:

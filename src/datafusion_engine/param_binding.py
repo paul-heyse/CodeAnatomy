@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
-from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
@@ -230,14 +230,12 @@ def _ensure_table_slot(ctx: SessionContext, name: str) -> None:
 
 
 def _register_table_like(ctx: SessionContext, name: str, table: object) -> None:
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     if isinstance(table, pa.Table):
-        ctx.register_table(name, table)
-        invalidate_introspection_cache(ctx)
+        adapter.register_arrow_table(name, table)
         return
     to_pyarrow = getattr(table, "to_pyarrow", None)
     if callable(to_pyarrow):
-        ctx.register_table(name, to_pyarrow())
-        invalidate_introspection_cache(ctx)
+        adapter.register_arrow_table(name, to_pyarrow())
         return
-    ctx.register_table(name, table)
-    invalidate_introspection_cache(ctx)
+    adapter.register_table_provider(name, table)

@@ -116,7 +116,14 @@ def _sql_schema(
     *,
     sql_options: SQLOptions | None,
 ) -> pa.Schema:
-    return ctx.sql_with_options(sql, _read_only_sql_options(sql_options)).schema()
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    return execute_with_profile(
+        ctx,
+        sql,
+        profile=None,
+        options=ExecutionProfileOptions(sql_options=_read_only_sql_options(sql_options)),
+    ).schema()
 
 
 def _schema_from_df(df: DataFrame) -> pa.Schema:
@@ -232,16 +239,28 @@ class ViewSpec:
             Optional SQL options to enforce SQL execution policy.
         """
         if self.builder is not None:
-            view = self.builder(ctx).into_view(temporary=False)
-            ctx.register_table(self.name, view)
-            invalidate_introspection_cache(ctx)
+            from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+            df = self.builder(ctx)
+            adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+            adapter.register_view(self.name, df, overwrite=False, temporary=False)
             if record_view is not None:
                 record_view(self.name, self.sql)
             if validate:
                 self.validate(ctx, sql_options=sql_options)
             return
+        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
         create_sql = self.create_view_sql()
-        ctx.sql_with_options(create_sql, _statement_sql_options(sql_options)).collect()
+        execute_with_profile(
+            ctx,
+            create_sql,
+            profile=None,
+            options=ExecutionProfileOptions(
+                sql_options=_statement_sql_options(sql_options),
+                allow_statements=True,
+            ),
+        ).collect()
         invalidate_introspection_cache(ctx)
         if record_view is not None:
             record_view(self.name, self.sql)

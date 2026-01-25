@@ -10,7 +10,13 @@ from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from arrowdsl.schema.validation import ArrowValidationOptions
 from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle, TableSchemaSpec
-from schema_spec.system import ContractSpec, DatasetSpec, make_dataset_spec, make_table_spec
+from schema_spec.system import (
+    ContractSpec,
+    DatasetKind,
+    DatasetSpec,
+    make_dataset_spec,
+    make_table_spec,
+)
 from sqlglot_tools.expr_spec import SqlExprSpec
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
@@ -19,6 +25,7 @@ from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 class DatasetRegistration:
     """Optional registration settings for dataset specs."""
 
+    dataset_kind: DatasetKind | None = None
     query_spec: IbisQuerySpec | None = None
     contract_spec: ContractSpec | None = None
     delta_write_policy: DeltaWritePolicy | None = None
@@ -76,6 +83,7 @@ def register_dataset(
         )
     return make_dataset_spec(
         table_spec=table_spec,
+        dataset_kind=registration.dataset_kind or "primary",
         query_spec=registration.query_spec,
         contract_spec=registration.contract_spec,
         delta_write_policy=registration.delta_write_policy,

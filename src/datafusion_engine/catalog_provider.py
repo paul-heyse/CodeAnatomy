@@ -391,9 +391,12 @@ def register_registry_catalog(
     RegistryCatalogProvider
         Registered catalog provider.
     """
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
     dataset_catalog = registry.catalog if isinstance(registry, IbisDatasetRegistry) else registry
     provider = RegistryCatalogProvider(dataset_catalog, schema_name=schema_name, ctx=ctx)
-    ctx.register_catalog_provider(catalog_name, provider)
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_catalog_provider(catalog_name, provider)
     return provider
 
 
@@ -422,10 +425,13 @@ def register_registry_catalogs(
     MultiRegistryCatalogProvider
         Registered catalog provider.
     """
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
     provider = MultiRegistryCatalogProvider(
         catalogs=catalogs, default_schema=default_schema, ctx=ctx
     )
-    ctx.register_catalog_provider(catalog_name, provider)
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_catalog_provider(catalog_name, provider)
     return provider
 
 

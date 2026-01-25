@@ -192,7 +192,7 @@ class DataFusionScanOptions:
     """DataFusion-specific scan configuration."""
 
     partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
-    file_sort_order: tuple[str, ...] = ()
+    file_sort_order: tuple[tuple[str, str], ...] = ()
     parquet_pruning: bool = True
     skip_metadata: bool = True
     skip_arrow_metadata: bool | None = None
@@ -226,6 +226,9 @@ class DeltaScanOptions:
     schema_force_view_types: bool | None = None
     wrap_partition_values: bool = False
     schema: pa.Schema | None = None
+
+
+type DatasetKind = Literal["primary", "delta_cdf"]
 
 
 def _ordering_metadata_spec(
@@ -325,6 +328,7 @@ class DatasetSpec:
     """Unified dataset spec with schema, contract, and query behavior."""
 
     table_spec: TableSchemaSpec
+    dataset_kind: DatasetKind = "primary"
     contract_spec: ContractSpec | None = None
     query_spec: IbisQuerySpec | None = None
     view_specs: tuple[ViewSpec, ...] = ()
@@ -855,6 +859,7 @@ class ContractKwargs(TypedDict):
 class DatasetSpecKwargs(TypedDict, total=False):
     """Keyword arguments supported by make_dataset_spec."""
 
+    dataset_kind: DatasetKind
     contract_spec: ContractSpec | None
     query_spec: IbisQuerySpec | None
     view_specs: Sequence[ViewSpec]
@@ -1023,6 +1028,7 @@ def make_dataset_spec(
     """
     return DatasetSpec(
         table_spec=table_spec,
+        dataset_kind=kwargs.get("dataset_kind", "primary"),
         contract_spec=kwargs.get("contract_spec"),
         query_spec=kwargs.get("query_spec"),
         view_specs=tuple(kwargs.get("view_specs", ())),
@@ -1363,6 +1369,7 @@ __all__ = [
     "ContractSpec",
     "ContractSpecKwargs",
     "DataFusionScanOptions",
+    "DatasetKind",
     "DatasetOpenSpec",
     "DatasetSpec",
     "DatasetSpecKwargs",

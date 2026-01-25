@@ -17,6 +17,7 @@ from schema_spec.specs import DerivedFieldSpec, TableSchemaSpec
 from schema_spec.system import (
     ContractSpec,
     DataFusionScanOptions,
+    DatasetKind,
     DatasetSpec,
     DedupeSpecSpec,
     DeltaScanOptions,
@@ -160,7 +161,7 @@ class DataFusionScanPayload(StructBase, frozen=True):
     """Serializable DataFusion scan payload."""
 
     partition_schema_msgpack: bytes | None = None
-    file_sort_order: tuple[str, ...] = ()
+    file_sort_order: tuple[tuple[str, str], ...] = ()
     parquet_pruning: bool = True
     skip_metadata: bool = True
     skip_arrow_metadata: bool | None = None
@@ -225,6 +226,7 @@ class DatasetSpecPayload(StructBase, frozen=True):
     """Serializable dataset spec payload."""
 
     table_schema: TableSchemaPayload
+    dataset_kind: DatasetKind = "primary"
     contract_spec: ContractSpecPayload | None = None
     query_spec: IbisQueryPayload | None = None
     view_specs: tuple[ViewSpecPayload, ...] = ()
@@ -674,6 +676,7 @@ def dataset_spec_payload(spec: DatasetSpec) -> DatasetSpecPayload:
     """
     return DatasetSpecPayload(
         table_schema=_table_schema_payload(spec.table_spec),
+        dataset_kind=spec.dataset_kind,
         contract_spec=_contract_payload(spec.contract_spec) if spec.contract_spec else None,
         query_spec=_query_payload(spec.query_spec) if spec.query_spec is not None else None,
         view_specs=tuple(_view_payload(item) for item in spec.view_specs),
@@ -716,6 +719,7 @@ def dataset_spec_from_payload(payload: DatasetSpecPayload) -> DatasetSpec:
     table_spec = _table_schema_from_payload(payload.table_schema)
     return DatasetSpec(
         table_spec=table_spec,
+        dataset_kind=payload.dataset_kind,
         contract_spec=(
             _contract_from_payload(payload.contract_spec)
             if payload.contract_spec is not None

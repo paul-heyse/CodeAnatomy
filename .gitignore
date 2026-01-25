@@ -10,5 +10,8 @@ wheels/
 !build/scip/
 !build/scip/**
 
+# Rust build artifacts
+target/
+Cargo.lock
 # Virtual environments
 .venv

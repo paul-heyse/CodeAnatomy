@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from datafusion import SQLOptions
 
 from datafusion_engine.compile_options import DataFusionSqlPolicy
+from schema_spec.policies import DataFusionWritePolicy, ParquetColumnPolicy
 from sqlglot_tools.compat import exp
 
 if TYPE_CHECKING:
@@ -24,8 +25,13 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.diagnostics import DiagnosticsRecorder
-    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-    from schema_spec.policies import DataFusionWritePolicy, ParquetColumnPolicy
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+from datafusion_engine.sql_safety import (
+    ExecutionPolicy,
+    ExecutionProfileOptions,
+    execute_with_profile,
+)
+from datafusion_engine.table_provider_metadata import table_provider_metadata
 
 
 class WriteFormat(Enum):
@@ -208,6 +214,8 @@ class WriteRequest:
     parquet_policy: ParquetWritePolicy | None = None
     format_options: dict[str, object] | None = None
     single_file_output: bool | None = None
+    table_name: str | None = None
+    constraints: tuple[str, ...] = ()
 
     def to_copy_ast(
         self,
@@ -234,12 +242,17 @@ class WriteRequest:
         This method uses `sqlglot_tools.ddl_builders.build_copy_to_ast`
         to construct the AST with proper option encoding.
         """
-        from sqlglot_tools.compat import parse_one
         from sqlglot_tools.ddl_builders import build_copy_to_ast
+        from sqlglot_tools.optimizer import parse_sql_strict
 
         # Parse source if string
         if isinstance(self.source, str):
-            query = parse_one(self.source, dialect=profile.read_dialect)
+            query = parse_sql_strict(
+                self.source,
+                dialect=profile.read_dialect,
+                error_level=profile.error_level,
+                unsupported_level=profile.unsupported_level,
+            )
         else:
             query = self.source
 
@@ -387,7 +400,16 @@ class WritePipeline:
         """
         copy_ast = request.to_copy_ast(self.profile)
         sql = copy_ast.sql(dialect=self.profile.write_dialect)
-        df = self.ctx.sql_with_options(sql, self._resolved_sql_options())
+        policy = ExecutionPolicy(allow_ddl=False, allow_dml=True, allow_statements=True)
+        df = execute_with_profile(
+            self.ctx,
+            sql,
+            profile=None,
+            options=ExecutionProfileOptions(
+                policy=policy,
+                sql_options=self._resolved_sql_options(),
+            ),
+        )
         return sql, df
 
     def write_via_streaming(
@@ -466,6 +488,59 @@ class WritePipeline:
         self._record_write_artifact(write_result)
         return write_result
 
+    def write_via_insert(
+        self,
+        request: WriteRequest,
+        *,
+        table_name: str,
+    ) -> WriteResult:
+        """Write using INSERT INTO against a registered table provider.
+
+        Parameters
+        ----------
+        request
+            Write request specification.
+        table_name
+            Registered table provider name to insert into.
+
+        Returns
+        -------
+        WriteResult
+            Write result metadata for the INSERT operation.
+
+        Raises
+        ------
+        ValueError
+            Raised when INSERT is incompatible with the request options.
+        """
+        if request.partition_by:
+            msg = "INSERT writes do not support partition_by."
+            raise ValueError(msg)
+        if request.mode == WriteMode.ERROR:
+            msg = "INSERT requires APPEND or OVERWRITE mode."
+            raise ValueError(msg)
+        from datafusion_engine.bridge import DeltaInsertOptions, datafusion_insert_delta
+
+        start = time.perf_counter()
+        mode = "overwrite" if request.mode == WriteMode.OVERWRITE else "append"
+        sql = self._source_sql(request)
+        insert_options = DeltaInsertOptions(mode=mode, constraints=request.constraints)
+        datafusion_insert_delta(
+            self.ctx,
+            table_name,
+            sql,
+            options=insert_options,
+        )
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        write_result = WriteResult(
+            request=request,
+            method=WriteMethod.INSERT,
+            sql=sql,
+            duration_ms=duration_ms,
+        )
+        self._record_write_artifact(write_result)
+        return write_result
+
     def write(
         self,
         request: WriteRequest,
@@ -496,6 +571,9 @@ class WritePipeline:
         - PARQUET with prefer_streaming: use streaming
         - All other cases: use COPY
         """
+        insert_target = self._insert_target(request)
+        if insert_target is not None:
+            return self.write_via_insert(request, table_name=insert_target)
         if request.format == WriteFormat.PARQUET:
             if request.partition_by:
                 return self.write_via_streaming(request)
@@ -551,6 +629,17 @@ class WritePipeline:
         if isinstance(request.source, str):
             return request.source
         return request.source.sql(dialect=self.profile.write_dialect)
+
+    def _insert_target(self, request: WriteRequest) -> str | None:
+        target = request.table_name or request.destination
+        metadata = table_provider_metadata(id(self.ctx), table_name=target)
+        if metadata is None:
+            return None
+        if metadata.file_format != "delta":
+            return None
+        if metadata.supports_insert is False:
+            return None
+        return target
 
 
 def parquet_policy_from_datafusion(

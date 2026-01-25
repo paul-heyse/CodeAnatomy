@@ -24,9 +24,9 @@ from datafusion_engine.bridge import (
     IbisCompilerBackend,
     datafusion_to_reader,
     datafusion_to_table,
-    ibis_to_datafusion,
 )
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.schema_introspection import SchemaIntrospector, schema_map_fingerprint
 from ibis_engine.plan import IbisPlan
 from obs.datafusion_runs import tracked_run
@@ -336,18 +336,19 @@ def _datafusion_dataframe_for_plan(
         execution=execution,
         params=params,
     )
+    facade = DataFusionExecutionFacade(
+        ctx=execution.ctx,
+        runtime_profile=execution.runtime_profile,
+        ibis_backend=execution.backend,
+    )
     runtime_profile = execution.runtime_profile
     if (
         runtime_profile is None
         or runtime_profile.diagnostics_sink is None
         or options.run_id is not None
     ):
-        return ibis_to_datafusion(
-            plan.expr,
-            backend=execution.backend,
-            ctx=execution.ctx,
-            options=options,
-        )
+        result = facade.execute_expr(plan.expr, options=options)
+        return _require_dataframe(result)
     label = _datafusion_run_label(execution, operation="compile")
     metadata = _datafusion_run_metadata(execution, operation="compile")
     from datafusion_engine.diagnostics import ensure_recorder_sink
@@ -357,15 +358,18 @@ def _datafusion_dataframe_for_plan(
         session_id=runtime_profile.context_cache_key(),
     )
     with tracked_run(label=label, sink=sink, metadata=metadata) as run:
-        df = ibis_to_datafusion(
-            plan.expr,
-            backend=execution.backend,
-            ctx=execution.ctx,
-            options=replace(options, run_id=run.run_id),
-        )
+        result = facade.execute_expr(plan.expr, options=replace(options, run_id=run.run_id))
+        df = _require_dataframe(result)
         _record_metrics_snapshot(execution, run_id=run.run_id)
         _record_tracing_snapshot(execution, run_id=run.run_id)
         return df
+
+
+def _require_dataframe(result: ExecutionResult) -> DataFrame:
+    if result.dataframe is None:
+        msg = f"Execution result is not a dataframe: {result.kind}."
+        raise ValueError(msg)
+    return result.dataframe
 
 
 def _resolve_options(

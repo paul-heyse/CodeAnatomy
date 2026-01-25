@@ -37,13 +37,22 @@ def _datafusion_context() -> SessionContext:
 
 
 def _sql_table(ctx: SessionContext, sql: str) -> pa.Table:
-    return ctx.sql_with_options(sql, sql_options_for_profile(None)).to_arrow_table()
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    return execute_with_profile(
+        ctx,
+        sql,
+        profile=None,
+        options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
+    ).to_arrow_table()
 
 
 def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
     name = f"_{prefix}_{uuid4().hex}"
-    ctx.register_record_batches(name, [list(table.to_batches())])
-    invalidate_introspection_cache(ctx)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_record_batches(name, [list(table.to_batches())])
     return name
 
 

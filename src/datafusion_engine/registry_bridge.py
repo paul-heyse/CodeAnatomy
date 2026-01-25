@@ -26,15 +26,12 @@ from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import ensure_path
+from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.introspection import (
     introspection_cache_for_ctx,
     invalidate_introspection_cache,
 )
-from datafusion_engine.io_adapter import (
-    DataFusionIOAdapter,
-    _external_table_ddl_config,
-    _normalize_external_table_options,
-)
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import schema_introspector_for_profile
 from datafusion_engine.schema_contracts import schema_contract_from_table_schema_contract
 from datafusion_engine.schema_introspection import (
@@ -53,6 +50,7 @@ from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
+    table_provider_metadata,
 )
 from ibis_engine.registry import (
     DatasetLocation,
@@ -62,9 +60,13 @@ from ibis_engine.registry import (
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
-from sqlglot_tools.compat import exp, parse_one
-from sqlglot_tools.ddl_builders import build_external_table_ddl
-from sqlglot_tools.optimizer import build_select, resolve_sqlglot_policy, sqlglot_emit
+from sqlglot_tools.compat import exp
+from sqlglot_tools.optimizer import (
+    build_select,
+    parse_sql_strict,
+    resolve_sqlglot_policy,
+    sqlglot_emit,
+)
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -75,7 +77,6 @@ from schema_spec.system import (
     ParquetColumnOptions,
     TableSchemaContract,
     dataset_spec_from_schema,
-    ddl_fingerprint_from_definition,
     make_dataset_spec,
 )
 from storage.deltalake import DeltaCdfOptions
@@ -88,7 +89,10 @@ _REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
 _INPUT_PLUGIN_PREFIXES = ("artifact://", "dataset://", "repo://")
 _CST_EXTERNAL_TABLE_NAME = "libcst_files_v1"
 _CST_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
-_CST_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
+_CST_FILE_SORT_ORDER: tuple[tuple[str, str], ...] = (
+    ("path", "ascending"),
+    ("file_id", "ascending"),
+)
 _CST_PROJECTION_EXPRS: tuple[str, ...] = (
     "repo",
     "path",
@@ -110,16 +114,28 @@ _CST_PROJECTION_EXPRS: tuple[str, ...] = (
 _CST_PARQUET_COLUMN_OPTIONS = ParquetColumnOptions(statistics_enabled=("file_id", "path", "repo"))
 _AST_EXTERNAL_TABLE_NAME = "ast_files_v1"
 _AST_PARTITION_FIELDS: tuple[str, ...] = ("repo", "path")
-_AST_FILE_SORT_ORDER: tuple[str, ...] = ("repo", "path")
+_AST_FILE_SORT_ORDER: tuple[tuple[str, str], ...] = (
+    ("repo", "ascending"),
+    ("path", "ascending"),
+)
 _SYMTABLE_EXTERNAL_TABLE_NAME = "symtable_files_v1"
 _SYMTABLE_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
-_SYMTABLE_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
+_SYMTABLE_FILE_SORT_ORDER: tuple[tuple[str, str], ...] = (
+    ("path", "ascending"),
+    ("file_id", "ascending"),
+)
 _BYTECODE_EXTERNAL_TABLE_NAME = "bytecode_files_v1"
 _BYTECODE_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
-_BYTECODE_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
+_BYTECODE_FILE_SORT_ORDER: tuple[tuple[str, str], ...] = (
+    ("path", "ascending"),
+    ("file_id", "ascending"),
+)
 _TREE_SITTER_EXTERNAL_TABLE_NAME = "tree_sitter_files_v1"
 _TREE_SITTER_PARTITION_FIELDS: tuple[str, ...] = ("repo",)
-_TREE_SITTER_FILE_SORT_ORDER: tuple[str, ...] = ("path", "file_id")
+_TREE_SITTER_FILE_SORT_ORDER: tuple[tuple[str, str], ...] = (
+    ("path", "ascending"),
+    ("file_id", "ascending"),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -302,14 +318,13 @@ class DataFusionRegistrationContext:
     location: DatasetLocation
     options: DataFusionRegistryOptions
     cache: DataFusionCacheSettings
-    external_table_sql: str | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
 
 
 @dataclass(frozen=True)
 class _ScanDefaults:
     partition_fields: tuple[str, ...]
-    file_sort_order: tuple[str, ...]
+    file_sort_order: tuple[tuple[str, str], ...]
     infer_partitions: bool
     cache_ttl: str
     listing_mutable: bool
@@ -414,7 +429,9 @@ def _default_scan_options_for_dataset(name: str) -> DataFusionScanOptions | None
         dtype = _schema_field_type(name, field_name)
         if dtype is not None:
             partition_cols.append((field_name, dtype))
-    file_sort_order = tuple(field for field in defaults.file_sort_order if field in schema.names)
+    file_sort_order = tuple(
+        (field, order) for field, order in defaults.file_sort_order if field in schema.names
+    )
     return DataFusionScanOptions(
         partition_cols=tuple(partition_cols),
         file_sort_order=file_sort_order,
@@ -472,6 +489,12 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
         raise ValueError(msg)
     if provider == "parquet":
         provider = "listing"
+    if (
+        provider is None
+        and location.dataset_spec is not None
+        and location.dataset_spec.dataset_kind == "delta_cdf"
+    ):
+        provider = "delta_cdf"
     if provider is None and location.format == "delta" and location.delta_cdf_options is not None:
         provider = "delta_cdf"
     if provider is None and location.format != "delta":
@@ -660,7 +683,7 @@ def register_dataset_df(
 
 
 @dataclass(frozen=True)
-class DatasetDdlRegistration:
+class DatasetRegistration:
     """Define inputs for dataset registration."""
 
     name: str
@@ -669,9 +692,9 @@ class DatasetDdlRegistration:
     file_format: str = "PARQUET"
 
 
-def register_dataset_ddl(
+def register_dataset_spec(
     ctx: SessionContext,
-    registration: DatasetDdlRegistration,
+    registration: DatasetRegistration,
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> None:
@@ -681,7 +704,7 @@ def register_dataset_ddl(
     ----------
     ctx : SessionContext
         DataFusion session context to register the table in.
-    registration : DatasetDdlRegistration
+    registration : DatasetRegistration
         Registration inputs including name, spec, location, and file format.
     runtime_profile : DataFusionRuntimeProfile | None
         Optional runtime profile used for registration defaults.
@@ -702,9 +725,9 @@ def register_dataset_ddl(
     ...     table_spec=table_spec,
     ...     datafusion_scan=DataFusionScanOptions(unbounded=True),
     ... )
-    >>> register_dataset_ddl(
+    >>> register_dataset_spec(
     ...     ctx,
-    ...     DatasetDdlRegistration(
+    ...     DatasetRegistration(
     ...         name="streaming_events",
     ...         spec=spec,
     ...         location="s3://bucket/events/",
@@ -724,47 +747,6 @@ def register_dataset_ddl(
     )
 
 
-def datafusion_external_table_sql(
-    *,
-    name: str,
-    location: DatasetLocation,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-    options_override: Mapping[str, object] | None = None,
-) -> str | None:
-    """Return external table DDL for a dataset location.
-
-    Parameters
-    ----------
-    name : str
-        Table name to register.
-    location : DatasetLocation
-        Dataset location metadata including schema and scan options.
-    runtime_profile : DataFusionRuntimeProfile | None
-        Optional runtime profile providing session defaults.
-    options_override : Mapping[str, object] | None
-        Optional statement-level overrides applied after location and profile defaults.
-
-    Returns
-    -------
-    str | None
-        Rendered DDL statement for external table registration.
-    """
-    location = _apply_scan_defaults(name, location)
-    config = _external_table_ddl_config(location=location, profile=runtime_profile)
-    options: dict[str, object] = dict(config.options or {})
-    if options_override:
-        options.update(dict(options_override))
-    normalized = _normalize_external_table_options(options) or {}
-    compression = normalized.pop("compression", None) or config.compression
-    ordered_options = {key: normalized[key] for key in sorted(normalized)}
-    updated_config = replace(
-        config,
-        options=ordered_options or None,
-        compression=compression,
-    )
-    return build_external_table_ddl(name=name, location=location, config=updated_config)
-
-
 def _build_registration_context(
     ctx: SessionContext,
     *,
@@ -782,31 +764,24 @@ def _build_registration_context(
         cache_policy=cache_policy,
         runtime_profile=runtime_profile,
     )
-    external_table_sql: str | None = None
     context = DataFusionRegistrationContext(
         ctx=ctx,
         name=name,
         location=location,
         options=options,
         cache=cache,
-        external_table_sql=external_table_sql,
         runtime_profile=runtime_profile,
-    )
-    ddl_fingerprint = (
-        ddl_fingerprint_from_definition(external_table_sql)
-        if external_table_sql is not None
-        else None
     )
     metadata = TableProviderMetadata(
         table_name=name,
-        ddl=external_table_sql,
+        ddl=None,
         storage_location=str(location.path),
         file_format=location.format or "unknown",
         partition_columns=tuple(col for col, _ in options.scan.partition_cols)
         if options.scan and options.scan.partition_cols
         else (),
         unbounded=options.scan.unbounded if options.scan else False,
-        ddl_fingerprint=ddl_fingerprint,
+        ddl_fingerprint=None,
     )
     record_table_provider_metadata(id(ctx), metadata=metadata)
     return context
@@ -956,6 +931,11 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             ),
         ),
     )
+    _update_table_provider_capabilities(
+        context.ctx,
+        name=context.name,
+        supports_insert=True,
+    )
     df = context.ctx.table(context.name)
     return _maybe_cache(context, df)
 
@@ -1098,105 +1078,6 @@ def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] |
     }
 
 
-def _register_external_table(
-    context: DataFusionRegistrationContext,
-) -> DataFrame:
-    """Register external table via legacy DDL-based path.
-
-    This is the preferred registration path that uses DataFusion's native
-    DDL parsing and execution instead of bespoke registry logic. It leverages
-    CREATE EXTERNAL TABLE statements and information_schema for schema contracts.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        Registered DataFusion DataFrame.
-
-    Raises
-    ------
-    ValueError
-        If the external table SQL statement is missing.
-    """
-    scan = context.options.scan
-    if context.external_table_sql is None:
-        msg = "External table registration requires a schema-backed DDL statement."
-        raise ValueError(msg)
-    file_extension = scan.file_extension if scan and scan.file_extension else ".parquet"
-    table_schema_contract = _resolve_table_schema_contract(
-        schema=context.options.schema,
-        scan=scan,
-        partition_cols=scan.partition_cols if scan is not None else None,
-    )
-    _validate_table_schema_contract(table_schema_contract)
-    _validate_ordering_contract(context, scan=scan)
-    table_partition_cols = (
-        [(col, str(dtype)) for col, dtype in scan.partition_cols]
-        if scan and scan.partition_cols
-        else None
-    )
-    skip_metadata = None
-    if scan is not None:
-        skip_metadata = _effective_skip_metadata(context.location, scan)
-    _apply_scan_settings(
-        context.ctx,
-        scan=scan,
-        sql_options=_statement_sql_options_for_profile(context.runtime_profile),
-        runtime_profile=context.runtime_profile,
-    )
-    try:
-        from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-        adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
-        adapter.register_external_table(
-            name=context.name,
-            location=context.location,
-            ddl=context.external_table_sql,
-        )
-    except (RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to register unbounded external table: {exc}"
-        raise ValueError(msg) from exc
-    df = context.ctx.table(context.name)
-    registered_schema = df.schema()
-    expr_adapter_factory = _resolve_expr_adapter_factory(
-        scan,
-        runtime_profile=context.runtime_profile,
-        dataset_name=context.name,
-        location=context.location,
-    )
-    dataset_spec = _resolve_dataset_spec(context.name, context.location)
-    evolution_required = (
-        _requires_schema_evolution_adapter(dataset_spec.evolution_spec)
-        if dataset_spec is not None
-        else False
-    )
-    _ensure_expr_adapter_factory(
-        context.ctx,
-        factory=expr_adapter_factory,
-        evolution_required=evolution_required,
-    )
-    _validate_constraints_and_defaults(
-        context,
-        enable_information_schema=(
-            context.runtime_profile.enable_information_schema
-            if context.runtime_profile is not None
-            else False
-        ),
-    )
-    _record_listing_table_artifact(
-        context,
-        details=_ListingTableArtifactDetails(
-            scan=scan,
-            file_extension=file_extension,
-            table_partition_cols=table_partition_cols,
-            skip_metadata=skip_metadata,
-            table_schema_contract=table_schema_contract,
-            expr_adapter_factory=expr_adapter_factory,
-            actual_schema=registered_schema,
-        ),
-    )
-    return _maybe_cache(context, df)
-
-
 def _file_extension_for_location(
     location: DatasetLocation,
     *,
@@ -1298,7 +1179,9 @@ def _register_listing_table(
     )
     file_sort_order = None
     if scan is not None and scan.file_sort_order:
-        file_sort_order = [list(scan.file_sort_order)]
+        file_sort_order = [
+            (str(column), str(direction)) for column, direction in scan.file_sort_order
+        ]
     skip_metadata = None
     if scan is not None:
         skip_metadata = _effective_skip_metadata(context.location, scan)
@@ -1489,8 +1372,6 @@ def _record_table_provider_artifact(
     *,
     artifact: _TableProviderArtifact,
 ) -> None:
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
-        return
     capsule_id = _provider_capsule_id(artifact.provider, source=artifact.source)
     payload: dict[str, object] = {
         "name": artifact.name,
@@ -1504,7 +1385,25 @@ def _record_table_provider_artifact(
         payload.update(_provider_pushdown_hints(artifact.provider))
     if artifact.details:
         payload.update(artifact.details)
-    runtime_profile.diagnostics_sink.record_artifact("datafusion_table_providers_v1", payload)
+    record_artifact(runtime_profile, "datafusion_table_providers_v1", payload)
+
+
+def _update_table_provider_capabilities(
+    ctx: SessionContext,
+    *,
+    name: str,
+    supports_insert: bool | None = None,
+    supports_cdf: bool | None = None,
+) -> None:
+    metadata = table_provider_metadata(id(ctx), table_name=name)
+    if metadata is None:
+        return
+    updated = replace(
+        metadata,
+        supports_insert=supports_insert,
+        supports_cdf=supports_cdf,
+    )
+    record_table_provider_metadata(id(ctx), metadata=updated)
 
 
 def _record_listing_table_artifact(
@@ -1513,7 +1412,7 @@ def _record_listing_table_artifact(
     details: _ListingTableArtifactDetails,
 ) -> None:
     profile = context.runtime_profile
-    if profile is None or profile.diagnostics_sink is None:
+    if profile is None:
         return
     provenance = _table_provenance_snapshot(
         context.ctx,
@@ -1525,20 +1424,6 @@ def _record_listing_table_artifact(
     expected_schema = context.options.schema
     expected_schema_fingerprint = _schema_fingerprint(expected_schema)
     actual_schema_fingerprint = _schema_fingerprint(details.actual_schema)
-    expected_ddl_fingerprint = (
-        ddl_fingerprint_from_definition(context.external_table_sql)
-        if context.external_table_sql is not None
-        else None
-    )
-    observed_ddl_fingerprint = _ddl_fingerprint(
-        _DdlFingerprintContext(
-            ctx=context.ctx,
-            enable_information_schema=profile.enable_information_schema,
-            runtime_profile=profile,
-        ),
-        name=context.name,
-        schema=expected_schema,
-    )
     table_schema_snapshot = _table_schema_snapshot(
         schema=context.options.schema,
         partition_cols=details.table_partition_cols,
@@ -1551,8 +1436,10 @@ def _record_listing_table_artifact(
         if ordering.keys:
             ordering_keys = [list(key) for key in ordering.keys]
             if details.scan is not None and details.scan.file_sort_order:
-                expected = [key[0] for key in ordering.keys]
-                ordering_matches_scan = list(details.scan.file_sort_order) == expected
+                expected = [list(key) for key in ordering.keys]
+                ordering_matches_scan = [
+                    list(key) for key in details.scan.file_sort_order
+                ] == expected
     payload: dict[str, object] = {
         "name": context.name,
         "path": str(context.location.path),
@@ -1563,7 +1450,9 @@ def _record_listing_table_artifact(
             {"name": col, "dtype": dtype} for col, dtype in (details.table_partition_cols or ())
         ],
         "file_sort_order": (
-            list(details.scan.file_sort_order) if details.scan is not None else None
+            [list(key) for key in details.scan.file_sort_order]
+            if details.scan is not None
+            else None
         ),
         "ordering_keys": ordering_keys,
         "ordering_matches_scan": ordering_matches_scan,
@@ -1610,9 +1499,6 @@ def _record_listing_table_artifact(
         "expected_schema_fingerprint": expected_schema_fingerprint,
         "actual_schema_fingerprint": actual_schema_fingerprint,
         "schema_match": _fingerprints_match(expected_schema_fingerprint, actual_schema_fingerprint),
-        "expected_ddl_fingerprint": expected_ddl_fingerprint,
-        "observed_ddl_fingerprint": observed_ddl_fingerprint,
-        "ddl_match": _fingerprints_match(expected_ddl_fingerprint, observed_ddl_fingerprint),
         "table_schema_snapshot": table_schema_snapshot,
         "table_schema_contract": _table_schema_contract_payload(details.table_schema_contract),
         "schema_evolution": evolution_payload,
@@ -1630,7 +1516,7 @@ def _record_listing_table_artifact(
         expected_partition_cols=details.table_partition_cols,
     )
     payload.update(provenance)
-    profile.diagnostics_sink.record_artifact("datafusion_listing_tables_v1", payload)
+    record_artifact(profile, "datafusion_listing_tables_v1", payload)
 
 
 def _apply_projection_exprs(
@@ -1651,21 +1537,35 @@ def _apply_projection_exprs(
         overwrite=True,
         temporary=True,
     )
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
     parsed_exprs: list[exp.Expression] = []
     for projection in projection_exprs:
         try:
-            parsed_exprs.append(parse_one(projection))
+            parsed_exprs.append(
+                parse_sql_strict(
+                    projection,
+                    dialect=policy.read_dialect,
+                    error_level=policy.error_level,
+                    unsupported_level=policy.unsupported_level,
+                )
+            )
         except (ParseError, TypeError, ValueError):
             parsed_exprs = []
             break
     if parsed_exprs:
-        policy = resolve_sqlglot_policy(name="datafusion_compile")
         view_expr = build_select(parsed_exprs, from_=base_name)
         view_sql = sqlglot_emit(view_expr, policy=policy)
     else:
         selection = ", ".join(projection_exprs)
         view_sql = f"SELECT {selection} FROM {base_name}"
-    projected = ctx.sql_with_options(view_sql, sql_options)
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    projected = execute_with_profile(
+        ctx,
+        view_sql,
+        profile=runtime_profile,
+        options=ExecutionProfileOptions(sql_options=sql_options),
+    )
     adapter.register_view(
         table_name,
         projected,
@@ -1833,7 +1733,17 @@ def _set_runtime_setting(
     if violations:
         msg = f"SQL policy violations: {', '.join(violations)}."
         raise ValueError(msg)
-    ctx.sql_with_options(sql, sql_options).collect()
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    execute_with_profile(
+        ctx,
+        sql,
+        profile=runtime_profile,
+        options=ExecutionProfileOptions(
+            sql_options=sql_options,
+            allow_statements=True,
+        ),
+    ).collect()
 
 
 def _refresh_listing_table(
@@ -1849,12 +1759,7 @@ def _refresh_listing_table(
         adapter.deregister_table(name)
     register()
     _invalidate_information_schema_cache(runtime_profile, ctx)
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
-        return
-    runtime_profile.diagnostics_sink.record_artifact(
-        "datafusion_listing_refresh_v1",
-        {"name": name},
-    )
+    record_artifact(runtime_profile, "datafusion_listing_refresh_v1", {"name": name})
 
 
 def _schema_fingerprint(schema: pa.Schema | None) -> str | None:
@@ -1937,13 +1842,13 @@ def _validate_ordering_contract(
     ordering = ordering_from_schema(schema)
     if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
         return
-    expected = [key[0] for key in ordering.keys]
+    expected = [list(key) for key in ordering.keys]
     if scan is None or not scan.file_sort_order:
         msg = f"{context.name} ordering requires file_sort_order {expected}."
         raise ValueError(msg)
-    if list(scan.file_sort_order) != expected:
+    if [list(key) for key in scan.file_sort_order] != expected:
         msg = (
-            f"{context.name} file_sort_order {list(scan.file_sort_order)} does not match "
+            f"{context.name} file_sort_order {[list(key) for key in scan.file_sort_order]} does not match "
             f"schema ordering {expected}."
         )
         raise ValueError(msg)
@@ -2043,36 +1948,6 @@ def _schema_evolution_adapter_factory() -> object:
         msg = "schema_evolution_adapter_factory is not available in datafusion_ext."
         raise TypeError(msg)
     return factory()
-
-
-@dataclass(frozen=True)
-class _DdlFingerprintContext:
-    ctx: SessionContext
-    enable_information_schema: bool
-    runtime_profile: DataFusionRuntimeProfile | None = None
-
-
-def _ddl_fingerprint(
-    context: _DdlFingerprintContext,
-    *,
-    name: str,
-    schema: pa.Schema | None,
-) -> str | None:
-    if context.enable_information_schema:
-        if context.runtime_profile is not None:
-            ddl = schema_introspector_for_profile(
-                context.runtime_profile,
-                context.ctx,
-            ).table_definition(name)
-        else:
-            ddl = SchemaIntrospector(
-                context.ctx,
-                sql_options=_sql_options_for_profile(None),
-            ).table_definition(name)
-        if ddl is not None:
-            return ddl_fingerprint_from_definition(ddl)
-    _ = schema
-    return None
 
 
 def _fingerprints_match(left: str | None, right: str | None) -> bool | None:
@@ -2447,6 +2322,11 @@ def register_delta_cdf_df(
             source=None,
         ),
     )
+    _update_table_provider_capabilities(
+        ctx,
+        name=name,
+        supports_cdf=True,
+    )
     _record_delta_cdf_artifact(
         runtime_profile,
         artifact=DeltaCdfArtifact(
@@ -2495,8 +2375,6 @@ def _record_delta_cdf_artifact(
     *,
     artifact: DeltaCdfArtifact,
 ) -> None:
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
-        return
     payload: dict[str, object] = {
         "name": artifact.name,
         "path": artifact.path,
@@ -2506,7 +2384,7 @@ def _record_delta_cdf_artifact(
             dict(artifact.log_storage_options) if artifact.log_storage_options else None
         ),
     }
-    runtime_profile.diagnostics_sink.record_artifact("datafusion_delta_cdf_v1", payload)
+    record_artifact(runtime_profile, "datafusion_delta_cdf_v1", payload)
 
 
 def _cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object] | None:
@@ -2595,8 +2473,11 @@ def _ensure_catalog_schema(ctx: SessionContext, *, catalog: str, schema: str) ->
         try:
             cat = ctx.catalog(catalog)
         except KeyError:
+            from datafusion_engine.io_adapter import DataFusionIOAdapter
+
             cat = Catalog.memory_catalog()
-            ctx.register_catalog_provider(catalog, cat)
+            adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+            adapter.register_catalog_provider(catalog, cat)
         registered_catalogs.add(catalog)
     if (catalog, schema) in registered_schemas:
         return
@@ -2659,13 +2540,12 @@ __all__ = [
     "DataFusionCachePolicy",
     "DataFusionCacheSettings",
     "DataFusionRegistryOptions",
-    "DatasetDdlRegistration",
     "DatasetInputSource",
-    "datafusion_external_table_sql",
+    "DatasetRegistration",
     "dataset_input_plugin",
     "input_plugin_prefixes",
-    "register_dataset_ddl",
     "register_dataset_df",
+    "register_dataset_spec",
     "register_delta_cdf_df",
     "resolve_registry_options",
 ]

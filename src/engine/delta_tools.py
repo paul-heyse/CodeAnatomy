@@ -167,7 +167,9 @@ def _record_maintenance(
 ) -> None:
     if runtime_profile is None or runtime_profile.diagnostics_sink is None:
         return
-    runtime_profile.diagnostics_sink.record_artifact("delta_maintenance_v1", payload)
+    from datafusion_engine.diagnostics import record_artifact
+
+    record_artifact(runtime_profile, "delta_maintenance_v1", payload)
 
 
 def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
@@ -218,7 +220,9 @@ def _record_querybuilder(
 ) -> None:
     if runtime_profile is None or runtime_profile.diagnostics_sink is None:
         return
-    runtime_profile.diagnostics_sink.record_artifact("delta_querybuilder_v1", payload)
+    from datafusion_engine.diagnostics import record_artifact
+
+    record_artifact(runtime_profile, "delta_querybuilder_v1", payload)
 
 
 __all__ = [

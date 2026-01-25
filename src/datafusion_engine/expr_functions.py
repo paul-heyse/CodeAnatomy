@@ -47,16 +47,7 @@ from datafusion_ext import (
     prefixed_hash64 as _prefixed_hash64,
 )
 from datafusion_ext import (
-    row_index as _row_index,
-)
-from datafusion_ext import (
     row_number_window as _row_number_window,
-)
-from datafusion_ext import (
-    running_count as _running_count,
-)
-from datafusion_ext import (
-    running_total as _running_total,
 )
 from datafusion_ext import (
     stable_hash64 as _stable_hash64,
@@ -242,54 +233,6 @@ def string_agg(value: Expr, delimiter: Expr) -> Expr:
         DataFusion expression.
     """
     return _string_agg(value, delimiter)
-
-
-def row_index(expr: Expr) -> Expr:
-    """Build a row_index window expression.
-
-    Parameters
-    ----------
-    expr
-        Dummy expression (unused by the window function).
-
-    Returns
-    -------
-    Expr
-        DataFusion expression.
-    """
-    return _row_index(expr)
-
-
-def running_count(expr: Expr) -> Expr:
-    """Build a running_count window expression.
-
-    Parameters
-    ----------
-    expr
-        Dummy expression (unused by the window function).
-
-    Returns
-    -------
-    Expr
-        DataFusion expression.
-    """
-    return _running_count(expr)
-
-
-def running_total(expr: Expr) -> Expr:
-    """Build a running_total window expression.
-
-    Parameters
-    ----------
-    expr
-        Value expression to aggregate.
-
-    Returns
-    -------
-    Expr
-        DataFusion expression.
-    """
-    return _running_total(expr)
 
 
 def row_number_window(expr: Expr) -> Expr:
@@ -495,10 +438,7 @@ __all__ = [
     "map_keys",
     "map_values",
     "prefixed_hash64",
-    "row_index",
     "row_number_window",
-    "running_count",
-    "running_total",
     "stable_hash64",
     "stable_hash128",
     "stable_id",

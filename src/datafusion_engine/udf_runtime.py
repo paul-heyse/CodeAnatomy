@@ -11,23 +11,31 @@ import datafusion_ext
 
 _RUST_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 
-_SCALAR_UDFS: tuple[str, ...] = (
-    "arrow_metadata",
-    "col_to_byte",
-    "prefixed_hash64",
-    "stable_hash64",
-    "stable_hash128",
-    "stable_id",
-)
-_TABLE_UDFS: tuple[str, ...] = ("range_table",)
+def _build_registry_snapshot() -> Mapping[str, object]:
+    snapshot = datafusion_ext.udf_registry_snapshot()
+    if not isinstance(snapshot, Mapping):
+        msg = "datafusion_ext.udf_registry_snapshot returned a non-mapping payload."
+        raise TypeError(msg)
+    payload = dict(snapshot)
+    payload.setdefault("scalar", [])
+    payload.setdefault("aggregate", [])
+    payload.setdefault("window", [])
+    payload.setdefault("table", [])
+    payload.setdefault("aliases", {})
+    payload.setdefault("pycapsule_udfs", [])
+    return payload
 
-RUST_UDF_SNAPSHOT: Mapping[str, object] = {
-    "scalar": list(_SCALAR_UDFS),
-    "aggregate": [],
-    "window": [],
-    "table": list(_TABLE_UDFS),
-    "pycapsule_udfs": [],
-}
+
+def _build_docs_snapshot() -> Mapping[str, object]:
+    snapshot = datafusion_ext.udf_docs_snapshot()
+    if not isinstance(snapshot, Mapping):
+        msg = "datafusion_ext.udf_docs_snapshot returned a non-mapping payload."
+        raise TypeError(msg)
+    return dict(snapshot)
+
+
+RUST_UDF_SNAPSHOT: Mapping[str, object] = _build_registry_snapshot()
+RUST_UDF_DOCS: Mapping[str, object] = _build_docs_snapshot()
 
 
 def register_rust_udfs(ctx: SessionContext) -> Mapping[str, object]:
@@ -45,4 +53,4 @@ def register_rust_udfs(ctx: SessionContext) -> Mapping[str, object]:
     return RUST_UDF_SNAPSHOT
 
 
-__all__ = ["RUST_UDF_SNAPSHOT", "register_rust_udfs"]
+__all__ = ["RUST_UDF_DOCS", "RUST_UDF_SNAPSHOT", "register_rust_udfs"]

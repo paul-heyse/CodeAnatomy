@@ -51,12 +51,27 @@ def _table_for_query(
     prepared_name: str | None = None,
 ) -> pa.Table:
     options = sql_options or _read_only_sql_options()
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
     if prepared_name is not None:
         try:
-            return ctx.sql_with_options(f"EXECUTE {prepared_name}", options).to_arrow_table()
+            return execute_with_profile(
+                ctx,
+                f"EXECUTE {prepared_name}",
+                profile=None,
+                options=ExecutionProfileOptions(
+                    sql_options=options,
+                    allow_statements=True,
+                ),
+            ).to_arrow_table()
         except (RuntimeError, TypeError, ValueError):
             pass
-    return ctx.sql_with_options(query, options).to_arrow_table()
+    return execute_with_profile(
+        ctx,
+        query,
+        profile=None,
+        options=ExecutionProfileOptions(sql_options=options),
+    ).to_arrow_table()
 
 
 def _rows_for_query(

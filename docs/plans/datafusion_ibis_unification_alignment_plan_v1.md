@@ -20,9 +20,9 @@
 
 ## Progress snapshot (as of January 25, 2026)
 
-- Completed: Scope 2, Scope 4, Scope 5, Scope 6, Scope 7, Scope 9.
-- Partially complete: Scope 1, Scope 3, Scope 8, Scope 10, Scope 11.
-- Not started: Scope 12, Scope 13.
+- Completed: Scope 2, Scope 4, Scope 5, Scope 6, Scope 7, Scope 8, Scope 9, Scope 10, Scope 11.
+- Partially complete: Scope 1, Scope 3, Scope 12, Scope 13.
+- Not started: None.
 
 ---
 
@@ -292,7 +292,7 @@ adapter.register_record_batches(table_name, [list(batches)], overwrite=options.o
 Ensure all Ibis‑side diagnostics go through `DiagnosticsRecorder` with stable payloads.
 
 **Status**
-Partial. Backend/sources/runner/catalog are on `DiagnosticsRecorder`, but `substrait_bridge` and `tracked_run` still use raw sinks.
+Complete. `substrait_bridge` and `tracked_run` now route through recorder adapters; runner emits traces/metrics via recorder hooks.
 
 **Representative pattern**
 ```python
@@ -311,8 +311,8 @@ recorder.record_registration(name=table_name, registration_type="table", locatio
 
 **Checklist**
 - [x] Replace direct `diagnostics_sink.record_artifact` calls in backend/sources/runner/catalog with recorder methods.
-- [ ] Migrate `substrait_bridge` and `tracked_run` diagnostics to recorder wrappers or document exceptions.
-- [ ] Add recorder methods for traces/metrics or route through existing recorders.
+- [x] Migrate `substrait_bridge` and `tracked_run` diagnostics to recorder wrappers.
+- [x] Route traces/metrics through existing recorder hooks.
 
 ---
 
@@ -351,7 +351,7 @@ register_dataset_df(ctx, name=name, location=location, runtime_profile=profile)
 Use DataFusion listing tables for directory/prefix scans with partition columns and file sort order.
 
 **Status**
-Partial. Listing-table registration now uses DataFusion APIs, but provider selection and sort-order shape need final verification.
+Complete. Listing-table registration uses DataFusion APIs with provider selection defaulting to listing for non-delta formats, plus verified partition/sort propagation.
 
 **Representative pattern**
 ```python
@@ -375,7 +375,7 @@ adapter.register_listing_table(
 **Checklist**
 - [x] Prefer listing providers when scanning directory/parquet locations with partition or sort metadata.
 - [x] Ensure `DatasetLocation.datafusion_provider == "listing"` routes through listing registration without legacy caches.
-- [ ] Pass `partition_cols` and `file_sort_order` from scan options end-to-end (verify).
+- [x] Pass `partition_cols` and `file_sort_order` from scan options end-to-end.
 
 ---
 
@@ -385,7 +385,7 @@ adapter.register_listing_table(
 Prefer Substrait compilation when available; fallback to DataFusion Expr/DataFrame API, not SQL.
 
 **Status**
-Partial. `prefer_substrait` executes Substrait directly (no SQL fallback), but we still lack a DataFrame/Expr fallback path and plan artifacts are SQL-centric.
+Complete. `prefer_substrait` executes Substrait, falls back to AST execution when enabled, and collects plan artifacts without SQL execution.
 
 **Representative pattern**
 ```python
@@ -406,7 +406,7 @@ plan = Consumer.from_substrait_plan(ctx, plan_bytes)
 
 **Checklist**
 - [x] Add Substrait compilation path behind `prefer_substrait` option.
-- [ ] Emit diagnostics when falling back to DataFusion Expr/DataFrame (no SQL fallback path yet).
+- [x] Emit diagnostics when falling back to DataFusion Expr/DataFrame (no SQL fallback path).
 
 ---
 
@@ -416,7 +416,7 @@ plan = Consumer.from_substrait_plan(ctx, plan_bytes)
 Use DataFusion schema APIs and Rust functions, avoiding SQL DDL in runtime code.
 
 **Status**
-Not started. Schema registration still relies on SQL DDL builders.
+Partial. Runtime registration no longer executes DDL, but legacy DDL helpers remain for debug/back-compat.
 
 **Representative pattern**
 ```python
@@ -432,7 +432,8 @@ ctx.table("my_table").schema()
 - Any remaining string DDL assembly in Ibis‑side schema helpers
 
 **Checklist**
-- [ ] Replace DDL string assembly with schema APIs and DataFusion functions.
+- [x] Replace runtime DDL registration with DataFusion APIs (listing tables + dataset providers).
+- [ ] Retire legacy DDL helpers (`datafusion_external_table_sql`, `_register_external_table`) and remove DDL fingerprints if no longer needed.
 - [ ] Use DataFusion schema functions for type validation where possible.
 
 ---
@@ -443,7 +444,7 @@ ctx.table("my_table").schema()
 Emit lineage and semantic diff metadata derived from Substrait or Ibis IR; SQLGlot may be used for diagnostics only.
 
 **Status**
-Not started. Lineage/diff still rely on SQLGlot/SQL-based paths.
+Partial. Plan artifacts can be collected without SQL execution; semantic diff payloads are still SQLGlot-based.
 
 **Representative pattern**
 ```python
@@ -461,6 +462,7 @@ diff_payload = semantic_diff_ir(old_expr, new_expr)
 - SQLGlot execution paths used solely to power lineage/diff in runtime
 
 **Checklist**
+- [x] Avoid SQL execution when collecting plan artifacts for Substrait/AST lanes.
 - [ ] Emit lineage payload from Substrait or Ibis IR in compile pipeline.
 - [ ] Emit semantic diff payloads in diagnostics for plan comparisons.
 
@@ -476,7 +478,7 @@ diff_payload = semantic_diff_ir(old_expr, new_expr)
 - [x] `src/ibis_engine/registry.py`: `_REGISTERED_CATALOGS`, `_REGISTERED_SCHEMAS`, `_REGISTERED_REGISTRY_CATALOGS`
 - [x] `src/ibis_engine/sources.py`: direct `ctx.register_record_batches` / `ctx.deregister_table` usage
 - [x] `src/ibis_engine/sources.py`: `namespace_recorder_from_ctx` / `record_namespace_action`
-- [ ] SQLGlot execution paths in runtime code (diagnostics‑only allowed)
+- [x] SQLGlot execution paths in runtime code (diagnostics‑only allowed)
 
 ---
 

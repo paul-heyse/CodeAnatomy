@@ -11,7 +11,7 @@ from datafusion import SessionContext, SQLOptions
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
-from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.schema_registry import has_schema, schema_for
 from datafusion_engine.sql_options import sql_options_for_profile
 from ibis_engine.registry import datafusion_context
@@ -59,10 +59,10 @@ def register_nested_table(
     with suppress(KeyError, ValueError):
         df_ctx.deregister_table(name)
     if isinstance(ctx, SessionContext):
-        invalidate_introspection_cache(ctx)
-    df_ctx.register_record_batches(name, [resolved_table.to_batches()])
-    if isinstance(ctx, SessionContext):
-        invalidate_introspection_cache(ctx)
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        adapter.register_record_batches(name, [resolved_table.to_batches()])
+    else:
+        df_ctx.register_record_batches(name, [resolved_table.to_batches()])
 
 
 def materialize_view_reference(
@@ -85,9 +85,15 @@ def materialize_view_reference(
         msg = f"View {view.name!r} requires an Ibis backend."
         raise ValueError(msg)
     ctx = datafusion_context(backend)
-    df_ctx = cast("_DatafusionContext", ctx)
     sql_options = sql_options_for_profile(None)
-    batches = df_ctx.sql_with_options(f"SELECT * FROM {view.name}", sql_options).collect()
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    batches = execute_with_profile(
+        ctx,
+        f"SELECT * FROM {view.name}",
+        profile=None,
+        options=ExecutionProfileOptions(sql_options=sql_options),
+    ).collect()
     return pa.Table.from_batches(batches)
 
 

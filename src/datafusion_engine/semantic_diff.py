@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
-from sqlglot import exp, parse_one  # type: ignore[attr-defined]
+from sqlglot import exp  # type: ignore[attr-defined]
 from sqlglot.diff import Insert, Keep, Move, Remove, Update, diff  # type: ignore[attr-defined]
 
 if TYPE_CHECKING:
@@ -322,8 +322,20 @@ def compute_rebuild_needed(
     from datafusion_engine.sql_policy_engine import compile_sql_policy
 
     # Parse and canonicalize both versions
-    old_ast = parse_one(old_sql, dialect=profile.read_dialect)
-    new_ast = parse_one(new_sql, dialect=profile.read_dialect)
+    from sqlglot_tools.optimizer import parse_sql_strict
+
+    old_ast = parse_sql_strict(
+        old_sql,
+        dialect=profile.read_dialect,
+        error_level=profile.error_level,
+        unsupported_level=profile.unsupported_level,
+    )
+    new_ast = parse_sql_strict(
+        new_sql,
+        dialect=profile.read_dialect,
+        error_level=profile.error_level,
+        unsupported_level=profile.unsupported_level,
+    )
 
     old_canonical, _ = compile_sql_policy(old_ast, schema=schema, profile=profile)
     new_canonical, _ = compile_sql_policy(new_ast, schema=schema, profile=profile)

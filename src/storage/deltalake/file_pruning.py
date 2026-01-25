@@ -148,12 +148,22 @@ def evaluate_filters_against_index(
     # Register the index as a temporary table
     temp_table_name = f"__file_index_{uuid.uuid4().hex}"
     try:
-        ctx.register_record_batches(temp_table_name, [list(index.to_batches())])
-        invalidate_introspection_cache(ctx)
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        adapter.register_record_batches(temp_table_name, [list(index.to_batches())])
 
         # Construct and execute filter query
         sql = _build_filter_query(temp_table_name, policy)
-        filtered_df = ctx.sql(sql)
+        from datafusion_engine.sql_options import sql_options_for_profile
+        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+        filtered_df = execute_with_profile(
+            ctx,
+            sql,
+            profile=None,
+            options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
+        )
         return filtered_df.to_arrow_table()
     finally:
         # Deregister temporary table

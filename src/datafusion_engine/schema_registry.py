@@ -29,7 +29,6 @@ from arrowdsl.schema.semantic_types import (
     span_type,
 )
 from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
-from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
@@ -85,7 +84,14 @@ SQLGLOT_PARSE_ERROR_DETAILS_TYPE = list_view_type(
 def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
     pipeline = CompilationPipeline(ctx, CompileOptions())
     compiled = pipeline.compile_sql(sql)
-    return pipeline.execute(compiled, sql_options=sql_options_for_profile(None))
+    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+    return execute_with_profile(
+        ctx,
+        compiled.rendered_sql,
+        profile=None,
+        options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
+    )
 
 
 def _attrs_field(name: str = "attrs") -> pa.Field:
@@ -1218,20 +1224,6 @@ DATAFUSION_SCHEMA_MAP_FINGERPRINTS_SCHEMA = _schema_with_metadata(
     ),
 )
 
-DATAFUSION_DDL_FINGERPRINTS_SCHEMA = _schema_with_metadata(
-    "datafusion_ddl_fingerprints_v1",
-    pa.schema(
-        [
-            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
-            pa.field("table_catalog", pa.string(), nullable=False),
-            pa.field("table_schema", pa.string(), nullable=False),
-            pa.field("table_name", pa.string(), nullable=False),
-            pa.field("table_type", pa.string(), nullable=True),
-            pa.field("ddl_fingerprint", pa.string(), nullable=True),
-        ]
-    ),
-)
-
 FEATURE_STATE_SCHEMA = _schema_with_metadata(
     "feature_state_v1",
     pa.schema(
@@ -1257,6 +1249,23 @@ DATAFUSION_CACHE_STATE_SCHEMA = _schema_with_metadata(
             pa.field("eviction_count", pa.int64(), nullable=True),
             pa.field("config_ttl", pa.string(), nullable=True),
             pa.field("config_limit", pa.string(), nullable=True),
+        ]
+    ),
+)
+
+DATAFUSION_SEMANTIC_DIFF_SCHEMA = _schema_with_metadata(
+    "datafusion_semantic_diff_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("run_id", pa.string(), nullable=True),
+            pa.field("plan_hash", pa.string(), nullable=True),
+            pa.field("base_plan_hash", pa.string(), nullable=True),
+            pa.field("category", pa.string(), nullable=False),
+            pa.field("changed", pa.bool_(), nullable=False),
+            pa.field("breaking", pa.bool_(), nullable=False),
+            pa.field("row_multiplying", pa.bool_(), nullable=False),
+            pa.field("change_count", pa.int64(), nullable=True),
         ]
     ),
 )
@@ -1685,12 +1694,12 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "cpg_props_v1": CPG_PROPS_SCHEMA,
     "dataset_fingerprint_v1": DATASET_FINGERPRINT_SCHEMA,
     "datafusion_cache_state_v1": DATAFUSION_CACHE_STATE_SCHEMA,
-    "datafusion_ddl_fingerprints_v1": DATAFUSION_DDL_FINGERPRINTS_SCHEMA,
     "datafusion_explains_v1": DATAFUSION_EXPLAINS_SCHEMA,
     "datafusion_plan_artifacts_v1": DATAFUSION_PLAN_ARTIFACTS_SCHEMA,
     "datafusion_runs_v1": DATAFUSION_RUNS_SCHEMA,
     "datafusion_schema_map_fingerprints_v1": DATAFUSION_SCHEMA_MAP_FINGERPRINTS_SCHEMA,
     "datafusion_schema_registry_validation_v1": DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA,
+    "datafusion_semantic_diff_v1": DATAFUSION_SEMANTIC_DIFF_SCHEMA,
     "dim_qualified_names_v1": DIM_QUALIFIED_NAMES_SCHEMA,
     "engine_runtime_v1": ENGINE_RUNTIME_SCHEMA,
     "feature_state_v1": FEATURE_STATE_SCHEMA,
@@ -4365,8 +4374,10 @@ def register_schema(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
     """Register a schema in a DataFusion SessionContext using an empty batch."""
     arrays = [pa.array([], type=field.type) for field in schema]
     batch = pa.record_batch(arrays, schema=schema)
-    ctx.register_record_batches(name, [[batch]])
-    invalidate_introspection_cache(ctx)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_record_batches(name, [[batch]])
 
 
 def register_all_schemas(ctx: SessionContext) -> None:

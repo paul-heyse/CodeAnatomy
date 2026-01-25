@@ -339,8 +339,25 @@ class StreamingExecutor:
         >>> result = executor.execute_sql("SELECT * FROM tbl WHERE id = $1", $1=42)
         >>> table = result.to_table()
         """
+        from datafusion_engine.sql_safety import (
+            ExecutionPolicy,
+            ExecutionProfileOptions,
+            execute_with_profile,
+        )
+
         resolved_options = sql_options or self.sql_options
-        df = self.ctx.sql_with_options(sql, resolved_options, **params)
+        policy = ExecutionPolicy(allow_ddl=False, allow_dml=False, allow_statements=False)
+        df = execute_with_profile(
+            self.ctx,
+            sql,
+            profile=None,
+            options=ExecutionProfileOptions(
+                policy=policy,
+                sql_options=resolved_options,
+                param_values=params,
+                dialect="datafusion",
+            ),
+        )
         return StreamingExecutionResult(df=df)
 
     def from_table(

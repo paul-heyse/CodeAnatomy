@@ -11,13 +11,15 @@ from enum import Enum
 from functools import cache
 from typing import cast
 
-import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
 from arrowdsl.core.interop import pc
 from arrowdsl.schema.serialization import schema_fingerprint
+from datafusion_engine.io_adapter import DataFusionIOAdapter
+from ibis_engine.registry import datafusion_context
+from ibis_engine.schema_utils import ibis_schema_from_arrow
 from storage.ipc import payload_hash
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
@@ -144,7 +146,7 @@ class ParamTableRegistry:
         self.artifacts[logical_name] = artifact
         return artifact
 
-    def ibis_tables(self, _backend: BaseBackend) -> dict[str, Table]:
+    def ibis_tables(self, backend: BaseBackend) -> dict[str, Table]:
         """Return Ibis table handles for registered param tables.
 
         Returns
@@ -153,8 +155,22 @@ class ParamTableRegistry:
             Ibis table expressions keyed by logical name.
         """
         tables: dict[str, Table] = {}
-        for logical_name in self.artifacts:
-            tables[logical_name] = ibis.memtable(self.artifacts[logical_name].table)
+        for logical_name, artifact in self.artifacts.items():
+            physical_name = _param_table_physical_name(self.policy, logical_name, self.scope_key)
+            if not _register_param_table_via_datafusion(
+                backend,
+                name=physical_name,
+                table=artifact.table,
+            ):
+                schema = ibis_schema_from_arrow(artifact.table.schema)
+                backend.create_table(
+                    physical_name,
+                    obj=artifact.table,
+                    schema=schema,
+                    temp=True,
+                    overwrite=True,
+                )
+            tables[logical_name] = backend.table(physical_name)
         return tables
 
 
@@ -179,6 +195,32 @@ def param_table_name(policy: ParamTablePolicy, logical_name: str) -> str:
         msg = f"Invalid param logical name: {logical_name!r}."
         raise ValueError(msg)
     return f"{policy.prefix}{logical_name}"
+
+
+def _param_table_physical_name(
+    policy: ParamTablePolicy,
+    logical_name: str,
+    scope_key: str | None,
+) -> str:
+    base = param_table_name(policy, logical_name)
+    if scope_key is None:
+        return base
+    return f"{base}_{scope_key}"
+
+
+def _register_param_table_via_datafusion(
+    backend: BaseBackend,
+    *,
+    name: str,
+    table: pa.Table,
+) -> bool:
+    try:
+        ctx = datafusion_context(backend)
+    except ValueError:
+        return False
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_arrow_table(name, table, overwrite=True)
+    return True
 
 
 def param_signature_from_array(

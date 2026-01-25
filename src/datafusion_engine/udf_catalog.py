@@ -362,7 +362,14 @@ def _show_functions_table(introspector: SchemaIntrospector) -> pa.Table | None:
     ctx = introspector.ctx
     sql_options = introspector.sql_options or SQLOptions()
     try:
-        df = ctx.sql_with_options("SHOW FUNCTIONS", sql_options)
+        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+
+        df = execute_with_profile(
+            ctx,
+            "SHOW FUNCTIONS",
+            profile=None,
+            options=ExecutionProfileOptions(sql_options=sql_options),
+        )
     except (RuntimeError, TypeError, ValueError):
         return None
     try:
@@ -910,36 +917,6 @@ def datafusion_udf_specs() -> tuple[DataFusionUdfSpec, ...]:
             state_type=pa.list_(pa.string()),
             arg_names=("value", "separator"),
             rewrite_tags=("aggregate", "string"),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="row_index",
-            engine_name="row_index",
-            kind="window",
-            input_types=(pa.int64(),),
-            return_type=pa.int64(),
-            arg_names=("value",),
-            rewrite_tags=("window",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="running_count",
-            engine_name="running_count",
-            kind="window",
-            input_types=(pa.int64(),),
-            return_type=pa.int64(),
-            arg_names=("value",),
-            rewrite_tags=("window",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="running_total",
-            engine_name="running_total",
-            kind="window",
-            input_types=(pa.float64(),),
-            return_type=pa.float64(),
-            arg_names=("value",),
-            rewrite_tags=("window",),
             udf_tier="builtin",
         ),
         DataFusionUdfSpec(

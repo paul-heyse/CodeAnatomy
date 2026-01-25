@@ -96,6 +96,10 @@ from storage.ipc import payload_hash
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
 
+    from datafusion_engine.plugin_manager import (
+        DataFusionPluginManager,
+        DataFusionPluginSpec,
+    )
     from datafusion_engine.udf_catalog import UdfCatalog
     from ibis_engine.registry import DatasetCatalog, DatasetLocation
     from obs.datafusion_runs import DataFusionRun
@@ -2493,6 +2497,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     schema_adapter_factories: Mapping[str, object] = field(default_factory=dict)
     enable_schema_evolution_adapter: bool = True
     enable_udfs: bool = True
+    plugin_specs: tuple[DataFusionPluginSpec, ...] = ()
+    plugin_manager: DataFusionPluginManager | None = None
     udf_catalog_policy: Literal["default", "strict"] = "default"
     require_delta: bool = True
     enable_delta_session_defaults: bool = False
@@ -2562,6 +2568,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     self.diagnostics_sink,
                     session_id=self.context_cache_key(),
                 ),
+            )
+        if self.plugin_manager is None and self.plugin_specs:
+            from datafusion_engine.plugin_manager import DataFusionPluginManager
+
+            object.__setattr__(
+                self,
+                "plugin_manager",
+                DataFusionPluginManager(self.plugin_specs),
             )
 
     def session_config(self) -> SessionConfig:
@@ -2717,6 +2731,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
         self._install_delta_table_factory(ctx)
+        self._install_plugins(ctx)
         self._install_udfs(ctx)
         self._install_schema_registry(ctx)
         self._validate_rule_function_allowlist(ctx)
@@ -2749,6 +2764,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
         self._install_delta_table_factory(ctx)
+        self._install_plugins(ctx)
         self._install_udfs(ctx)
         self._install_schema_registry(ctx)
         self._validate_rule_function_allowlist(ctx)
@@ -2864,6 +2880,17 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = "datafusion_ext.install_delta_table_factory is unavailable."
             raise TypeError(msg)
         installer(ctx, "DELTATABLE")
+
+    def _install_plugins(self, ctx: SessionContext) -> None:
+        """Install runtime-loaded DataFusion plugins."""
+        if not self.plugin_specs:
+            return
+        manager = self.plugin_manager
+        if manager is None:
+            from datafusion_engine.plugin_manager import DataFusionPluginManager
+
+            manager = DataFusionPluginManager(self.plugin_specs)
+        manager.register_all(ctx)
 
     def _apply_delta_session_defaults(self, ctx: SessionContext) -> None:
         """Apply Delta session defaults when enabled.

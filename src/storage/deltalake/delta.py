@@ -433,9 +433,7 @@ def read_delta_cdf(
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     ctx = DataFusionRuntimeProfile().session_context()
-    from datafusion_engine.bridge import datafusion_read_table
-
-    df = datafusion_read_table(ctx, provider)
+    df = ctx.read_table(provider)
     if resolved_options.columns:
         from datafusion import col
 

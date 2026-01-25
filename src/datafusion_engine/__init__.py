@@ -7,13 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from datafusion_engine.bridge import (
-        datafusion_read_table,
-        datafusion_to_table,
-        ibis_plan_to_datafusion,
-        ibis_plan_to_table,
-        ibis_to_datafusion,
         replay_substrait_bytes,
-        sqlglot_to_datafusion,
     )
     from datafusion_engine.catalog_provider import (
         RegistryCatalogProvider,
@@ -178,13 +172,8 @@ __all__ = [
     "apply_execution_policy",
     "compile_sql_policy",
     "compute_rebuild_needed",
-    "datafusion_read_table",
-    "datafusion_to_table",
     "execute_with_policy",
     "has_schema",
-    "ibis_plan_to_datafusion",
-    "ibis_plan_to_table",
-    "ibis_to_datafusion",
     "nested_base_df",
     "nested_dataset_names",
     "nested_schema_for",
@@ -204,7 +193,6 @@ __all__ = [
     "schema_names",
     "schema_registry",
     "snapshot_plans",
-    "sqlglot_to_datafusion",
     "validate_sql_safety",
 ]
 
@@ -257,13 +245,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "schema_registry": ("datafusion_engine.schema_registry", "schema_registry"),
     "SchemaIntrospector": ("datafusion_engine.schema_introspection", "SchemaIntrospector"),
     # Bridge and execution
-    "datafusion_read_table": ("datafusion_engine.bridge", "datafusion_read_table"),
-    "datafusion_to_table": ("datafusion_engine.bridge", "datafusion_to_table"),
-    "ibis_plan_to_datafusion": ("datafusion_engine.bridge", "ibis_plan_to_datafusion"),
-    "ibis_plan_to_table": ("datafusion_engine.bridge", "ibis_plan_to_table"),
-    "ibis_to_datafusion": ("datafusion_engine.bridge", "ibis_to_datafusion"),
     "replay_substrait_bytes": ("datafusion_engine.bridge", "replay_substrait_bytes"),
-    "sqlglot_to_datafusion": ("datafusion_engine.bridge", "sqlglot_to_datafusion"),
     "CompilationArtifacts": ("datafusion_engine.sql_policy_engine", "CompilationArtifacts"),
     "SQLPolicyProfile": ("datafusion_engine.sql_policy_engine", "SQLPolicyProfile"),
     "compile_sql_policy": ("datafusion_engine.sql_policy_engine", "compile_sql_policy"),

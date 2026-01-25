@@ -1,0 +1,8 @@
+[package]
+name = "df_plugin_api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+abi_stable = "0.11"
+datafusion-ffi = "51.0.0"

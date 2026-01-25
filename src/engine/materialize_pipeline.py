@@ -16,10 +16,7 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
-from datafusion_engine.bridge import (
-    datafusion_from_arrow,
-    datafusion_to_reader,
-)
+from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.dataset_locations import resolve_dataset_location
 from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
 from datafusion_engine.io_adapter import DataFusionIOAdapter
@@ -247,24 +244,6 @@ def build_plan_product(
         stream=stream,
         table=table,
     )
-
-
-def df_to_reader(df: DataFrame) -> pa.RecordBatchReader:
-    """Convert a DataFusion DataFrame to a streaming RecordBatchReader.
-
-    Prefers the __arrow_c_stream__ protocol for zero-copy streaming.
-
-    Parameters
-    ----------
-    df : DataFrame
-        DataFusion DataFrame to convert.
-
-    Returns
-    -------
-    pa.RecordBatchReader
-        Streaming reader for the DataFrame results.
-    """
-    return datafusion_to_reader(df)
 
 
 @dataclass(frozen=True)
@@ -752,7 +731,6 @@ def write_extract_outputs(
 
 __all__ = [
     "build_plan_product",
-    "df_to_reader",
     "resolve_cache_policy",
     "resolve_prefer_reader",
     "write_extract_outputs",

@@ -363,21 +363,30 @@ class CompilationPipeline:
         resolved_options = sql_options or DataFusionSqlPolicy().to_sql_options()
 
         # Register table params with cleanup
-        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+        from datafusion_engine.sql_safety import (
+            ExecutionContext,
+            ExecutionPolicy,
+            validate_sql_safety,
+        )
 
         profile = self.options.profile
         assert profile is not None
 
+        policy = ExecutionPolicy.for_context(ExecutionContext.QUERY_ONLY)
+        violations = validate_sql_safety(
+            compiled.rendered_sql,
+            policy,
+            dialect=profile.write_dialect,
+        )
+        if violations:
+            msg = f"SQL policy violations: {'; '.join(violations)}"
+            raise ValueError(msg)
+        param_values = dict(bindings.param_values) if bindings.param_values else None
         with register_table_params(self.ctx, bindings):
-            return execute_with_profile(
-                self.ctx,
+            return self.ctx.sql_with_options(
                 compiled.rendered_sql,
-                profile=None,
-                options=ExecutionProfileOptions(
-                    sql_options=resolved_options,
-                    dialect=profile.write_dialect,
-                    param_values=bindings.param_values,
-                ),
+                resolved_options,
+                param_values=param_values,
             )
 
     def compile_and_execute(

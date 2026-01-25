@@ -20,14 +20,13 @@ from datafusion.dataframe import DataFrame
 from ibis.expr.types import Table, Value
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.bridge import (
-    IbisCompilerBackend,
-    datafusion_to_reader,
-    datafusion_to_table,
-)
+from arrowdsl.core.ordering import Ordering, OrderingLevel
+from arrowdsl.schema.metadata import ordering_metadata_spec
+from datafusion_engine.bridge import IbisCompilerBackend
 from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.schema_introspection import SchemaIntrospector, schema_map_fingerprint
+from datafusion_engine.streaming_executor import StreamingExecutionResult
 from ibis_engine.plan import IbisPlan
 from obs.datafusion_runs import tracked_run
 
@@ -202,7 +201,7 @@ def materialize_plan(
                 execution=execution.datafusion,
                 params=execution.params,
             )
-            return datafusion_to_table(df, ordering=portable_plan.ordering)
+            return _datafusion_table_from_dataframe(df, ordering=portable_plan.ordering)
     params = _validate_plan_params(execution.params) if execution is not None else None
     return plan.to_table(params=params)
 
@@ -244,7 +243,7 @@ def stream_plan(
             execution=execution.datafusion,
             params=effective_params,
         )
-        return datafusion_to_reader(df, ordering=portable_plan.ordering)
+        return _datafusion_reader_from_dataframe(df, ordering=portable_plan.ordering)
     validated_params = _validate_plan_params(effective_params)
     return plan.to_reader(batch_size=batch_size, params=validated_params)
 
@@ -370,6 +369,38 @@ def _require_dataframe(result: ExecutionResult) -> DataFrame:
         msg = f"Execution result is not a dataframe: {result.kind}."
         raise ValueError(msg)
     return result.dataframe
+
+
+def _datafusion_reader_from_dataframe(
+    df: DataFrame,
+    *,
+    ordering: Ordering | None,
+) -> RecordBatchReaderLike:
+    reader = StreamingExecutionResult(df=df).to_arrow_stream()
+    return _apply_ordering(reader, ordering=ordering)
+
+
+def _datafusion_table_from_dataframe(
+    df: DataFrame,
+    *,
+    ordering: Ordering | None,
+) -> TableLike:
+    table = StreamingExecutionResult(df=df).to_table()
+    if ordering is None or ordering.level == OrderingLevel.UNORDERED:
+        return table
+    spec = ordering_metadata_spec(ordering.level, keys=ordering.keys)
+    return table.cast(spec.apply(table.schema))
+
+
+def _apply_ordering(
+    reader: RecordBatchReaderLike,
+    *,
+    ordering: Ordering | None,
+) -> RecordBatchReaderLike:
+    if ordering is None or ordering.level == OrderingLevel.UNORDERED:
+        return reader
+    spec = ordering_metadata_spec(ordering.level, keys=ordering.keys)
+    return pa.RecordBatchReader.from_batches(spec.apply(reader.schema), reader)
 
 
 def _resolve_options(

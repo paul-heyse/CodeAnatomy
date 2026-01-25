@@ -26,14 +26,8 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.core.streaming import to_reader
 from core_types import PathLike
-from datafusion_engine.bridge import (
-    datafusion_from_arrow,
-    datafusion_to_table,
-    datafusion_view_sql,
-    ibis_plan_to_datafusion,
-    ibis_to_datafusion,
-)
 from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import statement_sql_options_for_profile
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
@@ -84,7 +78,6 @@ type DeltaInsertMode = Literal["append", "overwrite"]
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
-    from datafusion.dataframe import DataFrame
 
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from ibis_engine.registry import DatasetLocation
@@ -227,6 +220,7 @@ class DeltaInsertRequest:
     mode: DeltaInsertMode
     backend: IbisCompilerBackend
     batch_size: int | None
+    execution: IbisExecutionContext
     runtime_profile: DataFusionRuntimeProfile | None
     constraints: tuple[str, ...] = ()
 
@@ -251,6 +245,22 @@ class DeltaDataCheckContext:
     constraints: Sequence[str]
     operation: str
     location: DatasetLocation | None = None
+
+
+@dataclass(frozen=True)
+class _WriteSource:
+    """SQLGlot source expression with optional temp registration."""
+
+    source_expr: exp.Expression
+    temp_name: str | None
+
+
+@dataclass(frozen=True)
+class _WriteSourceContext:
+    ctx: SessionContext
+    backend: IbisCompilerBackend
+    runtime_profile: DataFusionRuntimeProfile | None
+    batch_size: int | None
 
 
 def _resolved_write_batch_size(options: IbisDatasetWriteOptions) -> int | None:
@@ -655,6 +665,7 @@ def _write_delta_dataset(
             mode=cast("DeltaInsertMode", context.delta_options.mode),
             backend=cast("IbisCompilerBackend", context.backend),
             batch_size=context.batch_size,
+            execution=context.execution,
             runtime_profile=context.runtime_profile,
             constraints=constraints,
         )
@@ -675,7 +686,10 @@ def _write_delta_dataset(
                     },
                 )
             else:
-                table = _delta_check_table_for_input(value, context=context)
+                table = _delta_check_table_for_input(
+                    value,
+                    execution=context.execution,
+                )
                 _run_delta_data_checker(
                     DeltaDataCheckContext(
                         ctx=context.ctx,
@@ -841,24 +855,82 @@ def write_ibis_named_datasets_delta(
     return results
 
 
-def _datafusion_df_for_write(
+def _register_temp_table(
+    ctx: SessionContext,
+    *,
+    name: str,
+    value: TableLike | RecordBatchReaderLike,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    batch_size: int | None,
+) -> None:
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    if isinstance(value, RecordBatchReaderLike):
+        batches = list(value)
+        adapter.register_record_batches(name, [batches], overwrite=True)
+        return
+    table = cast("pa.Table", value)
+    if batch_size is not None and batch_size > 0:
+        batches = list(table.to_batches(max_chunksize=batch_size))
+        adapter.register_record_batches(name, [batches], overwrite=True)
+        return
+    adapter.register_arrow_table(name, table, overwrite=True)
+
+
+def _compile_ibis_source(
+    expr: IbisTable,
+    *,
+    backend: IbisCompilerBackend,
+    ctx: SessionContext,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> exp.Expression:
+    facade = DataFusionExecutionFacade(
+        ctx=ctx,
+        runtime_profile=runtime_profile,
+        ibis_backend=backend,
+    )
+    plan = facade.compile(expr)
+    return plan.compiled.sqlglot_ast
+
+
+def _write_source_for_datafusion(
     *,
     name: str,
     value: IbisWriteInput,
-    backend: IbisCompilerBackend,
-    ctx: SessionContext,
-    batch_size: int | None,
-) -> tuple[object, str | None]:
+    context: _WriteSourceContext,
+) -> _WriteSource:
     if isinstance(value, IbisPlan):
-        return ibis_plan_to_datafusion(value, backend=backend, ctx=ctx), None
+        return _WriteSource(
+            source_expr=_compile_ibis_source(
+                value.expr,
+                backend=context.backend,
+                ctx=context.ctx,
+                runtime_profile=context.runtime_profile,
+            ),
+            temp_name=None,
+        )
     if isinstance(value, IbisTable):
-        return ibis_to_datafusion(value, backend=backend, ctx=ctx), None
+        return _WriteSource(
+            source_expr=_compile_ibis_source(
+                value,
+                backend=context.backend,
+                ctx=context.ctx,
+                runtime_profile=context.runtime_profile,
+            ),
+            temp_name=None,
+        )
     if isinstance(value, PlanProduct):
         value = value.materialize_table()
     table = coerce_table_like(value)
     temp_name = f"__delta_write_{name}_{uuid.uuid4().hex}"
-    df = datafusion_from_arrow(ctx, name=temp_name, value=table, batch_size=batch_size)
-    return df, temp_name
+    _register_temp_table(
+        context.ctx,
+        name=temp_name,
+        value=table,
+        runtime_profile=context.runtime_profile,
+        batch_size=context.batch_size,
+    )
+    source_expr = exp.select("*").from_(exp.table_(temp_name))
+    return _WriteSource(source_expr=source_expr, temp_name=temp_name)
 
 
 def _table_name_for_delta_path(ctx: SessionContext, *, path: str) -> str | None:
@@ -1013,30 +1085,23 @@ def _record_delta_data_checker(
     recorder.record_events("delta_data_checker_v1", [payload])
 
 
-def _dataframe_to_table(df: DataFrame) -> TableLike:
-    to_table = getattr(df, "to_arrow_table", None)
-    if callable(to_table):
-        return cast("TableLike", to_table())
-    return datafusion_to_table(df)
-
-
 def _delta_check_table_for_input(
     value: IbisWriteInput,
     *,
-    context: DeltaWriteContext,
+    execution: IbisExecutionContext,
 ) -> TableLike:
     if isinstance(value, PlanProduct):
         return value.materialize_table()
     if isinstance(value, IbisPlan):
         return execute_ibis_plan(
             value,
-            execution=context.execution,
+            execution=execution,
             streaming=False,
         ).require_table()
     if isinstance(value, IbisTable):
         return execute_ibis_plan(
             IbisPlan(expr=value),
-            execution=context.execution,
+            execution=execution,
             streaming=False,
         ).require_table()
     table = coerce_table_like(value)
@@ -1133,34 +1198,17 @@ def _delta_constraints_for_table(
     return tuple(location.delta_constraints)
 
 
-def _delta_insert_select_sql(
-    df: DataFrame,
-    *,
-    ctx: SessionContext,
-    runtime_profile: DataFusionRuntimeProfile | None,
-    table_name: str,
-    temp_name: str | None,
-) -> tuple[str, str | None]:
-    sql = datafusion_view_sql(df)
-    if sql is not None:
-        return sql, temp_name
-    if temp_name is None:
-        temp_name = f"__delta_insert_{table_name}_{uuid.uuid4().hex}"
-        adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
-        adapter.register_view(temp_name, df, overwrite=True, temporary=True)
-    sql = exp.select("*").from_(exp.table_(temp_name)).sql(dialect="datafusion")
-    return sql, temp_name
-
-
 def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
-    df_obj, temp_name = _datafusion_df_for_write(
+    source = _write_source_for_datafusion(
         name=request.table_name,
         value=request.value,
-        backend=request.backend,
-        ctx=request.ctx,
-        batch_size=request.batch_size,
+        context=_WriteSourceContext(
+            ctx=request.ctx,
+            backend=request.backend,
+            runtime_profile=request.runtime_profile,
+            batch_size=request.batch_size,
+        ),
     )
-    df = cast("DataFrame", df_obj)
     try:
         if (
             request.runtime_profile is not None
@@ -1181,7 +1229,10 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
                     },
                 )
             else:
-                table = _dataframe_to_table(df)
+                table = _delta_check_table_for_input(
+                    request.value,
+                    execution=request.execution,
+                )
                 _run_delta_data_checker(
                     DeltaDataCheckContext(
                         ctx=request.ctx,
@@ -1193,15 +1244,8 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
                         location=location,
                     )
                 )
-        select_sql, temp_name = _delta_insert_select_sql(
-            df,
-            ctx=request.ctx,
-            runtime_profile=request.runtime_profile,
-            table_name=request.table_name,
-            temp_name=temp_name,
-        )
         write_request = WriteRequest(
-            source=select_sql,
+            source=source.source_expr,
             destination=request.table_name,
             format=WriteFormat.PARQUET,
             mode=WriteMode.OVERWRITE if request.mode == "overwrite" else WriteMode.APPEND,
@@ -1229,13 +1273,13 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
             return None
         raise
     finally:
-        if temp_name is not None:
+        if source.temp_name is not None:
             adapter = DataFusionIOAdapter(
                 ctx=request.ctx,
                 profile=request.runtime_profile,
             )
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                adapter.deregister_table(temp_name)
+                adapter.deregister_table(source.temp_name)
     _record_delta_insert_diagnostics(
         request.runtime_profile,
         table_name=request.table_name,
@@ -1302,24 +1346,28 @@ def write_ibis_dataset_parquet(
         msg = "Parquet exports require a runtime profile and Ibis backend."
         raise ValueError(msg)
     df_ctx = runtime_profile.session_context()
-    batch_size = options.execution.batch_size
-    df_obj, temp_name = _datafusion_df_for_write(
+    source = _write_source_for_datafusion(
         name="parquet",
         value=data,
-        backend=cast("IbisCompilerBackend", backend),
-        ctx=df_ctx,
-        batch_size=batch_size,
+        context=_WriteSourceContext(
+            ctx=df_ctx,
+            backend=cast("IbisCompilerBackend", backend),
+            runtime_profile=runtime_profile,
+            batch_size=options.execution.batch_size,
+        ),
     )
-    df = cast("DataFrame", df_obj)
     path = Path(base_dir)
     _prepare_parquet_dir(path, overwrite=options.overwrite)
     format_options: dict[str, object] = (
         dict(options.dataset_options) if options.dataset_options is not None else {}
     )
     format_options.pop("partition_by", None)
-    partition_by = _copy_partition_by(options.partition_by, df)
+    partition_by = _copy_partition_by(
+        options.partition_by,
+        schema_names=_schema_names_for_input(data),
+    )
     request = WriteRequest(
-        source=_write_source(df, temp_name=temp_name),
+        source=source.source_expr,
         destination=str(path),
         format=WriteFormat.PARQUET,
         mode=WriteMode.OVERWRITE if options.overwrite else WriteMode.ERROR,
@@ -1336,10 +1384,10 @@ def write_ibis_dataset_parquet(
     try:
         pipeline.write(request, prefer_streaming=True)
     finally:
-        if temp_name is not None:
+        if source.temp_name is not None:
             adapter = DataFusionIOAdapter(ctx=df_ctx, profile=runtime_profile)
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                adapter.deregister_table(temp_name)
+                adapter.deregister_table(source.temp_name)
     return str(path)
 
 
@@ -1406,6 +1454,7 @@ def write_ibis_named_datasets_copy(
         pipeline=pipeline,
         profile=profile,
         write_format=write_format,
+        runtime_profile=runtime_profile,
     )
     results: dict[str, IbisCopyWriteResult] = {}
     for name, value in datasets.items():
@@ -1427,6 +1476,7 @@ class _NamedCopyContext:
     pipeline: WritePipeline
     profile: SQLPolicyProfile
     write_format: WriteFormat
+    runtime_profile: DataFusionRuntimeProfile | None
 
 
 def _write_named_dataset_copy(
@@ -1434,20 +1484,25 @@ def _write_named_dataset_copy(
     name: str,
     value: IbisWriteInput,
 ) -> IbisCopyWriteResult:
-    df_obj, temp_name = _datafusion_df_for_write(
+    source = _write_source_for_datafusion(
         name=name,
         value=value,
-        backend=context.backend,
-        ctx=context.ctx,
-        batch_size=context.batch_size,
+        context=_WriteSourceContext(
+            ctx=context.ctx,
+            backend=context.backend,
+            runtime_profile=context.runtime_profile,
+            batch_size=context.batch_size,
+        ),
     )
-    df = cast("DataFrame", df_obj)
     target_path = Path(context.base_dir) / name
     _prepare_copy_dir(target_path, overwrite=context.options.overwrite)
-    partition_by = _copy_partition_by(context.options.partition_by, df)
+    partition_by = _copy_partition_by(
+        context.options.partition_by,
+        schema_names=_schema_names_for_input(value),
+    )
     try:
         request = WriteRequest(
-            source=_write_source(df, temp_name=temp_name),
+            source=source.source_expr,
             destination=str(target_path),
             format=context.write_format,
             mode=WriteMode.OVERWRITE if context.options.overwrite else WriteMode.ERROR,
@@ -1473,10 +1528,10 @@ def _write_named_dataset_copy(
                 }
             )
     finally:
-        if temp_name is not None:
-            adapter = DataFusionIOAdapter(ctx=context.ctx, profile=None)
+        if source.temp_name is not None:
+            adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                adapter.deregister_table(temp_name)
+                adapter.deregister_table(source.temp_name)
     return IbisCopyWriteResult(
         path=str(target_path),
         sql=result.sql,
@@ -1517,34 +1572,33 @@ def _write_format(value: str) -> WriteFormat:
     return resolved
 
 
-def _write_source(
-    df: DataFrame,
-    *,
-    temp_name: str | None,
-) -> str | exp.Expression:
-    sql = datafusion_view_sql(df)
-    if sql is not None:
-        return sql
-    if temp_name is None:
-        msg = "Write pipeline requires SQL for the DataFusion DataFrame."
-        raise ValueError(msg)
-    return exp.select("*").from_(exp.table_(temp_name))
+def _schema_names_for_input(value: IbisWriteInput) -> Sequence[str] | None:
+    if isinstance(value, IbisPlan):
+        names = cast("Sequence[str]", value.expr.schema().names)
+        return tuple(names)
+    if isinstance(value, IbisTable):
+        names = cast("Sequence[str]", value.schema().names)
+        return tuple(names)
+    if isinstance(value, PlanProduct):
+        return value.schema.names
+    table = coerce_table_like(value)
+    if isinstance(table, RecordBatchReaderLike):
+        return table.schema.names
+    if isinstance(table, pa.Table):
+        return table.schema.names
+    return None
 
 
 def _copy_partition_by(
     partition_by: Sequence[str] | None,
-    df: DataFrame,
+    *,
+    schema_names: Sequence[str] | None,
 ) -> tuple[str, ...]:
     if not partition_by:
         return ()
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        names = schema.names
-    else:
-        names = getattr(schema, "names", None)
-        if names is None:
-            return tuple(partition_by)
-    available = set(names)
+    if schema_names is None:
+        return tuple(partition_by)
+    available = set(schema_names)
     return tuple(name for name in partition_by if name in available)
 
 

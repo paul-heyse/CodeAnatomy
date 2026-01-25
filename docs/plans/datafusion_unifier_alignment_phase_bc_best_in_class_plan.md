@@ -121,7 +121,7 @@ recorder.record_execution(...)
 Enforce `SafeExecutor` policy on every SQL execution and session `SET`.
 
 ## Status
-**Partial** — core registry/runtime/view/write paths now execute via the facade; specialized modules still call `execute_with_profile` directly.
+**Complete** — all SQL execution routes through the facade, including schema/introspection/finalize/arrowdsl paths.
 
 ## Representative pattern
 ```python
@@ -138,7 +138,7 @@ df = executor.execute(sql)
 ## Checklist
 - [x] Replace `ctx.sql`/`ctx.sql_with_options` with `SafeExecutor` for core SQL execution.
 - [x] Ensure `SET` statements use `allow_statements=True` in policy.
-- [ ] Centralize SQL execution behind the facade (remaining direct usage in schema_introspection/introspection/finalize/arrowdsl).
+- [x] Centralize SQL execution behind the facade (schema_introspection/introspection/finalize/arrowdsl now route through it).
 
 ## Deletions
 - Remove direct SQL execution helpers once all usage routes through the facade.
@@ -246,7 +246,7 @@ facade.register_dataset(name=name, location=location)
 Move away from named memtable patterns and use backend create_table/create_view.
 
 ## Status
-**Partial** — memtable usage removed; remaining gap is explicit schema binding for contracted outputs.
+**Complete** — memtable usage removed and contracted outputs now bind explicit schemas.
 
 ## Representative pattern
 ```python
@@ -261,7 +261,7 @@ backend.create_view(name, expr, overwrite=True)
 ## Checklist
 - [x] Replace named memtable usage with backend create_table/create_view (param tables + file_id macros).
 - [x] Ensure view/table creation flows through IOAdapter for DataFusion backends.
-- [ ] Update any schema inference to explicit schemas for contracted outputs.
+- [x] Update any schema inference to explicit schemas for contracted outputs.
 
 ## Deletions
 - Remove memtable naming utilities once explicit-schema work is complete.
@@ -302,7 +302,7 @@ expr = parse_sql_strict(sql, dialect=policy.read_dialect, error_level=policy.err
 Standardize a single execution result envelope and capability metadata surface.
 
 ## Status
-**Partial** — `ExecutionResult` exists and capability flags added; some legacy routing still returns raw DataFrames/readers.
+**Partial** — `ExecutionResult` now drives Ibis/materialization surfaces; remaining legacy bridge helpers still return raw DataFrames/readers.
 
 ## Representative pattern
 ```python
@@ -319,7 +319,8 @@ result = facade.execute(compiled)
 ## Checklist
 - [x] Define a unified execution result model (table/reader/write summary).
 - [x] Add capability flags to `TableProviderMetadata` and surface them to the facade.
-- [ ] Remove duplicate execution routing paths after facade integration.
+- [x] Adopt `ExecutionResult` in Ibis plan execution and materialization pipelines.
+- [ ] Remove duplicate execution routing paths after facade integration (bridge helpers still return raw DataFrames/readers).
 
 ## Deletions
 - Remove redundant execution routing helpers once contract is adopted.
@@ -331,7 +332,6 @@ result = facade.execute(compiled)
 The following code should only be deleted once all new surfaces are in place and in use:
 
 - Remaining legacy execution helpers in `src/datafusion_engine/bridge.py` (e.g., copy/reader helpers) once all execution flows return `ExecutionResult`.
-- Direct `execute_with_profile` usage in specialized modules (schema/introspection/finalize/arrowdsl) once they are routed through the facade.
 - Memtable naming utilities once explicit-schema enforcement for contracted outputs is complete.
 
 ---

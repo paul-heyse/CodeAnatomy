@@ -28,6 +28,7 @@ datafusion-functions-table = "51.0.0"
 datafusion-functions-window = "51.0.0"
 datafusion-physical-expr-adapter = "51.0.0"
 datafusion-python = "51.0.0"
+df_plugin_host = { path = "../df_plugin_host" }
 deltalake = { version = "0.30.1", features = ["datafusion"] }
 hex = "0.4"
 pyo3 = { version = "0.26", features = ["extension-module"] }

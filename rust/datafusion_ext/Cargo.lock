@@ -1774,6 +1774,7 @@ dependencies = [
  "datafusion-physical-expr-adapter",
  "datafusion-python",
  "deltalake",
+ "df_plugin_host",
  "hex",
  "pyo3",
  "tokio",
@@ -1896,6 +1897,27 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "df_plugin_api"
+version = "0.1.0"
+dependencies = [
+ "abi_stable",
+ "datafusion-ffi",
+]
+
+[[package]]
+name = "df_plugin_host"
+version = "0.1.0"
+dependencies = [
+ "abi_stable",
+ "arrow",
+ "datafusion",
+ "datafusion-expr",
+ "datafusion-ffi",
+ "df_plugin_api",
+ "tokio",
 ]
 
 [[package]]

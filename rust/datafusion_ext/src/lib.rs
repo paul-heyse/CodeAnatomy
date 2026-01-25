@@ -17,6 +17,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::io::Cursor;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -67,6 +68,7 @@ use datafusion_expr::{
     TableType,
 };
 use datafusion_expr::registry::FunctionRegistry;
+use df_plugin_host::{load_plugin, PluginHandle};
 
 pub fn install_sql_macro_factory_native(ctx: &SessionContext) -> Result<()> {
     let state_ref = ctx.state_ref();
@@ -152,6 +154,36 @@ fn now_unix_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0)
+}
+
+const PLUGIN_HANDLE_CAPSULE_NAME: &str = "datafusion_ext.DfPluginHandle";
+
+fn plugin_capsule_name() -> PyResult<CString> {
+    CString::new(PLUGIN_HANDLE_CAPSULE_NAME)
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))
+}
+
+fn extract_plugin_handle(
+    py: Python<'_>,
+    plugin: &Py<PyAny>,
+) -> PyResult<Arc<PluginHandle>> {
+    let capsule: Bound<'_, PyCapsule> = plugin.bind(py).extract()?;
+    let name = capsule
+        .name()
+        .map_err(|err| PyValueError::new_err(format!("Invalid plugin capsule: {err}")))?;
+    let Some(name) = name else {
+        return Err(PyValueError::new_err("Plugin capsule is missing a name."));
+    };
+    let name = name.to_str().map_err(|err| {
+        PyValueError::new_err(format!("Invalid plugin capsule name: {err}"))
+    })?;
+    if name != PLUGIN_HANDLE_CAPSULE_NAME {
+        return Err(PyValueError::new_err(format!(
+            "Unexpected plugin capsule name: {name}"
+        )));
+    }
+    let handle: &Arc<PluginHandle> = unsafe { capsule.reference() };
+    Ok(handle.clone())
 }
 
 #[pyfunction]
@@ -241,6 +273,104 @@ fn udf_docs_snapshot(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<P
         add_doc(name, doc)?;
     }
     Ok(payload.into())
+}
+
+#[pyfunction]
+fn load_df_plugin(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
+    let handle = load_plugin(Path::new(&path)).map_err(|err| {
+        PyRuntimeError::new_err(format!(
+            "Failed to load DataFusion plugin {path:?}: {err}"
+        ))
+    })?;
+    let name = plugin_capsule_name()?;
+    let capsule = PyCapsule::new(py, Arc::new(handle), Some(name))?;
+    Ok(capsule.unbind().into())
+}
+
+#[pyfunction]
+fn register_df_plugin_udfs(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    plugin: Py<PyAny>,
+) -> PyResult<()> {
+    let handle = extract_plugin_handle(py, &plugin)?;
+    handle.register_udfs(&ctx.ctx).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}"))
+    })?;
+    Ok(())
+}
+
+#[pyfunction]
+fn register_df_plugin_table_functions(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    plugin: Py<PyAny>,
+) -> PyResult<()> {
+    let handle = extract_plugin_handle(py, &plugin)?;
+    handle
+        .register_table_functions(&ctx.ctx)
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to register plugin table functions: {err}"
+            ))
+        })?;
+    Ok(())
+}
+
+#[pyfunction]
+fn register_df_plugin_table_providers(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    plugin: Py<PyAny>,
+    table_names: Option<Vec<String>>,
+    options_json: Option<HashMap<String, String>>,
+) -> PyResult<()> {
+    let handle = extract_plugin_handle(py, &plugin)?;
+    handle
+        .register_table_providers(
+            &ctx.ctx,
+            table_names.as_deref(),
+            options_json.as_ref(),
+        )
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to register plugin table providers: {err}"
+            ))
+        })?;
+    Ok(())
+}
+
+#[pyfunction]
+fn register_df_plugin(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    plugin: Py<PyAny>,
+    table_names: Option<Vec<String>>,
+    options_json: Option<HashMap<String, String>>,
+) -> PyResult<()> {
+    let handle = extract_plugin_handle(py, &plugin)?;
+    handle.register_udfs(&ctx.ctx).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}"))
+    })?;
+    handle
+        .register_table_functions(&ctx.ctx)
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to register plugin table functions: {err}"
+            ))
+        })?;
+    handle
+        .register_table_providers(
+            &ctx.ctx,
+            table_names.as_deref(),
+            options_json.as_ref(),
+        )
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to register plugin table providers: {err}"
+            ))
+        })?;
+    Ok(())
 }
 
 #[derive(Debug, Default)]
@@ -1426,6 +1556,11 @@ fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()>
     module.add_function(wrap_pyfunction!(register_udfs, module)?)?;
     module.add_function(wrap_pyfunction!(registry_snapshot_py, module)?)?;
     module.add_function(wrap_pyfunction!(udf_docs_snapshot, module)?)?;
+    module.add_function(wrap_pyfunction!(load_df_plugin, module)?)?;
+    module.add_function(wrap_pyfunction!(register_df_plugin_udfs, module)?)?;
+    module.add_function(wrap_pyfunction!(register_df_plugin_table_functions, module)?)?;
+    module.add_function(wrap_pyfunction!(register_df_plugin_table_providers, module)?)?;
+    module.add_function(wrap_pyfunction!(register_df_plugin, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::map_entries, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::map_keys, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::map_values, module)?)?;

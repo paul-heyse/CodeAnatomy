@@ -9,7 +9,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, TypedDict, cast
 
@@ -32,28 +32,20 @@ try:
 except ImportError:
     DataFusionLogicalPlan = None
 from datafusion import (
-    DataFrameWriteOptions,
     ParquetColumnOptions,
-    ParquetWriterOptions,
     SessionContext,
     SQLOptions,
-    col,
 )
 from datafusion.dataframe import DataFrame
-from datafusion.expr import SortExpr
-from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.interop import (
     RecordBatchReaderLike,
     TableLike,
     coerce_table_like,
-    concat_readers,
 )
-from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.streaming import to_reader
 from arrowdsl.schema.build import table_from_row_dicts
-from arrowdsl.schema.metadata import ordering_metadata_spec
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -74,23 +66,14 @@ from datafusion_engine.registry_bridge import (
 from datafusion_engine.schema_registry import has_schema, schema_for
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.sql_safety import ExecutionPolicy
-from datafusion_engine.write_pipeline import (
-    WriteFormat,
-    WriteMode,
-    WritePipeline,
-    WriteRequest,
-)
 from engine.plan_cache import PlanCacheKey
 from ibis_engine.param_tables import scalar_param_signature
-from ibis_engine.plan import IbisPlan
-from schema_spec.policies import DataFusionWritePolicy
 from serde_msgspec import dumps_msgpack
 from sqlglot_tools.bridge import (
     AstExecutionResult,
     IbisCompilerBackend,
     execute_sqlglot_ast,
     ibis_to_datafusion_ast_path,
-    ibis_to_sqlglot,
 )
 from sqlglot_tools.compat import ErrorLevel, Expression, exp
 from sqlglot_tools.lineage import (
@@ -180,7 +163,6 @@ if TYPE_CHECKING:
     from datafusion.substrait import Consumer as SubstraitConsumerType
     from datafusion.substrait import Serde as SubstraitSerdeType
 
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from schema_spec.policies import ParquetColumnPolicy
 else:
     DataFusionLogicalPlanType = object
@@ -330,8 +312,10 @@ def _substrait_validation_payload(
             "status": "unavailable",
             "error": "pyarrow.substrait is unavailable",
         }
+    from datafusion_engine.streaming_executor import StreamingExecutionResult
+
     try:
-        df_reader = datafusion_to_reader(df)
+        df_reader = StreamingExecutionResult(df=df).to_arrow_stream()
     except (RuntimeError, TypeError, ValueError) as exc:
         return {
             "status": "error",
@@ -543,36 +527,6 @@ def _emit_internal_sql(expr: Expression) -> str:
     return _emit_sql(expr, options=DataFusionCompileOptions())
 
 
-def df_from_sqlglot_or_sql(
-    ctx: SessionContext,
-    expr: Expression,
-    *,
-    options: DataFusionCompileOptions | None = None,
-) -> DataFrame:
-    """Translate a SQLGlot expression into a DataFusion DataFrame.
-
-    Uses the unified compilation pipeline for DataFusion execution.
-
-    Raises
-    ------
-    ValueError
-        Raised when named parameters violate read-only SQL policy.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFusion DataFrame representing the expression.
-    """
-    resolved = options or DataFusionCompileOptions()
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=resolved.runtime_profile)
-    plan = facade.compile(expr, options=resolved)
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "SQLGlot execution did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    return result.dataframe
-
-
 def validate_table_constraints(
     ctx: SessionContext,
     *,
@@ -622,438 +576,12 @@ def validate_table_constraints(
 
 
 def _df_has_rows(df: DataFrame) -> bool:
-    reader = datafusion_to_reader(df)
+    from datafusion_engine.streaming_executor import StreamingExecutionResult
+
+    reader = StreamingExecutionResult(df=df).to_arrow_stream()
     for batch in reader:
         return batch.num_rows > 0
     return False
-
-
-def sqlglot_to_datafusion(
-    expr: Expression,
-    *,
-    ctx: SessionContext,
-    options: DataFusionCompileOptions | None = None,
-) -> DataFrame:
-    """Translate a SQLGlot expression into a DataFusion DataFrame.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFusion DataFrame representing the expression.
-    """
-    return df_from_sqlglot_or_sql(ctx, expr, options=options)
-
-
-def compile_sqlglot_expr(
-    expr: IbisTable,
-    *,
-    backend: IbisCompilerBackend,
-    ctx: SessionContext | None = None,
-    options: DataFusionCompileOptions | None = None,
-) -> Expression:
-    """Compile an Ibis expression into a SQLGlot expression.
-
-    Parameters
-    ----------
-    expr:
-        Ibis expression to compile.
-    backend:
-        Backend providing SQLGlot compilation support.
-    ctx:
-        Optional DataFusion session context for schema-aware canonicalization.
-    options:
-        Optional compilation options controlling rewrites and normalization.
-
-    Returns
-    -------
-    sqlglot.Expression
-        SQLGlot expression for the Ibis input.
-    """
-    resolved = options or DataFusionCompileOptions()
-    if resolved.ibis_expr is None:
-        resolved = replace(resolved, ibis_expr=expr)
-    if ctx is None:
-        ibis_params: Mapping[IbisValue, object] | None = None
-        if resolved.params and all(
-            isinstance(key, IbisValue) for key in resolved.params
-        ):
-            ibis_params = cast("Mapping[IbisValue, object]", resolved.params)
-        sg_expr = ibis_to_sqlglot(
-            expr,
-            backend=backend,
-            params=ibis_params,
-        )
-        sg_expr = _apply_rewrite_hook(sg_expr, options=resolved)
-        _maybe_enforce_preflight(sg_expr, options=resolved)
-        return _apply_dynamic_projection(sg_expr, options=resolved)
-    facade = DataFusionExecutionFacade(
-        ctx=ctx,
-        runtime_profile=resolved.runtime_profile,
-        ibis_backend=backend,
-    )
-    plan = facade.compile(expr, options=resolved)
-    return plan.compiled.sqlglot_ast
-
-
-def ibis_to_datafusion(
-    expr: IbisTable,
-    *,
-    backend: IbisCompilerBackend,
-    ctx: SessionContext,
-    options: DataFusionCompileOptions | None = None,
-) -> DataFrame:
-    """Compile an Ibis expression into a DataFusion DataFrame.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFusion DataFrame for the Ibis expression.
-
-    Raises
-    ------
-    ValueError
-        If parameter bindings include invalid scalar or table-like combinations.
-    """
-    resolved = options or DataFusionCompileOptions()
-    if resolved.ibis_expr is None:
-        resolved = replace(resolved, ibis_expr=expr)
-    if resolved.prefer_substrait:
-        from datafusion_engine.compile_options import DataFusionSubstraitFallbackEvent
-        from datafusion_engine.diagnostics import ensure_recorder_sink
-        from ibis_engine.substrait_bridge import try_ibis_to_substrait_bytes
-
-        diagnostics_sink = None
-        session_id = None
-        if resolved.runtime_profile is not None and resolved.runtime_profile.diagnostics_sink is not None:
-            session_id = resolved.runtime_profile.context_cache_key()
-            diagnostics_sink = ensure_recorder_sink(
-                resolved.runtime_profile.diagnostics_sink,
-                session_id=session_id,
-            )
-
-        plan_bytes = try_ibis_to_substrait_bytes(
-            expr,
-            record_gaps=resolved.record_substrait_gaps,
-            diagnostics_sink=diagnostics_sink,
-            session_id=session_id,
-        )
-        if plan_bytes is None:
-            if resolved.substrait_fallback_hook is not None:
-                resolved.substrait_fallback_hook(
-                    DataFusionSubstraitFallbackEvent(
-                        reason="Substrait compilation failed; falling back to AST execution.",
-                        expr_type=type(expr).__name__,
-                        plan_hash=resolved.plan_hash,
-                        profile_hash=resolved.profile_hash,
-                        run_id=resolved.run_id,
-                    )
-                )
-            if not resolved.prefer_ast_execution:
-                msg = "Substrait compilation failed and AST fallback is disabled."
-                raise ValueError(msg)
-            fallback_expr = compile_sqlglot_expr(
-                expr,
-                backend=backend,
-                ctx=ctx,
-                options=resolved,
-            )
-            df = df_from_sqlglot_ast(ctx, fallback_expr, options=resolved)
-            diagnostics_options = replace(resolved, diagnostics_allow_sql=False)
-            _maybe_collect_plan_artifacts(
-                ctx,
-                fallback_expr,
-                options=diagnostics_options,
-                df=df,
-            )
-            _maybe_collect_semantic_diff(ctx, fallback_expr, options=diagnostics_options)
-            return df
-        df = replay_substrait_bytes(ctx, plan_bytes)
-        plan_expr = compile_sqlglot_expr(
-            expr,
-            backend=backend,
-            ctx=ctx,
-            options=resolved,
-        )
-        diagnostics_options = replace(
-            resolved,
-            diagnostics_allow_sql=False,
-            substrait_plan_override=plan_bytes,
-        )
-        _maybe_collect_plan_artifacts(
-            ctx,
-            plan_expr,
-            options=diagnostics_options,
-            df=df,
-            substrait_plan_override=plan_bytes,
-        )
-        _maybe_collect_semantic_diff(ctx, plan_expr, options=diagnostics_options)
-        return df
-    facade = DataFusionExecutionFacade(
-        ctx=ctx,
-        runtime_profile=resolved.runtime_profile,
-        ibis_backend=backend,
-    )
-    plan = facade.compile(expr, options=resolved)
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "Ibis execution did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    return result.dataframe
-
-
-def ibis_plan_to_datafusion(
-    plan: IbisPlan,
-    *,
-    backend: IbisCompilerBackend,
-    ctx: SessionContext,
-    options: DataFusionCompileOptions | None = None,
-) -> DataFrame:
-    """Compile an Ibis plan into a DataFusion DataFrame.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFusion DataFrame for the plan.
-    """
-    return ibis_to_datafusion(plan.expr, backend=backend, ctx=ctx, options=options)
-
-
-def datafusion_to_table(
-    df: DataFrame,
-    *,
-    ordering: Ordering | None = None,
-    policy: MaterializationPolicy | None = None,
-) -> TableLike:
-    """Materialize a DataFusion DataFrame with optional ordering metadata.
-
-    Full materialization is gated by policy checks to enforce streaming-first
-    design. Use datafusion_to_reader() for streaming access.
-
-    Parameters
-    ----------
-    df : DataFrame
-        DataFusion DataFrame to materialize.
-    ordering : Ordering | None
-        Optional ordering metadata to apply to the result.
-    policy : MaterializationPolicy | None
-        Policy controlling materialization behavior. If None, uses permissive defaults.
-
-    Returns
-    -------
-    TableLike
-        Arrow table with ordering metadata applied when provided.
-
-    Raises
-    ------
-    ValueError
-        Raised when materialization is blocked by policy.
-    """
-    resolved_policy = policy or MaterializationPolicy(allow_full_materialization=True)
-    if not resolved_policy.allow_full_materialization and not resolved_policy.debug_mode:
-        msg = (
-            "Full materialization is disabled. Use datafusion_to_reader() for streaming access "
-            "or enable debug_mode in MaterializationPolicy."
-        )
-        raise ValueError(msg)
-    reader = datafusion_to_reader(df, ordering=ordering)
-    if resolved_policy.max_rows_for_table is not None:
-        row_count = sum(batch.num_rows for batch in reader)
-        if row_count > resolved_policy.max_rows_for_table:
-            msg = (
-                f"Row count {row_count} exceeds max_rows_for_table limit "
-                f"({resolved_policy.max_rows_for_table}). Use datafusion_to_reader() instead."
-            )
-            raise ValueError(msg)
-        reader = datafusion_to_reader(df, ordering=ordering)
-    table = reader.read_all()
-    if ordering is None or ordering.level == OrderingLevel.UNORDERED:
-        return table
-    spec = ordering_metadata_spec(ordering.level, keys=ordering.keys)
-    return table.cast(spec.apply(table.schema))
-
-
-def datafusion_to_reader(
-    df: DataFrame,
-    *,
-    ordering: Ordering | None = None,
-) -> pa.RecordBatchReader:
-    """Return a RecordBatchReader for a DataFusion DataFrame.
-
-    Prefers partitioned streaming when available, falling back to the
-    __arrow_c_stream__ protocol for zero-copy streaming.
-
-    Returns
-    -------
-    pyarrow.RecordBatchReader
-        Record batch reader for the DataFusion results.
-    """
-    partitioned = datafusion_partitioned_readers(df)
-    if partitioned:
-        try:
-            reader = concat_readers(partitioned)
-            return _apply_ordering(reader, ordering=ordering)
-        except ValueError:
-            pass
-    if hasattr(df, "__arrow_c_stream__"):
-        try:
-            reader = pa.RecordBatchReader.from_stream(df)
-            return _apply_ordering(reader, ordering=ordering)
-        except (TypeError, ValueError, AttributeError):
-            pass
-    stream = getattr(df, "execute_stream", None)
-    if callable(stream):
-        try:
-            reader = stream()
-            return _apply_ordering(reader, ordering=ordering)
-        except (TypeError, ValueError, RuntimeError):
-            pass
-    to_batches = getattr(df, "to_arrow_batches", None)
-    if callable(to_batches):
-        batch_iter = cast("Iterable[pa.RecordBatch]", to_batches())
-        batches = list(batch_iter)
-        reader = pa.RecordBatchReader.from_batches(df.schema(), batches)
-        return _apply_ordering(reader, ordering=ordering)
-    collect = getattr(df, "collect", None)
-    if callable(collect):
-        batch_iter = cast("Iterable[pa.RecordBatch]", collect())
-        batches = list(batch_iter)
-        reader = pa.RecordBatchReader.from_batches(df.schema(), batches)
-        return _apply_ordering(reader, ordering=ordering)
-    reader = pa.RecordBatchReader.from_batches(df.schema(), [])
-    return _apply_ordering(reader, ordering=ordering)
-
-
-def datafusion_read_table(
-    ctx: SessionContext,
-    table: object,
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-) -> DataFrame:
-    """Return a DataFusion DataFrame from a table provider without registration.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFusion DataFrame for the table provider.
-    """
-    df = ctx.read_table(table)
-    from datafusion_engine.diagnostics import record_artifact
-
-    record_artifact(
-        runtime_profile,
-        "datafusion_read_table_v1",
-        {
-            "event_time_unix_ms": int(time.time() * 1000),
-            "table_type": type(table).__name__,
-        },
-    )
-    return df
-
-
-def datafusion_partitioned_readers(df: DataFrame) -> list[pa.RecordBatchReader]:
-    """Return partitioned stream readers when supported by DataFusion.
-
-    Returns
-    -------
-    list[pyarrow.RecordBatchReader]
-        Partitioned readers when supported, otherwise an empty list.
-    """
-    stream_partitions = getattr(df, "execute_stream_partitioned", None)
-    if not callable(stream_partitions):
-        return []
-    readers = stream_partitions()
-    if not isinstance(readers, Iterable):
-        return []
-    return [cast("pa.RecordBatchReader", reader) for reader in readers]
-
-
-async def datafusion_to_async_batches(
-    df: DataFrame,
-    *,
-    ordering: Ordering | None = None,
-) -> AsyncIterator[pa.RecordBatch]:
-    """Yield RecordBatches asynchronously from a DataFusion DataFrame.
-
-    Yields
-    ------
-    pyarrow.RecordBatch
-        Record batches from the DataFusion result.
-    """
-    async_iter = getattr(df, "__aiter__", None)
-    if callable(async_iter):
-        async for batch in df:
-            yield _to_record_batch(batch)
-        return
-    reader = datafusion_to_reader(df, ordering=ordering)
-    for batch in reader:
-        yield batch
-
-
-def datafusion_view_sql(df: DataFrame) -> str | None:
-    """Return SQL text for a DataFusion DataFrame when available.
-
-    Returns
-    -------
-    str | None
-        SQL string when the DataFrame can emit it, otherwise ``None``.
-    """
-    to_sql = getattr(df, "to_sql", None)
-    if callable(to_sql):
-        try:
-            return str(to_sql())
-        except (RuntimeError, TypeError, ValueError):
-            return None
-    sql_attr = getattr(df, "sql", None)
-    if isinstance(sql_attr, str):
-        return sql_attr
-    return None
-
-
-def ibis_plan_to_table(
-    plan: IbisPlan,
-    *,
-    backend: IbisCompilerBackend,
-    ctx: SessionContext,
-    options: DataFusionCompileOptions | None = None,
-) -> TableLike:
-    """Compile an Ibis plan into a DataFusion-backed Arrow table.
-
-    Returns
-    -------
-    TableLike
-        Arrow table with ordering metadata applied when available.
-    """
-    df = ibis_plan_to_datafusion(plan, backend=backend, ctx=ctx, options=options)
-    return datafusion_to_table(df, ordering=plan.ordering)
-
-
-def ibis_plan_to_reader(
-    plan: IbisPlan,
-    *,
-    backend: IbisCompilerBackend,
-    ctx: SessionContext,
-    options: DataFusionCompileOptions | None = None,
-) -> pa.RecordBatchReader:
-    """Return a DataFusion-backed RecordBatchReader for an Ibis plan.
-
-    Returns
-    -------
-    pyarrow.RecordBatchReader
-        Record batch reader for the plan results.
-    """
-    df = ibis_plan_to_datafusion(plan, backend=backend, ctx=ctx, options=options)
-    return datafusion_to_reader(df, ordering=plan.ordering)
-
-
-def _apply_ordering(
-    reader: pa.RecordBatchReader,
-    *,
-    ordering: Ordering | None,
-) -> pa.RecordBatchReader:
-    if ordering is None or ordering.level == OrderingLevel.UNORDERED:
-        return reader
-    spec = ordering_metadata_spec(ordering.level, keys=ordering.keys)
-    return pa.RecordBatchReader.from_batches(spec.apply(reader.schema), reader)
 
 
 def _to_record_batch(value: object) -> pa.RecordBatch:
@@ -1589,182 +1117,6 @@ def _bind_params_for_ast(
         raise ValueError(msg) from exc
 
 
-def merge_format_options(
-    *,
-    session_defaults: Mapping[str, object] | None = None,
-    table_options: Mapping[str, object] | None = None,
-    statement_overrides: Mapping[str, object] | None = None,
-) -> dict[str, object]:
-    """Merge format options using session < table < statement precedence.
-
-    Returns
-    -------
-    dict[str, object]
-        Merged format options with deterministic precedence.
-    """
-    merged: dict[str, object] = {}
-    for options in (session_defaults, table_options, statement_overrides):
-        if not options:
-            continue
-        merged.update({key: value for key, value in options.items() if value is not None})
-    return merged
-
-
-def _write_format(value: str | None) -> WriteFormat:
-    if value is None:
-        return WriteFormat.PARQUET
-    normalized = value.strip().lower()
-    mapping = {
-        "parquet": WriteFormat.PARQUET,
-        "csv": WriteFormat.CSV,
-        "json": WriteFormat.JSON,
-        "arrow": WriteFormat.ARROW,
-    }
-    resolved = mapping.get(normalized)
-    if resolved is None:
-        msg = f"Unsupported write format: {value!r}."
-        raise ValueError(msg)
-    return resolved
-
-
-def _write_pipeline_profile_for_dml(
-    options: DataFusionDmlOptions | None,
-) -> SQLPolicyProfile:
-    dialect = options.dialect if options is not None else "datafusion_ext"
-    _ensure_dialect(dialect)
-    return SQLPolicyProfile(read_dialect=dialect, write_dialect=dialect)
-
-
-def _sql_options_for_dml(
-    options: DataFusionDmlOptions | None,
-) -> SQLOptions | None:
-    if options is None:
-        return None
-    if options.sql_options is not None:
-        return options.sql_options
-    policy = options.sql_policy or resolve_sql_policy(
-        options.sql_policy_name,
-        fallback=_default_sql_policy(),
-    )
-    merged = _merge_sql_policies(
-        DataFusionSqlPolicy(allow_dml=True, allow_statements=True),
-        options.session_policy,
-        options.table_policy,
-        policy,
-    )
-    return merged.to_sql_options()
-
-
-def copy_to_path(
-    ctx: SessionContext,
-    *,
-    sql: str,
-    path: str,
-    options: CopyToOptions | None = None,
-) -> DataFrame:
-    """Execute COPY TO with deterministic options precedence.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFrame representing the COPY statement.
-
-    Raises
-    ------
-    ValueError
-        If file output is disallowed by the COPY options.
-    """
-    resolved = options or CopyToOptions()
-    if not resolved.allow_file_output:
-        msg = "COPY TO file outputs are disabled; use Delta writes instead."
-        raise ValueError(msg)
-    profile = _write_pipeline_profile_for_dml(resolved.dml)
-    request = WriteRequest(
-        source=sql,
-        destination=path,
-        format=_write_format(resolved.file_format),
-        mode=WriteMode.ERROR,
-        partition_by=tuple(resolved.partition_by),
-        format_options=(
-            merge_format_options(
-                session_defaults=resolved.session_defaults,
-                table_options=resolved.table_options,
-                statement_overrides=resolved.statement_overrides,
-            )
-            or None
-        ),
-    )
-    pipeline = WritePipeline(
-        ctx,
-        profile,
-        sql_options=_sql_options_for_dml(resolved.dml),
-    )
-    copy_sql, df = pipeline.copy_dataframe(request)
-    if resolved.dml is not None and resolved.dml.record_hook is not None:
-        param_mode = _param_mode(resolved.dml.params)
-        resolved.dml.record_hook(
-            {
-                "sql": copy_sql,
-                "dialect": profile.write_dialect,
-                "policy_violations": [],
-                "sql_policy_name": resolved.dml.sql_policy_name,
-                "param_mode": param_mode,
-            }
-        )
-    return df
-
-
-def copy_to_statement(
-    sql: str,
-    *,
-    path: str,
-    options: CopyToOptions | None = None,
-) -> str:
-    """Return a COPY statement for the provided query and path.
-
-    Parameters
-    ----------
-    sql
-        SQL query to wrap in the COPY statement.
-    path
-        Output path for the COPY destination.
-    options
-        COPY statement options and DML configuration.
-
-    Returns
-    -------
-    str
-        COPY statement assembled from the provided options.
-
-    Raises
-    ------
-    ValueError
-        Raised when COPY output is disabled.
-    """
-    resolved = options or CopyToOptions()
-    if not resolved.allow_file_output:
-        msg = "COPY TO file outputs are disabled; use Delta writes instead."
-        raise ValueError(msg)
-    merged = merge_format_options(
-        session_defaults=resolved.session_defaults,
-        table_options=resolved.table_options,
-        statement_overrides=resolved.statement_overrides,
-    )
-    from sqlglot_tools.ddl_builders import build_copy_to_ast
-    from sqlglot_tools.optimizer import parse_sql_strict, resolve_sqlglot_policy, sqlglot_emit
-
-    policy = resolve_sqlglot_policy(name="datafusion_dml")
-    query = parse_sql_strict(sql, dialect=policy.read_dialect)
-    copy_expr = build_copy_to_ast(
-        query=query,
-        path=path,
-        file_format=resolved.file_format,
-        options=merged,
-        partition_by=tuple(resolved.partition_by),
-    )
-    return sqlglot_emit(copy_expr, policy=policy)
-
-
 def _maybe_explain(
     ctx: SessionContext,
     expr: Expression,
@@ -1879,11 +1231,15 @@ def _maybe_collect_semantic_diff(
 
 
 def _explain_reader(df: DataFrame) -> pa.RecordBatchReader:
-    return datafusion_to_reader(df)
+    from datafusion_engine.streaming_executor import StreamingExecutionResult
+
+    return StreamingExecutionResult(df=df).to_arrow_stream()
 
 
 def _collect_reader(df: DataFrame) -> pa.RecordBatchReader:
-    return datafusion_to_reader(df)
+    from datafusion_engine.streaming_executor import StreamingExecutionResult
+
+    return StreamingExecutionResult(df=df).to_arrow_stream()
 
 
 def _df_plan_details(df: DataFrame) -> dict[str, object]:
@@ -2238,63 +1594,6 @@ def collect_plan_artifacts(
     )
 
 
-def datafusion_write_options(
-    policy: DataFusionWritePolicy | None,
-) -> tuple[DataFrameWriteOptions | None, ParquetWriterOptions | None]:
-    """Return DataFusion write options for a write policy.
-
-    Returns
-    -------
-    tuple[DataFrameWriteOptions | None, ParquetWriterOptions | None]
-        DataFrame + Parquet writer option instances.
-    """
-    if policy is None:
-        return None, None
-    sort_exprs = _datafusion_sort_exprs(policy.sort_by)
-    write_options = DataFrameWriteOptions(
-        partition_by=list(policy.partition_by) if policy.partition_by else None,
-        single_file_output=policy.single_file_output,
-        sort_by=sort_exprs or None,
-    )
-    parquet_kwargs: _ParquetWriterOptionsKwargs = {}
-    if policy.parquet_compression is not None:
-        parquet_kwargs["compression"] = policy.parquet_compression
-    if policy.parquet_statistics_enabled is not None:
-        parquet_kwargs["statistics_enabled"] = policy.parquet_statistics_enabled
-    if policy.parquet_row_group_size is not None:
-        parquet_kwargs["max_row_group_size"] = int(policy.parquet_row_group_size)
-    if policy.parquet_bloom_filter_on_write is not None:
-        parquet_kwargs["bloom_filter_on_write"] = policy.parquet_bloom_filter_on_write
-    if policy.parquet_dictionary_enabled is not None:
-        parquet_kwargs["dictionary_enabled"] = policy.parquet_dictionary_enabled
-    if policy.parquet_encoding is not None:
-        parquet_kwargs["encoding"] = policy.parquet_encoding
-    if policy.parquet_skip_arrow_metadata is not None:
-        parquet_kwargs["skip_arrow_metadata"] = policy.parquet_skip_arrow_metadata
-    column_options = _column_options(policy.parquet_column_options)
-    if column_options:
-        parquet_kwargs["column_specific_options"] = column_options
-    parquet_options = (
-        ParquetWriterOptions(**parquet_kwargs) if parquet_kwargs else ParquetWriterOptions()
-    )
-    return write_options, parquet_options
-
-
-def _datafusion_sort_exprs(sort_by: Sequence[str]) -> list[SortExpr]:
-    return [col(name).sort(ascending=True, nulls_first=True) for name in sort_by]
-
-
-class _ParquetWriterOptionsKwargs(TypedDict, total=False):
-    compression: str | None
-    statistics_enabled: str | None
-    max_row_group_size: int
-    bloom_filter_on_write: bool
-    dictionary_enabled: bool
-    encoding: str
-    skip_arrow_metadata: bool
-    column_specific_options: dict[str, ParquetColumnOptions]
-
-
 class _ParquetColumnOptionsKwargs(TypedDict, total=False):
     compression: str | None
     dictionary_enabled: bool
@@ -2561,64 +1860,6 @@ def _uuid_short() -> str:
     return uuid.uuid4().hex[:8]
 
 
-def df_from_sqlglot_ast(
-    ctx: SessionContext,
-    expr: Expression,
-    *,
-    options: DataFusionCompileOptions | None = None,
-) -> DataFrame:
-    """Create DataFrame from SQLGlot AST without string serialization.
-
-    This executes the AST via the Ibis DataFusion backend and materializes
-    results into a DataFusion DataFrame for downstream use.
-
-    Parameters
-    ----------
-    ctx : SessionContext
-        DataFusion session context.
-    expr : Expression
-        SQLGlot expression to execute.
-    options : DataFusionCompileOptions | None
-        Compilation options controlling dialect and SQL generation.
-
-    Returns
-    -------
-    DataFrame
-        DataFusion DataFrame for the expression.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when the Ibis DataFusion backend is unavailable.
-    ValueError
-        Raised when the AST execution returns no column metadata.
-    """
-    resolved = options or DataFusionCompileOptions()
-    _ensure_dialect(resolved.dialect)
-    try:
-        import ibis
-    except ImportError as exc:
-        msg = "AST execution requires the Ibis DataFusion backend."
-        raise RuntimeError(msg) from exc
-    backend = ibis.datafusion.connect(ctx=ctx)
-    result = execute_sqlglot_ast(
-        cast("IbisCompilerBackend", backend),
-        expr,
-        dialect=resolved.dialect,
-    )
-    columns = result.columns
-    if not columns:
-        msg = "AST execution returned no column metadata."
-        raise ValueError(msg)
-    rows = result.rows or []
-    if rows:
-        row_dicts = [dict(zip(columns, row, strict=True)) for row in rows]
-        table = table_from_row_dicts(row_dicts)
-    else:
-        table = pa.table({name: [] for name in columns})
-    return datafusion_from_arrow(ctx, name=f"__ast_result_{_uuid_short()}", value=table)
-
-
 __all__ = [
     "AstExecutionResult",
     "CopyToOptions",
@@ -2629,28 +1870,11 @@ __all__ = [
     "IbisCompilerBackend",
     "MaterializationPolicy",
     "collect_plan_artifacts",
-    "compile_sqlglot_expr",
-    "copy_to_path",
-    "copy_to_statement",
     "datafusion_from_arrow",
-    "datafusion_partitioned_readers",
-    "datafusion_read_table",
-    "datafusion_to_async_batches",
-    "datafusion_to_reader",
-    "datafusion_to_table",
-    "datafusion_view_sql",
-    "datafusion_write_options",
-    "df_from_sqlglot_ast",
     "execute_sqlglot_ast",
-    "ibis_plan_to_datafusion",
-    "ibis_plan_to_reader",
-    "ibis_plan_to_table",
-    "ibis_to_datafusion",
     "ibis_to_datafusion_ast_path",
-    "merge_format_options",
     "rehydrate_plan_artifacts",
     "replay_substrait_bytes",
-    "sqlglot_to_datafusion",
     "validate_substrait_plan",
     "validate_table_constraints",
 ]

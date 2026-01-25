@@ -6,7 +6,6 @@ execution policies that control DDL, DML, and statement execution.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING
@@ -97,31 +96,6 @@ class ExecutionPolicy:
             .with_allow_dml(self.allow_dml)
             .with_allow_statements(self.allow_statements)
         )
-
-
-@dataclass(frozen=True)
-class ExecutionProfileOptions:
-    """Execution policy overrides for profile-backed SQL execution.
-
-    Parameters
-    ----------
-    policy
-        Explicit execution policy override.
-    sql_options
-        Optional SQLOptions override to use for execution.
-    param_values
-        Optional parameter bindings for SQL execution.
-    allow_statements
-        Whether to allow statement execution.
-    dialect
-        SQL dialect for safety validation.
-    """
-
-    policy: ExecutionPolicy | None = None
-    sql_options: SQLOptions | None = None
-    param_values: Mapping[str, object] | None = None
-    allow_statements: bool | None = None
-    dialect: str = "datafusion"
 
 
 def statement_sql_options_for_profile(
@@ -225,53 +199,6 @@ def execute_with_policy(
     return ctx.sql_with_options(
         sql,
         policy.to_sql_options(),
-    )
-
-
-def execute_with_profile(
-    ctx: SessionContext,
-    sql: str,
-    *,
-    profile: DataFusionRuntimeProfile | None,
-    options: ExecutionProfileOptions | None = None,
-) -> DataFrame:
-    """Execute SQL using a runtime profile-backed safety policy.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context.
-    sql
-        SQL query to execute.
-    profile
-        Runtime profile supplying execution policy.
-    options
-        Optional execution overrides for policy, SQL options, and dialect.
-
-    Returns
-    -------
-    DataFrame
-        Execution result.
-
-    Raises
-    ------
-    ValueError
-        Raised when the SQL fails safety validation.
-    """
-    resolved = options or ExecutionProfileOptions()
-    effective_policy = resolved.policy or execution_policy_for_profile(
-        profile,
-        allow_statements=resolved.allow_statements,
-    )
-    violations = validate_sql_safety(sql, effective_policy, dialect=resolved.dialect)
-    if violations:
-        msg = f"SQL policy violations: {'; '.join(violations)}"
-        raise ValueError(msg)
-    param_values = dict(resolved.param_values) if resolved.param_values is not None else None
-    return ctx.sql_with_options(
-        sql,
-        resolved.sql_options or effective_policy.to_sql_options(),
-        param_values=param_values,
     )
 
 

@@ -2311,7 +2311,10 @@ def register_delta_cdf_df(
     if provider is None:
         msg = "Delta CDF provider requires datafusion_ext.delta_cdf_table_provider."
         raise ValueError(msg)
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    adapter = facade.io_adapter()
     adapter.register_table_provider(name, provider)
     _record_table_provider_artifact(
         runtime_profile,

@@ -576,18 +576,14 @@ def _register_datafusion_dataset(
     location: DatasetLocation,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> None:
-    from datafusion_engine.registry_bridge import register_dataset_df
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
     if not isinstance(ctx, SessionContext):
         msg = "DataFusion SessionContext is required for dataset registration."
         raise TypeError(msg)
     try:
-        register_dataset_df(
-            ctx,
-            name=name,
-            location=location,
-            runtime_profile=runtime_profile,
-        )
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+        facade.register_dataset(name=name, location=location)
     except ValueError as exc:
         if location.format == "delta":
             msg = f"Delta provider required for {name!r}."

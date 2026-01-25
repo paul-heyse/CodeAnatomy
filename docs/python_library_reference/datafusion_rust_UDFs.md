@@ -5491,3 +5491,510 @@ If you want to go one level deeper, the next most actionable artifact is a **“
 [7]: https://datafusion.apache.org/python/user-guide/io/table_provider.html?utm_source=chatgpt.com "Custom Table Provider - Apache DataFusion"
 [8]: https://datafusion.apache.org/blog/2025/07/16/datafusion-48.0.0/ "Apache DataFusion 48.0.0 Released - Apache DataFusion Blog"
 [9]: https://github.com/apache/datafusion/issues/17374 "Stabilize FFI Boundary · Issue #17374 · apache/datafusion · GitHub"
+
+## DataFusion plugin ABI spec (Rust↔Rust, in-process) — **v1**
+
+This is a **concrete, codegen-ready ABI** for runtime-loaded DataFusion extensions that export:
+
+1. **`TableProvider` plugins** (data sources) via `FFI_TableProvider`
+2. **UDF bundles** (Scalar + Aggregate + Window) via `FFI_ScalarUDF / FFI_AggregateUDF / FFI_WindowUDF`
+
+It is built on **`datafusion-ffi`** (stable FFI structs + Foreign wrappers) and optionally **`abi_stable`** (root module + version/layout checks). `datafusion-ffi` explicitly targets runtime-loaded modular interfaces as a primary use case (beyond datafusion-python). ([Docs.rs][1])
+
+> **Reality check / motivation:** DataFusion’s FFI boundary is still stabilizing; there were breaking changes between DF 48→49 and planned between 49→50. Your plugin needs a hard **handshake gate** and must fail fast on incompatibility. ([GitHub][2])
+
+---
+
+# 0) Ground rules (must-haves for correctness)
+
+### 0.1 “FFI major” compatibility
+
+`datafusion_ffi::version()` returns the **major version of the FFI implementation** and is explicitly intended for compatibility checks across the unsafe boundary. ([Docs.rs][3])
+
+### 0.2 Foreign wrappers never touch `private_data`
+
+Every `FFI_*` struct is paired with a `Foreign*` consumer-side wrapper; consumer code must not access `private_data`, even if it “works locally”. `FFI_TableProvider` docs spell this out explicitly. ([Docs.rs][4])
+
+### 0.3 Lifetime: host must keep the dynamic library loaded while any exported objects exist
+
+`datafusion-ffi` objects often call back across the boundary during `Drop`/`release` to free producer-private state. The crate docs explain the release mechanism and why it’s necessary. ([Docs.rs][1])
+
+### 0.4 TaskContext/codec plumbing is part of the ABI
+
+Recent `datafusion-ffi` changes require a **`TaskContextProvider`** (commonly `SessionContext`) and optionally a `LogicalExtensionCodec` when constructing key FFI structs (including `FFI_TableProvider`). The upgrade guide provides the canonical construction patterns. ([DataFusion][5])
+
+---
+
+# 1) ABI surface: **exported root module** (recommended) or **raw symbols**
+
+You asked for “exported symbols (or an abi_stable module root)”. The most robust pattern is **`abi_stable` root module**, because it does:
+
+* load-time ABI/header checks + version checks + layout checks
+* a structured export table (“module of function pointers”) you can evolve
+
+`abi_stable` root modules are exported via `#[export_root_module]`. ([Docs.rs][6])
+And loaded via `RootModule::load_from*`, which documents compatibility errors like `InvalidAbiHeader`, `IncompatibleVersionNumber`, and `AbiInstability`. ([Docs.rs][7])
+
+Below I specify the ABI in **module form** (best), then give a minimal “raw symbol” equivalent.
+
+---
+
+# 2) Handshake schema (version gate)
+
+### 2.1 Manifest struct (ABI v1)
+
+Use a fixed, append-only manifest with a `struct_size` field (classic C ABI evolution pattern). Keep it **pure data** and use `abi_stable` types for safe cross-dylib ownership.
+
+```rust
+// df_plugin_api/src/manifest.rs
+use abi_stable::StableAbi;
+use abi_stable::std_types::{RString, RVec};
+
+pub const DF_PLUGIN_ABI_MAJOR: u16 = 1;
+pub const DF_PLUGIN_ABI_MINOR: u16 = 0;
+
+// Bitflags: advertise what the plugin can export
+pub mod caps {
+    pub const TABLE_PROVIDER: u64 = 1 << 0;
+    pub const SCALAR_UDF:     u64 = 1 << 1;
+    pub const AGG_UDF:        u64 = 1 << 2;
+    pub const WINDOW_UDF:     u64 = 1 << 3;
+}
+
+#[repr(C)]
+#[derive(Debug, StableAbi, Clone)]
+pub struct DfPluginManifestV1 {
+    pub struct_size: u32,
+
+    // This spec’s ABI version
+    pub plugin_abi_major: u16,
+    pub plugin_abi_minor: u16,
+
+    // datafusion_ffi::version() (FFI ABI major)
+    pub df_ffi_major: u64,
+
+    // Producer’s DataFusion/Arrow majors (policy gate; keep small ints)
+    pub datafusion_major: u16,
+    pub arrow_major: u16,
+
+    // Human identity
+    pub plugin_name: RString,
+    pub plugin_version: RString,   // semver string
+    pub build_id: RString,         // git SHA / build hash / reproducibility token
+
+    // Capabilities + feature strings
+    pub capabilities: u64,
+    pub features: RVec<RString>,   // e.g., ["udfs:regex", "provider:s3"]
+}
+```
+
+### 2.2 Host-side validation algorithm
+
+**Hard gate (must pass):**
+
+* `manifest.plugin_abi_major == DF_PLUGIN_ABI_MAJOR`
+* `manifest.df_ffi_major == datafusion_ffi::version()` (FFI ABI major) ([Docs.rs][3])
+* `manifest.struct_size >= size_of::<DfPluginManifestV1>()` (or at least the fields you read)
+
+**Policy gate (recommended):**
+
+* `manifest.datafusion_major == host_datafusion_major`
+* `manifest.arrow_major == host_arrow_major`
+
+Even though `datafusion-ffi` aims to provide stability across DataFusion versions, it still recommends using the same DataFusion version on both sides. ([Docs.rs][1])
+And again: FFI boundary churn is real; strict gating is safer. ([GitHub][2])
+
+---
+
+# 3) Export schema (what the plugin provides)
+
+You want (1) a **TableProvider** plugin and (2) a **UDF bundle**. Define a single export surface that can provide both:
+
+```rust
+// df_plugin_api/src/lib.rs
+use abi_stable::StableAbi;
+use abi_stable::std_types::{RResult, RString, RVec, RStr, ROption};
+
+use datafusion_ffi::table_provider::FFI_TableProvider;
+use datafusion_ffi::udf::FFI_ScalarUDF;
+use datafusion_ffi::udaf::FFI_AggregateUDF;
+use datafusion_ffi::udwf::FFI_WindowUDF;
+use datafusion_ffi::proto::FFI_LogicalExtensionCodec;
+
+use crate::manifest::DfPluginManifestV1;
+
+pub type DfResult<T> = RResult<T, RString>;
+
+#[repr(C)]
+#[derive(StableAbi)]
+pub struct DfUdfBundleV1 {
+    pub scalar: RVec<FFI_ScalarUDF>,
+    pub aggregate: RVec<FFI_AggregateUDF>,
+    pub window: RVec<FFI_WindowUDF>,
+}
+
+#[repr(C)]
+#[derive(StableAbi)]
+pub struct DfPluginExportsV1 {
+    pub table_provider_names: RVec<RString>,   // enumerate
+    pub udf_bundle: DfUdfBundleV1,             // bulk-export UDFs
+}
+
+#[repr(C)]
+#[derive(StableAbi)]
+pub struct DfPluginMod {
+    pub manifest: extern "C" fn() -> DfPluginManifestV1,
+
+    // List everything (no host context needed)
+    pub exports: extern "C" fn() -> DfPluginExportsV1,
+
+    // Instantiate a table provider by name, embedding host codec/task ctx provider
+    pub create_table_provider: extern "C" fn(
+        name: RStr<'_>,
+        options_json: ROption<RString>,            // stable, extensible args channel
+        ffi_codec: FFI_LogicalExtensionCodec,      // host-provided (holds TaskContextProvider)
+    ) -> DfResult<FFI_TableProvider>,
+}
+
+// abi_stable will generate DfPluginMod_Ref (prefix ref) automatically
+```
+
+**Why `FFI_LogicalExtensionCodec` in `create_table_provider`:**
+Newer `FFI_TableProvider::new` requires a `TaskContextProvider` and optionally a `LogicalExtensionCodec`, and `new_with_ffi_codec` embeds the codec. ([Docs.rs][4])
+The FFI crate explains that many FFI structs need a TaskContextProvider to (de)serialize via `datafusion-proto`, and it holds a **Weak** ref; the provider must stay valid for the lifetime of calls. ([Docs.rs][1])
+
+---
+
+# 4) Producer skeletons (plugin side)
+
+## 4.1 `cdylib` crate layout
+
+* `df_plugin_api` (interface crate): types + module definition above
+* `df_plugin_impl` (implementation crate): compiled as `cdylib`, implements the module and exports it
+
+## 4.2 Export the root module (abi_stable)
+
+```rust
+// df_plugin_impl/src/lib.rs
+use abi_stable::prefix_type::PrefixTypeTrait;
+use abi_stable::export_root_module;
+
+use df_plugin_api::{DfPluginMod, DfPluginMod_Ref};
+
+#[export_root_module]
+pub fn df_plugin_root() -> DfPluginMod_Ref {
+    DfPluginMod {
+        manifest: my_manifest,
+        exports: my_exports,
+        create_table_provider: my_create_table_provider,
+    }
+    .leak_into_prefix()
+}
+```
+
+This is the canonical `#[export_root_module]` pattern. ([Docs.rs][6])
+
+---
+
+## 4.3 TableProvider plugin producer: build `FFI_TableProvider`
+
+### 4.3.1 Build the underlying provider
+
+Use any `TableProvider` implementation you want; the ABI only cares about the returned `FFI_TableProvider`.
+
+### 4.3.2 Wrap into `FFI_TableProvider`
+
+Use `FFI_TableProvider::new_with_ffi_codec(...)` if you want the host to control codecs/context.
+
+`FFI_TableProvider` provides:
+
+* a stable struct layout + foreign wrapper contract ([Docs.rs][4])
+* `new(...)` signature: `(provider, can_support_pushdown_filters, runtime, task_ctx_provider, logical_codec)` ([Docs.rs][4])
+* `new_with_ffi_codec(...)` signature: `(provider, can_support_pushdown_filters, runtime, logical_codec: FFI_LogicalExtensionCodec)` ([Docs.rs][4])
+* and `version: fn() -> u64` field returning the **major DataFusion version number of the provider** ([Docs.rs][4])
+
+```rust
+use abi_stable::std_types::{RResult, RString, RStr, ROption};
+use df_plugin_api::DfResult;
+
+use datafusion_ffi::table_provider::FFI_TableProvider;
+use datafusion_ffi::proto::FFI_LogicalExtensionCodec;
+
+use datafusion::datasource::TableProvider;
+use std::sync::Arc;
+
+extern "C" fn my_create_table_provider(
+    name: RStr<'_>,
+    options_json: ROption<RString>,
+    ffi_codec: FFI_LogicalExtensionCodec,
+) -> DfResult<FFI_TableProvider> {
+    // 1) parse options_json (plugin-defined contract)
+    // 2) build Arc<dyn TableProvider + Send>
+    let provider: Arc<dyn TableProvider + Send> = build_provider(name, options_json)
+        .map_err(|e| RString::from(e))?;
+
+    // 3) wrap (host codec already includes task context provider)
+    let runtime = None; // or Some(tokio::runtime::Handle::current())
+    let ffi_tp = FFI_TableProvider::new_with_ffi_codec(
+        provider,
+        /*can_support_pushdown_filters=*/ true,
+        runtime,
+        ffi_codec,
+    );
+
+    RResult::ROk(ffi_tp)
+}
+
+// your internal builder
+fn build_provider(
+    _name: RStr<'_>,
+    _options_json: ROption<RString>,
+) -> Result<Arc<dyn TableProvider + Send>, String> {
+    // TODO: return a real provider; use MemTable for toy, ListingTable for files, etc.
+    Err("not implemented".into())
+}
+```
+
+---
+
+## 4.4 UDF bundle producer: export `FFI_ScalarUDF / FFI_AggregateUDF / FFI_WindowUDF`
+
+### 4.4.1 Post-48 FFI support for UDAF + UDWF
+
+DataFusion 48 explicitly calls out FFI support for `AggregateUDF` and `WindowUDF` to enable shared libraries to pass functions back and forth. ([DataFusion][8])
+
+### 4.4.2 Create native UDF objects → convert to FFI structs
+
+All of these FFI structs are `#[repr(C)]` stable ABI structs with explicit `release` callbacks and private data pointers (e.g., `FFI_ScalarUDF` defines `return_field_from_args`, `invoke_with_args`, `coerce_types`, `release`, `private_data`). ([Docs.rs][9])
+
+Producer conversion is trivial because each struct implements `From<Arc<…UDF…>>`:
+
+* `FFI_ScalarUDF: From<Arc<ScalarUDF>>` ([Docs.rs][9])
+* `FFI_AggregateUDF: From<Arc<AggregateUDF>>` ([Docs.rs][10])
+* `FFI_WindowUDF: From<Arc<WindowUDF>>` ([Docs.rs][11])
+
+```rust
+use abi_stable::std_types::RVec;
+use df_plugin_api::DfUdfBundleV1;
+
+use datafusion::logical_expr::ScalarUDF;
+use datafusion_expr::AggregateUDF;
+use datafusion::logical_expr::WindowUDF;
+
+use datafusion_ffi::udf::FFI_ScalarUDF;
+use datafusion_ffi::udaf::FFI_AggregateUDF;
+use datafusion_ffi::udwf::FFI_WindowUDF;
+
+use std::sync::Arc;
+
+extern "C" fn my_exports() -> df_plugin_api::DfPluginExportsV1 {
+    // build real UDFs here
+    let scalar_udfs: Vec<Arc<ScalarUDF>> = vec![];
+    let agg_udfs: Vec<Arc<AggregateUDF>> = vec![];
+    let win_udfs: Vec<Arc<WindowUDF>> = vec![];
+
+    df_plugin_api::DfPluginExportsV1 {
+        table_provider_names: RVec::from(vec![]),
+
+        udf_bundle: DfUdfBundleV1 {
+            scalar: RVec::from(scalar_udfs.into_iter().map(Into::into).collect::<Vec<FFI_ScalarUDF>>()),
+            aggregate: RVec::from(agg_udfs.into_iter().map(Into::into).collect::<Vec<FFI_AggregateUDF>>()),
+            window: RVec::from(win_udfs.into_iter().map(Into::into).collect::<Vec<FFI_WindowUDF>>()),
+        },
+    }
+}
+```
+
+**Scalar UDF FFI note:** the upgrade guide states the FFI scalar UDF structure no longer has a `return_type` call because `ForeignScalarUDF` uses `return_field_from_args`. Don’t design ABI expecting `return_type` here. ([DataFusion][5])
+
+---
+
+# 5) Consumer skeletons (host side)
+
+## 5.1 Load plugin module (abi_stable) + validate handshake
+
+```rust
+use abi_stable::library::RootModule;
+use std::path::Path;
+
+use df_plugin_api::{DfPluginMod_Ref, manifest::DF_PLUGIN_ABI_MAJOR};
+use datafusion_ffi;
+
+fn load_plugin(path: &Path) -> anyhow::Result<DfPluginMod_Ref> {
+    // RootModule::load_from* does header + layout + version checks; see docs for failure modes.
+    // :contentReference[oaicite:24]{index=24}
+    let plugin = DfPluginMod_Ref::load_from_file(path).map_err(anyhow::Error::msg)?;
+
+    let m = (plugin.manifest)();
+    if m.plugin_abi_major != DF_PLUGIN_ABI_MAJOR {
+        anyhow::bail!("plugin ABI major mismatch");
+    }
+    if m.df_ffi_major != datafusion_ffi::version() {
+        anyhow::bail!("datafusion-ffi ABI major mismatch");
+    }
+
+    Ok(plugin)
+}
+```
+
+`RootModule::load_from*` warning: don’t call it from static initializers inside a dynamic library; call it from normal runtime code (docs explicitly warn about this). ([Docs.rs][7])
+
+## 5.2 Build host codec (TaskContextProvider) to pass into provider creation
+
+Upgrade guide canonical pattern (codec + ctx + `FFI_LogicalExtensionCodec`). ([DataFusion][5])
+
+```rust
+use std::sync::Arc;
+use datafusion::prelude::SessionContext;
+use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+use datafusion_ffi::proto::FFI_LogicalExtensionCodec;
+
+fn host_ffi_codec(ctx: Arc<SessionContext>) -> FFI_LogicalExtensionCodec {
+    let codec = Arc::new(DefaultLogicalExtensionCodec {});
+    FFI_LogicalExtensionCodec::new(codec, None, ctx)
+}
+```
+
+## 5.3 Import a `TableProvider` and register it
+
+`FFI_TableProvider` is a stable wrapper; consumer must not touch `private_data` (use Foreign wrapper / conversions). ([Docs.rs][4])
+There is `From<&FFI_TableProvider> for Arc<dyn TableProvider>` on the type. ([Docs.rs][4])
+
+```rust
+use datafusion::datasource::TableProvider;
+use datafusion::prelude::SessionContext;
+use std::sync::Arc;
+
+fn register_provider(
+    ctx: &SessionContext,
+    plugin: &df_plugin_api::DfPluginMod_Ref,
+) -> datafusion::error::Result<()> {
+    let ffi_codec = host_ffi_codec(Arc::new(ctx.clone()));
+
+    // Instantiate provider (plugin embeds codec inside returned FFI_TableProvider)
+    let ffi_tp = (plugin.create_table_provider)(
+        "my_table".into(),
+        abi_stable::std_types::ROption::RNone,
+        ffi_codec,
+    )
+    .into_result()
+    .map_err(|e| datafusion::error::DataFusionError::External(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))))?;
+
+    // Convert to Arc<dyn TableProvider> and register
+    let tp: Arc<dyn TableProvider> = (&ffi_tp).into();
+    ctx.register_table("my_table", tp)?;
+
+    Ok(())
+}
+```
+
+**Lifetime rule:** the plugin dylib must remain loaded while `ffi_tp` (and the `tp` derived from it) exist, because drops/releases may call back across the boundary. ([Docs.rs][1])
+
+## 5.4 Import UDF bundle and register (Scalar + Aggregate + Window)
+
+### Scalar UDF (FFI → `Arc<dyn ScalarUDFImpl>` → `ScalarUDF`)
+
+* `FFI_ScalarUDF` provides `From<&FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl>`. ([Docs.rs][9])
+* Upgrade guide canonical wrapper: `ScalarUDF::new_from_shared_impl(foreign_impl)`. ([DataFusion][5])
+
+```rust
+use datafusion::logical_expr::{ScalarUDF, ScalarUDFImpl};
+use std::sync::Arc;
+
+fn import_scalar(ffi: &datafusion_ffi::udf::FFI_ScalarUDF) -> ScalarUDF {
+    let impl_: Arc<dyn ScalarUDFImpl> = ffi.into();
+    ScalarUDF::new_from_shared_impl(impl_)
+}
+```
+
+### Aggregate UDF (FFI → `Arc<dyn AggregateUDFImpl>` → `AggregateUDF`)
+
+* `FFI_AggregateUDF` provides `From<&FFI_AggregateUDF> for Arc<dyn AggregateUDFImpl>`. ([Docs.rs][10])
+* `AggregateUDF::new_from_shared_impl` exists explicitly. ([Docs.rs][12])
+
+```rust
+use datafusion_expr::{AggregateUDF, AggregateUDFImpl};
+use std::sync::Arc;
+
+fn import_aggregate(ffi: &datafusion_ffi::udaf::FFI_AggregateUDF) -> AggregateUDF {
+    let impl_: Arc<dyn AggregateUDFImpl> = ffi.into();
+    AggregateUDF::new_from_shared_impl(impl_)
+}
+```
+
+### Window UDF (FFI → `Arc<dyn WindowUDFImpl>` → `WindowUDF`)
+
+* `FFI_WindowUDF` provides `From<&FFI_WindowUDF> for Arc<dyn WindowUDFImpl>`. ([Docs.rs][11])
+* `WindowUDF::new_from_shared_impl` exists explicitly. ([Docs.rs][13])
+
+```rust
+use datafusion::logical_expr::{WindowUDF, WindowUDFImpl};
+use std::sync::Arc;
+
+fn import_window(ffi: &datafusion_ffi::udwf::FFI_WindowUDF) -> WindowUDF {
+    let impl_: Arc<dyn WindowUDFImpl> = ffi.into();
+    WindowUDF::new_from_shared_impl(impl_)
+}
+```
+
+### Register all
+
+```rust
+fn register_udfs(ctx: &datafusion::prelude::SessionContext, plugin: &df_plugin_api::DfPluginMod_Ref) {
+    let exports = (plugin.exports)();
+
+    for ffi in exports.udf_bundle.scalar.iter() {
+        ctx.register_udf(import_scalar(ffi));
+    }
+    for ffi in exports.udf_bundle.aggregate.iter() {
+        ctx.register_udaf(import_aggregate(ffi));
+    }
+    for ffi in exports.udf_bundle.window.iter() {
+        ctx.register_udwf(import_window(ffi));
+    }
+}
+```
+
+---
+
+# 6) Minimal “raw symbol” ABI (if you don’t want abi_stable RootModule)
+
+If you want the smallest possible exported surface (e.g., use `libloading`), you can export these symbols:
+
+* `df_plugin_manifest_v1(out: *mut DfPluginManifestV1)`
+* `df_plugin_exports_v1(out: *mut DfPluginExportsV1)`
+* `df_plugin_create_table_provider_v1(name_ptr, opts_ptr, ffi_codec, out_provider) -> status`
+
+But if you do this, **you must implement your own layout/version checks** that `abi_stable` otherwise gives you for free (including ABI header compatibility and root module layout checks). ([Docs.rs][7])
+Given FFI churn risk, I strongly recommend the RootModule pattern.
+
+---
+
+# 7) Operational constraints (the things that break production)
+
+1. **FFI ABI drift exists** — you must gate on `datafusion_ffi::version()` and your own plugin ABI major. ([Docs.rs][3])
+2. **TaskContextProvider must remain valid** — `FFI_TaskContextProvider` holds a `Weak` ref; if the provider dies, later (de)serialization may fail or worse. ([Docs.rs][1])
+3. **Never unload the dylib early** — drops/releases may execute foreign calls. ([Docs.rs][1])
+4. **Don’t touch `private_data` on the consumer side** — use Foreign wrappers / stable functions only. ([Docs.rs][4])
+
+---
+
+If you want, the next “artifact” that makes this immediately actionable is a **repo skeleton** (`df_plugin_api`, `df_plugin_impl`, `df_plugin_host`) with:
+
+* a toy `MemTable` provider plugin,
+* one scalar UDF + one aggregate UDF + one window UDF,
+* an `EXPLAIN FORMAT tree` snapshot test verifying the functions/providers are actually used in plans (and that the plugin stays loaded for the duration).
+
+[1]: https://docs.rs/crate/datafusion-ffi/latest "datafusion-ffi 52.1.0 - Docs.rs"
+[2]: https://github.com/apache/datafusion/issues/17374?utm_source=chatgpt.com "Stabilize FFI Boundary · Issue #17374 · apache/datafusion"
+[3]: https://docs.rs/datafusion-ffi/latest/datafusion_ffi/ "datafusion_ffi - Rust"
+[4]: https://docs.rs/datafusion-ffi/latest/datafusion_ffi/table_provider/struct.FFI_TableProvider.html "FFI_TableProvider in datafusion_ffi::table_provider - Rust"
+[5]: https://datafusion.apache.org/library-user-guide/upgrading.html?utm_source=chatgpt.com "Upgrade Guides — Apache DataFusion documentation"
+[6]: https://docs.rs/abi_stable/latest/abi_stable/attr.export_root_module.html?utm_source=chatgpt.com "export_root_module in abi_stable - Rust"
+[7]: https://docs.rs/abi_stable/latest/abi_stable/library/trait.RootModule.html?utm_source=chatgpt.com "RootModule in abi_stable::library - Rust"
+[8]: https://datafusion.apache.org/blog/2025/07/16/datafusion-48.0.0/?utm_source=chatgpt.com "Apache DataFusion 48.0.0 Released"
+[9]: https://docs.rs/datafusion-ffi/latest/datafusion_ffi/udf/struct.FFI_ScalarUDF.html "FFI_ScalarUDF in datafusion_ffi::udf - Rust"
+[10]: https://docs.rs/datafusion-ffi/latest/datafusion_ffi/udaf/struct.FFI_AggregateUDF.html "FFI_AggregateUDF in datafusion_ffi::udaf - Rust"
+[11]: https://docs.rs/datafusion-ffi/latest/datafusion_ffi/udwf/struct.FFI_WindowUDF.html "FFI_WindowUDF in datafusion_ffi::udwf - Rust"
+[12]: https://docs.rs/datafusion-expr/latest/datafusion_expr/struct.AggregateUDF.html "AggregateUDF in datafusion_expr - Rust"
+[13]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html "WindowUDF in datafusion::logical_expr - Rust"

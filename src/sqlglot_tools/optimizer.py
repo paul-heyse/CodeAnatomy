@@ -1306,18 +1306,13 @@ def parse_sql(
     sqlglot.Expression
         Parsed SQLGlot expression.
     """
-    sanitized = (
-        sanitize_templated_sql(sql, preserve_params=options.preserve_params)
-        if options.sanitize_templated
-        else sql
-    )
-    error_level = options.error_level or DEFAULT_ERROR_LEVEL
-    unsupported_level = options.unsupported_level or DEFAULT_UNSUPPORTED_LEVEL
-    return parse_one(
-        sanitized,
+    return parse_sql_strict(
+        sql,
         dialect=options.dialect,
-        error_level=error_level,
-        unsupported_level=unsupported_level,
+        error_level=options.error_level,
+        unsupported_level=options.unsupported_level,
+        preserve_params=options.preserve_params,
+        sanitize_templated=options.sanitize_templated,
     )
 
 
@@ -1328,6 +1323,7 @@ def parse_sql_strict(
     error_level: ErrorLevel | None = None,
     unsupported_level: ErrorLevel | None = None,
     preserve_params: bool = False,
+    sanitize_templated: bool = True,
 ) -> Expression:
     """Parse SQL with strict error handling and templated sanitization.
 
@@ -1343,21 +1339,26 @@ def parse_sql_strict(
         Optional SQLGlot unsupported level override.
     preserve_params
         Whether to preserve templated parameters during sanitization.
+    sanitize_templated
+        Whether to sanitize templated SQL segments before parsing.
 
     Returns
     -------
     sqlglot.Expression
         Parsed SQLGlot expression.
     """
-    return parse_sql(
-        sql,
-        options=ParseSqlOptions(
-            dialect=dialect,
-            error_level=error_level,
-            unsupported_level=unsupported_level,
-            sanitize_templated=True,
-            preserve_params=preserve_params,
-        ),
+    sanitized = (
+        sanitize_templated_sql(sql, preserve_params=preserve_params)
+        if sanitize_templated
+        else sql
+    )
+    resolved_error = error_level or DEFAULT_ERROR_LEVEL
+    resolved_unsupported = unsupported_level or DEFAULT_UNSUPPORTED_LEVEL
+    return parse_one(
+        sanitized,
+        dialect=dialect,
+        error_level=resolved_error,
+        unsupported_level=resolved_unsupported,
     )
 
 

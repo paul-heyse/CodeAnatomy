@@ -379,7 +379,9 @@ class StreamingExecutor:
 
         Examples
         --------
-        >>> ctx.register_parquet("events", "/data/events.parquet")
+        >>> from datafusion_engine.io_adapter import DataFusionIOAdapter
+        >>> adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        >>> adapter.register_parquet("events", "/data/events.parquet")
         >>> result = executor.from_table("events")
         >>> for batch in result.to_batches():
         ...     process(batch)

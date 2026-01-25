@@ -13,7 +13,6 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from cache.diskcache_factory import build_deque, build_index
 from datafusion_engine.bridge import datafusion_from_arrow
-from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
@@ -175,7 +174,7 @@ def _worklist_stream(
             runtime_profile=runtime_profile,
         ),
     ):
-        stream = _execute_expr_stream(df_ctx, expr)
+        stream = _execute_expr_stream(df_ctx, expr, runtime_profile=runtime_profile)
         for batch in stream:
             arrow_batch = batch.to_pyarrow()
             rows = arrow_batch.to_pylist()
@@ -214,11 +213,18 @@ def _normalize_worklist_expr(expr: Expression) -> Expression:
 def _execute_expr_stream(
     ctx: SessionContext,
     expr: Expression,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> Iterator[_ArrowBatch]:
-    pipeline = CompilationPipeline(ctx, CompileOptions())
-    compiled = pipeline.compile_ast(expr)
-    df = pipeline.execute(compiled)
-    return df.execute_stream()
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    plan = facade.compile(expr)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Worklist execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe.execute_stream()
 
 
 def worklist_queue_name(*, output_table: str, repo_id: str | None) -> str:

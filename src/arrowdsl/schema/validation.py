@@ -246,8 +246,10 @@ def _register_temp_table(ctx: SessionContext, table: TableLike, *, prefix: str) 
     else:
         resolved_table = cast("ArrowTable", resolved)
     batches = list(resolved_table.to_batches())
-    ctx.register_record_batches(name, [batches])
-    invalidate_introspection_cache(ctx)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_record_batches(name, [batches])
     return name
 
 

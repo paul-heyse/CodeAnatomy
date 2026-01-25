@@ -13,7 +13,7 @@ from datafusion.dataframe import DataFrame
 
 from core_types import PathLike, ensure_path
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.registry_bridge import DataFusionCachePolicy, register_dataset_df
+from datafusion_engine.registry_bridge import DataFusionCachePolicy
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
 from schema_spec.system import DataFusionScanOptions, DeltaScanOptions
@@ -170,12 +170,13 @@ def _register_location(
     cache_policy: DataFusionCachePolicy,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFrame:
-    return register_dataset_df(
-        ctx,
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    return facade.register_dataset(
         name=name,
         location=location,
         cache_policy=cache_policy,
-        runtime_profile=runtime_profile,
     )
 
 

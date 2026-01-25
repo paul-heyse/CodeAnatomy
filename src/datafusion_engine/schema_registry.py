@@ -28,7 +28,6 @@ from arrowdsl.schema.semantic_types import (
     byte_span_type,
     span_type,
 )
-from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
@@ -82,16 +81,17 @@ SQLGLOT_PARSE_ERROR_DETAILS_TYPE = list_view_type(
 
 
 def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
-    pipeline = CompilationPipeline(ctx, CompileOptions())
-    compiled = pipeline.compile_sql(sql)
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+    from datafusion_engine.compile_options import DataFusionCompileOptions
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-    return execute_with_profile(
-        ctx,
-        compiled.rendered_sql,
-        profile=None,
-        options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
-    )
+    options = DataFusionCompileOptions(sql_options=sql_options_for_profile(None))
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    plan = facade.compile(sql, options=options)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Schema registry SQL execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe
 
 
 def _attrs_field(name: str = "attrs") -> pa.Field:

@@ -31,8 +31,6 @@ class _DatafusionQuery(Protocol):
 class _DatafusionContext(Protocol):
     def deregister_table(self, name: str) -> None: ...
 
-    def register_record_batches(self, name: str, batches: list[list[pa.RecordBatch]]) -> None: ...
-
     def sql_with_options(self, query: str, options: SQLOptions) -> _DatafusionQuery: ...
 
 
@@ -58,11 +56,10 @@ def register_nested_table(
     resolved_table = cast("pa.Table", resolved_table)
     with suppress(KeyError, ValueError):
         df_ctx.deregister_table(name)
-    if isinstance(ctx, SessionContext):
-        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-        adapter.register_record_batches(name, [resolved_table.to_batches()])
-    else:
-        df_ctx.register_record_batches(name, [resolved_table.to_batches()])
+    if not isinstance(ctx, SessionContext):
+        return
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_record_batches(name, [resolved_table.to_batches()])
 
 
 def materialize_view_reference(

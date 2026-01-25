@@ -3320,14 +3320,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table("ast_files_v1")
-        from datafusion_engine.registry_bridge import register_dataset_df
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-        df = register_dataset_df(
-            ctx,
-            name="ast_files_v1",
-            location=location,
-            runtime_profile=self,
-        )
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=self)
+        df = facade.register_dataset(name="ast_files_v1", location=location)
         expected = schema_for("ast_files_v1").remove_metadata()
         actual = df.schema().remove_metadata()
         expected_fingerprint = schema_fingerprint(expected)
@@ -3405,14 +3401,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table("bytecode_files_v1")
-        from datafusion_engine.registry_bridge import register_dataset_df
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-        df = register_dataset_df(
-            ctx,
-            name="bytecode_files_v1",
-            location=location,
-            runtime_profile=self,
-        )
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=self)
+        df = facade.register_dataset(name="bytecode_files_v1", location=location)
         expected = schema_for("bytecode_files_v1").remove_metadata()
         actual = df.schema().remove_metadata()
         expected_fingerprint = schema_fingerprint(expected)
@@ -3522,16 +3514,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             resolved = replace(resolved, datafusion_scan=scan)
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 adapter.deregister_table(schema_name)
-            from datafusion_engine.registry_bridge import (
-                register_dataset_df,
-            )
+            from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-            df = register_dataset_df(
-                ctx,
-                name=schema_name,
-                location=resolved,
-                runtime_profile=self,
-            )
+            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=self)
+            df = facade.register_dataset(name=schema_name, location=resolved)
             expected = expected_schema.remove_metadata()
             actual = df.schema().remove_metadata()
             expected_fingerprint = schema_fingerprint(expected)

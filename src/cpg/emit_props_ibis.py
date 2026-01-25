@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -27,6 +28,7 @@ from ibis_engine.schema_utils import (
     ensure_columns,
     ibis_dtype_from_arrow,
     ibis_null_literal,
+    ibis_schema_from_arrow,
 )
 
 SQLGLOT_UNION_THRESHOLD = 96
@@ -58,7 +60,7 @@ def emit_props_ibis(
     resolved_options = options or CpgPropOptions()
     fields = filter_fields(spec.fields, options=resolved_options)
     if not fields:
-        return _empty_props_plan()
+        return _empty_props_plan(expr)
     task_name = task_identity.name if task_identity is not None else None
     task_priority = task_identity.priority if task_identity is not None else None
     rows: list[Table] = []
@@ -74,7 +76,7 @@ def emit_props_ibis(
             continue
         rows.append(row_expr)
     if not rows:
-        return _empty_props_plan()
+        return _empty_props_plan(expr)
     if union_builder is not None and len(rows) >= SQLGLOT_UNION_THRESHOLD:
         combined = union_builder(rows)
     else:
@@ -219,9 +221,23 @@ def _union_exprs(exprs: Sequence[Table]) -> Table:
     return combined
 
 
-def _empty_props_plan() -> IbisPlan:
+def _empty_props_plan(expr: Table) -> IbisPlan:
+    backend = getattr(expr, "_find_backend", lambda: None)()
+    if backend is None:
+        backend = getattr(expr, "backend", None)
+    if backend is None:
+        msg = "CPG property emission requires an Ibis backend."
+        raise ValueError(msg)
     empty = empty_table(CPG_PROPS_SCHEMA)
-    return IbisPlan(expr=ibis.memtable(empty), ordering=Ordering.unordered())
+    table_name = f"__cpg_props_empty_{uuid.uuid4().hex}"
+    backend.create_table(
+        table_name,
+        obj=empty,
+        schema=ibis_schema_from_arrow(empty.schema),
+        temp=True,
+        overwrite=True,
+    )
+    return IbisPlan(expr=backend.table(table_name), ordering=Ordering.unordered())
 
 
 __all__ = ["CpgPropOptions", "emit_props_ibis"]

@@ -63,6 +63,7 @@ from datafusion_engine.compile_options import (
     resolve_sql_policy,
 )
 from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
+from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.param_binding import resolve_param_bindings
@@ -570,55 +571,13 @@ def df_from_sqlglot_or_sql(
         DataFusion DataFrame representing the expression.
     """
     resolved = options or DataFusionCompileOptions()
-    named_bindings = resolve_param_bindings(
-        resolved.named_params,
-        allowlist=resolved.param_identifier_allowlist,
-    )
-    if named_bindings.param_values:
-        msg = "Named parameters must be table-like."
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=resolved.runtime_profile)
+    plan = facade.compile(expr, options=resolved)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "SQLGlot execution did not return a DataFusion DataFrame."
         raise ValueError(msg)
-    named_params = named_bindings.named_tables
-    if named_params:
-        read_only_policy = DataFusionSqlPolicy()
-        violations = _policy_violations(expr, read_only_policy)
-        if violations:
-            msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
-            raise ValueError(msg)
-    pipeline = _compilation_pipeline(ctx, options=resolved)
-    compiled = pipeline.compile_ast(expr)
-    resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
-    bindings = resolve_param_bindings(
-        resolved.params,
-        allowlist=resolved.param_identifier_allowlist,
-    )
-    if bindings.named_tables:
-        msg = "Table-like parameters must be passed via named params."
-        raise ValueError(msg)
-    sql_options = (
-        _sql_options_for_named_params(resolved)
-        if named_params
-        else _sql_options_for_options(resolved)
-    )
-    if resolved.enforce_sql_policy:
-        policy = _execution_policy_for_options(resolved)
-        violations = validate_sql_safety(
-            compiled.rendered_sql,
-            policy,
-            dialect=resolved.dialect,
-        )
-        if violations:
-            msg = f"SQL policy violations: {', '.join(violations)}."
-            raise ValueError(msg)
-    df = pipeline.execute(
-        compiled,
-        params=bindings.param_values or None,
-        named_params=named_params or None,
-        sql_options=sql_options,
-    )
-    _maybe_explain(ctx, compiled.sqlglot_ast, options=resolved)
-    _maybe_collect_plan_artifacts(ctx, compiled.sqlglot_ast, options=resolved, df=df)
-    _maybe_collect_semantic_diff(ctx, compiled.sqlglot_ast, options=resolved)
-    return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
+    return result.dataframe
 
 
 def validate_table_constraints(
@@ -734,9 +693,13 @@ def compile_sqlglot_expr(
         sg_expr = _apply_rewrite_hook(sg_expr, options=resolved)
         _maybe_enforce_preflight(sg_expr, options=resolved)
         return _apply_dynamic_projection(sg_expr, options=resolved)
-    pipeline = _compilation_pipeline(ctx, options=resolved)
-    compiled = pipeline.compile_ibis(expr, backend=backend)
-    return compiled.sqlglot_ast
+    facade = DataFusionExecutionFacade(
+        ctx=ctx,
+        runtime_profile=resolved.runtime_profile,
+        ibis_backend=backend,
+    )
+    plan = facade.compile(expr, options=resolved)
+    return plan.compiled.sqlglot_ast
 
 
 def ibis_to_datafusion(
@@ -832,34 +795,17 @@ def ibis_to_datafusion(
         )
         _maybe_collect_semantic_diff(ctx, plan_expr, options=diagnostics_options)
         return df
-    pipeline = _compilation_pipeline(ctx, options=resolved)
-    compiled = pipeline.compile_ibis(expr, backend=backend)
-    resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
-    bindings = resolve_param_bindings(
-        resolved.params,
-        allowlist=resolved.param_identifier_allowlist,
+    facade = DataFusionExecutionFacade(
+        ctx=ctx,
+        runtime_profile=resolved.runtime_profile,
+        ibis_backend=backend,
     )
-    if bindings.named_tables:
-        msg = "Table-like parameters must be passed via named params."
+    plan = facade.compile(expr, options=resolved)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Ibis execution did not return a DataFusion DataFrame."
         raise ValueError(msg)
-    named_bindings = resolve_param_bindings(
-        resolved.named_params,
-        allowlist=resolved.param_identifier_allowlist,
-    )
-    if named_bindings.param_values:
-        msg = "Named parameters must be table-like."
-        raise ValueError(msg)
-    named_params = named_bindings.named_tables
-    df = pipeline.execute(
-        compiled,
-        params=bindings.param_values or None,
-        named_params=named_params or None,
-        sql_options=_sql_options_for_options(resolved),
-    )
-    _maybe_explain(ctx, compiled.sqlglot_ast, options=resolved)
-    _maybe_collect_plan_artifacts(ctx, compiled.sqlglot_ast, options=resolved, df=df)
-    _maybe_collect_semantic_diff(ctx, compiled.sqlglot_ast, options=resolved)
-    return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
+    return result.dataframe
 
 
 def ibis_plan_to_datafusion(

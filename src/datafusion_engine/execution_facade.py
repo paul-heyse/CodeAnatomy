@@ -10,21 +10,23 @@ from datafusion import DataFrame, SessionContext
 from sqlglot import exp  # type: ignore[attr-defined]
 
 from datafusion_engine.bridge import (
+    DataFusionSqlPolicy,
     _compilation_pipeline,
     _execution_policy_for_options,
     _maybe_collect_plan_artifacts,
     _maybe_collect_semantic_diff,
     _maybe_explain,
+    _policy_violations,
     _resolve_cache_policy,
     _should_cache_df,
+    _sql_options_for_named_params,
     _sql_options_for_options,
-    df_from_sqlglot_or_sql,
-    ibis_to_datafusion,
 )
 from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.compile_pipeline import CompiledExpression
 from datafusion_engine.diagnostics import DiagnosticsRecorder, recorder_for_profile
 from datafusion_engine.io_adapter import DataFusionIOAdapter
+from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.sql_safety import validate_sql_safety
 from datafusion_engine.write_pipeline import WritePipeline, WriteRequest, WriteResult
 
@@ -37,6 +39,8 @@ if TYPE_CHECKING:
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+    from datafusion_engine.registry_bridge import DataFusionCachePolicy
+    from ibis_engine.registry import DatasetLocation
     from sqlglot_tools.bridge import IbisCompilerBackend
     from sqlglot_tools.compat import Expression
 
@@ -259,12 +263,35 @@ class DataFusionExecutionFacade:
             Raised when the SQL fails safety validation.
         """
         resolved = plan.options
+        params = params if params is not None else resolved.params
+        named_params = named_params if named_params is not None else resolved.named_params
         resolved, cache_reason = _resolve_cache_policy(
             plan.compiled.sqlglot_ast,
             ctx=self.ctx,
             options=resolved,
         )
         pipeline = _compilation_pipeline(self.ctx, options=resolved)
+        bindings = resolve_param_bindings(
+            params,
+            allowlist=resolved.param_identifier_allowlist,
+        )
+        if bindings.named_tables:
+            msg = "Table-like parameters must be passed via named params."
+            raise ValueError(msg)
+        named_bindings = resolve_param_bindings(
+            named_params,
+            allowlist=resolved.param_identifier_allowlist,
+        )
+        if named_bindings.param_values:
+            msg = "Named parameters must be table-like."
+            raise ValueError(msg)
+        named_tables = named_bindings.named_tables
+        if named_tables:
+            read_only_policy = DataFusionSqlPolicy()
+            violations = _policy_violations(plan.compiled.sqlglot_ast, read_only_policy)
+            if violations:
+                msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
+                raise ValueError(msg)
         policy = _execution_policy_for_options(resolved)
         violations = validate_sql_safety(
             plan.compiled.rendered_sql,
@@ -276,9 +303,13 @@ class DataFusionExecutionFacade:
             raise ValueError(msg)
         df = pipeline.execute(
             plan.compiled,
-            params=params,
-            named_params=named_params,
-            sql_options=_sql_options_for_options(resolved),
+            params=bindings.param_values or None,
+            named_params=named_tables or None,
+            sql_options=(
+                _sql_options_for_named_params(resolved)
+                if named_tables
+                else _sql_options_for_options(resolved)
+            ),
         )
         _maybe_explain(self.ctx, plan.compiled.sqlglot_ast, options=resolved)
         _maybe_collect_plan_artifacts(self.ctx, plan.compiled.sqlglot_ast, options=resolved, df=df)
@@ -306,17 +337,8 @@ class DataFusionExecutionFacade:
         ExecutionResult
             Unified execution result for the expression.
         """
-        resolved = self._resolve_compile_options(options)
-        if isinstance(expr, exp.Expression):
-            df = df_from_sqlglot_or_sql(self.ctx, cast("Expression", expr), options=resolved)
-        else:
-            df = ibis_to_datafusion(
-                cast("IbisTable", expr),
-                backend=self._resolve_ibis_backend(),
-                ctx=self.ctx,
-                options=resolved,
-            )
-        return ExecutionResult.from_dataframe(df)
+        plan = self.compile(expr, options=options)
+        return self.execute(plan)
 
     def write(
         self,
@@ -341,6 +363,37 @@ class DataFusionExecutionFacade:
         pipeline = self.write_pipeline(profile=profile)
         result = pipeline.write(request)
         return ExecutionResult.from_write(result)
+
+    def register_dataset(
+        self,
+        *,
+        name: str,
+        location: DatasetLocation,
+        cache_policy: DataFusionCachePolicy | None = None,
+    ) -> DataFrame:
+        """Register a dataset location via the registry bridge.
+
+        Parameters
+        ----------
+        name
+            Dataset name to register.
+        location
+            Dataset location metadata.
+
+        Returns
+        -------
+        DataFrame
+            DataFusion DataFrame representing the registered dataset.
+        """
+        from datafusion_engine.registry_bridge import register_dataset_df
+
+        return register_dataset_df(
+            self.ctx,
+            name=name,
+            location=location,
+            cache_policy=cache_policy,
+            runtime_profile=self.runtime_profile,
+        )
 
     def _resolve_ibis_backend(self) -> IbisCompilerBackend:
         if self.ibis_backend is None:

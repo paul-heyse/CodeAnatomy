@@ -16,8 +16,14 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from core_types import PathLike, ensure_path
+from datafusion_engine.introspection import introspection_cache_for_ctx
 from datafusion_engine.registry_bridge import DatasetDdlRegistration, register_dataset_ddl
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.schema_contracts import (
+    SchemaContract,
+    SchemaViolation,
+    schema_contract_from_dataset_spec,
+)
 from datafusion_engine.schema_introspection import table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile, statement_sql_options_for_profile
 from datafusion_engine.table_provider_metadata import TableProviderMetadata, table_provider_metadata
@@ -276,6 +282,50 @@ def dataset_contract(name: str, *, ctx: SessionContext | None = None) -> Contrac
     return dataset_spec(name, ctx=ctx).contract_spec_or_default()
 
 
+def dataset_schema_contract(name: str, *, ctx: SessionContext | None = None) -> SchemaContract:
+    """Return the SchemaContract for the dataset name.
+
+    Parameters
+    ----------
+    name : str
+        Dataset name to resolve.
+    ctx : SessionContext | None
+        Optional DataFusion session context.
+
+    Returns
+    -------
+    SchemaContract
+        Schema contract derived from the dataset spec.
+    """
+    spec = dataset_spec(name, ctx=ctx)
+    return schema_contract_from_dataset_spec(name=spec.name, spec=spec)
+
+
+def dataset_contract_violations(
+    name: str,
+    *,
+    ctx: SessionContext | None = None,
+) -> tuple[SchemaViolation, ...]:
+    """Return schema contract violations for the dataset name.
+
+    Parameters
+    ----------
+    name : str
+        Dataset name to resolve.
+    ctx : SessionContext | None
+        Optional DataFusion session context.
+
+    Returns
+    -------
+    tuple[SchemaViolation, ...]
+        Contract violations for the current information_schema snapshot.
+    """
+    session = _resolve_session_context(ctx)
+    contract = dataset_schema_contract(name, ctx=session)
+    snapshot = introspection_cache_for_ctx(session).snapshot
+    return tuple(contract.validate_against_introspection(snapshot))
+
+
 def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
     """Return a schema policy derived from the dataset spec.
 
@@ -494,6 +544,7 @@ __all__ = [
     "NORMALIZE_STAGE_META",
     "dataset_alias",
     "dataset_contract",
+    "dataset_contract_violations",
     "dataset_input_columns",
     "dataset_input_schema",
     "dataset_metadata_spec",
@@ -501,6 +552,7 @@ __all__ = [
     "dataset_names",
     "dataset_query",
     "dataset_schema",
+    "dataset_schema_contract",
     "dataset_schema_policy",
     "dataset_spec",
     "dataset_specs",

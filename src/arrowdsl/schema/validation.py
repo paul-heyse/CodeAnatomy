@@ -33,6 +33,7 @@ from arrowdsl.schema.schema import (
     required_field_names,
     required_non_null_mask,
 )
+from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_introspection import table_constraint_rows
 
 
@@ -211,6 +212,7 @@ def _datafusion_type_name(dtype: DataTypeLike) -> str:
     )
     batches = list(table.to_batches())
     ctx.register_record_batches("t", [batches])
+    invalidate_introspection_cache(ctx)
     from datafusion_engine.sql_options import sql_options_for_profile
 
     options = sql_options_for_profile(None)
@@ -236,6 +238,7 @@ def _register_temp_table(ctx: SessionContext, table: TableLike, *, prefix: str) 
         resolved_table = cast("ArrowTable", resolved)
     batches = list(resolved_table.to_batches())
     ctx.register_record_batches(name, [batches])
+    invalidate_introspection_cache(ctx)
     return name
 
 
@@ -244,6 +247,7 @@ def _deregister_table(ctx: SessionContext, *, name: str) -> None:
     if callable(deregister):
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             deregister(name)
+            invalidate_introspection_cache(ctx)
 
 
 def _count_rows(

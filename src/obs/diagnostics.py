@@ -14,6 +14,7 @@ class DiagnosticsCollector:
 
     events: dict[str, list[Mapping[str, object]]] = field(default_factory=dict)
     artifacts: dict[str, list[Mapping[str, object]]] = field(default_factory=dict)
+    metrics: list[tuple[str, float, dict[str, str]]] = field(default_factory=list)
 
     def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
         """Append event rows under a logical name."""
@@ -24,6 +25,15 @@ class DiagnosticsCollector:
         """Append an artifact payload under a logical name."""
         bucket = self.artifacts.setdefault(name, [])
         bucket.append(dict(payload))
+
+    def record_event(self, name: str, properties: Mapping[str, object]) -> None:
+        """Append an event payload under a logical name."""
+        bucket = self.events.setdefault(name, [])
+        bucket.append(dict(properties))
+
+    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
+        """Record a metric value."""
+        self.metrics.append((name, value, dict(tags)))
 
     def events_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
         """Return a shallow copy of collected event rows.

@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import pyarrow as pa
+import pytest
+from sqlglot.errors import ErrorLevel
 
-from datafusion_engine.registry_bridge import datafusion_external_table_sql
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
 from ibis_engine.schema_utils import sqlglot_column_sql
 from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec
 from schema_spec.system import DataFusionScanOptions, DatasetSpec
+from sqlglot_tools.compat import parse_one
+from sqlglot_tools.optimizer import canonical_ast_fingerprint
+
+datafusion = pytest.importorskip("datafusion")
 
 
 def _dataset_location(
@@ -45,24 +51,18 @@ def test_external_table_ddl_contains_expected_clauses() -> None:
         read_options={"compression": "zstd", "coalesce_batches": True},
         partition_cols=(("day", pa.string()),),
     )
-    sql = datafusion_external_table_sql(
-        name="events",
-        location=location,
-        runtime_profile=DataFusionRuntimeProfile(),
+    adapter = DataFusionIOAdapter(
+        ctx=datafusion.SessionContext(),
+        profile=DataFusionRuntimeProfile(),
     )
-    assert sql is not None
-    assert "CREATE EXTERNAL TABLE events" in sql
-    assert "STORED AS PARQUET" in sql
-    assert "LOCATION '/tmp/events'" in sql
-    assert "PARTITIONED BY (day)" in sql
-    assert "PRIMARY KEY (id)" in sql
-    assert "WITH ORDER (id)" in sql
-    assert "COMPRESSION TYPE zstd" in sql
-    assert "OPTIONS ('coalesce_batches' 'true')" in sql
+    ddl = adapter.external_table_ddl(name="events", location=location)
+    expr = parse_one(ddl, dialect="datafusion", error_level=ErrorLevel.IGNORE)
+    fingerprint = canonical_ast_fingerprint(expr)
+    assert fingerprint == "bf68b5c04ea11fc0a898e2e59626c198b6f4919fbba46ddf5b98893d28cb07f2"
 
 
 def test_external_table_option_precedence() -> None:
-    """Prefer statement overrides over table and session defaults."""
+    """Prefer location read options over profile defaults."""
     table_spec = TableSchemaSpec(
         name="metrics",
         fields=[ArrowFieldSpec(name="metric_id", dtype=pa.int64())],
@@ -85,19 +85,11 @@ def test_external_table_option_precedence() -> None:
             "rows_per_page": 1000,
         }
     )
-    sql = datafusion_external_table_sql(
-        name="metrics",
-        location=location,
-        runtime_profile=profile,
-        options_override={
-            "compression": "gzip",
-            "rows_per_page": 3000,
-        },
-    )
-    assert sql is not None
-    assert "PRIMARY KEY (metric_id)" in sql
-    assert "COMPRESSION TYPE gzip" in sql
-    assert "OPTIONS ('coalesce_batches' 'true', 'rows_per_page' '3000')" in sql
+    adapter = DataFusionIOAdapter(ctx=datafusion.SessionContext(), profile=profile)
+    ddl = adapter.external_table_ddl(name="metrics", location=location)
+    expr = parse_one(ddl, dialect="datafusion", error_level=ErrorLevel.IGNORE)
+    fingerprint = canonical_ast_fingerprint(expr)
+    assert fingerprint == "20cc4c9b63214bcdc31a51ab29af43108eebb9265ba4932a50d4e771262a9baa"
 
 
 def test_sqlglot_column_defs_match_schema_utils() -> None:

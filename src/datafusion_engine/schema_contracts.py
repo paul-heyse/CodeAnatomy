@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
+from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
+
 if TYPE_CHECKING:
     from datafusion_engine.introspection import IntrospectionSnapshot
 
@@ -475,3 +477,126 @@ class ContractRegistry:
             for contract in self.contracts.values()
             for violation in contract.validate_against_introspection(snapshot)
         ]
+
+
+def schema_contract_from_table_schema_contract(
+    *,
+    table_name: str,
+    contract: TableSchemaContract,
+    evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT,
+) -> SchemaContract:
+    """Build a SchemaContract from a TableSchemaContract.
+
+    Parameters
+    ----------
+    table_name
+        Name of the table the contract applies to.
+    contract
+        Table schema contract containing file schema and partition columns.
+    evolution_policy
+        Evolution policy for the contract.
+
+    Returns
+    -------
+    SchemaContract
+        Schema contract constructed from the table schema contract.
+    """
+    columns = tuple(ColumnContract.from_arrow_field(field) for field in contract.file_schema)
+    partition_cols = tuple(name for name, _dtype in contract.partition_cols)
+    if contract.partition_cols:
+        partition_fields = tuple(
+            ColumnContract(
+                name=name,
+                arrow_type=dtype,
+                nullable=False,
+            )
+            for name, dtype in contract.partition_cols
+        )
+        columns = (*columns, *partition_fields)
+    return SchemaContract(
+        table_name=table_name,
+        columns=columns,
+        partition_cols=partition_cols,
+        evolution_policy=evolution_policy,
+    )
+
+
+def schema_contract_from_dataset_spec(
+    *,
+    name: str,
+    spec: DatasetSpec,
+    evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT,
+) -> SchemaContract:
+    """Build a SchemaContract from a DatasetSpec.
+
+    Parameters
+    ----------
+    name
+        Dataset name to bind into the contract.
+    spec
+        DatasetSpec providing schema and scan settings.
+    evolution_policy
+        Evolution policy for the contract.
+
+    Returns
+    -------
+    SchemaContract
+        Schema contract derived from the dataset specification.
+    """
+    table_schema = spec.table_spec.to_arrow_schema()
+    partition_cols = ()
+    if spec.datafusion_scan is not None:
+        partition_cols = spec.datafusion_scan.partition_cols
+    table_contract = TableSchemaContract(
+        file_schema=table_schema,
+        partition_cols=partition_cols,
+    )
+    return schema_contract_from_table_schema_contract(
+        table_name=name,
+        contract=table_contract,
+        evolution_policy=evolution_policy,
+    )
+
+
+def schema_contract_from_contract_spec(
+    *,
+    name: str,
+    spec: ContractSpec,
+    evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT,
+) -> SchemaContract:
+    """Build a SchemaContract from a ContractSpec.
+
+    Parameters
+    ----------
+    name
+        Dataset name to bind into the contract.
+    spec
+        ContractSpec providing a table schema specification.
+    evolution_policy
+        Evolution policy for the contract.
+
+    Returns
+    -------
+    SchemaContract
+        Schema contract derived from the contract specification.
+    """
+    table_schema = spec.table_schema.to_arrow_schema()
+    table_contract = TableSchemaContract(file_schema=table_schema, partition_cols=())
+    return schema_contract_from_table_schema_contract(
+        table_name=name,
+        contract=table_contract,
+        evolution_policy=evolution_policy,
+    )
+
+
+__all__ = [
+    "ColumnContract",
+    "ContractRegistry",
+    "EvolutionPolicy",
+    "SchemaContract",
+    "SchemaViolation",
+    "SchemaViolationType",
+    "schema_contract_from_contract_spec",
+    "schema_contract_from_dataset_spec",
+    "schema_contract_from_table_schema_contract",
+]

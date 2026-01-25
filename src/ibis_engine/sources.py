@@ -18,6 +18,7 @@ from ibis.expr.types import Table as IbisTable
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.ordering import Ordering
+from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
@@ -253,7 +254,9 @@ def register_ibis_record_batches(
         if callable(deregister):
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 deregister(table_name)
+                invalidate_introspection_cache(ctx)
     register_batches(table_name, [list(batches)])
+    invalidate_introspection_cache(ctx)
     _record_namespace_action(
         options.namespace_recorder,
         action="create_table",

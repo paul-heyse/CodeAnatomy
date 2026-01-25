@@ -8,7 +8,7 @@ from typing import Any
 
 import pyarrow.dataset as ds
 
-from datafusion_engine.runtime import DiagnosticsSink
+from datafusion_engine.diagnostics import DiagnosticsSink
 from storage.deltalake import StorageOptions, build_delta_file_index, open_delta_table
 from storage.deltalake.file_pruning import FilePruningResult
 

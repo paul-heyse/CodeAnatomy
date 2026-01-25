@@ -9,12 +9,23 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 from ibis.expr.types import Table as IbisTable
 
+from datafusion_engine.introspection import introspection_cache_for_ctx
+from datafusion_engine.schema_contracts import (
+    SchemaContract,
+    SchemaViolation,
+    schema_contract_from_contract_spec,
+    schema_contract_from_dataset_spec,
+)
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import DatasetSource
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
+
     from arrowdsl.core.interop import SchemaLike
+    from datafusion_engine.introspection import IntrospectionSnapshot
     from relspec.plan_catalog import PlanCatalog
+    from schema_spec.system import ContractSpec, DatasetSpec
 
 
 @dataclass
@@ -25,6 +36,10 @@ class EvidenceCatalog:
     columns_by_dataset: dict[str, set[str]] = field(default_factory=dict)
     types_by_dataset: dict[str, dict[str, str]] = field(default_factory=dict)
     metadata_by_dataset: dict[str, dict[bytes, bytes]] = field(default_factory=dict)
+    contracts_by_dataset: dict[str, SchemaContract] = field(default_factory=dict)
+    contract_violations_by_dataset: dict[str, tuple[SchemaViolation, ...]] = field(
+        default_factory=dict
+    )
 
     @classmethod
     def from_sources(
@@ -54,6 +69,46 @@ class EvidenceCatalog:
         self.columns_by_dataset[name] = set(_schema_names(schema))
         self.types_by_dataset[name] = _schema_types(schema)
         self.metadata_by_dataset[name] = _schema_metadata(schema)
+
+    def register_contract(
+        self,
+        name: str,
+        contract: SchemaContract,
+        *,
+        snapshot: IntrospectionSnapshot | None = None,
+    ) -> None:
+        """Register an evidence dataset using a SchemaContract."""
+        self.sources.add(name)
+        self.contracts_by_dataset[name] = contract
+        self.columns_by_dataset[name] = {col.name for col in contract.columns}
+        self.types_by_dataset[name] = {
+            col.name: str(col.arrow_type) for col in contract.columns
+        }
+        if snapshot is not None:
+            violations = contract.validate_against_introspection(snapshot)
+            self.contract_violations_by_dataset[name] = tuple(violations)
+
+    def register_from_dataset_spec(
+        self,
+        name: str,
+        spec: DatasetSpec,
+        *,
+        snapshot: IntrospectionSnapshot | None = None,
+    ) -> None:
+        """Register an evidence dataset using a DatasetSpec."""
+        contract = schema_contract_from_dataset_spec(name=name, spec=spec)
+        self.register_contract(name, contract, snapshot=snapshot)
+
+    def register_from_contract_spec(
+        self,
+        name: str,
+        spec: ContractSpec,
+        *,
+        snapshot: IntrospectionSnapshot | None = None,
+    ) -> None:
+        """Register an evidence dataset using a ContractSpec."""
+        contract = schema_contract_from_contract_spec(name=name, spec=spec)
+        self.register_contract(name, contract, snapshot=snapshot)
 
     def register_from_registry(self, name: str, *, ctx_id: int | None = None) -> bool:
         """Register an evidence dataset using the schema registry.
@@ -86,6 +141,8 @@ class EvidenceCatalog:
             columns_by_dataset={key: set(cols) for key, cols in self.columns_by_dataset.items()},
             types_by_dataset={key: dict(types) for key, types in self.types_by_dataset.items()},
             metadata_by_dataset={key: dict(meta) for key, meta in self.metadata_by_dataset.items()},
+            contracts_by_dataset=dict(self.contracts_by_dataset),
+            contract_violations_by_dataset=dict(self.contract_violations_by_dataset),
         )
 
     def sources_available(self, sources: Sequence[str]) -> bool:
@@ -140,7 +197,9 @@ def evidence_requirements_from_plan(
 def initial_evidence_from_plan(
     catalog: PlanCatalog,
     *,
-    ctx_id: int | None = None,
+    ctx: SessionContext | None = None,
+    snapshot: IntrospectionSnapshot | None = None,
+    allow_registry_fallback: bool = False,
     task_names: set[str] | None = None,
 ) -> EvidenceCatalog:
     """Build initial evidence catalog seeded from plan requirements.
@@ -158,8 +217,36 @@ def initial_evidence_from_plan(
     requirements = evidence_requirements_from_plan(catalog, task_names=task_names)
     seed_sources = requirements.sources - outputs
     evidence = EvidenceCatalog(sources=set(seed_sources))
+    ctx_id = id(ctx) if ctx is not None else None
+    resolved_snapshot = snapshot or _snapshot_from_ctx(ctx)
     for source in seed_sources:
-        if evidence.register_from_registry(source, ctx_id=ctx_id):
+        spec = _dataset_spec_from_known_registries(source, ctx=ctx)
+        if spec is not None:
+            evidence.register_from_dataset_spec(
+                source,
+                spec,
+                snapshot=resolved_snapshot,
+            )
+            if ctx_id is not None:
+                provider_metadata = _provider_metadata(ctx_id, source)
+                if provider_metadata:
+                    evidence.metadata_by_dataset.setdefault(source, {}).update(provider_metadata)
+            continue
+        contract_spec = _contract_spec_from_known_registries(source, ctx=ctx)
+        if contract_spec is not None:
+            evidence.register_from_contract_spec(
+                source,
+                contract_spec,
+                snapshot=resolved_snapshot,
+            )
+            if ctx_id is not None:
+                provider_metadata = _provider_metadata(ctx_id, source)
+                if provider_metadata:
+                    evidence.metadata_by_dataset.setdefault(source, {}).update(provider_metadata)
+            continue
+        if allow_registry_fallback and evidence.register_from_registry(
+            source, ctx_id=ctx_id
+        ):
             continue
         _seed_evidence_from_requirements(evidence, source, requirements)
     return evidence
@@ -238,6 +325,53 @@ def _schema_from_source(source: object) -> SchemaLike | None:
         if candidate is not None and hasattr(candidate, "names"):
             schema = cast("SchemaLike", candidate)
     return schema
+
+
+def _snapshot_from_ctx(ctx: SessionContext | None) -> IntrospectionSnapshot | None:
+    if ctx is None:
+        return None
+    return introspection_cache_for_ctx(ctx).snapshot
+
+
+def _dataset_spec_from_known_registries(
+    name: str,
+    *,
+    ctx: SessionContext | None = None,
+) -> DatasetSpec | None:
+    try:
+        from normalize.registry_runtime import dataset_spec as normalize_dataset_spec
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        normalize_dataset_spec = None
+    if normalize_dataset_spec is not None:
+        try:
+            return normalize_dataset_spec(name, ctx=ctx)
+        except KeyError:
+            pass
+    try:
+        from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_spec
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
+    relation_output_name = RELATION_OUTPUT_NAME
+    if name == relation_output_name:
+        return relation_output_spec()
+    return None
+
+
+def _contract_spec_from_known_registries(
+    name: str,
+    *,
+    ctx: SessionContext | None = None,
+) -> ContractSpec | None:
+    try:
+        from normalize.registry_runtime import dataset_contract as normalize_dataset_contract
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        normalize_dataset_contract = None
+    if normalize_dataset_contract is not None:
+        try:
+            return normalize_dataset_contract(name, ctx=ctx)
+        except KeyError:
+            pass
+    return None
 
 
 def _schema_from_registry(name: str) -> SchemaLike | None:

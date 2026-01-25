@@ -18,6 +18,7 @@ from datafusion_engine.hash_utils import (
 from datafusion_engine.hash_utils import (
     hash128_from_text as _hash128_from_text,
 )
+from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.sql_options import sql_options_for_profile
 
@@ -42,6 +43,7 @@ def _sql_table(ctx: SessionContext, sql: str) -> pa.Table:
 def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
     name = f"_{prefix}_{uuid4().hex}"
     ctx.register_record_batches(name, [list(table.to_batches())])
+    invalidate_introspection_cache(ctx)
     return name
 
 
@@ -49,6 +51,7 @@ def _deregister_table(ctx: SessionContext, name: str) -> None:
     deregister = getattr(ctx, "deregister_table", None)
     if callable(deregister):
         deregister(name)
+        invalidate_introspection_cache(ctx)
 
 
 def _sql_identifier(name: str) -> str:

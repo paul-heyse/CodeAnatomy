@@ -11,6 +11,7 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.execution_factory import ibis_backend_from_ctx, ibis_execution_from_ctx
 from sqlglot_tools.optimizer import SqlGlotPolicy, resolve_sqlglot_policy
@@ -135,6 +136,7 @@ class TempTableRegistry:
         """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
         self._ctx.register_record_batches(name, table.to_batches())
+        invalidate_introspection_cache(self._ctx)
         self._names.append(name)
         return name
 
@@ -148,6 +150,7 @@ class TempTableRegistry:
         """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
         self._ctx.register_record_batches(name, batches)
+        invalidate_introspection_cache(self._ctx)
         self._names.append(name)
         return name
 
@@ -169,6 +172,7 @@ class TempTableRegistry:
         if callable(deregister):
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 deregister(name)
+                invalidate_introspection_cache(self._ctx)
         if name in self._names:
             self._names.remove(name)
 

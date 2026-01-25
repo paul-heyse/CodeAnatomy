@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import cache
 
 from arrowdsl.core.interop import SchemaLike
+from datafusion_engine.schema_contracts import SchemaContract, schema_contract_from_dataset_spec
 from normalize.registry_runtime import dataset_contract, dataset_schema, dataset_spec
 from schema_spec.system import Contract, DatasetSpec
 
@@ -45,9 +46,23 @@ def normalize_evidence_contract() -> Contract:
     return dataset_contract(NORMALIZE_EVIDENCE_NAME).to_contract()
 
 
+@cache
+def normalize_evidence_schema_contract() -> SchemaContract:
+    """Return the SchemaContract for canonical normalized evidence.
+
+    Returns
+    -------
+    SchemaContract
+        Schema contract derived from the dataset spec.
+    """
+    spec = normalize_evidence_spec()
+    return schema_contract_from_dataset_spec(name=spec.name, spec=spec)
+
+
 __all__ = [
     "NORMALIZE_EVIDENCE_NAME",
     "normalize_evidence_contract",
     "normalize_evidence_schema",
+    "normalize_evidence_schema_contract",
     "normalize_evidence_spec",
 ]

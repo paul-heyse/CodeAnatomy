@@ -357,6 +357,16 @@ class ParameterizedRulepack:
         """
         return [name for name, spec in self.param_specs.items() if spec.default is not None]
 
+    def param_objects(self) -> dict[str, Scalar]:
+        """Return parameter objects keyed by name.
+
+        Returns
+        -------
+        dict[str, Scalar]
+            Mapping of parameter names to Ibis parameter objects.
+        """
+        return dict(self._params)
+
     def _resolve_values(
         self,
         values: dict[str, Any],

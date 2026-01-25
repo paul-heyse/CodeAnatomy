@@ -30,6 +30,8 @@ class ExternalTableDDLConfig:
     ----------
     schema
         Explicit column definitions (name -> type).
+    schema_expressions
+        SQLGlot schema expressions (ColumnDef + constraints) when available.
     file_format
         File format (PARQUET, CSV, JSON, ARROW).
     options
@@ -47,6 +49,7 @@ class ExternalTableDDLConfig:
     """
 
     schema: dict[str, str] | None = None
+    schema_expressions: list[exp.Expression] | None = None
     file_format: str = "PARQUET"
     options: dict[str, str] | None = None
     compression: str | None = None
@@ -180,6 +183,7 @@ def build_external_table_ddl(
     """
     ddl_config = config or ExternalTableDDLConfig()
     schema = ddl_config.schema
+    schema_expressions = ddl_config.schema_expressions
     file_format = ddl_config.file_format
     options = ddl_config.options
     compression = ddl_config.compression
@@ -189,7 +193,9 @@ def build_external_table_ddl(
 
     # Build column definitions if schema provided
     columns = None
-    if schema:
+    if schema_expressions:
+        columns = exp.Schema(expressions=list(schema_expressions))
+    elif schema:
         columns = exp.Schema(
             expressions=[
                 exp.ColumnDef(

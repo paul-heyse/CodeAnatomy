@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from datafusion import SessionContext
 
@@ -13,7 +13,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from cache.diskcache_factory import build_deque, build_index
 from datafusion_engine.bridge import datafusion_from_arrow
-from datafusion_engine.df_builder import df_from_sqlglot
+from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
@@ -22,10 +22,17 @@ from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import NormalizeExprOptions, normalize_expr, resolve_sqlglot_policy
 
 if TYPE_CHECKING:
+    import pyarrow as pa
     from diskcache import Deque, Index
 
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from ibis_engine.registry import DatasetLocation
+
+
+class _ArrowBatch(Protocol):
+    def to_pyarrow(self) -> pa.RecordBatch:
+        """Return the underlying PyArrow record batch."""
+        ...
 
 
 def _is_null(expr: Expression) -> Expression:
@@ -168,7 +175,7 @@ def _worklist_stream(
             runtime_profile=runtime_profile,
         ),
     ):
-        stream = df_from_sqlglot(df_ctx, expr).execute_stream()
+        stream = _execute_expr_stream(df_ctx, expr)
         for batch in stream:
             arrow_batch = batch.to_pyarrow()
             rows = arrow_batch.to_pylist()
@@ -188,7 +195,7 @@ def _table_exists(ctx: SessionContext, name: str) -> bool:
         .limit(1)
     )
     try:
-        stream = df_from_sqlglot(ctx, tables_expr).execute_stream()
+        stream = _execute_expr_stream(ctx, tables_expr)
     except (KeyError, RuntimeError, TypeError, ValueError):
         try:
             ctx.table(name)
@@ -202,6 +209,16 @@ def _normalize_worklist_expr(expr: Expression) -> Expression:
     policy = resolve_sqlglot_policy(name="datafusion_compile")
     options = NormalizeExprOptions(policy=policy)
     return normalize_expr(expr, options=options)
+
+
+def _execute_expr_stream(
+    ctx: SessionContext,
+    expr: Expression,
+) -> Iterator[_ArrowBatch]:
+    pipeline = CompilationPipeline(ctx, CompileOptions())
+    compiled = pipeline.compile_ast(expr)
+    df = pipeline.execute(compiled)
+    return df.execute_stream()
 
 
 def worklist_queue_name(*, output_table: str, repo_id: str | None) -> str:

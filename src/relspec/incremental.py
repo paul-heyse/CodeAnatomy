@@ -5,10 +5,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from ibis_engine.plan_diff import PlanDiffResult, semantic_diff_sql
+from sqlglot.errors import ParseError
+
+from datafusion_engine.semantic_diff import (
+    ChangeCategory,
+    RebuildPolicy,
+    SemanticChange,
+    SemanticDiff,
+    compute_rebuild_needed,
+)
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.plan_catalog import PlanCatalog
-from sqlglot_tools.optimizer import sqlglot_sql
+from sqlglot_tools.optimizer import register_datafusion_dialect, sqlglot_sql
 
 
 @dataclass(frozen=True)
@@ -19,7 +28,26 @@ class IncrementalDiff:
     added_tasks: tuple[str, ...] = ()
     removed_tasks: tuple[str, ...] = ()
     unchanged_tasks: tuple[str, ...] = ()
-    semantic_changes: Mapping[str, PlanDiffResult] = field(default_factory=dict)
+    semantic_changes: Mapping[str, SemanticDiff] = field(default_factory=dict)
+
+    def tasks_requiring_rebuild(
+        self,
+        *,
+        policy: RebuildPolicy = RebuildPolicy.CONSERVATIVE,
+    ) -> tuple[str, ...]:
+        """Return task names that require rebuild under the policy.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Task names that should be rebuilt.
+        """
+        rebuild: set[str] = set(self.added_tasks)
+        for name in self.changed_tasks:
+            change = self.semantic_changes.get(name)
+            if change is None or change.requires_rebuild(policy):
+                rebuild.add(name)
+        return tuple(sorted(rebuild))
 
 
 def diff_plan_catalog(prev: PlanCatalog, curr: PlanCatalog) -> IncrementalDiff:
@@ -141,8 +169,11 @@ def _semantic_diff_map(
     prev: Mapping[str, PlanFingerprintSnapshot],
     curr: Mapping[str, PlanFingerprintSnapshot],
     changed_tasks: tuple[str, ...],
-) -> dict[str, PlanDiffResult]:
-    results: dict[str, PlanDiffResult] = {}
+) -> dict[str, SemanticDiff]:
+    results: dict[str, SemanticDiff] = {}
+    register_datafusion_dialect()
+    profile = SQLPolicyProfile(read_dialect="datafusion_ext", write_dialect="datafusion_ext")
+    schema: dict[str, dict[str, str]] = {}
     for name in changed_tasks:
         prev_snapshot = prev.get(name)
         curr_snapshot = curr.get(name)
@@ -150,11 +181,26 @@ def _semantic_diff_map(
             continue
         if prev_snapshot.plan_sql is None or curr_snapshot.plan_sql is None:
             continue
-        results[name] = semantic_diff_sql(
-            prev_snapshot.plan_sql,
-            curr_snapshot.plan_sql,
-            dialect="datafusion",
-        )
+        try:
+            _rebuild_needed, diff = compute_rebuild_needed(
+                prev_snapshot.plan_sql,
+                curr_snapshot.plan_sql,
+                profile=profile,
+                schema=schema,
+                policy=RebuildPolicy.CONSERVATIVE,
+            )
+        except (ParseError, TypeError, ValueError) as exc:
+            diff = SemanticDiff(
+                changes=[
+                    SemanticChange(
+                        edit_type="parse_error",
+                        node_type=type(exc).__name__,
+                        description=str(exc) or "SQL parse error",
+                        category=ChangeCategory.BREAKING,
+                    )
+                ]
+            )
+        results[name] = diff
     return results
 
 

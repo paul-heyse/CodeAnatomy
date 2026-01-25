@@ -1248,13 +1248,13 @@ class DataFusionGenerator(SqlGlotGenerator):
 class DataFusionDialect(Dialect):
     """Optional DataFusion-focused dialect overrides."""
 
-    generator_class = DataFusionGenerator
+    Generator = DataFusionGenerator
 
 
 def register_datafusion_dialect(name: str = "datafusion_ext") -> None:
     """Register the DataFusion dialect overrides under a custom name."""
     Dialect.classes[name] = DataFusionDialect
-    Dialect.classes.setdefault("datafusion", DataFusionDialect)
+    Dialect.classes["datafusion"] = DataFusionDialect
 
 
 def sanitize_templated_sql(sql: str, *, preserve_params: bool = False) -> str:

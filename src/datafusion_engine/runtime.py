@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import datafusion
 import msgspec
@@ -35,10 +35,6 @@ from cache.diskcache_factory import (
     evict_cache_tag,
     run_profile_maintenance,
 )
-from datafusion_engine.cache_introspection import (
-    capture_cache_diagnostics,
-    register_cache_introspection_functions,
-)
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -46,15 +42,20 @@ from datafusion_engine.compile_options import (
     DataFusionSubstraitFallbackEvent,
     resolve_sql_policy,
 )
+from datafusion_engine.diagnostics import DiagnosticsSink, ensure_recorder_sink
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
+from datafusion_engine.introspection import (
+    capture_cache_diagnostics,
+    introspection_cache_for_ctx,
+    invalidate_introspection_cache,
+    register_cache_introspection_functions,
+)
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     catalogs_snapshot,
     constraint_rows,
-    settings_snapshot_table,
     table_constraint_rows,
-    tables_snapshot_table,
 )
 from datafusion_engine.schema_registry import (
     AST_CORE_VIEW_NAMES,
@@ -80,6 +81,7 @@ from datafusion_engine.schema_registry import (
     validate_symtable_views,
     validate_ts_views,
 )
+from datafusion_engine.sql_safety import execution_policy_for_profile
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_registry import (
     DataFusionUdfSnapshot,
@@ -129,26 +131,6 @@ def _encode_telemetry_msgpack(payload: object) -> bytes:
     buf = bytearray()
     _TELEMETRY_MSGPACK_ENCODER.encode_into(payload, buf)
     return bytes(buf)
-
-
-class DiagnosticsSink(Protocol):
-    """Protocol for diagnostics sinks used by DataFusion runtime."""
-
-    def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
-        """Record event rows for a named diagnostics table."""
-        ...
-
-    def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
-        """Record an artifact payload for diagnostics sinks."""
-        ...
-
-    def events_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
-        """Return collected event rows."""
-        ...
-
-    def artifacts_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
-        """Return collected artifact payloads."""
-        ...
 
 
 MemoryPool = Literal["greedy", "fair", "unbounded"]
@@ -1067,6 +1049,7 @@ def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) ->
     arrays = [pa.array([], type=field.type) for field in schema]
     table = pa.Table.from_arrays(arrays, schema=schema)
     ctx.register_table(name, table)
+    invalidate_introspection_cache(ctx)
 
 
 def _apply_config_int(
@@ -1383,14 +1366,7 @@ def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) 
     datafusion.SQLOptions
         SQL options that allow statements, with fallback defaults.
     """
-    if profile is None:
-        return DataFusionSqlPolicy(allow_statements=True).to_sql_options()
-    resolved = profile.sql_policy or resolve_sql_policy(profile.sql_policy_name)
-    return DataFusionSqlPolicy(
-        allow_ddl=resolved.allow_ddl,
-        allow_dml=resolved.allow_dml,
-        allow_statements=True,
-    ).to_sql_options()
+    return execution_policy_for_profile(profile, allow_statements=True).to_sql_options()
 
 
 def settings_snapshot_for_profile(
@@ -1403,7 +1379,8 @@ def settings_snapshot_for_profile(
     pyarrow.Table
         Table of settings from information_schema.df_settings.
     """
-    return settings_snapshot_table(ctx, sql_options=profile.sql_options())
+    cache = introspection_cache_for_ctx(ctx, sql_options=profile.sql_options())
+    return cache.snapshot.settings
 
 
 def catalog_snapshot_for_profile(
@@ -1416,7 +1393,8 @@ def catalog_snapshot_for_profile(
     pyarrow.Table
         Table inventory from information_schema.tables.
     """
-    return tables_snapshot_table(ctx, sql_options=profile.sql_options())
+    cache = introspection_cache_for_ctx(ctx, sql_options=profile.sql_options())
+    return cache.snapshot.tables
 
 
 def function_catalog_snapshot_for_profile(
@@ -2510,6 +2488,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "plan_cache",
                 PlanCache(cache_profile=self.diskcache_profile),
             )
+        if self.diagnostics_sink is not None:
+            object.__setattr__(
+                self,
+                "diagnostics_sink",
+                ensure_recorder_sink(
+                    self.diagnostics_sink,
+                    session_id=self.context_cache_key(),
+                ),
+            )
 
     def session_config(self) -> SessionConfig:
         """Return a SessionConfig configured from the profile.
@@ -2869,10 +2856,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             catalog = get_strict_udf_catalog(introspector=introspector)
         else:
             catalog = get_default_udf_catalog(introspector=introspector)
-        self._validate_ibis_udf_specs(catalog)
+        self._validate_ibis_udf_specs(catalog, introspector=introspector)
         self.udf_catalog_cache[id(ctx)] = catalog
 
-    def _validate_ibis_udf_specs(self, catalog: UdfCatalog) -> None:
+    def _validate_ibis_udf_specs(
+        self,
+        catalog: UdfCatalog,
+        *,
+        introspector: SchemaIntrospector,
+    ) -> None:
         """Validate Ibis builtin UDFs against the runtime catalog.
 
         Raises
@@ -2881,19 +2873,21 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             Raised when builtin Ibis UDFs are missing from DataFusion.
         """
         missing: list[str] = []
-        from datafusion_engine.udf_registry import datafusion_udf_specs
-        from ibis_engine.builtin_udfs import ibis_udf_specs
+        from engine.unified_registry import build_unified_function_registry
 
-        registered_udfs = {spec.engine_name for spec in datafusion_udf_specs()}
-        for spec in ibis_udf_specs():
-            if spec.engine_name in registered_udfs:
-                continue
+        unified_registry = build_unified_function_registry(
+            datafusion_function_catalog=introspector.function_catalog_snapshot(
+                include_parameters=True
+            ),
+            snapshot=introspector.snapshot,
+        )
+        for name in sorted(unified_registry.required_builtins):
             try:
-                if catalog.is_builtin_from_runtime(spec.engine_name):
+                if catalog.is_builtin_from_runtime(name):
                     continue
             except (RuntimeError, TypeError, ValueError):
                 pass
-            missing.append(spec.engine_name)
+            missing.append(name)
         if missing:
             if self.diagnostics_sink is not None:
                 self.diagnostics_sink.record_artifact(
@@ -4672,7 +4666,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         datafusion.SQLOptions
             SQL options derived from the profile policy.
         """
-        return self._resolved_sql_policy().to_sql_options()
+        return execution_policy_for_profile(self).to_sql_options()
 
     def sql_options(self) -> SQLOptions:
         """Return SQLOptions derived from the resolved SQL policy.
@@ -4692,12 +4686,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         datafusion.SQLOptions
             SQL options with statement execution enabled.
         """
-        policy = self._resolved_sql_policy()
-        return DataFusionSqlPolicy(
-            allow_ddl=policy.allow_ddl,
-            allow_dml=policy.allow_dml,
-            allow_statements=True,
-        ).to_sql_options()
+        return execution_policy_for_profile(self, allow_statements=True).to_sql_options()
 
     def _diskcache(self, kind: DiskCacheKind) -> Cache | FanoutCache | None:
         """Return a DiskCache instance for the requested kind.
@@ -4763,7 +4752,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         pyarrow.Table
             Table of settings from information_schema.df_settings.
         """
-        return settings_snapshot_table(ctx, sql_options=self._sql_options())
+        cache = introspection_cache_for_ctx(ctx, sql_options=self._sql_options())
+        return cache.snapshot.settings
 
     def _catalog_snapshot(self, ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion catalog tables when available.
@@ -4773,7 +4763,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         pyarrow.Table
             Table inventory from information_schema.tables.
         """
-        return tables_snapshot_table(ctx, sql_options=self._sql_options())
+        cache = introspection_cache_for_ctx(ctx, sql_options=self._sql_options())
+        return cache.snapshot.tables
 
     def _function_catalog_snapshot(
         self,
@@ -5215,6 +5206,7 @@ def _datafusion_type_name(dtype: pa.DataType) -> str:
     ctx = DataFusionRuntimeProfile().ephemeral_context()
     table = pa.Table.from_arrays([pa.array([None], type=dtype)], names=["value"])
     ctx.register_table("t", ctx.from_arrow(table))
+    invalidate_introspection_cache(ctx)
     result = _sql_with_options(ctx, "SELECT arrow_typeof(value) AS dtype FROM t").to_arrow_table()
     value = result["dtype"][0].as_py()
     if not isinstance(value, str):
@@ -5278,12 +5270,6 @@ def _align_projection_exprs(
     return selections
 
 
-def _deregister_table(ctx: SessionContext, *, name: str) -> None:
-    deregister = getattr(ctx, "deregister_table", None)
-    if callable(deregister):
-        deregister(name)
-
-
 def align_table_to_schema(
     table: TableLike | RecordBatchReaderLike,
     *,
@@ -5309,6 +5295,7 @@ def align_table_to_schema(
     session = ctx or DataFusionRuntimeProfile().session_context()
     temp_name = f"__schema_align_{uuid.uuid4().hex}"
     session.register_record_batches(temp_name, resolved_table.to_batches())
+    invalidate_introspection_cache(session)
     try:
         selections = _align_projection_exprs(
             schema=resolved_schema,
@@ -5319,7 +5306,11 @@ def align_table_to_schema(
         df = _sql_with_options(session, f"SELECT {select_sql} FROM {_sql_identifier(temp_name)}")
         aligned = df.to_arrow_table()
     finally:
-        _deregister_table(session, name=temp_name)
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=session, profile=None)
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            adapter.deregister_table(temp_name)
     return _apply_table_schema_metadata(
         aligned,
         schema=resolved_schema,

@@ -31,6 +31,8 @@ class EdgeValidationResult:
         Required column/type pairs missing or mismatched.
     missing_metadata : tuple[tuple[bytes, bytes], ...]
         Required metadata entries missing or mismatched.
+    contract_violations : tuple[str, ...]
+        Contract violations detected for the evidence source.
     available_columns : tuple[str, ...]
         Columns actually available in the catalog.
     available_types : tuple[tuple[str, str], ...]
@@ -45,6 +47,7 @@ class EdgeValidationResult:
     missing_columns: tuple[str, ...] = ()
     missing_types: tuple[tuple[str, str], ...] = ()
     missing_metadata: tuple[tuple[bytes, bytes], ...] = ()
+    contract_violations: tuple[str, ...] = ()
     available_columns: tuple[str, ...] = ()
     available_types: tuple[tuple[str, str], ...] = ()
     available_metadata: tuple[tuple[bytes, bytes], ...] = ()
@@ -64,12 +67,15 @@ class TaskValidationResult:
         Individual validation results for each edge.
     unsatisfied_edges : tuple[str, ...]
         Names of edges that failed validation.
+    contract_violations : tuple[str, ...]
+        Flattened contract violations across all incoming edges.
     """
 
     task_name: str
     is_valid: bool
     edge_results: tuple[EdgeValidationResult, ...] = ()
     unsatisfied_edges: tuple[str, ...] = ()
+    contract_violations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -153,6 +159,9 @@ def validate_edge_requirements(
             and _missing_required_metadata(edge_data.required_metadata, available_metadata)
         ):
             return False
+        violations = catalog.contract_violations_by_dataset.get(edge_data.name)
+        if violations:
+            return False
     return True
 
 
@@ -194,54 +203,84 @@ def validate_edge_requirements_detailed(
     task_name = node.payload.name
     edge_results: list[EdgeValidationResult] = []
     unsatisfied: list[str] = []
+    contract_violations: set[str] = set()
 
     for pred_idx in graph.graph.predecessor_indices(task_idx):
         edge_data = graph.graph.get_edge_data(pred_idx, task_idx)
         if not isinstance(edge_data, GraphEdge):
             continue
-
-        available_cols = catalog.columns_by_dataset.get(edge_data.name)
-        required_cols = set(edge_data.required_columns)
-        missing_cols = required_cols - available_cols if available_cols is not None else set()
-
-        available_types = catalog.types_by_dataset.get(edge_data.name)
-        missing_types = (
-            _missing_required_types(edge_data.required_types, available_types)
-            if available_types is not None
-            else ()
+        edge_result, is_valid, violation_messages = _edge_validation_result(
+            edge_data,
+            task_name=task_name,
+            catalog=catalog,
         )
-
-        available_metadata = catalog.metadata_by_dataset.get(edge_data.name)
-        missing_metadata = (
-            _missing_required_metadata(edge_data.required_metadata, available_metadata)
-            if available_metadata is not None
-            else ()
-        )
-
-        is_valid = not missing_cols and not missing_types and not missing_metadata
+        contract_violations.update(violation_messages)
         if not is_valid:
             unsatisfied.append(edge_data.name)
-
-        edge_results.append(
-            EdgeValidationResult(
-                source_name=edge_data.name,
-                target_task=task_name,
-                is_valid=is_valid,
-                missing_columns=tuple(sorted(missing_cols)),
-                missing_types=missing_types,
-                missing_metadata=missing_metadata,
-                available_columns=tuple(sorted(available_cols or ())),
-                available_types=_sorted_type_pairs(available_types or {}),
-                available_metadata=_sorted_metadata_pairs(available_metadata or {}),
-            )
-        )
+        edge_results.append(edge_result)
 
     return TaskValidationResult(
         task_name=task_name,
         is_valid=len(unsatisfied) == 0,
         edge_results=tuple(edge_results),
         unsatisfied_edges=tuple(unsatisfied),
+        contract_violations=tuple(sorted(contract_violations)),
     )
+
+
+def _edge_validation_result(
+    edge: GraphEdge,
+    *,
+    task_name: str,
+    catalog: EvidenceCatalog,
+) -> tuple[EdgeValidationResult, bool, tuple[str, ...]]:
+    available_cols = catalog.columns_by_dataset.get(edge.name)
+    missing_cols = _missing_required_columns(edge.required_columns, available_cols)
+    available_types = catalog.types_by_dataset.get(edge.name)
+    missing_types = (
+        _missing_required_types(edge.required_types, available_types)
+        if available_types is not None
+        else ()
+    )
+    available_metadata = catalog.metadata_by_dataset.get(edge.name)
+    missing_metadata = (
+        _missing_required_metadata(edge.required_metadata, available_metadata)
+        if available_metadata is not None
+        else ()
+    )
+    violations = catalog.contract_violations_by_dataset.get(edge.name)
+    violation_messages = tuple(str(item) for item in violations) if violations else ()
+    is_valid = (
+        not missing_cols
+        and not missing_types
+        and not missing_metadata
+        and not violation_messages
+    )
+    return (
+        EdgeValidationResult(
+            source_name=edge.name,
+            target_task=task_name,
+            is_valid=is_valid,
+            missing_columns=tuple(sorted(missing_cols)),
+            missing_types=missing_types,
+            missing_metadata=missing_metadata,
+            contract_violations=violation_messages,
+            available_columns=tuple(sorted(available_cols or ())),
+            available_types=_sorted_type_pairs(available_types or {}),
+            available_metadata=_sorted_metadata_pairs(available_metadata or {}),
+        ),
+        is_valid,
+        violation_messages,
+    )
+
+
+def _missing_required_columns(
+    required_columns: tuple[str, ...],
+    available_columns: set[str] | None,
+) -> set[str]:
+    if available_columns is None:
+        return set()
+    return set(required_columns) - available_columns
 
 
 def validate_graph_edges(

@@ -8,6 +8,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from datafusion_engine.runtime import dataset_schema_from_context
+from datafusion_engine.schema_contracts import SchemaContract, schema_contract_from_dataset_spec
 from relspec.errors import RelspecValidationError
 from schema_spec.system import (
     Contract,
@@ -70,6 +71,19 @@ def relation_output_contract() -> Contract:
         Runtime contract for relationship outputs.
     """
     return relation_output_spec().contract()
+
+
+@cache
+def relation_output_schema_contract() -> SchemaContract:
+    """Return the SchemaContract for canonical relationship outputs.
+
+    Returns
+    -------
+    SchemaContract
+        Schema contract derived from the dataset spec.
+    """
+    spec = relation_output_spec()
+    return schema_contract_from_dataset_spec(name=spec.name, spec=spec)
 
 
 def relation_output_ddl(*, dialect: str | None = None) -> str:
@@ -140,5 +154,6 @@ __all__ = [
     "relation_output_ddl",
     "relation_output_logical_plan",
     "relation_output_schema",
+    "relation_output_schema_contract",
     "relation_output_spec",
 ]

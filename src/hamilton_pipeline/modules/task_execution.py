@@ -12,6 +12,7 @@ from hamilton.htypes import Collect, Parallelizable
 from arrowdsl.core.interop import TableLike as ArrowTableLike
 from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.serialization import schema_fingerprint
+from core_types import JsonDict
 from datafusion_engine.finalize import Contract, normalize_only
 from relspec.evidence import EvidenceCatalog, initial_evidence_from_plan
 from relspec.execution import TaskExecutionRequest, execute_plan_artifact
@@ -20,6 +21,8 @@ from relspec.runtime_artifacts import MaterializedTableSpec, RuntimeArtifacts, T
 from relspec.rustworkx_graph import task_graph_impact_subgraph
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
+
     from arrowdsl.core.execution_context import ExecutionContext
     from ibis_engine.execution import IbisExecutionContext
     from relspec.graph_inference import TaskGraph
@@ -71,10 +74,14 @@ def _finalize_cpg_props_stage(table: TableLike, ctx: ExecutionContext) -> TableL
 def _initial_evidence(
     catalog: PlanCatalog,
     *,
-    ctx_id: int | None = None,
+    ctx: SessionContext | None = None,
     task_names: set[str] | None = None,
 ) -> EvidenceCatalog:
-    return initial_evidence_from_plan(catalog, ctx_id=ctx_id, task_names=task_names)
+    return initial_evidence_from_plan(
+        catalog,
+        ctx=ctx,
+        task_names=task_names,
+    )
 
 
 def _artifact_by_task(catalog: PlanCatalog) -> dict[str, PlanArtifact]:
@@ -106,6 +113,7 @@ def _record_output(
 @tag(layer="execution", artifact="runtime_artifacts", kind="context")
 def runtime_artifacts(
     ibis_execution: IbisExecutionContext,
+    relspec_param_values: JsonDict,
 ) -> RuntimeArtifacts:
     """Return the runtime artifacts container for task execution.
 
@@ -114,7 +122,10 @@ def runtime_artifacts(
     RuntimeArtifacts
         Runtime artifacts container.
     """
-    return RuntimeArtifacts(execution=ibis_execution)
+    return RuntimeArtifacts(
+        execution=ibis_execution,
+        rulepack_param_values=relspec_param_values,
+    )
 
 
 @tag(layer="execution", artifact="task_execution_inputs", kind="context")
@@ -150,8 +161,25 @@ def evidence_catalog(
         Evidence catalog seeded from plan requirements.
     """
     df_profile = ibis_execution.ctx.runtime.datafusion
-    ctx_id = id(df_profile.session_context()) if df_profile is not None else None
-    return _initial_evidence(plan_catalog, ctx_id=ctx_id)
+    session = df_profile.session_context() if df_profile is not None else None
+    evidence = _initial_evidence(plan_catalog, ctx=session)
+    if (
+        df_profile is not None
+        and df_profile.diagnostics_sink is not None
+        and evidence.contract_violations_by_dataset
+    ):
+        payload = [
+            {
+                "dataset": name,
+                "violations": [str(item) for item in violations],
+            }
+            for name, violations in evidence.contract_violations_by_dataset.items()
+        ]
+        df_profile.diagnostics_sink.record_artifact(
+            "evidence_contract_violations_v1",
+            {"violations": payload},
+        )
+    return evidence
 
 
 def task_graph_for_diff(
@@ -167,9 +195,9 @@ def task_graph_for_diff(
     """
     if diff is None:
         return task_graph
-    changed = (*diff.changed_tasks, *diff.added_tasks)
+    changed = diff.tasks_requiring_rebuild()
     if not changed:
-        return task_graph
+        return task_graph_impact_subgraph(task_graph, task_names=())
     return task_graph_impact_subgraph(task_graph, task_names=changed)
 
 

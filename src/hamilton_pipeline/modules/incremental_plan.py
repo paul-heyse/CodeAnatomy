@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from hamilton.function_modifiers import tag
 
+from datafusion_engine.semantic_diff import ChangeCategory, RebuildPolicy
 from incremental.delta_context import DeltaAccessContext
 from incremental.plan_fingerprints import read_plan_snapshots, write_plan_snapshots
 from incremental.runtime import IncrementalRuntime
@@ -74,9 +75,15 @@ def _record_plan_diff(
         payload["semantic_changes"] = [
             {
                 "task_name": name,
-                "breaking": change.breaking,
-                "changed": change.changed,
-                "changes": list(change.changes),
+                "overall_category": change.overall_category.name,
+                "breaking": change.is_breaking(),
+                "rebuild_needed": change.requires_rebuild(RebuildPolicy.CONSERVATIVE),
+                "summary": change.summary(),
+                "change_categories": [
+                    item.category.name
+                    for item in change.changes
+                    if item.category != ChangeCategory.NONE
+                ],
             }
             for name, change in diff.semantic_changes.items()
         ]

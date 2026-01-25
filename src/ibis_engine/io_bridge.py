@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 import time
 import uuid
@@ -36,12 +37,19 @@ from datafusion_engine.bridge import (
     ibis_plan_to_datafusion,
     ibis_to_datafusion,
 )
+from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.table_provider_metadata import (
     all_table_provider_metadata,
     table_provider_metadata,
 )
-from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.write_pipeline import (
+    WriteFormat,
+    WriteMode,
+    WritePipeline,
+    WriteRequest,
+)
 from engine.plan_policy import WriterStrategy
 from engine.plan_product import PlanProduct
 from ibis_engine.execution import (
@@ -1178,7 +1186,12 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
         raise
     finally:
         if temp_name is not None:
-            _deregister_table(request.ctx, name=temp_name)
+            adapter = DataFusionIOAdapter(
+                ctx=request.ctx,
+                profile=request.runtime_profile,
+            )
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                adapter.deregister_table(temp_name)
     _record_delta_insert_diagnostics(
         request.runtime_profile,
         table_name=request.table_name,
@@ -1276,12 +1289,15 @@ def write_ibis_dataset_parquet(
         df_ctx,
         profile,
         sql_options=statement_sql_options_for_profile(runtime_profile),
+        recorder=recorder_for_profile(runtime_profile, operation_id="ibis_parquet_write"),
     )
     try:
         pipeline.write(request, prefer_streaming=True)
     finally:
         if temp_name is not None:
-            _deregister_table(df_ctx, name=temp_name)
+            adapter = DataFusionIOAdapter(ctx=df_ctx, profile=runtime_profile)
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                adapter.deregister_table(temp_name)
     return str(path)
 
 
@@ -1338,6 +1354,7 @@ def write_ibis_named_datasets_copy(
         df_ctx,
         profile,
         sql_options=statement_sql_options_for_profile(runtime_profile),
+        recorder=recorder_for_profile(runtime_profile, operation_id="ibis_copy_write"),
     )
     write_format = _write_format(options.file_format)
     context = _NamedCopyContext(
@@ -1401,11 +1418,14 @@ def _write_named_dataset_copy(
                 else None
             ),
         )
-        copy_sql = context.pipeline.write_via_copy(request)
+        result = context.pipeline.write_via_copy(request)
+        if result.sql is None:
+            msg = "COPY writer failed to produce a SQL statement."
+            raise ValueError(msg)
         if context.options.record_hook is not None:
             context.options.record_hook(
                 {
-                    "sql": copy_sql,
+                    "sql": result.sql,
                     "dialect": context.profile.write_dialect,
                     "policy_violations": [],
                     "sql_policy_name": None,
@@ -1414,10 +1434,12 @@ def _write_named_dataset_copy(
             )
     finally:
         if temp_name is not None:
-            _deregister_table(context.ctx, name=temp_name)
+            adapter = DataFusionIOAdapter(ctx=context.ctx, profile=None)
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                adapter.deregister_table(temp_name)
     return IbisCopyWriteResult(
         path=str(target_path),
-        sql=copy_sql,
+        sql=result.sql,
         file_format=context.options.file_format,
         partition_by=partition_by,
         statement_overrides=context.options.statement_overrides,
@@ -1517,12 +1539,6 @@ def write_ibis_named_datasets_parquet(
             options=options,
         )
     return results
-
-
-def _deregister_table(ctx: SessionContext, *, name: str) -> None:
-    deregister = getattr(ctx, "deregister_table", None)
-    if callable(deregister):
-        deregister(name)
 
 
 __all__ = [

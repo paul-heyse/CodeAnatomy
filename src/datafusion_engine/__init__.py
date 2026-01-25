@@ -31,7 +31,6 @@ if TYPE_CHECKING:
         CompiledExpression,
         CompileOptions,
     )
-    from datafusion_engine.df_builder import df_from_sqlglot, register_dataset
     from datafusion_engine.diagnostics import (
         DiagnosticsContext,
         DiagnosticsRecorder,
@@ -200,7 +199,6 @@ __all__ = [
     # Bridge and execution
     "datafusion_read_table",
     "datafusion_to_table",
-    "df_from_sqlglot",
     "execute_with_policy",
     "has_schema",
     "ibis_plan_to_datafusion",
@@ -211,7 +209,6 @@ __all__ = [
     "nested_schema_for",
     "nested_schema_names",
     "register_all_schemas",
-    "register_dataset",
     "register_dataset_df",
     "register_registry_catalog",
     "register_registry_delta_tables",
@@ -255,7 +252,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "register_registry_catalog",
     ),
     "has_schema": ("datafusion_engine.schema_registry", "has_schema"),
-    "register_dataset": ("datafusion_engine.df_builder", "register_dataset"),
     "register_dataset_df": ("datafusion_engine.registry_bridge", "register_dataset_df"),
     "register_schema": ("datafusion_engine.schema_registry", "register_schema"),
     "register_all_schemas": ("datafusion_engine.schema_registry", "register_all_schemas"),
@@ -284,7 +280,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     # Bridge and execution
     "datafusion_read_table": ("datafusion_engine.bridge", "datafusion_read_table"),
     "datafusion_to_table": ("datafusion_engine.bridge", "datafusion_to_table"),
-    "df_from_sqlglot": ("datafusion_engine.df_builder", "df_from_sqlglot"),
     "ibis_plan_to_datafusion": ("datafusion_engine.bridge", "ibis_plan_to_datafusion"),
     "ibis_plan_to_table": ("datafusion_engine.bridge", "ibis_plan_to_table"),
     "ibis_to_datafusion": ("datafusion_engine.bridge", "ibis_to_datafusion"),

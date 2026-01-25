@@ -7,7 +7,7 @@ view references, and schema caches.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -23,8 +23,10 @@ from cache.diskcache_factory import (
 if TYPE_CHECKING:
     import pyarrow as pa
     from diskcache import Cache, FanoutCache
+    from ibis.expr.types import Value as IbisValue
 
     from ibis_engine.execution import IbisExecutionContext
+    from relspec.plan_catalog import PlanArtifact
 
 
 class TableLike(Protocol):
@@ -116,6 +118,8 @@ class RuntimeArtifacts:
         Metadata for materialized tables.
     execution_order : list[str]
         Order in which tasks were executed.
+    rulepack_param_values : Mapping[str, object]
+        Parameter values for parameterized rulepack execution.
     """
 
     execution: IbisExecutionContext | None = None
@@ -125,6 +129,7 @@ class RuntimeArtifacts:
     schema_cache: dict[str, SchemaLike] = field(default_factory=dict)
     table_metadata: dict[str, MaterializedTable] = field(default_factory=dict)
     execution_order: list[str] = field(default_factory=list)
+    rulepack_param_values: Mapping[str, object] = field(default_factory=dict)
     diskcache_profile: DiskCacheProfile | None = None
     _diskcache: Cache | FanoutCache | None = field(default=None, init=False, repr=False)
 
@@ -363,6 +368,46 @@ class RuntimeArtifacts:
             return self.table_metadata[name].source_task
         return None
 
+    def param_mapping_for_task(
+        self,
+        artifact: PlanArtifact,
+    ) -> Mapping[IbisValue, object] | None:
+        """Return parameter mapping for a plan artifact if configured.
+
+        Returns
+        -------
+        Mapping[IbisValue, object] | None
+            Ibis parameter mapping for execution, or None when not parameterized.
+        """
+        parameterization = artifact.parameterization
+        if parameterization is None:
+            return None
+        values = self._resolve_rulepack_values(
+            task_name=artifact.task.name,
+            output=artifact.task.output,
+            param_names=parameterization.param_specs.keys(),
+        )
+        return cast("Mapping[IbisValue, object]", parameterization.param_mapping(values))
+
+    def _resolve_rulepack_values(
+        self,
+        *,
+        task_name: str,
+        output: str,
+        param_names: Iterable[str],
+    ) -> dict[str, object]:
+        values: dict[str, object] = {}
+        for name in param_names:
+            resolved = _lookup_rulepack_value(
+                self.rulepack_param_values,
+                task_name=task_name,
+                output=output,
+                param_name=name,
+            )
+            if resolved is not None:
+                values[name] = resolved
+        return values
+
     def clone(self) -> RuntimeArtifacts:
         """Create a shallow copy for staged updates.
 
@@ -378,6 +423,7 @@ class RuntimeArtifacts:
             schema_cache=dict(self.schema_cache),
             table_metadata=dict(self.table_metadata),
             execution_order=list(self.execution_order),
+            rulepack_param_values=dict(self.rulepack_param_values),
             diskcache_profile=self.diskcache_profile,
         )
 
@@ -426,6 +472,32 @@ def _looks_like_schema(value: object) -> bool:
     has_index = callable(getattr(value, "get_field_index", None))
     has_iter = callable(getattr(value, "__iter__", None))
     return has_names and has_metadata and has_with_metadata and has_field and has_index and has_iter
+
+
+def _lookup_rulepack_value(
+    values: Mapping[str, object],
+    *,
+    task_name: str,
+    output: str,
+    param_name: str,
+) -> object | None:
+    task_payload = values.get(task_name)
+    if isinstance(task_payload, Mapping) and param_name in task_payload:
+        return task_payload[param_name]
+    output_payload = values.get(output)
+    if isinstance(output_payload, Mapping) and param_name in output_payload:
+        return output_payload[param_name]
+    for key in (
+        f"{task_name}.{param_name}",
+        f"{output}.{param_name}",
+        param_name,
+    ):
+        if key in values and not isinstance(values[key], Mapping):
+            return values[key]
+    global_payload = values.get("*")
+    if isinstance(global_payload, Mapping) and param_name in global_payload:
+        return global_payload[param_name]
+    return None
 
 
 def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:

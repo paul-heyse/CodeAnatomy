@@ -10,7 +10,8 @@ import ibis
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
-from datafusion_engine.runtime import DataFusionRuntimeProfile, DiagnosticsSink
+from datafusion_engine.diagnostics import DiagnosticsSink
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from incremental.delta_context import DeltaAccessContext
 from incremental.invalidations import (
     build_invalidation_snapshot,
@@ -26,12 +27,19 @@ from incremental.state_store import StateStore
 class _DiagnosticsSink(DiagnosticsSink):
     artifacts: dict[str, list[dict[str, object]]] = field(default_factory=dict)
     events: dict[str, list[dict[str, object]]] = field(default_factory=dict)
+    metrics: list[tuple[str, float, dict[str, str]]] = field(default_factory=list)
 
     def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
         self.events.setdefault(name, []).extend(dict(row) for row in rows)
 
     def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
         self.artifacts.setdefault(name, []).append(dict(payload))
+
+    def record_event(self, name: str, properties: Mapping[str, object]) -> None:
+        self.events.setdefault(name, []).append(dict(properties))
+
+    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
+        self.metrics.append((name, value, dict(tags)))
 
     def events_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
         return {name: list(rows) for name, rows in self.events.items()}

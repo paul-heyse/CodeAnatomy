@@ -10,6 +10,7 @@ from datafusion import SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.compile_options import DataFusionSqlPolicy
+from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
@@ -233,6 +234,7 @@ class ViewSpec:
         if self.builder is not None:
             view = self.builder(ctx).into_view(temporary=False)
             ctx.register_table(self.name, view)
+            invalidate_introspection_cache(ctx)
             if record_view is not None:
                 record_view(self.name, self.sql)
             if validate:
@@ -240,6 +242,7 @@ class ViewSpec:
             return
         create_sql = self.create_view_sql()
         ctx.sql_with_options(create_sql, _statement_sql_options(sql_options)).collect()
+        invalidate_introspection_cache(ctx)
         if record_view is not None:
             record_view(self.name, self.sql)
         if validate:

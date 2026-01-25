@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.cache_introspection import (
+from datafusion_engine.introspection import (
     CacheConfigSnapshot,
     CacheStateSnapshot,
     capture_cache_diagnostics,

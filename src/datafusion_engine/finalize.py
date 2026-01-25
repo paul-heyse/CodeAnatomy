@@ -31,6 +31,7 @@ from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_table
 from arrowdsl.schema.validation import ArrowValidationOptions
+from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_options import sql_options_for_profile
@@ -592,6 +593,7 @@ def _row_id_for_errors(
             resolved_table = cast("pa.Table", resolved)
         table_name = f"_finalize_errors_{uuid.uuid4().hex}"
         df_ctx.register_record_batches(table_name, [resolved_table.to_batches()])
+        invalidate_introspection_cache(df_ctx)
         try:
             prefix = f"{contract.name}:row"
             row_sql = _row_id_sql(prefix, key_cols)
@@ -601,6 +603,7 @@ def _row_id_for_errors(
             deregister = getattr(df_ctx, "deregister_table", None)
             if callable(deregister):
                 deregister(table_name)
+                invalidate_introspection_cache(df_ctx)
         return result["row_id"]
     return pa.array(range(errors.num_rows), type=pa.int64())
 
@@ -682,6 +685,7 @@ def _register_temp_table(
         resolved_table = cast("pa.Table", resolved)
     table_name = f"_{prefix}_{uuid.uuid4().hex}"
     ctx.register_record_batches(table_name, [resolved_table.to_batches()])
+    invalidate_introspection_cache(ctx)
     return table_name, resolved_table
 
 
@@ -689,6 +693,7 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     temp_name = f"_dtype_{uuid.uuid4().hex}"
     table = pa.table({"value": pa.array([None], type=dtype)})
     ctx.register_record_batches(temp_name, [table.to_batches()])
+    invalidate_introspection_cache(ctx)
     try:
         sql = f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}"
         result = ctx.sql_with_options(sql, sql_options_for_profile(None)).to_arrow_table()
@@ -697,6 +702,7 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
         deregister = getattr(ctx, "deregister_table", None)
         if callable(deregister):
             deregister(temp_name)
+            invalidate_introspection_cache(ctx)
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
         raise TypeError(msg)

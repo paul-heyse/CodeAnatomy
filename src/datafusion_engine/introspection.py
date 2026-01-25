@@ -8,13 +8,17 @@ consistency within a compilation unit and enable schema-driven optimization.
 
 from __future__ import annotations
 
+import importlib
+import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
 if TYPE_CHECKING:
-    from datafusion import SessionContext
+    from datafusion import SessionContext, SQLOptions
+
+from datafusion_engine.sql_options import sql_options_for_profile
 
 
 @dataclass
@@ -46,7 +50,12 @@ class IntrospectionSnapshot:
     settings: pa.Table
 
     @classmethod
-    def capture(cls, ctx: SessionContext) -> IntrospectionSnapshot:
+    def capture(
+        cls,
+        ctx: SessionContext,
+        *,
+        sql_options: SQLOptions | None = None,
+    ) -> IntrospectionSnapshot:
         """
         Capture snapshot from SessionContext.
 
@@ -58,49 +67,56 @@ class IntrospectionSnapshot:
         ----------
         ctx : SessionContext
             DataFusion session to introspect
+        sql_options : SQLOptions | None
+            SQL options applied to information_schema queries when provided.
 
         Returns
         -------
         IntrospectionSnapshot
             Snapshot containing all available catalog metadata
         """
-        tables = ctx.sql("""
+        def _table(sql: str) -> pa.Table:
+            if sql_options is None:
+                return ctx.sql(sql).to_arrow_table()
+            return ctx.sql_with_options(sql, sql_options).to_arrow_table()
+
+        tables = _table("""
             SELECT table_catalog, table_schema, table_name, table_type
             FROM information_schema.tables
-        """).to_arrow_table()
+        """)
 
-        columns = ctx.sql("""
+        columns = _table("""
             SELECT
                 table_catalog, table_schema, table_name,
                 column_name, ordinal_position, data_type,
                 is_nullable, column_default
             FROM information_schema.columns
             ORDER BY table_catalog, table_schema, table_name, ordinal_position
-        """).to_arrow_table()
+        """)
 
-        settings = ctx.sql("""
+        settings = _table("""
             SELECT name, value
             FROM information_schema.df_settings
-        """).to_arrow_table()
+        """)
 
         # Routines may not be available in all configurations
         try:
-            routines = ctx.sql("""
+            routines = _table("""
                 SELECT
                     specific_catalog, specific_schema, specific_name,
                     routine_catalog, routine_schema, routine_name,
                     routine_type, data_type
                 FROM information_schema.routines
-            """).to_arrow_table()
+            """)
 
-            parameters = ctx.sql("""
+            parameters = _table("""
                 SELECT
                     specific_catalog, specific_schema, specific_name,
                     ordinal_position, parameter_mode, parameter_name,
                     data_type
                 FROM information_schema.parameters
                 ORDER BY specific_name, ordinal_position
-            """).to_arrow_table()
+            """)
         except Exception:  # noqa: BLE001
             # DataFusion versions may not expose routines/parameters views
             routines = None
@@ -255,9 +271,15 @@ class IntrospectionCache:
         Current or recaptured snapshot (property)
     """
 
-    def __init__(self, ctx: SessionContext) -> None:
+    def __init__(
+        self,
+        ctx: SessionContext,
+        *,
+        sql_options: SQLOptions | None = None,
+    ) -> None:
         """Initialize cache with SessionContext."""
         self._ctx = ctx
+        self._sql_options = sql_options
         self._snapshot: IntrospectionSnapshot | None = None
         self._invalidated = False
 
@@ -274,7 +296,10 @@ class IntrospectionCache:
             Current snapshot
         """
         if self._snapshot is None or self._invalidated:
-            self._snapshot = IntrospectionSnapshot.capture(self._ctx)
+            self._snapshot = IntrospectionSnapshot.capture(
+                self._ctx,
+                sql_options=self._sql_options,
+            )
             self._invalidated = False
         return self._snapshot
 
@@ -296,3 +321,302 @@ class IntrospectionCache:
             Schema map from current snapshot
         """
         return self.snapshot.schema_map()
+
+
+_INTROSPECTION_CACHE_BY_CONTEXT: dict[int, IntrospectionCache] = {}
+
+
+def introspection_cache_for_ctx(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> IntrospectionCache:
+    """Return a cached IntrospectionCache for a SessionContext.
+
+    Returns
+    -------
+    IntrospectionCache
+        Cache bound to the provided SessionContext.
+    """
+    key = id(ctx)
+    cache = _INTROSPECTION_CACHE_BY_CONTEXT.get(key)
+    if cache is None:
+        cache = IntrospectionCache(ctx, sql_options=sql_options)
+        _INTROSPECTION_CACHE_BY_CONTEXT[key] = cache
+    return cache
+
+
+def invalidate_introspection_cache(ctx: SessionContext) -> None:
+    """Invalidate the cached snapshot for a SessionContext, if present."""
+    cache = _INTROSPECTION_CACHE_BY_CONTEXT.get(id(ctx))
+    if cache is not None:
+        cache.invalidate()
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+@dataclass(frozen=True)
+class CacheConfigSnapshot:
+    """Configuration snapshot for DataFusion caches."""
+
+    list_files_cache_ttl: str | None
+    list_files_cache_limit: str | None
+    metadata_cache_limit: str | None
+    predicate_cache_size: str | None
+
+
+@dataclass(frozen=True)
+class CacheStateSnapshot:
+    """Runtime state snapshot for a DataFusion cache."""
+
+    cache_name: str
+    event_time_unix_ms: int
+    entry_count: int | None
+    hit_count: int | None
+    miss_count: int | None
+    eviction_count: int | None
+    config_ttl: str | None
+    config_limit: str | None
+
+    def to_row(self) -> dict[str, object]:
+        """Return a row mapping for diagnostics sinks.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-ready cache snapshot row.
+        """
+        return {
+            "cache_name": self.cache_name,
+            "event_time_unix_ms": self.event_time_unix_ms,
+            "entry_count": self.entry_count,
+            "hit_count": self.hit_count,
+            "miss_count": self.miss_count,
+            "eviction_count": self.eviction_count,
+            "config_ttl": self.config_ttl,
+            "config_limit": self.config_limit,
+        }
+
+
+def _extract_cache_config(settings: list[dict[str, object]]) -> CacheConfigSnapshot:
+    settings_map = {str(row.get("name")): str(row.get("value")) for row in settings}
+    return CacheConfigSnapshot(
+        list_files_cache_ttl=settings_map.get("datafusion.runtime.list_files_cache_ttl"),
+        list_files_cache_limit=settings_map.get("datafusion.runtime.list_files_cache_limit"),
+        metadata_cache_limit=settings_map.get("datafusion.runtime.metadata_cache_limit"),
+        predicate_cache_size=settings_map.get(
+            "datafusion.execution.parquet.max_predicate_cache_size"
+        ),
+    )
+
+
+def _cache_snapshot_from_table(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+) -> CacheStateSnapshot | None:
+    query = f"SELECT * FROM {table_name}()"
+    try:
+        table = ctx.sql_with_options(query, sql_options_for_profile(None)).to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    rows = table.to_pylist()
+    if not rows:
+        return None
+    row = rows[0]
+    return CacheStateSnapshot(
+        cache_name=str(row.get("cache_name") or table_name),
+        event_time_unix_ms=int(row.get("event_time_unix_ms") or _now_ms()),
+        entry_count=int(row["entry_count"]) if row.get("entry_count") is not None else None,
+        hit_count=int(row["hit_count"]) if row.get("hit_count") is not None else None,
+        miss_count=int(row["miss_count"]) if row.get("miss_count") is not None else None,
+        eviction_count=(
+            int(row["eviction_count"]) if row.get("eviction_count") is not None else None
+        ),
+        config_ttl=str(row.get("config_ttl")) if row.get("config_ttl") is not None else None,
+        config_limit=str(row.get("config_limit")) if row.get("config_limit") is not None else None,
+    )
+
+
+def _settings_snapshot(ctx: SessionContext) -> list[dict[str, object]]:
+    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options_for_profile(None)).snapshot
+    return [dict(row) for row in snapshot.settings.to_pylist()]
+
+
+def metadata_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
+    """Capture metadata cache state snapshot.
+
+    Returns
+    -------
+    CacheStateSnapshot
+        Cache snapshot for metadata cache.
+    """
+    snapshot = _cache_snapshot_from_table(ctx, table_name="metadata_cache")
+    if snapshot is not None:
+        return snapshot
+    settings = _settings_snapshot(ctx)
+    config = _extract_cache_config(settings)
+    now = _now_ms()
+    return CacheStateSnapshot(
+        cache_name="metadata",
+        event_time_unix_ms=now,
+        entry_count=None,
+        hit_count=None,
+        miss_count=None,
+        eviction_count=None,
+        config_ttl=None,
+        config_limit=config.metadata_cache_limit,
+    )
+
+
+def list_files_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
+    """Capture list_files cache state snapshot.
+
+    Returns
+    -------
+    CacheStateSnapshot
+        Cache snapshot for list_files cache.
+    """
+    snapshot = _cache_snapshot_from_table(ctx, table_name="list_files_cache")
+    if snapshot is not None:
+        return snapshot
+    settings = _settings_snapshot(ctx)
+    config = _extract_cache_config(settings)
+    now = _now_ms()
+    return CacheStateSnapshot(
+        cache_name="list_files",
+        event_time_unix_ms=now,
+        entry_count=None,
+        hit_count=None,
+        miss_count=None,
+        eviction_count=None,
+        config_ttl=config.list_files_cache_ttl,
+        config_limit=config.list_files_cache_limit,
+    )
+
+
+def statistics_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
+    """Capture statistics cache state snapshot.
+
+    Returns
+    -------
+    CacheStateSnapshot
+        Cache snapshot for statistics cache.
+    """
+    snapshot = _cache_snapshot_from_table(ctx, table_name="statistics_cache")
+    if snapshot is not None:
+        return snapshot
+    settings = _settings_snapshot(ctx)
+    config = _extract_cache_config(settings)
+    now = _now_ms()
+    return CacheStateSnapshot(
+        cache_name="statistics",
+        event_time_unix_ms=now,
+        entry_count=None,
+        hit_count=None,
+        miss_count=None,
+        eviction_count=None,
+        config_ttl=None,
+        config_limit=config.predicate_cache_size,
+    )
+
+
+def predicate_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
+    """Capture predicate cache state snapshot.
+
+    Returns
+    -------
+    CacheStateSnapshot
+        Cache snapshot for predicate cache.
+    """
+    snapshot = _cache_snapshot_from_table(ctx, table_name="predicate_cache")
+    if snapshot is not None:
+        return snapshot
+    settings = _settings_snapshot(ctx)
+    config = _extract_cache_config(settings)
+    now = _now_ms()
+    return CacheStateSnapshot(
+        cache_name="predicate",
+        event_time_unix_ms=now,
+        entry_count=None,
+        hit_count=None,
+        miss_count=None,
+        eviction_count=None,
+        config_ttl=None,
+        config_limit=config.predicate_cache_size,
+    )
+
+
+def capture_cache_diagnostics(ctx: SessionContext) -> dict[str, Any]:
+    """Capture cache configuration and state for diagnostics.
+
+    Returns
+    -------
+    dict[str, Any]
+        Diagnostics payload describing cache configuration and snapshots.
+    """
+    settings = _settings_snapshot(ctx)
+    config = _extract_cache_config(settings)
+    snapshots = [
+        list_files_cache_snapshot(ctx).to_row(),
+        metadata_cache_snapshot(ctx).to_row(),
+        statistics_cache_snapshot(ctx).to_row(),
+        predicate_cache_snapshot(ctx).to_row(),
+    ]
+    return {
+        "config": {
+            "list_files_cache_ttl": config.list_files_cache_ttl,
+            "list_files_cache_limit": config.list_files_cache_limit,
+            "metadata_cache_limit": config.metadata_cache_limit,
+            "predicate_cache_size": config.predicate_cache_size,
+        },
+        "cache_snapshots": snapshots,
+    }
+
+
+def register_cache_introspection_functions(ctx: SessionContext) -> None:
+    """Register cache introspection table functions in the SessionContext.
+
+    Raises
+    ------
+    ImportError
+        Raised when ``datafusion_ext`` is not available.
+    TypeError
+        Raised when the cache table registration hook is unavailable.
+    """
+    settings = _settings_snapshot(ctx)
+    config = _extract_cache_config(settings)
+    payload = {
+        "list_files_cache_ttl": config.list_files_cache_ttl,
+        "list_files_cache_limit": config.list_files_cache_limit,
+        "metadata_cache_limit": config.metadata_cache_limit,
+        "predicate_cache_size": config.predicate_cache_size,
+    }
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:
+        msg = "datafusion_ext is required for cache introspection tables."
+        raise ImportError(msg) from exc
+    register = getattr(module, "register_cache_tables", None)
+    if not callable(register):
+        msg = "datafusion_ext.register_cache_tables is unavailable."
+        raise TypeError(msg)
+    register(ctx, payload)
+
+
+__all__ = [
+    "CacheConfigSnapshot",
+    "CacheStateSnapshot",
+    "IntrospectionCache",
+    "IntrospectionSnapshot",
+    "capture_cache_diagnostics",
+    "introspection_cache_for_ctx",
+    "invalidate_introspection_cache",
+    "list_files_cache_snapshot",
+    "metadata_cache_snapshot",
+    "predicate_cache_snapshot",
+    "register_cache_introspection_functions",
+    "statistics_cache_snapshot",
+]

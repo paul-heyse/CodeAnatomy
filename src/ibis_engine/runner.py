@@ -1,4 +1,4 @@
-"""Runner helpers for Ibis plans."""
+"""Execution helpers for Ibis plans with DataFusion integration."""
 
 from __future__ import annotations
 
@@ -22,14 +22,12 @@ from ibis.expr.types import Table, Value
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.bridge import (
     IbisCompilerBackend,
-    datafusion_to_async_batches,
     datafusion_to_reader,
     datafusion_to_table,
-    ibis_to_datafusion_dual_lane,
+    ibis_to_datafusion,
 )
 from datafusion_engine.compile_options import DataFusionCompileOptions
-from datafusion_engine.schema_introspection import SchemaIntrospector
-from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
+from datafusion_engine.schema_introspection import SchemaIntrospector, schema_map_fingerprint
 from ibis_engine.plan import IbisPlan
 from obs.datafusion_runs import tracked_run
 
@@ -188,41 +186,14 @@ def materialize_plan(
                 cached_execution = replace(execution, cache_policy=None)
                 return materialize_plan(cached, execution=cached_execution)
         if execution.datafusion is not None:
-            return _materialize_plan_datafusion(
-                plan,
+            portable_plan = _portable_plan(plan)
+            df = _datafusion_dataframe_for_plan(
+                portable_plan,
                 execution=execution.datafusion,
                 params=execution.params,
             )
+            return datafusion_to_table(df, ordering=portable_plan.ordering)
     params = _validate_plan_params(execution.params) if execution is not None else None
-    return plan.to_table(params=params)
-
-
-def _materialize_plan_datafusion(
-    plan: IbisPlan,
-    *,
-    execution: DataFusionExecutionOptions,
-    params: Mapping[Value, object] | None,
-) -> TableLike:
-    options = _resolve_options(
-        execution.options,
-        execution=execution,
-        params=params,
-    )
-    portable_plan = _portable_plan(plan)
-    if _force_bridge(options):
-        df = plan_to_datafusion(
-            portable_plan,
-            execution=execution,
-            params=params,
-        )
-        return datafusion_to_table(df, ordering=portable_plan.ordering)
-    missing = _missing_ops(
-        plan,
-        execution=execution,
-    )
-    if missing:
-        msg = f"Unsupported Ibis operations: {', '.join(missing)}."
-        raise ValueError(msg)
     return plan.to_table(params=params)
 
 
@@ -257,12 +228,13 @@ def stream_plan(
                     execution=cached_execution,
                 )
     if execution is not None and execution.datafusion is not None:
-        return _stream_plan_datafusion(
-            plan,
-            batch_size=batch_size,
-            params=effective_params,
+        portable_plan = _portable_plan(plan)
+        df = _datafusion_dataframe_for_plan(
+            portable_plan,
             execution=execution.datafusion,
+            params=effective_params,
         )
+        return datafusion_to_reader(df, ordering=portable_plan.ordering)
     validated_params = _validate_plan_params(effective_params)
     return plan.to_reader(batch_size=batch_size, params=validated_params)
 
@@ -315,6 +287,7 @@ async def async_stream_plan(
     effective_params = params
     if execution is not None and execution.params is not None:
         effective_params = execution.params
+    effective_execution = execution
     if execution is not None:
         cache_policy = execution.cache_policy
         if cache_policy is not None:
@@ -330,92 +303,52 @@ async def async_stream_plan(
                 ):
                     yield batch
                 return
-    if execution is not None and execution.datafusion is not None:
-        df = plan_to_datafusion(
-            plan,
-            execution=execution.datafusion,
-            params=effective_params,
-        )
-        async for batch in datafusion_to_async_batches(df, ordering=plan.ordering):
-            yield batch
-        return
-    validated_params = _validate_plan_params(effective_params)
-    reader = plan.to_reader(batch_size=batch_size, params=validated_params)
+        if cache_policy is not None:
+            effective_execution = replace(execution, cache_policy=None)
+    reader = stream_plan(
+        plan,
+        batch_size=batch_size,
+        params=effective_params,
+        execution=effective_execution,
+    )
     for batch in reader:
         yield batch
 
-
-def _stream_plan_datafusion(
-    plan: IbisPlan,
-    *,
-    batch_size: int | None,
-    params: Mapping[Value, object] | None,
-    execution: DataFusionExecutionOptions,
-) -> RecordBatchReaderLike:
-    options = _resolve_options(
-        execution.options,
-        execution=execution,
-        params=params,
-    )
-    portable_plan = _portable_plan(plan)
-    if _force_bridge(options):
-        df = plan_to_datafusion(
-            portable_plan,
-            execution=execution,
-            params=params,
-        )
-        return datafusion_to_reader(df, ordering=portable_plan.ordering)
-    missing = _missing_ops(plan, execution=execution)
-    if missing:
-        msg = f"Unsupported Ibis operations: {', '.join(missing)}."
-        raise ValueError(msg)
-    return plan.to_reader(batch_size=batch_size, params=params)
-
-
-def plan_to_datafusion(
+def _datafusion_dataframe_for_plan(
     plan: IbisPlan,
     *,
     execution: DataFusionExecutionOptions,
     params: Mapping[Value, object] | None = None,
 ) -> DataFrame:
-    """Return a DataFusion DataFrame for an Ibis plan.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFusion DataFrame for the Ibis expression.
-    """
     options = _resolve_options(
         execution.options,
         execution=execution,
         params=params,
     )
-    portable_plan = _portable_plan(plan)
     runtime_profile = execution.runtime_profile
     if (
         runtime_profile is None
         or runtime_profile.diagnostics_sink is None
         or options.run_id is not None
     ):
-        result = ibis_to_datafusion_dual_lane(
-            portable_plan.expr,
+        return ibis_to_datafusion(
+            plan.expr,
             backend=execution.backend,
             ctx=execution.ctx,
             options=options,
         )
-        return result.df
     label = _datafusion_run_label(execution, operation="compile")
     metadata = _datafusion_run_metadata(execution, operation="compile")
     with tracked_run(label=label, sink=runtime_profile.diagnostics_sink, metadata=metadata) as run:
-        result = ibis_to_datafusion_dual_lane(
-            portable_plan.expr,
+        df = ibis_to_datafusion(
+            plan.expr,
             backend=execution.backend,
             ctx=execution.ctx,
             options=replace(options, run_id=run.run_id),
         )
         _record_metrics_snapshot(execution, run_id=run.run_id)
         _record_tracing_snapshot(execution, run_id=run.run_id)
-        return result.df
+        return df
 
 
 def _resolve_options(
@@ -475,7 +408,7 @@ def _resolve_options(
         schema_map = introspector.schema_map()
         schema_map_hash: str | None = None
         try:
-            schema_map_hash = introspector.schema_map_fingerprint()
+            schema_map_hash = schema_map_fingerprint(introspector)
         except (RuntimeError, TypeError, ValueError):
             schema_map_hash = None
         resolved = replace(
@@ -486,40 +419,4 @@ def _resolve_options(
     return resolved
 
 
-def _missing_ops(
-    plan: IbisPlan,
-    *,
-    execution: DataFusionExecutionOptions,
-) -> tuple[str, ...]:
-    if not execution.probe_capabilities:
-        return ()
-    backend = cast("OperationSupportBackend", execution.backend)
-    missing = unsupported_operations(plan.expr, backend=backend)
-    _record_support_matrix(execution, missing=missing)
-    return missing
-
-
-def _record_support_matrix(
-    execution: DataFusionExecutionOptions,
-    *,
-    missing: tuple[str, ...],
-) -> None:
-    profile = execution.runtime_profile
-    if profile is None or profile.diagnostics_sink is None:
-        return
-    label = execution.execution_label
-    payload = {
-        "backend": type(execution.backend).__name__,
-        "missing": list(missing),
-        "execution_label": {
-            "task_name": label.task_name,
-            "output": label.output_dataset,
-        }
-        if label is not None
-        else None,
-    }
-    profile.diagnostics_sink.record_artifact("ibis_support_matrix_v1", payload)
-
-
-def _force_bridge(options: DataFusionCompileOptions) -> bool:
-    return options.capture_explain or options.explain_hook is not None
+"""Runner helpers for Ibis plans."""

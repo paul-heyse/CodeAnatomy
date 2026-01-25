@@ -16,6 +16,7 @@ from arrowdsl.core.interop import (
     TableLike,
     coerce_table_like,
 )
+from datafusion_engine.introspection import invalidate_introspection_cache
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -86,6 +87,7 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     resolved = _ensure_table(table)
     table_name = f"_encoding_{uuid.uuid4().hex}"
     df_ctx.register_record_batches(table_name, [resolved.to_batches()])
+    invalidate_introspection_cache(df_ctx)
     try:
         sql_options = _sql_options_for_profile(None)
         selections: list[str] = []
@@ -113,6 +115,7 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
             deregister(table_name)
+            invalidate_introspection_cache(df_ctx)
 
 
 def _datafusion_context() -> SessionContext:

@@ -7,24 +7,14 @@ import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from storage.deltalake.delta import IdempotentWriteOptions
 
-
-class DiagnosticsSink(Protocol):
-    """Protocol for diagnostics recording backends."""
-
-    def record_events(self, name: str, rows: list[Mapping[str, object]]) -> None:
-        """Record event rows under a logical name."""
-        ...
-
-    def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
-        """Record an artifact payload under a logical name."""
-        ...
+from datafusion_engine.diagnostics import DiagnosticsSink
 
 
 @dataclass

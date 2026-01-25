@@ -10,6 +10,8 @@ from typing import Any
 import pyarrow as pa
 from datafusion import SessionContext
 
+from datafusion_engine.introspection import invalidate_introspection_cache
+
 
 @dataclass(frozen=True)
 class FilePruningPolicy:
@@ -147,6 +149,7 @@ def evaluate_filters_against_index(
     temp_table_name = f"__file_index_{uuid.uuid4().hex}"
     try:
         ctx.register_record_batches(temp_table_name, [list(index.to_batches())])
+        invalidate_introspection_cache(ctx)
 
         # Construct and execute filter query
         sql = _build_filter_query(temp_table_name, policy)
@@ -372,6 +375,7 @@ def _deregister_table(ctx: SessionContext, table_name: str) -> None:
     if callable(deregister):
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             deregister(table_name)
+            invalidate_introspection_cache(ctx)
 
 
 __all__ = [

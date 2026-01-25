@@ -517,10 +517,14 @@ class UdfCatalog:
         introspector:
             Schema introspector for the DataFusion session.
         """
-        routines = routines_snapshot_table(
-            introspector.ctx,
-            sql_options=introspector.sql_options,
-        )
+        snapshot = introspector.snapshot
+        if snapshot is not None and snapshot.routines is not None:
+            routines = snapshot.routines
+        else:
+            routines = routines_snapshot_table(
+                introspector.ctx,
+                sql_options=introspector.sql_options,
+            )
         parameters = introspector.parameters_snapshot_table()
         catalog = FunctionCatalog.from_information_schema(
             routines=routines,

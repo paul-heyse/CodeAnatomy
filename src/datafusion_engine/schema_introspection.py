@@ -11,6 +11,11 @@ import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 from diskcache import memoize_stampede
 
+from datafusion_engine.introspection import (
+    IntrospectionCache,
+    IntrospectionSnapshot,
+    introspection_cache_for_ctx,
+)
 from datafusion_engine.sql_options import (
     sql_options_for_profile,
     statement_sql_options_for_profile,
@@ -94,17 +99,10 @@ def table_names_snapshot(
     set[str]
         Set of table names registered in the session.
     """
-    names: set[str] = set()
-    for row in _rows_for_query(
-        ctx,
-        "SELECT table_name FROM information_schema.tables",
-        sql_options=sql_options,
-        prepared_name="table_names_snapshot",
-    ):
-        value = row.get("table_name")
-        if value is not None:
-            names.add(str(value))
-    return names
+    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    if "table_name" not in snapshot.tables.column_names:
+        return set()
+    return {str(name) for name in snapshot.tables["table_name"].to_pylist() if name is not None}
 
 
 def settings_snapshot_table(
@@ -119,13 +117,8 @@ def settings_snapshot_table(
     pyarrow.Table
         Table of settings from information_schema.df_settings.
     """
-    query = "SELECT name, value FROM information_schema.df_settings"
-    return _table_for_query(
-        ctx,
-        query,
-        sql_options=sql_options,
-        prepared_name="df_settings_snapshot",
-    )
+    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    return snapshot.settings
 
 
 def tables_snapshot_table(
@@ -140,15 +133,8 @@ def tables_snapshot_table(
     pyarrow.Table
         Table inventory from information_schema.tables.
     """
-    query = (
-        "SELECT table_catalog, table_schema, table_name, table_type FROM information_schema.tables"
-    )
-    return _table_for_query(
-        ctx,
-        query,
-        sql_options=sql_options,
-        prepared_name="tables_snapshot",
-    )
+    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    return snapshot.tables
 
 
 def routines_snapshot_table(
@@ -163,6 +149,9 @@ def routines_snapshot_table(
     pyarrow.Table
         Routine inventory from information_schema.routines.
     """
+    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    if snapshot.routines is not None:
+        return snapshot.routines
     query = "SELECT * FROM information_schema.routines"
     return _table_for_query(
         ctx,
@@ -304,6 +293,19 @@ class SchemaIntrospector:
     cache: Cache | FanoutCache | None = None
     cache_prefix: str | None = None
     cache_ttl: float | None = None
+    introspection_cache: IntrospectionCache | None = None
+    snapshot: IntrospectionSnapshot | None = None
+
+    def __post_init__(self) -> None:
+        """Attach or derive the shared introspection cache for this session."""
+        if self.introspection_cache is None:
+            object.__setattr__(
+                self,
+                "introspection_cache",
+                introspection_cache_for_ctx(self.ctx, sql_options=self.sql_options),
+            )
+        if self.snapshot is None and self.introspection_cache is not None:
+            object.__setattr__(self, "snapshot", self.introspection_cache.snapshot)
 
     def _cache_key(self, kind: str, *, payload: Mapping[str, object] | None = None) -> str:
         key_payload = {
@@ -382,6 +384,25 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Column metadata rows for the table.
         """
+        snapshot = self.snapshot
+        if snapshot is not None:
+            rows: list[dict[str, object]] = []
+            for row in snapshot.columns.to_pylist():
+                name = row.get("table_name")
+                if name is None or str(name) != table_name:
+                    continue
+                rows.append(
+                    {
+                        "table_catalog": row.get("table_catalog"),
+                        "table_schema": row.get("table_schema"),
+                        "table_name": row.get("table_name"),
+                        "column_name": row.get("column_name"),
+                        "data_type": row.get("data_type"),
+                        "is_nullable": row.get("is_nullable"),
+                        "column_default": row.get("column_default"),
+                    }
+                )
+            return rows
         query = (
             "SELECT table_catalog, table_schema, table_name, column_name, data_type, "
             "is_nullable, column_default "
@@ -402,6 +423,39 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Column metadata rows ordered by ordinal position.
         """
+        snapshot = self.snapshot
+        if snapshot is not None:
+            rows: list[dict[str, object]] = []
+            for row in snapshot.columns.to_pylist():
+                name = row.get("table_name")
+                if name is None or str(name) != table_name:
+                    continue
+                rows.append(
+                    {
+                        "table_catalog": row.get("table_catalog"),
+                        "table_schema": row.get("table_schema"),
+                        "table_name": row.get("table_name"),
+                        "column_name": row.get("column_name"),
+                        "data_type": row.get("data_type"),
+                        "ordinal_position": row.get("ordinal_position"),
+                        "is_nullable": row.get("is_nullable"),
+                        "column_default": row.get("column_default"),
+                    }
+                )
+            def _ordinal_value(item: Mapping[str, object]) -> int:
+                value = item.get("ordinal_position")
+                if isinstance(value, int):
+                    return value
+                if isinstance(value, float):
+                    return int(value)
+                if isinstance(value, str):
+                    try:
+                        return int(value)
+                    except ValueError:
+                        return 0
+                return 0
+
+            return sorted(rows, key=_ordinal_value)
         query = (
             "SELECT table_catalog, table_schema, table_name, column_name, data_type, "
             "ordinal_position, is_nullable, column_default "
@@ -423,6 +477,9 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Table inventory rows including catalog/schema/type.
         """
+        snapshot = self.snapshot
+        if snapshot is not None:
+            return [dict(row) for row in snapshot.tables.to_pylist()]
         query = (
             "SELECT table_catalog, table_schema, table_name, table_type "
             "FROM information_schema.tables"
@@ -448,6 +505,9 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Column metadata rows for all tables.
         """
+        snapshot = self.snapshot
+        if snapshot is not None:
+            return [dict(row) for row in snapshot.columns.to_pylist()]
         query = (
             "SELECT table_catalog, table_schema, table_name, column_name, data_type, "
             "is_nullable, column_default "
@@ -483,16 +543,6 @@ class SchemaIntrospector:
             )
         return mapping
 
-    def schema_map_fingerprint(self) -> str:
-        """Return a stable fingerprint for the information_schema schema map.
-
-        Returns
-        -------
-        str
-            SHA-256 fingerprint for the schema map payload.
-        """
-        return schema_map_fingerprint_from_mapping(self.schema_map())
-
     def routines_snapshot(self) -> list[dict[str, object]]:
         """Return routine inventory rows from information_schema.
 
@@ -501,6 +551,9 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Routine inventory rows including name and type.
         """
+        snapshot = self.snapshot
+        if snapshot is not None and snapshot.routines is not None:
+            return [dict(row) for row in snapshot.routines.to_pylist()]
         query = "SELECT * FROM information_schema.routines"
         return self._cached_rows(
             "routines_snapshot",
@@ -516,6 +569,9 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Parameter metadata rows including names and data types.
         """
+        snapshot = self.snapshot
+        if snapshot is not None and snapshot.parameters is not None:
+            return [dict(row) for row in snapshot.parameters.to_pylist()]
         query = (
             "SELECT specific_name, routine_name, parameter_name, parameter_mode, "
             "data_type, ordinal_position "
@@ -535,6 +591,9 @@ class SchemaIntrospector:
         pyarrow.Table | None
             Parameter inventory from information_schema.parameters, or None if unavailable.
         """
+        snapshot = self.snapshot
+        if snapshot is not None:
+            return snapshot.parameters
         query = (
             "SELECT specific_name, routine_name, parameter_name, parameter_mode, "
             "data_type, ordinal_position "
@@ -604,6 +663,9 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Session settings rows with name/value pairs.
         """
+        snapshot = self.snapshot
+        if snapshot is not None:
+            return [dict(row) for row in snapshot.settings.to_pylist()]
         query = "SELECT name, value FROM information_schema.df_settings"
         return self._cached_rows("settings_snapshot", query=query)
 
@@ -756,6 +818,17 @@ def schema_map_for_sqlglot(introspector: SchemaIntrospector) -> SchemaMapping:
             column
         ] = dtype_str
     return mapping
+
+
+def schema_map_fingerprint(introspector: SchemaIntrospector) -> str:
+    """Return a stable fingerprint for an introspector's schema map.
+
+    Returns
+    -------
+    str
+        SHA-256 fingerprint for the schema map payload.
+    """
+    return schema_map_fingerprint_from_mapping(introspector.schema_map())
 
 
 def schema_map_snapshot(

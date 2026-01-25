@@ -979,9 +979,10 @@ Establish streaming-first execution via Arrow C Stream protocol. DataFusion Data
 implement `__arrow_c_stream__`, enabling zero-copy streaming without full materialization.
 
 **Status (code audit 2026-01-24)**
-PARTIAL — `src/datafusion_engine/streaming_executor.py` exists and implements the
-streaming API, but current execution paths still materialize via
-`src/engine/materialize_pipeline.py` and `src/ibis_engine/io_bridge.py`.
+COMPLETE (code paths) — streaming executor integration now routes
+`src/engine/materialize_pipeline.py`, `src/ibis_engine/io_bridge.py`, and
+`src/datafusion_engine/write_pipeline.py` through streaming-first writes.
+Remaining work is tests and benchmarks.
 
 **Representative pattern**
 ```python
@@ -1202,9 +1203,11 @@ Provide a single writing surface with explicit format policy, partitioning, and 
 constraints, while avoiding inconsistent Ibis vs DataFusion write behavior.
 
 **Status (code audit 2026-01-24)**
-PARTIAL — `src/datafusion_engine/write_pipeline.py` exists and uses SQLGlot AST builders
-plus the streaming executor, but production write paths still run through
-`src/engine/materialize_pipeline.py` and `src/ibis_engine/io_bridge.py`.
+COMPLETE (code paths) — production write paths now delegate to `WritePipeline` and
+`StreamingExecutor` from `src/engine/materialize_pipeline.py`,
+`src/ibis_engine/io_bridge.py`, and `src/datafusion_engine/bridge.py` (including
+`copy_to_path` and `datafusion_write_parquet` when SQL is available).
+Remaining work is diagnostics consolidation and tests.
 
 **Representative pattern**
 ```python
@@ -1439,8 +1442,8 @@ class WritePipeline:
 - [x] Define `WriteRequest` and `ParquetWritePolicy` dataclasses.
 - [x] Implement `WritePipeline` with COPY and streaming paths.
 - [x] Support per-column compression overrides in Parquet policy.
-- [ ] Remove direct Parquet write paths where COPY/streaming is available.
-- [ ] Ensure DataFusion write policy is applied consistently.
+- [x] Remove direct Parquet write paths where COPY/streaming is available (fallback retained for non-SQL DataFrames).
+- [x] Ensure DataFusion write policy is applied consistently.
 - [ ] Record write artifacts from a single source.
 - [ ] Add tests for partitioned writes.
 - [ ] Add tests for per-column compression options.
@@ -1455,10 +1458,10 @@ class WritePipeline:
 Make information_schema-derived metadata the single source of truth for schema,
 function catalog, and settings. Avoid separate metadata caches.
 
-**Status (code audit 2026-01-24)**
-PARTIAL — `src/datafusion_engine/introspection.py` exists, but core call sites still use
-`SchemaIntrospector` and direct information_schema queries. Function registry
-and schema validation paths are not yet routed through the snapshot cache.
+**Status (code audit 2026-01-25)**
+COMPLETE (code paths) — the snapshot cache now backs schema/introspection helpers,
+function catalogs, and DDL invalidation across registration paths. Remaining work
+is test coverage.
 
 **Representative pattern**
 ```python
@@ -1678,8 +1681,8 @@ class IntrospectionCache:
 - [x] Implement `schema_map` for SQLGlot optimizer integration.
 - [x] Implement `function_signatures` for UDF registry.
 - [x] Create `IntrospectionCache` with invalidation support.
-- [ ] Route function registry build to use snapshot, not direct queries.
-- [ ] Invalidate snapshots centrally when DDL changes tables.
+- [x] Route function registry build to use snapshot, not direct queries.
+- [x] Invalidate snapshots centrally when DDL changes tables.
 - [ ] Add tests for snapshot accuracy.
 - [ ] Add tests for invalidation behavior.
 
@@ -1691,10 +1694,9 @@ class IntrospectionCache:
 Provide declarative schema contracts that can be validated against introspection
 and used to generate DDL. Catch schema drift at compile time.
 
-**Status (code audit 2026-01-24)**
-PARTIAL — `src/datafusion_engine/schema_contracts.py` exists, but the runtime still
-uses `schema_spec.system.TableSchemaContract` and related validation paths.
-No production flows reference the new contract registry.
+**Status (code audit 2026-01-25)**
+COMPLETE (code paths) — evidence scheduling and contract exports now use
+`SchemaContract` with introspection-backed validation. Remaining work is test coverage.
 
 **Representative pattern**
 ```python
@@ -1972,7 +1974,10 @@ class ContractRegistry:
 **Target files**
 - `src/datafusion_engine/schema_contracts.py` (new)
 - `src/relspec/evidence.py`
-- `src/cpg/schema_definitions.py`
+- `src/relspec/contracts.py`
+- `src/normalize/contracts.py`
+- `src/normalize/registry_runtime.py`
+- `src/cpg/schemas.py`
 
 **Implementation checklist**
 - [x] Create `SchemaContract` and `ColumnContract` dataclasses.
@@ -1991,10 +1996,9 @@ class ContractRegistry:
 Use SQLGlot diff to detect semantic changes between query versions. Enable fine-grained
 rebuild decisions based on what actually changed, not just text differences.
 
-**Status (code audit 2026-01-24)**
-PARTIAL — `src/datafusion_engine/semantic_diff.py` exists, but incremental workflows still
-use `src/ibis_engine/plan_diff.py` and no call sites wire the new diff into
-incremental scheduling.
+**Status (code audit 2026-01-25)**
+COMPLETE (code paths) — semantic diff now gates incremental rebuild decisions in
+relspec/hamilton scheduling. Remaining work is test coverage.
 
 **Representative pattern**
 ```python
@@ -2262,7 +2266,8 @@ def compute_rebuild_needed(
 **Target files**
 - `src/datafusion_engine/semantic_diff.py` (new)
 - `src/incremental/sqlglot_artifacts.py`
-- `src/relspec/rustworkx_schedule.py`
+- `src/relspec/incremental.py`
+- `src/hamilton_pipeline/modules/task_execution.py`
 
 **Implementation checklist**
 - [x] Create `SemanticDiff` class wrapping SQLGlot diff.
@@ -2270,6 +2275,7 @@ def compute_rebuild_needed(
 - [x] Implement `ChangeCategory` enum with rebuild semantics.
 - [x] Create `RebuildPolicy` enum for configurable rebuild decisions.
 - [x] Implement `compute_rebuild_needed` end-to-end function.
+- [x] Wire semantic diff into incremental rebuild scheduling.
 - [ ] Add tests for various change types (additive, breaking, etc.).
 - [ ] Add tests for row-multiplying detection (joins, unnest).
 - [ ] Add golden tests for diff stability.
@@ -2284,7 +2290,7 @@ def compute_rebuild_needed(
 Leverage Ibis `ibis.param` for templated rulepacks that compile once and execute
 with different parameter values. Enables efficient multi-configuration runs.
 
-**Status (code audit 2026-01-24)**
+**Status (code audit 2026-01-25)**
 PARTIAL — `src/datafusion_engine/parameterized_execution.py` exists, but no
 Hamilton / relspec / pipeline modules reference it yet.
 
@@ -2504,8 +2510,8 @@ def create_edge_filter_rulepack(edges: IbisTable) -> ParameterizedRulepack:
 Define one function registry with explicit lane precedence (builtin → pyarrow → pandas → python)
 and a single source-of-truth for built-ins, UDFs, and SQL expressions.
 
-**Status (code audit 2026-01-24)**
-PARTIAL — `src/engine/udf_registry.py` exists, but existing execution still uses
+**Status (code audit 2026-01-25)**
+PARTIAL — `src/engine/udf_registry.py` exists, but execution still relies on
 `src/engine/function_registry.py` and `src/datafusion_engine/udf_registry.py`.
 No call sites merge the new registry with the runtime.
 
@@ -2781,7 +2787,7 @@ class FunctionRegistry:
 Use DataFusion's SQLOptions to gate SQL execution. Provide defense-in-depth even
 when SQL is generated correctly.
 
-**Status (code audit 2026-01-24)**
+**Status (code audit 2026-01-25)**
 PARTIAL — `src/datafusion_engine/sql_safety.py` exists, but existing
 `statement_sql_options_for_profile` and execution paths still route through
 `src/datafusion_engine/runtime.py` and `src/datafusion_engine/sql_options.py`.
@@ -3013,7 +3019,7 @@ class SafeExecutor:
 All diagnostics should be emitted from a shared adapter/pipeline rather than from each
 local subsystem. Ensure consistent payload shape across execution lanes.
 
-**Status (code audit 2026-01-24)**
+**Status (code audit 2026-01-25)**
 PARTIAL — `src/datafusion_engine/diagnostics.py` exists, but most call sites still
 record artifacts directly on `diagnostics_sink`. No central recorder is wired
 into runtime or execution flows.
@@ -3285,21 +3291,18 @@ def record_artifact(
 The following items should be removed once the above refactors are complete. This is a
 decommission plan, not immediate deletion.
 
-**Status (code audit 2026-01-24)**
-IN PROGRESS — execution has moved to the unified pipeline, but legacy helpers and SQL
-assembly paths still exist. No decommission items below are safe to delete yet.
+**Status (code audit 2026-01-25)**
+IN PROGRESS — several legacy helpers have been removed, but remaining items below
+are still in use. Delete only after diagnostics consolidation and cleanup.
 
 **Duplicate helpers**
-- `src/engine/materialize_pipeline.py`: `_sql_identifier`, `_copy_select_sql`,
-  `_copy_statement_overrides`, `_copy_options_payload`, `_deregister_table`
+- `src/engine/materialize_pipeline.py`: `_copy_options_payload`, `_deregister_table`
 - `src/ibis_engine/io_bridge.py`: `_deregister_table`
 - `src/datafusion_engine/runtime.py`: `_deregister_table` (replace with centralized helper)
 
 **Legacy SQL assembly**
-- Any direct string SQL assembly for COPY or CREATE EXTERNAL TABLE in:
-  - `src/engine/materialize_pipeline.py`
+- Remaining direct CREATE EXTERNAL TABLE string assembly in:
   - `src/datafusion_engine/registry_bridge.py`
-  - `src/ibis_engine/io_bridge.py`
 
 **Obsolete metadata layers**
 - Any direct `information_schema` querying that bypasses the new introspection snapshot.
@@ -3317,9 +3320,11 @@ assembly paths still exist. No decommission items below are safe to delete yet.
 
 ## Execution Phases (Summary)
 
-**Status (code audit 2026-01-24)**
-Phase 1 code-path unification is complete; remaining work is test coverage and
-cleanup. Phases 2–4 remain partially integrated, and Phase 5 cleanup is not started.
+**Status (code audit 2026-01-25)**
+Phase 1 code-path unification is complete; Phase 2 code paths are complete with
+tests/benchmarks/diagnostics still outstanding. Phase 3 code paths are complete
+with tests pending. Phase 4 remains partially integrated, and Phase 5 cleanup
+is not started.
 
 ### Phase 1: Core Unification
 1. IO Adapter (catalog, registration, object stores)

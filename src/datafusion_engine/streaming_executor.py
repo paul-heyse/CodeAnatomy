@@ -16,7 +16,9 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 
 if TYPE_CHECKING:
-    from datafusion import DataFrame, SessionContext
+    from datafusion import DataFrame, SessionContext, SQLOptions
+
+from datafusion_engine.compile_options import DataFusionSqlPolicy
 
 
 @dataclass(frozen=True)
@@ -289,7 +291,12 @@ class StreamingExecutor:
     >>> result.pipe_to_dataset("/output", partitioning=["year"])
     """
 
-    def __init__(self, ctx: SessionContext) -> None:
+    def __init__(
+        self,
+        ctx: SessionContext,
+        *,
+        sql_options: SQLOptions | None = None,
+    ) -> None:
         """
         Initialize streaming executor.
 
@@ -297,12 +304,17 @@ class StreamingExecutor:
         ----------
         ctx : SessionContext
             DataFusion session context.
+        sql_options : SQLOptions | None, optional
+            Optional SQL options to apply for query execution.
         """
         self.ctx = ctx
+        self.sql_options = sql_options or DataFusionSqlPolicy().to_sql_options()
 
     def execute_sql(
         self,
         sql: str,
+        *,
+        sql_options: SQLOptions | None = None,
         **params: Any,
     ) -> StreamingExecutionResult:
         """
@@ -312,6 +324,8 @@ class StreamingExecutor:
         ----------
         sql : str
             SQL query to execute.
+        sql_options : SQLOptions | None, optional
+            Optional SQL options to override the executor defaults.
         **params
             Query parameters for parameterized queries.
 
@@ -325,7 +339,8 @@ class StreamingExecutor:
         >>> result = executor.execute_sql("SELECT * FROM tbl WHERE id = $1", $1=42)
         >>> table = result.to_table()
         """
-        df = self.ctx.sql(sql, **params)
+        resolved_options = sql_options or self.sql_options
+        df = self.ctx.sql_with_options(sql, resolved_options, **params)
         return StreamingExecutionResult(df=df)
 
     def from_table(

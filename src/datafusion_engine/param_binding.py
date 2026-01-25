@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
+from datafusion_engine.introspection import invalidate_introspection_cache
+
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
     from ibis.expr.types import Value
@@ -213,6 +215,7 @@ def register_table_params(
         for name in registered:
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 ctx.deregister_table(name)
+                invalidate_introspection_cache(ctx)
 
 
 def _ensure_table_slot(ctx: SessionContext, name: str) -> None:
@@ -227,9 +230,12 @@ def _ensure_table_slot(ctx: SessionContext, name: str) -> None:
 def _register_table_like(ctx: SessionContext, name: str, table: object) -> None:
     if isinstance(table, pa.Table):
         ctx.register_table(name, table)
+        invalidate_introspection_cache(ctx)
         return
     to_pyarrow = getattr(table, "to_pyarrow", None)
     if callable(to_pyarrow):
         ctx.register_table(name, to_pyarrow())
+        invalidate_introspection_cache(ctx)
         return
     ctx.register_table(name, table)
+    invalidate_introspection_cache(ctx)

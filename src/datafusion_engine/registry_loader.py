@@ -12,6 +12,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from core_types import PathLike, ensure_path
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.registry_bridge import DataFusionCachePolicy, register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
@@ -84,10 +85,11 @@ def register_registry_delta_tables(
     cache_policy = DataFusionCachePolicy(enabled=resolved.cache, max_columns=None)
     locations = registry_delta_table_paths(output_dir, target=target)
     registered: dict[str, DataFrame] = {}
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=resolved.runtime_profile)
     for table_name, path in locations.items():
         name = _registry_table_name(target, table_name)
         with suppress(KeyError, ValueError):
-            ctx.deregister_table(name)
+            adapter.deregister_table(name)
         location = DatasetLocation(
             path=str(path),
             format="delta",

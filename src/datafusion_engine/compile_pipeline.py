@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from sqlglot_tools.compat import Expression
     from sqlglot_tools.optimizer import SchemaMapping
 
+from datafusion_engine.compile_options import DataFusionSqlPolicy
+
 
 @dataclass(frozen=True)
 class CompiledExpression:
@@ -352,15 +354,15 @@ class CompilationPipeline:
                 raise ValueError(msg)
             bindings = bindings.merge(named_bindings)
 
+        resolved_options = sql_options or DataFusionSqlPolicy().to_sql_options()
+
         # Register table params with cleanup
         with register_table_params(self.ctx, bindings):
-            if sql_options is not None:
-                return self.ctx.sql_with_options(
-                    compiled.rendered_sql,
-                    sql_options,
-                    **bindings.param_values,
-                )
-            return self.ctx.sql(compiled.rendered_sql, **bindings.param_values)
+            return self.ctx.sql_with_options(
+                compiled.rendered_sql,
+                resolved_options,
+                **bindings.param_values,
+            )
 
     def compile_and_execute(
         self,

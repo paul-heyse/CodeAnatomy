@@ -28,9 +28,10 @@ Examples
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -43,19 +44,19 @@ class DiagnosticsSink(Protocol):
     artifacts, metrics, and events from DataFusion operations.
     """
 
-    def record_artifact(self, name: str, payload: dict[str, Any]) -> None:
+    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
         """Record a named artifact.
 
         Parameters
         ----------
         name : str
             Artifact type identifier (e.g., "sql_compilation", "write_operation").
-        payload : dict[str, Any]
+        payload : Mapping[str, Any]
             Artifact payload with type-specific fields.
         """
         ...
 
-    def record_metric(self, name: str, value: float, tags: dict[str, str]) -> None:
+    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
         """Record a metric value.
 
         Parameters
@@ -64,21 +65,41 @@ class DiagnosticsSink(Protocol):
             Metric name (e.g., "cache_hit_rate", "execution_duration_ms").
         value : float
             Metric value.
-        tags : dict[str, str]
+        tags : Mapping[str, str]
             Tags for metric categorization.
         """
         ...
 
-    def record_event(self, name: str, properties: dict[str, Any]) -> None:
+    def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
         """Record an event.
 
         Parameters
         ----------
         name : str
             Event type identifier (e.g., "cache_access", "schema_validation").
-        properties : dict[str, Any]
+        properties : Mapping[str, Any]
             Event properties.
         """
+        ...
+
+    def record_events(self, name: str, rows: Sequence[Mapping[str, Any]]) -> None:
+        """Record a batch of event rows.
+
+        Parameters
+        ----------
+        name : str
+            Event type identifier.
+        rows : Sequence[Mapping[str, Any]]
+            Event payload rows.
+        """
+        ...
+
+    def events_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
+        """Return collected event rows."""
+        ...
+
+    def artifacts_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
+        """Return collected artifact payloads."""
         ...
 
 
@@ -103,7 +124,7 @@ class InMemoryDiagnosticsSink:
     metrics: list[tuple[str, float, dict[str, str]]] = field(default_factory=list)
     events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
-    def record_artifact(self, name: str, payload: dict[str, Any]) -> None:
+    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
         """Record a named artifact.
 
         Parameters
@@ -113,9 +134,9 @@ class InMemoryDiagnosticsSink:
         payload : dict[str, Any]
             Artifact payload.
         """
-        self.artifacts.append((name, payload))
+        self.artifacts.append((name, dict(payload)))
 
-    def record_metric(self, name: str, value: float, tags: dict[str, str]) -> None:
+    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
         """Record a metric value.
 
         Parameters
@@ -127,9 +148,9 @@ class InMemoryDiagnosticsSink:
         tags : dict[str, str]
             Tags for metric categorization.
         """
-        self.metrics.append((name, value, tags))
+        self.metrics.append((name, value, dict(tags)))
 
-    def record_event(self, name: str, properties: dict[str, Any]) -> None:
+    def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
         """Record an event.
 
         Parameters
@@ -139,7 +160,46 @@ class InMemoryDiagnosticsSink:
         properties : dict[str, Any]
             Event properties.
         """
-        self.events.append((name, properties))
+        self.events.append((name, dict(properties)))
+
+    def record_events(self, name: str, rows: Sequence[Mapping[str, Any]]) -> None:
+        """Record a batch of events.
+
+        Parameters
+        ----------
+        name : str
+            Event type identifier.
+        rows : Sequence[Mapping[str, Any]]
+            Event payload rows.
+        """
+        for row in rows:
+            self.record_event(name, dict(row))
+
+    def events_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
+        """Return collected event rows by name.
+
+        Returns
+        -------
+        dict[str, list[Mapping[str, Any]]]
+            Mapping of event names to collected payloads.
+        """
+        snapshot: dict[str, list[Mapping[str, Any]]] = {}
+        for name, payload in self.events:
+            snapshot.setdefault(name, []).append(dict(payload))
+        return snapshot
+
+    def artifacts_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
+        """Return collected artifact payloads by name.
+
+        Returns
+        -------
+        dict[str, list[Mapping[str, Any]]]
+            Mapping of artifact names to collected payloads.
+        """
+        snapshot: dict[str, list[Mapping[str, Any]]] = {}
+        for name, payload in self.artifacts:
+            snapshot.setdefault(name, []).append(dict(payload))
+        return snapshot
 
     def get_artifacts(self, name: str) -> list[dict[str, Any]]:
         """Get all artifacts with given name.
@@ -233,6 +293,64 @@ class DiagnosticsRecorder:
             True if sink is configured and recording is enabled.
         """
         return self._sink is not None
+
+    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
+        """Record a named artifact through the recorder.
+
+        Parameters
+        ----------
+        name : str
+            Artifact type identifier.
+        payload : dict[str, Any]
+            Artifact payload.
+        """
+        if not self.enabled or self._sink is None:
+            return
+        self._sink.record_artifact(name, payload)
+
+    def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
+        """Record a single event through the recorder.
+
+        Parameters
+        ----------
+        name : str
+            Event type identifier.
+        properties : dict[str, Any]
+            Event properties.
+        """
+        if not self.enabled or self._sink is None:
+            return
+        self._sink.record_event(name, properties)
+
+    def record_events(self, name: str, rows: Sequence[Mapping[str, Any]]) -> None:
+        """Record a batch of event rows through the recorder.
+
+        Parameters
+        ----------
+        name : str
+            Event type identifier.
+        rows : Sequence[Mapping[str, Any]]
+            Event payload rows.
+        """
+        if not self.enabled or self._sink is None:
+            return
+        self._sink.record_events(name, rows)
+
+    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
+        """Record a metric through the recorder.
+
+        Parameters
+        ----------
+        name : str
+            Metric name.
+        value : float
+            Metric value.
+        tags : dict[str, str]
+            Metric tags.
+        """
+        if not self.enabled or self._sink is None:
+            return
+        self._sink.record_metric(name, value, tags)
 
     def record_compilation(  # noqa: PLR0913
         self,
@@ -457,10 +575,79 @@ class DiagnosticsRecorder:
         )
 
 
+@dataclass(frozen=True)
+class DiagnosticsRecorderAdapter:
+    """Adapter that routes DiagnosticsSink calls through DiagnosticsRecorder."""
+
+    sink: DiagnosticsSink
+    session_id: str
+    tags: dict[str, str] = field(default_factory=dict)
+
+    def _recorder(self, operation_id: str) -> DiagnosticsRecorder:
+        context = DiagnosticsContext(
+            session_id=self.session_id,
+            operation_id=operation_id,
+            tags=self.tags,
+        )
+        return DiagnosticsRecorder(self.sink, context)
+
+    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
+        """Record a named artifact via DiagnosticsRecorder."""
+        self._recorder(name).record_artifact(name, payload)
+
+    def record_metric(self, name: str, value: float, tags: Mapping[str, str]) -> None:
+        """Record a metric via DiagnosticsRecorder."""
+        self._recorder(name).record_metric(name, value, tags)
+
+    def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
+        """Record a single event via DiagnosticsRecorder."""
+        self._recorder(name).record_event(name, properties)
+
+    def record_events(self, name: str, rows: Sequence[Mapping[str, Any]]) -> None:
+        """Record a batch of events via DiagnosticsRecorder."""
+        self._recorder(name).record_events(name, rows)
+
+    def events_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
+        """Return collected event rows from the underlying sink when available.
+
+        Returns
+        -------
+        dict[str, list[Mapping[str, Any]]]
+            Mapping of event names to collected payloads.
+        """
+        snapshot = getattr(self.sink, "events_snapshot", None)
+        if callable(snapshot):
+            return cast("dict[str, list[Mapping[str, Any]]]", snapshot())
+        return {}
+
+    def artifacts_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
+        """Return collected artifact payloads from the underlying sink when available.
+
+        Returns
+        -------
+        dict[str, list[Mapping[str, Any]]]
+            Mapping of artifact names to collected payloads.
+        """
+        snapshot = getattr(self.sink, "artifacts_snapshot", None)
+        if callable(snapshot):
+            return cast("dict[str, list[Mapping[str, Any]]]", snapshot())
+        return {}
+
+    def __getattr__(self, name: str) -> object:
+        """Delegate unknown attributes to the underlying sink.
+
+        Returns
+        -------
+        object
+            Attribute resolved from the underlying sink.
+        """
+        return getattr(self.sink, name)
+
+
 def record_artifact(
     profile: DataFusionRuntimeProfile | None,
     name: str,
-    payload: dict[str, Any],
+    payload: Mapping[str, Any],
 ) -> None:
     """Record an artifact directly from a runtime profile.
 
@@ -479,4 +666,79 @@ def record_artifact(
     """
     if profile is None or profile.diagnostics_sink is None:
         return
-    profile.diagnostics_sink.record_artifact(name, payload)
+    recorder = recorder_for_profile(profile, operation_id=name)
+    if recorder is None:
+        return
+    recorder.record_artifact(name, payload)
+
+
+def record_events(
+    profile: DataFusionRuntimeProfile | None,
+    name: str,
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
+    """Record event rows directly from a runtime profile.
+
+    Parameters
+    ----------
+    profile : DataFusionRuntimeProfile | None
+        Runtime profile containing diagnostics sink. If None or sink is None,
+        no recording occurs.
+    name : str
+        Event type identifier.
+    rows : Sequence[Mapping[str, Any]]
+        Event payload rows.
+    """
+    if profile is None or profile.diagnostics_sink is None:
+        return
+    recorder = recorder_for_profile(profile, operation_id=name)
+    if recorder is None:
+        return
+    recorder.record_events(name, rows)
+
+
+def ensure_recorder_sink(
+    sink: DiagnosticsSink,
+    *,
+    session_id: str,
+) -> DiagnosticsSink:
+    """Wrap a diagnostics sink with a recorder adapter when needed.
+
+    Returns
+    -------
+    DiagnosticsSink
+        Recorder adapter when wrapping is required.
+    """
+    if isinstance(sink, DiagnosticsRecorderAdapter):
+        return sink
+    return DiagnosticsRecorderAdapter(sink=sink, session_id=session_id)
+
+
+def recorder_for_profile(
+    profile: DataFusionRuntimeProfile | None,
+    *,
+    operation_id: str,
+    session_id: str | None = None,
+) -> DiagnosticsRecorder | None:
+    """Return a DiagnosticsRecorder for a runtime profile.
+
+    Parameters
+    ----------
+    profile : DataFusionRuntimeProfile | None
+        Runtime profile containing diagnostics sink.
+    operation_id : str
+        Operation identifier for the recorder context.
+    session_id : str | None
+        Optional session identifier override.
+
+    Returns
+    -------
+    DiagnosticsRecorder | None
+        Recorder instance when diagnostics are enabled, otherwise ``None``.
+    """
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    resolved_session = session_id or profile.context_cache_key()
+    context = DiagnosticsContext(session_id=resolved_session, operation_id=operation_id)
+    sink = profile.diagnostics_sink
+    return DiagnosticsRecorder(sink, context)

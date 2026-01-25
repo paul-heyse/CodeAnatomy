@@ -263,7 +263,9 @@ def relspec_param_values() -> JsonDict:
     Returns
     -------
     JsonDict
-        Mapping of parameter names to values.
+        Mapping of parameter names to values. Keys may be global ("threshold"),
+        task-scoped ("task_name.threshold"), output-scoped ("output.threshold"),
+        or nested per-task mappings ({"task_name": {"threshold": 0.5}}).
     """
     return {}
 

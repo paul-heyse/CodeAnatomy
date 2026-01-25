@@ -118,12 +118,58 @@ def statement_sql_options_for_profile(
     Currently returns QUERY_ONLY default. Will be updated when
     execution_policy is added to DataFusionRuntimeProfile.
     """
-    if profile is None:
-        # Default: query only
-        return ExecutionPolicy.for_context(ExecutionContext.QUERY_ONLY).to_sql_options()
+    policy = execution_policy_for_profile(profile, allow_statements=True)
+    return policy.to_sql_options()
 
-    # NOTE: Use profile.execution_policy when added to DataFusionRuntimeProfile
-    return ExecutionPolicy.for_context(ExecutionContext.QUERY_ONLY).to_sql_options()
+
+def execution_policy_for_profile(
+    profile: DataFusionRuntimeProfile | None,
+    *,
+    allow_statements: bool | None = None,
+) -> ExecutionPolicy:
+    """Return an ExecutionPolicy derived from the runtime profile.
+
+    Returns
+    -------
+    ExecutionPolicy
+        Execution policy derived from the profile settings.
+    """
+    if profile is None:
+        base = ExecutionPolicy.for_context(ExecutionContext.QUERY_ONLY)
+        return (
+            ExecutionPolicy(
+                allow_ddl=base.allow_ddl,
+                allow_dml=base.allow_dml,
+                allow_statements=allow_statements if allow_statements is not None else base.allow_statements,
+            )
+            if allow_statements is not None
+            else base
+        )
+    from datafusion_engine.compile_options import resolve_sql_policy
+
+    policy = profile.sql_policy or resolve_sql_policy(profile.sql_policy_name)
+    return ExecutionPolicy(
+        allow_ddl=policy.allow_ddl,
+        allow_dml=policy.allow_dml,
+        allow_statements=allow_statements if allow_statements is not None else policy.allow_statements,
+    )
+
+
+def safe_executor_for_profile(
+    ctx: SessionContext,
+    *,
+    profile: DataFusionRuntimeProfile | None,
+    allow_statements: bool | None = None,
+) -> SafeExecutor:
+    """Return a SafeExecutor configured from the runtime profile.
+
+    Returns
+    -------
+    SafeExecutor
+        Safe executor configured with the derived policy.
+    """
+    policy = execution_policy_for_profile(profile, allow_statements=allow_statements)
+    return SafeExecutor(ctx=ctx, default_policy=policy)
 
 
 def execute_with_policy(

@@ -160,12 +160,14 @@ def _build_dependency_map(
         inputs = tuple(sorted(name for name in artifact.deps.inputs if name in outputs))
         dependency_map[artifact.task.output] = inputs
         plan_fingerprints[artifact.task.name] = artifact.plan_fingerprint
-    signature, schedule_metadata = _task_graph_metadata(plan_catalog)
+    signature, schedule_metadata = _task_graph_metadata(plan_catalog, ctx=ctx)
     return dependency_map, task_catalog, plan_fingerprints, signature, schedule_metadata
 
 
 def _task_graph_metadata(
     plan_catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext | None = None,
 ) -> tuple[str, Mapping[str, TaskScheduleMetadata]]:
     artifacts = plan_catalog.artifacts
     deps = tuple(artifact.deps for artifact in artifacts)
@@ -184,7 +186,10 @@ def _task_graph_metadata(
         graph, label="hamilton_pipeline", task_signatures=task_signatures
     )
     signature = task_graph_signature(snapshot)
-    evidence = initial_evidence_from_plan(plan_catalog)
+    session = None
+    if ctx is not None and ctx.runtime.datafusion is not None:
+        session = ctx.runtime.datafusion.session_context()
+    evidence = initial_evidence_from_plan(plan_catalog, ctx=session)
     schedule = schedule_tasks(graph, evidence=evidence, allow_partial=True)
     schedule_metadata = task_schedule_metadata(schedule)
     return signature, schedule_metadata

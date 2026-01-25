@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         UDFSignature,
         UDFSpec,
     )
+    from engine.unified_registry import UnifiedFunctionRegistry, build_unified_function_registry
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaHistorySnapshot": ("engine.delta_tools", "DeltaHistorySnapshot"),
@@ -49,6 +50,8 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "resolve_cache_policy": ("engine.materialize_pipeline", "resolve_cache_policy"),
     "resolve_prefer_reader": ("engine.materialize_pipeline", "resolve_prefer_reader"),
     "resolve_runtime_profile": ("engine.runtime_profile", "resolve_runtime_profile"),
+    "UnifiedFunctionRegistry": ("engine.unified_registry", "UnifiedFunctionRegistry"),
+    "build_unified_function_registry": ("engine.unified_registry", "build_unified_function_registry"),
     # UDF Registry (new modular architecture)
     "UDFLane": ("engine.udf_registry", "UDFLane"),
     "UDFSignature": ("engine.udf_registry", "UDFSignature"),
@@ -82,10 +85,12 @@ __all__ = [
     "UDFLane",
     "UDFSignature",
     "UDFSpec",
+    "UnifiedFunctionRegistry",
     "WriterStrategy",
     "build_engine_runtime",
     "build_engine_session",
     "build_plan_product",
+    "build_unified_function_registry",
     "default_function_registry",
     "delta_history",
     "delta_vacuum",

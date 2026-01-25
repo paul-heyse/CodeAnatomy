@@ -6,9 +6,10 @@ from collections.abc import Callable, Sequence
 
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
+from sqlglot.serde import load
 
-from datafusion_engine.df_builder import df_from_sqlglot
-from datafusion_engine.query_fragments_sql import FRAGMENT_SQL
+from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
+from datafusion_engine.query_fragments_ast import FRAGMENT_AST_PAYLOADS
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_options import sql_options_for_profile
 from datafusion_engine.udf_registry import register_datafusion_udfs
@@ -18,7 +19,6 @@ from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
     normalize_expr,
-    parse_sql_strict,
     resolve_sqlglot_policy,
 )
 
@@ -43,7 +43,7 @@ def fragment_view_specs(
         View specifications derived from fragment expressions.
     """
     excluded = set(exclude or ())
-    names = sorted(name for name in FRAGMENT_SQL if name not in excluded)
+    names = sorted(name for name in FRAGMENT_AST_PAYLOADS if name not in excluded)
     sql_options = sql_options_for_profile(None)
     schema_map = SchemaIntrospector(ctx, sql_options=sql_options).schema_map()
     specs: list[ViewSpec] = []
@@ -66,7 +66,9 @@ def fragment_view_specs(
 def _fragment_df_builder(expr: Expression) -> Callable[[SessionContext], DataFrame]:
     def _build(ctx: SessionContext) -> DataFrame:
         register_datafusion_udfs(ctx)
-        return df_from_sqlglot(ctx, expr.copy())
+        pipeline = CompilationPipeline(ctx, CompileOptions())
+        compiled = pipeline.compile_ast(expr.copy())
+        return pipeline.execute(compiled)
 
     return _build
 
@@ -76,21 +78,22 @@ def _normalize_fragment_expr(
     *,
     schema_map: SchemaMapping | None,
 ) -> Expression:
-    sql = FRAGMENT_SQL[name]
     policy = resolve_sqlglot_policy(name="datafusion_compile")
-    expr = parse_sql_strict(sql, dialect=policy.read_dialect)
+    expr = load(FRAGMENT_AST_PAYLOADS[name])
     return normalize_expr(
         expr,
         options=NormalizeExprOptions(
             schema=schema_map,
             policy=policy,
-            sql=sql,
+            sql=None,
         ),
     )
 
 
 def _fragment_sql(name: str) -> str:
-    return FRAGMENT_SQL[name]
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
+    expr = load(FRAGMENT_AST_PAYLOADS[name])
+    return expr.sql(dialect=policy.write_dialect)
 
 
 def cst_callsites_attrs_sql() -> str:

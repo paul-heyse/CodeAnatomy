@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from ibis.backends import BaseBackend
 
     from arrowdsl.core.execution_context import ExecutionContext
+    from datafusion_engine.parameterized_execution import ParameterizedRulepack
     from ibis_engine.catalog import IbisPlanCatalog
     from ibis_engine.plan import IbisPlan
     from normalize.runtime import NormalizeRuntime
@@ -17,6 +18,10 @@ if TYPE_CHECKING:
 TaskKind = Literal["view", "compute", "materialization"]
 CachePolicy = Literal["none", "session", "persistent"]
 
+if TYPE_CHECKING:
+    PlanBuildResult = IbisPlan | ParameterizedRulepack
+else:
+    PlanBuildResult = object
 
 @dataclass(frozen=True)
 class TaskBuildContext:
@@ -26,6 +31,9 @@ class TaskBuildContext:
     backend: BaseBackend
     ibis_catalog: IbisPlanCatalog | None = None
     runtime: NormalizeRuntime | None = None
+
+
+PlanBuilder = Callable[[TaskBuildContext], PlanBuildResult]
 
 
 @dataclass(frozen=True)
@@ -38,7 +46,7 @@ class TaskSpec:
         Stable task identifier.
     output : str
         Output dataset name produced by the task.
-    build : Callable[[TaskBuildContext], IbisPlan]
+    build : Callable[[TaskBuildContext], IbisPlan | ParameterizedRulepack]
         Builder for the Ibis plan.
     kind : TaskKind
         Execution classification for scheduling.
@@ -52,7 +60,7 @@ class TaskSpec:
 
     name: str
     output: str
-    build: Callable[[TaskBuildContext], IbisPlan]
+    build: PlanBuilder
     kind: TaskKind = "view"
     priority: int = 100
     cache_policy: CachePolicy = "none"

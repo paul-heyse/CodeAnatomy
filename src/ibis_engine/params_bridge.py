@@ -228,28 +228,6 @@ def param_types_from_bindings(
     return resolved
 
 
-def datafusion_param_bindings(
-    values: Mapping[str, object] | Mapping[Value, object],
-) -> dict[str, object]:
-    """Return DataFusion parameter bindings for execution.
-
-    Returns
-    -------
-    dict[str, object]
-        DataFusion parameter bindings.
-
-    Raises
-    ------
-    ValueError
-        Raised when a parameter expression lacks a stable name.
-    """
-    bindings = resolve_param_bindings(values)
-    if bindings.named_tables:
-        msg = "Scalar bindings cannot include table-like parameters."
-        raise ValueError(msg)
-    return bindings.param_values
-
-
 def param_binding_signature(
     values: Mapping[str, object] | Mapping[Value, object] | None,
 ) -> str | None:
@@ -267,13 +245,10 @@ def param_binding_signature(
     """
     if not values:
         return None
-    try:
-        bindings = datafusion_param_bindings(values)
-    except ValueError:
+    bindings = resolve_param_bindings(values)
+    if bindings.named_tables or not bindings.param_values:
         return None
-    if not bindings:
-        return None
-    return scalar_param_signature(bindings)
+    return scalar_param_signature(bindings.param_values)
 
 
 def param_binding_mode(values: Mapping[str, object] | Mapping[Value, object] | None) -> str:
@@ -424,7 +399,6 @@ __all__ = [
     "JoinOptions",
     "ParamSpec",
     "ScalarParamSpec",
-    "datafusion_param_bindings",
     "list_param_join",
     "list_param_names_from_rel_ops",
     "param_binding_mode",

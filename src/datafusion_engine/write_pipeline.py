@@ -8,6 +8,7 @@ with consistent semantics.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -15,12 +16,14 @@ from typing import TYPE_CHECKING, Any
 
 from datafusion import SQLOptions
 
+from datafusion_engine.compile_options import DataFusionSqlPolicy
 from sqlglot_tools.compat import exp
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
 
+    from datafusion_engine.diagnostics import DiagnosticsRecorder
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     from schema_spec.policies import DataFusionWritePolicy, ParquetColumnPolicy
 
@@ -40,6 +43,14 @@ class WriteMode(Enum):
     ERROR = auto()
     OVERWRITE = auto()
     APPEND = auto()
+
+
+class WriteMethod(Enum):
+    """Write execution method."""
+
+    COPY = auto()
+    STREAMING = auto()
+    INSERT = auto()
 
 
 @dataclass(frozen=True)
@@ -249,6 +260,16 @@ class WriteRequest:
         )
 
 
+@dataclass(frozen=True)
+class WriteResult:
+    """Result of a write operation."""
+
+    request: WriteRequest
+    method: WriteMethod
+    sql: str | None
+    duration_ms: float | None = None
+
+
 class WritePipeline:
     """Unified write pipeline for all output paths.
 
@@ -284,6 +305,7 @@ class WritePipeline:
         profile: SQLPolicyProfile,
         *,
         sql_options: SQLOptions | None = None,
+        recorder: DiagnosticsRecorder | None = None,
     ) -> None:
         """Initialize write pipeline.
 
@@ -295,15 +317,23 @@ class WritePipeline:
             SQL policy profile for SQL generation.
         sql_options
             Optional SQL execution options for COPY statements.
+        recorder
+            Optional diagnostics recorder for write operations.
         """
         self.ctx = ctx
         self.profile = profile
         self.sql_options = sql_options
+        self.recorder = recorder
+
+    def _resolved_sql_options(self) -> SQLOptions:
+        if self.sql_options is not None:
+            return self.sql_options
+        return DataFusionSqlPolicy(allow_dml=True, allow_statements=True).to_sql_options()
 
     def write_via_copy(
         self,
         request: WriteRequest,
-    ) -> str:
+    ) -> WriteResult:
         """Write using SQL COPY statement.
 
         Executes a COPY TO statement to write query results to disk.
@@ -323,15 +353,21 @@ class WritePipeline:
 
         Returns
         -------
-        str
-            Rendered COPY statement SQL.
+        WriteResult
+            Write result metadata for the COPY operation.
         """
+        start = time.perf_counter()
         sql, df = self.copy_dataframe(request)
         df.collect()
-
-        # Record artifact
-        self._record_write_artifact(request, sql)
-        return sql
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        result = WriteResult(
+            request=request,
+            method=WriteMethod.COPY,
+            sql=sql,
+            duration_ms=duration_ms,
+        )
+        self._record_write_artifact(result)
+        return result
 
     def copy_dataframe(
         self,
@@ -351,16 +387,13 @@ class WritePipeline:
         """
         copy_ast = request.to_copy_ast(self.profile)
         sql = copy_ast.sql(dialect=self.profile.write_dialect)
-        if self.sql_options is not None:
-            df = self.ctx.sql_with_options(sql, self.sql_options)
-        else:
-            df = self.ctx.sql(sql)
+        df = self.ctx.sql_with_options(sql, self._resolved_sql_options())
         return sql, df
 
     def write_via_streaming(
         self,
         request: WriteRequest,
-    ) -> None:
+    ) -> WriteResult:
         """Write using streaming Arrow writer.
 
         Uses the streaming executor to write results without full
@@ -382,17 +415,18 @@ class WritePipeline:
         This method is preferred for large datasets or when partitioning
         is required, as it allows streaming writes without full
         materialization.
+
+        Returns
+        -------
+        WriteResult
+            Write result metadata for the streaming operation.
         """
         from datafusion_engine.streaming_executor import StreamingExecutor
 
-        executor = StreamingExecutor(self.ctx)
-
-        # Get streaming result from source
-        if isinstance(request.source, str):
-            result = executor.execute_sql(request.source)
-        else:
-            sql = request.source.sql(dialect=self.profile.write_dialect)
-            result = executor.execute_sql(sql)
+        start = time.perf_counter()
+        executor = StreamingExecutor(self.ctx, sql_options=self._resolved_sql_options())
+        sql = self._source_sql(request)
+        result = executor.execute_sql(sql)
 
         # Write based on format
         if request.format == WriteFormat.PARQUET:
@@ -422,14 +456,22 @@ class WritePipeline:
             msg = f"Streaming write for {request.format}"
             raise NotImplementedError(msg)
 
-        self._record_write_artifact(request, "streaming")
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        write_result = WriteResult(
+            request=request,
+            method=WriteMethod.STREAMING,
+            sql=sql,
+            duration_ms=duration_ms,
+        )
+        self._record_write_artifact(write_result)
+        return write_result
 
     def write(
         self,
         request: WriteRequest,
         *,
         prefer_streaming: bool = True,
-    ) -> str | None:
+    ) -> WriteResult:
         """Write using best available method.
 
         Chooses between COPY-based and streaming write paths based on
@@ -444,8 +486,8 @@ class WritePipeline:
 
         Returns
         -------
-        str | None
-            COPY statement SQL when COPY was used, otherwise None.
+        WriteResult
+            Write result metadata for the executed write.
 
         Notes
         -----
@@ -456,11 +498,9 @@ class WritePipeline:
         """
         if request.format == WriteFormat.PARQUET:
             if request.partition_by:
-                self.write_via_streaming(request)
-                return None
+                return self.write_via_streaming(request)
             if prefer_streaming and request.single_file_output is not False:
-                self.write_via_streaming(request)
-                return None
+                return self.write_via_streaming(request)
         return self.write_via_copy(request)
 
     @staticmethod
@@ -485,23 +525,32 @@ class WritePipeline:
 
     def _record_write_artifact(
         self,
-        request: WriteRequest,
-        method: str,
+        result: WriteResult,
     ) -> None:
         """Record write operation in diagnostics.
 
         Parameters
         ----------
-        request
-            Write request that was executed.
-        method
-            Write method used (SQL string or "streaming").
+        result
+            Write result metadata to record.
 
         Notes
         -----
-        Implementation depends on diagnostics infrastructure.
-        Currently a no-op placeholder for future diagnostic collection.
+        Records `write_operation` diagnostics when a recorder is configured.
         """
+        if self.recorder is None:
+            return
+        self.recorder.record_write(
+            destination=result.request.destination,
+            format_=result.request.format.name.lower(),
+            method=result.method.name.lower(),
+            duration_ms=result.duration_ms or 0.0,
+        )
+
+    def _source_sql(self, request: WriteRequest) -> str:
+        if isinstance(request.source, str):
+            return request.source
+        return request.source.sql(dialect=self.profile.write_dialect)
 
 
 def parquet_policy_from_datafusion(

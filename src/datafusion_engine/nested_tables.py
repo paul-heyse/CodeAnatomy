@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 import pyarrow as pa
-from datafusion import SQLOptions
+from datafusion import SessionContext, SQLOptions
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
+from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_registry import has_schema, schema_for
 from datafusion_engine.sql_options import sql_options_for_profile
 from ibis_engine.registry import datafusion_context
@@ -57,7 +58,11 @@ def register_nested_table(
     resolved_table = cast("pa.Table", resolved_table)
     with suppress(KeyError, ValueError):
         df_ctx.deregister_table(name)
+    if isinstance(ctx, SessionContext):
+        invalidate_introspection_cache(ctx)
     df_ctx.register_record_batches(name, [resolved_table.to_batches()])
+    if isinstance(ctx, SessionContext):
+        invalidate_introspection_cache(ctx)
 
 
 def materialize_view_reference(

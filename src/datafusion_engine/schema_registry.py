@@ -28,6 +28,8 @@ from arrowdsl.schema.semantic_types import (
     byte_span_type,
     span_type,
 )
+from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
+from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
@@ -82,7 +84,9 @@ SQLGLOT_PARSE_ERROR_DETAILS_TYPE = list_view_type(
 
 
 def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
-    return ctx.sql_with_options(sql, sql_options_for_profile(None))
+    pipeline = CompilationPipeline(ctx, CompileOptions())
+    compiled = pipeline.compile_sql(sql)
+    return pipeline.execute(compiled, sql_options=sql_options_for_profile(None))
 
 
 def _attrs_field(name: str = "attrs") -> pa.Field:
@@ -2978,19 +2982,17 @@ def nested_base_sql(name: str, *, table: str | None = None) -> str:
 
 def _nested_df_builder(sql: str) -> Callable[[SessionContext], DataFrame]:
     def _build(ctx: SessionContext) -> DataFrame:
-        module = importlib.import_module("datafusion_engine.df_builder")
-        df_from_sqlglot = getattr(module, "df_from_sqlglot", None)
-        if not callable(df_from_sqlglot):
-            msg = "DataFrame builder is unavailable for nested view registration."
-            raise TypeError(msg)
         udf_module = importlib.import_module("datafusion_engine.udf_registry")
         register_udfs = getattr(udf_module, "register_datafusion_udfs", None)
         if callable(register_udfs):
             register_udfs(ctx)
         policy = resolve_sqlglot_policy(name="datafusion_compile")
         expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-        df = df_from_sqlglot(ctx, expr)
-        return cast("DataFrame", df)
+        from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
+
+        pipeline = CompilationPipeline(ctx, CompileOptions())
+        compiled = pipeline.compile_ast(expr)
+        return pipeline.execute(compiled)
 
     return _build
 
@@ -4365,6 +4367,7 @@ def register_schema(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
     arrays = [pa.array([], type=field.type) for field in schema]
     batch = pa.record_batch(arrays, schema=schema)
     ctx.register_record_batches(name, [[batch]])
+    invalidate_introspection_cache(ctx)
 
 
 def register_all_schemas(ctx: SessionContext) -> None:

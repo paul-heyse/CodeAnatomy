@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Literal, TypedDict, cast
 import msgspec
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
-from sqlglot.errors import SqlglotError
 
 try:
     import pyarrow.substrait as pa_substrait
@@ -60,11 +59,12 @@ from datafusion_engine.compile_options import (
     DataFusionCompileOptions,
     DataFusionDmlOptions,
     DataFusionSqlPolicy,
-    DataFusionSubstraitFallbackEvent,
     ExplainRows,
     resolve_sql_policy,
 )
 from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
+from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.registry_bridge import (
     apply_projection_overrides,
@@ -72,21 +72,15 @@ from datafusion_engine.registry_bridge import (
 )
 from datafusion_engine.schema_registry import has_schema, schema_for
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from datafusion_engine.write_pipeline import (
     WriteFormat,
     WriteMode,
     WritePipeline,
     WriteRequest,
-    parquet_policy_from_datafusion,
 )
-from engine.plan_cache import PlanCacheEntry, PlanCacheKey
+from engine.plan_cache import PlanCacheKey
 from ibis_engine.param_tables import scalar_param_signature
 from ibis_engine.plan import IbisPlan
-from ibis_engine.substrait_bridge import (
-    record_substrait_gap,
-    try_ibis_to_substrait_bytes,
-)
 from obs.diagnostics import PreparedStatementSpec
 from schema_spec.policies import DataFusionWritePolicy
 from serde_msgspec import dumps_msgpack
@@ -97,7 +91,7 @@ from sqlglot_tools.bridge import (
     ibis_to_datafusion_ast_path,
     ibis_to_sqlglot,
 )
-from sqlglot_tools.compat import ErrorLevel, Expression, exp, parse_one
+from sqlglot_tools.compat import ErrorLevel, Expression, exp
 from sqlglot_tools.lineage import (
     LineageExtractionOptions,
     LineagePayload,
@@ -147,28 +141,6 @@ class MaterializationPolicy:
     allow_full_materialization: bool = False
     max_rows_for_table: int | None = None
     debug_mode: bool = False
-
-
-@dataclass(frozen=True)
-class DualLaneCompilationResult:
-    """Result of dual-lane compilation attempt.
-
-    Attributes
-    ----------
-    df : DataFrame
-        Compiled DataFusion DataFrame.
-    lane : str
-        Compilation lane used: 'substrait' or 'sql'.
-    substrait_bytes : bytes | None
-        Substrait plan bytes when Substrait lane was used, otherwise ``None``.
-    fallback_reason : str | None
-        Reason for SQL fallback when Substrait lane failed, otherwise ``None``.
-    """
-
-    df: DataFrame
-    lane: str
-    substrait_bytes: bytes | None = None
-    fallback_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -319,31 +291,6 @@ def _plan_cache_key(
     plan_bytes = _substrait_bytes(ctx, sql)
     if plan_bytes is None:
         return None
-    substrait_hash = hashlib.sha256(plan_bytes).hexdigest()
-    return PlanCacheKey(
-        plan_hash=plan_hash,
-        profile_hash=options.profile_hash,
-        substrait_hash=substrait_hash,
-    )
-
-
-def _plan_cache_key_from_substrait(
-    expr: Expression,
-    *,
-    options: DataFusionCompileOptions,
-    plan_bytes: bytes,
-) -> PlanCacheKey | None:
-    if options.plan_cache is None or options.profile_hash is None:
-        return None
-    if options.params is not None or options.named_params is not None:
-        return None
-    policy_hash = _sqlglot_policy_hash(options)
-    plan_hash = options.plan_hash or plan_fingerprint(
-        expr,
-        dialect=options.dialect,
-        policy_hash=policy_hash,
-        schema_map_hash=options.schema_map_hash,
-    )
     substrait_hash = hashlib.sha256(plan_bytes).hexdigest()
     return PlanCacheKey(
         plan_hash=plan_hash,
@@ -559,13 +506,6 @@ def _emit_internal_sql(expr: Expression) -> str:
     return _emit_sql(expr, options=DataFusionCompileOptions())
 
 
-def _parse_sql_expr(sql: str) -> Expression | None:
-    try:
-        return parse_one(sql)
-    except (SqlglotError, TypeError, ValueError):
-        return None
-
-
 def df_from_sqlglot_or_sql(
     ctx: SessionContext,
     expr: Expression,
@@ -587,10 +527,14 @@ def df_from_sqlglot_or_sql(
         DataFusion DataFrame representing the expression.
     """
     resolved = options or DataFusionCompileOptions()
-    named_params = _validated_named_params(
+    named_bindings = resolve_param_bindings(
         resolved.named_params,
         allowlist=resolved.param_identifier_allowlist,
     )
+    if named_bindings.param_values:
+        msg = "Named parameters must be table-like."
+        raise ValueError(msg)
+    named_params = named_bindings.named_tables
     if named_params:
         read_only_policy = DataFusionSqlPolicy()
         violations = _policy_violations(expr, read_only_policy)
@@ -600,10 +544,13 @@ def df_from_sqlglot_or_sql(
     pipeline = _compilation_pipeline(ctx, options=resolved)
     compiled = pipeline.compile_ast(expr)
     resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
-    bindings = _validated_param_bindings(
+    bindings = resolve_param_bindings(
         resolved.params,
         allowlist=resolved.param_identifier_allowlist,
     )
+    if bindings.named_tables:
+        msg = "Table-like parameters must be passed via named params."
+        raise ValueError(msg)
     sql_options = (
         _sql_options_for_named_params(resolved)
         if named_params
@@ -611,7 +558,7 @@ def df_from_sqlglot_or_sql(
     )
     df = pipeline.execute(
         compiled,
-        params=bindings or None,
+        params=bindings.param_values or None,
         named_params=named_params or None,
         sql_options=sql_options,
     )
@@ -637,28 +584,29 @@ def validate_table_constraints(
     if not constraints:
         return []
     ctx.register_record_batches(name, [table.to_batches()])
+    invalidate_introspection_cache(ctx)
     violations: list[str] = []
     sql_options = _default_sql_policy().to_sql_options()
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
     try:
         for constraint in constraints:
             if not constraint.strip():
                 continue
-            constraint_expr = _parse_sql_expr(constraint)
-            if constraint_expr is None:
-                query = f"SELECT 1 FROM {name} WHERE NOT ({constraint}) LIMIT 1"
-            else:
-                query_expr = build_select(
-                    [exp.Literal.number(1)],
-                    from_=name,
-                    where=exp.not_(constraint_expr),
-                    limit=1,
-                )
-                query = _emit_internal_sql(query_expr)
+            constraint_expr = parse_sql_strict(constraint, dialect=policy.read_dialect)
+            query_expr = build_select(
+                [exp.Literal.number(1)],
+                from_=name,
+                where=exp.not_(constraint_expr),
+                limit=1,
+            )
+            query = sqlglot_emit(query_expr, policy=policy)
             df = ctx.sql_with_options(query, sql_options)
             if _df_has_rows(df):
                 violations.append(constraint)
     finally:
-        ctx.deregister_table(name)
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            adapter.deregister_table(name)
     return violations
 
 
@@ -688,10 +636,14 @@ def sqlglot_to_datafusion(
         Raised when named parameters violate read-only SQL policy.
     """
     resolved = options or DataFusionCompileOptions()
-    named_params = _validated_named_params(
+    named_bindings = resolve_param_bindings(
         resolved.named_params,
         allowlist=resolved.param_identifier_allowlist,
     )
+    if named_bindings.param_values:
+        msg = "Named parameters must be table-like."
+        raise ValueError(msg)
+    named_params = named_bindings.named_tables
     if named_params:
         read_only_policy = DataFusionSqlPolicy()
         violations = _policy_violations(expr, read_only_policy)
@@ -701,10 +653,13 @@ def sqlglot_to_datafusion(
     pipeline = _compilation_pipeline(ctx, options=resolved)
     compiled = pipeline.compile_ast(expr)
     resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
-    bindings = _validated_param_bindings(
+    bindings = resolve_param_bindings(
         resolved.params,
         allowlist=resolved.param_identifier_allowlist,
     )
+    if bindings.named_tables:
+        msg = "Table-like parameters must be passed via named params."
+        raise ValueError(msg)
     sql_options = (
         _sql_options_for_named_params(resolved)
         if named_params
@@ -712,7 +667,7 @@ def sqlglot_to_datafusion(
     )
     df = pipeline.execute(
         compiled,
-        params=bindings or None,
+        params=bindings.param_values or None,
         named_params=named_params or None,
         sql_options=sql_options,
     )
@@ -750,10 +705,15 @@ def compile_sqlglot_expr(
     if resolved.ibis_expr is None:
         resolved = replace(resolved, ibis_expr=expr)
     if ctx is None:
+        ibis_params: Mapping[IbisValue, object] | None = None
+        if resolved.params and all(
+            isinstance(key, IbisValue) for key in resolved.params
+        ):
+            ibis_params = cast("Mapping[IbisValue, object]", resolved.params)
         sg_expr = ibis_to_sqlglot(
             expr,
             backend=backend,
-            params=_ibis_param_bindings(resolved.params),
+            params=ibis_params,
         )
         sg_expr = _apply_rewrite_hook(sg_expr, options=resolved)
         _maybe_enforce_preflight(sg_expr, options=resolved)
@@ -776,211 +736,40 @@ def ibis_to_datafusion(
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame for the Ibis expression.
+
+    Raises
+    ------
+    ValueError
+        If parameter bindings include invalid scalar or table-like combinations.
     """
     resolved = options or DataFusionCompileOptions()
     pipeline = _compilation_pipeline(ctx, options=resolved)
     compiled = pipeline.compile_ibis(expr, backend=backend)
     resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
-    bindings = _validated_param_bindings(
+    bindings = resolve_param_bindings(
         resolved.params,
         allowlist=resolved.param_identifier_allowlist,
     )
-    named_params = _validated_named_params(
+    if bindings.named_tables:
+        msg = "Table-like parameters must be passed via named params."
+        raise ValueError(msg)
+    named_bindings = resolve_param_bindings(
         resolved.named_params,
         allowlist=resolved.param_identifier_allowlist,
     )
+    if named_bindings.param_values:
+        msg = "Named parameters must be table-like."
+        raise ValueError(msg)
+    named_params = named_bindings.named_tables
     df = pipeline.execute(
         compiled,
-        params=bindings or None,
+        params=bindings.param_values or None,
         named_params=named_params or None,
         sql_options=_sql_options_for_options(resolved),
     )
     _maybe_explain(ctx, compiled.sqlglot_ast, options=resolved)
     _maybe_collect_plan_artifacts(ctx, compiled.sqlglot_ast, options=resolved, df=df)
     return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
-
-
-def ibis_to_datafusion_dual_lane(
-    expr: IbisTable,
-    *,
-    backend: IbisCompilerBackend,
-    ctx: SessionContext,
-    options: DataFusionCompileOptions | None = None,
-) -> DualLaneCompilationResult:
-    """Compile an Ibis expression using dual-lane strategy.
-
-    This function attempts Substrait compilation first when enabled, falling back
-    to SQL generation if Substrait compilation fails. The result includes metadata
-    about which compilation lane was used.
-
-    Parameters
-    ----------
-    expr : IbisTable
-        Ibis table expression to compile.
-    backend : IbisCompilerBackend
-        Backend providing SQLGlot compilation support.
-    ctx : SessionContext
-        DataFusion session context for execution.
-    options : DataFusionCompileOptions | None, optional
-        Compilation options controlling dual-lane behavior.
-
-    Returns
-    -------
-    DualLaneCompilationResult
-        Result containing the compiled DataFrame and compilation lane metadata.
-
-    Examples
-    --------
-    >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
-    >>> from ibis_engine.backends import get_backend
-    >>> from datafusion_engine.bridge import ibis_to_datafusion_dual_lane
-    >>> from datafusion_engine.compile_options import DataFusionCompileOptions
-    >>> ctx = DataFusionRuntimeProfile().ephemeral_context()
-    >>> backend = get_backend()
-    >>> expr = backend.table("my_table").select("col1", "col2")
-    >>> opts = DataFusionCompileOptions(prefer_substrait=True)
-    >>> result = ibis_to_datafusion_dual_lane(expr, backend=backend, ctx=ctx, options=opts)
-    >>> print(result.lane)  # 'substrait' or 'sql'
-    """
-    resolved = options or DataFusionCompileOptions()
-    fallback_reason = "Substrait lane disabled (prefer_substrait=False)"
-
-    if resolved.prefer_substrait:
-        substrait_result, fallback_reason = _attempt_substrait_lane(
-            expr=expr,
-            backend=backend,
-            ctx=ctx,
-            options=resolved,
-        )
-        if substrait_result is not None:
-            return substrait_result
-
-    # SQL fallback lane
-    df = ibis_to_datafusion(expr, backend=backend, ctx=ctx, options=resolved)
-
-    return DualLaneCompilationResult(
-        df=df,
-        lane="sql",
-        substrait_bytes=None,
-        fallback_reason=fallback_reason if resolved.prefer_substrait else None,
-    )
-
-
-def _attempt_substrait_lane(
-    *,
-    expr: IbisTable,
-    backend: IbisCompilerBackend,
-    ctx: SessionContext,
-    options: DataFusionCompileOptions,
-) -> tuple[DualLaneCompilationResult | None, str]:
-    fallback_reason = "Substrait lane disabled (prefer_substrait=False)"
-    try:
-        plan_bytes = try_ibis_to_substrait_bytes(expr, diagnostics_sink=None)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        fallback_reason = f"Substrait lane error: {exc}"
-        logger.info("Substrait lane error, falling back to SQL: %s", fallback_reason)
-        _record_substrait_fallback(expr=expr, options=options, reason=fallback_reason)
-        _record_substrait_gap_if_enabled(expr=expr, options=options, reason=fallback_reason)
-        return None, fallback_reason
-
-    if plan_bytes is None:
-        fallback_reason = "Substrait compilation not supported for this expression"
-        logger.debug("Substrait lane unavailable, using SQL: %s", fallback_reason)
-        _record_substrait_fallback(expr=expr, options=options, reason=fallback_reason)
-        return None, fallback_reason
-
-    try:
-        df = replay_substrait_bytes(ctx, plan_bytes)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        fallback_reason = f"Substrait replay failed: {exc}"
-        logger.info("Substrait lane failed, falling back to SQL: %s", fallback_reason)
-        _record_substrait_fallback(expr=expr, options=options, reason=fallback_reason)
-        _record_substrait_gap_if_enabled(expr=expr, options=options, reason=fallback_reason)
-        return None, fallback_reason
-
-    if options.substrait_validation:
-        validation_result = validate_substrait_plan(plan_bytes, df=df)
-        if validation_result.get("status") == "mismatch":
-            logger.warning("Substrait validation mismatch detected: %s", validation_result)
-
-    sg_expr = compile_sqlglot_expr(expr, backend=backend, ctx=ctx, options=options)
-    resolved_cached, cache_reason = _resolve_cache_policy(sg_expr, ctx=ctx, options=options)
-    cached_df = (
-        df.cache() if _should_cache_df(df, options=resolved_cached, reason=cache_reason) else df
-    )
-    _maybe_store_substrait_lane(
-        sg_expr,
-        plan_bytes,
-        options=options,
-        lane="substrait",
-    )
-    return (
-        DualLaneCompilationResult(
-            df=cached_df,
-            lane="substrait",
-            substrait_bytes=plan_bytes,
-            fallback_reason=None,
-        ),
-        fallback_reason,
-    )
-
-
-def _record_substrait_gap_if_enabled(
-    *,
-    expr: IbisTable,
-    options: DataFusionCompileOptions,
-    reason: str,
-) -> None:
-    if not options.record_substrait_gaps:
-        return
-    record_substrait_gap(
-        expr_type=type(expr).__name__,
-        reason=reason,
-        sink=None,
-    )
-
-
-def _record_substrait_fallback(
-    *,
-    expr: IbisTable,
-    options: DataFusionCompileOptions,
-    reason: str,
-    plan_hash: str | None = None,
-) -> None:
-    hook = options.substrait_fallback_hook
-    if hook is None:
-        return
-    hook(
-        DataFusionSubstraitFallbackEvent(
-            reason=reason,
-            expr_type=type(expr).__name__,
-            plan_hash=plan_hash,
-            profile_hash=options.profile_hash,
-            run_id=options.run_id,
-        )
-    )
-
-
-def _maybe_store_substrait_lane(
-    expr: Expression,
-    plan_bytes: bytes,
-    *,
-    options: DataFusionCompileOptions,
-    lane: str,
-) -> None:
-    cache_key = _plan_cache_key_from_substrait(expr, options=options, plan_bytes=plan_bytes)
-    if cache_key is None or options.plan_cache is None:
-        return
-    if options.plan_cache.contains(cache_key):
-        return
-    entry = PlanCacheEntry(
-        plan_hash=cache_key.plan_hash,
-        profile_hash=cache_key.profile_hash,
-        substrait_hash=cache_key.substrait_hash,
-        plan_bytes=plan_bytes,
-        compilation_lane=lane,
-    )
-    options.plan_cache.put(entry)
 
 
 def ibis_plan_to_datafusion(
@@ -1525,17 +1314,6 @@ def _contains_params(expr: Expression) -> bool:
     return bool(expr.find(exp.Placeholder)) or bool(expr.find(exp.Parameter))
 
 
-def _ibis_param_bindings(
-    values: Mapping[str, object] | Mapping[IbisValue, object] | None,
-) -> Mapping[IbisValue, object] | None:
-    if not values:
-        return None
-    keys = list(values.keys())
-    if all(isinstance(key, IbisValue) for key in keys):
-        return cast("Mapping[IbisValue, object]", values)
-    return None
-
-
 def _param_mode(values: Mapping[str, object] | Mapping[IbisValue, object] | None) -> str:
     if not values:
         return "none"
@@ -1549,67 +1327,6 @@ def _param_mode(values: Mapping[str, object] | Mapping[IbisValue, object] | None
     if has_scalar:
         return "scalar"
     return "none"
-
-
-def _validated_param_bindings(
-    values: Mapping[str, object] | Mapping[IbisValue, object] | None,
-    *,
-    allowlist: Sequence[str] | None,
-) -> dict[str, object]:
-    bindings = resolve_param_bindings(values, allowlist=allowlist)
-    if bindings.named_tables:
-        msg = "Table-like parameters must be passed via named params."
-        raise ValueError(msg)
-    return bindings.param_values
-
-
-def _named_param_type(value: object) -> str:
-    if isinstance(value, DataFrame):
-        return "DataFrame"
-    if isinstance(value, TableProviderCapsule):
-        return "TableProviderCapsule"
-    if isinstance(value, RecordBatchReaderLike):
-        return "RecordBatchReaderLike"
-    if isinstance(value, TableLike):
-        return "TableLike"
-    return type(value).__name__
-
-
-def _validated_named_params(
-    params: Mapping[str, object] | None,
-    *,
-    allowlist: Sequence[str] | None,
-) -> Mapping[str, object]:
-    bindings = resolve_param_bindings(params, allowlist=allowlist)
-    if bindings.param_values:
-        msg = "Named parameters must be table-like."
-        raise ValueError(msg)
-    return bindings.named_tables
-
-
-def _emit_named_param_diagnostics(
-    options: DataFusionCompileOptions,
-    *,
-    params: Mapping[str, object],
-) -> None:
-    if not params:
-        return
-    payload = {
-        "event_time_unix_ms": int(time.time() * 1000),
-        "named_param_count": len(params),
-        "named_params": {name: _named_param_type(value) for name, value in params.items()},
-        "dialect": options.dialect,
-        "run_id": options.run_id,
-    }
-    if options.sql_ingest_hook is not None:
-        options.sql_ingest_hook(payload)
-        return
-    if options.runtime_profile is None or options.runtime_profile.diagnostics_sink is None:
-        return
-    options.runtime_profile.diagnostics_sink.record_artifact(
-        "datafusion_named_params_v1",
-        payload,
-    )
 
 
 def _sql_options_for_named_params(options: DataFusionCompileOptions) -> SQLOptions:
@@ -1789,15 +1506,18 @@ def _bind_params_for_ast(
     *,
     options: DataFusionCompileOptions,
 ) -> Expression:
-    bindings = _validated_param_bindings(
+    bindings = resolve_param_bindings(
         options.params,
         allowlist=options.param_identifier_allowlist,
     )
-    if not bindings:
+    if bindings.named_tables:
+        msg = "AST execution does not support table-like parameters."
+        raise ValueError(msg)
+    if not bindings.param_values:
         msg = "SQL parameters require bindings for AST execution."
         raise ValueError(msg)
     try:
-        return bind_params(expr, params=bindings)
+        return bind_params(expr, params=bindings.param_values)
     except (KeyError, TypeError, ValueError) as exc:
         msg = "SQL parameter binding failed for AST execution."
         raise ValueError(msg) from exc
@@ -1849,14 +1569,17 @@ def execute_dml(
     if violations:
         msg = f"DataFusion DML policy violations: {', '.join(violations)}."
         raise ValueError(msg)
-    bindings = _validated_param_bindings(
+    bindings = resolve_param_bindings(
         resolved.params,
         allowlist=resolved.param_identifier_allowlist,
     )
+    if bindings.named_tables:
+        msg = "Table-like parameters must be passed via named params."
+        raise ValueError(msg)
     param_mode = _param_mode(resolved.params)
-    if bindings:
+    if bindings.param_values:
         try:
-            df = ctx.sql_with_options(sql, sql_options, param_values=bindings)
+            df = ctx.sql_with_options(sql, sql_options, param_values=bindings.param_values)
         except TypeError as exc:
             msg = "DataFusion does not support param_values for DML execution."
             raise ValueError(msg) from exc
@@ -2342,17 +2065,21 @@ def _collect_plan_artifact_inputs(
     df: DataFrame | None,
 ) -> _PlanArtifactInputs:
     _ensure_dialect(options.dialect)
-    bindings = _validated_param_bindings(
+    bindings = resolve_param_bindings(
         options.params,
         allowlist=options.param_identifier_allowlist,
     )
-    param_signature = scalar_param_signature(bindings) if bindings else None
+    param_signature = (
+        scalar_param_signature(bindings.param_values)
+        if bindings.param_values
+        else None
+    )
     projection_map = _projection_map_payload(expr, options=options)
     policy = _sqlglot_emit_policy(options)
     resolved_expr = expr
-    if bindings and _contains_params(expr):
+    if bindings.param_values and _contains_params(expr):
         try:
-            resolved_expr = bind_params(expr, params=bindings)
+            resolved_expr = bind_params(expr, params=bindings.param_values)
         except (KeyError, TypeError, ValueError):
             resolved_expr = expr
     sql = _emit_sql(resolved_expr, options=options)
@@ -2580,20 +2307,31 @@ def execute_sql(
         Raised when named parameters are invalid or violate read-only policy.
     """
     _ensure_dialect(options.dialect)
-    named_params = _validated_named_params(
+    named_bindings = resolve_param_bindings(
         options.named_params,
         allowlist=options.param_identifier_allowlist,
     )
-    bindings = _validated_param_bindings(
+    if named_bindings.param_values:
+        msg = "Named parameters must be table-like."
+        raise ValueError(msg)
+    named_params = named_bindings.named_tables
+    bindings = resolve_param_bindings(
         options.params,
         allowlist=options.param_identifier_allowlist,
     )
+    if bindings.named_tables:
+        msg = "Table-like parameters must be passed via named params."
+        raise ValueError(msg)
     expr = parse_sql_strict(
         sql,
         dialect=options.dialect,
-        preserve_params=bool(bindings),
+        preserve_params=bool(bindings.param_values),
     )
-    resolved = replace(options, params=bindings or None, named_params=named_params or None)
+    resolved = replace(
+        options,
+        params=bindings.param_values or None,
+        named_params=named_params or None,
+    )
     if named_params:
         read_only_policy = DataFusionSqlPolicy()
         violations = _policy_violations(expr, read_only_policy)
@@ -2606,7 +2344,6 @@ def execute_sql(
             sql_policy=read_only_policy,
             sql_policy_name=None,
         )
-        _emit_named_param_diagnostics(resolved, params=named_params)
     df = df_from_sqlglot_or_sql(ctx, expr, options=resolved)
     return _collect_reader(df)
 
@@ -2653,153 +2390,8 @@ def datafusion_write_options(
     return write_options, parquet_options
 
 
-def datafusion_write_parquet(
-    df: DataFrame,
-    *,
-    path: str,
-    policy: DataFusionWritePolicy | None = None,
-    ctx: SessionContext | None = None,
-) -> dict[str, object]:
-    """Write a DataFusion DataFrame to Parquet using policy options.
-
-    Returns
-    -------
-    dict[str, object]
-        Payload describing the write policy applied.
-    """
-    if ctx is None:
-        return _direct_parquet_write(df, path=path, policy=policy)
-    sql = datafusion_view_sql(df)
-    if sql is None:
-        return _direct_parquet_write(df, path=path, policy=policy)
-    return _pipeline_write_parquet(
-        ctx,
-        df=df,
-        sql=sql,
-        path=path,
-        policy=policy,
-    )
-
-
-def _direct_parquet_write(
-    df: DataFrame,
-    *,
-    path: str,
-    policy: DataFusionWritePolicy | None,
-) -> dict[str, object]:
-    write_options, parquet_options = datafusion_write_options(policy)
-    if parquet_options is None:
-        df.write_parquet(path, write_options=write_options)
-    else:
-        df.write_parquet_with_options(path, parquet_options, write_options=write_options)
-    return {
-        "path": str(path),
-        "write_policy": policy.payload() if policy is not None else None,
-        "parquet_options": _parquet_options_payload(parquet_options),
-    }
-
-
-def _available_column_names(df: DataFrame) -> set[str] | None:
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        return set(schema.names)
-    return None
-
-
-def _policy_columns(
-    names: Sequence[str] | None,
-    *,
-    available: set[str] | None,
-) -> tuple[str, ...]:
-    if not names:
-        return ()
-    if available is None:
-        return tuple(names)
-    return tuple(name for name in names if name in available)
-
-
-def _build_sorted_source(
-    sql: str,
-    *,
-    sort_by: tuple[str, ...],
-    profile: SQLPolicyProfile,
-) -> str | exp.Expression:
-    if not sort_by:
-        return sql
-    try:
-        parsed = parse_one(sql, dialect=profile.read_dialect)
-    except SqlglotError:
-        return sql
-    subquery = exp.Subquery(this=parsed)
-    source_expr = exp.select("*").from_(subquery)
-    order_exprs = [exp.Ordered(this=exp.column(name)) for name in sort_by]
-    source_expr.set("order", exp.Order(expressions=order_exprs))
-    return source_expr
-
-
-def _pipeline_write_parquet(
-    ctx: SessionContext,
-    *,
-    df: DataFrame,
-    sql: str,
-    path: str,
-    policy: DataFusionWritePolicy | None,
-) -> dict[str, object]:
-    profile = _write_pipeline_profile_for_dml(None)
-    available = _available_column_names(df)
-    partition_by = _policy_columns(
-        policy.partition_by if policy is not None else None,
-        available=available,
-    )
-    sort_by = _policy_columns(
-        policy.sort_by if policy is not None else None,
-        available=available,
-    )
-    source = _build_sorted_source(sql, sort_by=sort_by, profile=profile)
-    parquet_policy = parquet_policy_from_datafusion(policy)
-    request = WriteRequest(
-        source=source,
-        destination=path,
-        format=WriteFormat.PARQUET,
-        mode=WriteMode.OVERWRITE,
-        partition_by=partition_by,
-        parquet_policy=parquet_policy,
-        single_file_output=policy.single_file_output if policy is not None else None,
-    )
-    pipeline = WritePipeline(ctx, profile)
-    pipeline.write(request, prefer_streaming=True)
-    return {
-        "path": str(path),
-        "write_policy": policy.payload() if policy is not None else None,
-        "parquet_options": (
-            parquet_policy.to_copy_options() if parquet_policy is not None else None
-        ),
-    }
-
-
 def _datafusion_sort_exprs(sort_by: Sequence[str]) -> list[SortExpr]:
     return [col(name).sort(ascending=True, nulls_first=True) for name in sort_by]
-
-
-def _parquet_options_payload(options: ParquetWriterOptions | None) -> dict[str, object] | None:
-    if options is None:
-        return None
-    column_options = getattr(options, "column_specific_options", None)
-    column_payload = (
-        {name: _parquet_column_options_payload(option) for name, option in column_options.items()}
-        if isinstance(column_options, Mapping)
-        else None
-    )
-    return {
-        "compression": getattr(options, "compression", None),
-        "statistics_enabled": getattr(options, "statistics_enabled", None),
-        "max_row_group_size": getattr(options, "max_row_group_size", None),
-        "bloom_filter_on_write": getattr(options, "bloom_filter_on_write", None),
-        "dictionary_enabled": getattr(options, "dictionary_enabled", None),
-        "encoding": getattr(options, "encoding", None),
-        "skip_arrow_metadata": getattr(options, "skip_arrow_metadata", None),
-        "column_specific_options": column_payload,
-    }
 
 
 class _ParquetWriterOptionsKwargs(TypedDict, total=False):
@@ -2954,6 +2546,7 @@ def datafusion_from_arrow(
             msg = "DataFusion SessionContext missing register_record_batches."
             raise TypeError(msg)
         register_batches(name, batches)
+        invalidate_introspection_cache(ctx)
         _emit_arrow_ingest(
             ingest_hook,
             ArrowIngestEvent(
@@ -2997,6 +2590,7 @@ def datafusion_from_arrow(
         msg = "DataFusion SessionContext missing register_record_batches."
         raise TypeError(msg)
     register_batches(name, batches)
+    invalidate_introspection_cache(ctx)
     row_count = sum(batch.num_rows for batch in batches)
     _emit_arrow_ingest(
         ingest_hook,
@@ -3121,25 +2715,21 @@ def datafusion_insert_delta(
     if resolved.mode not in {"overwrite", "append"}:
         msg = f"Unsupported Delta INSERT mode: {resolved.mode!r}."
         raise ValueError(msg)
-    source_expr = _parse_sql_expr(source_sql)
-    if source_expr is None:
-        if resolved.mode == "overwrite":
-            sql = f"INSERT OVERWRITE {table_name} {source_sql}"
-        else:
-            sql = f"INSERT INTO {table_name} {source_sql}"
-    else:
-        insert_expr = build_insert(
-            source_expr,
-            table_name=table_name,
-            overwrite=resolved.mode == "overwrite",
-        )
-        sql = _emit_internal_sql(insert_expr)
+    policy = resolve_sqlglot_policy(name="datafusion_dml")
+    source_expr = parse_sql_strict(source_sql, dialect=policy.read_dialect)
+    insert_expr = build_insert(
+        source_expr.copy(),
+        table_name=table_name,
+        overwrite=resolved.mode == "overwrite",
+    )
+    sql = sqlglot_emit(insert_expr, policy=policy)
 
     if resolved.constraints:
         _validate_sql_constraints(
             ctx,
-            source_sql=source_sql,
+            source_expr=source_expr,
             constraints=resolved.constraints,
+            policy=policy,
         )
 
     # Use DML-enabled SQL options
@@ -3169,8 +2759,9 @@ def datafusion_insert_delta(
 def _validate_sql_constraints(
     ctx: SessionContext,
     *,
-    source_sql: str,
+    source_expr: Expression,
     constraints: Sequence[str],
+    policy: SqlGlotPolicy,
 ) -> None:
     if not constraints:
         return
@@ -3178,22 +2769,18 @@ def _validate_sql_constraints(
     for constraint in constraints:
         if not constraint.strip():
             continue
-        source_expr = _parse_sql_expr(source_sql)
-        constraint_expr = _parse_sql_expr(constraint)
-        if source_expr is None or constraint_expr is None:
-            query = f"SELECT 1 FROM ({source_sql}) AS input WHERE NOT ({constraint}) LIMIT 1"
-        else:
-            subquery = exp.Subquery(
-                this=source_expr,
-                alias=exp.TableAlias(this=exp.to_identifier("input")),
-            )
-            query_expr = build_select(
-                [exp.Literal.number(1)],
-                from_=subquery,
-                where=exp.not_(constraint_expr),
-                limit=1,
-            )
-            query = _emit_internal_sql(query_expr)
+        constraint_expr = parse_sql_strict(constraint, dialect=policy.read_dialect)
+        subquery = exp.Subquery(
+            this=source_expr.copy(),
+            alias=exp.TableAlias(this=exp.to_identifier("input")),
+        )
+        query_expr = build_select(
+            [exp.Literal.number(1)],
+            from_=subquery,
+            where=exp.not_(constraint_expr),
+            limit=1,
+        )
+        query = sqlglot_emit(query_expr, policy=policy)
         df = ctx.sql_with_options(query, sql_options)
         if _df_has_rows(df):
             msg = f"Delta constraint violated: {constraint}"
@@ -3243,6 +2830,7 @@ def datafusion_insert_from_dataframe(
         msg = "DataFusion SessionContext missing register_record_batches."
         raise TypeError(msg)
     register_batches(temp_name, batches)
+    invalidate_introspection_cache(ctx)
 
     try:
         source_expr = build_select([exp.Star()], from_=temp_name)
@@ -3255,8 +2843,9 @@ def datafusion_insert_from_dataframe(
         )
     finally:
         # Deregister temp view
-        with contextlib.suppress(RuntimeError, TypeError, ValueError):
-            ctx.deregister_table(temp_name)
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            adapter.deregister_table(temp_name)
 
     return result
 
@@ -3339,7 +2928,6 @@ __all__ = [
     "DataFusionSqlPolicy",
     "DeltaInsertOptions",
     "DeltaInsertResult",
-    "DualLaneCompilationResult",
     "IbisCompilerBackend",
     "MaterializationPolicy",
     "collect_plan_artifacts",
@@ -3356,7 +2944,6 @@ __all__ = [
     "datafusion_to_table",
     "datafusion_view_sql",
     "datafusion_write_options",
-    "datafusion_write_parquet",
     "df_from_sql",
     "df_from_sqlglot_ast",
     "execute_dml",
@@ -3368,7 +2955,6 @@ __all__ = [
     "ibis_plan_to_table",
     "ibis_to_datafusion",
     "ibis_to_datafusion_ast_path",
-    "ibis_to_datafusion_dual_lane",
     "merge_format_options",
     "prepare_statement",
     "rehydrate_plan_artifacts",

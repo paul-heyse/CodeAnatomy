@@ -117,6 +117,15 @@ _CONTRACT_ATTRS: dict[str, str] = {
     "CPG_PROPS_GLOBAL_CONTRACT": "CPG_PROPS_GLOBAL_CONTRACT_SPEC",
 }
 
+_SCHEMA_CONTRACT_ATTRS: dict[str, str] = {
+    "CPG_NODES_SCHEMA_CONTRACT": "CPG_NODES_SPEC",
+    "CPG_EDGES_SCHEMA_CONTRACT": "CPG_EDGES_SPEC",
+    "CPG_PROPS_SCHEMA_CONTRACT": "CPG_PROPS_SPEC",
+    "CPG_PROPS_JSON_SCHEMA_CONTRACT": "CPG_PROPS_JSON_SPEC",
+    "CPG_PROPS_BY_FILE_ID_SCHEMA_CONTRACT": "CPG_PROPS_BY_FILE_ID_SPEC",
+    "CPG_PROPS_GLOBAL_SCHEMA_CONTRACT": "CPG_PROPS_GLOBAL_SPEC",
+}
+
 
 def __getattr__(name: str) -> Any:
     if name in _LAZY_ATTRS:
@@ -129,6 +138,12 @@ def __getattr__(name: str) -> Any:
         spec_name = _CONTRACT_ATTRS[name]
         spec = __getattr__(spec_name)
         return spec.to_contract()
+    if name in _SCHEMA_CONTRACT_ATTRS:
+        spec_name = _SCHEMA_CONTRACT_ATTRS[name]
+        spec = __getattr__(spec_name)
+        from datafusion_engine.schema_contracts import schema_contract_from_dataset_spec
+
+        return schema_contract_from_dataset_spec(name=spec.name, spec=spec)
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)
 

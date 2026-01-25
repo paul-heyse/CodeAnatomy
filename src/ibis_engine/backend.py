@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import time
 from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol, cast
 
 import ibis
 
+from datafusion_engine.schema_introspection import SchemaIntrospector
+from engine.unified_registry import build_unified_function_registry
 from ibis_engine.config import IbisBackendConfig
 
 if TYPE_CHECKING:
+    from ibis.backends.datafusion import Backend as DataFusionBackend
+
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+logger = logging.getLogger(__name__)
 
 
 class _IbisDataFusionModule(Protocol):
@@ -107,4 +114,17 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
     profile = _resolve_datafusion_profile(cfg)
     ctx = profile.session_context()
     _register_object_stores(ctx=ctx, cfg=cfg, profile=profile)
-    return ibis_datafusion.connect(ctx)
+    backend = ibis_datafusion.connect(ctx)
+    try:
+        introspector = SchemaIntrospector(ctx)
+        unified_registry = build_unified_function_registry(
+            datafusion_function_catalog=introspector.function_catalog_snapshot(
+                include_parameters=True
+            ),
+            snapshot=introspector.snapshot,
+        )
+        backend_df = cast("DataFusionBackend", backend)
+        unified_registry.udf_registry.apply_to_backend(backend_df)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        logger.warning("Failed to apply unified UDF registry: %s", exc)
+    return backend

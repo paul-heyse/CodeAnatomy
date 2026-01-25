@@ -14,7 +14,8 @@ import pyarrow as pa
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
 from arrowdsl.schema.serialization import schema_to_msgpack
-from engine.function_registry import default_function_registry
+from datafusion_engine.introspection import introspection_cache_for_ctx
+from engine.unified_registry import build_unified_function_registry
 from serde_msgspec import dumps_msgpack, to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 from storage.ipc import payload_hash
@@ -208,6 +209,7 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     ibis_payload = runtime.ibis_options_payload()
     sqlglot_snapshot = sqlglot_policy_snapshot()
     function_catalog = None
+    session = None
     if runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
         try:
             from datafusion_engine.runtime import function_catalog_snapshot_for_profile
@@ -220,8 +222,14 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
             )
         except (RuntimeError, TypeError, ValueError):
             function_catalog = None
-    function_registry = default_function_registry(datafusion_function_catalog=function_catalog)
-    function_registry_hash = function_registry.fingerprint()
+    introspection_snapshot = None
+    if session is not None and runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
+        introspection_snapshot = introspection_cache_for_ctx(session).snapshot
+    unified_registry = build_unified_function_registry(
+        datafusion_function_catalog=function_catalog,
+        snapshot=introspection_snapshot,
+    )
+    function_registry_hash = unified_registry.fingerprint()
     datafusion_payload = (
         runtime.datafusion.telemetry_payload_v1() if runtime.datafusion is not None else None
     )
@@ -303,12 +311,19 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
     snapshot = runtime_profile_snapshot(runtime)
     policy_snapshot = sqlglot_policy_snapshot()
     function_catalog = _function_catalog_snapshot(runtime)
-    try:
-        function_registry = default_function_registry(
-            datafusion_function_catalog=function_catalog,
-        )
-    except ValueError:
-        function_registry = default_function_registry(datafusion_function_catalog=[])
+    session = None
+    if runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
+        try:
+            session = runtime.datafusion.session_context()
+        except (RuntimeError, TypeError, ValueError):
+            session = None
+    introspection_snapshot = (
+        introspection_cache_for_ctx(session).snapshot if session is not None else None
+    )
+    unified_registry = build_unified_function_registry(
+        datafusion_function_catalog=function_catalog or [],
+        snapshot=introspection_snapshot,
+    )
     datafusion_settings = (
         runtime.datafusion.settings_payload() if runtime.datafusion is not None else None
     )
@@ -324,8 +339,10 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
         "sqlglot_policy_snapshot": (
             dumps_msgpack(policy_snapshot.payload()) if policy_snapshot is not None else None
         ),
-        "function_registry_hash": function_registry.fingerprint(),
-        "function_registry_snapshot": dumps_msgpack(function_registry.payload()),
+        "function_registry_hash": unified_registry.fingerprint(),
+        "function_registry_snapshot": dumps_msgpack(
+            unified_registry.function_registry.payload()
+        ),
         "datafusion_settings_hash": (
             runtime.datafusion.settings_hash() if runtime.datafusion is not None else None
         ),

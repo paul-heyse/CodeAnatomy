@@ -15,7 +15,7 @@ from datafusion_engine.sql_expression_registry import (
     DataFusionSqlExpressionSpec,
     datafusion_sql_expression_specs,
 )
-from datafusion_engine.udf_registry import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
+from datafusion_engine.udf_catalog import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
 from storage.ipc import payload_hash
 
@@ -384,6 +384,7 @@ def _spec_from_datafusion(
     *,
     lane_precedence: tuple[ExecutionLane, ...],
 ) -> FunctionSpec:
+    lane: ExecutionLane = "df_rust" if spec.udf_tier == "builtin" else "df_udf"
     return FunctionSpec(
         func_id=spec.func_id,
         engine_name=spec.engine_name,
@@ -393,7 +394,7 @@ def _spec_from_datafusion(
         state_type=spec.state_type,
         volatility=spec.volatility,
         arg_names=spec.arg_names,
-        lanes=("df_udf",),
+        lanes=(lane,),
         lane_precedence=lane_precedence,
         rewrite_tags=spec.rewrite_tags,
         catalog=spec.catalog,

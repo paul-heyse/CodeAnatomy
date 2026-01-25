@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import (
     extractor_metadata_spec,
@@ -21,7 +22,7 @@ from datafusion_engine.extract_templates import config as extractor_config
 from datafusion_engine.extract_templates import template
 from ibis_engine.hashing import hash_expr_ir, masked_hash_expr_ir
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
-from sqlglot_tools.expr_spec import SqlExprSpec
+from sqlglot_tools.expr_spec import ExprIR, SqlExprSpec
 
 
 @dataclass(frozen=True)
@@ -66,30 +67,21 @@ def _default_exprs(row: ExtractMetadata) -> dict[str, SqlExprSpec]:
     return defaults
 
 
-def _coalesce_field_default(name: str, value: object) -> SqlExprSpec:
-    literal = _sql_literal(value)
-    sql = f"coalesce({_sql_identifier(name)}, {literal})"
-    return SqlExprSpec(sql=sql)
+def _coalesce_field_default(name: str, value: ScalarValue) -> SqlExprSpec:
+    expr = _call_expr("coalesce", _field_expr(name), _literal_expr(value))
+    return SqlExprSpec(expr_ir=expr)
 
 
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
+def _field_expr(name: str) -> ExprIR:
+    return ExprIR(op="field", name=name)
 
 
-def _sql_literal(value: object) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return str(value)
-    if isinstance(value, (str, bytes)):
-        text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
-        escaped = text.replace("'", "''")
-        return f"'{escaped}'"
-    msg = f"Unsupported default literal type: {type(value).__name__}."
-    raise TypeError(msg)
+def _literal_expr(value: ScalarValue) -> ExprIR:
+    return ExprIR(op="literal", value=value)
+
+
+def _call_expr(name: str, *args: ExprIR) -> ExprIR:
+    return ExprIR(op="call", name=name, args=tuple(args))
 
 
 def _bundle_field_keys(bundle_names: Sequence[str]) -> list[str]:

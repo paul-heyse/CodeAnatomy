@@ -93,8 +93,7 @@ def materialize_ibis_plan(plan: IbisPlan, *, execution: IbisExecutionContext) ->
     TableLike
         Materialized Arrow table.
     """
-    table = materialize_plan(plan, execution=execution.plan_options())
-    return _apply_ordering_metadata(table, plan=plan, ctx=execution.ctx)
+    return cast("TableLike", _execute_plan(plan, execution=execution, streaming=False))
 
 
 def stream_ibis_plan(
@@ -109,12 +108,27 @@ def stream_ibis_plan(
     RecordBatchReaderLike
         Streamed reader for the plan results.
     """
-    reader = stream_plan(
-        plan,
-        batch_size=execution.batch_size,
-        execution=execution.plan_options(),
+    return cast(
+        "RecordBatchReaderLike",
+        _execute_plan(plan, execution=execution, streaming=True),
     )
-    return _apply_ordering_metadata(reader, plan=plan, ctx=execution.ctx)
+
+
+def _execute_plan(
+    plan: IbisPlan,
+    *,
+    execution: IbisExecutionContext,
+    streaming: bool,
+) -> TableLike | RecordBatchReaderLike:
+    if streaming:
+        reader = stream_plan(
+            plan,
+            batch_size=execution.batch_size,
+            execution=execution.plan_options(),
+        )
+        return _apply_ordering_metadata(reader, plan=plan, ctx=execution.ctx)
+    table = materialize_plan(plan, execution=execution.plan_options())
+    return _apply_ordering_metadata(table, plan=plan, ctx=execution.ctx)
 
 
 @overload

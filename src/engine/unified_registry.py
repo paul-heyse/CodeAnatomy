@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from datafusion_engine.introspection import IntrospectionSnapshot
-from datafusion_engine.udf_registry import DataFusionUdfSpec, datafusion_udf_specs
+from datafusion_engine.udf_catalog import DataFusionUdfSpec, datafusion_udf_specs
 from engine.function_registry import (
     DEFAULT_LANE_PRECEDENCE,
     DEFAULT_RULE_PRIMITIVES,

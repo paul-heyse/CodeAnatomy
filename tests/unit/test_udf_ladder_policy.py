@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datafusion_engine.udf_registry import datafusion_udf_specs
+from datafusion_engine.udf_catalog import datafusion_udf_specs
 from engine.function_registry import build_function_registry
 
 
@@ -14,6 +14,6 @@ def test_udf_tier_tags_and_lane_precedence() -> None:
         primitives=(),
     )
     spec = registry.specs["stable_hash64"]
-    assert spec.udf_tier == "python"
+    assert spec.udf_tier == "builtin"
     assert "ibis_builtin" not in spec.lanes
-    assert registry.resolve_lane("stable_hash64") == "df_udf"
+    assert registry.resolve_lane("stable_hash64") == "df_rust"

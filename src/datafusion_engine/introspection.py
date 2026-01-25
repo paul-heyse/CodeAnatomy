@@ -35,18 +35,27 @@ class IntrospectionSnapshot:
         Table metadata from information_schema.tables
     columns : pa.Table
         Column metadata from information_schema.columns
+    schemata : pa.Table
+        Schema metadata from information_schema.schemata
     routines : pa.Table | None
         Function metadata from information_schema.routines (if available)
     parameters : pa.Table | None
         Function parameter metadata from information_schema.parameters (if available)
+    table_constraints : pa.Table | None
+        Constraint metadata from information_schema.table_constraints (if available)
+    key_column_usage : pa.Table | None
+        Constraint column metadata from information_schema.key_column_usage (if available)
     settings : pa.Table
         DataFusion configuration from information_schema.df_settings
     """
 
     tables: pa.Table
     columns: pa.Table
+    schemata: pa.Table
     routines: pa.Table | None
     parameters: pa.Table | None
+    table_constraints: pa.Table | None
+    key_column_usage: pa.Table | None
     settings: pa.Table
 
     @classmethod
@@ -94,6 +103,17 @@ class IntrospectionSnapshot:
             ORDER BY table_catalog, table_schema, table_name, ordinal_position
         """)
 
+        try:
+            schemata = _table("""
+                SELECT catalog_name, schema_name
+                FROM information_schema.schemata
+            """)
+        except Exception:  # noqa: BLE001
+            schemata = pa.Table.from_arrays(
+                [pa.array([], type=pa.string()), pa.array([], type=pa.string())],
+                names=["catalog_name", "schema_name"],
+            )
+
         settings = _table("""
             SELECT name, value
             FROM information_schema.df_settings
@@ -122,11 +142,26 @@ class IntrospectionSnapshot:
             routines = None
             parameters = None
 
+        # Constraints may not be available in all configurations
+        try:
+            table_constraints = _table("""
+                SELECT * FROM information_schema.table_constraints
+            """)
+            key_column_usage = _table("""
+                SELECT * FROM information_schema.key_column_usage
+            """)
+        except Exception:  # noqa: BLE001
+            table_constraints = None
+            key_column_usage = None
+
         return cls(
             tables=tables,
             columns=columns,
+            schemata=schemata,
             routines=routines,
             parameters=parameters,
+            table_constraints=table_constraints,
+            key_column_usage=key_column_usage,
             settings=settings,
         )
 

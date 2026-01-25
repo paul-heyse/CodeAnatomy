@@ -2,7 +2,7 @@
 
 This module provides infrastructure for compiling Ibis expressions directly to
 Substrait bytes, enabling a dual-lane compilation strategy that prefers
-Substrait over SQL generation when supported.
+Substrait over SQL string generation when supported.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from ibis.expr.types import Table as IbisTable
 
 if TYPE_CHECKING:
-    from obs.diagnostics import DiagnosticsCollector
+    from datafusion_engine.diagnostics import DiagnosticsSink
 
 PYARROW_SUBSTRAIT_AVAILABLE = importlib.util.find_spec("pyarrow.substrait") is not None
 IBIS_SUBSTRAIT_AVAILABLE = importlib.util.find_spec("ibis_substrait") is not None
@@ -43,17 +43,32 @@ class SubstraitCompilationResult:
     expr_type: str | None = None
 
 
+def _coerce_diagnostics_sink(
+    sink: DiagnosticsSink | None,
+    *,
+    session_id: str | None,
+) -> DiagnosticsSink | None:
+    if sink is None:
+        return None
+    if session_id is None:
+        return sink
+    from datafusion_engine.diagnostics import ensure_recorder_sink
+
+    return ensure_recorder_sink(sink, session_id=session_id)
+
+
 def ibis_to_substrait_bytes(
     expr: IbisTable,
     *,
     record_gaps: bool = False,
-    diagnostics_sink: DiagnosticsCollector | None = None,
+    diagnostics_sink: DiagnosticsSink | None = None,
+    session_id: str | None = None,
 ) -> bytes:
     """Compile an Ibis expression to Substrait bytes.
 
     This function attempts direct Ibis-to-Substrait compilation as an
     alternative to SQL generation. When compilation fails, it raises
-    an exception to trigger SQL fallback in the dual-lane strategy.
+    an exception to trigger AST fallback in the dual-lane strategy.
 
     Parameters
     ----------
@@ -62,8 +77,10 @@ def ibis_to_substrait_bytes(
     record_gaps : bool, optional
         Whether to record unsupported expressions in diagnostics.
         Default is False.
-    diagnostics_sink : DiagnosticsCollector | None, optional
-        Diagnostics collector for recording gap information.
+    diagnostics_sink : DiagnosticsSink | None, optional
+        Diagnostics sink for recording gap information.
+    session_id : str | None, optional
+        Optional session identifier for recorder adaptation.
 
     Returns
     -------
@@ -83,10 +100,11 @@ def ibis_to_substrait_bytes(
     >>> expr = backend.table("my_table").select("col1", "col2")
     >>> plan_bytes = ibis_to_substrait_bytes(expr)  # doctest: +SKIP
     """
+    resolved_sink = _coerce_diagnostics_sink(diagnostics_sink, session_id=session_id)
     result = _try_ibis_substrait(
         expr,
         record_gaps=record_gaps,
-        diagnostics_sink=diagnostics_sink,
+        diagnostics_sink=resolved_sink,
     )
 
     if not result.success or result.plan_bytes is None:
@@ -101,7 +119,7 @@ def _try_ibis_substrait(
     expr: IbisTable,
     *,
     record_gaps: bool,
-    diagnostics_sink: DiagnosticsCollector | None = None,
+    diagnostics_sink: DiagnosticsSink | None = None,
 ) -> SubstraitCompilationResult:
     """Attempt Ibis-to-Substrait compilation with error capture.
 
@@ -114,8 +132,8 @@ def _try_ibis_substrait(
         Ibis table expression to compile.
     record_gaps : bool
         Whether to record unsupported expressions in diagnostics.
-    diagnostics_sink : DiagnosticsCollector | None
-        Diagnostics collector for recording gap information.
+    diagnostics_sink : DiagnosticsSink | None
+        Diagnostics sink for recording gap information.
 
     Returns
     -------
@@ -168,7 +186,7 @@ def _try_substrait_from_expr(
     expr: IbisTable,
     *,
     record_gaps: bool,
-    diagnostics_sink: DiagnosticsCollector | None,
+    diagnostics_sink: DiagnosticsSink | None,
 ) -> SubstraitCompilationResult | None:
     to_substrait = getattr(expr, "to_substrait", None)
     if not callable(to_substrait):
@@ -202,7 +220,7 @@ def _try_substrait_from_backend(
     expr: IbisTable,
     *,
     record_gaps: bool,
-    diagnostics_sink: DiagnosticsCollector | None,
+    diagnostics_sink: DiagnosticsSink | None,
 ) -> SubstraitCompilationResult | None:
     backend = getattr(expr, "_find_backend", lambda: None)()
     if backend is None:
@@ -244,7 +262,7 @@ def _try_substrait_from_ibis_substrait(
     expr: IbisTable,
     *,
     record_gaps: bool,
-    diagnostics_sink: DiagnosticsCollector | None,
+    diagnostics_sink: DiagnosticsSink | None,
 ) -> SubstraitCompilationResult | None:
     if not IBIS_SUBSTRAIT_AVAILABLE:
         return None
@@ -292,7 +310,7 @@ def _substrait_failure(
     expr: IbisTable,
     error_msg: str,
     record_gaps: bool,
-    diagnostics_sink: DiagnosticsCollector | None,
+    diagnostics_sink: DiagnosticsSink | None,
 ) -> SubstraitCompilationResult:
     if record_gaps:
         record_substrait_gap(
@@ -350,13 +368,13 @@ def substrait_compilation_diagnostics(
 def record_substrait_gap(
     expr_type: str,
     reason: str,
-    sink: DiagnosticsCollector | None,
+    sink: DiagnosticsSink | None,
 ) -> None:
     """Record a Substrait compilation gap in diagnostics.
 
     This function emits diagnostic information when an Ibis expression
     cannot be compiled to Substrait, helping identify which operations
-    need SQL fallback.
+    need AST fallback.
 
     Parameters
     ----------
@@ -364,13 +382,13 @@ def record_substrait_gap(
         Type name of the unsupported expression.
     reason : str
         Explanation for why Substrait compilation failed.
-    sink : DiagnosticsCollector | None
-        Diagnostics collector to record the gap event, or None to skip recording.
+    sink : DiagnosticsSink | None
+        Diagnostics sink to record the gap event, or None to skip recording.
 
     Examples
     --------
-    >>> from obs.diagnostics import DiagnosticsCollector
-    >>> sink = DiagnosticsCollector()
+    >>> from datafusion_engine.diagnostics import InMemoryDiagnosticsSink
+    >>> sink = InMemoryDiagnosticsSink()
     >>> record_substrait_gap("Join", "anti joins not supported", sink)
     >>> gaps = sink.artifacts.get("substrait_gaps_v1", [])
     >>> len(gaps)
@@ -384,7 +402,7 @@ def record_substrait_gap(
     payload: dict[str, object] = {
         "expr_type": expr_type,
         "reason": reason,
-        "fallback": "sql_generation",
+        "fallback": "ast_execution",
     }
 
     sink.record_artifact("substrait_gaps_v1", payload)
@@ -393,7 +411,9 @@ def record_substrait_gap(
 def try_ibis_to_substrait_bytes(
     expr: IbisTable,
     *,
-    diagnostics_sink: DiagnosticsCollector | None = None,
+    record_gaps: bool = True,
+    diagnostics_sink: DiagnosticsSink | None = None,
+    session_id: str | None = None,
 ) -> bytes | None:
     """Attempt Ibis-to-Substrait compilation without raising exceptions.
 
@@ -404,8 +424,12 @@ def try_ibis_to_substrait_bytes(
     ----------
     expr : IbisTable
         Ibis table expression to compile.
-    diagnostics_sink : DiagnosticsCollector | None, optional
-        Diagnostics collector for recording gap information.
+    record_gaps : bool, optional
+        Whether to record Substrait gaps in diagnostics.
+    diagnostics_sink : DiagnosticsSink | None, optional
+        Diagnostics sink for recording gap information.
+    session_id : str | None, optional
+        Optional session identifier for recorder adaptation.
 
     Returns
     -------
@@ -420,13 +444,14 @@ def try_ibis_to_substrait_bytes(
     >>> expr = backend.table("my_table").select("col1", "col2")
     >>> plan_bytes = try_ibis_to_substrait_bytes(expr)  # doctest: +SKIP
     >>> if plan_bytes is None:  # doctest: +SKIP
-    ...     # Fall back to SQL generation
+    ...     # Fall back to AST execution
     ...     pass
     """
+    resolved_sink = _coerce_diagnostics_sink(diagnostics_sink, session_id=session_id)
     result = _try_ibis_substrait(
         expr,
-        record_gaps=True,
-        diagnostics_sink=diagnostics_sink,
+        record_gaps=record_gaps,
+        diagnostics_sink=resolved_sink,
     )
     return result.plan_bytes if result.success else None
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
-from datafusion import SessionContext, SQLOptions
+from datafusion import SessionContext
 
 import normalize.dataset_specs as static_dataset_specs
 from arrowdsl.core.execution_context import ExecutionContext
@@ -25,7 +25,7 @@ from datafusion_engine.schema_contracts import (
     schema_contract_from_dataset_spec,
 )
 from datafusion_engine.schema_introspection import table_names_snapshot
-from datafusion_engine.sql_options import sql_options_for_profile, statement_sql_options_for_profile
+from datafusion_engine.sql_options import sql_options_for_profile
 from datafusion_engine.table_provider_metadata import TableProviderMetadata, table_provider_metadata
 from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.specs import TableSchemaSpec
@@ -82,9 +82,8 @@ def register_normalize_output_tables(
     *,
     datasets: Sequence[str] | None = None,
     runtime_profile: DataFusionRuntimeProfile | None = None,
-    sql_options: SQLOptions | None = None,
 ) -> Mapping[str, str]:
-    """Register normalize outputs in DataFusion using DDL.
+    """Register normalize outputs in DataFusion using non-DDL APIs.
 
     Parameters
     ----------
@@ -96,8 +95,6 @@ def register_normalize_output_tables(
         Optional dataset names or aliases to register.
     runtime_profile : DataFusionRuntimeProfile | None
         Optional runtime profile used for SQL options.
-    sql_options : SQLOptions | None
-        Explicit SQL options for DDL execution.
 
     Returns
     -------
@@ -105,7 +102,6 @@ def register_normalize_output_tables(
         Mapping of dataset names to registered output locations.
     """
     locations = normalize_output_locations(output_dir, datasets=datasets)
-    options = sql_options or statement_sql_options_for_profile(runtime_profile)
     for name, location in locations.items():
         spec = static_dataset_specs.dataset_spec(name)
         registration = DatasetDdlRegistration(
@@ -117,7 +113,6 @@ def register_normalize_output_tables(
         register_dataset_ddl(
             ctx,
             registration,
-            sql_options=options,
             runtime_profile=runtime_profile,
         )
     return locations

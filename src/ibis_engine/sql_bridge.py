@@ -49,6 +49,7 @@ class SqlIngestSpec:
     schema: _SchemaProtocol | None = None
     dialect: str | None = None
     ingest_kind: SqlIngestKind = "parse_sql"
+    debug_only: bool = False
     table: Table | None = None
     source_name: str | None = None
     backend: IbisCompilerBackend | None = None
@@ -128,7 +129,9 @@ def parse_sql_table(spec: SqlIngestSpec) -> Table:
         Parsed Ibis table expression.
     """
     if spec.ingest_kind != "parse_sql":
-        spec = replace(spec, ingest_kind="parse_sql")
+        spec = replace(spec, ingest_kind="parse_sql", debug_only=True)
+    elif not spec.debug_only:
+        spec = replace(spec, debug_only=True)
     return sql_to_ibis_expr(spec)
 
 
@@ -141,7 +144,9 @@ def backend_sql_table(spec: SqlIngestSpec) -> Table:
         Ibis table expression produced by Backend.sql.
     """
     if spec.ingest_kind != "backend_sql":
-        spec = replace(spec, ingest_kind="backend_sql")
+        spec = replace(spec, ingest_kind="backend_sql", debug_only=True)
+    elif not spec.debug_only:
+        spec = replace(spec, debug_only=True)
     return sql_to_ibis_expr(spec)
 
 
@@ -154,7 +159,9 @@ def table_sql_table(spec: SqlIngestSpec) -> Table:
         Ibis table expression produced by Table.sql.
     """
     if spec.ingest_kind != "table_sql":
-        spec = replace(spec, ingest_kind="table_sql")
+        spec = replace(spec, ingest_kind="table_sql", debug_only=True)
+    elif not spec.debug_only:
+        spec = replace(spec, debug_only=True)
     return sql_to_ibis_expr(spec)
 
 
@@ -241,6 +248,9 @@ def sql_to_ibis_expr(spec: SqlIngestSpec) -> Table:
 
 
 def _validate_ingest_spec(spec: SqlIngestSpec) -> None:
+    if not spec.debug_only:
+        msg = "SQL ingestion is debug-only; set SqlIngestSpec.debug_only=True to proceed."
+        raise ValueError(msg)
     if spec.ingest_kind == "parse_sql" and spec.schema is None:
         msg = "SqlIngestSpec.schema is required for SQL ingestion."
         raise ValueError(msg)

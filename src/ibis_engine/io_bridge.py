@@ -64,8 +64,6 @@ from ibis_engine.sources import (
     DatabaseHint,
     IbisDeltaWriteOptions,
     SourceToIbisOptions,
-    namespace_recorder_from_ctx,
-    record_namespace_action,
     resolve_database_hint,
     source_to_ibis,
     write_delta_ibis,
@@ -134,7 +132,7 @@ class IbisMaterializeOptions:
     name: str
     overwrite: bool = True
     database: DatabaseHint | None = None
-    namespace_recorder: Callable[[Mapping[str, object]], None] | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
 
 
 @dataclass(frozen=True)
@@ -363,13 +361,14 @@ def materialize_table(
         database=backend_database,
         overwrite=options.overwrite,
     )
-    record_namespace_action(
-        options.namespace_recorder,
-        action="create_table",
-        name=table_name,
-        database=database,
-        overwrite=options.overwrite,
-    )
+    recorder = recorder_for_profile(options.runtime_profile, operation_id="ibis_materialize")
+    if recorder is not None:
+        recorder.record_namespace_action(
+            action="create_table",
+            name=table_name,
+            database={"database": backend_database},
+            overwrite=options.overwrite,
+        )
     insert = getattr(backend, "insert", None)
     if not callable(insert):
         msg = "Ibis backend is missing insert."
@@ -380,13 +379,13 @@ def materialize_table(
         database=backend_database,
         overwrite=options.overwrite,
     )
-    record_namespace_action(
-        options.namespace_recorder,
-        action="insert",
-        name=table_name,
-        database=database,
-        overwrite=options.overwrite,
-    )
+    if recorder is not None:
+        recorder.record_namespace_action(
+            action="insert",
+            name=table_name,
+            database={"database": backend_database},
+            overwrite=options.overwrite,
+        )
     return options.backend.table(table_name, database=backend_database)
 
 
@@ -609,7 +608,7 @@ def _write_delta_ibis_from_input(
             backend=backend,
             name=None,
             ordering=None,
-            namespace_recorder=namespace_recorder_from_ctx(execution.ctx),
+            runtime_profile=execution.ctx.runtime.datafusion,
         ),
     )
     return write_delta_ibis(backend, write_plan.expr, path, options=options)
@@ -947,7 +946,7 @@ def _record_delta_insert_diagnostics(
     mode: str,
     rows_affected: int | None,
 ) -> None:
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+    if runtime_profile is None:
         return
     payload: dict[str, object] = {
         "event_time_unix_ms": int(time.time() * 1000),
@@ -959,10 +958,10 @@ def _record_delta_insert_diagnostics(
     provider_payload = _table_provider_payload(runtime_profile, table_name=table_name)
     if provider_payload is not None:
         payload["table_provider"] = dict(provider_payload)
-    runtime_profile.diagnostics_sink.record_events(
-        "datafusion_dml_statements_v1",
-        [payload],
-    )
+    recorder = recorder_for_profile(runtime_profile, operation_id="datafusion_dml_statements_v1")
+    if recorder is None:
+        return
+    recorder.record_events("datafusion_dml_statements_v1", [payload])
 
 
 def _record_delta_features(
@@ -971,7 +970,7 @@ def _record_delta_features(
     path: str,
     version: int | None,
 ) -> None:
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+    if runtime_profile is None:
         return
     try:
         features = delta_table_features(path)
@@ -985,7 +984,10 @@ def _record_delta_features(
     }
     if features is not None:
         payload["features"] = dict(features)
-    runtime_profile.diagnostics_sink.record_artifact("relspec_delta_features_v1", payload)
+    recorder = recorder_for_profile(runtime_profile, operation_id="relspec_delta_features_v1")
+    if recorder is None:
+        return
+    recorder.record_artifact("relspec_delta_features_v1", payload)
 
 
 def _record_delta_data_checker(
@@ -993,9 +995,12 @@ def _record_delta_data_checker(
     *,
     payload: Mapping[str, object],
 ) -> None:
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+    if runtime_profile is None:
         return
-    runtime_profile.diagnostics_sink.record_events("delta_data_checker_v1", [payload])
+    recorder = recorder_for_profile(runtime_profile, operation_id="delta_data_checker_v1")
+    if recorder is None:
+        return
+    recorder.record_events("delta_data_checker_v1", [payload])
 
 
 def _dataframe_to_table(df: DataFrame) -> TableLike:
@@ -1228,7 +1233,7 @@ def _coerce_parquet_table(
         options=SourceToIbisOptions(
             backend=backend,
             name=name,
-            namespace_recorder=namespace_recorder_from_ctx(options.execution.ctx),
+            runtime_profile=options.execution.ctx.runtime.datafusion,
         ),
     )
     return plan.expr

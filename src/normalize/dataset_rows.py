@@ -19,7 +19,7 @@ from ibis_engine.hashing import hash_expr_ir, hash_expr_ir_from_parts, masked_ha
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 from schema_spec.specs import DerivedFieldSpec
 from schema_spec.system import DedupeSpecSpec, SortKeySpec
-from sqlglot_tools.expr_spec import SqlExprSpec
+from sqlglot_tools.expr_spec import ExprIR, SqlExprSpec
 
 SCHEMA_VERSION = 1
 _DEF_USE_PREFIXES = ("STORE_", "DELETE_")
@@ -27,28 +27,27 @@ _USE_PREFIXES = ("LOAD_",)
 _DEF_USE_OPS = ("IMPORT_NAME", "IMPORT_FROM")
 
 
-def _field_expr(name: str) -> str:
-    return _sql_identifier(name)
+def _field_expr(name: str) -> ExprIR:
+    return ExprIR(op="field", name=name)
 
 
-def _literal_expr(value: ScalarValue) -> str:
-    return _sql_literal(value)
+def _literal_expr(value: ScalarValue) -> ExprIR:
+    return ExprIR(op="literal", value=value)
 
 
-def _call_expr(name: str, *args: str) -> str:
-    joined = ", ".join(args)
-    return f"{name}({joined})"
+def _call_expr(name: str, *args: ExprIR) -> ExprIR:
+    return ExprIR(op="call", name=name, args=tuple(args))
 
 
-def _stringify_expr(expr: str) -> str:
+def _stringify_expr(expr: ExprIR) -> ExprIR:
     return _call_expr("stringify", expr)
 
 
-def _trim_expr(column: str) -> str:
+def _trim_expr(column: str) -> ExprIR:
     return _call_expr("utf8_trim_whitespace", _field_expr(column))
 
 
-def _coalesce_expr(exprs: Sequence[str]) -> str:
+def _coalesce_expr(exprs: Sequence[ExprIR]) -> ExprIR:
     if not exprs:
         return _literal_expr(None)
     if len(exprs) == 1:
@@ -56,11 +55,11 @@ def _coalesce_expr(exprs: Sequence[str]) -> str:
     return _call_expr("coalesce", *exprs)
 
 
-def _coalesce_string_expr(columns: Sequence[str]) -> str:
+def _coalesce_string_expr(columns: Sequence[str]) -> ExprIR:
     return _coalesce_expr([_field_expr(name) for name in columns])
 
 
-def _or_exprs(exprs: Sequence[str]) -> str:
+def _or_exprs(exprs: Sequence[ExprIR]) -> ExprIR:
     if not exprs:
         return _literal_expr(value=False)
     out = exprs[0]
@@ -69,28 +68,8 @@ def _or_exprs(exprs: Sequence[str]) -> str:
     return out
 
 
-def _sql_spec(sql: str) -> SqlExprSpec:
-    return SqlExprSpec(sql=sql)
-
-
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
-
-
-def _sql_literal(value: ScalarValue) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return str(value)
-    if isinstance(value, (str, bytes)):
-        text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
-        escaped = text.replace("'", "''")
-        return f"'{escaped}'"
-    msg = f"Unsupported literal type: {type(value).__name__}."
-    raise TypeError(msg)
+def _sql_spec(expr: ExprIR) -> SqlExprSpec:
+    return SqlExprSpec(expr_ir=expr)
 
 
 @dataclass(frozen=True)
@@ -121,7 +100,7 @@ class DatasetRow:
     metadata_extra: dict[bytes, bytes] = field(default_factory=dict)
 
 
-def _def_use_kind_expr() -> str:
+def _def_use_kind_expr() -> ExprIR:
     opname = _stringify_expr(_field_expr("opname"))
     def_ops = tuple(_call_expr("equal", opname, _literal_expr(value)) for value in _DEF_USE_OPS)
     def_prefixes = tuple(

@@ -85,7 +85,7 @@ if TYPE_CHECKING:
     from datafusion_engine.schema_introspection import SchemaIntrospector
     from datafusion_engine.schema_registry import (
         has_schema,
-        nested_base_sql,
+        nested_base_df,
         nested_dataset_names,
         nested_schema_for,
         nested_schema_names,
@@ -204,7 +204,7 @@ __all__ = [
     "ibis_plan_to_datafusion",
     "ibis_plan_to_table",
     "ibis_to_datafusion",
-    "nested_base_sql",
+    "nested_base_df",
     "nested_dataset_names",
     "nested_schema_for",
     "nested_schema_names",
@@ -255,7 +255,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "register_dataset_df": ("datafusion_engine.registry_bridge", "register_dataset_df"),
     "register_schema": ("datafusion_engine.schema_registry", "register_schema"),
     "register_all_schemas": ("datafusion_engine.schema_registry", "register_all_schemas"),
-    "nested_base_sql": ("datafusion_engine.schema_registry", "nested_base_sql"),
+    "nested_base_df": ("datafusion_engine.schema_registry", "nested_base_df"),
     "nested_dataset_names": ("datafusion_engine.schema_registry", "nested_dataset_names"),
     "nested_schema_for": ("datafusion_engine.schema_registry", "nested_schema_for"),
     "nested_schema_names": ("datafusion_engine.schema_registry", "nested_schema_names"),

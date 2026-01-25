@@ -83,12 +83,8 @@ from datafusion_engine.schema_registry import (
 )
 from datafusion_engine.sql_safety import execution_policy_for_profile
 from datafusion_engine.table_provider_metadata import table_provider_metadata
-from datafusion_engine.udf_registry import (
-    DataFusionUdfSnapshot,
-    get_default_udf_catalog,
-    get_strict_udf_catalog,
-    register_datafusion_udfs,
-)
+from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
+from datafusion_engine.udf_runtime import register_rust_udfs
 from engine.plan_cache import PlanCache
 from serde_msgspec import StructBase
 from storage.ipc import payload_hash
@@ -2843,7 +2839,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def _install_udfs(self, ctx: SessionContext) -> None:
         """Install registered UDFs on the session context."""
         if self.enable_udfs:
-            snapshot = register_datafusion_udfs(ctx)
+            snapshot = register_rust_udfs(ctx)
             self._record_udf_snapshot(snapshot)
         self._refresh_udf_catalog(ctx)
 
@@ -3256,10 +3252,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         location = self._ast_dataset_location()
         if location is None:
             return
-        deregister = getattr(ctx, "deregister_table", None)
-        if callable(deregister):
-            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                deregister("ast_files_v1")
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            adapter.deregister_table("ast_files_v1")
         from datafusion_engine.registry_bridge import register_dataset_df
 
         df = register_dataset_df(
@@ -3340,10 +3337,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         location = self._bytecode_dataset_location()
         if location is None:
             return
-        deregister = getattr(ctx, "deregister_table", None)
-        if callable(deregister):
-            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                deregister("bytecode_files_v1")
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            adapter.deregister_table("bytecode_files_v1")
         from datafusion_engine.registry_bridge import register_dataset_df
 
         df = register_dataset_df(
@@ -3434,6 +3432,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def _register_scip_datasets(self, ctx: SessionContext) -> None:
         if not self.scip_dataset_locations:
             return
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
         for name, location in sorted(self.scip_dataset_locations.items()):
             schema_name = SCIP_VIEW_SCHEMA_MAP.get(name, name)
             try:
@@ -3456,10 +3457,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     ),
                 )
             resolved = replace(resolved, datafusion_scan=scan)
-            deregister = getattr(ctx, "deregister_table", None)
-            if callable(deregister):
-                with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                    deregister(schema_name)
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                adapter.deregister_table(schema_name)
             from datafusion_engine.registry_bridge import (
                 register_dataset_df,
             )
@@ -3966,18 +3965,20 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if not ast_registration and (
             self.ast_catalog_location is not None or self.ast_catalog_format is not None
         ):
-            deregister = getattr(ctx, "deregister_table", None)
-            if callable(deregister):
-                with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                    deregister("ast_files_v1")
+            from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+            adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                adapter.deregister_table("ast_files_v1")
             self._validate_ast_catalog_autoload(ctx)
         if not bytecode_registration and (
             self.bytecode_catalog_location is not None or self.bytecode_catalog_format is not None
         ):
-            deregister = getattr(ctx, "deregister_table", None)
-            if callable(deregister):
-                with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                    deregister("bytecode_files_v1")
+            from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+            adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
+            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                adapter.deregister_table("bytecode_files_v1")
             self._validate_bytecode_catalog_autoload(ctx)
 
     def _record_schema_diagnostics(
@@ -4047,9 +4048,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if bytecode_registration:
             self._register_bytecode_dataset(ctx)
         self._register_scip_datasets(ctx)
-        from datafusion_engine.query_fragments import fragment_view_specs
+        from datafusion_engine.view_registry import registry_view_specs
 
-        fragment_views = fragment_view_specs(ctx, exclude=ast_optional_disabled)
+        fragment_views = registry_view_specs(ctx, exclude=ast_optional_disabled)
         self._register_schema_views(ctx, fragment_views=fragment_views)
         self._validate_catalog_autoloads(
             ctx,
@@ -4155,12 +4156,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         )
         return installed
 
-    def _record_udf_snapshot(self, snapshot: DataFusionUdfSnapshot) -> None:
+    def _record_udf_snapshot(self, snapshot: Mapping[str, object]) -> None:
         if self.diagnostics_sink is None:
             return
         self.diagnostics_sink.record_artifact(
             "datafusion_udf_registry_v1",
-            snapshot.payload(),
+            dict(snapshot),
         )
 
     def _record_delta_plan_codecs(self, *, available: bool, installed: bool) -> None:

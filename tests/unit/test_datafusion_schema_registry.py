@@ -20,7 +20,7 @@ from datafusion_engine.schema_registry import (
     validate_required_engine_functions,
     validate_required_symtable_functions,
 )
-from datafusion_engine.udf_registry import register_datafusion_udfs
+from datafusion_engine.udf_runtime import register_rust_udfs
 
 
 def _to_arrow_schema(value: object) -> pa.Schema:
@@ -63,35 +63,35 @@ def test_symtable_schema_metadata() -> None:
 def test_required_functions_present() -> None:
     """Validate required CST function inventory and signatures."""
     ctx = SessionContext()
-    register_datafusion_udfs(ctx)
+    register_rust_udfs(ctx)
     validate_required_cst_functions(ctx)
 
 
 def test_required_symtable_functions_present() -> None:
     """Validate required symtable function inventory and signatures."""
     ctx = SessionContext()
-    register_datafusion_udfs(ctx)
+    register_rust_udfs(ctx)
     validate_required_symtable_functions(ctx)
 
 
 def test_required_bytecode_functions_present() -> None:
     """Validate required bytecode function inventory and signatures."""
     ctx = SessionContext()
-    register_datafusion_udfs(ctx)
+    register_rust_udfs(ctx)
     validate_required_bytecode_functions(ctx)
 
 
 def test_required_engine_functions_present() -> None:
     """Validate required engine function inventory."""
     ctx = SessionContext()
-    register_datafusion_udfs(ctx)
+    register_rust_udfs(ctx)
     validate_required_engine_functions(ctx)
 
 
 def test_validate_ast_views_smoke() -> None:
     """Ensure AST view validation runs against registered views."""
     ctx = SessionContext()
-    register_datafusion_udfs(ctx)
+    register_rust_udfs(ctx)
     register_schema(ctx, "ast_files_v1", schema_for("ast_files_v1"))
     views = [view for view in nested_view_specs() if view.name in AST_VIEW_NAMES]
     for view in views:

@@ -10,6 +10,7 @@ from arrowdsl.core.interop import ScalarLike
 from sqlglot_tools.compat import Expression, exp, parse_one
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
+    SqlGlotPolicy,
     normalize_expr,
     resolve_sqlglot_policy,
     sqlglot_sql,
@@ -123,9 +124,28 @@ class ExprIR:
 class SqlExprSpec:
     """SQL-backed expression specification."""
 
-    sql: str
+    sql: str | None = None
     policy_name: str = "datafusion_compile"
     dialect: str | None = None
+    expr_ir: ExprIR | None = None
+
+    def __post_init__(self) -> None:
+        """Validate and populate SQL from ExprIR when needed.
+
+        Raises
+        ------
+        ValueError
+            Raised when neither sql nor expr_ir is provided.
+        """
+        if self.sql is None and self.expr_ir is None:
+            msg = "SqlExprSpec requires sql or expr_ir."
+            raise ValueError(msg)
+        if self.sql is None and self.expr_ir is not None:
+            object.__setattr__(
+                self,
+                "sql",
+                self.expr_ir.to_sql(policy_name=self.policy_name),
+            )
 
     def normalized_sql(self) -> str:
         """Return normalized SQL text for this expression spec.
@@ -136,11 +156,11 @@ class SqlExprSpec:
             Normalized SQL expression text.
         """
         policy = resolve_sqlglot_policy(name=self.policy_name)
-        read_dialect = self.dialect or policy.read_dialect
-        expr = parse_one(self.sql, read=read_dialect)
+        expr = self._resolve_expr(policy=policy)
+        sql_text = self.sql or sqlglot_sql(expr, policy=policy)
         normalized = normalize_expr(
             expr,
-            options=NormalizeExprOptions(policy=policy, sql=self.sql),
+            options=NormalizeExprOptions(policy=policy, sql=sql_text),
         )
         return sqlglot_sql(normalized, policy=policy)
 
@@ -154,6 +174,15 @@ class SqlExprSpec:
         """
         policy = resolve_sqlglot_policy(name=self.policy_name)
         return self.dialect or policy.write_dialect
+
+    def _resolve_expr(self, *, policy: SqlGlotPolicy) -> Expression:
+        if self.expr_ir is not None:
+            return self.expr_ir.to_sqlglot()
+        if self.sql is None:
+            msg = "SqlExprSpec requires sql or expr_ir."
+            raise ValueError(msg)
+        read_dialect = self.dialect or policy.read_dialect
+        return parse_one(self.sql, read=read_dialect)
 
 
 __all__ = ["ExprIR", "SqlExprSpec"]

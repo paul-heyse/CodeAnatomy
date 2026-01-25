@@ -2291,8 +2291,10 @@ Leverage Ibis `ibis.param` for templated rulepacks that compile once and execute
 with different parameter values. Enables efficient multi-configuration runs.
 
 **Status (code audit 2026-01-25)**
-PARTIAL — `src/datafusion_engine/parameterized_execution.py` exists, but no
-Hamilton / relspec / pipeline modules reference it yet.
+COMPLETE — parameterized rulepacks are wired into relspec planning and
+execution (`TaskBuildContext` → `PlanArtifact.parameterization` →
+`RuntimeArtifacts.param_mapping_for_task`), with execution parameter values
+propagated into plan materialization. Tests remain pending.
 
 **Representative pattern**
 ```python
@@ -2492,6 +2494,9 @@ def create_edge_filter_rulepack(edges: IbisTable) -> ParameterizedRulepack:
 - `src/datafusion_engine/parameterized_execution.py` (new)
 - `src/hamilton_pipeline/modules/task_execution.py`
 - `src/relspec/runtime_artifacts.py`
+- `src/relspec/plan_catalog.py`
+- `src/relspec/task_catalog.py`
+- `src/relspec/execution.py`
 
 **Implementation checklist**
 - [x] Create `ParameterSpec` for typed parameter definitions.
@@ -2499,6 +2504,7 @@ def create_edge_filter_rulepack(edges: IbisTable) -> ParameterizedRulepack:
 - [x] Implement parameter validation against specs.
 - [x] Support streaming execution with params.
 - [x] Support SQL compilation with/without values.
+- [x] Wire rulepack planning and runtime parameter mapping into relspec execution.
 - [ ] Add tests for various parameter types.
 - [ ] Add tests for missing/unknown parameter handling.
 
@@ -2511,9 +2517,10 @@ Define one function registry with explicit lane precedence (builtin → pyarrow 
 and a single source-of-truth for built-ins, UDFs, and SQL expressions.
 
 **Status (code audit 2026-01-25)**
-PARTIAL — `src/engine/udf_registry.py` exists, but execution still relies on
-`src/engine/function_registry.py` and `src/datafusion_engine/udf_registry.py`.
-No call sites merge the new registry with the runtime.
+PARTIAL — unified registry facade exists and is now used for runtime validation
+and Ibis backend registration (`build_unified_function_registry` +
+`apply_to_backend`), but DataFusion runtime UDF installation still relies on
+`src/datafusion_engine/udf_registry.py`. Tests pending.
 
 **Representative pattern**
 ```python
@@ -2766,7 +2773,10 @@ class FunctionRegistry:
 
 **Target files**
 - `src/engine/udf_registry.py` (new or refactored)
+- `src/engine/unified_registry.py`
+- `src/datafusion_engine/runtime.py`
 - `src/datafusion_engine/udf_registry.py`
+- `src/ibis_engine/backend.py`
 - `src/ibis_engine/builtin_udfs.py`
 
 **Implementation checklist**
@@ -2776,6 +2786,8 @@ class FunctionRegistry:
 - [x] Implement lane precedence (prefer faster lanes).
 - [x] Add warning for Python lane usage.
 - [x] Merge builtins from introspection (implemented in registry module).
+- [x] Wire unified registry into Ibis backend registration.
+- [x] Use unified registry for runtime builtin validation/fingerprints.
 - [ ] Add tests for lane selection precedence.
 - [ ] Add tests for backend registration.
 
@@ -2788,9 +2800,10 @@ Use DataFusion's SQLOptions to gate SQL execution. Provide defense-in-depth even
 when SQL is generated correctly.
 
 **Status (code audit 2026-01-25)**
-PARTIAL — `src/datafusion_engine/sql_safety.py` exists, but existing
-`statement_sql_options_for_profile` and execution paths still route through
-`src/datafusion_engine/runtime.py` and `src/datafusion_engine/sql_options.py`.
+MOSTLY COMPLETE — execution policy flows through `sql_options` in compile,
+streaming, and write paths, and `validate_sql_safety` is now enforced at key SQL
+entry points (bridge, IO adapter, registry bridge). `SafeExecutor` remains
+optional and tests are pending.
 
 **Representative pattern**
 ```python
@@ -3000,6 +3013,9 @@ class SafeExecutor:
 - `src/datafusion_engine/sql_safety.py` (new)
 - `src/datafusion_engine/runtime.py`
 - `src/datafusion_engine/bridge.py`
+- `src/datafusion_engine/compile_pipeline.py`
+- `src/datafusion_engine/streaming_executor.py`
+- `src/datafusion_engine/write_pipeline.py`
 
 **Implementation checklist**
 - [x] Create `ExecutionPolicy` with DDL/DML/statement flags.
@@ -3008,6 +3024,9 @@ class SafeExecutor:
 - [x] Implement `validate_sql_safety` for pre-execution checks.
 - [x] Add external location detection for high-risk operations.
 - [x] Create `SafeExecutor` class for convenient safe execution.
+- [x] Enforce SQL options in compile + streaming + write execution paths.
+- [x] Validate SQL at key entry points (bridge, IO adapter, registry bridge).
+- [ ] Adopt `SafeExecutor` as the default execution wrapper (optional).
 - [ ] Add tests for each policy level.
 - [ ] Add tests for violation detection.
 
@@ -3020,9 +3039,10 @@ All diagnostics should be emitted from a shared adapter/pipeline rather than fro
 local subsystem. Ensure consistent payload shape across execution lanes.
 
 **Status (code audit 2026-01-25)**
-PARTIAL — `src/datafusion_engine/diagnostics.py` exists, but most call sites still
-record artifacts directly on `diagnostics_sink`. No central recorder is wired
-into runtime or execution flows.
+PARTIAL — `DiagnosticsRecorder` is now wired via a recorder adapter that wraps
+`diagnostics_sink` in runtime profiles; IO adapter registration now emits
+standardized `registration` artifacts. Legacy payload shapes remain in place and
+tests are pending.
 
 **Representative pattern**
 ```python
@@ -3272,15 +3292,18 @@ def record_artifact(
 - `src/datafusion_engine/runtime.py`
 - `src/datafusion_engine/bridge.py`
 - `src/engine/materialize_pipeline.py`
-- `src/obs/*`
+- `src/obs/diagnostics.py`
+- `src/obs/datafusion_runs.py`
 
 **Implementation checklist**
 - [x] Define `DiagnosticsSink` protocol.
 - [x] Create `InMemoryDiagnosticsSink` for testing.
 - [x] Create `DiagnosticsRecorder` with typed recording methods.
 - [x] Implement consistent payload shapes for each artifact type.
-- [ ] Route all existing diagnostics through `DiagnosticsRecorder`.
+- [x] Route diagnostics through a recorder adapter in runtime profiles.
 - [x] Add metrics recording alongside artifacts.
+- [x] Emit standardized `registration` artifacts from IO adapter registrations.
+- [ ] Align legacy payload shapes to recorder methods consistently.
 - [ ] Add tests for artifact recording.
 - [ ] Add tests for payload shape consistency.
 
@@ -3323,8 +3346,9 @@ are still in use. Delete only after diagnostics consolidation and cleanup.
 **Status (code audit 2026-01-25)**
 Phase 1 code-path unification is complete; Phase 2 code paths are complete with
 tests/benchmarks/diagnostics still outstanding. Phase 3 code paths are complete
-with tests pending. Phase 4 remains partially integrated, and Phase 5 cleanup
-is not started.
+with tests pending. Phase 4 is largely integrated with remaining work focused
+on tests, optional SafeExecutor adoption, and diagnostics payload alignment.
+Phase 5 cleanup is not started.
 
 ### Phase 1: Core Unification
 1. IO Adapter (catalog, registration, object stores)

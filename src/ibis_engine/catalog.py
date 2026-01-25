@@ -18,7 +18,6 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import (
     DatasetSource,
     SourceToIbisOptions,
-    namespace_recorder_from_ctx,
     register_ibis_table,
     source_to_ibis,
 )
@@ -73,7 +72,7 @@ class IbisPlanCatalog:
                 backend=self.backend,
                 name=label or name,
                 ordering=Ordering.unordered(),
-                namespace_recorder=namespace_recorder_from_ctx(ctx),
+                runtime_profile=ctx.runtime.datafusion,
             ),
         )
         self.tables[name] = plan
@@ -116,7 +115,7 @@ class IbisPlanCatalog:
                 backend=self.backend,
                 name=None,
                 ordering=Ordering.unordered(),
-                namespace_recorder=namespace_recorder_from_ctx(ctx),
+                runtime_profile=ctx.runtime.datafusion,
             ),
         )
         return plan.expr

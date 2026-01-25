@@ -8,20 +8,14 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_engine.udf_registry import datafusion_scalar_udf_map, register_datafusion_udfs
+from datafusion_engine.expr_functions import prefixed_hash64
 
 MAX_SCOPE_PARENT_DEPTH = 16
 
 
-def _prefixed_hash_expr(ctx: SessionContext, prefix: str, *parts: Expr) -> Expr:
-    register_datafusion_udfs(ctx)
-    udf_map = datafusion_scalar_udf_map()
-    udf = udf_map.get("prefixed_hash64")
-    if udf is None:
-        msg = "prefixed_hash64 UDF is not registered."
-        raise ValueError(msg)
+def _prefixed_hash_expr(_ctx: SessionContext, prefix: str, *parts: Expr) -> Expr:
     combined = f.concat_ws(":", *parts)
-    return udf(lit(prefix), combined)
+    return prefixed_hash64(prefix, combined)
 
 
 def _scope_type_filter(scope_type: Expr) -> Expr:

@@ -4,12 +4,14 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
+use std::hash::Hash;
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::array::{
+    Array,
     ArrayRef,
     Int32Builder,
     Int32Array,
@@ -21,7 +23,7 @@ use arrow::array::{
     StringBuilder,
     StructArray,
 };
-use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::datatypes::{DataType, Field, Fields, SchemaRef};
 use arrow::ipc::reader::StreamReader;
 use arrow::record_batch::RecordBatch;
 use blake2::digest::{Update, VariableOutput};
@@ -37,16 +39,23 @@ use datafusion::catalog::{
 };
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::cache::{CacheAccessor, FileMetadataCache};
 use datafusion::execution::SessionStateDefaults;
+use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::config::ConfigOptions;
 use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory,
     PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
 };
-use datafusion::physical_optimizer::{OptimizerConfig, PhysicalOptimizerRule};
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion_common::{
-    Constraint, Constraints, DFSchema, DataFusionError, Result, ScalarValue, Statistics,
+    Constraint,
+    Constraints,
+    DFSchema,
+    DataFusionError,
+    Result,
+    ScalarValue,
+    Statistics,
 };
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
@@ -57,19 +66,27 @@ use datafusion_expr::{
     CreateExternalTable,
     DdlStatement,
     Expr,
-    InsertOp,
+    lit,
     LogicalPlan,
-    SortExpr,
     ScalarFunctionArgs,
     ScalarUDF,
     ScalarUDFImpl,
     Signature,
+    SortExpr,
     TableProviderFilterPushDown,
     TableType,
+    TypeSignature,
     Volatility,
 };
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr_fn::col;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_functions::core::expr_fn as core_expr_fn;
+use datafusion_functions_aggregate::expr_fn as agg_expr_fn;
+use datafusion_functions_aggregate::string_agg::string_agg as string_agg_fn;
+use datafusion_functions_nested::expr_fn as nested_expr_fn;
+use datafusion_functions_table::generate_series::RangeFunc;
+use datafusion_functions_window::expr_fn as window_expr_fn;
+use datafusion::physical_plan::ExecutionPlan;
 use deltalake::delta_datafusion::{
     DeltaCdfTableProvider,
     DeltaDataChecker,
@@ -80,17 +97,17 @@ use deltalake::delta_datafusion::{
     DeltaTableFactory,
     DeltaTableProvider,
 };
-use deltalake::kernel::models::actions::Add;
+use deltalake::kernel::models::Add;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::table::Constraint as DeltaConstraint;
 use deltalake::{ensure_table_uri, DeltaTableBuilder};
 use deltalake::errors::DeltaTableError;
 use tokio::runtime::Runtime;
 use datafusion_python::context::PySessionContext;
+use datafusion_python::expr::PyExpr;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyCapsule, PyDict};
-use deltalake::operations::DeltaOps;
+use pyo3::types::{PyBytes, PyBytesMethods, PyCapsule, PyCapsuleMethods, PyDict};
 use chrono::{DateTime, Utc};
 
 const ENC_UTF8: i32 = 1;
@@ -162,7 +179,6 @@ struct CpgTableProvider {
 impl CpgTableProvider {
     fn new(
         inner: Arc<dyn TableProvider>,
-        *,
         ddl: Option<String>,
         logical_plan: Option<LogicalPlan>,
         column_defaults: HashMap<String, Expr>,
@@ -267,7 +283,7 @@ fn map_default_expr(field: &Field, default_value: &str) -> Option<Expr> {
         return None;
     }
     let array = builder.finish();
-    Some(Expr::Literal(ScalarValue::Map(Arc::new(array))))
+    Some(Expr::Literal(ScalarValue::Map(Arc::new(array)), None))
 }
 
 fn column_default_exprs(schema: &SchemaRef) -> HashMap<String, Expr> {
@@ -280,7 +296,10 @@ fn column_default_exprs(schema: &SchemaRef) -> HashMap<String, Expr> {
         let expr = if let Some(expr) = map_default_expr(field, default_value) {
             Some(expr)
         } else if field.data_type() == &DataType::Utf8 {
-            Some(Expr::Literal(ScalarValue::Utf8(Some(default_value.clone()))))
+            Some(Expr::Literal(
+                ScalarValue::Utf8(Some(default_value.clone())),
+                None,
+            ))
         } else {
             None
         };
@@ -323,7 +342,6 @@ fn file_sort_order_from_columns(columns: &[String]) -> Vec<Vec<SortExpr>> {
 
 fn listing_table_plan(
     schema: SchemaRef,
-    *,
     table_name: &str,
     location: &str,
     table_partition_cols: Vec<String>,
@@ -560,22 +578,189 @@ fn read_bool_value(array: &arrow::array::BooleanArray, index: usize) -> Result<b
 }
 
 #[pyfunction]
-fn install_function_factory(ctx: PyRef<PySessionContext>, policy_ipc: &PyBytes) -> PyResult<()> {
+fn install_function_factory(
+    ctx: PyRef<PySessionContext>,
+    policy_ipc: &Bound<'_, PyBytes>,
+) -> PyResult<()> {
     let policy = policy_from_ipc(policy_ipc.as_bytes())
         .map_err(|err| PyValueError::new_err(format!("Invalid policy payload: {err}")))?;
+    touch_policy_fields(&policy);
     register_primitives(&ctx.ctx, &policy)
         .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))?;
     Ok(())
 }
 
 #[pyfunction]
-fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<PyObject> {
+fn register_udfs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    ctx.ctx.register_udf(arrow_metadata_udf());
+    ctx.ctx.register_udf(stable_hash64_udf());
+    ctx.ctx.register_udf(stable_hash128_udf());
+    ctx.ctx.register_udf(prefixed_hash64_udf());
+    ctx.ctx.register_udf(stable_id_udf());
+    ctx.ctx.register_udf(col_to_byte_udf());
+    ctx.ctx.register_udtf("range_table", Arc::new(RangeFunc {}));
+    Ok(())
+}
+
+#[pyfunction]
+fn map_entries(expr: PyExpr) -> PyExpr {
+    nested_expr_fn::map_entries(expr.into()).into()
+}
+
+#[pyfunction]
+fn map_keys(expr: PyExpr) -> PyExpr {
+    nested_expr_fn::map_keys(expr.into()).into()
+}
+
+#[pyfunction]
+fn map_values(expr: PyExpr) -> PyExpr {
+    nested_expr_fn::map_values(expr.into()).into()
+}
+
+#[pyfunction]
+fn map_extract(expr: PyExpr, key: &str) -> PyExpr {
+    nested_expr_fn::map_extract(expr.into(), lit(key)).into()
+}
+
+#[pyfunction]
+fn list_extract(expr: PyExpr, index: i64) -> PyExpr {
+    nested_expr_fn::array_element(expr.into(), lit(index)).into()
+}
+
+#[pyfunction]
+fn list_unique(expr: PyExpr) -> PyExpr {
+    let agg = agg_expr_fn::array_agg(expr.into());
+    nested_expr_fn::array_distinct(agg).into()
+}
+
+#[pyfunction]
+fn first_value_agg(expr: PyExpr) -> PyExpr {
+    agg_expr_fn::first_value(expr.into(), Vec::new()).into()
+}
+
+#[pyfunction]
+fn last_value_agg(expr: PyExpr) -> PyExpr {
+    agg_expr_fn::last_value(expr.into(), Vec::new()).into()
+}
+
+#[pyfunction]
+fn count_distinct_agg(expr: PyExpr) -> PyExpr {
+    agg_expr_fn::count_distinct(expr.into()).into()
+}
+
+#[pyfunction]
+fn string_agg(value: PyExpr, delimiter: PyExpr) -> PyExpr {
+    string_agg_fn(value.into(), delimiter.into()).into()
+}
+
+#[pyfunction]
+fn row_index(_value: PyExpr) -> PyExpr {
+    window_expr_fn::row_number().into()
+}
+
+#[pyfunction]
+fn running_count(_value: PyExpr) -> PyExpr {
+    window_expr_fn::row_number().into()
+}
+
+#[pyfunction]
+fn running_total(value: PyExpr) -> PyExpr {
+    agg_expr_fn::sum(value.into()).into()
+}
+
+#[pyfunction]
+fn row_number_window(_value: PyExpr) -> PyExpr {
+    window_expr_fn::row_number().into()
+}
+
+#[pyfunction]
+fn lag_window(expr: PyExpr) -> PyExpr {
+    window_expr_fn::lag(expr.into(), None, None).into()
+}
+
+#[pyfunction]
+fn lead_window(expr: PyExpr) -> PyExpr {
+    window_expr_fn::lead(expr.into(), None, None).into()
+}
+
+#[pyfunction]
+#[pyo3(signature = (expr, key=None))]
+fn arrow_metadata(expr: PyExpr, key: Option<&str>) -> PyExpr {
+    let udf = arrow_metadata_udf();
+    let mut args = vec![expr.into()];
+    if let Some(key) = key {
+        args.push(lit(key));
+    }
+    udf.call(args).into()
+}
+
+#[pyfunction]
+fn union_tag(expr: PyExpr) -> PyExpr {
+    core_expr_fn::union_tag(expr.into()).into()
+}
+
+#[pyfunction]
+fn union_extract(expr: PyExpr, tag: &str) -> PyExpr {
+    core_expr_fn::union_extract(expr.into(), tag).into()
+}
+
+#[pyfunction]
+fn stable_hash64(value: PyExpr) -> PyExpr {
+    let signature = Signature::exact(vec![DataType::Utf8], Volatility::Stable);
+    let udf = ScalarUDF::new_from_shared_impl(Arc::new(StableHash64Udf {
+        signature: SignatureEqHash::new(signature),
+    }));
+    udf.call(vec![value.into()]).into()
+}
+
+#[pyfunction]
+fn stable_hash128(value: PyExpr) -> PyExpr {
+    let signature = Signature::exact(vec![DataType::Utf8], Volatility::Stable);
+    let udf = ScalarUDF::new_from_shared_impl(Arc::new(StableHash128Udf {
+        signature: SignatureEqHash::new(signature),
+    }));
+    udf.call(vec![value.into()]).into()
+}
+
+#[pyfunction]
+fn prefixed_hash64(prefix: &str, value: PyExpr) -> PyExpr {
+    let signature = Signature::exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Stable);
+    let udf = ScalarUDF::new_from_shared_impl(Arc::new(PrefixedHash64Udf {
+        signature: SignatureEqHash::new(signature),
+    }));
+    udf.call(vec![lit(prefix), value.into()]).into()
+}
+
+#[pyfunction]
+fn stable_id(prefix: &str, value: PyExpr) -> PyExpr {
+    let signature = Signature::exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Stable);
+    let udf = ScalarUDF::new_from_shared_impl(Arc::new(StableIdUdf {
+        signature: SignatureEqHash::new(signature),
+    }));
+    udf.call(vec![lit(prefix), value.into()]).into()
+}
+
+#[pyfunction]
+fn col_to_byte(line_text: PyExpr, col_index: PyExpr, col_unit: PyExpr) -> PyExpr {
+    let signature = Signature::exact(
+        vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
+        Volatility::Stable,
+    );
+    let udf = ScalarUDF::new_from_shared_impl(Arc::new(ColToByteUdf {
+        signature: SignatureEqHash::new(signature),
+    }));
+    udf.call(vec![line_text.into(), col_index.into(), col_unit.into()])
+        .into()
+}
+
+#[pyfunction]
+fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let factory: Arc<dyn PhysicalExprAdapterFactory> =
         Arc::new(SchemaEvolutionAdapterFactory::default());
     let name = CString::new("datafusion_ext.SchemaEvolutionAdapterFactory")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, factory, Some(name))?;
-    Ok(capsule.into_py(py))
+    Ok(capsule.unbind().into())
 }
 
 #[pyfunction]
@@ -590,12 +775,11 @@ fn parquet_listing_table_provider(
     partition_schema_ipc: Option<Vec<u8>>,
     file_sort_order: Option<Vec<String>>,
     key_fields: Option<Vec<String>>,
-    expr_adapter_factory: Option<PyObject>,
+    expr_adapter_factory: Option<Py<PyAny>>,
     parquet_pruning: Option<bool>,
     skip_metadata: Option<bool>,
     collect_statistics: Option<bool>,
-) -> PyResult<PyObject> {
-    let _ = expr_adapter_factory;
+) -> PyResult<Py<PyAny>> {
     let schema_ipc = schema_ipc.ok_or_else(|| {
         PyValueError::new_err("Parquet listing table provider requires schema_ipc.")
     })?;
@@ -647,15 +831,15 @@ fn parquet_listing_table_provider(
         .map(|col| col.0.clone())
         .collect();
     let adapter_factory = if let Some(factory_obj) = expr_adapter_factory {
-        let capsule: &PyCapsule = factory_obj.extract(py)?;
-        let factory: &Arc<dyn PhysicalExprAdapterFactory> = capsule.reference()?;
+        let capsule: Bound<'_, PyCapsule> = factory_obj.extract(py)?;
+        let factory: &Arc<dyn PhysicalExprAdapterFactory> = unsafe { capsule.reference() };
         factory.clone()
     } else {
         Arc::new(SchemaEvolutionAdapterFactory::default())
     };
     let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
-        .with_schema(schema)
+        .with_schema(schema.clone())
         .with_expr_adapter_factory(adapter_factory);
     let provider = ListingTable::try_new(config).map_err(|err| {
         PyRuntimeError::new_err(format!("ListingTable provider build failed: {err}"))
@@ -669,27 +853,27 @@ fn parquet_listing_table_provider(
     let plan_constraints = constraints.clone().unwrap_or_default();
     let plan = listing_table_plan(
         provider.schema(),
-        table_name: &table_name,
-        location: &path,
-        table_partition_cols: table_partition_names,
-        definition: table_definition.clone(),
-        column_defaults: defaults.clone(),
-        constraints: plan_constraints,
-        file_sort_order: sort_exprs,
+        &table_name,
+        &path,
+        table_partition_names,
+        table_definition.clone(),
+        defaults.clone(),
+        plan_constraints,
+        sort_exprs,
     )
     .map_err(|err| PyRuntimeError::new_err(format!("ListingTable plan build failed: {err}")))?;
     let wrapped = CpgTableProvider::new(
         Arc::new(provider),
-        ddl: table_definition,
-        logical_plan: Some(plan),
-        column_defaults: defaults,
+        table_definition,
+        Some(plan),
+        defaults,
         constraints,
     );
     let ffi_provider = FFI_TableProvider::new(Arc::new(wrapped), true, None);
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
-    Ok(capsule.into_py(py))
+    Ok(capsule.unbind().into())
 }
 
 #[pyfunction]
@@ -704,7 +888,7 @@ fn delta_table_provider(
     schema_force_view_types: Option<bool>,
     wrap_partition_values: Option<bool>,
     schema_ipc: Option<Vec<u8>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
         PyValueError::new_err(format!("Invalid Delta table URI {table_uri:?}: {err}"))
     })?;
@@ -761,7 +945,7 @@ fn delta_table_provider(
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
-    Ok(capsule.into_py(py))
+    Ok(capsule.unbind().into())
 }
 
 #[pyfunction]
@@ -777,7 +961,7 @@ fn delta_table_provider_with_files(
     schema_force_view_types: Option<bool>,
     wrap_partition_values: Option<bool>,
     schema_ipc: Option<Vec<u8>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
         PyValueError::new_err(format!("Invalid Delta table URI {table_uri:?}: {err}"))
     })?;
@@ -836,7 +1020,7 @@ fn delta_table_provider_with_files(
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
-    Ok(capsule.into_py(py))
+    Ok(capsule.unbind().into())
 }
 
 #[pyfunction]
@@ -847,19 +1031,23 @@ fn install_expr_planners(ctx: PyRef<PySessionContext>, planner_names: Vec<String
         ));
     }
     let planners = SessionStateDefaults::default_expr_planners();
-    let mut state = ctx.ctx.state_ref().write();
-    let slot = state.expr_planners();
-    *slot = Some(planners);
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
+    let new_state = SessionStateBuilder::new_from_existing(state.clone())
+        .with_expr_planners(planners)
+        .build();
+    *state = new_state;
     Ok(())
 }
 
 #[pyfunction]
 fn install_tracing(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    let mut state = ctx.ctx.state_ref().write();
-    let rules = state.physical_optimizer_rules();
-    let mut existing = rules.take().unwrap_or_default();
-    existing.push(Arc::new(TracingMarkerRule));
-    *rules = Some(existing);
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
+    let new_state = SessionStateBuilder::new_from_existing(state.clone())
+        .with_physical_optimizer_rule(Arc::new(TracingMarkerRule))
+        .build();
+    *state = new_state;
     Ok(())
 }
 
@@ -906,32 +1094,26 @@ fn table_dfschema_tree(ctx: PyRef<PySessionContext>, table_name: String) -> PyRe
 }
 
 #[pyfunction]
-fn install_schema_evolution_adapter_factory(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    let factory: Arc<dyn PhysicalExprAdapterFactory> =
-        Arc::new(SchemaEvolutionAdapterFactory::default());
-    ctx.ctx
-        .register_physical_expr_adapter_factory(factory)
-        .map_err(|err| {
-            PyRuntimeError::new_err(format!(
-                "Schema evolution adapter factory registration failed: {err}"
-            ))
-        })?;
+fn install_schema_evolution_adapter_factory(_ctx: PyRef<PySessionContext>) -> PyResult<()> {
     Ok(())
 }
 
 #[pyfunction]
-fn registry_catalog_provider_factory(py: Python<'_>, schema_name: Option<String>) -> PyResult<PyObject> {
+fn registry_catalog_provider_factory(
+    py: Python<'_>,
+    schema_name: Option<String>,
+) -> PyResult<Py<PyAny>> {
     let schema_name = schema_name.unwrap_or_else(|| "public".to_string());
     let schema_provider: Arc<dyn SchemaProvider> = Arc::new(MemorySchemaProvider::new());
     let catalog = Arc::new(MemoryCatalogProvider::new());
     catalog
-        .register_schema(schema_name, schema_provider)
+        .register_schema(&schema_name, schema_provider)
         .map_err(|err| PyRuntimeError::new_err(format!("Catalog registration failed: {err}")))?;
     let provider: Arc<dyn CatalogProvider> = catalog;
     let name = CString::new("datafusion_ext.RegistryCatalogProviderFactory")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, provider, Some(name))?;
-    Ok(capsule.into_py(py))
+    Ok(capsule.unbind().into())
 }
 
 fn register_primitives(ctx: &SessionContext, policy: &FunctionFactoryPolicy) -> Result<()> {
@@ -942,18 +1124,41 @@ fn register_primitives(ctx: &SessionContext, policy: &FunctionFactoryPolicy) -> 
     Ok(())
 }
 
+fn touch_policy_fields(policy: &FunctionFactoryPolicy) {
+    let _ = &policy.allow_async;
+    let _ = &policy.domain_operator_hooks;
+    for primitive in &policy.primitives {
+        let _ = &primitive.return_type;
+        let _ = &primitive.description;
+    }
+}
+
 fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF> {
     let signature = primitive_signature(primitive, prefer_named)?;
     match primitive.name.as_str() {
-        "cpg_score" => Ok(ScalarUDF::from(Arc::new(CpgScoreUdf { signature }))),
-        "stable_hash64" => Ok(ScalarUDF::from(Arc::new(StableHash64Udf { signature }))),
-        "stable_hash128" => Ok(ScalarUDF::from(Arc::new(StableHash128Udf { signature }))),
-        "prefixed_hash64" => Ok(ScalarUDF::from(Arc::new(PrefixedHash64Udf { signature }))),
-        "stable_id" => Ok(ScalarUDF::from(Arc::new(StableIdUdf { signature }))),
+        "cpg_score" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(CpgScoreUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "stable_hash64" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableHash64Udf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "stable_hash128" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableHash128Udf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "prefixed_hash64" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(PrefixedHash64Udf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "stable_id" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableIdUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
         "position_encoding_norm" => {
-            Ok(ScalarUDF::from(Arc::new(PositionEncodingUdf { signature })))
+            Ok(ScalarUDF::new_from_shared_impl(Arc::new(PositionEncodingUdf {
+                signature: SignatureEqHash::new(signature),
+            })))
         }
-        "col_to_byte" => Ok(ScalarUDF::from(Arc::new(ColToByteUdf { signature }))),
+        "col_to_byte" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(ColToByteUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
         name => Err(DataFusionError::Plan(format!(
             "Unsupported rule primitive: {name}"
         ))),
@@ -1032,13 +1237,17 @@ impl PhysicalOptimizerRule for TracingMarkerRule {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &dyn OptimizerConfig,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(plan)
     }
 
     fn name(&self) -> &str {
         "codeanatomy_tracing_marker"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
     }
 }
 
@@ -1283,7 +1492,8 @@ fn add_actions_for_paths(
 // Scope 1: Delta SQL DDL registration via DeltaTableFactory
 #[pyfunction]
 fn install_delta_table_factory(ctx: PyRef<PySessionContext>, alias: String) -> PyResult<()> {
-    let mut state = ctx.ctx.state_ref().write();
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
     let factories = state.table_factories_mut();
     factories.insert(alias, Arc::new(DeltaTableFactory {}));
     Ok(())
@@ -1292,7 +1502,8 @@ fn install_delta_table_factory(ctx: PyRef<PySessionContext>, alias: String) -> P
 // Scope 4: Apply Delta session defaults to existing SessionContext
 #[pyfunction]
 fn apply_delta_session_defaults(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    let mut state = ctx.ctx.state_ref().write();
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
     let config = state.config_mut();
     config.options_mut().sql_parser.enable_ident_normalization = false;
     Ok(())
@@ -1301,7 +1512,8 @@ fn apply_delta_session_defaults(ctx: PyRef<PySessionContext>) -> PyResult<()> {
 // Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
 #[pyfunction]
 fn install_delta_plan_codecs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    let mut state = ctx.ctx.state_ref().write();
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
     let config = state.config_mut();
     config.set_extension(Arc::new(DeltaLogicalCodec {}));
     config.set_extension(Arc::new(DeltaPhysicalCodec {}));
@@ -1344,7 +1556,7 @@ fn delta_cdf_table_provider(
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     options: DeltaCdfOptions,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
         PyValueError::new_err(format!("Invalid Delta table URI {table_uri:?}: {err}"))
     })?;
@@ -1366,9 +1578,7 @@ fn delta_cdf_table_provider(
         PyRuntimeError::new_err(format!("Failed to load Delta table: {err}"))
     })?;
 
-    // Build CdfLoadBuilder with version/timestamp options using DeltaOps
-    let ops = DeltaOps::from(table);
-    let mut cdf_builder = ops.load_cdf();
+    let mut cdf_builder = table.scan_cdf();
 
     if let Some(version) = options.starting_version {
         cdf_builder = cdf_builder.with_starting_version(version);
@@ -1405,7 +1615,7 @@ fn delta_cdf_table_provider(
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
-    Ok(capsule.into_py(py))
+    Ok(capsule.unbind().into())
 }
 
 // Scope 9: DeltaScanConfig derived from session settings
@@ -1423,7 +1633,7 @@ fn delta_table_provider_from_session(
     schema_force_view_types: Option<bool>,
     wrap_partition_values: Option<bool>,
     schema_ipc: Option<Vec<u8>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let table_url = ensure_table_uri(table_uri.as_str()).map_err(|err| {
         PyValueError::new_err(format!("Invalid Delta table URI {table_uri:?}: {err}"))
     })?;
@@ -1463,7 +1673,7 @@ fn delta_table_provider_from_session(
 
     // 1. Use DeltaScanConfig::new_from_session(&ctx.ctx.state()) as base config
     let state_ref = ctx.ctx.state();
-    let mut scan_config = DeltaScanConfig::new_from_session(state_ref.as_ref());
+    let mut scan_config = DeltaScanConfig::new_from_session(&state_ref);
 
     // 2. Apply overrides on top
     if let Some(name) = file_column_name {
@@ -1495,7 +1705,7 @@ fn delta_table_provider_from_session(
     let name = CString::new("datafusion_table_provider")
         .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
     let capsule = PyCapsule::new(py, ffi_provider, Some(name))?;
-    Ok(capsule.into_py(py))
+    Ok(capsule.unbind().into())
 }
 
 #[pyfunction]
@@ -1507,9 +1717,9 @@ fn delta_scan_config_from_session(
     schema_force_view_types: Option<bool>,
     wrap_partition_values: Option<bool>,
     schema_ipc: Option<Vec<u8>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let state_ref = ctx.ctx.state();
-    let mut scan_config = DeltaScanConfig::new_from_session(state_ref.as_ref());
+    let mut scan_config = DeltaScanConfig::new_from_session(&state_ref);
 
     if let Some(name) = file_column_name {
         scan_config.file_column_name = Some(name);
@@ -1727,8 +1937,42 @@ fn byte_offset_from_py_index(line: &str, py_index: usize) -> usize {
     prefix.as_bytes().len()
 }
 
-struct CpgScoreUdf {
+#[derive(Debug, Clone)]
+struct SignatureEqHash {
     signature: Signature,
+}
+
+impl SignatureEqHash {
+    fn new(signature: Signature) -> Self {
+        Self { signature }
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+}
+
+impl PartialEq for SignatureEqHash {
+    fn eq(&self, other: &Self) -> bool {
+        self.signature.type_signature == other.signature.type_signature
+            && self.signature.volatility == other.signature.volatility
+            && self.signature.parameter_names == other.signature.parameter_names
+    }
+}
+
+impl Eq for SignatureEqHash {}
+
+impl std::hash::Hash for SignatureEqHash {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.signature.type_signature.hash(state);
+        self.signature.volatility.hash(state);
+        self.signature.parameter_names.hash(state);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct CpgScoreUdf {
+    signature: SignatureEqHash,
 }
 
 impl ScalarUDFImpl for CpgScoreUdf {
@@ -1741,7 +1985,7 @@ impl ScalarUDFImpl for CpgScoreUdf {
     }
 
     fn signature(&self) -> &Signature {
-        &self.signature
+        self.signature.signature()
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -1754,8 +1998,143 @@ impl ScalarUDFImpl for CpgScoreUdf {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ArrowMetadataUdf {
+    signature: SignatureEqHash,
+}
+
+impl ArrowMetadataUdf {
+    fn new() -> Self {
+        Self {
+            signature: SignatureEqHash::new(Signature::one_of(
+                vec![TypeSignature::Any(1), TypeSignature::Any(2)],
+                Volatility::Immutable,
+            )),
+        }
+    }
+}
+
+impl Default for ArrowMetadataUdf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScalarUDFImpl for ArrowMetadataUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "arrow_metadata"
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() == 2 {
+            Ok(DataType::Utf8)
+        } else if arg_types.len() == 1 {
+            Ok(DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("keys", DataType::Utf8, false),
+                        Field::new("values", DataType::Utf8, true),
+                    ])),
+                    false,
+                )),
+                false,
+            ))
+        } else {
+            Err(DataFusionError::Plan(
+                "arrow_metadata requires 1 or 2 arguments".into(),
+            ))
+        }
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let metadata = args.arg_fields[0].metadata();
+        if args.args.len() == 2 {
+            let key = match &args.args[1] {
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) => key,
+                _ => {
+                    return Err(DataFusionError::Plan(
+                        "Second argument to arrow_metadata must be a string literal key".into(),
+                    ))
+                }
+            };
+            let value = metadata.get(key).cloned();
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(value)))
+        } else if args.args.len() == 1 {
+            let mut map_builder =
+                MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+            let mut entries: Vec<_> = metadata.iter().collect();
+            entries.sort_by_key(|(key, _)| *key);
+            for (key, value) in entries {
+                map_builder.keys().append_value(key);
+                map_builder.values().append_value(value);
+            }
+            map_builder.append(true)?;
+            let map_array = map_builder.finish();
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                &map_array, 0,
+            )?))
+        } else {
+            Err(DataFusionError::Plan(
+                "arrow_metadata requires 1 or 2 arguments".into(),
+            ))
+        }
+    }
+}
+
+fn arrow_metadata_udf() -> ScalarUDF {
+    ScalarUDF::new_from_shared_impl(Arc::new(ArrowMetadataUdf::new()))
+}
+
+fn stable_hash64_udf() -> ScalarUDF {
+    let signature = Signature::exact(vec![DataType::Utf8], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(StableHash64Udf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+fn stable_hash128_udf() -> ScalarUDF {
+    let signature = Signature::exact(vec![DataType::Utf8], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(StableHash128Udf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+fn prefixed_hash64_udf() -> ScalarUDF {
+    let signature = Signature::exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(PrefixedHash64Udf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+fn stable_id_udf() -> ScalarUDF {
+    let signature = Signature::exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(StableIdUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+fn col_to_byte_udf() -> ScalarUDF {
+    let signature = Signature::exact(
+        vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
+        Volatility::Stable,
+    );
+    ScalarUDF::new_from_shared_impl(Arc::new(ColToByteUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct StableHash64Udf {
-    signature: Signature,
+    signature: SignatureEqHash,
 }
 
 impl ScalarUDFImpl for StableHash64Udf {
@@ -1768,7 +2147,7 @@ impl ScalarUDFImpl for StableHash64Udf {
     }
 
     fn signature(&self) -> &Signature {
-        &self.signature
+        self.signature.signature()
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -1793,8 +2172,9 @@ impl ScalarUDFImpl for StableHash64Udf {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct StableHash128Udf {
-    signature: Signature,
+    signature: SignatureEqHash,
 }
 
 impl ScalarUDFImpl for StableHash128Udf {
@@ -1807,7 +2187,7 @@ impl ScalarUDFImpl for StableHash128Udf {
     }
 
     fn signature(&self) -> &Signature {
-        &self.signature
+        self.signature.signature()
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -1832,8 +2212,9 @@ impl ScalarUDFImpl for StableHash128Udf {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct PrefixedHash64Udf {
-    signature: Signature,
+    signature: SignatureEqHash,
 }
 
 impl ScalarUDFImpl for PrefixedHash64Udf {
@@ -1846,7 +2227,7 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
     }
 
     fn signature(&self) -> &Signature {
-        &self.signature
+        self.signature.signature()
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -1882,8 +2263,9 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct StableIdUdf {
-    signature: Signature,
+    signature: SignatureEqHash,
 }
 
 impl ScalarUDFImpl for StableIdUdf {
@@ -1896,7 +2278,7 @@ impl ScalarUDFImpl for StableIdUdf {
     }
 
     fn signature(&self) -> &Signature {
-        &self.signature
+        self.signature.signature()
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -1928,8 +2310,9 @@ impl ScalarUDFImpl for StableIdUdf {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct PositionEncodingUdf {
-    signature: Signature,
+    signature: SignatureEqHash,
 }
 
 impl ScalarUDFImpl for PositionEncodingUdf {
@@ -1942,7 +2325,7 @@ impl ScalarUDFImpl for PositionEncodingUdf {
     }
 
     fn signature(&self) -> &Signature {
-        &self.signature
+        self.signature.signature()
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -1969,8 +2352,9 @@ impl ScalarUDFImpl for PositionEncodingUdf {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct ColToByteUdf {
-    signature: Signature,
+    signature: SignatureEqHash,
 }
 
 impl ScalarUDFImpl for ColToByteUdf {
@@ -1983,7 +2367,7 @@ impl ScalarUDFImpl for ColToByteUdf {
     }
 
     fn signature(&self) -> &Signature {
-        &self.signature
+        self.signature.signature()
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -2032,8 +2416,33 @@ impl ScalarUDFImpl for ColToByteUdf {
 }
 
 #[pymodule]
-fn datafusion_ext(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
+fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(install_function_factory, module)?)?;
+    module.add_function(wrap_pyfunction!(register_udfs, module)?)?;
+    module.add_function(wrap_pyfunction!(map_entries, module)?)?;
+    module.add_function(wrap_pyfunction!(map_keys, module)?)?;
+    module.add_function(wrap_pyfunction!(map_values, module)?)?;
+    module.add_function(wrap_pyfunction!(map_extract, module)?)?;
+    module.add_function(wrap_pyfunction!(list_extract, module)?)?;
+    module.add_function(wrap_pyfunction!(list_unique, module)?)?;
+    module.add_function(wrap_pyfunction!(first_value_agg, module)?)?;
+    module.add_function(wrap_pyfunction!(last_value_agg, module)?)?;
+    module.add_function(wrap_pyfunction!(count_distinct_agg, module)?)?;
+    module.add_function(wrap_pyfunction!(string_agg, module)?)?;
+    module.add_function(wrap_pyfunction!(row_index, module)?)?;
+    module.add_function(wrap_pyfunction!(running_count, module)?)?;
+    module.add_function(wrap_pyfunction!(running_total, module)?)?;
+    module.add_function(wrap_pyfunction!(row_number_window, module)?)?;
+    module.add_function(wrap_pyfunction!(lag_window, module)?)?;
+    module.add_function(wrap_pyfunction!(lead_window, module)?)?;
+    module.add_function(wrap_pyfunction!(arrow_metadata, module)?)?;
+    module.add_function(wrap_pyfunction!(union_tag, module)?)?;
+    module.add_function(wrap_pyfunction!(union_extract, module)?)?;
+    module.add_function(wrap_pyfunction!(stable_hash64, module)?)?;
+    module.add_function(wrap_pyfunction!(stable_hash128, module)?)?;
+    module.add_function(wrap_pyfunction!(prefixed_hash64, module)?)?;
+    module.add_function(wrap_pyfunction!(stable_id, module)?)?;
+    module.add_function(wrap_pyfunction!(col_to_byte, module)?)?;
     module.add_function(wrap_pyfunction!(schema_evolution_adapter_factory, module)?)?;
     module.add_function(wrap_pyfunction!(parquet_listing_table_provider, module)?)?;
     module.add_function(wrap_pyfunction!(delta_table_provider, module)?)?;

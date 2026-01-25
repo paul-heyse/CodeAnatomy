@@ -72,6 +72,7 @@ from datafusion_engine.registry_bridge import (
 )
 from datafusion_engine.schema_registry import has_schema, schema_for
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+from datafusion_engine.sql_safety import ExecutionPolicy, validate_sql_safety
 from datafusion_engine.write_pipeline import (
     WriteFormat,
     WriteMode,
@@ -386,6 +387,22 @@ def _default_sql_policy() -> DataFusionSqlPolicy:
     return DataFusionSqlPolicy()
 
 
+def _execution_policy_from_sql_policy(policy: DataFusionSqlPolicy) -> ExecutionPolicy:
+    return ExecutionPolicy(
+        allow_ddl=policy.allow_ddl,
+        allow_dml=policy.allow_dml,
+        allow_statements=policy.allow_statements,
+    )
+
+
+def _execution_policy_for_options(options: DataFusionCompileOptions) -> ExecutionPolicy:
+    policy = options.sql_policy or resolve_sql_policy(
+        options.sql_policy_name,
+        fallback=_default_sql_policy(),
+    )
+    return _execution_policy_from_sql_policy(policy)
+
+
 def _merge_sql_policies(*policies: DataFusionSqlPolicy | None) -> DataFusionSqlPolicy:
     allow_ddl = any(policy.allow_ddl for policy in policies if policy is not None)
     allow_dml = any(policy.allow_dml for policy in policies if policy is not None)
@@ -556,6 +573,16 @@ def df_from_sqlglot_or_sql(
         if named_params
         else _sql_options_for_options(resolved)
     )
+    if resolved.enforce_sql_policy:
+        policy = _execution_policy_for_options(resolved)
+        violations = validate_sql_safety(
+            compiled.rendered_sql,
+            policy,
+            dialect=resolved.dialect,
+        )
+        if violations:
+            msg = f"SQL policy violations: {', '.join(violations)}."
+            raise ValueError(msg)
     df = pipeline.execute(
         compiled,
         params=bindings.param_values or None,
@@ -629,51 +656,8 @@ def sqlglot_to_datafusion(
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame representing the expression.
-
-    Raises
-    ------
-    ValueError
-        Raised when named parameters violate read-only SQL policy.
     """
-    resolved = options or DataFusionCompileOptions()
-    named_bindings = resolve_param_bindings(
-        resolved.named_params,
-        allowlist=resolved.param_identifier_allowlist,
-    )
-    if named_bindings.param_values:
-        msg = "Named parameters must be table-like."
-        raise ValueError(msg)
-    named_params = named_bindings.named_tables
-    if named_params:
-        read_only_policy = DataFusionSqlPolicy()
-        violations = _policy_violations(expr, read_only_policy)
-        if violations:
-            msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
-            raise ValueError(msg)
-    pipeline = _compilation_pipeline(ctx, options=resolved)
-    compiled = pipeline.compile_ast(expr)
-    resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
-    bindings = resolve_param_bindings(
-        resolved.params,
-        allowlist=resolved.param_identifier_allowlist,
-    )
-    if bindings.named_tables:
-        msg = "Table-like parameters must be passed via named params."
-        raise ValueError(msg)
-    sql_options = (
-        _sql_options_for_named_params(resolved)
-        if named_params
-        else _sql_options_for_options(resolved)
-    )
-    df = pipeline.execute(
-        compiled,
-        params=bindings.param_values or None,
-        named_params=named_params or None,
-        sql_options=sql_options,
-    )
-    _maybe_explain(ctx, compiled.sqlglot_ast, options=resolved)
-    _maybe_collect_plan_artifacts(ctx, compiled.sqlglot_ast, options=resolved, df=df)
-    return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
+    return df_from_sqlglot_or_sql(ctx, expr, options=options)
 
 
 def compile_sqlglot_expr(
@@ -743,6 +727,77 @@ def ibis_to_datafusion(
         If parameter bindings include invalid scalar or table-like combinations.
     """
     resolved = options or DataFusionCompileOptions()
+    if resolved.ibis_expr is None:
+        resolved = replace(resolved, ibis_expr=expr)
+    if resolved.prefer_substrait:
+        from datafusion_engine.compile_options import DataFusionSubstraitFallbackEvent
+        from datafusion_engine.diagnostics import ensure_recorder_sink
+        from ibis_engine.substrait_bridge import try_ibis_to_substrait_bytes
+
+        diagnostics_sink = None
+        session_id = None
+        if resolved.runtime_profile is not None and resolved.runtime_profile.diagnostics_sink is not None:
+            session_id = resolved.runtime_profile.context_cache_key()
+            diagnostics_sink = ensure_recorder_sink(
+                resolved.runtime_profile.diagnostics_sink,
+                session_id=session_id,
+            )
+
+        plan_bytes = try_ibis_to_substrait_bytes(
+            expr,
+            record_gaps=resolved.record_substrait_gaps,
+            diagnostics_sink=diagnostics_sink,
+            session_id=session_id,
+        )
+        if plan_bytes is None:
+            if resolved.substrait_fallback_hook is not None:
+                resolved.substrait_fallback_hook(
+                    DataFusionSubstraitFallbackEvent(
+                        reason="Substrait compilation failed; falling back to AST execution.",
+                        expr_type=type(expr).__name__,
+                        plan_hash=resolved.plan_hash,
+                        profile_hash=resolved.profile_hash,
+                        run_id=resolved.run_id,
+                    )
+                )
+            if not resolved.prefer_ast_execution:
+                msg = "Substrait compilation failed and AST fallback is disabled."
+                raise ValueError(msg)
+            fallback_expr = compile_sqlglot_expr(
+                expr,
+                backend=backend,
+                ctx=ctx,
+                options=resolved,
+            )
+            df = df_from_sqlglot_ast(ctx, fallback_expr, options=resolved)
+            diagnostics_options = replace(resolved, diagnostics_allow_sql=False)
+            _maybe_collect_plan_artifacts(
+                ctx,
+                fallback_expr,
+                options=diagnostics_options,
+                df=df,
+            )
+            return df
+        df = replay_substrait_bytes(ctx, plan_bytes)
+        plan_expr = compile_sqlglot_expr(
+            expr,
+            backend=backend,
+            ctx=ctx,
+            options=resolved,
+        )
+        diagnostics_options = replace(
+            resolved,
+            diagnostics_allow_sql=False,
+            substrait_plan_override=plan_bytes,
+        )
+        _maybe_collect_plan_artifacts(
+            ctx,
+            plan_expr,
+            options=diagnostics_options,
+            df=df,
+            substrait_plan_override=plan_bytes,
+        )
+        return df
     pipeline = _compilation_pipeline(ctx, options=resolved)
     compiled = pipeline.compile_ibis(expr, backend=backend)
     resolved, cache_reason = _resolve_cache_policy(compiled.sqlglot_ast, ctx=ctx, options=resolved)
@@ -1135,8 +1190,8 @@ def _lineage_schema_map(
 
 @dataclass(frozen=True)
 class _PlanArtifactsDetails:
-    df: DataFrame
-    explain_rows: ExplainRows
+    df: DataFrame | None
+    explain_rows: ExplainRows | None
     analyze_rows: ExplainRows | None
     substrait_plan: bytes | None
     substrait_validation: Mapping[str, object] | None
@@ -1151,14 +1206,46 @@ def _collect_plan_artifacts_details(
     sql: str,
     options: DataFusionCompileOptions,
     df: DataFrame | None,
+    substrait_plan_override: bytes | None = None,
 ) -> _PlanArtifactsDetails:
+    if not options.diagnostics_allow_sql:
+        plan_df = df
+        explain_rows: ExplainRows | None = None
+        analyze_rows: ExplainRows | None = None
+        substrait_plan = substrait_plan_override
+        substrait_validation = None
+        if substrait_plan is not None and options.substrait_validation and plan_df is not None:
+            substrait_validation = _substrait_validation_payload(
+                substrait_plan,
+                df=plan_df,
+            )
+        plan_details = _df_plan_details(plan_df) if plan_df is not None else {}
+        unparsed_sql = None
+        unparse_error = None
+        if plan_df is not None:
+            unparse_plan = _df_plan(plan_df, "optimized_logical_plan") or _df_plan(
+                plan_df,
+                "logical_plan",
+            )
+            unparsed_sql, unparse_error = _unparse_plan(unparse_plan)
+        return _PlanArtifactsDetails(
+            df=plan_df,
+            explain_rows=explain_rows,
+            analyze_rows=analyze_rows,
+            substrait_plan=substrait_plan,
+            substrait_validation=substrait_validation,
+            plan_details=plan_details,
+            unparsed_sql=unparsed_sql,
+            unparse_error=unparse_error,
+        )
+
     sql_options = _sql_options_for_options(options)
     plan_df = df or ctx.sql_with_options(sql, sql_options)
     explain_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN {sql}", sql_options))
     analyze_rows = None
     if options.explain_analyze:
         analyze_rows = _collect_reader(ctx.sql_with_options(f"EXPLAIN ANALYZE {sql}", sql_options))
-    substrait_plan = _substrait_bytes(ctx, sql)
+    substrait_plan = substrait_plan_override or _substrait_bytes(ctx, sql)
     substrait_validation = None
     if substrait_plan is not None and options.substrait_validation:
         substrait_validation = _substrait_validation_payload(
@@ -1353,7 +1440,7 @@ class DataFusionPlanArtifacts:
 
     plan_hash: str | None
     sql: str
-    explain: TableLike | RecordBatchReaderLike
+    explain: TableLike | RecordBatchReaderLike | None
     explain_analyze: TableLike | RecordBatchReaderLike | None
     substrait_plan: bytes | None
     normalized_sql: str | None = None
@@ -1568,6 +1655,14 @@ def execute_dml(
     violations = _policy_violations(expr, policy)
     if violations:
         msg = f"DataFusion DML policy violations: {', '.join(violations)}."
+        raise ValueError(msg)
+    safety_violations = validate_sql_safety(
+        sql,
+        _execution_policy_from_sql_policy(policy),
+        dialect=resolved.dialect,
+    )
+    if safety_violations:
+        msg = f"SQL policy violations: {', '.join(safety_violations)}."
         raise ValueError(msg)
     bindings = resolve_param_bindings(
         resolved.params,
@@ -1901,6 +1996,8 @@ def _maybe_explain(
     *,
     options: DataFusionCompileOptions,
 ) -> None:
+    if not options.diagnostics_allow_sql:
+        return
     if not options.capture_explain and options.explain_hook is None:
         return
     _ensure_dialect(options.dialect)
@@ -1919,6 +2016,7 @@ def _maybe_collect_plan_artifacts(
     *,
     options: DataFusionCompileOptions,
     df: DataFrame,
+    substrait_plan_override: bytes | None = None,
 ) -> None:
     if (
         not options.capture_plan_artifacts
@@ -1926,8 +2024,11 @@ def _maybe_collect_plan_artifacts(
         and not options.substrait_validation
     ):
         return
+    resolved = options
+    if substrait_plan_override is not None:
+        resolved = replace(options, substrait_plan_override=substrait_plan_override)
     try:
-        artifacts = collect_plan_artifacts(ctx, expr, options=options, df=df, run_id=options.run_id)
+        artifacts = collect_plan_artifacts(ctx, expr, options=resolved, df=df, run_id=options.run_id)
     except (RuntimeError, TypeError, ValueError):
         return
     if options.plan_artifacts_hook is not None:
@@ -2083,7 +2184,13 @@ def _collect_plan_artifact_inputs(
         except (KeyError, TypeError, ValueError):
             resolved_expr = expr
     sql = _emit_sql(resolved_expr, options=options)
-    details = _collect_plan_artifacts_details(ctx, sql=sql, options=options, df=df)
+    details = _collect_plan_artifacts_details(
+        ctx,
+        sql=sql,
+        options=options,
+        df=df,
+        substrait_plan_override=options.substrait_plan_override,
+    )
     policy_hash = _sqlglot_policy_hash(options, policy=policy)
     plan_hash = options.plan_hash or plan_fingerprint(
         resolved_expr,

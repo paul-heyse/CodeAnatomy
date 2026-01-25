@@ -212,10 +212,12 @@ def register_table_params(
             registered.append(name)
         yield
     finally:
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
         for name in registered:
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                ctx.deregister_table(name)
-                invalidate_introspection_cache(ctx)
+                adapter.deregister_table(name)
 
 
 def _ensure_table_slot(ctx: SessionContext, name: str) -> None:

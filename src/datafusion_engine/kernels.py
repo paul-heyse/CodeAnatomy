@@ -32,7 +32,7 @@ from arrowdsl.schema.metadata import (
     ordering_from_schema,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from datafusion_engine.udf_registry import _register_kernel_udfs, register_datafusion_udfs
+from datafusion_engine.udf_runtime import register_rust_udfs
 
 type KernelFn = Callable[..., TableLike]
 
@@ -47,7 +47,7 @@ def _session_context(ctx: ExecutionContext | None) -> SessionContext:
         session = DataFusionRuntimeProfile().session_context()
     else:
         session = ctx.runtime.datafusion.session_context()
-    _register_kernel_udfs(session)
+    register_rust_udfs(session)
     return session
 
 
@@ -857,6 +857,6 @@ __all__ = [
     "dedupe_kernel",
     "explode_list_kernel",
     "interval_align_kernel",
-    "register_datafusion_udfs",
+    "register_rust_udfs",
     "winner_select_kernel",
 ]

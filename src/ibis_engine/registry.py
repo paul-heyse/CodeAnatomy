@@ -33,9 +33,6 @@ type PathLike = str | Path
 type DatasetFormat = str
 type DataFusionProvider = Literal["listing", "parquet", "delta_cdf"]
 
-_REGISTERED_CATALOGS: dict[int, set[str]] = {}
-_REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
-_REGISTERED_REGISTRY_CATALOGS: dict[int, set[str]] = {}
 
 
 class FilesystemBackend(Protocol):
@@ -582,21 +579,14 @@ def _ensure_backend_catalog_schema(
 ) -> None:
     if runtime_profile is None:
         return
-    backend_id = id(backend)
-    catalogs = _REGISTERED_CATALOGS.setdefault(backend_id, set())
-    schemas = _REGISTERED_SCHEMAS.setdefault(backend_id, set())
     catalog = runtime_profile.default_catalog
     schema = runtime_profile.default_schema
-    if catalog not in catalogs:
-        create_catalog = getattr(backend, "create_catalog", None)
-        if callable(create_catalog):
-            create_catalog(catalog, force=True)
-        catalogs.add(catalog)
-    if (catalog, schema) not in schemas:
-        create_database = getattr(backend, "create_database", None)
-        if callable(create_database):
-            create_database(schema, catalog=catalog, force=True)
-        schemas.add((catalog, schema))
+    create_catalog = getattr(backend, "create_catalog", None)
+    if callable(create_catalog):
+        create_catalog(catalog, force=True)
+    create_database = getattr(backend, "create_database", None)
+    if callable(create_database):
+        create_database(schema, catalog=catalog, force=True)
 
 
 def _ensure_registry_catalog_provider(
@@ -629,17 +619,12 @@ def _ensure_registry_catalog_provider(
         raise TypeError(msg)
     from datafusion_engine.catalog_provider import register_registry_catalog
 
-    ctx_id = id(ctx)
-    registered = _REGISTERED_REGISTRY_CATALOGS.setdefault(ctx_id, set())
-    if catalog_name in registered:
-        return
     register_registry_catalog(
         ctx,
         registry=registry,
         catalog_name=catalog_name,
         schema_name=schema_name,
     )
-    registered.add(catalog_name)
 
 
 class IbisDatasetRegistry:

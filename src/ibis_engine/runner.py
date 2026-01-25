@@ -74,14 +74,19 @@ def _record_tracing_snapshot(
     run_id: str,
 ) -> None:
     runtime_profile = execution.runtime_profile
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+    if runtime_profile is None:
         return
     from datafusion_engine.runtime import collect_datafusion_traces
 
     traces = collect_datafusion_traces(runtime_profile)
     if traces is None:
         return
-    runtime_profile.diagnostics_sink.record_artifact(
+    from datafusion_engine.diagnostics import recorder_for_profile
+
+    recorder = recorder_for_profile(runtime_profile, operation_id="datafusion_traces_v1")
+    if recorder is None:
+        return
+    recorder.record_artifact(
         "datafusion_traces_v1",
         {
             "event_time_unix_ms": int(time.time() * 1000),
@@ -97,14 +102,19 @@ def _record_metrics_snapshot(
     run_id: str,
 ) -> None:
     runtime_profile = execution.runtime_profile
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+    if runtime_profile is None:
         return
     from datafusion_engine.runtime import collect_datafusion_metrics
 
     metrics = collect_datafusion_metrics(runtime_profile)
     if metrics is None:
         return
-    runtime_profile.diagnostics_sink.record_artifact(
+    from datafusion_engine.diagnostics import recorder_for_profile
+
+    recorder = recorder_for_profile(runtime_profile, operation_id="datafusion_metrics_v1")
+    if recorder is None:
+        return
+    recorder.record_artifact(
         "datafusion_metrics_v1",
         {
             "event_time_unix_ms": int(time.time() * 1000),
@@ -314,6 +324,7 @@ async def async_stream_plan(
     for batch in reader:
         yield batch
 
+
 def _datafusion_dataframe_for_plan(
     plan: IbisPlan,
     *,
@@ -339,7 +350,13 @@ def _datafusion_dataframe_for_plan(
         )
     label = _datafusion_run_label(execution, operation="compile")
     metadata = _datafusion_run_metadata(execution, operation="compile")
-    with tracked_run(label=label, sink=runtime_profile.diagnostics_sink, metadata=metadata) as run:
+    from datafusion_engine.diagnostics import ensure_recorder_sink
+
+    sink = ensure_recorder_sink(
+        runtime_profile.diagnostics_sink,
+        session_id=runtime_profile.context_cache_key(),
+    )
+    with tracked_run(label=label, sink=sink, metadata=metadata) as run:
         df = ibis_to_datafusion(
             plan.expr,
             backend=execution.backend,

@@ -17,9 +17,8 @@ from datafusion_engine.schema_introspection import routines_snapshot_table
 
 if TYPE_CHECKING:
     from datafusion_engine.schema_introspection import SchemaIntrospector
-    from datafusion_engine.udf_registry import DataFusionUdfSpec
 
-# UdfTier type - must match udf_registry.py definition
+# UdfTier type - must match engine UDF tier definitions
 UdfTier = Literal["builtin", "pyarrow", "pandas", "python"]
 
 BuiltinCategory = Literal[
@@ -35,6 +34,37 @@ BuiltinCategory = Literal[
 # Performance tier ordering from fastest to slowest
 # Note: Uses "pandas" tier to align with existing DataFusionUdfSpec.udf_tier values
 UDF_TIER_LADDER: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
+
+
+@dataclass(frozen=True)
+class DataFusionUdfSpec:
+    """Specification for a DataFusion UDF entry."""
+
+    func_id: str
+    engine_name: str
+    kind: Literal["scalar", "aggregate", "window", "table"]
+    input_types: tuple[pa.DataType, ...]
+    return_type: pa.DataType
+    state_type: pa.DataType | None = None
+    volatility: str = "stable"
+    arg_names: tuple[str, ...] | None = None
+    catalog: str | None = None
+    database: str | None = None
+    capsule_id: str | None = None
+    udf_tier: UdfTier = "python"
+    rewrite_tags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate UDF tier values.
+
+        Raises
+        ------
+        ValueError
+            Raised when the tier is not supported.
+        """
+        if self.udf_tier not in UDF_TIER_LADDER:
+            msg = f"Unsupported UDF tier: {self.udf_tier!r}."
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True)
@@ -768,10 +798,226 @@ def create_strict_catalog(
     return UdfCatalog(tier_policy=policy, udf_specs=udf_specs)
 
 
+def datafusion_udf_specs() -> tuple[DataFusionUdfSpec, ...]:
+    """Return the canonical DataFusion UDF specs.
+
+    Returns
+    -------
+    tuple[DataFusionUdfSpec, ...]
+        Canonical DataFusion UDF specifications.
+    """
+    return (
+        DataFusionUdfSpec(
+            func_id="stable_hash64",
+            engine_name="stable_hash64",
+            kind="scalar",
+            input_types=(pa.string(),),
+            return_type=pa.int64(),
+            arg_names=("value",),
+            rewrite_tags=("hash",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="stable_hash128",
+            engine_name="stable_hash128",
+            kind="scalar",
+            input_types=(pa.string(),),
+            return_type=pa.string(),
+            arg_names=("value",),
+            rewrite_tags=("hash",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="prefixed_hash64",
+            engine_name="prefixed_hash64",
+            kind="scalar",
+            input_types=(pa.string(), pa.string()),
+            return_type=pa.string(),
+            arg_names=("prefix", "value"),
+            rewrite_tags=("hash",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="stable_id",
+            engine_name="stable_id",
+            kind="scalar",
+            input_types=(pa.string(), pa.string()),
+            return_type=pa.string(),
+            arg_names=("prefix", "value"),
+            rewrite_tags=("hash",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="col_to_byte",
+            engine_name="col_to_byte",
+            kind="scalar",
+            input_types=(pa.string(), pa.int64(), pa.string()),
+            return_type=pa.int64(),
+            arg_names=("line_text", "col", "col_unit"),
+            rewrite_tags=("position_encoding",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="list_unique",
+            engine_name="list_unique",
+            kind="aggregate",
+            input_types=(pa.string(),),
+            return_type=pa.list_(pa.string()),
+            state_type=pa.list_(pa.string()),
+            arg_names=("value",),
+            rewrite_tags=("list",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="first_value_agg",
+            engine_name="first_value_agg",
+            kind="aggregate",
+            input_types=(pa.string(),),
+            return_type=pa.string(),
+            state_type=pa.string(),
+            arg_names=("value",),
+            rewrite_tags=("aggregate",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="last_value_agg",
+            engine_name="last_value_agg",
+            kind="aggregate",
+            input_types=(pa.string(),),
+            return_type=pa.string(),
+            state_type=pa.string(),
+            arg_names=("value",),
+            rewrite_tags=("aggregate",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="count_distinct_agg",
+            engine_name="count_distinct_agg",
+            kind="aggregate",
+            input_types=(pa.string(),),
+            return_type=pa.int64(),
+            state_type=pa.list_(pa.string()),
+            arg_names=("value",),
+            rewrite_tags=("aggregate",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="string_agg",
+            engine_name="string_agg",
+            kind="aggregate",
+            input_types=(pa.string(), pa.string()),
+            return_type=pa.string(),
+            state_type=pa.list_(pa.string()),
+            arg_names=("value", "separator"),
+            rewrite_tags=("aggregate", "string"),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="row_index",
+            engine_name="row_index",
+            kind="window",
+            input_types=(pa.int64(),),
+            return_type=pa.int64(),
+            arg_names=("value",),
+            rewrite_tags=("window",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="running_count",
+            engine_name="running_count",
+            kind="window",
+            input_types=(pa.int64(),),
+            return_type=pa.int64(),
+            arg_names=("value",),
+            rewrite_tags=("window",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="running_total",
+            engine_name="running_total",
+            kind="window",
+            input_types=(pa.float64(),),
+            return_type=pa.float64(),
+            arg_names=("value",),
+            rewrite_tags=("window",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="row_number_window",
+            engine_name="row_number_window",
+            kind="window",
+            input_types=(pa.int64(),),
+            return_type=pa.int64(),
+            arg_names=("value",),
+            rewrite_tags=("window",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="lag_window",
+            engine_name="lag_window",
+            kind="window",
+            input_types=(pa.string(),),
+            return_type=pa.string(),
+            arg_names=("value",),
+            rewrite_tags=("window",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="lead_window",
+            engine_name="lead_window",
+            kind="window",
+            input_types=(pa.string(),),
+            return_type=pa.string(),
+            arg_names=("value",),
+            rewrite_tags=("window",),
+            udf_tier="builtin",
+        ),
+        DataFusionUdfSpec(
+            func_id="range_table",
+            engine_name="range_table",
+            kind="table",
+            input_types=(pa.int64(), pa.int64()),
+            return_type=pa.struct([pa.field("value", pa.int64())]),
+            arg_names=("start", "end"),
+            rewrite_tags=("table",),
+            udf_tier="builtin",
+        ),
+    )
+
+
+def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
+    """Get a default UDF catalog with runtime builtin introspection.
+
+    Returns
+    -------
+    UdfCatalog
+        Default catalog with standard tier policy.
+    """
+    specs = {spec.func_id: spec for spec in datafusion_udf_specs()}
+    catalog = create_default_catalog(udf_specs=specs)
+    catalog.refresh_from_session(introspector)
+    return catalog
+
+
+def get_strict_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
+    """Get a strict UDF catalog that prefers builtins only.
+
+    Returns
+    -------
+    UdfCatalog
+        Catalog with strict builtin-only policy.
+    """
+    specs = {spec.func_id: spec for spec in datafusion_udf_specs()}
+    catalog = create_strict_catalog(udf_specs=specs)
+    catalog.refresh_from_session(introspector)
+    return catalog
+
+
 __all__ = [
     "UDF_TIER_LADDER",
     "BuiltinCategory",
     "BuiltinFunctionSpec",
+    "DataFusionUdfSpec",
     "FunctionCatalog",
     "FunctionSignature",
     "ResolvedFunction",
@@ -782,4 +1028,7 @@ __all__ = [
     "check_udf_allowed",
     "create_default_catalog",
     "create_strict_catalog",
+    "datafusion_udf_specs",
+    "get_default_udf_catalog",
+    "get_strict_udf_catalog",
 ]

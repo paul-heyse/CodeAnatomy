@@ -11,7 +11,7 @@ import pytest
 from arrowdsl.core.ids import hash64_from_text
 from arrowdsl.schema.build import rows_from_table
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.udf_registry import register_datafusion_udfs
+from datafusion_engine.udf_runtime import register_rust_udfs
 from tests.utils import values_as_list
 
 
@@ -70,7 +70,7 @@ def _col_to_byte_reference(line: str | None, offset: int | None, unit: str | Non
 def test_datafusion_udf_conformance() -> None:
     """Match DataFusion UDF outputs to reference implementations."""
     ctx = DataFusionRuntimeProfile().session_context()
-    register_datafusion_udfs(ctx)
+    register_rust_udfs(ctx)
     table = pa.table(
         {
             "value": ["alpha", None],

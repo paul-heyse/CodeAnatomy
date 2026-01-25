@@ -8,6 +8,7 @@ all DataFusion execution paths.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -16,7 +17,12 @@ import pyarrow.dataset as ds
 from datafusion import SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
 
+from datafusion_engine.diagnostics import recorder_for_profile
 from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.sql_safety import (
+    execution_policy_for_profile,
+    validate_sql_safety,
+)
 from sqlglot_tools.compat import exp
 from sqlglot_tools.ddl_builders import ExternalTableDDLConfig, build_external_table_ddl
 
@@ -25,6 +31,19 @@ if TYPE_CHECKING:
     from ibis_engine.registry import DatasetLocation
     from schema_spec.specs import TableSchemaSpec
     from schema_spec.system import DataFusionScanOptions
+
+
+@dataclass(frozen=True)
+class ListingTableRegistration:
+    """Listing table registration details."""
+
+    name: str
+    location: str
+    table_partition_cols: Sequence[tuple[str, object]] | None = None
+    file_extension: str = ".parquet"
+    schema: pa.Schema | None = None
+    file_sort_order: Sequence[Sequence[object]] | None = None
+    overwrite: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +101,11 @@ class DataFusionIOAdapter:
         sink is configured in the runtime profile.
         """
         self.ctx.register_object_store(scheme, store, host)
+        self._record_registration(
+            name=scheme,
+            registration_type="object_store",
+            location=host,
+        )
         self._record_artifact(
             "object_store_registered",
             {
@@ -172,8 +196,14 @@ class DataFusionIOAdapter:
                 msg = "DatasetLocation is required when DDL is not provided."
                 raise ValueError(msg)
             resolved_ddl = self.external_table_ddl(name=name, location=location)
+        self._validate_sql(resolved_ddl)
         options = sql_options or self._statement_options()
         self.ctx.sql_with_options(resolved_ddl, options).collect()
+        self._record_registration(
+            name=name,
+            registration_type="table",
+            location=_location_payload(location),
+        )
         self._record_artifact(
             "external_table_registered",
             {
@@ -216,6 +246,38 @@ class DataFusionIOAdapter:
         self.ctx.register_table(name, table)
         invalidate_introspection_cache(self.ctx)
 
+    def register_record_batches(
+        self,
+        name: str,
+        batches: list[list[pa.RecordBatch]],
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        """Register record batches as a DataFusion table.
+
+        Parameters
+        ----------
+        name
+            Table name for registration.
+        batches
+            Nested list of record batches (partitioned batches).
+        overwrite
+            If True, deregister existing table with the same name before
+            registering. Defaults to False.
+        """
+        register = getattr(self.ctx, "register_record_batches", None)
+        if not callable(register):
+            msg = "SessionContext does not support register_record_batches."
+            raise NotImplementedError(msg)
+        if overwrite and self.ctx.table_exist(name):
+            self._deregister_table(name)
+        register(name, batches)
+        invalidate_introspection_cache(self.ctx)
+        self._record_registration(
+            name=name,
+            registration_type="table",
+        )
+
     def register_table_provider(
         self,
         name: str,
@@ -239,6 +301,10 @@ class DataFusionIOAdapter:
             self._deregister_table(name)
         self.ctx.register_table(name, provider)
         invalidate_introspection_cache(self.ctx)
+        self._record_registration(
+            name=name,
+            registration_type="table",
+        )
         self._record_artifact(
             "table_provider_registered",
             {"name": name, "provider_type": type(provider).__name__},
@@ -271,6 +337,10 @@ class DataFusionIOAdapter:
         view = df.into_view(temporary=temporary)
         self.ctx.register_table(name, view)
         invalidate_introspection_cache(self.ctx)
+        self._record_registration(
+            name=name,
+            registration_type="view",
+        )
         self._record_artifact(
             "view_registered",
             {"name": name, "temporary": temporary},
@@ -301,45 +371,40 @@ class DataFusionIOAdapter:
         self.ctx.register_dataset(name, dataset)
         invalidate_introspection_cache(self.ctx)
 
-    def register_listing_table(
-        self,
-        *,
-        name: str,
-        location: str,
-        options: object,
-        schema: object | None = None,
-        overwrite: bool = False,
-    ) -> None:
+    def register_listing_table(self, spec: ListingTableRegistration) -> None:
         """Register a listing table when supported by the backend.
 
         Parameters
         ----------
-        name
-            Table name for registration.
-        location
-            Filesystem or object store location for the listing table.
-        options
-            Listing table options object.
-        schema
-            Optional schema override for registration.
-        overwrite
-            If True, deregister existing table with the same name before
-            registering. Defaults to False.
+        spec
+            Registration details including name, location, partition columns,
+            file extension, optional schema override, sort order, and overwrite.
         """
         register = getattr(self.ctx, "register_listing_table", None)
         if not callable(register):
             msg = "SessionContext does not support register_listing_table."
             raise NotImplementedError(msg)
-        if overwrite and self.ctx.table_exist(name):
-            self._deregister_table(name)
-        if schema is None:
-            register(name, location, options)
-        else:
-            register(name, location, options, schema)
+        if spec.overwrite and self.ctx.table_exist(spec.name):
+            self._deregister_table(spec.name)
+        register(
+            name=spec.name,
+            path=spec.location,
+            table_partition_cols=(
+                list(spec.table_partition_cols) if spec.table_partition_cols else None
+            ),
+            file_extension=spec.file_extension,
+            schema=spec.schema,
+            file_sort_order=spec.file_sort_order,
+        )
         invalidate_introspection_cache(self.ctx)
+        self._record_registration(
+            name=spec.name,
+            registration_type="table",
+            location=spec.location,
+        )
         self._record_artifact(
             "listing_table_registered",
-            {"name": name, "location": location},
+            {"name": spec.name, "location": spec.location},
         )
 
     def deregister_table(self, name: str) -> None:
@@ -390,6 +455,46 @@ class DataFusionIOAdapter:
         from datafusion_engine.sql_options import statement_sql_options_for_profile
 
         return statement_sql_options_for_profile(self.profile)
+
+    def _validate_sql(self, sql: str, *, allow_statements: bool = False) -> None:
+        """Validate SQL against the runtime execution policy.
+
+        Parameters
+        ----------
+        sql
+            SQL text to validate.
+        allow_statements
+            Whether to allow statement execution in the policy.
+
+        Raises
+        ------
+        ValueError
+            Raised when SQL violates the execution policy.
+        """
+        policy = execution_policy_for_profile(self.profile, allow_statements=allow_statements)
+        violations = validate_sql_safety(sql, policy, dialect="datafusion")
+        if violations:
+            msg = f"SQL policy violations: {', '.join(violations)}."
+            raise ValueError(msg)
+
+    def _record_registration(
+        self,
+        *,
+        name: str,
+        registration_type: str,
+        location: str | None = None,
+    ) -> None:
+        """Record a standardized registration diagnostic."""
+        if self.profile is None:
+            return
+        recorder = recorder_for_profile(self.profile, operation_id=f"register_{name}")
+        if recorder is None:
+            return
+        recorder.record_registration(
+            name=name,
+            registration_type=registration_type,
+            location=location,
+        )
 
     def _record_artifact(self, name: str, payload: dict[str, object]) -> None:
         """Record diagnostics artifact.

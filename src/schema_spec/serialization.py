@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import msgspec
 import pyarrow as pa
 
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from arrowdsl.schema.serialization import schema_from_msgpack, schema_to_msgpack
 from arrowdsl.schema.validation import ArrowValidationOptions
@@ -25,8 +26,18 @@ from schema_spec.system import (
 )
 from schema_spec.view_specs import ViewSpec
 from serde_msgspec import StructBase, dumps_json, dumps_msgpack, loads_msgpack
-from sqlglot_tools.expr_spec import SqlExprSpec
+from sqlglot_tools.expr_spec import ExprIR, SqlExprSpec
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
+
+
+class ExprIrPayload(StructBase, frozen=True):
+    """Serializable ExprIR payload."""
+
+    op: str
+    name: str | None = None
+    value: object | None = None
+    args: tuple[ExprIrPayload, ...] = ()
+    options: object | None = None
 
 
 class SqlExprPayload(StructBase, frozen=True):
@@ -35,6 +46,7 @@ class SqlExprPayload(StructBase, frozen=True):
     sql: str
     policy_name: str = "datafusion_compile"
     dialect: str | None = None
+    expr_ir: ExprIrPayload | None = None
 
 
 class DerivedFieldPayload(StructBase, frozen=True):
@@ -229,8 +241,52 @@ class DatasetSpecPayload(StructBase, frozen=True):
     validation: ArrowValidationPayload | None = None
 
 
+def _expr_ir_payload(expr: ExprIR | None) -> ExprIrPayload | None:
+    if expr is None:
+        return None
+    return _expr_ir_payload_required(expr)
+
+
+def _expr_ir_payload_required(expr: ExprIR) -> ExprIrPayload:
+    return ExprIrPayload(
+        op=expr.op,
+        name=expr.name,
+        value=expr.value,
+        args=tuple(_expr_ir_payload_required(arg) for arg in expr.args),
+        options=expr.options,
+    )
+
+
+def _expr_ir_from_payload(payload: ExprIrPayload | None) -> ExprIR | None:
+    if payload is None:
+        return None
+    return _expr_ir_from_payload_required(payload)
+
+
+def _expr_ir_from_payload_required(payload: ExprIrPayload) -> ExprIR:
+    value = payload.value
+    if value is not None and not isinstance(value, (bool, int, float, str, bytes)):
+        msg = f"Unsupported ExprIR literal value: {type(value).__name__}."
+        raise TypeError(msg)
+    return ExprIR(
+        op=payload.op,
+        name=payload.name,
+        value=cast("ScalarValue | None", value),
+        args=tuple(_expr_ir_from_payload_required(arg) for arg in payload.args),
+        options=payload.options,
+    )
+
+
 def _expr_payload(expr: SqlExprSpec) -> SqlExprPayload:
-    return SqlExprPayload(sql=expr.sql, policy_name=expr.policy_name, dialect=expr.dialect)
+    if expr.sql is None:
+        msg = "SqlExprSpec requires sql or expr_ir for serialization."
+        raise ValueError(msg)
+    return SqlExprPayload(
+        sql=expr.sql,
+        policy_name=expr.policy_name,
+        dialect=expr.dialect,
+        expr_ir=_expr_ir_payload(expr.expr_ir),
+    )
 
 
 def _expr_from_payload(payload: SqlExprPayload) -> SqlExprSpec:
@@ -238,6 +294,7 @@ def _expr_from_payload(payload: SqlExprPayload) -> SqlExprSpec:
         sql=payload.sql,
         policy_name=payload.policy_name,
         dialect=payload.dialect,
+        expr_ir=_expr_ir_from_payload(payload.expr_ir),
     )
 
 

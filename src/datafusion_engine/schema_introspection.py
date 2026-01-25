@@ -82,9 +82,82 @@ def _rows_for_query(
     return [dict(row) for row in table.to_pylist()]
 
 
-def _sql_literal(value: str) -> str:
-    escaped = value.replace("'", "''")
-    return f"'{escaped}'"
+def _normalized_rows(table: pa.Table) -> list[dict[str, object]]:
+    return [{str(key).lower(): value for key, value in row.items()} for row in table.to_pylist()]
+
+
+def _constraint_rows_from_snapshot(
+    snapshot: IntrospectionSnapshot,
+    *,
+    table_name: str | None = None,
+    catalog: str | None = None,
+    schema: str | None = None,
+) -> list[dict[str, object]]:
+    if snapshot.table_constraints is None or snapshot.key_column_usage is None:
+        return []
+    constraints = _normalized_rows(snapshot.table_constraints)
+    usage_rows = _normalized_rows(snapshot.key_column_usage)
+    usage_map: dict[tuple[str | None, str | None, str | None, str | None], list[dict[str, object]]] = {}
+    for row in usage_rows:
+        key = (
+            str(row.get("table_catalog")) if row.get("table_catalog") is not None else None,
+            str(row.get("table_schema")) if row.get("table_schema") is not None else None,
+            str(row.get("table_name")) if row.get("table_name") is not None else None,
+            str(row.get("constraint_name")) if row.get("constraint_name") is not None else None,
+        )
+        usage_map.setdefault(key, []).append(row)
+    rows: list[dict[str, object]] = []
+    for constraint in constraints:
+        table_catalog = (
+            str(constraint.get("table_catalog")) if constraint.get("table_catalog") is not None else None
+        )
+        table_schema = (
+            str(constraint.get("table_schema")) if constraint.get("table_schema") is not None else None
+        )
+        table_value = (
+            str(constraint.get("table_name")) if constraint.get("table_name") is not None else None
+        )
+        if table_name is not None and table_value != table_name:
+            continue
+        if catalog is not None and table_catalog != catalog:
+            continue
+        if schema is not None and table_schema != schema:
+            continue
+        constraint_name = (
+            str(constraint.get("constraint_name"))
+            if constraint.get("constraint_name") is not None
+            else None
+        )
+        key = (table_catalog, table_schema, table_value, constraint_name)
+        usage = usage_map.get(key)
+        if not usage:
+            rows.append(
+                {
+                    "table_catalog": constraint.get("table_catalog"),
+                    "table_schema": constraint.get("table_schema"),
+                    "table_name": constraint.get("table_name"),
+                    "constraint_name": constraint.get("constraint_name"),
+                    "constraint_type": constraint.get("constraint_type"),
+                    "column_name": None,
+                    "ordinal_position": None,
+                }
+            )
+            continue
+        rows.extend(
+            [
+                {
+                    "table_catalog": constraint.get("table_catalog"),
+                    "table_schema": constraint.get("table_schema"),
+                    "table_name": constraint.get("table_name"),
+                    "constraint_name": constraint.get("constraint_name"),
+                    "constraint_type": constraint.get("constraint_type"),
+                    "column_name": entry.get("column_name"),
+                    "ordinal_position": entry.get("ordinal_position"),
+                }
+                for entry in usage
+            ]
+        )
+    return rows
 
 
 def table_names_snapshot(
@@ -152,12 +225,27 @@ def routines_snapshot_table(
     snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
     if snapshot.routines is not None:
         return snapshot.routines
-    query = "SELECT * FROM information_schema.routines"
-    return _table_for_query(
-        ctx,
-        query,
-        sql_options=sql_options,
-        prepared_name="routines_snapshot",
+    return pa.Table.from_arrays(
+        [
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+        ],
+        names=[
+            "specific_catalog",
+            "specific_schema",
+            "specific_name",
+            "routine_catalog",
+            "routine_schema",
+            "routine_name",
+            "routine_type",
+            "data_type",
+        ],
     )
 
 
@@ -174,25 +262,8 @@ def table_constraint_rows(
     list[dict[str, object]]
         Rows including constraint type and column names where available.
     """
-    query = (
-        "SELECT "
-        "tc.table_catalog, "
-        "tc.table_schema, "
-        "tc.table_name, "
-        "tc.constraint_name, "
-        "tc.constraint_type, "
-        "kcu.column_name, "
-        "kcu.ordinal_position "
-        "FROM information_schema.table_constraints tc "
-        "LEFT JOIN information_schema.key_column_usage kcu "
-        "ON tc.constraint_name = kcu.constraint_name "
-        "AND tc.table_catalog = kcu.table_catalog "
-        "AND tc.table_schema = kcu.table_schema "
-        "AND tc.table_name = kcu.table_name "
-        f"WHERE tc.table_name = {_sql_literal(table_name)} "
-        "ORDER BY tc.constraint_name, kcu.ordinal_position"
-    )
-    return _rows_for_query(ctx, query, sql_options=sql_options)
+    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    return _constraint_rows_from_snapshot(snapshot, table_name=table_name)
 
 
 def constraint_rows(
@@ -209,31 +280,8 @@ def constraint_rows(
     list[dict[str, object]]
         Rows including constraint type and column names where available.
     """
-    filters: list[str] = []
-    if catalog is not None:
-        filters.append(f"tc.table_catalog = {_sql_literal(catalog)}")
-    if schema is not None:
-        filters.append(f"tc.table_schema = {_sql_literal(schema)}")
-    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
-    query = (
-        "SELECT "
-        "tc.table_catalog, "
-        "tc.table_schema, "
-        "tc.table_name, "
-        "tc.constraint_name, "
-        "tc.constraint_type, "
-        "kcu.column_name, "
-        "kcu.ordinal_position "
-        "FROM information_schema.table_constraints tc "
-        "LEFT JOIN information_schema.key_column_usage kcu "
-        "ON tc.constraint_name = kcu.constraint_name "
-        "AND tc.table_catalog = kcu.table_catalog "
-        "AND tc.table_schema = kcu.table_schema "
-        "AND tc.table_name = kcu.table_name "
-        f"{where_clause} "
-        "ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position"
-    )
-    return _rows_for_query(ctx, query, sql_options=sql_options)
+    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    return _constraint_rows_from_snapshot(snapshot, catalog=catalog, schema=schema)
 
 
 def _ddl_column_defs(schema: pa.Schema, *, partition_columns: set[str]) -> list[str]:
@@ -385,35 +433,25 @@ class SchemaIntrospector:
             Column metadata rows for the table.
         """
         snapshot = self.snapshot
-        if snapshot is not None:
-            rows: list[dict[str, object]] = []
-            for row in snapshot.columns.to_pylist():
-                name = row.get("table_name")
-                if name is None or str(name) != table_name:
-                    continue
-                rows.append(
-                    {
-                        "table_catalog": row.get("table_catalog"),
-                        "table_schema": row.get("table_schema"),
-                        "table_name": row.get("table_name"),
-                        "column_name": row.get("column_name"),
-                        "data_type": row.get("data_type"),
-                        "is_nullable": row.get("is_nullable"),
-                        "column_default": row.get("column_default"),
-                    }
-                )
-            return rows
-        query = (
-            "SELECT table_catalog, table_schema, table_name, column_name, data_type, "
-            "is_nullable, column_default "
-            "FROM information_schema.columns "
-            f"WHERE table_name = {_sql_literal(table_name)}"
-        )
-        return self._cached_rows(
-            "table_columns",
-            query=query,
-            payload={"table_name": table_name},
-        )
+        if snapshot is None:
+            return []
+        rows: list[dict[str, object]] = []
+        for row in snapshot.columns.to_pylist():
+            name = row.get("table_name")
+            if name is None or str(name) != table_name:
+                continue
+            rows.append(
+                {
+                    "table_catalog": row.get("table_catalog"),
+                    "table_schema": row.get("table_schema"),
+                    "table_name": row.get("table_name"),
+                    "column_name": row.get("column_name"),
+                    "data_type": row.get("data_type"),
+                    "is_nullable": row.get("is_nullable"),
+                    "column_default": row.get("column_default"),
+                }
+            )
+        return rows
 
     def table_columns_with_ordinal(self, table_name: str) -> list[dict[str, object]]:
         """Return ordered column metadata rows for a table.
@@ -424,50 +462,39 @@ class SchemaIntrospector:
             Column metadata rows ordered by ordinal position.
         """
         snapshot = self.snapshot
-        if snapshot is not None:
-            rows: list[dict[str, object]] = []
-            for row in snapshot.columns.to_pylist():
-                name = row.get("table_name")
-                if name is None or str(name) != table_name:
-                    continue
-                rows.append(
-                    {
-                        "table_catalog": row.get("table_catalog"),
-                        "table_schema": row.get("table_schema"),
-                        "table_name": row.get("table_name"),
-                        "column_name": row.get("column_name"),
-                        "data_type": row.get("data_type"),
-                        "ordinal_position": row.get("ordinal_position"),
-                        "is_nullable": row.get("is_nullable"),
-                        "column_default": row.get("column_default"),
-                    }
-                )
-            def _ordinal_value(item: Mapping[str, object]) -> int:
-                value = item.get("ordinal_position")
-                if isinstance(value, int):
-                    return value
-                if isinstance(value, float):
+        if snapshot is None:
+            return []
+        rows: list[dict[str, object]] = []
+        for row in snapshot.columns.to_pylist():
+            name = row.get("table_name")
+            if name is None or str(name) != table_name:
+                continue
+            rows.append(
+                {
+                    "table_catalog": row.get("table_catalog"),
+                    "table_schema": row.get("table_schema"),
+                    "table_name": row.get("table_name"),
+                    "column_name": row.get("column_name"),
+                    "data_type": row.get("data_type"),
+                    "ordinal_position": row.get("ordinal_position"),
+                    "is_nullable": row.get("is_nullable"),
+                    "column_default": row.get("column_default"),
+                }
+            )
+        def _ordinal_value(item: Mapping[str, object]) -> int:
+            value = item.get("ordinal_position")
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float):
+                return int(value)
+            if isinstance(value, str):
+                try:
                     return int(value)
-                if isinstance(value, str):
-                    try:
-                        return int(value)
-                    except ValueError:
-                        return 0
-                return 0
+                except ValueError:
+                    return 0
+            return 0
 
-            return sorted(rows, key=_ordinal_value)
-        query = (
-            "SELECT table_catalog, table_schema, table_name, column_name, data_type, "
-            "ordinal_position, is_nullable, column_default "
-            "FROM information_schema.columns "
-            f"WHERE table_name = {_sql_literal(table_name)} "
-            "ORDER BY ordinal_position"
-        )
-        return self._cached_rows(
-            "table_columns_with_ordinal",
-            query=query,
-            payload={"table_name": table_name},
-        )
+        return sorted(rows, key=_ordinal_value)
 
     def tables_snapshot(self) -> list[dict[str, object]]:
         """Return table inventory rows from information_schema.
@@ -478,13 +505,9 @@ class SchemaIntrospector:
             Table inventory rows including catalog/schema/type.
         """
         snapshot = self.snapshot
-        if snapshot is not None:
-            return [dict(row) for row in snapshot.tables.to_pylist()]
-        query = (
-            "SELECT table_catalog, table_schema, table_name, table_type "
-            "FROM information_schema.tables"
-        )
-        return self._cached_rows("tables_snapshot", query=query)
+        if snapshot is None:
+            return []
+        return [dict(row) for row in snapshot.tables.to_pylist()]
 
     def schemata_snapshot(self) -> list[dict[str, object]]:
         """Return schema inventory rows from information_schema.
@@ -494,8 +517,10 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Schema inventory rows including catalog and schema names.
         """
-        query = "SELECT catalog_name, schema_name FROM information_schema.schemata"
-        return self._cached_rows("schemata_snapshot", query=query)
+        snapshot = self.snapshot
+        if snapshot is None:
+            return []
+        return [dict(row) for row in snapshot.schemata.to_pylist()]
 
     def columns_snapshot(self) -> list[dict[str, object]]:
         """Return all column metadata rows from information_schema.
@@ -506,14 +531,9 @@ class SchemaIntrospector:
             Column metadata rows for all tables.
         """
         snapshot = self.snapshot
-        if snapshot is not None:
-            return [dict(row) for row in snapshot.columns.to_pylist()]
-        query = (
-            "SELECT table_catalog, table_schema, table_name, column_name, data_type, "
-            "is_nullable, column_default "
-            "FROM information_schema.columns"
-        )
-        return self._cached_rows("columns_snapshot", query=query)
+        if snapshot is None:
+            return []
+        return [dict(row) for row in snapshot.columns.to_pylist()]
 
     def schema_map(self) -> dict[str, dict[str, str]]:
         """Return a SQLGlot schema mapping derived from information_schema.
@@ -552,14 +572,9 @@ class SchemaIntrospector:
             Routine inventory rows including name and type.
         """
         snapshot = self.snapshot
-        if snapshot is not None and snapshot.routines is not None:
-            return [dict(row) for row in snapshot.routines.to_pylist()]
-        query = "SELECT * FROM information_schema.routines"
-        return self._cached_rows(
-            "routines_snapshot",
-            query=query,
-            prepared_name="routines_snapshot",
-        )
+        if snapshot is None or snapshot.routines is None:
+            return []
+        return [dict(row) for row in snapshot.routines.to_pylist()]
 
     def parameters_snapshot(self) -> list[dict[str, object]]:
         """Return routine parameter rows from information_schema.
@@ -570,18 +585,9 @@ class SchemaIntrospector:
             Parameter metadata rows including names and data types.
         """
         snapshot = self.snapshot
-        if snapshot is not None and snapshot.parameters is not None:
-            return [dict(row) for row in snapshot.parameters.to_pylist()]
-        query = (
-            "SELECT specific_name, routine_name, parameter_name, parameter_mode, "
-            "data_type, ordinal_position "
-            "FROM information_schema.parameters"
-        )
-        return self._cached_rows(
-            "parameters_snapshot",
-            query=query,
-            prepared_name="parameters_snapshot",
-        )
+        if snapshot is None or snapshot.parameters is None:
+            return []
+        return [dict(row) for row in snapshot.parameters.to_pylist()]
 
     def parameters_snapshot_table(self) -> pa.Table | None:
         """Return information_schema.parameters as Arrow table if available.
@@ -592,22 +598,9 @@ class SchemaIntrospector:
             Parameter inventory from information_schema.parameters, or None if unavailable.
         """
         snapshot = self.snapshot
-        if snapshot is not None:
-            return snapshot.parameters
-        query = (
-            "SELECT specific_name, routine_name, parameter_name, parameter_mode, "
-            "data_type, ordinal_position "
-            "FROM information_schema.parameters"
-        )
-        try:
-            return _table_for_query(
-                self.ctx,
-                query,
-                sql_options=self.sql_options,
-                prepared_name="parameters_snapshot",
-            )
-        except (RuntimeError, TypeError, ValueError, KeyError):
+        if snapshot is None:
             return None
+        return snapshot.parameters
 
     def function_catalog_snapshot(
         self, *, include_parameters: bool = False
@@ -664,10 +657,9 @@ class SchemaIntrospector:
             Session settings rows with name/value pairs.
         """
         snapshot = self.snapshot
-        if snapshot is not None:
-            return [dict(row) for row in snapshot.settings.to_pylist()]
-        query = "SELECT name, value FROM information_schema.df_settings"
-        return self._cached_rows("settings_snapshot", query=query)
+        if snapshot is None:
+            return []
+        return [dict(row) for row in snapshot.settings.to_pylist()]
 
     def table_column_defaults(self, table_name: str) -> dict[str, object]:
         """Return column default metadata for a table when available.
@@ -765,26 +757,21 @@ class SchemaIntrospector:
         tuple[str, ...]
             Constraint expressions or identifiers.
         """
-        try:
-            rows = self._cached_rows(
-                "table_constraints",
-                query=(
-                    "SELECT constraint_name, constraint_type, constraint_definition "
-                    "FROM information_schema.table_constraints "
-                    f"WHERE table_name = {_sql_literal(table_name)}"
-                ),
-                payload={"table_name": table_name},
-            )
-        except (RuntimeError, TypeError, ValueError):
+        snapshot = self.snapshot
+        if snapshot is None or snapshot.table_constraints is None:
             return ()
+        rows = _normalized_rows(snapshot.table_constraints)
         constraints: list[str] = []
         for row in rows:
+            name = row.get("table_name")
+            if name is None or str(name) != table_name:
+                continue
             definition = row.get("constraint_definition")
-            name = row.get("constraint_name")
+            constraint_name = row.get("constraint_name")
             if definition:
                 constraints.append(str(definition))
-            elif name:
-                constraints.append(str(name))
+            elif constraint_name:
+                constraints.append(str(constraint_name))
         return tuple(constraints)
 
 

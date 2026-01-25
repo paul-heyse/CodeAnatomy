@@ -8,7 +8,7 @@ import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import pyarrow as pa
 from deltalake import CommitProperties, DeltaTable, Transaction, WriterProperties
@@ -18,7 +18,8 @@ from ibis.expr.types import Table as IbisTable
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.ordering import Ordering
-from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
@@ -28,7 +29,9 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.registry import datafusion_context
 from ibis_engine.schema_utils import ibis_schema_from_arrow
-from obs.diagnostics import DiagnosticsCollector
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DatabaseHint = tuple[str, str] | str | None
 _QUALIFIED_PARTS_SINGLE = 1
@@ -86,7 +89,7 @@ class SourceToIbisOptions:
     name: str | None = None
     ordering: Ordering | None = None
     overwrite: bool = True
-    namespace_recorder: Callable[[Mapping[str, object]], None] | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
     table_metadata: Mapping[str, str] | None = None
 
 
@@ -201,7 +204,7 @@ def register_ibis_table(
         overwrite=options.overwrite,
     )
     _record_namespace_action(
-        options.namespace_recorder,
+        options.runtime_profile,
         action="create_table",
         name=table_name,
         database=database_hint or _default_database_hint(options.backend),
@@ -229,8 +232,6 @@ def register_ibis_record_batches(
 
     Raises
     ------
-    TypeError
-        Raised when record batch registration is unsupported.
     ValueError
         Raised when the input batch list is empty.
     """
@@ -245,20 +246,14 @@ def register_ibis_record_batches(
     except ValueError:
         table = pa.Table.from_batches(batches)
         return register_ibis_table(table, options=options)
-    register_batches = getattr(ctx, "register_record_batches", None)
-    if not callable(register_batches):
-        msg = "Ibis backend does not support record batch registration."
-        raise TypeError(msg)
-    if options.overwrite:
-        deregister = getattr(ctx, "deregister_table", None)
-        if callable(deregister):
-            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                deregister(table_name)
-                invalidate_introspection_cache(ctx)
-    register_batches(table_name, [list(batches)])
-    invalidate_introspection_cache(ctx)
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=options.runtime_profile)
+    adapter.register_record_batches(
+        table_name,
+        [list(batches)],
+        overwrite=options.overwrite,
+    )
     _record_namespace_action(
-        options.namespace_recorder,
+        options.runtime_profile,
         action="create_table",
         name=table_name,
         database=database_hint or _default_database_hint(options.backend),
@@ -292,7 +287,7 @@ def register_ibis_view(
     if database is None:
         backend_view.create_view(view_name, expr, overwrite=options.overwrite)
         _record_namespace_action(
-            options.namespace_recorder,
+            options.runtime_profile,
             action="create_view",
             name=view_name,
             database=None,
@@ -307,7 +302,7 @@ def register_ibis_view(
             overwrite=options.overwrite,
         )
         _record_namespace_action(
-            options.namespace_recorder,
+            options.runtime_profile,
             action="create_view",
             name=view_name,
             database=database,
@@ -423,7 +418,7 @@ def _plan_from_source(
         backend=backend,
         name=name,
         ordering=ordering,
-        namespace_recorder=namespace_recorder_from_ctx(ctx),
+        runtime_profile=ctx.runtime.datafusion,
     )
     return source_to_ibis(source, options=options)
 
@@ -630,77 +625,20 @@ def _database_payload(database: DatabaseHint) -> dict[str, object]:
 
 
 def _record_namespace_action(
-    recorder: Callable[[Mapping[str, object]], None] | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
     *,
     action: str,
     name: str,
     database: DatabaseHint,
     overwrite: bool,
 ) -> None:
+    recorder = recorder_for_profile(runtime_profile, operation_id="ibis_namespace_action")
     if recorder is None:
         return
-    payload: dict[str, object] = {
-        "action": action,
-        "name": name,
-        "overwrite": overwrite,
-        **_database_payload(database),
-    }
-    recorder(payload)
-
-
-def namespace_recorder_from_ctx(
-    ctx: object | None,
-) -> Callable[[Mapping[str, object]], None] | None:
-    """Return a namespace recorder derived from an execution context.
-
-    Returns
-    -------
-    Callable[[Mapping[str, object]], None] | None
-        Recorder callback when diagnostics are enabled.
-    """
-    if ctx is None:
-        return None
-    runtime = getattr(ctx, "runtime", None)
-    datafusion = getattr(runtime, "datafusion", None)
-    diagnostics = getattr(datafusion, "diagnostics_sink", None)
-    if diagnostics is None:
-        return None
-    diagnostics_sink = cast("DiagnosticsCollector", diagnostics)
-
-    def _record(payload: Mapping[str, object]) -> None:
-        diagnostics_sink.record_artifact("ibis_namespace_actions_v1", payload)
-
-    return _record
-
-
-def record_namespace_action(
-    recorder: Callable[[Mapping[str, object]], None] | None,
-    *,
-    action: str,
-    name: str,
-    database: DatabaseHint,
-    overwrite: bool,
-) -> None:
-    """Record a namespace action for diagnostics.
-
-    Parameters
-    ----------
-    recorder:
-        Recorder callback to emit diagnostics.
-    action:
-        Action name (create_view, create_table, insert, etc.).
-    name:
-        Target object name.
-    database:
-        Optional database/catalog hint.
-    overwrite:
-        Whether the action overwrites existing namespace entries.
-    """
-    _record_namespace_action(
-        recorder,
+    recorder.record_namespace_action(
         action=action,
         name=name,
-        database=database,
+        database=_database_payload(database),
         overwrite=overwrite,
     )
 
@@ -729,12 +667,10 @@ __all__ = [
     "IbisDeltaWriteOptions",
     "PlanSource",
     "SourceToIbisOptions",
-    "namespace_recorder_from_ctx",
     "plan_from_dataset",
     "plan_from_source",
     "read_delta_ibis",
     "record_batches_to_ibis",
-    "record_namespace_action",
     "register_ibis_record_batches",
     "register_ibis_table",
     "register_ibis_view",

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import importlib
 import logging
-import time
 from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol, cast
 
 import ibis
 
+from datafusion_engine.diagnostics import recorder_for_profile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from engine.unified_registry import build_unified_function_registry
 from ibis_engine.config import IbisBackendConfig
@@ -88,15 +88,13 @@ def _register_object_stores(
             msg = "ObjectStoreConfig.scheme must be non-empty."
             raise ValueError(msg)
         adapter.register_object_store(scheme=store.scheme, store=store.store, host=store.host)
-        if profile.diagnostics_sink is not None:
-            profile.diagnostics_sink.record_artifact(
-                "datafusion_object_stores_v1",
-                {
-                    "event_time_unix_ms": int(time.time() * 1000),
-                    "scheme": store.scheme,
-                    "host": store.host,
-                    "store_type": type(store.store).__name__,
-                },
+        recorder = recorder_for_profile(profile, operation_id="datafusion_object_store")
+        if recorder is not None:
+            recorder.record_registration(
+                name=store.scheme,
+                registration_type="object_store",
+                location=store.host,
+                schema={"store_type": type(store.store).__name__},
             )
 
 

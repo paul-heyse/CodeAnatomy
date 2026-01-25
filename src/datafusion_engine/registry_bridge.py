@@ -48,6 +48,7 @@ from datafusion_engine.sql_options import (
 from datafusion_engine.sql_options import (
     statement_sql_options_for_profile as _statement_sql_options_for_profile,
 )
+from datafusion_engine.sql_safety import execution_policy_for_profile, validate_sql_safety
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
@@ -469,8 +470,12 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     if provider == "delta_cdf" and location.format != "delta":
         msg = "Delta CDF provider requires delta-format datasets."
         raise ValueError(msg)
+    if provider == "parquet":
+        provider = "listing"
     if provider is None and location.format == "delta" and location.delta_cdf_options is not None:
         provider = "delta_cdf"
+    if provider is None and location.format != "delta":
+        provider = "listing"
     if provider is None and _prefers_listing_table(location, scan=scan):
         provider = "listing"
     return DataFusionRegistryOptions(
@@ -656,7 +661,7 @@ def register_dataset_df(
 
 @dataclass(frozen=True)
 class DatasetDdlRegistration:
-    """Define inputs for DDL-based dataset registration."""
+    """Define inputs for dataset registration."""
 
     name: str
     spec: DatasetSpec
@@ -668,14 +673,9 @@ def register_dataset_ddl(
     ctx: SessionContext,
     registration: DatasetDdlRegistration,
     *,
-    sql_options: SQLOptions | None = None,
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> None:
-    """Register dataset using DDL (preferred path for streaming sources).
-
-    This uses CREATE [UNBOUNDED] EXTERNAL TABLE DDL which properly sets
-    streaming semantics in DataFusion. The unbounded flag is derived from
-    the DatasetSpec's DataFusionScanOptions.
+    """Register a dataset using non-DDL DataFusion APIs.
 
     Parameters
     ----------
@@ -683,16 +683,13 @@ def register_dataset_ddl(
         DataFusion session context to register the table in.
     registration : DatasetDdlRegistration
         Registration inputs including name, spec, location, and file format.
-    sql_options : SQLOptions | None
-        Optional SQL execution options for the DDL statement.
     runtime_profile : DataFusionRuntimeProfile | None
-        Optional runtime profile used for cache invalidation.
+        Optional runtime profile used for registration defaults.
 
     Notes
     -----
-    This function is particularly useful for streaming sources where the
-    unbounded flag needs to be properly propagated through DDL generation
-    to DataFusion's internal table provider setup.
+    This function preserves the DatasetSpec's scan configuration without
+    executing SQL DDL statements.
 
     Examples
     --------
@@ -719,32 +716,12 @@ def register_dataset_ddl(
         format=registration.file_format,
         dataset_spec=registration.spec,
     )
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
-    ddl = adapter.external_table_ddl(name=registration.name, location=location)
-    adapter.register_external_table(
+    register_dataset_df(
+        ctx,
         name=registration.name,
         location=location,
-        ddl=ddl,
-        sql_options=sql_options or _statement_sql_options_for_profile(runtime_profile),
+        runtime_profile=runtime_profile,
     )
-    scan = resolve_datafusion_scan_options(location)
-
-    # Record metadata for diagnostics
-    record_table_provider_metadata(
-        ctx_id=id(ctx),
-        metadata=TableProviderMetadata(
-            table_name=registration.name,
-            ddl=ddl,
-            ddl_fingerprint=ddl_fingerprint_from_definition(ddl),
-            storage_location=registration.location,
-            file_format=registration.file_format,
-            unbounded=scan.unbounded if scan else False,
-            partition_columns=tuple(col for col, _ in scan.partition_cols)
-            if scan and scan.partition_cols
-            else (),
-        ),
-    )
-    _invalidate_information_schema_cache(runtime_profile, ctx)
 
 
 def datafusion_external_table_sql(
@@ -805,14 +782,7 @@ def _build_registration_context(
         cache_policy=cache_policy,
         runtime_profile=runtime_profile,
     )
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
-    external_table_sql = adapter.external_table_ddl(
-        name=name,
-        location=location,
-    )
-    if location.format == "delta" and location.files:
-        msg = "Delta DDL registration does not support file-restricted inputs."
-        raise ValueError(msg)
+    external_table_sql: str | None = None
     context = DataFusionRegistrationContext(
         ctx=ctx,
         name=name,
@@ -821,6 +791,11 @@ def _build_registration_context(
         cache=cache,
         external_table_sql=external_table_sql,
         runtime_profile=runtime_profile,
+    )
+    ddl_fingerprint = (
+        ddl_fingerprint_from_definition(external_table_sql)
+        if external_table_sql is not None
+        else None
     )
     metadata = TableProviderMetadata(
         table_name=name,
@@ -831,7 +806,7 @@ def _build_registration_context(
         if options.scan and options.scan.partition_cols
         else (),
         unbounded=options.scan.unbounded if options.scan else False,
-        ddl_fingerprint=ddl_fingerprint_from_definition(external_table_sql),
+        ddl_fingerprint=ddl_fingerprint,
     )
     record_table_provider_metadata(id(ctx), metadata=metadata)
     return context
@@ -909,15 +884,12 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
         elif _should_register_delta_provider(context):
             df = _register_delta_provider(context)
         else:
-            if context.external_table_sql is None:
-                msg = "Delta registration requires a schema-backed DDL statement."
-                raise ValueError(msg)
-            df = _register_external_table(context)
-    else:
-        if context.external_table_sql is None:
-            msg = "External table registration requires a schema-backed DDL statement."
+            msg = "Delta registration requires the native provider; DDL fallback is disabled."
             raise ValueError(msg)
-        df = _register_external_table(context)
+    elif context.location.files:
+        df = _register_file_list_dataset(context)
+    else:
+        df = _register_listing_table(context)
     _invalidate_information_schema_cache(context.runtime_profile, context.ctx)
     _validate_schema_contracts(context)
     return df
@@ -1129,7 +1101,7 @@ def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] |
 def _register_external_table(
     context: DataFusionRegistrationContext,
 ) -> DataFrame:
-    """Register external table via DDL-based path (preferred).
+    """Register external table via legacy DDL-based path.
 
     This is the preferred registration path that uses DataFusion's native
     DDL parsing and execution instead of bespoke registry logic. It leverages
@@ -1169,6 +1141,7 @@ def _register_external_table(
         context.ctx,
         scan=scan,
         sql_options=_statement_sql_options_for_profile(context.runtime_profile),
+        runtime_profile=context.runtime_profile,
     )
     try:
         from datafusion_engine.io_adapter import DataFusionIOAdapter
@@ -1222,6 +1195,200 @@ def _register_external_table(
         ),
     )
     return _maybe_cache(context, df)
+
+
+def _file_extension_for_location(
+    location: DatasetLocation,
+    *,
+    scan: DataFusionScanOptions | None,
+) -> str:
+    if scan is not None and scan.file_extension:
+        return scan.file_extension
+    format_name = str(location.format or "parquet").lower()
+    if format_name.startswith("."):
+        return format_name
+    return f".{format_name}"
+
+
+@dataclass(frozen=True)
+class _RegistrationInputs:
+    scan: DataFusionScanOptions | None
+    file_extension: str
+    table_partition_cols: Sequence[tuple[str, str]] | None
+    skip_metadata: bool | None
+    table_schema_contract: TableSchemaContract | None
+
+
+def _finalize_registered_df(
+    context: DataFusionRegistrationContext,
+    df: DataFrame,
+    *,
+    inputs: _RegistrationInputs,
+) -> DataFrame:
+    scan = inputs.scan
+    registered_schema = df.schema()
+    expr_adapter_factory = _resolve_expr_adapter_factory(
+        scan,
+        runtime_profile=context.runtime_profile,
+        dataset_name=context.name,
+        location=context.location,
+    )
+    dataset_spec = _resolve_dataset_spec(context.name, context.location)
+    evolution_required = (
+        _requires_schema_evolution_adapter(dataset_spec.evolution_spec)
+        if dataset_spec is not None
+        else False
+    )
+    _ensure_expr_adapter_factory(
+        context.ctx,
+        factory=expr_adapter_factory,
+        evolution_required=evolution_required,
+    )
+    _validate_constraints_and_defaults(
+        context,
+        enable_information_schema=(
+            context.runtime_profile.enable_information_schema
+            if context.runtime_profile is not None
+            else False
+        ),
+    )
+    _record_listing_table_artifact(
+        context,
+        details=_ListingTableArtifactDetails(
+            scan=scan,
+            file_extension=inputs.file_extension,
+            table_partition_cols=inputs.table_partition_cols,
+            skip_metadata=inputs.skip_metadata,
+            table_schema_contract=inputs.table_schema_contract,
+            expr_adapter_factory=expr_adapter_factory,
+            actual_schema=registered_schema,
+        ),
+    )
+    return _maybe_cache(context, df)
+
+
+def _register_listing_table(
+    context: DataFusionRegistrationContext,
+) -> DataFrame:
+    """Register a listing table via DataFusion listing APIs.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        DataFrame for the registered listing table.
+    """
+    scan = context.options.scan
+    file_extension = _file_extension_for_location(context.location, scan=scan)
+    table_schema_contract = _resolve_table_schema_contract(
+        schema=context.options.schema,
+        scan=scan,
+        partition_cols=scan.partition_cols if scan is not None else None,
+    )
+    _validate_table_schema_contract(table_schema_contract)
+    _validate_ordering_contract(context, scan=scan)
+    table_partition_cols = (
+        [(col, dtype) for col, dtype in scan.partition_cols]
+        if scan and scan.partition_cols
+        else None
+    )
+    table_partition_cols_payload = (
+        [(col, str(dtype)) for col, dtype in scan.partition_cols]
+        if scan and scan.partition_cols
+        else None
+    )
+    file_sort_order = None
+    if scan is not None and scan.file_sort_order:
+        file_sort_order = [list(scan.file_sort_order)]
+    skip_metadata = None
+    if scan is not None:
+        skip_metadata = _effective_skip_metadata(context.location, scan)
+    _apply_scan_settings(
+        context.ctx,
+        scan=scan,
+        sql_options=_statement_sql_options_for_profile(context.runtime_profile),
+        runtime_profile=context.runtime_profile,
+    )
+    from datafusion_engine.io_adapter import DataFusionIOAdapter, ListingTableRegistration
+
+    adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
+    adapter.register_listing_table(
+        ListingTableRegistration(
+            name=context.name,
+            location=str(context.location.path),
+            table_partition_cols=table_partition_cols,
+            file_extension=file_extension,
+            schema=context.options.schema,
+            file_sort_order=file_sort_order,
+            overwrite=bool(scan.listing_mutable) if scan is not None else False,
+        )
+    )
+    df = context.ctx.table(context.name)
+    inputs = _RegistrationInputs(
+        scan=scan,
+        file_extension=file_extension,
+        table_partition_cols=table_partition_cols_payload,
+        skip_metadata=skip_metadata,
+        table_schema_contract=table_schema_contract,
+    )
+    return _finalize_registered_df(
+        context,
+        df,
+        inputs=inputs,
+    )
+
+
+def _register_file_list_dataset(
+    context: DataFusionRegistrationContext,
+) -> DataFrame:
+    scan = context.options.scan
+    file_extension = _file_extension_for_location(context.location, scan=scan)
+    table_schema_contract = _resolve_table_schema_contract(
+        schema=context.options.schema,
+        scan=scan,
+        partition_cols=scan.partition_cols if scan is not None else None,
+    )
+    _validate_table_schema_contract(table_schema_contract)
+    _validate_ordering_contract(context, scan=scan)
+    table_partition_cols_payload = (
+        [(col, str(dtype)) for col, dtype in scan.partition_cols]
+        if scan and scan.partition_cols
+        else None
+    )
+    skip_metadata = None
+    if scan is not None:
+        skip_metadata = _effective_skip_metadata(context.location, scan)
+    _apply_scan_settings(
+        context.ctx,
+        scan=scan,
+        sql_options=_statement_sql_options_for_profile(context.runtime_profile),
+        runtime_profile=context.runtime_profile,
+    )
+    files = context.location.files
+    if not files:
+        msg = "File-list registration requires at least one file path."
+        raise ValueError(msg)
+    dataset = ds.dataset(
+        list(files),
+        format=str(context.location.format or "parquet").lower(),
+        filesystem=context.location.filesystem,
+        schema=context.options.schema,
+        partitioning=context.location.partitioning or "hive",
+    )
+    adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
+    adapter.register_dataset(context.name, dataset)
+    df = context.ctx.table(context.name)
+    inputs = _RegistrationInputs(
+        scan=scan,
+        file_extension=file_extension,
+        table_partition_cols=table_partition_cols_payload,
+        skip_metadata=skip_metadata,
+        table_schema_contract=table_schema_contract,
+    )
+    return _finalize_registered_df(
+        context,
+        df,
+        inputs=inputs,
+    )
 
 
 def provider_capsule_id(provider: object) -> str:
@@ -1586,8 +1753,21 @@ def _apply_scan_settings(
     *,
     scan: DataFusionScanOptions | None,
     sql_options: SQLOptions,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> None:
-    """Apply per-table DataFusion scan settings via SET statements."""
+    """Apply per-table DataFusion scan settings via SET statements.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    scan
+        Scan options to apply.
+    sql_options
+        SQL options to use for SET statements.
+    runtime_profile
+        Runtime profile used to validate SQL policy.
+    """
     if scan is None:
         return
     settings: list[tuple[str, object | None, bool]] = [
@@ -1610,7 +1790,13 @@ def _apply_scan_settings(
         if value is None:
             continue
         text = str(value).lower() if lower else str(value)
-        _set_runtime_setting(ctx, key=key, value=text, sql_options=sql_options)
+        _set_runtime_setting(
+            ctx,
+            key=key,
+            value=text,
+            sql_options=sql_options,
+            runtime_profile=runtime_profile,
+        )
 
 
 def _set_runtime_setting(
@@ -1619,9 +1805,35 @@ def _set_runtime_setting(
     key: str,
     value: str,
     sql_options: SQLOptions,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> None:
-    """Apply a DataFusion session setting."""
-    ctx.sql_with_options(f"SET {key} = '{value}'", sql_options).collect()
+    """Apply a DataFusion session setting.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    key
+        Setting key to update.
+    value
+        Setting value to apply.
+    sql_options
+        SQL options to use for the SET statement.
+    runtime_profile
+        Runtime profile used to validate SQL policy.
+
+    Raises
+    ------
+    ValueError
+        Raised when SQL violates the execution policy.
+    """
+    sql = f"SET {key} = '{value}'"
+    policy = execution_policy_for_profile(runtime_profile, allow_statements=True)
+    violations = validate_sql_safety(sql, policy, dialect="datafusion")
+    if violations:
+        msg = f"SQL policy violations: {', '.join(violations)}."
+        raise ValueError(msg)
+    ctx.sql_with_options(sql, sql_options).collect()
 
 
 def _refresh_listing_table(

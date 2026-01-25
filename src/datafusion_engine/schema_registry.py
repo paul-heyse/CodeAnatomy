@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import importlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypedDict, cast
 
 import pyarrow as pa
-from datafusion import SessionContext
+from datafusion import SessionContext, col
 from datafusion.dataframe import DataFrame
+from datafusion.expr import Expr
 
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.core.schema_constants import (
@@ -33,7 +33,6 @@ from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
-from sqlglot_tools.optimizer import parse_sql_strict, resolve_sqlglot_policy
 
 BYTE_SPAN_T = byte_span_type()
 SPAN_T = span_type()
@@ -2392,6 +2391,8 @@ BYTECODE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "named_struct",
     "prefixed_hash64",
     "stable_id",
+    "union_extract",
+    "union_tag",
     "unnest",
 )
 
@@ -2408,6 +2409,8 @@ BYTECODE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "named_struct": 2,
     "prefixed_hash64": 2,
     "stable_id": 2,
+    "union_extract": 2,
+    "union_tag": 1,
     "unnest": 1,
 }
 
@@ -2561,6 +2564,8 @@ BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | Non
     "map_keys": (_MAP_TYPE_TOKENS,),
     "map_values": (_MAP_TYPE_TOKENS,),
     "stable_id": (_STRING_TYPE_TOKENS, _STRING_TYPE_TOKENS),
+    "union_extract": (None, _STRING_TYPE_TOKENS),
+    "union_tag": (None,),
 }
 
 AST_VIEW_REQUIRED_NON_NULL_FIELDS: tuple[str, ...] = ("file_id", "path")
@@ -2850,66 +2855,55 @@ def nested_schema_for(name: str, *, allow_derived: bool = False) -> pa.Schema:
     return pa.schema(fields)
 
 
-def _append_selection(
-    selections: list[str],
+def _append_expr_selection(
+    selections: list[Expr],
     selected_names: set[str],
     *,
     name: str,
-    expr: str,
+    expr: Expr,
 ) -> None:
     if name in selected_names:
         return
-    selections.append(f"{expr} AS {name}")
+    selections.append(expr.alias(name))
     selected_names.add(name)
 
 
-def _get_field_expr(expr: str, field_name: str) -> str:
-    return f"get_field({expr}, '{field_name}')"
-
-
-def _context_expr(
+def _context_expr_expr(
     *,
-    root_alias: str,
-    prefix_exprs: Mapping[str, str],
+    prefix_exprs: Mapping[str, Expr],
     ctx_path: str,
     dataset_name: str,
-) -> str:
+) -> Expr:
     prefix, sep, field_name = ctx_path.rpartition(".")
     if not sep:
-        return f"{root_alias}.{field_name}"
+        return col(field_name)
     prefix_expr = prefix_exprs.get(prefix)
     if prefix_expr is None:
         msg = f"Nested context path {ctx_path!r} not resolved for {dataset_name!r}."
         raise KeyError(msg)
-    return _get_field_expr(prefix_expr, field_name)
+    return prefix_expr[field_name]
 
 
 def _resolve_nested_path(
-    *,
+    df: DataFrame,
     root_schema: pa.Schema,
+    *,
     path: str,
-    root_alias: str,
-    table: str,
-) -> tuple[str, str, pa.StructType, dict[str, str]]:
-    from_clause = f"FROM {table} AS {root_alias}"
-    current_expr = root_alias
-    current_is_root = True
+) -> tuple[DataFrame, pa.StructType, Expr | None, dict[str, Expr]]:
     current_struct: pa.Schema | pa.StructType = root_schema
-    prefix_exprs: dict[str, str] = {}
-    parts = path.split(".")
+    current_expr: Expr | None = None
+    prefix_exprs: dict[str, Expr] = {}
+    parts = path.split(".") if path else []
     for idx, step in enumerate(parts):
         field = _field_from_container(current_struct, step)
         dtype = field.type
         prefix = ".".join(parts[: idx + 1])
         if _is_list_type(dtype):
-            list_expr = (
-                f"{current_expr}.{step}" if current_is_root else _get_field_expr(current_expr, step)
-            )
+            list_expr = col(step) if current_expr is None else current_expr[step]
             alias = f"n{idx}"
-            item_alias = f"{alias}_item"
-            from_clause += f"\nCROSS JOIN unnest({list_expr}) AS {alias}({item_alias})"
-            current_expr = f"{alias}.{item_alias}"
-            current_is_root = False
+            df = df.with_column(alias, list_expr)
+            df = df.unnest_columns(alias, preserve_nulls=False)
+            current_expr = col(alias)
             value_type = dtype.value_type
             if not pa.types.is_struct(value_type):
                 msg = f"Nested path {path!r} does not resolve to a struct at {step!r}."
@@ -2920,81 +2914,87 @@ def _resolve_nested_path(
         if not pa.types.is_struct(dtype):
             msg = f"Nested path {path!r} does not resolve to a struct at {step!r}."
             raise TypeError(msg)
-        current_expr = (
-            f"{current_expr}.{step}" if current_is_root else _get_field_expr(current_expr, step)
-        )
-        current_is_root = False
+        current_expr = col(step) if current_expr is None else current_expr[step]
         current_struct = dtype
         prefix_exprs[prefix] = current_expr
     if not isinstance(current_struct, pa.StructType):
         msg = f"Nested path {path!r} did not resolve to a struct."
         raise TypeError(msg)
-    return from_clause, current_expr, current_struct, prefix_exprs
+    return df, current_struct, current_expr, prefix_exprs
 
 
-def nested_base_sql(name: str, *, table: str | None = None) -> str:
-    """Return base SQL for a nested dataset path.
-
-    Returns
-    -------
-    str
-        Base SQL query string.
-    """
-    root, path = nested_path_for(name)
-    root_schema = SCHEMA_REGISTRY[root]
-    root_alias = "root"
-    resolved_table = table or root
-    from_clause, row_expr, row_struct, prefix_exprs = _resolve_nested_path(
-        root_schema=root_schema,
-        path=path,
-        root_alias=root_alias,
-        table=resolved_table,
-    )
-    identity_fields = identity_fields_for(name, root_schema, row_struct)
+def _build_nested_selections(
+    *,
+    name: str,
+    root_schema: pa.Schema,
+    current_struct: pa.StructType,
+    current_expr: Expr | None,
+    prefix_exprs: Mapping[str, Expr],
+) -> list[Expr]:
+    identity_fields = identity_fields_for(name, root_schema, current_struct)
     context_fields = nested_context_for(name)
-    selections: list[str] = []
+    selections: list[Expr] = []
     selected_names: set[str] = set()
     for field_name in identity_fields:
-        _append_selection(
+        _append_expr_selection(
             selections,
             selected_names,
             name=field_name,
-            expr=f"{root_alias}.{field_name}",
+            expr=col(field_name),
         )
     for alias, ctx_path in context_fields.items():
-        expr = _context_expr(
-            root_alias=root_alias,
+        expr = _context_expr_expr(
             prefix_exprs=prefix_exprs,
             ctx_path=ctx_path,
             dataset_name=name,
         )
-        _append_selection(selections, selected_names, name=alias, expr=expr)
-    for field in row_struct:
-        _append_selection(
-            selections,
-            selected_names,
-            name=field.name,
-            expr=_get_field_expr(row_expr, field.name),
-        )
-    select_sql = ",\n      ".join(selections)
-    return f"SELECT\n      {select_sql}\n{from_clause}"
+        _append_expr_selection(selections, selected_names, name=alias, expr=expr)
+    for field in current_struct:
+        expr = col(field.name) if current_expr is None else current_expr[field.name]
+        _append_expr_selection(selections, selected_names, name=field.name, expr=expr)
+    return selections
 
 
-def _nested_df_builder(sql: str) -> Callable[[SessionContext], DataFrame]:
-    def _build(ctx: SessionContext) -> DataFrame:
-        udf_module = importlib.import_module("datafusion_engine.udf_registry")
-        register_udfs = getattr(udf_module, "register_datafusion_udfs", None)
-        if callable(register_udfs):
-            register_udfs(ctx)
-        policy = resolve_sqlglot_policy(name="datafusion_compile")
-        expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-        from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
+def nested_base_df(
+    ctx: SessionContext,
+    name: str,
+    *,
+    table: str | None = None,
+) -> DataFrame:
+    """Return a DataFrame for a nested dataset path.
 
-        pipeline = CompilationPipeline(ctx, CompileOptions())
-        compiled = pipeline.compile_ast(expr)
-        return pipeline.execute(compiled)
+    Parameters
+    ----------
+    ctx:
+        DataFusion session context.
+    name:
+        Nested dataset name.
+    table:
+        Optional base table name to use instead of the root schema name.
 
-    return _build
+    Returns
+    -------
+    DataFrame
+        DataFrame projecting the nested dataset rows.
+
+    """
+    root, path = nested_path_for(name)
+    root_schema = SCHEMA_REGISTRY[root]
+    resolved_table = table or root
+    df = ctx.table(resolved_table)
+    df, current_struct, current_expr, prefix_exprs = _resolve_nested_path(
+        df,
+        root_schema,
+        path=path,
+    )
+    selections = _build_nested_selections(
+        name=name,
+        root_schema=root_schema,
+        current_struct=current_struct,
+        current_expr=current_expr,
+        prefix_exprs=prefix_exprs,
+    )
+    return df.select(*selections)
 
 
 def nested_view_spec(name: str, *, table: str | None = None) -> ViewSpec:
@@ -3006,12 +3006,11 @@ def nested_view_spec(name: str, *, table: str | None = None) -> ViewSpec:
         View specification with schema and base SQL.
     """
     schema = nested_schema_for(name, allow_derived=True)
-    sql = nested_base_sql(name, table=table)
     return ViewSpec(
         name=name,
         sql=None,
         schema=schema,
-        builder=_nested_df_builder(sql),
+        builder=lambda ctx: nested_base_df(ctx, name=name, table=table),
     )
 
 
@@ -4428,7 +4427,7 @@ __all__ = [
     "is_intrinsic_nested_dataset",
     "is_nested_dataset",
     "missing_schema_names",
-    "nested_base_sql",
+    "nested_base_df",
     "nested_context_for",
     "nested_dataset_names",
     "nested_path_for",

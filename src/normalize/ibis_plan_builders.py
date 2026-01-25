@@ -37,7 +37,6 @@ from ibis_engine.schema_utils import (
 )
 from ibis_engine.sources import (
     SourceToIbisOptions,
-    namespace_recorder_from_ctx,
     register_ibis_table,
 )
 from normalize.registry_runtime import dataset_input_schema, dataset_schema
@@ -466,7 +465,7 @@ def reaching_defs_plan_ibis(
                 backend=backend,
                 name=None,
                 ordering=Ordering.unordered(),
-                namespace_recorder=namespace_recorder_from_ctx(ctx),
+                runtime_profile=ctx.runtime.datafusion,
             ),
         )
     defs = table.filter(table.kind == ibis.literal("def")).select(
@@ -965,7 +964,7 @@ def diagnostics_plan_ibis(
                 backend=backend,
                 name=None,
                 ordering=Ordering.unordered(),
-                namespace_recorder=namespace_recorder_from_ctx(ctx),
+                runtime_profile=ctx.runtime.datafusion,
             ),
         )
 

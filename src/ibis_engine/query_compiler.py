@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
 import ibis
 import pyarrow as pa
-from ibis.expr.types import Table, Value
+from ibis.expr.types import BooleanValue, Table, Value
 
 from arrowdsl.core.interop import SchemaLike
+from ibis_engine.expr_compiler import expr_ir_to_ibis
 from ibis_engine.macros import IbisMacroSpec, apply_macros
 from ibis_engine.param_tables import ParamTablePolicy, ParamTableRegistry, ParamTableSpec
 from ibis_engine.params_bridge import list_param_join
-from sqlglot_tools.expr_spec import SqlExprSpec
+from sqlglot_tools.expr_spec import ExprIR, SqlExprSpec
 
 FILE_ID_PARAM_THRESHOLD = 500
 
@@ -209,12 +211,10 @@ def apply_projection(
     ibis.expr.types.Table
         Ibis table with projection applied.
     """
-    derived = derived or {}
-    table = _apply_derived(table, derived)
-    cols = _projection_columns(table, base, derived)
-    if not cols:
-        return table
-    return table.select(cols)
+    spec = IbisQuerySpec(
+        projection=IbisProjectionSpec(base=tuple(base), derived=derived or {}),
+    )
+    return apply_query_spec(table, spec=spec)
 
 
 def _apply_derived(
@@ -223,7 +223,10 @@ def _apply_derived(
 ) -> Table:
     if not derived:
         return table
-    return _apply_sql_derived(table, derived)
+    mutations = {
+        name: expr_ir_to_ibis(_require_expr_ir(expr), table) for name, expr in derived.items()
+    }
+    return table.mutate(**mutations)
 
 
 def _projection_columns(
@@ -248,60 +251,27 @@ def _apply_predicate(
     table: Table,
     predicate: SqlExprSpec,
 ) -> Table:
-    return _apply_sql_filter(table, predicate)
-
-
-def _resolve_sql_dialect(specs: Sequence[SqlExprSpec]) -> str:
-    dialects = {spec.resolved_dialect() for spec in specs}
-    if not dialects:
-        return "datafusion"
-    if len(dialects) > 1:
-        msg = f"Mixed SQL dialects in SQL expression specs: {sorted(dialects)}."
-        raise ValueError(msg)
-    return next(iter(dialects))
-
-
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
-
-
-def _apply_sql_derived(
-    table: Table,
-    derived: Mapping[str, SqlExprSpec],
-) -> Table:
-    if not derived:
-        return table
-    dialect = _resolve_sql_dialect(list(derived.values()))
-    existing_cols = [name for name in table.columns if name not in derived]
-    select_cols = [_sql_identifier(name) for name in existing_cols]
-    for name, expr in derived.items():
-        select_cols.append(f"{expr.normalized_sql()} AS {_sql_identifier(name)}")
-    sql = f"SELECT {', '.join(select_cols)} FROM {{self}}"
-    return table.sql(sql, dialect=dialect)
-
-
-def _apply_sql_filter(
-    table: Table,
-    predicate: SqlExprSpec,
-) -> Table:
-    dialect = predicate.resolved_dialect()
-    sql = f"SELECT * FROM {{self}} WHERE {predicate.normalized_sql()}"
-    return table.sql(sql, dialect=dialect)
+    compiled = expr_ir_to_ibis(_require_expr_ir(predicate), table)
+    return table.filter(cast("BooleanValue", compiled))
 
 
 def _false_predicate() -> SqlExprSpec:
-    return SqlExprSpec(sql="FALSE")
-
-
-def _sql_literal(value: str) -> str:
-    escaped = value.replace("'", "''")
-    return f"'{escaped}'"
+    return SqlExprSpec(expr_ir=ExprIR(op="literal", value=False))
 
 
 def _in_set_expr(name: str, values: Sequence[str]) -> SqlExprSpec:
     if not values:
         return _false_predicate()
-    literals = ", ".join(_sql_literal(value) for value in values)
-    sql = f"{_sql_identifier(name)} IN ({literals})"
-    return SqlExprSpec(sql=sql)
+    args = (
+        ExprIR(op="field", name=name),
+        *(ExprIR(op="literal", value=value) for value in values),
+    )
+    return SqlExprSpec(expr_ir=ExprIR(op="call", name="in_set", args=args))
+
+
+def _require_expr_ir(spec: SqlExprSpec) -> ExprIR:
+    expr_ir = spec.expr_ir
+    if expr_ir is None:
+        msg = "SqlExprSpec missing expr_ir; SQL execution is not supported."
+        raise ValueError(msg)
+    return expr_ir

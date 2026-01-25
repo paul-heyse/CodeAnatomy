@@ -171,6 +171,8 @@ class DataFusionCompileOptions:
     plan_artifacts_hook: Callable[[Mapping[str, object]], None] | None = None
     substrait_fallback_hook: Callable[[DataFusionSubstraitFallbackEvent], None] | None = None
     substrait_validation: bool = False
+    diagnostics_allow_sql: bool = False
+    substrait_plan_override: bytes | None = None
     plan_cache: PlanCache | None = None
     plan_hash: str | None = None
     profile_hash: str | None = None

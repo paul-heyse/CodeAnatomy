@@ -537,6 +537,43 @@ class DiagnosticsRecorder:
             },
         )
 
+    def record_namespace_action(
+        self,
+        *,
+        action: str,
+        name: str,
+        database: Mapping[str, Any],
+        overwrite: bool,
+    ) -> None:
+        """Record namespace actions from Ibis integrations.
+
+        Parameters
+        ----------
+        action : str
+            Action name (create_table, create_view, insert, etc.).
+        name : str
+            Target object name.
+        database : Mapping[str, Any]
+            Catalog/database payload for the target.
+        overwrite : bool
+            Whether the action overwrites existing objects.
+        """
+        if not self.enabled or self._sink is None:
+            return
+        self._sink.record_artifact(
+            "ibis_namespace_actions_v1",
+            {
+                "session_id": self._context.session_id,
+                "operation_id": self._context.operation_id,
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "action": action,
+                "name": name,
+                "overwrite": overwrite,
+                **dict(database),
+                "tags": self._context.tags,
+            },
+        )
+
     def record_cache_event(
         self,
         *,

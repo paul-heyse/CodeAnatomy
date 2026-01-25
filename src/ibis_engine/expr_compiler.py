@@ -124,6 +124,12 @@ def _starts_with_expr(value: StringValue, prefix: Value) -> BooleanValue:
     return value.startswith(cast("StringValue | str", prefix))
 
 
+def _in_set_expr(value: Value, *items: Value) -> BooleanValue:
+    if not items:
+        return cast("BooleanValue", ibis.literal(value=False))
+    return value.isin(list(items))
+
+
 def _binary_join_element_wise_expr(*values: Value) -> Value:
     min_inputs = 2
     if len(values) < min_inputs:
@@ -217,6 +223,7 @@ def default_expr_registry() -> IbisExprRegistry:
             "fill_null": _fill_null_expr,
             "concat": _concat_expr,
             "if_else": _if_else_expr,
+            "in_set": _in_set_expr,
             "equal": _equal_expr,
             "map": ibis.map,
             "not_equal": _not_equal_expr,

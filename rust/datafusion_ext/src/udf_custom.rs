@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::borrow::Cow;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -9,10 +10,12 @@ use arrow::array::{
     Int32Array,
     Int64Array,
     Int64Builder,
+    LargeStringArray,
     ListArray,
     MapBuilder,
     StringArray,
     StringBuilder,
+    StringViewArray,
     StructArray,
 };
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
@@ -81,7 +84,13 @@ pub fn install_function_factory(
     touch_policy_fields(&policy);
     register_primitives(&ctx.ctx, &policy)
         .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))?;
+    install_sql_macro_factory(&ctx.ctx)
+        .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))?;
     Ok(())
+}
+
+fn install_sql_macro_factory(ctx: &SessionContext) -> Result<()> {
+    crate::install_sql_macro_factory_native(ctx)
 }
 
 fn policy_from_ipc(payload: &[u8]) -> Result<FunctionFactoryPolicy> {
@@ -346,7 +355,10 @@ fn primitive_signature(primitive: &RulePrimitive, prefer_named: bool) -> Result<
         .iter()
         .map(|param| dtype_from_str(param.dtype.as_str()))
         .collect();
-    let signature = Signature::exact(arg_types?, volatility_from_str(primitive.volatility.as_str())?);
+    let signature = signature_from_arg_types(
+        arg_types?,
+        volatility_from_str(primitive.volatility.as_str())?,
+    );
     if prefer_named && primitive.supports_named_args {
         let names = primitive.params.iter().map(|param| param.name.clone()).collect();
         return signature.with_parameter_names(names).map_err(|err| {
@@ -354,6 +366,40 @@ fn primitive_signature(primitive: &RulePrimitive, prefer_named: bool) -> Result<
         });
     }
     Ok(signature)
+}
+
+fn signature_from_arg_types(arg_types: Vec<DataType>, volatility: Volatility) -> Signature {
+    let has_string = arg_types.iter().any(|dtype| matches!(dtype, DataType::Utf8));
+    if arg_types.iter().all(|dtype| matches!(dtype, DataType::Utf8)) {
+        Signature::string(arg_types.len(), volatility)
+    } else if has_string {
+        Signature::one_of(expand_string_signatures(&arg_types), volatility)
+    } else {
+        Signature::exact(arg_types, volatility)
+    }
+}
+
+fn expand_string_signatures(arg_types: &[DataType]) -> Vec<TypeSignature> {
+    let variants = [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View];
+    let mut expanded: Vec<Vec<DataType>> = vec![Vec::new()];
+    for dtype in arg_types {
+        if matches!(dtype, DataType::Utf8) {
+            let mut next = Vec::new();
+            for existing in &expanded {
+                for variant in &variants {
+                    let mut updated = existing.clone();
+                    updated.push(variant.clone());
+                    next.push(updated);
+                }
+            }
+            expanded = next;
+        } else {
+            for existing in &mut expanded {
+                existing.push(dtype.clone());
+            }
+        }
+    }
+    expanded.into_iter().map(TypeSignature::Exact).collect()
 }
 
 fn dtype_from_str(value: &str) -> Result<DataType> {
@@ -385,6 +431,30 @@ fn signature_with_names(signature: Signature, names: &[&str]) -> Signature {
         .clone()
         .with_parameter_names(name_vec)
         .unwrap_or(signature)
+}
+
+fn string_int_string_signature(volatility: Volatility) -> Signature {
+    let arg_types = vec![DataType::Utf8, DataType::Int64, DataType::Utf8];
+    Signature::one_of(expand_string_signatures(&arg_types), volatility)
+}
+
+fn scalar_str<'a>(value: &'a ScalarValue, message: &str) -> Result<Option<&'a str>> {
+    value
+        .try_as_str()
+        .ok_or_else(|| DataFusionError::Plan(message.to_string()))
+}
+
+fn string_array_any<'a>(array: &'a ArrayRef, message: &str) -> Result<Cow<'a, StringArray>> {
+    if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
+        return Ok(Cow::Borrowed(values));
+    }
+    if let Some(values) = array.as_any().downcast_ref::<LargeStringArray>() {
+        return Ok(Cow::Owned(StringArray::from_iter(values.iter())));
+    }
+    if let Some(values) = array.as_any().downcast_ref::<StringViewArray>() {
+        return Ok(Cow::Owned(StringArray::from_iter(values.iter())));
+    }
+    Err(DataFusionError::Plan(message.to_string()))
 }
 
 fn prefixed_hash64_value(prefix: &str, value: &str) -> String {
@@ -569,7 +639,15 @@ impl ScalarUDFImpl for ArrowMetadataUdf {
         let metadata = args.arg_fields[0].metadata();
         if args.args.len() == 2 {
             let key = match &args.args[1] {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) => key,
+                ColumnarValue::Scalar(value) => scalar_str(
+                    value,
+                    "Second argument to arrow_metadata must be a string literal key",
+                )?
+                .ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "Second argument to arrow_metadata must be a string literal key".into(),
+                    )
+                })?,
                 _ => {
                     return Err(DataFusionError::Plan(
                         "Second argument to arrow_metadata must be a string literal key".into(),
@@ -606,7 +684,7 @@ pub fn arrow_metadata_udf() -> ScalarUDF {
 
 pub fn stable_hash64_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::exact(vec![DataType::Utf8], Volatility::Stable),
+        Signature::string(1, Volatility::Stable),
         &["value"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(StableHash64Udf {
@@ -616,7 +694,7 @@ pub fn stable_hash64_udf() -> ScalarUDF {
 
 pub fn stable_hash128_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::exact(vec![DataType::Utf8], Volatility::Stable),
+        Signature::string(1, Volatility::Stable),
         &["value"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(StableHash128Udf {
@@ -626,7 +704,7 @@ pub fn stable_hash128_udf() -> ScalarUDF {
 
 pub fn prefixed_hash64_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Stable),
+        Signature::string(2, Volatility::Stable),
         &["prefix", "value"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(PrefixedHash64Udf {
@@ -636,7 +714,7 @@ pub fn prefixed_hash64_udf() -> ScalarUDF {
 
 pub fn stable_id_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Stable),
+        Signature::string(2, Volatility::Stable),
         &["prefix", "value"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(StableIdUdf {
@@ -646,10 +724,7 @@ pub fn stable_id_udf() -> ScalarUDF {
 
 pub fn col_to_byte_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::exact(
-            vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
-            Volatility::Stable,
-        ),
+        string_int_string_signature(Volatility::Stable),
         &["line_text", "col", "col_unit"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(ColToByteUdf {
@@ -724,15 +799,13 @@ impl ScalarUDFImpl for StableHash64Udf {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if let [ColumnarValue::Scalar(ScalarValue::Utf8(value))] = args.args.as_slice() {
-            let hashed = value.as_ref().map(|input| hash64_value(input));
+        if let [ColumnarValue::Scalar(value)] = args.args.as_slice() {
+            let hashed = scalar_str(value, "stable_hash64 expects string input")?
+                .map(hash64_value);
             return Ok(ColumnarValue::Scalar(ScalarValue::Int64(hashed)));
         }
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
-        let input = arrays[0]
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Plan("stable_hash64 expects string input".into()))?;
+        let input = string_array_any(&arrays[0], "stable_hash64 expects string input")?;
         let mut builder = Int64Builder::with_capacity(input.len());
         for index in 0..input.len() {
             if input.is_null(index) {
@@ -772,15 +845,13 @@ impl ScalarUDFImpl for StableHash128Udf {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if let [ColumnarValue::Scalar(ScalarValue::Utf8(value))] = args.args.as_slice() {
-            let hashed = value.as_ref().map(|input| hash128_value(input));
+        if let [ColumnarValue::Scalar(value)] = args.args.as_slice() {
+            let hashed = scalar_str(value, "stable_hash128 expects string input")?
+                .map(hash128_value);
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)));
         }
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
-        let input = arrays[0]
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Plan("stable_hash128 expects string input".into()))?;
+        let input = string_array_any(&arrays[0], "stable_hash128 expects string input")?;
         let mut builder = StringBuilder::with_capacity(input.len(), input.len() * 16);
         for index in 0..input.len() {
             if input.is_null(index) {
@@ -820,30 +891,23 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if let [
-            ColumnarValue::Scalar(ScalarValue::Utf8(prefix)),
-            ColumnarValue::Scalar(ScalarValue::Utf8(value)),
-        ] = args.args.as_slice()
+        if let [ColumnarValue::Scalar(prefix), ColumnarValue::Scalar(value)] = args.args.as_slice()
         {
-            let hashed = match (prefix.as_ref(), value.as_ref()) {
+            let prefix = scalar_str(prefix, "prefixed_hash64 expects string prefix input")?;
+            let value = scalar_str(value, "prefixed_hash64 expects string value input")?;
+            let hashed = match (prefix, value) {
                 (Some(prefix), Some(value)) => Some(prefixed_hash64_value(prefix, value)),
                 _ => None,
             };
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)));
         }
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
-        let prefixes = arrays[0]
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("prefixed_hash64 expects string prefix input".into())
-            })?;
-        let values = arrays[1]
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("prefixed_hash64 expects string value input".into())
-            })?;
+        let prefixes = string_array_any(
+            &arrays[0],
+            "prefixed_hash64 expects string prefix input",
+        )?;
+        let values =
+            string_array_any(&arrays[1], "prefixed_hash64 expects string value input")?;
         let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 16);
         for index in 0..values.len() {
             if prefixes.is_null(index) || values.is_null(index) {
@@ -886,26 +950,20 @@ impl ScalarUDFImpl for StableIdUdf {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if let [
-            ColumnarValue::Scalar(ScalarValue::Utf8(prefix)),
-            ColumnarValue::Scalar(ScalarValue::Utf8(value)),
-        ] = args.args.as_slice()
+        if let [ColumnarValue::Scalar(prefix), ColumnarValue::Scalar(value)] = args.args.as_slice()
         {
-            let hashed = match (prefix.as_ref(), value.as_ref()) {
+            let prefix = scalar_str(prefix, "stable_id expects string prefix input")?;
+            let value = scalar_str(value, "stable_id expects string value input")?;
+            let hashed = match (prefix, value) {
                 (Some(prefix), Some(value)) => Some(stable_id_value(prefix, value)),
                 _ => None,
             };
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)));
         }
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
-        let prefixes = arrays[0]
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Plan("stable_id expects string prefix input".into()))?;
-        let values = arrays[1]
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Plan("stable_id expects string value input".into()))?;
+        let prefixes =
+            string_array_any(&arrays[0], "stable_id expects string prefix input")?;
+        let values = string_array_any(&arrays[1], "stable_id expects string value input")?;
         let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 32);
         for index in 0..values.len() {
             if prefixes.is_null(index) || values.is_null(index) {
@@ -1049,20 +1107,20 @@ impl ScalarUDFImpl for PositionEncodingUdf {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if let [ColumnarValue::Scalar(ScalarValue::Utf8(value))] = args.args.as_slice() {
-            let normalized = value
-                .as_ref()
-                .map(|text| normalize_position_encoding(text))
-                .unwrap_or(ENC_UTF32);
+        if let [ColumnarValue::Scalar(value)] = args.args.as_slice() {
+            let normalized = scalar_str(
+                value,
+                "position_encoding_norm expects string input",
+            )?
+            .map(normalize_position_encoding)
+            .unwrap_or(ENC_UTF32);
             return Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(normalized))));
         }
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
-        let input = arrays[0]
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("position_encoding_norm expects string input".into())
-            })?;
+        let input = string_array_any(
+            &arrays[0],
+            "position_encoding_norm expects string input",
+        )?;
         let mut builder = Int32Builder::with_capacity(input.len());
         for index in 0..input.len() {
             if input.is_null(index) {
@@ -1103,18 +1161,28 @@ impl ScalarUDFImpl for ColToByteUdf {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if let [
-            ColumnarValue::Scalar(ScalarValue::Utf8(line)),
-            ColumnarValue::Scalar(ScalarValue::Int64(offset)),
-            ColumnarValue::Scalar(ScalarValue::Utf8(encoding)),
+            ColumnarValue::Scalar(line),
+            ColumnarValue::Scalar(offset),
+            ColumnarValue::Scalar(encoding),
         ] = args.args.as_slice()
         {
-            let Some(line) = line.as_ref() else {
+            let line = scalar_str(line, "col_to_byte expects string input")?;
+            let Some(line) = line else {
                 return Ok(ColumnarValue::Scalar(ScalarValue::Int64(None)));
+            };
+            let offset = match offset {
+                ScalarValue::Int64(value) => value,
+                _ => {
+                    return Err(DataFusionError::Plan(
+                        "col_to_byte expects int64 input".into(),
+                    ))
+                }
             };
             let Some(offset) = offset else {
                 return Ok(ColumnarValue::Scalar(ScalarValue::Int64(None)));
             };
-            let unit = match encoding.as_ref() {
+            let encoding = scalar_str(encoding, "col_to_byte expects string encoding")?;
+            let unit = match encoding {
                 Some(value) => col_unit_from_text(value),
                 None => ColUnit::Utf32,
             };
@@ -1130,18 +1198,12 @@ impl ScalarUDFImpl for ColToByteUdf {
             ))));
         }
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
-        let lines = arrays[0]
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Plan("col_to_byte expects string input".into()))?;
+        let lines = string_array_any(&arrays[0], "col_to_byte expects string input")?;
         let offsets = arrays[1]
             .as_any()
             .downcast_ref::<Int64Array>()
             .ok_or_else(|| DataFusionError::Plan("col_to_byte expects int64 input".into()))?;
-        let encodings = arrays[2]
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Plan("col_to_byte expects string encoding".into()))?;
+        let encodings = string_array_any(&arrays[2], "col_to_byte expects string encoding")?;
         let mut builder = Int64Builder::with_capacity(lines.len());
         for index in 0..lines.len() {
             if lines.is_null(index) || offsets.is_null(index) {

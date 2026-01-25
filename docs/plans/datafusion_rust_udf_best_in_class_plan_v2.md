@@ -2,11 +2,15 @@
 
 > **Goal**: Implement a fully native, Rust-first DataFusion UDF/UDAF/UDWF/UDTF architecture with unified registry/discovery, SQL-defined function support, and high-performance execution semantics (no Python UDFs).
 
+**Status update (2026-01-25)**: Scopes 1–6 are implemented (with tests still pending in several areas). Scopes 7–9 remain.
+
 ---
 
 ## Scope 1 — Unified function registry + discovery (built-ins + custom)
 
 **Intent**: Provide a single authoritative registry snapshot that merges DataFusion built-ins and custom Rust UDF/UDAF/UDWF/UDTFs, and expose docs + signatures to Python and SQL discovery surfaces.
+
+**Status**: ✅ Completed (registry snapshot + Python bridge wired; docs integration deferred to Scope 7).
 
 ### Representative patterns
 
@@ -59,9 +63,9 @@ RUST_UDF_DOCS = normalize_docs(snapshot)
 - Remove legacy per-module UDF discovery helpers that bypass the new snapshot.
 
 ### Checklist
-- [ ] Build Rust snapshot from `SessionState` maps (scalar/aggregate/window/table).
-- [ ] Attach alias info and parameter names (from `Signature` where available).
-- [ ] Export snapshot to Python and normalize into `udf_catalog`.
+- [x] Build Rust snapshot from `SessionState` maps (scalar/aggregate/window/table).
+- [x] Attach alias info and parameter names (from `Signature` where available).
+- [x] Export snapshot to Python and normalize in `udf_runtime` for diagnostics.
 - [ ] Use snapshot to populate SQL discovery artifacts when information_schema is enabled.
 
 ---
@@ -69,6 +73,8 @@ RUST_UDF_DOCS = normalize_docs(snapshot)
 ## Scope 2 — Native DataFusion `FunctionFactory` for CREATE FUNCTION
 
 **Intent**: Replace custom policy-only installers with a real DataFusion `FunctionFactory` that supports SQL macro functions and optional domain-specific function compilers.
+
+**Status**: ✅ Completed (factory installed; tests pending).
 
 ### Representative patterns
 
@@ -106,8 +112,8 @@ impl FunctionFactory for MacroFactory {
 - Remove custom FunctionFactory IPC registration hooks once native factory is installed via `SessionState`.
 
 ### Checklist
-- [ ] Implement `FunctionFactory` that supports SQL macro functions (`RETURN $1 + ...`).
-- [ ] Install factory via `SessionContext.with_function_factory(...)`.
+- [x] Implement `FunctionFactory` that supports SQL macro functions (`RETURN $1 + ...`).
+- [x] Install factory via `SessionContext.with_function_factory(...)`.
 - [ ] Add tests for CREATE/DROP FUNCTION, macro expansion, and explain output.
 
 ---
@@ -115,6 +121,8 @@ impl FunctionFactory for MacroFactory {
 ## Scope 3 — ExprPlanner + FunctionRewrite integration
 
 **Intent**: Implement real DataFusion ExprPlanners and FunctionRewrite rules rather than no-op installers, enabling operator-to-function rewrites and domain-specific syntax support.
+
+**Status**: ✅ Completed (planner + rewrite registered; tests pending).
 
 ### Representative patterns
 
@@ -168,8 +176,8 @@ impl FunctionRewrite for OperatorToFunctionRewrite {
 - Remove `install_expr_planners` default-only behavior and replace with real planner registration.
 
 ### Checklist
-- [ ] Implement `ExprPlanner` and `FunctionRewrite` registries in Rust.
-- [ ] Install via `SessionStateBuilder` without clobbering existing registries.
+- [x] Implement `ExprPlanner` and `FunctionRewrite` registries in Rust.
+- [x] Install via `SessionStateBuilder` without clobbering existing registries.
 - [ ] Add plan snapshot tests for custom operators.
 
 ---
@@ -177,6 +185,8 @@ impl FunctionRewrite for OperatorToFunctionRewrite {
 ## Scope 4 — String typing & scalar fast-path normalization
 
 **Intent**: Ensure all string UDFs accept Utf8/Utf8View/LargeUtf8 and handle scalar fast paths without forced casts.
+
+**Status**: ✅ Completed (UDF signatures + runtime coercion updated; tests pending).
 
 ### Representative patterns
 
@@ -207,8 +217,8 @@ fn string_array_any(array: &ArrayRef) -> Result<Cow<'_, StringArray>> {
 - Remove any unnecessary casts that force Utf8 conversion in hot paths.
 
 ### Checklist
-- [ ] Accept `TypeSignature::String(n)` for string UDFs.
-- [ ] Use `try_as_str` for scalar literals.
+- [x] Accept `TypeSignature::String(n)` for string UDFs.
+- [x] Use `try_as_str` for scalar literals.
 - [ ] Add tests for Utf8View/LargeUtf8 inputs.
 
 ---
@@ -216,6 +226,8 @@ fn string_array_any(array: &ArrayRef) -> Result<Cow<'_, StringArray>> {
 ## Scope 5 — UDAF + UDWF + UDTF expansion
 
 **Intent**: Fill missing function classes with native Rust implementations for dataset/window semantics and table-valued utilities.
+
+**Status**: ✅ Completed (core UDAF/UDWF/UDTFs added; GroupsAccumulator still pending if needed).
 
 ### Representative patterns
 
@@ -252,9 +264,9 @@ impl AggregateUDFImpl for SumSqUdaf {
 - Remove any remaining scalar wrappers that mimic window/aggregate semantics.
 
 ### Checklist
-- [ ] Register default table functions (`range`, `generate_series`).
-- [ ] Add at least one metadata/introspection UDTF.
-- [ ] Implement UDAFs/UDWFs for dataset-level semantics currently expressed as scalar wrappers.
+- [x] Register default table functions (`range`, `generate_series`).
+- [x] Add at least one metadata/introspection UDTF.
+- [x] Implement UDAFs/UDWFs for dataset-level semantics currently expressed as scalar wrappers.
 - [ ] Add GroupsAccumulator where high-cardinality group-by workloads exist.
 
 ---
@@ -262,6 +274,8 @@ impl AggregateUDFImpl for SumSqUdaf {
 ## Scope 6 — Rust-only UDF enforcement
 
 **Intent**: Ensure no Python UDF lane is used in DataFusion execution.
+
+**Status**: ✅ Completed (non-Rust lanes rejected at registry + catalog policy).
 
 ### Representative patterns
 
@@ -280,14 +294,16 @@ if udf_tier == "python":
 - Remove `python` lane registrations or hard-disable them in DataFusion backend.
 
 ### Checklist
-- [ ] Disallow python/pyarrow/pandas lanes for DataFusion runtime.
-- [ ] Keep Ibis builtin declarations as metadata only if needed.
+- [x] Disallow python/pyarrow/pandas lanes for DataFusion runtime.
+- [x] Keep Ibis builtin declarations as metadata only if needed.
 
 ---
 
 ## Scope 7 — Documentation + UX surfaces
 
 **Intent**: Surface all Rust UDF/UDAF/UDWF/UDTF docs through discovery and runtime snapshots.
+
+**Status**: ⏳ Not started.
 
 ### Representative patterns
 
@@ -315,6 +331,8 @@ pub fn docs_snapshot(state: &SessionState) -> HashMap<String, Documentation> {
 ## Scope 8 — Testing & plan-shape validation
 
 **Intent**: Add comprehensive SQL-level coverage and plan snapshots for UDF/UDAF/UDWF/UDTF changes.
+
+**Status**: ⏳ Not started.
 
 ### Representative patterns
 
@@ -345,6 +363,8 @@ EXPLAIN FORMAT tree SELECT stable_hash64('a')
 ## Scope 9 — Plugin ABI + runtime-loaded DataFusion extensions
 
 **Intent**: Implement the DataFusion plugin ABI spec (FFI + abi_stable) for runtime-loaded Rust extensions that export TableProviders and UDF bundles, with strict handshake validation and lifecycle management.
+
+**Status**: ⏳ Not started.
 
 ### Representative patterns
 
@@ -426,12 +446,12 @@ pub fn load_plugin(path: &Path) -> Result<DfPluginMod_Ref> {
 
 ## Global implementation checklist
 
-- [ ] Unified registry snapshot for all function classes (built-in + custom).
+- [x] Unified registry snapshot for all function classes (built-in + custom).
 - [ ] Native DataFusion FunctionFactory (CREATE FUNCTION) + tests.
-- [ ] Real ExprPlanner + FunctionRewrite registration.
-- [ ] String typing normalization across UDFs.
-- [ ] UDAF/UDWF/UDTF expansion + dataset-level semantics migration.
-- [ ] Rust-only UDF enforcement.
+- [x] Real ExprPlanner + FunctionRewrite registration.
+- [x] String typing normalization across UDFs.
+- [x] UDAF/UDWF/UDTF expansion + dataset-level semantics migration.
+- [x] Rust-only UDF enforcement.
 - [ ] Unified docs snapshot exposed to discovery surfaces.
 - [ ] SQL + plan-shape test harness coverage.
 - [ ] Plugin ABI + runtime-loaded extensions support.

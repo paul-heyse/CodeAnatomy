@@ -12,6 +12,7 @@ from cpg.specs import EdgeEmitSpec
 from ibis_engine.ids import stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
+    bind_expr_schema,
     coalesce_columns,
     ibis_dtype_from_arrow,
     ibis_null_literal,
@@ -63,6 +64,11 @@ def emit_edges_ibis(
         expected=CPG_EDGES_SCHEMA,
         allow_extra_columns=include_keys,
     )
+    output = bind_expr_schema(
+        output,
+        schema=CPG_EDGES_SCHEMA,
+        allow_extra_columns=include_keys,
+    )
     return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 
@@ -97,6 +103,7 @@ def emit_edges_from_relation_output(rel: IbisPlan | Table) -> IbisPlan:
         task_priority=output.task_priority,
     )
     validate_expr_schema(output, expected=CPG_EDGES_SCHEMA, allow_extra_columns=False)
+    output = bind_expr_schema(output, schema=CPG_EDGES_SCHEMA, allow_extra_columns=False)
     return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 

@@ -4,8 +4,9 @@ use datafusion::execution::context::SessionContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::RangeFunc;
 use datafusion::catalog::TableFunctionImpl;
+use datafusion_common::Result;
 
-use crate::udf_custom;
+use crate::{udaf_builtin, udtf_builtin, udwf_builtin, udf_custom};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -82,7 +83,7 @@ pub fn all_udfs() -> Vec<UdfSpec> {
     ]
 }
 
-pub fn register_all(ctx: &SessionContext) {
+pub fn register_all(ctx: &SessionContext) -> Result<()> {
     for spec in all_udfs() {
         match (spec.kind, (spec.builder)()) {
             (UdfKind::Scalar, UdfHandle::Scalar(udf)) => {
@@ -120,6 +121,14 @@ pub fn register_all(ctx: &SessionContext) {
             }
         }
     }
+    for udaf in udaf_builtin::builtin_udafs() {
+        ctx.register_udaf(udaf);
+    }
+    for udwf in udwf_builtin::builtin_udwfs() {
+        ctx.register_udwf(udwf);
+    }
+    udtf_builtin::register_builtin_udtfs(ctx)?;
+    Ok(())
 }
 
 #[cfg(test)]

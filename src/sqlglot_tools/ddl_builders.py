@@ -94,8 +94,8 @@ def build_copy_to_ast(
 
     Examples
     --------
-    >>> from sqlglot_tools.compat import parse_one
-    >>> query = parse_one("SELECT * FROM mytable")
+    >>> from sqlglot_tools.optimizer import parse_sql_strict
+    >>> query = parse_sql_strict("SELECT * FROM mytable", dialect="datafusion")
     >>> copy_expr = build_copy_to_ast(
     ...     query=query,
     ...     path="/tmp/output.parquet",

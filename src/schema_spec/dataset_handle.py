@@ -214,9 +214,10 @@ class DatasetHandle:
         datafusion.dataframe.DataFrame
             Registered DataFrame for the dataset location.
         """
-        from datafusion_engine.registry_bridge import register_dataset_df
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-        return register_dataset_df(ctx, name=self.spec.name, location=location)
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+        return facade.register_dataset(name=self.spec.name, location=location)
 
     def register_views(
         self,

@@ -30,6 +30,7 @@ from ibis_engine.expr_compiler import OperationSupportBackend, preflight_portabi
 from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
+    bind_expr_schema,
     coalesce_columns,
     ensure_columns,
     ibis_null_literal,
@@ -136,6 +137,11 @@ def type_exprs_plan_ibis(
         expected=dataset_schema(TYPE_EXPRS_NAME),
         allow_extra_columns=ctx.debug,
     )
+    enriched = bind_expr_schema(
+        enriched,
+        schema=dataset_schema(TYPE_EXPRS_NAME),
+        allow_extra_columns=ctx.debug,
+    )
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
@@ -175,6 +181,11 @@ def type_nodes_plan_ibis(
     validate_expr_schema(
         combined,
         expected=target_schema,
+        allow_extra_columns=ctx.debug,
+    )
+    combined = bind_expr_schema(
+        combined,
+        schema=target_schema,
         allow_extra_columns=ctx.debug,
     )
     ordering_keys = _ordering_keys_for_schema(target_schema)
@@ -330,6 +341,7 @@ def cfg_blocks_plan_ibis(
     )
     joined = joined.mutate(span=span)
     validate_expr_schema(joined, expected=dataset_schema(CFG_BLOCKS_NAME))
+    joined = bind_expr_schema(joined, schema=dataset_schema(CFG_BLOCKS_NAME))
     return IbisPlan(expr=joined, ordering=Ordering.unordered())
 
 
@@ -381,6 +393,7 @@ def cfg_edges_plan_ibis(
     else:
         joined = edges
     validate_expr_schema(joined, expected=dataset_schema(CFG_EDGES_NAME))
+    joined = bind_expr_schema(joined, schema=dataset_schema(CFG_EDGES_NAME))
     return IbisPlan(expr=joined, ordering=Ordering.unordered())
 
 
@@ -438,6 +451,11 @@ def def_use_events_plan_ibis(
     validate_expr_schema(
         enriched,
         expected=dataset_schema(DEF_USE_NAME),
+        allow_extra_columns=ctx.debug,
+    )
+    enriched = bind_expr_schema(
+        enriched,
+        schema=dataset_schema(DEF_USE_NAME),
         allow_extra_columns=ctx.debug,
     )
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
@@ -503,6 +521,11 @@ def reaching_defs_plan_ibis(
     validate_expr_schema(
         enriched,
         expected=dataset_schema(REACHES_NAME),
+        allow_extra_columns=ctx.debug,
+    )
+    enriched = bind_expr_schema(
+        enriched,
+        schema=dataset_schema(REACHES_NAME),
         allow_extra_columns=ctx.debug,
     )
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
@@ -1002,6 +1025,11 @@ def diagnostics_plan_ibis(
         expected=diag_schema,
         allow_extra_columns=ctx.debug,
     )
+    enriched = bind_expr_schema(
+        enriched,
+        schema=diag_schema,
+        allow_extra_columns=ctx.debug,
+    )
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
@@ -1060,6 +1088,7 @@ def span_errors_plan_ibis(
     schema = dataset_schema("span_errors_v1")
     table = catalog.resolve_expr("span_errors_v1", ctx=ctx, schema=schema)
     validate_expr_schema(table, expected=schema)
+    table = bind_expr_schema(table, schema=schema)
     return IbisPlan(expr=table, ordering=Ordering.unordered())
 
 

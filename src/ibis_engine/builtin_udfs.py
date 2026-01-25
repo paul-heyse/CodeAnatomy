@@ -1,4 +1,4 @@
-"""Builtin Ibis UDFs for backend-native execution."""
+"""Builtin Ibis UDFs for backend-native execution (Rust-only DataFusion)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import pyarrow as pa
 from ibis.expr.types import Value
 
 UdfVolatility = Literal["immutable", "stable", "volatile"]
-IbisUdfLane = Literal["ibis_builtin", "ibis_pyarrow", "ibis_pandas", "ibis_python"]
+IbisUdfLane = Literal["ibis_builtin"]
 IbisUdfKind = Literal["scalar", "aggregate", "window", "table"]
 
 

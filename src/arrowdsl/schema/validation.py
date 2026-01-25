@@ -145,14 +145,22 @@ def _sql_table(
     *,
     sql_options: SQLOptions,
 ) -> ArrowTable:
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-    return execute_with_profile(
-        ctx,
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    plan = facade.compile(
         sql,
-        profile=None,
-        options=ExecutionProfileOptions(sql_options=sql_options),
-    ).to_arrow_table()
+        options=DataFusionCompileOptions(
+            sql_options=sql_options,
+            sql_policy=DataFusionSqlPolicy(),
+        ),
+    )
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Schema validation SQL did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe.to_arrow_table()
 
 
 def _constraint_key_fields(rows: Sequence[Mapping[str, object]]) -> list[str]:

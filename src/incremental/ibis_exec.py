@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from arrowdsl.core.ordering import Ordering
-from ibis_engine.execution import materialize_ibis_plan
+from ibis_engine.execution import execute_ibis_plan
 from ibis_engine.plan import IbisPlan
 from incremental.runtime import IncrementalRuntime
 from incremental.sqlglot_artifacts import record_sqlglot_plan_artifact
@@ -31,7 +31,11 @@ def ibis_expr_to_table(
     """
     record_sqlglot_plan_artifact(runtime, name=name, expr=expr)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
-    table = materialize_ibis_plan(plan, execution=runtime.ibis_execution())
+    table = execute_ibis_plan(
+        plan,
+        execution=runtime.ibis_execution(),
+        streaming=False,
+    ).require_table()
     return cast("pa.Table", table)
 
 

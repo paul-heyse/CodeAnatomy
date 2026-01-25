@@ -18,7 +18,7 @@ from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.finalize import FinalizeOptions, finalize
 from ibis_engine.catalog import IbisPlanCatalog, IbisPlanSource
-from ibis_engine.execution import materialize_ibis_plan
+from ibis_engine.execution import execute_ibis_plan
 from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
@@ -99,7 +99,11 @@ def ensure_execution_context(
 def _materialize_table_expr(expr: Table, *, runtime: NormalizeRuntime) -> TableLike:
     execution = ibis_execution_from_ctx(runtime.execution_ctx, backend=runtime.ibis_backend)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
-    return materialize_ibis_plan(plan, execution=execution)
+    return execute_ibis_plan(
+        plan,
+        execution=execution,
+        streaming=False,
+    ).require_table()
 
 
 def _empty_plan(output: str, *, backend: BaseBackend) -> IbisPlan:
@@ -144,7 +148,11 @@ def _finalize_plan(
     if plan is None:
         return empty_table(dataset_schema(output))
     execution = ibis_execution_from_ctx(ctx, backend=runtime.ibis_backend)
-    table = materialize_ibis_plan(plan, execution=execution)
+    table = execute_ibis_plan(
+        plan,
+        execution=execution,
+        streaming=False,
+    ).require_table()
     contract_spec = dataset_contract(output)
     contract = contract_spec.to_contract()
     metadata_spec = _metadata_with_determinism(dataset_spec(output).metadata_spec, ctx)

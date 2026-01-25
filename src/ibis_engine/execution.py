@@ -25,6 +25,7 @@ from engine.runtime_profile import runtime_profile_snapshot
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from datafusion_engine.execution_facade import ExecutionResult
 from ibis_engine.plan import IbisPlan
 from ibis_engine.runner import (
     DataFusionExecutionOptions,
@@ -85,6 +86,22 @@ class IbisExecutionContext:
         )
 
 
+def execute_ibis_plan(
+    plan: IbisPlan,
+    *,
+    execution: IbisExecutionContext,
+    streaming: bool,
+) -> ExecutionResult:
+    """Execute an Ibis plan and return a unified execution result.
+
+    Returns
+    -------
+    ExecutionResult
+        Execution result wrapper containing table or reader output.
+    """
+    return _execute_plan(plan, execution=execution, streaming=streaming)
+
+
 def materialize_ibis_plan(plan: IbisPlan, *, execution: IbisExecutionContext) -> TableLike:
     """Materialize an Ibis plan using the execution context.
 
@@ -92,8 +109,17 @@ def materialize_ibis_plan(plan: IbisPlan, *, execution: IbisExecutionContext) ->
     -------
     TableLike
         Materialized Arrow table.
+
+    Raises
+    ------
+    ValueError
+        Raised when the execution does not return a table.
     """
-    return cast("TableLike", _execute_plan(plan, execution=execution, streaming=False))
+    result = execute_ibis_plan(plan, execution=execution, streaming=False)
+    if result.table is None:
+        msg = "Materialized execution did not return a table."
+        raise ValueError(msg)
+    return result.table
 
 
 def stream_ibis_plan(
@@ -107,11 +133,17 @@ def stream_ibis_plan(
     -------
     RecordBatchReaderLike
         Streamed reader for the plan results.
+
+    Raises
+    ------
+    ValueError
+        Raised when the execution does not return a reader.
     """
-    return cast(
-        "RecordBatchReaderLike",
-        _execute_plan(plan, execution=execution, streaming=True),
-    )
+    result = execute_ibis_plan(plan, execution=execution, streaming=True)
+    if result.reader is None:
+        msg = "Streaming execution did not return a record batch reader."
+        raise ValueError(msg)
+    return result.reader
 
 
 def _execute_plan(
@@ -119,16 +151,18 @@ def _execute_plan(
     *,
     execution: IbisExecutionContext,
     streaming: bool,
-) -> TableLike | RecordBatchReaderLike:
+) -> ExecutionResult:
     if streaming:
         reader = stream_plan(
             plan,
             batch_size=execution.batch_size,
             execution=execution.plan_options(),
         )
-        return _apply_ordering_metadata(reader, plan=plan, ctx=execution.ctx)
+        reader = _apply_ordering_metadata(reader, plan=plan, ctx=execution.ctx)
+        return ExecutionResult.from_reader(reader)
     table = materialize_plan(plan, execution=execution.plan_options())
-    return _apply_ordering_metadata(table, plan=plan, ctx=execution.ctx)
+    table = _apply_ordering_metadata(table, plan=plan, ctx=execution.ctx)
+    return ExecutionResult.from_table(table)
 
 
 @overload
@@ -252,4 +286,9 @@ def _ordering_metadata_for_plan(
     return ordering_metadata_spec(level, keys=keys, extra=extra)
 
 
-__all__ = ["IbisExecutionContext", "materialize_ibis_plan", "stream_ibis_plan"]
+__all__ = [
+    "IbisExecutionContext",
+    "execute_ibis_plan",
+    "materialize_ibis_plan",
+    "stream_ibis_plan",
+]

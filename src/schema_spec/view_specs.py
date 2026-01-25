@@ -14,6 +14,7 @@ from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
+    StrictParseOptions,
     normalize_ddl_sql,
     parse_sql_strict,
     register_datafusion_dialect,
@@ -116,14 +117,20 @@ def _sql_schema(
     *,
     sql_options: SQLOptions | None,
 ) -> pa.Schema:
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-    return execute_with_profile(
-        ctx,
-        sql,
-        profile=None,
-        options=ExecutionProfileOptions(sql_options=_read_only_sql_options(sql_options)),
-    ).schema()
+    options = DataFusionCompileOptions(
+        sql_options=_read_only_sql_options(sql_options),
+        sql_policy=DataFusionSqlPolicy(),
+    )
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    plan = facade.compile(sql, options=options)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "View schema SQL execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe.schema()
 
 
 def _schema_from_df(df: DataFrame) -> pa.Schema:
@@ -170,7 +177,7 @@ class ViewSpec:
         query = parse_sql_strict(
             transpiled_sql,
             dialect=policy.write_dialect,
-            error_level=policy.error_level,
+            options=StrictParseOptions(error_level=policy.error_level),
         )
         create_expr = exp.Create(
             this=exp.Table(this=exp.Identifier(this=self.name)),
@@ -237,6 +244,11 @@ class ViewSpec:
             Whether to validate the resulting schema after registration.
         sql_options:
             Optional SQL options to enforce SQL execution policy.
+
+        Raises
+        ------
+        ValueError
+            Raised when SQL execution does not return a DataFrame.
         """
         if self.builder is not None:
             from datafusion_engine.io_adapter import DataFusionIOAdapter
@@ -249,18 +261,23 @@ class ViewSpec:
             if validate:
                 self.validate(ctx, sql_options=sql_options)
             return
-        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
-
         create_sql = self.create_view_sql()
-        execute_with_profile(
-            ctx,
+        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+        plan = facade.compile(
             create_sql,
-            profile=None,
-            options=ExecutionProfileOptions(
+            options=DataFusionCompileOptions(
                 sql_options=_statement_sql_options(sql_options),
-                allow_statements=True,
+                sql_policy=DataFusionSqlPolicy(allow_statements=True),
             ),
-        ).collect()
+        )
+        result = facade.execute(plan)
+        if result.dataframe is None:
+            msg = "View DDL execution did not return a DataFusion DataFrame."
+            raise ValueError(msg)
+        result.dataframe.collect()
         invalidate_introspection_cache(ctx)
         if record_view is not None:
             record_view(self.name, self.sql)

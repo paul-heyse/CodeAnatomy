@@ -24,13 +24,6 @@ if TYPE_CHECKING:
         DataFusionCompileOptions,
         DataFusionSqlPolicy,
     )
-
-    # New modular architecture modules
-    from datafusion_engine.compile_pipeline import (
-        CompilationPipeline,
-        CompiledExpression,
-        CompileOptions,
-    )
     from datafusion_engine.diagnostics import (
         DiagnosticsContext,
         DiagnosticsRecorder,
@@ -58,7 +51,6 @@ if TYPE_CHECKING:
         ParameterSpec,
         RulepackRegistry,
     )
-    from datafusion_engine.registry_bridge import register_dataset_df
     from datafusion_engine.registry_loader import (
         RegistryTarget,
         register_registry_delta_tables,
@@ -121,10 +113,7 @@ if TYPE_CHECKING:
         execute_with_policy,
         validate_sql_safety,
     )
-    from datafusion_engine.streaming_executor import (
-        StreamingExecutionResult,
-        StreamingExecutor,
-    )
+    from datafusion_engine.streaming_executor import StreamingExecutionResult
     from datafusion_engine.write_pipeline import (
         ParquetWritePolicy,
         WriteFormat,
@@ -140,9 +129,6 @@ __all__ = [
     "ChangeCategory",
     "ColumnContract",
     "CompilationArtifacts",
-    "CompilationPipeline",
-    "CompileOptions",
-    "CompiledExpression",
     "CompiledPlan",
     "ContractRegistry",
     "DataFusionCompileOptions",
@@ -183,7 +169,6 @@ __all__ = [
     "SemanticChange",
     "SemanticDiff",
     "StreamingExecutionResult",
-    "StreamingExecutor",
     "WriteFormat",
     "WriteMode",
     "WritePipeline",
@@ -205,7 +190,6 @@ __all__ = [
     "nested_schema_for",
     "nested_schema_names",
     "register_all_schemas",
-    "register_dataset_df",
     "register_registry_catalog",
     "register_registry_delta_tables",
     "register_registry_exports",
@@ -248,7 +232,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "register_registry_catalog",
     ),
     "has_schema": ("datafusion_engine.schema_registry", "has_schema"),
-    "register_dataset_df": ("datafusion_engine.registry_bridge", "register_dataset_df"),
     "register_schema": ("datafusion_engine.schema_registry", "register_schema"),
     "register_all_schemas": ("datafusion_engine.schema_registry", "register_all_schemas"),
     "nested_base_df": ("datafusion_engine.schema_registry", "nested_base_df"),
@@ -281,10 +264,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ibis_to_datafusion": ("datafusion_engine.bridge", "ibis_to_datafusion"),
     "replay_substrait_bytes": ("datafusion_engine.bridge", "replay_substrait_bytes"),
     "sqlglot_to_datafusion": ("datafusion_engine.bridge", "sqlglot_to_datafusion"),
-    # Compilation Pipeline
-    "CompilationPipeline": ("datafusion_engine.compile_pipeline", "CompilationPipeline"),
-    "CompiledExpression": ("datafusion_engine.compile_pipeline", "CompiledExpression"),
-    "CompileOptions": ("datafusion_engine.compile_pipeline", "CompileOptions"),
     "CompilationArtifacts": ("datafusion_engine.sql_policy_engine", "CompilationArtifacts"),
     "SQLPolicyProfile": ("datafusion_engine.sql_policy_engine", "SQLPolicyProfile"),
     "compile_sql_policy": ("datafusion_engine.sql_policy_engine", "compile_sql_policy"),
@@ -294,7 +273,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "datafusion_engine.streaming_executor",
         "StreamingExecutionResult",
     ),
-    "StreamingExecutor": ("datafusion_engine.streaming_executor", "StreamingExecutor"),
     # Parameter Binding
     "DataFusionParamBindings": ("datafusion_engine.param_binding", "DataFusionParamBindings"),
     "apply_bindings_to_context": (

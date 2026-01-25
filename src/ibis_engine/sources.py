@@ -16,7 +16,7 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering
 from datafusion_engine.diagnostics import recorder_for_profile
 from datafusion_engine.io_adapter import DataFusionIOAdapter
@@ -28,7 +28,7 @@ from datafusion_engine.table_provider_metadata import (
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.registry import datafusion_context
-from ibis_engine.schema_utils import ibis_schema_from_arrow
+from ibis_engine.schema_utils import bind_expr_schema, ibis_schema_from_arrow, resolve_arrow_schema
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -91,6 +91,8 @@ class SourceToIbisOptions:
     overwrite: bool = True
     runtime_profile: DataFusionRuntimeProfile | None = None
     table_metadata: Mapping[str, str] | None = None
+    schema: SchemaLike | None = None
+    allow_extra_columns: bool = False
 
 
 class DatasetSpecLike(Protocol):
@@ -102,6 +104,10 @@ class DatasetSpecLike(Protocol):
 
     def ordering(self) -> Ordering:
         """Return the ordering metadata for the dataset."""
+        ...
+
+    def schema(self) -> SchemaLike:
+        """Return the dataset schema."""
         ...
 
 
@@ -193,6 +199,9 @@ def register_ibis_table(
     database_hint, name = _parse_database_hint(options.name)
     table_name = name or _temporary_table_name()
     table_value = _as_pyarrow_table(table)
+    resolved_schema = _schema_for_options(options)
+    if resolved_schema is not None:
+        table_value = table_value.cast(resolved_schema)
     schema = ibis_schema_from_arrow(table_value.schema)
     temp = name is None
     backend.create_table(
@@ -238,6 +247,11 @@ def register_ibis_record_batches(
     if not batches:
         msg = "Record batch registration requires at least one batch."
         raise ValueError(msg)
+    resolved_schema = _schema_for_options(options)
+    if resolved_schema is not None:
+        table = pa.Table.from_batches(batches)
+        table = table.cast(resolved_schema)
+        return register_ibis_table(table, options=options)
     backend = cast("TableBackend", options.backend)
     database_hint, name = _parse_database_hint(options.name)
     table_name = name or _temporary_table_name()
@@ -279,6 +293,7 @@ def register_ibis_view(
     IbisPlan
         Ibis plan backed by the registered view.
     """
+    expr = _bind_expr_for_options(expr, options=options)
     database_hint, view_name = _parse_database_hint(options.name)
     if view_name is None:
         return IbisPlan(expr=expr, ordering=options.ordering or Ordering.unordered())
@@ -347,7 +362,8 @@ def source_to_ibis(
                 source,
                 options=options,
             )
-        return IbisPlan(expr=source, ordering=options.ordering or Ordering.unordered())
+        bound = _bind_expr_for_options(source, options=options)
+        return IbisPlan(expr=bound, ordering=options.ordering or Ordering.unordered())
     table = _ensure_table(source)
     return table_to_ibis(
         table,
@@ -372,6 +388,11 @@ def plan_from_dataset(
     """
     plan = _plan_from_source(dataset, ctx=ctx, backend=backend, name=name)
     expr = apply_query_spec(plan.expr, spec=spec.query())
+    expr = bind_expr_schema(
+        expr,
+        schema=spec.schema(),
+        allow_extra_columns=ctx.provenance or ctx.debug,
+    )
     return IbisPlan(expr=expr, ordering=spec.ordering())
 
 
@@ -404,6 +425,23 @@ def _ensure_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
     if isinstance(value, RecordBatchReaderLike):
         return value.read_all()
     return value
+
+
+def _schema_for_options(options: SourceToIbisOptions) -> pa.Schema | None:
+    if options.schema is None:
+        return None
+    return resolve_arrow_schema(options.schema)
+
+
+def _bind_expr_for_options(expr: IbisTable, *, options: SourceToIbisOptions) -> IbisTable:
+    schema = _schema_for_options(options)
+    if schema is None:
+        return expr
+    return bind_expr_schema(
+        expr,
+        schema=schema,
+        allow_extra_columns=options.allow_extra_columns,
+    )
 
 
 def _plan_from_source(

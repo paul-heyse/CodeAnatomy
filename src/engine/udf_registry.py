@@ -1,10 +1,10 @@
 """
 Unified function registry for UDFs with performance ladder.
 
-This module provides a single source of truth for all user-defined functions,
-with explicit lane precedence (builtin → pyarrow → pandas → python) to ensure
-optimal performance. The registry integrates with both DataFusion introspection
-and Ibis UDF decorators.
+This module provides a single source of truth for backend-native UDFs and
+explicitly disallows Python/PyArrow/Pandas UDF lanes in DataFusion execution.
+The registry integrates with DataFusion introspection and Ibis builtin UDF
+decorators.
 """
 
 from __future__ import annotations
@@ -146,15 +146,24 @@ class UDFSpec:
 
         Uses lane-specific Ibis decorators to achieve optimal performance:
         - BUILTIN: Reference existing backend function
-        - PYARROW: Vectorized over PyArrow arrays
-        - PANDAS: Vectorized over Pandas Series
-        - PYTHON: Row-by-row (emits warning)
+        - PYARROW/PANDAS/PYTHON: Disabled for Rust-only DataFusion execution
 
         Parameters
         ----------
         backend : Backend
             Ibis DataFusion backend to register with
+
+        Raises
+        ------
+        RuntimeError
+            Raised when a non-builtin UDF lane is attempted.
         """
+        if self.lane != UDFLane.BUILTIN:
+            msg = (
+                "Python/PyArrow/Pandas UDF lanes are disabled for DataFusion. "
+                "Convert this function to a Rust UDF."
+            )
+            raise RuntimeError(msg)
         match self.lane:
             case UDFLane.BUILTIN:
                 # Reference existing backend function
@@ -165,33 +174,12 @@ class UDFSpec:
                 )
                 def _builtin() -> None: ...
 
-            case UDFLane.PYARROW:
-                # Vectorized over PyArrow arrays
-                ibis.udf.scalar.pyarrow(
-                    fn=self.implementation,
-                    name=self.name,
-                    signature=(self.signature.arg_types, self.signature.return_type),
+            case UDFLane.PYARROW | UDFLane.PANDAS | UDFLane.PYTHON:
+                msg = (
+                    "Python/PyArrow/Pandas UDF lanes are disabled for DataFusion. "
+                    "Convert this function to a Rust UDF."
                 )
-
-            case UDFLane.PANDAS:
-                # Vectorized over Pandas Series
-                ibis.udf.scalar.pandas(
-                    fn=self.implementation,
-                    name=self.name,
-                    signature=(self.signature.arg_types, self.signature.return_type),
-                )
-
-            case UDFLane.PYTHON:
-                # Row-by-row - emit warning
-                logger.warning(
-                    "UDF '%s' uses slow Python lane. Consider upgrading to pyarrow or pandas.",
-                    self.name,
-                )
-                ibis.udf.scalar.python(
-                    fn=self.implementation,
-                    name=self.name,
-                    signature=(self.signature.arg_types, self.signature.return_type),
-                )
+                raise RuntimeError(msg)
 
 
 @dataclass
@@ -268,98 +256,92 @@ class FunctionRegistry:
             )
         )
 
+    @staticmethod
     def register_pyarrow(
-        self,
         name: str,
-        func: Callable[..., object],
-        signature: UDFSignature | None = None,
+        _func: Callable[..., object],
+        _signature: UDFSignature | None = None,
     ) -> None:
         """
-        Register PyArrow-based UDF (preferred for custom functions).
+        Register PyArrow-based UDF (disabled in Rust-only DataFusion mode).
 
         Parameters
         ----------
         name : str
             Function name
-        func : Callable
-            PyArrow-vectorized implementation
-        signature : UDFSignature | None
-            Type signature (inferred from annotations if not provided)
+        _func : Callable
+            PyArrow-vectorized implementation (unused)
+        _signature : UDFSignature | None
+            Type signature (unused)
+
+        Raises
+        ------
+        RuntimeError
+            Raised when PyArrow UDFs are requested.
         """
-        if signature is None:
-            signature = UDFSignature.from_annotations(func)
-
-        self.register_spec(
-            UDFSpec(
-                name=name,
-                lane=UDFLane.PYARROW,
-                implementation=func,
-                signature=signature,
-            )
+        msg = (
+            "PyArrow UDFs are disabled for DataFusion. "
+            f"Convert '{name}' to a Rust UDF."
         )
+        raise RuntimeError(msg)
 
+    @staticmethod
     def register_pandas(
-        self,
         name: str,
-        func: Callable[..., object],
-        signature: UDFSignature | None = None,
+        _func: Callable[..., object],
+        _signature: UDFSignature | None = None,
     ) -> None:
         """
-        Register Pandas-based UDF.
+        Register Pandas-based UDF (disabled in Rust-only DataFusion mode).
 
         Parameters
         ----------
         name : str
             Function name
-        func : Callable
-            Pandas-vectorized implementation
-        signature : UDFSignature | None
-            Type signature (inferred from annotations if not provided)
+        _func : Callable
+            Pandas-vectorized implementation (unused)
+        _signature : UDFSignature | None
+            Type signature (unused)
+
+        Raises
+        ------
+        RuntimeError
+            Raised when Pandas UDFs are requested.
         """
-        if signature is None:
-            signature = UDFSignature.from_annotations(func)
-
-        self.register_spec(
-            UDFSpec(
-                name=name,
-                lane=UDFLane.PANDAS,
-                implementation=func,
-                signature=signature,
-            )
+        msg = (
+            "Pandas UDFs are disabled for DataFusion. "
+            f"Convert '{name}' to a Rust UDF."
         )
+        raise RuntimeError(msg)
 
+    @staticmethod
     def register_python(
-        self,
         name: str,
-        func: Callable[..., object],
-        signature: UDFSignature | None = None,
+        _func: Callable[..., object],
+        _signature: UDFSignature | None = None,
     ) -> None:
         """
-        Register Python row-by-row UDF (slow - use as last resort).
-
-        Emits a warning when registered to encourage upgrading to vectorized
-        implementations.
+        Register Python row-by-row UDF (disabled in Rust-only DataFusion mode).
 
         Parameters
         ----------
         name : str
             Function name
-        func : Callable
-            Row-by-row Python implementation
-        signature : UDFSignature | None
-            Type signature (inferred from annotations if not provided)
-        """
-        if signature is None:
-            signature = UDFSignature.from_annotations(func)
+        _func : Callable
+            Row-by-row Python implementation (unused)
+        _signature : UDFSignature | None
+            Type signature (unused)
 
-        self.register_spec(
-            UDFSpec(
-                name=name,
-                lane=UDFLane.PYTHON,
-                implementation=func,
-                signature=signature,
-            )
+        Raises
+        ------
+        RuntimeError
+            Raised when Python UDFs are requested.
+        """
+        msg = (
+            "Python UDFs are disabled for DataFusion. "
+            f"Convert '{name}' to a Rust UDF."
         )
+        raise RuntimeError(msg)
 
     def apply_to_backend(self, backend: Backend) -> None:
         """

@@ -41,7 +41,7 @@ from datafusion_engine.write_pipeline import (
 )
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
-from ibis_engine.execution import materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.execution import execute_ibis_plan
 from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
@@ -223,13 +223,21 @@ def build_plan_product(
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
     if prefer_reader:
-        stream = stream_ibis_plan(plan, execution=execution)
+        stream = execute_ibis_plan(
+            plan,
+            execution=execution,
+            streaming=True,
+        ).require_reader()
         if not isinstance(stream, pa.RecordBatchReader):
             msg = "Expected RecordBatchReader for reader materialization."
             raise ValueError(msg)
         schema = stream.schema
     else:
-        table = materialize_ibis_plan(plan, execution=execution)
+        table = execute_ibis_plan(
+            plan,
+            execution=execution,
+            streaming=False,
+        ).require_table()
         schema = table.schema
     return PlanProduct(
         plan_id=plan_id or _default_plan_id(plan),

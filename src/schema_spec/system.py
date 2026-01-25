@@ -651,9 +651,9 @@ class ValidationPlans:
         """
         execution = _ibis_execution_for_ctx(ctx)
         module = importlib.import_module("ibis_engine.execution")
-        materialize = module.materialize_ibis_plan
-        invalid = materialize(self.invalid_rows, execution=execution)
-        dupes = materialize(self.duplicate_keys, execution=execution)
+        execute = module.execute_ibis_plan
+        invalid = execute(self.invalid_rows, execution=execution, streaming=False).require_table()
+        dupes = execute(self.duplicate_keys, execution=execution, streaming=False).require_table()
         return invalid, dupes
 
 

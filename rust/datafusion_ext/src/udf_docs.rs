@@ -260,8 +260,34 @@ static CPG_SCORE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     .build()
 });
 
+static UDF_REGISTRY_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_OTHER,
+        "Return metadata for all registered DataFusion functions.",
+        "udf_registry()",
+    )
+    .build()
+});
+
+static UDF_DOCS_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_OTHER,
+        "Return documentation metadata for all registered DataFusion functions.",
+        "udf_docs()",
+    )
+    .build()
+});
+
 pub fn arrow_metadata_doc() -> &'static Documentation {
     &ARROW_METADATA_DOC
+}
+
+pub fn list_unique_doc() -> &'static Documentation {
+    &LIST_UNIQUE_DOC
+}
+
+pub fn count_distinct_agg_doc() -> &'static Documentation {
+    &COUNT_DISTINCT_AGG_DOC
 }
 
 pub fn stable_hash64_doc() -> &'static Documentation {
@@ -292,6 +318,14 @@ pub fn cpg_score_doc() -> &'static Documentation {
     &CPG_SCORE_DOC
 }
 
+pub fn udf_registry_doc() -> &'static Documentation {
+    &UDF_REGISTRY_DOC
+}
+
+pub fn udf_docs_doc() -> &'static Documentation {
+    &UDF_DOCS_DOC
+}
+
 pub fn docs_snapshot() -> Vec<(&'static str, &'static Documentation)> {
     vec![
         ("map_entries", &MAP_ENTRIES_DOC),
@@ -317,5 +351,7 @@ pub fn docs_snapshot() -> Vec<(&'static str, &'static Documentation)> {
         ("col_to_byte", col_to_byte_doc()),
         ("position_encoding_norm", position_encoding_doc()),
         ("cpg_score", cpg_score_doc()),
+        ("udf_registry", udf_registry_doc()),
+        ("udf_docs", udf_docs_doc()),
     ]
 }

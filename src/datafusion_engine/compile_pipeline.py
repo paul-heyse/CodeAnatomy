@@ -226,13 +226,15 @@ class CompilationPipeline:
         # Type narrowing: profile is always non-None after __post_init__
         assert self.options.profile is not None
 
-        from sqlglot_tools.optimizer import parse_sql_strict
+        from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
 
         raw_ast = parse_sql_strict(
             sql,
             dialect=self.options.profile.read_dialect,
-            error_level=self.options.profile.error_level,
-            unsupported_level=self.options.profile.unsupported_level,
+            options=StrictParseOptions(
+                error_level=self.options.profile.error_level,
+                unsupported_level=self.options.profile.unsupported_level,
+            ),
         )
         if self.options.enable_rewrites and self.options.rewrite_hook is not None:
             raw_ast = self.options.rewrite_hook(raw_ast)

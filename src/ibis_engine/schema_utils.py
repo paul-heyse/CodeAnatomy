@@ -10,6 +10,7 @@ import ibis.expr.datatypes as dt
 import pyarrow as pa
 from ibis.expr.types import Table, Value
 
+from arrowdsl.core.interop import SchemaLike
 from sqlglot_tools.compat import Expression
 
 
@@ -74,6 +75,35 @@ def ibis_schema_from_arrow(schema: pa.Schema) -> ibis.Schema:
     """
     fields = {field.name: ibis_dtype_from_arrow(field.type) for field in schema}
     return ibis.schema(fields)
+
+
+def resolve_arrow_schema(schema: SchemaLike) -> pa.Schema:
+    """Return a PyArrow schema for a schema-like input.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Resolved schema instance.
+
+    Raises
+    ------
+    TypeError
+        Raised when the schema cannot be resolved.
+    """
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Schema-like object could not be resolved to a pyarrow.Schema."
+    raise TypeError(msg)
 
 
 def sqlglot_column_defs(schema: pa.Schema, *, dialect: str = "datafusion") -> list[Expression]:
@@ -148,6 +178,51 @@ def validate_expr_schema(
     raise ValueError(msg_full)
 
 
+def bind_expr_schema(
+    expr: Table,
+    *,
+    schema: SchemaLike,
+    allow_extra_columns: bool = False,
+) -> Table:
+    """Bind an Ibis expression to an explicit schema.
+
+    Parameters
+    ----------
+    expr:
+        Expression to bind.
+    schema:
+        Expected schema for the expression.
+    allow_extra_columns:
+        Whether to preserve columns not present in the schema.
+
+    Returns
+    -------
+    ibis.expr.types.Table
+        Expression cast and ordered according to the schema.
+
+    Raises
+    ------
+    ValueError
+        Raised when required columns are missing.
+    """
+    arrow_schema = resolve_arrow_schema(schema)
+    expected = ibis_schema_from_arrow(arrow_schema)
+    expected_names = tuple(arrow_schema.names)
+    expr_names = tuple(expr.columns)
+    missing = [name for name in expected_names if name not in expr_names]
+    if missing:
+        msg = f"Ibis expression is missing required columns: {missing}."
+        raise ValueError(msg)
+    columns: list[Value] = []
+    for field in arrow_schema:
+        col = expr[field.name].cast(expected[field.name]).name(field.name)
+        columns.append(col)
+    if allow_extra_columns:
+        extras = [name for name in expr_names if name not in expected_names]
+        columns.extend([expr[name] for name in extras])
+    return expr.select(columns)
+
+
 def ensure_columns(
     table: Table,
     *,
@@ -194,11 +269,13 @@ def coalesce_columns(
 
 
 __all__ = [
+    "bind_expr_schema",
     "coalesce_columns",
     "ensure_columns",
     "ibis_dtype_from_arrow",
     "ibis_null_literal",
     "ibis_schema_from_arrow",
+    "resolve_arrow_schema",
     "sqlglot_column_defs",
     "sqlglot_column_sql",
     "validate_expr_schema",

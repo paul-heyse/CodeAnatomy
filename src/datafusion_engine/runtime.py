@@ -85,14 +85,10 @@ from datafusion_engine.schema_registry import (
     validate_symtable_views,
     validate_ts_views,
 )
-from datafusion_engine.sql_safety import (
-    ExecutionProfileOptions,
-    execute_with_profile,
-    execution_policy_for_profile,
-)
+from datafusion_engine.sql_safety import execution_policy_for_profile
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
-from datafusion_engine.udf_runtime import register_rust_udfs
+from datafusion_engine.udf_runtime import register_rust_udfs, rust_udf_docs
 from engine.plan_cache import PlanCache
 from serde_msgspec import StructBase
 from storage.ipc import payload_hash
@@ -1350,15 +1346,26 @@ def _sql_with_options(
     runtime_profile: DataFusionRuntimeProfile | None = None,
     allow_statements: bool | None = None,
 ) -> DataFrame:
-    return execute_with_profile(
-        ctx,
-        sql,
-        profile=runtime_profile,
-        options=ExecutionProfileOptions(
-            sql_options=sql_options or _read_only_sql_options(),
-            allow_statements=allow_statements,
-        ),
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+    resolved_sql_options = sql_options or _read_only_sql_options()
+    if allow_statements:
+        allow_statements_flag = True
+        resolved_sql_options = resolved_sql_options.with_allow_statements(allow_statements_flag)
+    sql_policy = DataFusionSqlPolicy(allow_statements=bool(allow_statements))
+    options = DataFusionCompileOptions(
+        sql_options=resolved_sql_options,
+        sql_policy=sql_policy,
+        runtime_profile=runtime_profile,
     )
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    plan = facade.compile(sql, options=options)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Runtime SQL execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe
 
 
 def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
@@ -2904,6 +2911,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.enable_udfs:
             snapshot = register_rust_udfs(ctx)
             self._record_udf_snapshot(snapshot)
+            if self.diagnostics_sink is not None:
+                self._record_udf_docs(rust_udf_docs(ctx))
         self._refresh_udf_catalog(ctx)
 
     def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
@@ -4217,6 +4226,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self.record_artifact(
             "datafusion_udf_registry_v1",
             dict(snapshot),
+        )
+
+    def _record_udf_docs(self, docs: Mapping[str, object]) -> None:
+        if self.diagnostics_sink is None:
+            return
+        self.record_artifact(
+            "datafusion_udf_docs_v1",
+            dict(docs),
         )
 
     def _record_delta_plan_codecs(self, *, available: bool, installed: bool) -> None:

@@ -14,13 +14,14 @@ import pyarrow as pa
 from ibis.expr.types import Expr, Table, Value
 from sqlglot.errors import ParseError
 
-from ibis_engine.schema_utils import ibis_schema_from_arrow, validate_expr_schema
+from ibis_engine.schema_utils import bind_expr_schema, ibis_schema_from_arrow, validate_expr_schema
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot, sqlglot_ast_payload
 from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SchemaMapping,
     SqlGlotPolicy,
+    StrictParseOptions,
     normalize_expr,
     parse_error_payload,
     parse_sql_strict,
@@ -230,6 +231,7 @@ def sql_to_ibis_expr(spec: SqlIngestSpec) -> Table:
             )
             msg = f"SQL ingestion schema mismatch: {exc}"
             raise ValueError(msg) from exc
+        expr = bind_expr_schema(expr, schema=expected)
     if spec.backend is not None:
         try:
             ibis_expr = ibis_to_sqlglot(expr, backend=spec.backend, params=None)
@@ -355,7 +357,7 @@ def _normalize_ingest_expr(
     expr = parse_sql_strict(
         transpiled_sql,
         dialect=policy.write_dialect,
-        error_level=policy.error_level,
+        options=StrictParseOptions(error_level=policy.error_level),
     )
     return normalize_expr(
         expr,

@@ -11,6 +11,7 @@ from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SqlGlotPolicy,
+    StrictParseOptions,
     normalize_expr,
     parse_sql_strict,
     resolve_sqlglot_policy,
@@ -186,8 +187,10 @@ class SqlExprSpec:
         return parse_sql_strict(
             self.sql,
             dialect=read_dialect,
-            error_level=policy.error_level,
-            unsupported_level=policy.unsupported_level,
+            options=StrictParseOptions(
+                error_level=policy.error_level,
+                unsupported_level=policy.unsupported_level,
+            ),
         )
 
 

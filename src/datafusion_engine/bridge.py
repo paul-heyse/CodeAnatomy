@@ -11,7 +11,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import msgspec
 import pyarrow as pa
@@ -73,11 +73,7 @@ from datafusion_engine.registry_bridge import (
 )
 from datafusion_engine.schema_registry import has_schema, schema_for
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-from datafusion_engine.sql_safety import (
-    ExecutionPolicy,
-    execute_with_policy,
-    validate_sql_safety,
-)
+from datafusion_engine.sql_safety import ExecutionPolicy
 from datafusion_engine.write_pipeline import (
     WriteFormat,
     WriteMode,
@@ -87,7 +83,6 @@ from datafusion_engine.write_pipeline import (
 from engine.plan_cache import PlanCacheKey
 from ibis_engine.param_tables import scalar_param_signature
 from ibis_engine.plan import IbisPlan
-from obs.diagnostics import PreparedStatementSpec
 from schema_spec.policies import DataFusionWritePolicy
 from serde_msgspec import dumps_msgpack
 from sqlglot_tools.bridge import (
@@ -111,7 +106,6 @@ from sqlglot_tools.optimizer import (
     SqlGlotPolicy,
     ast_to_artifact,
     bind_params,
-    build_insert,
     build_select,
     emit_preflight_diagnostics,
     normalize_expr,
@@ -147,15 +141,6 @@ class MaterializationPolicy:
     allow_full_materialization: bool = False
     max_rows_for_table: int | None = None
     debug_mode: bool = False
-
-
-@dataclass(frozen=True)
-class PreparedStatementOptions:
-    """Options for preparing DataFusion SQL statements."""
-
-    param_types: Sequence[str]
-    sql_options: DataFusionSqlPolicy | None = None
-    record_hook: Callable[[PreparedStatementSpec], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -439,18 +424,26 @@ def _safe_sql(
     sql_options: SQLOptions,
     allow_statements: bool | None = None,
 ) -> DataFrame:
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-    return execute_with_profile(
-        ctx,
-        sql,
-        profile=options.runtime_profile,
-        options=ExecutionProfileOptions(
-            sql_options=sql_options,
-            allow_statements=allow_statements,
-            dialect=options.dialect,
-        ),
+    resolved_policy = options.sql_policy
+    if allow_statements is not None:
+        resolved_policy = _merge_sql_policies(
+            resolved_policy,
+            DataFusionSqlPolicy(allow_statements=allow_statements),
+        )
+    resolved = replace(
+        options,
+        sql_options=sql_options,
+        sql_policy=resolved_policy,
     )
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=resolved.runtime_profile)
+    plan = facade.compile(sql, options=resolved)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "SQL execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe
 
 
 def _ensure_dialect(name: str) -> None:
@@ -1596,98 +1589,6 @@ def _bind_params_for_ast(
         raise ValueError(msg) from exc
 
 
-def execute_dml(
-    ctx: SessionContext,
-    sql: str,
-    *,
-    options: DataFusionDmlOptions | None = None,
-) -> DataFrame:
-    """Execute a DML SQL statement using DataFusion.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFusion DataFrame representing the statement.
-
-    Raises
-    ------
-    ValueError
-        Raised when the SQL statement is not DML or violates policy.
-    """
-    resolved = options or DataFusionDmlOptions()
-    if resolved.named_params:
-        msg = "Named parameters are not supported for DML execution."
-        raise ValueError(msg)
-    _ensure_dialect(resolved.dialect)
-    expr = parse_sql_strict(
-        sql,
-        dialect=resolved.dialect,
-        preserve_params=resolved.params is not None,
-    )
-    if not _contains_dml(expr):
-        msg = "DML execution requires a DML statement."
-        raise ValueError(msg)
-    sql_policy = resolved.sql_policy or resolve_sql_policy(
-        resolved.sql_policy_name,
-        fallback=_default_sql_policy(),
-    )
-    policy = _merge_sql_policies(
-        DataFusionSqlPolicy(allow_dml=True),
-        resolved.session_policy,
-        resolved.table_policy,
-        sql_policy,
-    )
-    sql_options = resolved.sql_options or policy.to_sql_options()
-    violations = _policy_violations(expr, policy)
-    if violations:
-        msg = f"DataFusion DML policy violations: {', '.join(violations)}."
-        raise ValueError(msg)
-    safety_violations = validate_sql_safety(
-        sql,
-        _execution_policy_from_sql_policy(policy),
-        dialect=resolved.dialect,
-    )
-    if safety_violations:
-        msg = f"SQL policy violations: {', '.join(safety_violations)}."
-        raise ValueError(msg)
-    bindings = resolve_param_bindings(
-        resolved.params,
-        allowlist=resolved.param_identifier_allowlist,
-    )
-    if bindings.named_tables:
-        msg = "Table-like parameters must be passed via named params."
-        raise ValueError(msg)
-    param_mode = _param_mode(resolved.params)
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
-
-    try:
-        df = execute_with_profile(
-            ctx,
-            sql,
-            profile=resolved.runtime_profile,
-            options=ExecutionProfileOptions(
-                policy=_execution_policy_from_sql_policy(policy),
-                sql_options=sql_options,
-                dialect=resolved.dialect,
-                param_values=bindings.param_values or None,
-            ),
-        )
-    except TypeError as exc:
-        msg = "DataFusion does not support param_values for DML execution."
-        raise ValueError(msg) from exc
-    if resolved.record_hook is not None:
-        resolved.record_hook(
-            {
-                "sql": sql,
-                "dialect": resolved.dialect,
-                "policy_violations": list(violations),
-                "sql_policy_name": resolved.sql_policy_name,
-                "param_mode": param_mode,
-            }
-        )
-    return df
-
-
 def merge_format_options(
     *,
     session_defaults: Mapping[str, object] | None = None,
@@ -1864,147 +1765,6 @@ def copy_to_statement(
     return sqlglot_emit(copy_expr, policy=policy)
 
 
-def prepare_statement(
-    ctx: SessionContext,
-    *,
-    name: str,
-    sql: str,
-    options: PreparedStatementOptions,
-) -> PreparedStatementSpec:
-    """Prepare a SQL statement for reuse with EXECUTE.
-
-    Parameters
-    ----------
-    ctx:
-        DataFusion session context.
-    name:
-        Prepared statement name.
-    sql:
-        SQL text containing positional parameters.
-    options:
-        Prepared statement options, including parameter types and policy overrides.
-
-    Returns
-    -------
-    PreparedStatementSpec
-        Prepared statement metadata for diagnostics.
-    """
-    policy = _merge_sql_policies(DataFusionSqlPolicy(allow_statements=True), options.sql_options)
-    opts = policy.to_sql_options()
-    spec = PreparedStatementSpec(
-        name=name,
-        sql=sql,
-        param_types=tuple(options.param_types),
-    )
-    prepare_sql = f"PREPARE {name}({', '.join(spec.param_types)}) AS {sql}"
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
-
-    execute_with_profile(
-        ctx,
-        prepare_sql,
-        profile=None,
-        options=ExecutionProfileOptions(
-            sql_options=opts,
-            allow_statements=True,
-        ),
-    )
-    if options.record_hook is not None:
-        options.record_hook(spec)
-    return spec
-
-
-def execute_prepared_statement(
-    ctx: SessionContext,
-    *,
-    name: str,
-    params: Sequence[object],
-    sql_options: DataFusionSqlPolicy | None = None,
-) -> DataFrame:
-    """Execute a prepared statement with literal parameters.
-
-    Parameters
-    ----------
-    ctx:
-        DataFusion session context.
-    name:
-        Prepared statement name.
-    params:
-        Parameter values for EXECUTE.
-    sql_options:
-        Optional SQL policy overrides for statement execution.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFrame for the prepared statement execution.
-    """
-    policy = _merge_sql_policies(DataFusionSqlPolicy(allow_statements=True), sql_options)
-    opts = policy.to_sql_options()
-    arg_sql = ", ".join(_sql_literal(param) for param in params)
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
-
-    return execute_with_profile(
-        ctx,
-        f"EXECUTE {name}({arg_sql})",
-        profile=None,
-        options=ExecutionProfileOptions(
-            sql_options=opts,
-            allow_statements=True,
-        ),
-    )
-
-
-def _sql_literal(value: object) -> str:
-    """Return a SQL literal for the provided value.
-
-    Returns
-    -------
-    str
-        SQL literal representation of the value.
-    """
-    if value is None:
-        return "NULL"
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float)):
-        return str(value)
-    escaped = str(value).replace("'", "''")
-    return f"'{escaped}'"
-
-
-def _option_literal(value: object) -> str | None:
-    """Return a SQL literal for supported option values.
-
-    Returns
-    -------
-    str | None
-        SQL literal or None when the value is unsupported.
-    """
-    if isinstance(value, bool):
-        return _sql_literal("true" if value else "false")
-    if isinstance(value, (int, float)):
-        return _sql_literal(str(value))
-    if isinstance(value, str):
-        return _sql_literal(value)
-    return None
-
-
-def df_from_sql(
-    ctx: SessionContext,
-    expr: Expression,
-    *,
-    options: DataFusionCompileOptions,
-) -> DataFrame:
-    """Execute a SQLGlot expression with AST-first compilation.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFusion DataFrame representing the expression.
-    """
-    return df_from_sqlglot_or_sql(ctx, expr, options=options)
-
-
 def _maybe_explain(
     ctx: SessionContext,
     expr: Expression,
@@ -2074,14 +1834,14 @@ def _semantic_diff_base_expr(
     if options.semantic_diff_base_expr is None and options.semantic_diff_base_sql is None:
         return None
     base_options = replace(options, dynamic_projection=False)
-    pipeline = _compilation_pipeline(ctx, options=base_options)
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=base_options.runtime_profile)
     if options.semantic_diff_base_expr is not None:
-        compiled = pipeline.compile_ast(options.semantic_diff_base_expr)
-        return compiled.sqlglot_ast
+        plan = facade.compile(options.semantic_diff_base_expr, options=base_options)
+        return plan.compiled.sqlglot_ast
     if options.semantic_diff_base_sql is None:
         return None
-    compiled = pipeline.compile_sql(options.semantic_diff_base_sql)
-    return compiled.sqlglot_ast
+    plan = facade.compile(options.semantic_diff_base_sql, options=base_options)
+    return plan.compiled.sqlglot_ast
 
 
 def _maybe_collect_semantic_diff(
@@ -2478,66 +2238,6 @@ def collect_plan_artifacts(
     )
 
 
-def execute_sql(
-    ctx: SessionContext,
-    *,
-    sql: str,
-    options: DataFusionCompileOptions,
-) -> pa.RecordBatchReader:
-    """Execute SQL text with DataFusion and return a record batch reader.
-
-    Returns
-    -------
-    pyarrow.RecordBatchReader
-        Record batch reader over the SQL results.
-
-    Raises
-    ------
-    ValueError
-        Raised when named parameters are invalid or violate read-only policy.
-    """
-    _ensure_dialect(options.dialect)
-    named_bindings = resolve_param_bindings(
-        options.named_params,
-        allowlist=options.param_identifier_allowlist,
-    )
-    if named_bindings.param_values:
-        msg = "Named parameters must be table-like."
-        raise ValueError(msg)
-    named_params = named_bindings.named_tables
-    bindings = resolve_param_bindings(
-        options.params,
-        allowlist=options.param_identifier_allowlist,
-    )
-    if bindings.named_tables:
-        msg = "Table-like parameters must be passed via named params."
-        raise ValueError(msg)
-    expr = parse_sql_strict(
-        sql,
-        dialect=options.dialect,
-        preserve_params=bool(bindings.param_values),
-    )
-    resolved = replace(
-        options,
-        params=bindings.param_values or None,
-        named_params=named_params or None,
-    )
-    if named_params:
-        read_only_policy = DataFusionSqlPolicy()
-        violations = _policy_violations(expr, read_only_policy)
-        if violations:
-            msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
-            raise ValueError(msg)
-        resolved = replace(
-            resolved,
-            sql_options=_sql_options_for_named_params(resolved),
-            sql_policy=read_only_policy,
-            sql_policy_name=None,
-        )
-    df = df_from_sqlglot_or_sql(ctx, expr, options=resolved)
-    return _collect_reader(df)
-
-
 def datafusion_write_options(
     policy: DataFusionWritePolicy | None,
 ) -> tuple[DataFrameWriteOptions | None, ParquetWriterOptions | None]:
@@ -2850,202 +2550,6 @@ def rehydrate_plan_artifacts(
     return replay_substrait_bytes(ctx, plan_bytes)
 
 
-@dataclass(frozen=True)
-class DeltaInsertOptions:
-    """Options for DataFusion INSERT INTO Delta tables."""
-
-    mode: Literal["append", "overwrite"] = "append"
-    table_name: str | None = None
-    constraints: Sequence[str] = ()
-
-
-@dataclass(frozen=True)
-class DeltaInsertResult:
-    """Result of DataFusion INSERT operation."""
-
-    table_name: str
-    mode: str
-    rows_affected: int | None = None
-
-
-def datafusion_insert_delta(
-    ctx: SessionContext,
-    table_name: str,
-    source_sql: str,
-    *,
-    options: DeltaInsertOptions | None = None,
-) -> DeltaInsertResult:
-    """Execute INSERT INTO Delta table via DataFusion.
-
-    This uses DataFusion's DML support against DeltaTableProvider for
-    append/overwrite operations without materializing to Arrow first.
-
-    Parameters
-    ----------
-    ctx : SessionContext
-        DataFusion session context with Delta table registered.
-    table_name : str
-        Name of registered Delta table to insert into.
-    source_sql : str
-        SQL SELECT query providing the data to insert.
-    options : DeltaInsertOptions | None
-        Insert options (mode, etc).
-
-    Returns
-    -------
-    DeltaInsertResult
-        Result with table name and mode.
-
-    Raises
-    ------
-    ValueError
-        Raised when the insert mode is unsupported.
-    """
-    resolved = options or DeltaInsertOptions()
-    if resolved.mode not in {"overwrite", "append"}:
-        msg = f"Unsupported Delta INSERT mode: {resolved.mode!r}."
-        raise ValueError(msg)
-    policy = resolve_sqlglot_policy(name="datafusion_dml")
-    source_expr = parse_sql_strict(source_sql, dialect=policy.read_dialect)
-    insert_expr = build_insert(
-        source_expr.copy(),
-        table_name=table_name,
-        overwrite=resolved.mode == "overwrite",
-    )
-    sql = sqlglot_emit(insert_expr, policy=policy)
-
-    if resolved.constraints:
-        _validate_sql_constraints(
-            ctx,
-            source_expr=source_expr,
-            constraints=resolved.constraints,
-            policy=policy,
-        )
-
-    # Execute the INSERT
-    policy = ExecutionPolicy(allow_ddl=False, allow_dml=True, allow_statements=True)
-    violations = validate_sql_safety(sql, policy, dialect="datafusion")
-    if violations:
-        msg = f"SQL policy violations: {', '.join(violations)}."
-        raise ValueError(msg)
-    df = execute_with_policy(ctx, sql, policy)
-    batches = df.collect()
-
-    # Try to extract rows affected from result
-    rows_affected = None
-    if batches:
-        first_batch = batches[0]
-        if first_batch.num_columns > 0 and first_batch.num_rows > 0:
-            # DataFusion returns count in first column
-            with contextlib.suppress(IndexError, TypeError, ValueError):
-                rows_affected = int(first_batch.column(0)[0].as_py())
-
-    return DeltaInsertResult(
-        table_name=table_name,
-        mode=resolved.mode,
-        rows_affected=rows_affected,
-    )
-
-
-def _validate_sql_constraints(
-    ctx: SessionContext,
-    *,
-    source_expr: Expression,
-    constraints: Sequence[str],
-    policy: SqlGlotPolicy,
-) -> None:
-    if not constraints:
-        return
-    sql_options = SQLOptions()
-    for constraint in constraints:
-        if not constraint.strip():
-            continue
-        constraint_expr = parse_sql_strict(constraint, dialect=policy.read_dialect)
-        subquery = exp.Subquery(
-            this=source_expr.copy(),
-            alias=exp.TableAlias(this=exp.to_identifier("input")),
-        )
-        query_expr = build_select(
-            [exp.Literal.number(1)],
-            from_=subquery,
-            where=exp.not_(constraint_expr),
-            limit=1,
-        )
-        query = sqlglot_emit(query_expr, policy=policy)
-        df = _safe_sql(
-            ctx,
-            query,
-            options=DataFusionCompileOptions(),
-            sql_options=sql_options,
-        )
-        if _df_has_rows(df):
-            msg = f"Delta constraint violated: {constraint}"
-            raise ValueError(msg)
-
-
-def datafusion_insert_from_dataframe(
-    ctx: SessionContext,
-    table_name: str,
-    source_df: DataFrame,
-    *,
-    options: DeltaInsertOptions | None = None,
-) -> DeltaInsertResult:
-    """Execute INSERT INTO Delta table from a DataFusion DataFrame.
-
-    This registers the source DataFrame as a temporary view and executes
-    INSERT INTO against it.
-
-    Parameters
-    ----------
-    ctx : SessionContext
-        DataFusion session context with Delta table registered.
-    table_name : str
-        Name of registered Delta table to insert into.
-    source_df : DataFrame
-        DataFrame to insert.
-    options : DeltaInsertOptions | None
-        Insert options (mode, etc).
-
-    Returns
-    -------
-    DeltaInsertResult
-        Result with table name, mode, and rows affected.
-
-    Raises
-    ------
-    TypeError
-        Raised when the SessionContext cannot register record batches.
-    """
-    resolved = options or DeltaInsertOptions()
-
-    # Register source as temp view using Arrow materialization
-    temp_name = f"__insert_source_{_uuid_short()}"
-    batches = source_df.collect()
-    register_batches = getattr(ctx, "register_record_batches", None)
-    if not callable(register_batches):
-        msg = "DataFusion SessionContext missing register_record_batches."
-        raise TypeError(msg)
-    register_batches(temp_name, batches)
-    invalidate_introspection_cache(ctx)
-
-    try:
-        source_expr = build_select([exp.Star()], from_=temp_name)
-        source_sql = _emit_internal_sql(source_expr)
-        result = datafusion_insert_delta(
-            ctx,
-            table_name,
-            source_sql,
-            options=resolved,
-        )
-    finally:
-        # Deregister temp view
-        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            adapter.deregister_table(temp_name)
-
-    return result
-
-
 def _uuid_short() -> str:
     """Generate a short UUID for temporary table names.
 
@@ -3122,8 +2626,6 @@ __all__ = [
     "DataFusionDmlOptions",
     "DataFusionPlanArtifacts",
     "DataFusionSqlPolicy",
-    "DeltaInsertOptions",
-    "DeltaInsertResult",
     "IbisCompilerBackend",
     "MaterializationPolicy",
     "collect_plan_artifacts",
@@ -3131,8 +2633,6 @@ __all__ = [
     "copy_to_path",
     "copy_to_statement",
     "datafusion_from_arrow",
-    "datafusion_insert_delta",
-    "datafusion_insert_from_dataframe",
     "datafusion_partitioned_readers",
     "datafusion_read_table",
     "datafusion_to_async_batches",
@@ -3140,11 +2640,7 @@ __all__ = [
     "datafusion_to_table",
     "datafusion_view_sql",
     "datafusion_write_options",
-    "df_from_sql",
     "df_from_sqlglot_ast",
-    "execute_dml",
-    "execute_prepared_statement",
-    "execute_sql",
     "execute_sqlglot_ast",
     "ibis_plan_to_datafusion",
     "ibis_plan_to_reader",
@@ -3152,7 +2648,6 @@ __all__ = [
     "ibis_to_datafusion",
     "ibis_to_datafusion_ast_path",
     "merge_format_options",
-    "prepare_statement",
     "rehydrate_plan_artifacts",
     "replay_substrait_bytes",
     "sqlglot_to_datafusion",

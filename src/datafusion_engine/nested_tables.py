@@ -82,15 +82,23 @@ def materialize_view_reference(
         msg = f"View {view.name!r} requires an Ibis backend."
         raise ValueError(msg)
     ctx = datafusion_context(backend)
-    sql_options = sql_options_for_profile(None)
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-    batches = execute_with_profile(
-        ctx,
+    sql_options = sql_options_for_profile(None)
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    plan = facade.compile(
         f"SELECT * FROM {view.name}",
-        profile=None,
-        options=ExecutionProfileOptions(sql_options=sql_options),
-    ).collect()
+        options=DataFusionCompileOptions(
+            sql_options=sql_options,
+            sql_policy=DataFusionSqlPolicy(),
+        ),
+    )
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Nested table materialization did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    batches = result.dataframe.collect()
     return pa.Table.from_batches(batches)
 
 

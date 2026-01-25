@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.bridge import execute_dml
-from datafusion_engine.compile_options import DataFusionDmlOptions, resolve_sql_policy
+from datafusion_engine.compile_options import DataFusionCompileOptions, resolve_sql_policy
+from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 pytest.importorskip("datafusion")
@@ -26,10 +26,9 @@ def test_sql_policy_presets() -> None:
 
 def test_dml_policy_enforces_read_only() -> None:
     """Reject DML statements when read-only policy is applied."""
-    options = DataFusionDmlOptions(sql_policy_name="read_only")
+    ctx = DataFusionRuntimeProfile().session_context()
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    options = DataFusionCompileOptions(sql_policy_name="read_only")
+    plan = facade.compile("INSERT INTO missing_table VALUES (1)", options=options)
     with pytest.raises(ValueError, match="policy violations"):
-        execute_dml(
-            DataFusionRuntimeProfile().session_context(),
-            "INSERT INTO missing_table VALUES (1)",
-            options=options,
-        )
+        facade.execute(plan)

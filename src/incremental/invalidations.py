@@ -10,7 +10,7 @@ import pyarrow as pa
 
 from arrowdsl.core.ordering import Ordering
 from engine.runtime_profile import runtime_profile_snapshot
-from ibis_engine.execution import materialize_ibis_plan
+from ibis_engine.execution import execute_ibis_plan
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
@@ -354,7 +354,11 @@ def _read_delta_table(
         options=IbisDeltaReadOptions(storage_options=context.storage.storage_options),
     )
     plan = IbisPlan(expr=table, ordering=Ordering.unordered())
-    return materialize_ibis_plan(plan, execution=context.runtime.ibis_execution())
+    return execute_ibis_plan(
+        plan,
+        execution=context.runtime.ibis_execution(),
+        streaming=False,
+    ).require_table()
 
 
 __all__ = [

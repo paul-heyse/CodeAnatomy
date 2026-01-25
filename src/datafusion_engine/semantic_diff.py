@@ -322,20 +322,14 @@ def compute_rebuild_needed(
     from datafusion_engine.sql_policy_engine import compile_sql_policy
 
     # Parse and canonicalize both versions
-    from sqlglot_tools.optimizer import parse_sql_strict
+    from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
 
-    old_ast = parse_sql_strict(
-        old_sql,
-        dialect=profile.read_dialect,
+    options = StrictParseOptions(
         error_level=profile.error_level,
         unsupported_level=profile.unsupported_level,
     )
-    new_ast = parse_sql_strict(
-        new_sql,
-        dialect=profile.read_dialect,
-        error_level=profile.error_level,
-        unsupported_level=profile.unsupported_level,
-    )
+    old_ast = parse_sql_strict(old_sql, dialect=profile.read_dialect, options=options)
+    new_ast = parse_sql_strict(new_sql, dialect=profile.read_dialect, options=options)
 
     old_canonical, _ = compile_sql_policy(old_ast, schema=schema, profile=profile)
     new_canonical, _ = compile_sql_policy(new_ast, schema=schema, profile=profile)

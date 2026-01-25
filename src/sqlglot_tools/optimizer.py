@@ -377,6 +377,15 @@ class ParseSqlOptions:
 
 
 @dataclass(frozen=True)
+class StrictParseOptions:
+    """Options for strict SQL parsing."""
+
+    error_level: ErrorLevel | None = None
+    unsupported_level: ErrorLevel | None = None
+    preserve_params: bool = False
+
+
+@dataclass(frozen=True)
 class NormalizationStats:
     """Normalization stats for predicate normalization decisions."""
 
@@ -1066,8 +1075,10 @@ def normalize_ddl_sql(sql: str, *, surface: SqlGlotSurface = SqlGlotSurface.DATA
     expr = parse_sql_strict(
         sql,
         dialect=dialect,
-        error_level=policy.error_level,
-        unsupported_level=policy.unsupported_level,
+        options=StrictParseOptions(
+            error_level=policy.error_level,
+            unsupported_level=policy.unsupported_level,
+        ),
     )
     transformed = apply_transforms(expr, transforms=policy.transforms)
     policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
@@ -1306,13 +1317,18 @@ def parse_sql(
     sqlglot.Expression
         Parsed SQLGlot expression.
     """
-    return parse_sql_strict(
-        sql,
+    sanitized = (
+        sanitize_templated_sql(sql, preserve_params=options.preserve_params)
+        if options.sanitize_templated
+        else sql
+    )
+    resolved_error = options.error_level or DEFAULT_ERROR_LEVEL
+    resolved_unsupported = options.unsupported_level or DEFAULT_UNSUPPORTED_LEVEL
+    return parse_one(
+        sanitized,
         dialect=options.dialect,
-        error_level=options.error_level,
-        unsupported_level=options.unsupported_level,
-        preserve_params=options.preserve_params,
-        sanitize_templated=options.sanitize_templated,
+        error_level=resolved_error,
+        unsupported_level=resolved_unsupported,
     )
 
 
@@ -1320,10 +1336,7 @@ def parse_sql_strict(
     sql: str,
     *,
     dialect: str,
-    error_level: ErrorLevel | None = None,
-    unsupported_level: ErrorLevel | None = None,
-    preserve_params: bool = False,
-    sanitize_templated: bool = True,
+    options: StrictParseOptions | None = None,
 ) -> Expression:
     """Parse SQL with strict error handling and templated sanitization.
 
@@ -1333,32 +1346,24 @@ def parse_sql_strict(
         SQL text to parse.
     dialect
         SQLGlot dialect used for parsing.
-    error_level
-        Optional SQLGlot error level override.
-    unsupported_level
-        Optional SQLGlot unsupported level override.
-    preserve_params
-        Whether to preserve templated parameters during sanitization.
-    sanitize_templated
-        Whether to sanitize templated SQL segments before parsing.
+    options
+        Strict parsing overrides for error and unsupported levels.
 
     Returns
     -------
     sqlglot.Expression
         Parsed SQLGlot expression.
     """
-    sanitized = (
-        sanitize_templated_sql(sql, preserve_params=preserve_params)
-        if sanitize_templated
-        else sql
-    )
-    resolved_error = error_level or DEFAULT_ERROR_LEVEL
-    resolved_unsupported = unsupported_level or DEFAULT_UNSUPPORTED_LEVEL
-    return parse_one(
-        sanitized,
-        dialect=dialect,
-        error_level=resolved_error,
-        unsupported_level=resolved_unsupported,
+    resolved = options or StrictParseOptions()
+    return parse_sql(
+        sql,
+        options=ParseSqlOptions(
+            dialect=dialect,
+            error_level=resolved.error_level,
+            unsupported_level=resolved.unsupported_level,
+            sanitize_templated=True,
+            preserve_params=resolved.preserve_params,
+        ),
     )
 
 
@@ -1752,9 +1757,11 @@ def _preflight_parse(
         expr = parse_sql_strict(
             sql,
             dialect=context.dialect,
-            error_level=context.policy.error_level,
-            unsupported_level=context.policy.unsupported_level,
-            preserve_params=context.preserve_params,
+            options=StrictParseOptions(
+                error_level=context.policy.error_level,
+                unsupported_level=context.policy.unsupported_level,
+                preserve_params=context.preserve_params,
+            ),
         )
     except (SqlglotError, TypeError, ValueError) as exc:
         error_msg = f"Parse failed: {exc}"
@@ -2305,6 +2312,7 @@ __all__ = [
     "SqlGlotRewriteLane",
     "SqlGlotSurface",
     "SqlGlotSurfacePolicy",
+    "StrictParseOptions",
     "apply_transforms",
     "artifact_to_ast",
     "ast_to_artifact",

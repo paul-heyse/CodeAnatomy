@@ -25,12 +25,8 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.diagnostics import DiagnosticsRecorder
+    from sqlglot_tools.optimizer import SqlGlotPolicy
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-from datafusion_engine.sql_safety import (
-    ExecutionPolicy,
-    ExecutionProfileOptions,
-    execute_with_profile,
-)
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 
 
@@ -243,15 +239,17 @@ class WriteRequest:
         to construct the AST with proper option encoding.
         """
         from sqlglot_tools.ddl_builders import build_copy_to_ast
-        from sqlglot_tools.optimizer import parse_sql_strict
+        from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
 
         # Parse source if string
         if isinstance(self.source, str):
             query = parse_sql_strict(
                 self.source,
                 dialect=profile.read_dialect,
-                error_level=profile.error_level,
-                unsupported_level=profile.unsupported_level,
+                options=StrictParseOptions(
+                    error_level=profile.error_level,
+                    unsupported_level=profile.unsupported_level,
+                ),
             )
         else:
             query = self.source
@@ -343,6 +341,79 @@ class WritePipeline:
             return self.sql_options
         return DataFusionSqlPolicy(allow_dml=True, allow_statements=True).to_sql_options()
 
+    def _execute_sql(
+        self,
+        sql: str,
+        *,
+        sql_policy: DataFusionSqlPolicy,
+        sql_options: SQLOptions | None = None,
+    ) -> DataFrame:
+        from datafusion_engine.compile_options import DataFusionCompileOptions
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+        resolved_sql_options = sql_options or sql_policy.to_sql_options()
+        options = DataFusionCompileOptions(
+            sql_options=resolved_sql_options,
+            sql_policy=sql_policy,
+            sql_policy_profile=self.profile,
+            cache=False,
+        )
+        facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
+        plan = facade.compile(sql, options=options)
+        result = facade.execute(plan)
+        if result.dataframe is None:
+            msg = "SQL execution did not return a DataFusion DataFrame."
+            raise ValueError(msg)
+        return result.dataframe
+
+    @staticmethod
+    def _df_has_rows(df: DataFrame) -> bool:
+        batches = df.collect()
+        return any(batch.num_rows > 0 for batch in batches)
+
+    def _validate_insert_constraints(
+        self,
+        *,
+        source_expr: exp.Expression,
+        constraints: tuple[str, ...],
+        policy: SqlGlotPolicy,
+    ) -> None:
+        if not constraints:
+            return
+        from sqlglot_tools.optimizer import (
+            StrictParseOptions,
+            build_select,
+            parse_sql_strict,
+            sqlglot_emit,
+        )
+
+        for constraint in constraints:
+            if not constraint.strip():
+                continue
+            constraint_expr = parse_sql_strict(
+                constraint,
+                dialect=policy.read_dialect,
+                options=StrictParseOptions(
+                    error_level=policy.error_level,
+                    unsupported_level=policy.unsupported_level,
+                ),
+            )
+            subquery = exp.Subquery(
+                this=source_expr.copy(),
+                alias=exp.TableAlias(this=exp.to_identifier("input")),
+            )
+            query_expr = build_select(
+                [exp.Literal.number(1)],
+                from_=subquery,
+                where=exp.not_(constraint_expr),
+                limit=1,
+            )
+            query_sql = sqlglot_emit(query_expr, policy=policy)
+            df = self._execute_sql(query_sql, sql_policy=DataFusionSqlPolicy())
+            if self._df_has_rows(df):
+                msg = f"Delta constraint violated: {constraint}"
+                raise ValueError(msg)
+
     def write_via_copy(
         self,
         request: WriteRequest,
@@ -400,15 +471,10 @@ class WritePipeline:
         """
         copy_ast = request.to_copy_ast(self.profile)
         sql = copy_ast.sql(dialect=self.profile.write_dialect)
-        policy = ExecutionPolicy(allow_ddl=False, allow_dml=True, allow_statements=True)
-        df = execute_with_profile(
-            self.ctx,
+        df = self._execute_sql(
             sql,
-            profile=None,
-            options=ExecutionProfileOptions(
-                policy=policy,
-                sql_options=self._resolved_sql_options(),
-            ),
+            sql_policy=DataFusionSqlPolicy(allow_dml=True, allow_statements=True),
+            sql_options=self._resolved_sql_options(),
         )
         return sql, df
 
@@ -418,7 +484,7 @@ class WritePipeline:
     ) -> WriteResult:
         """Write using streaming Arrow writer.
 
-        Uses the streaming executor to write results without full
+        Uses Arrow streaming execution to write results without full
         materialization. Supports advanced partitioning and fine-grained
         control over output file structure.
 
@@ -431,6 +497,8 @@ class WritePipeline:
         ------
         NotImplementedError
             If format is not PARQUET or streaming is not supported.
+        ValueError
+            Raised when the streaming execution does not yield a DataFrame.
 
         Notes
         -----
@@ -443,12 +511,23 @@ class WritePipeline:
         WriteResult
             Write result metadata for the streaming operation.
         """
-        from datafusion_engine.streaming_executor import StreamingExecutor
+        from datafusion_engine.compile_options import DataFusionCompileOptions
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
+        from datafusion_engine.streaming_executor import StreamingExecutionResult
 
         start = time.perf_counter()
-        executor = StreamingExecutor(self.ctx, sql_options=self._resolved_sql_options())
         sql = self._source_sql(request)
-        result = executor.execute_sql(sql)
+        facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
+        options = DataFusionCompileOptions(
+            sql_options=self._resolved_sql_options(),
+            cache=False,
+        )
+        plan = facade.compile(sql, options=options)
+        exec_result = facade.execute(plan)
+        if exec_result.dataframe is None:
+            msg = "Streaming write requires a DataFusion DataFrame."
+            raise ValueError(msg)
+        result = StreamingExecutionResult(df=exec_result.dataframe)
 
         # Write based on format
         if request.format == WriteFormat.PARQUET:
@@ -519,23 +598,48 @@ class WritePipeline:
         if request.mode == WriteMode.ERROR:
             msg = "INSERT requires APPEND or OVERWRITE mode."
             raise ValueError(msg)
-        from datafusion_engine.bridge import DeltaInsertOptions, datafusion_insert_delta
+        from sqlglot_tools.optimizer import (
+            StrictParseOptions,
+            build_insert,
+            parse_sql_strict,
+            resolve_sqlglot_policy,
+            sqlglot_emit,
+        )
 
         start = time.perf_counter()
         mode = "overwrite" if request.mode == WriteMode.OVERWRITE else "append"
-        sql = self._source_sql(request)
-        insert_options = DeltaInsertOptions(mode=mode, constraints=request.constraints)
-        datafusion_insert_delta(
-            self.ctx,
-            table_name,
-            sql,
-            options=insert_options,
+        source_sql = self._source_sql(request)
+        policy = resolve_sqlglot_policy(name="datafusion_dml")
+        source_expr = parse_sql_strict(
+            source_sql,
+            dialect=policy.read_dialect,
+            options=StrictParseOptions(
+                error_level=policy.error_level,
+                unsupported_level=policy.unsupported_level,
+            ),
         )
+        insert_expr = build_insert(
+            source_expr.copy(),
+            table_name=table_name,
+            overwrite=mode == "overwrite",
+        )
+        insert_sql = sqlglot_emit(insert_expr, policy=policy)
+        self._validate_insert_constraints(
+            source_expr=source_expr,
+            constraints=request.constraints,
+            policy=policy,
+        )
+        df = self._execute_sql(
+            insert_sql,
+            sql_policy=DataFusionSqlPolicy(allow_dml=True, allow_statements=True),
+            sql_options=self._resolved_sql_options(),
+        )
+        df.collect()
         duration_ms = (time.perf_counter() - start) * 1000.0
         write_result = WriteResult(
             request=request,
             method=WriteMethod.INSERT,
-            sql=sql,
+            sql=insert_sql,
             duration_ms=duration_ms,
         )
         self._record_write_artifact(write_result)

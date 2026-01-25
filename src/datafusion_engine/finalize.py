@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
-from datafusion import SessionContext, col
+from datafusion import SessionContext, SQLOptions, col
 from datafusion import functions as f
 
 from arrowdsl.core.array_iter import iter_array_values
@@ -36,10 +36,11 @@ from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_options import sql_options_for_profile
-from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
+    from datafusion.dataframe import DataFrame
+
     from arrowdsl.schema.policy import SchemaPolicy
 
 
@@ -74,6 +75,47 @@ def _validate_arrow_table(
     module = importlib.import_module("schema_spec.system")
     validate_fn = cast("_ValidateArrowTable", module.validate_arrow_table)
     return validate_fn(table, spec=spec, options=options)
+
+
+def _execute_sql_df(
+    ctx: SessionContext,
+    sql: str,
+    *,
+    sql_options: SQLOptions | None = None,
+    allow_statements: bool = False,
+) -> DataFrame:
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+    resolved_sql_options = sql_options or sql_options_for_profile(None)
+    if allow_statements:
+        resolved_sql_options = resolved_sql_options.with_allow_statements(allow=True)
+    options = DataFusionCompileOptions(
+        sql_options=resolved_sql_options,
+        sql_policy=DataFusionSqlPolicy(allow_statements=allow_statements),
+    )
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    plan = facade.compile(sql, options=options)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Finalize SQL execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe
+
+
+def _execute_sql_table(
+    ctx: SessionContext,
+    sql: str,
+    *,
+    sql_options: SQLOptions | None = None,
+    allow_statements: bool = False,
+) -> pa.Table:
+    return _execute_sql_df(
+        ctx,
+        sql,
+        sql_options=sql_options,
+        allow_statements=allow_statements,
+    ).to_arrow_table()
 
 
 @dataclass(frozen=True)
@@ -335,12 +377,11 @@ def _required_non_null_results(
             f"SELECT {', '.join(mask_exprs)}, {combined_expr} AS bad_any "
             f"FROM {_sql_identifier(table_name)}"
         )
-        result = execute_with_profile(
+        result = _execute_sql_table(
             df_ctx,
             sql,
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
-        ).to_arrow_table()
+            sql_options=sql_options_for_profile(None),
+        )
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
@@ -418,12 +459,11 @@ def _combine_masks_df(
         parts = [f"COALESCE(mask_{idx}, FALSE)" for idx in range(len(masks))]
         combined_expr = " OR ".join(parts) if parts else "FALSE"
         sql = f"SELECT {combined_expr} AS bad_any FROM {_sql_identifier(table_name)}"
-        result = execute_with_profile(
+        result = _execute_sql_table(
             ctx,
             sql,
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
-        ).to_arrow_table()
+            sql_options=sql_options_for_profile(None),
+        )
     finally:
         deregister = getattr(ctx, "deregister_table", None)
         if callable(deregister):
@@ -449,12 +489,11 @@ def _filter_good_rows(
         columns = [name for name in resolved.schema.names if name != "_bad_any"]
         select_cols = ", ".join(_sql_identifier(name) for name in columns)
         sql = f"SELECT {select_cols} FROM {_sql_identifier(table_name)} WHERE NOT _bad_any"
-        return execute_with_profile(
+        return _execute_sql_table(
             df_ctx,
             sql,
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
-        ).to_arrow_table()
+            sql_options=sql_options_for_profile(None),
+        )
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
@@ -516,12 +555,11 @@ def _error_code_counts_table(errors: TableLike) -> pa.Table:
     ctx = DataFusionRuntimeProfile().ephemeral_context()
     datafusion_from_arrow(ctx, name="errors", value=errors)
     sql = "SELECT error_code, COUNT(*) AS count FROM errors GROUP BY error_code"
-    table = execute_with_profile(
+    table = _execute_sql_table(
         ctx,
         sql,
-        profile=None,
-        options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
-    ).to_arrow_table()
+        sql_options=sql_options_for_profile(None),
+    )
     return cast("pa.Table", table)
 
 
@@ -620,12 +658,11 @@ def _row_id_for_errors(
             prefix = f"{contract.name}:row"
             row_sql = _row_id_sql(prefix, key_cols)
             sql = f"SELECT {row_sql} AS row_id FROM {_sql_identifier(table_name)}"
-            result = execute_with_profile(
+            result = _execute_sql_table(
                 df_ctx,
                 sql,
-                profile=None,
-                options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
-            ).to_arrow_table()
+                sql_options=sql_options_for_profile(None),
+            )
         finally:
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 adapter.deregister_table(table_name)
@@ -721,12 +758,11 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     adapter.register_record_batches(temp_name, [table.to_batches()])
     try:
         sql = f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}"
-        result = execute_with_profile(
+        result = _execute_sql_table(
             ctx,
             sql,
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
-        ).to_arrow_table()
+            sql_options=sql_options_for_profile(None),
+        )
         value = result["dtype"][0].as_py()
     finally:
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
@@ -769,11 +805,10 @@ def _aggregate_error_detail_lists_df(
             else:
                 selections.append(_sql_identifier(name))
         select_sql = f"SELECT {', '.join(selections)} FROM {_sql_identifier(table_name)}"
-        df = execute_with_profile(
+        df = _execute_sql_df(
             ctx,
             select_sql,
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
+            sql_options=sql_options_for_profile(None),
         )
         struct_expr = f.named_struct([(name, col(name)) for name in detail_field_names])
         aggregated = df.aggregate(

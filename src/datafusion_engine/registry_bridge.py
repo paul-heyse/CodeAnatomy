@@ -45,7 +45,6 @@ from datafusion_engine.sql_options import (
 from datafusion_engine.sql_options import (
     statement_sql_options_for_profile as _statement_sql_options_for_profile,
 )
-from datafusion_engine.sql_safety import execution_policy_for_profile, validate_sql_safety
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
@@ -62,6 +61,7 @@ from ibis_engine.registry import (
 )
 from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
+    StrictParseOptions,
     build_select,
     parse_sql_strict,
     resolve_sqlglot_policy,
@@ -1545,8 +1545,10 @@ def _apply_projection_exprs(
                 parse_sql_strict(
                     projection,
                     dialect=policy.read_dialect,
-                    error_level=policy.error_level,
-                    unsupported_level=policy.unsupported_level,
+                    options=StrictParseOptions(
+                        error_level=policy.error_level,
+                        unsupported_level=policy.unsupported_level,
+                    ),
                 )
             )
         except (ParseError, TypeError, ValueError):
@@ -1558,14 +1560,21 @@ def _apply_projection_exprs(
     else:
         selection = ", ".join(projection_exprs)
         view_sql = f"SELECT {selection} FROM {base_name}"
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-    projected = execute_with_profile(
-        ctx,
-        view_sql,
-        profile=runtime_profile,
-        options=ExecutionProfileOptions(sql_options=sql_options),
+    options = DataFusionCompileOptions(
+        sql_options=sql_options,
+        sql_policy=DataFusionSqlPolicy(),
+        runtime_profile=runtime_profile,
     )
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    plan = facade.compile(view_sql, options=options)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Projection SQL execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    projected = result.dataframe
     adapter.register_view(
         table_name,
         projected,
@@ -1638,12 +1647,10 @@ def apply_projection_scan_overrides(
         with suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table(table_name)
         try:
-            register_dataset_df(
-                ctx,
-                name=table_name,
-                location=updated_location,
-                runtime_profile=runtime_profile,
-            )
+            from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+            facade.register_dataset(name=table_name, location=updated_location)
         except (RuntimeError, TypeError, ValueError):
             continue
 
@@ -1728,22 +1735,23 @@ def _set_runtime_setting(
         Raised when SQL violates the execution policy.
     """
     sql = f"SET {key} = '{value}'"
-    policy = execution_policy_for_profile(runtime_profile, allow_statements=True)
-    violations = validate_sql_safety(sql, policy, dialect="datafusion")
-    if violations:
-        msg = f"SQL policy violations: {', '.join(violations)}."
-        raise ValueError(msg)
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-    execute_with_profile(
-        ctx,
-        sql,
-        profile=runtime_profile,
-        options=ExecutionProfileOptions(
-            sql_options=sql_options,
-            allow_statements=True,
-        ),
-    ).collect()
+    allow_statements_flag = True
+    resolved_sql_options = sql_options.with_allow_statements(allow_statements_flag)
+    options = DataFusionCompileOptions(
+        sql_options=resolved_sql_options,
+        sql_policy=DataFusionSqlPolicy(allow_statements=True),
+        runtime_profile=runtime_profile,
+    )
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    plan = facade.compile(sql, options=options)
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "SET execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    result.dataframe.collect()
 
 
 def _refresh_listing_table(

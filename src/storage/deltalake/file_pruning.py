@@ -136,6 +136,11 @@ def evaluate_filters_against_index(
     -------
     pa.Table
         Filtered file index table with only candidate files.
+
+    Raises
+    ------
+    ValueError
+        Raised when SQL execution does not return a DataFusion DataFrame.
     """
     if not policy.has_filters():
         return index
@@ -155,16 +160,23 @@ def evaluate_filters_against_index(
 
         # Construct and execute filter query
         sql = _build_filter_query(temp_table_name, policy)
+        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
         from datafusion_engine.sql_options import sql_options_for_profile
-        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
 
-        filtered_df = execute_with_profile(
-            ctx,
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+        plan = facade.compile(
             sql,
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
+            options=DataFusionCompileOptions(
+                sql_options=sql_options_for_profile(None),
+                sql_policy=DataFusionSqlPolicy(),
+            ),
         )
-        return filtered_df.to_arrow_table()
+        result = facade.execute(plan)
+        if result.dataframe is None:
+            msg = "File pruning SQL did not return a DataFusion DataFrame."
+            raise ValueError(msg)
+        return result.dataframe.to_arrow_table()
     finally:
         # Deregister temporary table
         _deregister_table(ctx, temp_table_name)

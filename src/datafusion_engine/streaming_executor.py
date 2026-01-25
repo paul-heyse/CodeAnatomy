@@ -334,30 +334,32 @@ class StreamingExecutor:
         StreamingExecutionResult
             Streaming result wrapper.
 
+        Raises
+        ------
+        ValueError
+            Raised when SQL fails safety validation.
+
         Examples
         --------
         >>> result = executor.execute_sql("SELECT * FROM tbl WHERE id = $1", $1=42)
         >>> table = result.to_table()
         """
-        from datafusion_engine.sql_safety import (
-            ExecutionPolicy,
-            ExecutionProfileOptions,
-            execute_with_profile,
-        )
-
         resolved_options = sql_options or self.sql_options
-        policy = ExecutionPolicy(allow_ddl=False, allow_dml=False, allow_statements=False)
-        df = execute_with_profile(
-            self.ctx,
-            sql,
-            profile=None,
-            options=ExecutionProfileOptions(
-                policy=policy,
-                sql_options=resolved_options,
-                param_values=params,
-                dialect="datafusion",
-            ),
+        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+        options = DataFusionCompileOptions(
+            sql_options=resolved_options,
+            sql_policy=DataFusionSqlPolicy(),
+            params=params or None,
         )
+        facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
+        plan = facade.compile(sql, options=options)
+        result = facade.execute(plan)
+        if result.dataframe is None:
+            msg = "Streaming SQL did not return a DataFusion DataFrame."
+            raise ValueError(msg)
+        df = result.dataframe
         return StreamingExecutionResult(df=df)
 
     def from_table(

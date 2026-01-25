@@ -27,7 +27,6 @@ from arrowdsl.core.interop import (
 from arrowdsl.core.streaming import to_reader
 from core_types import PathLike
 from datafusion_engine.bridge import (
-    DeltaInsertResult,
     datafusion_from_arrow,
     datafusion_to_table,
     datafusion_view_sql,
@@ -50,11 +49,7 @@ from datafusion_engine.write_pipeline import (
 )
 from engine.plan_policy import WriterStrategy
 from engine.plan_product import PlanProduct
-from ibis_engine.execution import (
-    IbisExecutionContext,
-    materialize_ibis_plan,
-    stream_ibis_plan,
-)
+from ibis_engine.execution import IbisExecutionContext, execute_ibis_plan
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import resolve_delta_log_storage_options
 from ibis_engine.runner import async_stream_plan
@@ -237,6 +232,15 @@ class DeltaInsertRequest:
 
 
 @dataclass(frozen=True)
+class DeltaInsertResult:
+    """Result metadata for a Delta insert execution."""
+
+    table_name: str
+    mode: DeltaInsertMode
+    rows_affected: int | None = None
+
+
+@dataclass(frozen=True)
 class DeltaDataCheckContext:
     """Inputs required to run DeltaDataChecker."""
 
@@ -281,7 +285,11 @@ def ibis_plan_to_reader(
     if execution is not None:
         if batch_size is not None and execution.batch_size != batch_size:
             execution = replace(execution, batch_size=batch_size)
-        return stream_ibis_plan(plan, execution=execution)
+        return execute_ibis_plan(
+            plan,
+            execution=execution,
+            streaming=True,
+        ).require_reader()
     if batch_size is None:
         return to_reader(plan)
     return plan.to_reader(batch_size=batch_size)
@@ -318,7 +326,11 @@ def ibis_to_table(
     """
     if isinstance(value, IbisPlan):
         if execution is not None:
-            return materialize_ibis_plan(value, execution=execution)
+            return execute_ibis_plan(
+                value,
+                execution=execution,
+                streaming=False,
+            ).require_table()
         return value.to_table()
     return value.to_pyarrow()
 
@@ -1016,9 +1028,17 @@ def _delta_check_table_for_input(
     if isinstance(value, PlanProduct):
         return value.materialize_table()
     if isinstance(value, IbisPlan):
-        return materialize_ibis_plan(value, execution=context.execution)
+        return execute_ibis_plan(
+            value,
+            execution=context.execution,
+            streaming=False,
+        ).require_table()
     if isinstance(value, IbisTable):
-        return materialize_ibis_plan(IbisPlan(expr=value), execution=context.execution)
+        return execute_ibis_plan(
+            IbisPlan(expr=value),
+            execution=context.execution,
+            streaming=False,
+        ).require_table()
     table = coerce_table_like(value)
     if isinstance(table, RecordBatchReaderLike):
         return table.read_all()

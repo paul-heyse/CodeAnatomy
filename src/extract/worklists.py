@@ -13,7 +13,6 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from cache.diskcache_factory import build_deque, build_index
 from datafusion_engine.bridge import datafusion_from_arrow
-from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
 from extract.helpers import FileContext, iter_file_contexts
@@ -295,12 +294,10 @@ def _registered_output_table(
     if location is None:
         yield None
         return
-    register_dataset_df(
-        ctx,
-        name=name,
-        location=location,
-        runtime_profile=runtime_profile,
-    )
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    facade.register_dataset(name=name, location=location)
     try:
         yield None
     finally:

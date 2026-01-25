@@ -85,14 +85,25 @@ class IntrospectionSnapshot:
             Snapshot containing all available catalog metadata
         """
         def _table(sql: str) -> pa.Table:
-            from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+            from datafusion_engine.compile_options import (
+                DataFusionCompileOptions,
+                DataFusionSqlPolicy,
+            )
+            from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-            return execute_with_profile(
-                ctx,
+            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+            plan = facade.compile(
                 sql,
-                profile=None,
-                options=ExecutionProfileOptions(sql_options=sql_options),
-            ).to_arrow_table()
+                options=DataFusionCompileOptions(
+                    sql_options=sql_options,
+                    sql_policy=DataFusionSqlPolicy(),
+                ),
+            )
+            result = facade.execute(plan)
+            if result.dataframe is None:
+                msg = "Introspection SQL did not return a DataFusion DataFrame."
+                raise ValueError(msg)
+            return result.dataframe.to_arrow_table()
 
         tables = _table("""
             SELECT table_catalog, table_schema, table_name, table_type
@@ -459,14 +470,7 @@ def _cache_snapshot_from_table(
 ) -> CacheStateSnapshot | None:
     query = f"SELECT * FROM {table_name}()"
     try:
-        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
-
-        table = execute_with_profile(
-            ctx,
-            query,
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
-        ).to_arrow_table()
+        table = _cache_snapshot_table(ctx, query=query)
     except (RuntimeError, TypeError, ValueError):
         return None
     rows = table.to_pylist()
@@ -485,6 +489,25 @@ def _cache_snapshot_from_table(
         config_ttl=str(row.get("config_ttl")) if row.get("config_ttl") is not None else None,
         config_limit=str(row.get("config_limit")) if row.get("config_limit") is not None else None,
     )
+
+
+def _cache_snapshot_table(ctx: SessionContext, *, query: str) -> pa.Table:
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    plan = facade.compile(
+        query,
+        options=DataFusionCompileOptions(
+            sql_options=sql_options_for_profile(None),
+            sql_policy=DataFusionSqlPolicy(),
+        ),
+    )
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Cache introspection SQL did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe.to_arrow_table()
 
 
 def _settings_snapshot(ctx: SessionContext) -> list[dict[str, object]]:

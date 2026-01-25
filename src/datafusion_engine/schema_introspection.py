@@ -51,27 +51,37 @@ def _table_for_query(
     prepared_name: str | None = None,
 ) -> pa.Table:
     options = sql_options or _read_only_sql_options()
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
     if prepared_name is not None:
         try:
-            return execute_with_profile(
-                ctx,
-                f"EXECUTE {prepared_name}",
-                profile=None,
-                options=ExecutionProfileOptions(
-                    sql_options=options,
-                    allow_statements=True,
-                ),
-            ).to_arrow_table()
+            allow_statements = True
+            statement_options = DataFusionCompileOptions(
+                sql_options=options.with_allow_statements(allow_statements),
+                sql_policy=DataFusionSqlPolicy(allow_statements=True),
+            )
+            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+            plan = facade.compile(f"EXECUTE {prepared_name}", options=statement_options)
+            result = facade.execute(plan)
         except (RuntimeError, TypeError, ValueError):
             pass
-    return execute_with_profile(
-        ctx,
+        else:
+            if result.dataframe is not None:
+                return result.dataframe.to_arrow_table()
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    plan = facade.compile(
         query,
-        profile=None,
-        options=ExecutionProfileOptions(sql_options=options),
-    ).to_arrow_table()
+        options=DataFusionCompileOptions(
+            sql_options=options,
+            sql_policy=DataFusionSqlPolicy(),
+        ),
+    )
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Schema introspection SQL did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe.to_arrow_table()
 
 
 def _rows_for_query(
@@ -225,21 +235,7 @@ def tables_snapshot_table(
     return snapshot.tables
 
 
-def routines_snapshot_table(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None = None,
-) -> pa.Table:
-    """Return information_schema.routines as a pyarrow.Table.
-
-    Returns
-    -------
-    pyarrow.Table
-        Routine inventory from information_schema.routines.
-    """
-    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
-    if snapshot.routines is not None:
-        return snapshot.routines
+def _empty_routines_table() -> pa.Table:
     return pa.Table.from_arrays(
         [
             pa.array([], type=pa.string()),
@@ -262,6 +258,292 @@ def routines_snapshot_table(
             "data_type",
         ],
     )
+
+
+def _empty_parameters_table() -> pa.Table:
+    return pa.Table.from_arrays(
+        [
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.int32()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+            pa.array([], type=pa.string()),
+        ],
+        names=[
+            "specific_catalog",
+            "specific_schema",
+            "specific_name",
+            "routine_catalog",
+            "routine_schema",
+            "routine_name",
+            "ordinal_position",
+            "parameter_name",
+            "data_type",
+            "parameter_mode",
+        ],
+    )
+
+
+def _registry_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:
+    try:
+        from datafusion_engine.udf_runtime import rust_udf_snapshot
+    except ImportError:
+        return None
+    try:
+        snapshot = rust_udf_snapshot(ctx)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if not isinstance(snapshot, Mapping):
+        return None
+    return snapshot
+
+
+def _registry_names(snapshot: Mapping[str, object], key: str) -> list[str]:
+    value = snapshot.get(key, [])
+    if isinstance(value, str):
+        return []
+    if isinstance(value, Iterable):
+        return [str(name) for name in value if name is not None]
+    return []
+
+
+def _routine_name_from_row(row: Mapping[str, object]) -> str | None:
+    for key in ("routine_name", "function_name", "name"):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _normalized_aliases(value: object) -> Mapping[str, Sequence[str]]:
+    if isinstance(value, Mapping):
+        resolved: dict[str, Sequence[str]] = {}
+        for key, names in value.items():
+            if names is None or isinstance(names, str):
+                resolved[str(key)] = ()
+            elif isinstance(names, Iterable):
+                resolved[str(key)] = tuple(str(name) for name in names if name is not None)
+            else:
+                resolved[str(key)] = ()
+        return resolved
+    return {}
+
+
+def _normalized_parameter_names(value: object) -> Mapping[str, Sequence[str]]:
+    if isinstance(value, Mapping):
+        resolved: dict[str, Sequence[str]] = {}
+        for key, names in value.items():
+            if names is None or isinstance(names, str):
+                resolved[str(key)] = ()
+            elif isinstance(names, Iterable):
+                resolved[str(key)] = tuple(str(name) for name in names if name is not None)
+            else:
+                resolved[str(key)] = ()
+        return resolved
+    return {}
+
+
+def _deterministic_flag(volatility: str | None) -> bool | None:
+    if volatility is None:
+        return None
+    lowered = volatility.lower()
+    if lowered in {"immutable", "stable"}:
+        return True
+    if lowered == "volatile":
+        return False
+    return None
+
+
+def _routine_row(
+    *,
+    name: str,
+    routine_type: str,
+    specific_name: str,
+    volatility: str | None,
+    schema_names: Sequence[str],
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "specific_catalog": "datafusion",
+        "specific_schema": "public",
+        "specific_name": specific_name,
+        "routine_catalog": "datafusion",
+        "routine_schema": "public",
+        "routine_name": name,
+        "routine_type": routine_type,
+        "data_type": None,
+    }
+    if "function_name" in schema_names:
+        row["function_name"] = name
+    if "function_type" in schema_names:
+        row["function_type"] = routine_type
+    if "volatility" in schema_names:
+        row["volatility"] = volatility
+    if "is_deterministic" in schema_names:
+        row["is_deterministic"] = _deterministic_flag(volatility)
+    return row
+
+
+def _parameter_row(
+    *,
+    name: str,
+    specific_name: str,
+    ordinal: int,
+    param_name: str,
+    schema_names: Sequence[str],
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "specific_catalog": "datafusion",
+        "specific_schema": "public",
+        "specific_name": specific_name,
+        "routine_catalog": "datafusion",
+        "routine_schema": "public",
+        "routine_name": name,
+        "ordinal_position": ordinal,
+        "parameter_name": param_name,
+        "data_type": "unknown",
+        "parameter_mode": "IN",
+    }
+    if "function_name" in schema_names:
+        row["function_name"] = name
+    return row
+
+
+def _aligned_rows(
+    rows: Sequence[Mapping[str, object]],
+    schema_names: Sequence[str],
+) -> list[dict[str, object]]:
+    return [{name: row.get(name) for name in schema_names} for row in rows]
+
+
+def _merge_registry_routines(ctx: SessionContext, base: pa.Table) -> pa.Table:
+    snapshot = _registry_snapshot(ctx)
+    if snapshot is None:
+        return base
+    schema_names = tuple(base.schema.names)
+    aliases = _normalized_aliases(snapshot.get("aliases"))
+    volatility = snapshot.get("volatility", {})
+    volatility_map = (
+        {str(key): str(value) for key, value in volatility.items()}
+        if isinstance(volatility, Mapping)
+        else {}
+    )
+    routines: list[dict[str, object]] = base.to_pylist()
+    known: set[str] = set()
+    for row in routines:
+        name = _routine_name_from_row(row)
+        if name is not None:
+            known.add(name.lower())
+    registry_kinds = (
+        ("scalar", "FUNCTION"),
+        ("aggregate", "AGGREGATE"),
+        ("window", "WINDOW"),
+        ("table", "TABLE"),
+    )
+    for key, routine_type in registry_kinds:
+        for name in _registry_names(snapshot, key):
+            lowered = name.lower()
+            if lowered in known:
+                continue
+            routines.append(
+                _routine_row(
+                    name=name,
+                    routine_type=routine_type,
+                    specific_name=name,
+                    volatility=volatility_map.get(name),
+                    schema_names=schema_names,
+                )
+            )
+            known.add(lowered)
+            for alias in aliases.get(name, ()):
+                alias_lower = alias.lower()
+                if alias_lower in known:
+                    continue
+                routines.append(
+                    _routine_row(
+                        name=alias,
+                        routine_type=routine_type,
+                        specific_name=name,
+                        volatility=volatility_map.get(name),
+                        schema_names=schema_names,
+                    )
+                )
+                known.add(alias_lower)
+    if not routines:
+        return base
+    return pa.Table.from_pylist(_aligned_rows(routines, schema_names), schema=base.schema)
+
+
+def _merge_registry_parameters(ctx: SessionContext, base: pa.Table | None) -> pa.Table:
+    snapshot = _registry_snapshot(ctx)
+    base_table = base or _empty_parameters_table()
+    if snapshot is None:
+        return base_table
+    schema_names = tuple(base_table.schema.names)
+    parameter_names = _normalized_parameter_names(snapshot.get("parameter_names"))
+    routines: list[dict[str, object]] = base_table.to_pylist()
+    known: set[str] = set()
+    for row in routines:
+        name = _routine_name_from_row(row)
+        if name is not None:
+            known.add(name.lower())
+    for name, params in parameter_names.items():
+        if name.lower() in known:
+            continue
+        for ordinal, param_name in enumerate(params, start=1):
+            routines.append(
+                _parameter_row(
+                    name=name,
+                    specific_name=name,
+                    ordinal=ordinal,
+                    param_name=param_name,
+                    schema_names=schema_names,
+                )
+            )
+        known.add(name.lower())
+    if not routines:
+        return base_table
+    return pa.Table.from_pylist(_aligned_rows(routines, schema_names), schema=base_table.schema)
+
+def routines_snapshot_table(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> pa.Table:
+    """Return information_schema.routines as a pyarrow.Table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Routine inventory from information_schema.routines.
+    """
+    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    base = snapshot.routines if snapshot.routines is not None else _empty_routines_table()
+    return _merge_registry_routines(ctx, base)
+
+
+def parameters_snapshot_table(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None = None,
+) -> pa.Table | None:
+    """Return information_schema.parameters as a pyarrow.Table when available.
+
+    Returns
+    -------
+    pyarrow.Table | None
+        Parameter inventory from information_schema.parameters, or None if unavailable.
+    """
+    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    base = snapshot.parameters
+    merged = _merge_registry_parameters(ctx, base)
+    if base is None and merged.num_rows == 0:
+        return None
+    return merged
 
 
 def table_constraint_rows(
@@ -586,10 +868,8 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Routine inventory rows including name and type.
         """
-        snapshot = self.snapshot
-        if snapshot is None or snapshot.routines is None:
-            return []
-        return [dict(row) for row in snapshot.routines.to_pylist()]
+        table = routines_snapshot_table(self.ctx, sql_options=self.sql_options)
+        return [dict(row) for row in table.to_pylist()]
 
     def parameters_snapshot(self) -> list[dict[str, object]]:
         """Return routine parameter rows from information_schema.
@@ -599,10 +879,10 @@ class SchemaIntrospector:
         list[dict[str, object]]
             Parameter metadata rows including names and data types.
         """
-        snapshot = self.snapshot
-        if snapshot is None or snapshot.parameters is None:
+        table = parameters_snapshot_table(self.ctx, sql_options=self.sql_options)
+        if table is None:
             return []
-        return [dict(row) for row in snapshot.parameters.to_pylist()]
+        return [dict(row) for row in table.to_pylist()]
 
     def parameters_snapshot_table(self) -> pa.Table | None:
         """Return information_schema.parameters as Arrow table if available.
@@ -612,10 +892,7 @@ class SchemaIntrospector:
         pyarrow.Table | None
             Parameter inventory from information_schema.parameters, or None if unavailable.
         """
-        snapshot = self.snapshot
-        if snapshot is None:
-            return None
-        return snapshot.parameters
+        return parameters_snapshot_table(self.ctx, sql_options=self.sql_options)
 
     def function_catalog_snapshot(
         self, *, include_parameters: bool = False
@@ -977,6 +1254,7 @@ __all__ = [
     "SchemaMapCacheOptions",
     "catalogs_snapshot",
     "find_struct_field_keys",
+    "parameters_snapshot_table",
     "routines_snapshot_table",
     "tables_snapshot_table",
 ]

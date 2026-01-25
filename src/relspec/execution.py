@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from arrowdsl.core.interop import TableLike
-from ibis_engine.execution import materialize_ibis_plan
+from ibis_engine.execution import execute_ibis_plan
 from relspec.plan_catalog import PlanArtifact
 from relspec.runtime_artifacts import RuntimeArtifacts
 
@@ -42,7 +42,11 @@ def execute_plan_artifact(request: TaskExecutionRequest) -> TableLike:
         raise ValueError(msg)
     param_mapping = request.runtime.param_mapping_for_task(request.artifact)
     execution = replace(exec_ctx, params=param_mapping) if param_mapping is not None else exec_ctx
-    return materialize_ibis_plan(request.artifact.plan, execution=execution)
+    return execute_ibis_plan(
+        request.artifact.plan,
+        execution=execution,
+        streaming=False,
+    ).require_table()
 
 
 __all__ = ["TaskExecutionRequest", "execute_plan_artifact"]

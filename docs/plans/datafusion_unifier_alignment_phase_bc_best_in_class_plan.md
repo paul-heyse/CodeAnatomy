@@ -18,7 +18,7 @@ Implement the Phase B/C refinements described in the recent architecture review:
 Create a unified `DataFusionExecutionFacade` that orchestrates compilation, execution, registration, and write flows, then expose it via `EngineSession` so all surfaces use the same entrypoint.
 
 ## Status
-**Partial** — facade exists and `EngineSession` exposes it; some call sites still use `CompilationPipeline`/bridge helpers directly.
+**Complete** — facade is wired into `EngineSession` and core execution paths now route through it; legacy helpers are internal only.
 
 ## Representative pattern
 ```python
@@ -43,11 +43,11 @@ df = facade.execute(compiled, params=params)
 ## Checklist
 - [x] Define `DataFusionExecutionFacade` (compile, execute, register, write, diagnostics context).
 - [x] Wire facade into `EngineSession` (property and initialization).
-- [ ] Replace direct compilation/execution call chains with facade calls (bridge, schema_registry, extract/worklists still use `CompilationPipeline`).
-- [ ] Ensure facade constructs a consistent `DiagnosticsContext` per operation everywhere (runner uses facade; other callers still bypass it).
+- [x] Replace direct compilation/execution call chains with facade calls (bridge, schema_registry, extract/worklists now delegate).
+- [x] Ensure facade constructs a consistent `DiagnosticsContext` per operation everywhere (compile/write emit recorder-backed artifacts).
 
 ## Deletions (after migration)
-- Remove duplicated orchestration helpers in `src/datafusion_engine/bridge.py` once facade becomes the default entrypoint.
+- Remove remaining legacy bridge helpers once facade is the only entrypoint (see deferred deletions).
 
 ---
 
@@ -121,7 +121,7 @@ recorder.record_execution(...)
 Enforce `SafeExecutor` policy on every SQL execution and session `SET`.
 
 ## Status
-**Mostly complete** — `execute_with_profile` + validation applied broadly; full facade centralization remains.
+**Partial** — core registry/runtime/view/write paths now execute via the facade; specialized modules still call `execute_with_profile` directly.
 
 ## Representative pattern
 ```python
@@ -136,9 +136,9 @@ df = executor.execute(sql)
 - Modify: `src/datafusion_engine/write_pipeline.py`
 
 ## Checklist
-- [x] Replace `ctx.sql`/`ctx.sql_with_options` with `SafeExecutor` for all SQL text.
+- [x] Replace `ctx.sql`/`ctx.sql_with_options` with `SafeExecutor` for core SQL execution.
 - [x] Ensure `SET` statements use `allow_statements=True` in policy.
-- [ ] Centralize SQL execution behind the facade (several modules still execute directly).
+- [ ] Centralize SQL execution behind the facade (remaining direct usage in schema_introspection/introspection/finalize/arrowdsl).
 
 ## Deletions
 - Remove direct SQL execution helpers once all usage routes through the facade.
@@ -187,7 +187,7 @@ adapter.register_listing_table(
 Use DataFusion’s Delta provider inserts when supported; fall back only when required.
 
 ## Status
-**Complete (core path)** — insert capability metadata + WritePipeline insert path wired; legacy direct helpers remain for cleanup.
+**Complete** — insert capability metadata + WritePipeline insert path wired; legacy bridge helpers removed.
 
 ## Representative pattern
 ```python
@@ -208,7 +208,7 @@ else:
 - [x] Add INSERT path in `WritePipeline` for Delta tables.
 
 ## Deletions
-- Remove direct Delta insert paths outside the write pipeline once integrated.
+- [x] Removed direct Delta insert paths outside the write pipeline.
 
 ---
 
@@ -218,11 +218,11 @@ else:
 Expose CDF datasets through the unified registry pipeline with consistent diagnostics.
 
 ## Status
-**Complete** — dataset_kind + provider resolution added; registry_bridge already records CDF artifacts.
+**Complete** — dataset_kind + provider resolution added; CDF registration now routes through the facade and diagnostics are recorded.
 
 ## Representative pattern
 ```python
-register_delta_cdf_df(ctx, name, location, options=cdf_options)
+facade.register_dataset(name=name, location=location)
 ```
 
 ## Target files
@@ -232,7 +232,7 @@ register_delta_cdf_df(ctx, name, location, options=cdf_options)
 
 ## Checklist
 - [x] Add explicit CDF dataset kind in schema specs.
-- [ ] Route registration and diagnostics through the facade (still invoked via registry bridge).
+- [x] Route registration and diagnostics through the facade.
 - [x] Ensure CDF options recorded in registry diagnostics.
 
 ## Deletions
@@ -246,7 +246,7 @@ register_delta_cdf_df(ctx, name, location, options=cdf_options)
 Move away from named memtable patterns and use backend create_table/create_view.
 
 ## Status
-**Mostly complete** — param tables now register via backend/IOAdapter; one memtable remains in `src/cpg/emit_props_ibis.py`.
+**Partial** — memtable usage removed; remaining gap is explicit schema binding for contracted outputs.
 
 ## Representative pattern
 ```python
@@ -264,7 +264,7 @@ backend.create_view(name, expr, overwrite=True)
 - [ ] Update any schema inference to explicit schemas for contracted outputs.
 
 ## Deletions
-- Remove memtable naming utilities once all references are migrated.
+- Remove memtable naming utilities once explicit-schema work is complete.
 
 ---
 
@@ -274,7 +274,7 @@ backend.create_view(name, expr, overwrite=True)
 Enforce strict parsing and canonical generation with explicit error/unsupported levels.
 
 ## Status
-**Mostly complete** — strict parsing enabled in compile/write/registry/safety paths; tokenizer diagnostics still missing.
+**Complete** — strict parsing enabled across compile/write/registry/safety paths and tokenizer diagnostics recorded.
 
 ## Representative pattern
 ```python
@@ -289,7 +289,7 @@ expr = parse_sql_strict(sql, dialect=policy.read_dialect, error_level=policy.err
 ## Checklist
 - [x] Add error/unsupported levels to `SQLPolicyProfile`.
 - [x] Use `parse_sql_strict` for all SQL input parsing.
-- [ ] Emit diagnostics about tokenizer (Rust vs Python).
+- [x] Emit diagnostics about tokenizer (Rust vs Python).
 
 ## Deletions
 - Remove raw `parse_one` usage in compile path once strict parsing is enabled.
@@ -302,7 +302,7 @@ expr = parse_sql_strict(sql, dialect=policy.read_dialect, error_level=policy.err
 Standardize a single execution result envelope and capability metadata surface.
 
 ## Status
-**Partial** — `ExecutionResult` exists and capability flags added, but bridge/materialize/execution still use legacy routing.
+**Partial** — `ExecutionResult` exists and capability flags added; some legacy routing still returns raw DataFrames/readers.
 
 ## Representative pattern
 ```python
@@ -330,10 +330,9 @@ result = facade.execute(compiled)
 
 The following code should only be deleted once all new surfaces are in place and in use:
 
-- Direct SQL execution helpers in `src/datafusion_engine/bridge.py`.
-- Legacy compilation/execution routing in `src/datafusion_engine/bridge.py`, `src/datafusion_engine/schema_registry.py`, and `src/extract/worklists.py` (once facade is default).
-- Remaining memtable usage in `src/cpg/emit_props_ibis.py`.
-- Legacy Delta insert helpers in `src/datafusion_engine/bridge.py` once all callers use `WritePipeline`.
+- Remaining legacy execution helpers in `src/datafusion_engine/bridge.py` (e.g., copy/reader helpers) once all execution flows return `ExecutionResult`.
+- Direct `execute_with_profile` usage in specialized modules (schema/introspection/finalize/arrowdsl) once they are routed through the facade.
+- Memtable naming utilities once explicit-schema enforcement for contracted outputs is complete.
 
 ---
 

@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from datafusion_engine.registry_bridge import DeltaCdfRegistrationOptions, register_delta_cdf_df
+from datafusion_engine.execution_facade import DataFusionExecutionFacade
+from ibis_engine.registry import DatasetLocation
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.delta_context import DeltaAccessContext
@@ -47,11 +48,10 @@ def read_cdf_changes(
     path = Path(dataset_path)
     if not path.exists():
         return None
-    storage = context.storage
     current_version = delta_table_version(
         str(path),
-        storage_options=storage.storage_options,
-        log_storage_options=storage.log_storage_options,
+        storage_options=context.storage.storage_options or {},
+        log_storage_options=context.storage.log_storage_options or {},
     )
     if current_version is None:
         return None
@@ -71,17 +71,16 @@ def read_cdf_changes(
     with TempTableRegistry(ctx) as registry:
         cdf_name = f"__cdf_{uuid.uuid4().hex}"
         try:
-            _ = register_delta_cdf_df(
-                ctx,
-                name=cdf_name,
+            location = DatasetLocation(
                 path=str(path),
-                options=DeltaCdfRegistrationOptions(
-                    cdf_options=cdf_options,
-                    storage_options=storage.storage_options,
-                    log_storage_options=storage.log_storage_options,
-                    runtime_profile=runtime.profile,
-                ),
+                format="delta",
+                storage_options=context.storage.storage_options or {},
+                delta_log_storage_options=context.storage.log_storage_options or {},
+                delta_cdf_options=cdf_options,
+                datafusion_provider="delta_cdf",
             )
+            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime.profile)
+            _ = facade.register_dataset(name=cdf_name, location=location)
         except ValueError:
             return None
         registry.track(cdf_name)

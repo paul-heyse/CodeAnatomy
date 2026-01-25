@@ -37,14 +37,22 @@ def _datafusion_context() -> SessionContext:
 
 
 def _sql_table(ctx: SessionContext, sql: str) -> pa.Table:
-    from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-    return execute_with_profile(
-        ctx,
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    plan = facade.compile(
         sql,
-        profile=None,
-        options=ExecutionProfileOptions(sql_options=sql_options_for_profile(None)),
-    ).to_arrow_table()
+        options=DataFusionCompileOptions(
+            sql_options=sql_options_for_profile(None),
+            sql_policy=DataFusionSqlPolicy(),
+        ),
+    )
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "ID SQL execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe.to_arrow_table()
 
 
 def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:

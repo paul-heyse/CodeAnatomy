@@ -80,51 +80,79 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     -------
     TableLike
         Table with dictionary-encoded columns applied.
+
+    Raises
+    ------
+    ValueError
+        Raised when SQL execution does not return a DataFrame.
     """
     if not policy.dictionary_cols:
         return table
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
     df_ctx = _datafusion_context()
     resolved = _ensure_table(table)
     table_name = f"_encoding_{uuid.uuid4().hex}"
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
-
     adapter = DataFusionIOAdapter(ctx=df_ctx, profile=None)
     adapter.register_record_batches(table_name, [resolved.to_batches()])
     try:
+        sql = _encoding_select_sql(
+            schema=resolved.schema,
+            policy=policy,
+            ctx=df_ctx,
+            table_name=table_name,
+        )
         sql_options = _sql_options_for_profile(None)
-        selections: list[str] = []
-        for field in resolved.schema:
-            name = field.name
-            identifier = _sql_identifier(name)
-            if name not in policy.dictionary_cols:
-                selections.append(identifier)
-                continue
-            if patypes.is_dictionary(field.type):
-                selections.append(identifier)
-                continue
-            index_type = policy.dictionary_index_types.get(name, policy.dictionary_index_type)
-            ordered = policy.dictionary_ordered_flags.get(name, policy.dictionary_ordered)
-            dict_type = _dictionary_type_name(
-                df_ctx,
-                index_type,
-                field.type,
-                ordered=ordered,
-            )
-            selections.append(f"arrow_cast({identifier}, '{dict_type}') AS {identifier}")
-        sql = f"SELECT {', '.join(selections)} FROM {table_name}"
-        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-        return execute_with_profile(
-            df_ctx,
+        facade = DataFusionExecutionFacade(ctx=df_ctx, runtime_profile=None)
+        plan = facade.compile(
             sql,
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=sql_options),
-        ).to_arrow_table()
+            options=DataFusionCompileOptions(
+                sql_options=sql_options,
+                sql_policy=DataFusionSqlPolicy(),
+            ),
+        )
+        result = facade.execute(plan)
+        if result.dataframe is None:
+            msg = "Encoding policy SQL did not return a DataFusion DataFrame."
+            raise ValueError(msg)
+        return result.dataframe.to_arrow_table()
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
             deregister(table_name)
             invalidate_introspection_cache(df_ctx)
+
+
+def _encoding_select_sql(
+    *,
+    schema: pa.Schema,
+    policy: EncodingPolicy,
+    ctx: SessionContext,
+    table_name: str,
+) -> str:
+    selections: list[str] = []
+    for schema_field in schema:
+        name = schema_field.name
+        identifier = _sql_identifier(name)
+        if name not in policy.dictionary_cols:
+            selections.append(identifier)
+            continue
+        if patypes.is_dictionary(schema_field.type):
+            selections.append(identifier)
+            continue
+        index_type = policy.dictionary_index_types.get(name, policy.dictionary_index_type)
+        ordered = policy.dictionary_ordered_flags.get(name, policy.dictionary_ordered)
+        dict_type = _dictionary_type_name(
+            ctx,
+            index_type,
+            schema_field.type,
+            ordered=ordered,
+        )
+        selections.append(f"arrow_cast({identifier}, '{dict_type}') AS {identifier}")
+    return f"SELECT {', '.join(selections)} FROM {table_name}"
 
 
 def _datafusion_context() -> SessionContext:
@@ -163,15 +191,23 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     adapter.register_record_batches(temp_name, [list(table.to_batches())])
     try:
         sql = f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}"
-        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-        result = execute_with_profile(
-            ctx,
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+        plan = facade.compile(
             sql,
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=_sql_options_for_profile(None)),
-        ).to_arrow_table()
-        value = result["dtype"][0].as_py()
+            options=DataFusionCompileOptions(
+                sql_options=_sql_options_for_profile(None),
+                sql_policy=DataFusionSqlPolicy(),
+            ),
+        )
+        result = facade.execute(plan)
+        if result.dataframe is None:
+            msg = "Arrow type resolution did not return a DataFusion DataFrame."
+            raise ValueError(msg)
+        result_table = result.dataframe.to_arrow_table()
+        value = result_table["dtype"][0].as_py()
     finally:
         deregister = getattr(ctx, "deregister_table", None)
         if callable(deregister):

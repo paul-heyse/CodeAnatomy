@@ -3,7 +3,14 @@
 mod udf_builtin;
 mod udf_custom;
 mod udf_docs;
+mod expr_planner;
+mod function_rewrite;
+mod function_factory;
+mod udaf_builtin;
+mod udwf_builtin;
+mod udtf_builtin;
 pub mod udf_registry;
+mod registry_snapshot;
 
 use std::any::Any;
 use std::borrow::Cow;
@@ -29,7 +36,6 @@ use datafusion::catalog::{
 };
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::SessionStateDefaults;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::config::ConfigOptions;
 use datafusion::physical_expr_adapter::{
@@ -60,6 +66,56 @@ use datafusion_expr::{
     TableProviderFilterPushDown,
     TableType,
 };
+use datafusion_expr::registry::FunctionRegistry;
+
+pub fn install_sql_macro_factory_native(ctx: &SessionContext) -> Result<()> {
+    let state_ref = ctx.state_ref();
+    let mut state = state_ref.write();
+    let new_state = function_factory::with_sql_macro_factory(&state);
+    *state = new_state;
+    Ok(())
+}
+
+pub fn install_expr_planners_native(ctx: &SessionContext, planner_names: &[&str]) -> Result<()> {
+    if planner_names.is_empty() {
+        return Err(DataFusionError::Plan(
+            "ExprPlanner installation requires at least one planner name.".into(),
+        ));
+    }
+    let mut unknown: Vec<String> = Vec::new();
+    let mut install_domain = false;
+    for name in planner_names {
+        match *name {
+            "codeanatomy_domain" => {
+                install_domain = true;
+            }
+            _ => unknown.push((*name).to_string()),
+        }
+    }
+    if !unknown.is_empty() {
+        return Err(DataFusionError::Plan(format!(
+            "Unsupported ExprPlanner names: {}",
+            unknown.join(", ")
+        )));
+    }
+    let state_ref = ctx.state_ref();
+    let mut state = state_ref.write();
+    state.register_expr_planner(Arc::new(
+        datafusion_functions_nested::planner::NestedFunctionPlanner,
+    ))?;
+    state.register_expr_planner(Arc::new(
+        datafusion_functions_nested::planner::FieldAccessPlanner,
+    ))?;
+    if install_domain {
+        state.register_expr_planner(Arc::new(
+            expr_planner::CodeAnatomyDomainPlanner::default(),
+        ))?;
+        state.register_function_rewrite(Arc::new(
+            function_rewrite::CodeAnatomyOperatorRewrite::default(),
+        ))?;
+    }
+    Ok(())
+}
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr_fn::col;
 use datafusion::physical_plan::ExecutionPlan;
@@ -100,45 +156,42 @@ fn now_unix_ms() -> i64 {
 
 #[pyfunction]
 fn register_udfs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    udf_registry::register_all(&ctx.ctx);
+    udf_registry::register_all(&ctx.ctx)
+        .map_err(|err| PyRuntimeError::new_err(format!("Failed to register UDFs: {err}")))?;
     Ok(())
 }
 
-#[pyfunction]
-fn udf_registry_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    let mut scalars: Vec<String> = Vec::new();
-    let mut aggregates: Vec<String> = Vec::new();
-    let mut windows: Vec<String> = Vec::new();
-    let mut tables: Vec<String> = Vec::new();
-    let mut aliases: HashMap<String, Vec<String>> = HashMap::new();
-    for spec in udf_registry::all_udfs() {
-        match spec.kind {
-            udf_registry::UdfKind::Scalar => scalars.push(spec.name.to_string()),
-            udf_registry::UdfKind::Aggregate => aggregates.push(spec.name.to_string()),
-            udf_registry::UdfKind::Window => windows.push(spec.name.to_string()),
-            udf_registry::UdfKind::Table => tables.push(spec.name.to_string()),
-        }
-        if !spec.aliases.is_empty() {
-            aliases.insert(
-                spec.name.to_string(),
-                spec.aliases.iter().map(|alias| (*alias).to_string()).collect(),
-            );
-        }
-    }
+#[pyfunction(name = "registry_snapshot")]
+fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<Py<PyAny>> {
+    let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
     let payload = PyDict::new(py);
-    payload.set_item("scalar", PyList::new(py, scalars)?)?;
-    payload.set_item("aggregate", PyList::new(py, aggregates)?)?;
-    payload.set_item("window", PyList::new(py, windows)?)?;
-    payload.set_item("table", PyList::new(py, tables)?)?;
-    payload.set_item("aliases", aliases)?;
+    payload.set_item("scalar", PyList::new(py, snapshot.scalar)?)?;
+    payload.set_item("aggregate", PyList::new(py, snapshot.aggregate)?)?;
+    payload.set_item("window", PyList::new(py, snapshot.window)?)?;
+    payload.set_item("table", PyList::new(py, snapshot.table)?)?;
+    let alias_payload = PyDict::new(py);
+    for (name, aliases) in snapshot.aliases {
+        alias_payload.set_item(name, PyList::new(py, aliases)?)?;
+    }
+    payload.set_item("aliases", alias_payload)?;
+    let param_payload = PyDict::new(py);
+    for (name, params) in snapshot.parameter_names {
+        param_payload.set_item(name, PyList::new(py, params)?)?;
+    }
+    payload.set_item("parameter_names", param_payload)?;
+    let volatility_payload = PyDict::new(py);
+    for (name, volatility) in snapshot.volatility {
+        volatility_payload.set_item(name, volatility)?;
+    }
+    payload.set_item("volatility", volatility_payload)?;
     payload.set_item("pycapsule_udfs", PyList::empty(py))?;
     Ok(payload.into())
 }
 
 #[pyfunction]
-fn udf_docs_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
+fn udf_docs_snapshot(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<Py<PyAny>> {
     let payload = PyDict::new(py);
-    for (name, doc) in udf_docs::docs_snapshot() {
+    let add_doc = |name: &str, doc: &datafusion_expr::Documentation| -> PyResult<()> {
         let entry = PyDict::new(py);
         entry.set_item("description", doc.description.clone())?;
         entry.set_item("syntax", doc.syntax_example.clone())?;
@@ -164,6 +217,28 @@ fn udf_docs_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
             entry.set_item("related_udfs", PyList::empty(py))?;
         }
         payload.set_item(name, entry)?;
+        Ok(())
+    };
+
+    let state = ctx.ctx.state();
+    for (name, udf) in state.scalar_functions() {
+        if let Some(doc) = udf.documentation() {
+            add_doc(name, doc)?;
+        }
+    }
+    for (name, udaf) in state.aggregate_functions() {
+        if let Some(doc) = udaf.documentation() {
+            add_doc(name, doc)?;
+        }
+    }
+    for (name, udwf) in state.window_functions() {
+        if let Some(doc) = udwf.documentation() {
+            add_doc(name, doc)?;
+        }
+    }
+
+    for (name, doc) in udf_docs::docs_snapshot() {
+        add_doc(name, doc)?;
     }
     Ok(payload.into())
 }
@@ -657,19 +732,10 @@ fn delta_table_provider_with_files(
 
 #[pyfunction]
 fn install_expr_planners(ctx: PyRef<PySessionContext>, planner_names: Vec<String>) -> PyResult<()> {
-    if planner_names.is_empty() {
-        return Err(PyValueError::new_err(
-            "ExprPlanner installation requires at least one planner name.",
-        ));
-    }
-    let planners = SessionStateDefaults::default_expr_planners();
-    let state_ref = ctx.ctx.state_ref();
-    let mut state = state_ref.write();
-    let new_state = SessionStateBuilder::new_from_existing(state.clone())
-        .with_expr_planners(planners)
-        .build();
-    *state = new_state;
-    Ok(())
+    let names: Vec<&str> = planner_names.iter().map(String::as_str).collect();
+    install_expr_planners_native(&ctx.ctx, &names).map_err(|err| {
+        PyRuntimeError::new_err(format!("ExprPlanner install failed: {err}"))
+    })
 }
 
 #[pyfunction]
@@ -1358,7 +1424,7 @@ fn delta_data_checker(
 fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(udf_custom::install_function_factory, module)?)?;
     module.add_function(wrap_pyfunction!(register_udfs, module)?)?;
-    module.add_function(wrap_pyfunction!(udf_registry_snapshot, module)?)?;
+    module.add_function(wrap_pyfunction!(registry_snapshot_py, module)?)?;
     module.add_function(wrap_pyfunction!(udf_docs_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::map_entries, module)?)?;
     module.add_function(wrap_pyfunction!(udf_builtin::map_keys, module)?)?;

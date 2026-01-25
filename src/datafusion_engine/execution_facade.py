@@ -29,6 +29,7 @@ from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.sql_safety import validate_sql_safety
 from datafusion_engine.write_pipeline import WritePipeline, WriteRequest, WriteResult
+from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -37,9 +38,9 @@ if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
 
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+    from datafusion_engine.registry_bridge import DataFusionCachePolicy
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-    from datafusion_engine.registry_bridge import DataFusionCachePolicy
     from ibis_engine.registry import DatasetLocation
     from sqlglot_tools.bridge import IbisCompilerBackend
     from sqlglot_tools.compat import Expression
@@ -127,6 +128,78 @@ class ExecutionResult:
             Wrapped execution result.
         """
         return ExecutionResult(kind=ExecutionResultKind.WRITE, write_result=result)
+
+    def require_dataframe(self) -> DataFrame:
+        """Return the DataFrame result or raise when missing.
+
+        Returns
+        -------
+        datafusion.DataFrame
+            DataFrame result for this execution.
+
+        Raises
+        ------
+        ValueError
+            Raised when the execution result is not a DataFrame.
+        """
+        if self.dataframe is None:
+            msg = f"Execution result is not a dataframe: {self.kind}."
+            raise ValueError(msg)
+        return self.dataframe
+
+    def require_table(self) -> TableLike:
+        """Return the materialized table result or raise when missing.
+
+        Returns
+        -------
+        TableLike
+            Materialized table result for this execution.
+
+        Raises
+        ------
+        ValueError
+            Raised when the execution result is not a table.
+        """
+        if self.table is None:
+            msg = f"Execution result is not a table: {self.kind}."
+            raise ValueError(msg)
+        return self.table
+
+    def require_reader(self) -> RecordBatchReaderLike:
+        """Return the record batch reader or raise when missing.
+
+        Returns
+        -------
+        RecordBatchReaderLike
+            Streaming reader for this execution.
+
+        Raises
+        ------
+        ValueError
+            Raised when the execution result is not a reader.
+        """
+        if self.reader is None:
+            msg = f"Execution result is not a reader: {self.kind}."
+            raise ValueError(msg)
+        return self.reader
+
+    def require_write(self) -> WriteResult:
+        """Return the write result or raise when missing.
+
+        Returns
+        -------
+        WriteResult
+            Write result for this execution.
+
+        Raises
+        ------
+        ValueError
+            Raised when the execution result is not a write.
+        """
+        if self.write_result is None:
+            msg = f"Execution result is not a write result: {self.kind}."
+            raise ValueError(msg)
+        return self.write_result
 
 
 @dataclass(frozen=True)
@@ -222,11 +295,18 @@ class DataFusionExecutionFacade:
             Compiled plan and resolved compile options.
         """
         resolved = self._resolve_compile_options(options)
+        recorder = self.diagnostics_recorder(operation_id="compile")
+        if recorder is not None:
+            snapshot = sqlglot_policy_snapshot()
+            recorder.record_artifact(
+                "sqlglot_tokenizer_mode_v1",
+                {"tokenizer_mode": snapshot.tokenizer_mode},
+            )
         pipeline = _compilation_pipeline(self.ctx, options=resolved)
         if isinstance(expr, str):
             compiled = pipeline.compile_sql(expr)
         elif isinstance(expr, exp.Expression):
-            compiled = pipeline.compile_ast(cast("Expression", expr))
+            compiled = pipeline.compile_ast(expr)
         else:
             compiled = pipeline.compile_ibis(
                 cast("IbisTable", expr),
@@ -379,6 +459,8 @@ class DataFusionExecutionFacade:
             Dataset name to register.
         location
             Dataset location metadata.
+        cache_policy
+            Optional cache policy to apply during registration.
 
         Returns
         -------

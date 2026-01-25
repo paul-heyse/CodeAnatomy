@@ -221,9 +221,19 @@ class DataFusionIOAdapter:
             If True, allow replacing an existing catalog registration.
         """
         if overwrite:
-            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                self.ctx.deregister_catalog(name)
-        self.ctx.register_catalog_provider(name, provider)
+            deregister = getattr(self.ctx, "deregister_catalog", None)
+            if callable(deregister):
+                with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                    deregister(name)
+        from typing import cast
+
+        from datafusion.catalog import Catalog, CatalogProvider
+
+        typed_provider = cast(
+            "Catalog | CatalogProvider",
+            provider,
+        )
+        self.ctx.register_catalog_provider(name, typed_provider)
         self._record_registration(
             name=name,
             registration_type="catalog",

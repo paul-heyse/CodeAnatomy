@@ -12,6 +12,7 @@ from sqlglot_tools.compat import ErrorLevel, diff, exp
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     SqlGlotPolicy,
+    StrictParseOptions,
     normalize_expr,
     parse_sql_strict,
     resolve_sqlglot_policy,
@@ -81,8 +82,9 @@ def semantic_diff_sql(
     """
     policy = _policy_with_dialect(policy, dialect=dialect)
     try:
-        left = parse_sql_strict(left_sql, dialect=dialect, error_level=policy.error_level)
-        right = parse_sql_strict(right_sql, dialect=dialect, error_level=policy.error_level)
+        options = StrictParseOptions(error_level=policy.error_level)
+        left = parse_sql_strict(left_sql, dialect=dialect, options=options)
+        right = parse_sql_strict(right_sql, dialect=dialect, options=options)
     except (TypeError, ValueError):
         return PlanDiffResult(
             changed=True,

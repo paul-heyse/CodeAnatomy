@@ -1,7 +1,7 @@
 """UDF tier management and performance-based function resolution.
 
-This module implements a UDF performance ladder that prioritizes DataFusion builtins
-over custom UDFs, with additional tiers for Rust UDFs, PyArrow compute, and Python UDFs.
+This module implements a Rust-first UDF performance ladder that prioritizes
+DataFusion builtins and disallows Python/PyArrow/Pandas UDF execution.
 """
 
 from __future__ import annotations
@@ -31,9 +31,10 @@ BuiltinCategory = Literal[
     "datetime",
 ]
 
-# Performance tier ordering from fastest to slowest
-# Note: Uses "pandas" tier to align with existing DataFusionUdfSpec.udf_tier values
+# Performance tier ordering from fastest to slowest (non-Rust tiers retained
+# for compatibility, but rejected for DataFusion execution).
 UDF_TIER_LADDER: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
+NON_RUST_UDF_TIERS: frozenset[UdfTier] = frozenset({"pyarrow", "pandas", "python"})
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class DataFusionUdfSpec:
     catalog: str | None = None
     database: str | None = None
     capsule_id: str | None = None
-    udf_tier: UdfTier = "python"
+    udf_tier: UdfTier = "builtin"
     rewrite_tags: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -64,6 +65,12 @@ class DataFusionUdfSpec:
         """
         if self.udf_tier not in UDF_TIER_LADDER:
             msg = f"Unsupported UDF tier: {self.udf_tier!r}."
+            raise ValueError(msg)
+        if self.udf_tier in NON_RUST_UDF_TIERS:
+            msg = (
+                "Non-Rust UDF tiers are disabled for DataFusion. "
+                "Use Rust UDFs instead."
+            )
             raise ValueError(msg)
 
 
@@ -362,14 +369,21 @@ def _show_functions_table(introspector: SchemaIntrospector) -> pa.Table | None:
     ctx = introspector.ctx
     sql_options = introspector.sql_options or SQLOptions()
     try:
-        from datafusion_engine.sql_safety import ExecutionProfileOptions, execute_with_profile
+        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
-        df = execute_with_profile(
-            ctx,
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+        plan = facade.compile(
             "SHOW FUNCTIONS",
-            profile=None,
-            options=ExecutionProfileOptions(sql_options=sql_options),
+            options=DataFusionCompileOptions(
+                sql_options=sql_options,
+                sql_policy=DataFusionSqlPolicy(),
+            ),
         )
+        result = facade.execute(plan)
+        if result.dataframe is None:
+            return None
+        df = result.dataframe
     except (RuntimeError, TypeError, ValueError):
         return None
     try:
@@ -442,9 +456,10 @@ class UdfTierPolicy:
     gates for slow UDF usage.
     """
 
-    tier_preference: tuple[UdfTier, ...] = UDF_TIER_LADDER
-    allow_python_udfs: bool = True
-    allow_pyarrow_udfs: bool = True
+    tier_preference: tuple[UdfTier, ...] = ("builtin",)
+    allow_python_udfs: bool = False
+    allow_pyarrow_udfs: bool = False
+    allow_pandas_udfs: bool = False
     require_builtin_when_available: bool = False
     slow_udf_warning: bool = True
 
@@ -470,8 +485,9 @@ class UdfPerformancePolicy:
     in performance-critical contexts.
     """
 
-    allow_python_udfs: bool = True
-    allow_pyarrow_udfs: bool = True
+    allow_python_udfs: bool = False
+    allow_pyarrow_udfs: bool = False
+    allow_pandas_udfs: bool = False
     max_python_udf_count: int | None = None
     warn_on_python_udfs: bool = True
     require_explicit_approval: frozenset[str] = field(default_factory=frozenset)
@@ -496,6 +512,9 @@ class UdfPerformancePolicy:
 
         if udf_tier == "pyarrow" and not self.allow_pyarrow_udfs:
             return False, f"PyArrow UDFs are not allowed (function: {func_id!r})"
+
+        if udf_tier == "pandas" and not self.allow_pandas_udfs:
+            return False, f"Pandas UDFs are not allowed (function: {func_id!r})"
 
         if func_id in self.require_explicit_approval:
             return False, f"Function {func_id!r} requires explicit approval"
@@ -756,8 +775,7 @@ def check_udf_allowed(
     tuple[bool, str | None]
         Tuple of (is_allowed, reason). If not allowed, reason contains explanation.
     """
-    # Builtins and pandas-tier UDFs are always allowed (pandas tier is typically high-performance)
-    if resolved.tier in {"builtin", "pandas"}:
+    if resolved.tier == "builtin":
         return True, None
 
     return policy.is_udf_allowed(func_id, resolved.tier)
@@ -778,7 +796,14 @@ def create_default_catalog(
     UdfCatalog
         Catalog with default configuration.
     """
-    return UdfCatalog(tier_policy=UdfTierPolicy(), udf_specs=udf_specs)
+    policy = UdfTierPolicy(
+        tier_preference=("builtin",),
+        allow_python_udfs=False,
+        allow_pyarrow_udfs=False,
+        allow_pandas_udfs=False,
+        require_builtin_when_available=True,
+    )
+    return UdfCatalog(tier_policy=policy, udf_specs=udf_specs)
 
 
 def create_strict_catalog(
@@ -800,6 +825,7 @@ def create_strict_catalog(
         tier_preference=("builtin",),
         allow_python_udfs=False,
         allow_pyarrow_udfs=False,
+        allow_pandas_udfs=False,
         require_builtin_when_available=True,
     )
     return UdfCatalog(tier_policy=policy, udf_specs=udf_specs)

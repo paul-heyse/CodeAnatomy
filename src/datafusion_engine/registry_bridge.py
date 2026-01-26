@@ -884,11 +884,7 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
 
 def _should_register_delta_provider(context: DataFusionRegistrationContext) -> bool:
     location = context.location
-    if location.format != "delta":
-        return False
-    if location.delta_version is not None or location.delta_timestamp is not None:
-        return True
-    return resolve_delta_scan_options(location) is not None
+    return location.format == "delta"
 
 
 @dataclass(frozen=True)
@@ -928,7 +924,7 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
     response = _delta_table_provider_from_session(request)
     provider = response.provider
     adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
-    adapter.register_table_provider(context.name, TableProviderCapsule(provider))
+    adapter.register_delta_table_provider(context.name, TableProviderCapsule(provider))
     _record_table_provider_artifact(
         context.runtime_profile,
         artifact=_TableProviderArtifact(
@@ -2412,7 +2408,7 @@ def register_delta_cdf_df(
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     adapter = facade.io_adapter()
-    adapter.register_table_provider(name, provider)
+    adapter.register_delta_cdf_provider(name, provider)
     _record_table_provider_artifact(
         runtime_profile,
         artifact=_TableProviderArtifact(

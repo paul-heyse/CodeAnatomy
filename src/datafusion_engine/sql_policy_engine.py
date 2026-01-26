@@ -9,12 +9,13 @@ ensure deterministic builds.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from sqlglot import exp, serde  # type: ignore[attr-defined]
+import sqlglot.expressions as exp
 from sqlglot.optimizer import RULES, optimize
 from sqlglot.optimizer.annotate_types import annotate_types
 from sqlglot.optimizer.canonicalize import canonicalize
@@ -29,6 +30,17 @@ from sqlglot_tools.compat import ErrorLevel
 
 if TYPE_CHECKING:
     from sqlglot_tools.optimizer import SchemaMapping
+
+
+class _SqlglotSerde(Protocol):
+    def dump(self, expression: exp.Expression) -> list[dict[str, Any]]:
+        """Return a JSON-serializable AST payload."""
+        ...
+
+
+def _serde() -> _SqlglotSerde:
+    module = importlib.import_module("sqlglot.serde")
+    return cast("_SqlglotSerde", module)
 
 
 @dataclass(frozen=True)
@@ -151,7 +163,7 @@ class CompilationArtifacts:
         CompilationArtifacts
             Compilation artifacts with fingerprint and lineage.
         """
-        payload = serde.dump(ast)
+        payload = _serde().dump(ast)
         fingerprint = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -298,17 +310,14 @@ def extract_column_lineage(
             # Collect source columns from lineage graph
             sources: set[tuple[str, str]] = set()
             for node in lin.walk():
-                # Check for source and column attributes (lineage nodes)
-                # Type ignore: lineage nodes are dynamically typed
-                if (
-                    hasattr(node, "source")
-                    and hasattr(node, "column")
-                    and node.source is not None
-                    and node.column is not None  # type: ignore[attr-defined]
-                ):
-                    source_name = getattr(node.source, "name", None)
-                    if source_name and node.column:  # type: ignore[attr-defined]
-                        sources.add((source_name, node.column))  # type: ignore[attr-defined]
+                source = getattr(node, "source", None)
+                column = getattr(node, "column", None)
+                if source is None or column is None:
+                    continue
+                source_name = getattr(source, "name", None)
+                if not isinstance(source_name, str) or not isinstance(column, str):
+                    continue
+                sources.add((source_name, column))
 
             result[col_name] = sources
         except (ValueError, TypeError, AttributeError, KeyError):

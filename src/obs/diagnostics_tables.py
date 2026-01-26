@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import msgspec
 import pyarrow as pa
@@ -17,10 +17,17 @@ from arrowdsl.schema.build import table_from_rows
 from datafusion_engine.schema_registry import schema_for
 from serde_msgspec import coalesce_unset_or_none, convert, unset_to_none
 
+if TYPE_CHECKING:
+    from sqlglot_tools.lineage import LineagePayload as LineagePayloadType
+else:
+    type LineagePayloadType = object
+
 try:
-    from sqlglot_tools.lineage import LineagePayload
+    from sqlglot_tools.lineage import LineagePayload as LineagePayloadRuntime
 except ImportError:
-    LineagePayload = None  # type: ignore[misc, assignment]
+    LineagePayload = None
+else:
+    LineagePayload = LineagePayloadRuntime
 
 
 class DiagnosticsStruct(
@@ -1078,7 +1085,7 @@ def file_pruning_diagnostics_table(
 
 
 def lineage_diagnostics_row(
-    payload: object,
+    payload: LineagePayloadType,
     query_id: str,
     timestamp_ms: int,
 ) -> dict[str, object]:

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import column_or_null, table_from_arrays
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.runtime import dataset_schema_from_context
@@ -16,10 +15,7 @@ from ibis_engine.io_bridge import (
     IbisDeltaWriteOptions,
     write_ibis_dataset_delta,
 )
-from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
-from incremental.delta_context import DeltaAccessContext
-from incremental.ibis_exec import ibis_expr_to_table
-from incremental.state_store import StateStore
+from incremental.delta_context import DeltaAccessContext, read_delta_table_via_facade
 from storage.deltalake import (
     DeltaWriteResult,
     build_commit_properties,
@@ -27,6 +23,10 @@ from storage.deltalake import (
     enable_delta_features,
     open_delta_table,
 )
+
+if TYPE_CHECKING:
+    from arrowdsl.core.interop import TableLike
+    from incremental.state_store import StateStore
 
 
 def build_repo_snapshot(repo_files: TableLike) -> pa.Table:
@@ -195,13 +195,7 @@ def _read_delta_table(
     *,
     name: str,
 ) -> pa.Table:
-    backend = context.runtime.ibis_backend()
-    table = read_delta_ibis(
-        backend,
-        str(path),
-        options=IbisDeltaReadOptions(storage_options=context.storage.storage_options),
-    )
-    return ibis_expr_to_table(table, runtime=context.runtime, name=name)
+    return read_delta_table_via_facade(context, path=path, name=name)
 
 
 __all__ = ["build_repo_snapshot", "read_repo_snapshot", "write_repo_snapshot"]

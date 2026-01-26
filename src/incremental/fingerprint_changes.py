@@ -4,22 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
-from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
     write_ibis_dataset_delta,
 )
-from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
-from incremental.delta_context import DeltaAccessContext
-from incremental.ibis_exec import ibis_expr_to_table
+from incremental.delta_context import read_delta_table_via_facade
 from incremental.registry_specs import dataset_schema
-from incremental.state_store import StateStore
-from storage.deltalake import StorageOptions, delta_table_version, enable_delta_features
+from storage.deltalake import delta_table_version, enable_delta_features
+
+if TYPE_CHECKING:
+    from ibis_engine.execution import IbisExecutionContext
+    from incremental.delta_context import DeltaAccessContext
+    from incremental.state_store import StateStore
+    from storage.deltalake import StorageOptions
 
 FINGERPRINTS_VERSION = 1
 _FINGERPRINTS_SCHEMA = pa.schema(
@@ -176,13 +179,7 @@ def _read_delta_table(
     *,
     name: str,
 ) -> pa.Table:
-    backend = context.runtime.ibis_backend()
-    table = read_delta_ibis(
-        backend,
-        str(path),
-        options=IbisDeltaReadOptions(storage_options=context.storage.storage_options),
-    )
-    return ibis_expr_to_table(table, runtime=context.runtime, name=name)
+    return read_delta_table_via_facade(context, path=path, name=name)
 
 
 __all__ = [

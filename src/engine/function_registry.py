@@ -9,7 +9,7 @@ from typing import Literal, TypeVar, cast
 
 import pyarrow as pa
 
-from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
+from datafusion_engine.function_factory import RulePrimitive
 from datafusion_engine.sql_expression_registry import (
     DataFusionSqlExpressionSpec,
     datafusion_sql_expression_specs,
@@ -222,7 +222,7 @@ class FunctionRegistry:
 class FunctionRegistryOptions:
     """Configuration for building a function registry."""
 
-    primitives: tuple[RulePrimitive, ...] = DEFAULT_RULE_PRIMITIVES
+    primitives: tuple[RulePrimitive, ...] = ()
     datafusion_specs: tuple[DataFusionUdfSpec, ...] | None = None
     ibis_specs: tuple[IbisUdfSpec, ...] | None = None
     datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None

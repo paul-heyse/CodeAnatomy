@@ -21,6 +21,7 @@ class IbisMacroRewrite:
 IbisMacroSpec = IbisMacro | IbisMacroRewrite
 
 
+
 def apply_macros(table: Table, *, macros: Sequence[IbisMacroSpec]) -> Table:
     """Apply a sequence of macros to an Ibis table.
 
@@ -232,7 +233,17 @@ def with_deferred(table: Table, **named_exprs: object) -> Table:
     ...     full_name=deferred_concat_columns("first_name", "last_name", separator=" "),
     ... )
     """
-    return table.mutate(**named_exprs)  # type: ignore[arg-type]
+    from ibis import Deferred
+
+    from ibis_engine.selector_utils import bind_deferred
+
+    mutations: dict[str, Value] = {}
+    for name, expr in named_exprs.items():
+        if isinstance(expr, Deferred):
+            mutations[name] = bind_deferred(table, expr)[0]
+        else:
+            mutations[name] = cast("Value", expr)
+    return table.mutate(**mutations)
 
 
 __all__ = [

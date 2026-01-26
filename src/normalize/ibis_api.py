@@ -25,15 +25,6 @@ from ibis_engine.execution_factory import datafusion_facade_from_ctx, ibis_execu
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from normalize.ibis_bridge import resolve_plan_builder_ibis
-from normalize.ibis_plan_builders import (
-    CFG_BLOCKS_NAME,
-    CFG_EDGES_NAME,
-    DEF_USE_NAME,
-    DIAG_NAME,
-    REACHES_NAME,
-    TYPE_EXPRS_NAME,
-    TYPE_NODES_NAME,
-)
 from normalize.ibis_spans import (
     SpanSource,
     add_ast_span_struct_ibis,
@@ -51,6 +42,15 @@ from normalize.registry_runtime import (
 )
 from normalize.runtime import NormalizeRuntime
 from normalize.schemas import SPAN_ERROR_SCHEMA
+from normalize.view_builders import (
+    CFG_BLOCKS_NAME,
+    CFG_EDGES_NAME,
+    DEF_USE_NAME,
+    DIAG_NAME,
+    REACHES_NAME,
+    TYPE_EXPRS_NAME,
+    TYPE_NODES_NAME,
+)
 
 NormalizeSource = IbisPlanSource | None
 

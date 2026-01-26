@@ -8,17 +8,13 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from arrowdsl.core.ordering import Ordering
 from engine.runtime_profile import runtime_profile_snapshot
-from ibis_engine.execution import execute_ibis_plan
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
     write_ibis_dataset_delta,
 )
-from ibis_engine.plan import IbisPlan
-from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
-from incremental.delta_context import DeltaAccessContext
+from incremental.delta_context import DeltaAccessContext, read_delta_table_via_facade
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
@@ -347,18 +343,11 @@ def _read_delta_table(
     context: DeltaAccessContext,
     path: Path,
 ) -> pa.Table:
-    backend = context.runtime.ibis_backend()
-    table = read_delta_ibis(
-        backend,
-        str(path),
-        options=IbisDeltaReadOptions(storage_options=context.storage.storage_options),
+    return read_delta_table_via_facade(
+        context,
+        path=path,
+        name="invalidations_read",
     )
-    plan = IbisPlan(expr=table, ordering=Ordering.unordered())
-    return execute_ibis_plan(
-        plan,
-        execution=context.runtime.ibis_execution(),
-        streaming=False,
-    ).require_table()
 
 
 __all__ = [

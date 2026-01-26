@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 import ibis
 import pyarrow as pa
 
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
+from arrowdsl.core.interop import coerce_table_like
 from arrowdsl.schema.serialization import schema_fingerprint
 from ibis_engine.builtin_udfs import ibis_udf_call
 from ibis_engine.io_bridge import (
@@ -17,16 +17,18 @@ from ibis_engine.io_bridge import (
     IbisDeltaWriteOptions,
     write_ibis_dataset_delta,
 )
-from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
-from incremental.delta_context import DeltaAccessContext
+from incremental.delta_context import read_delta_table_via_facade
 from incremental.ibis_exec import ibis_expr_to_table
 from incremental.ibis_utils import ibis_table_from_arrow
-from incremental.runtime import IncrementalRuntime
+from incremental.runtime import TempTableRegistry
 from incremental.state_store import StateStore
 from storage.deltalake import delta_table_version, enable_delta_features
 
 if TYPE_CHECKING:
     from ibis.expr.types import StringValue, Value
+    from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+    from incremental.delta_context import DeltaAccessContext
+    from incremental.runtime import IncrementalRuntime
 
     from storage.deltalake import DeltaWriteResult
 
@@ -444,13 +446,7 @@ def _read_delta_table(
     *,
     name: str,
 ) -> pa.Table:
-    backend = context.runtime.ibis_backend()
-    table = read_delta_ibis(
-        backend,
-        str(path),
-        options=IbisDeltaReadOptions(storage_options=context.storage.storage_options),
-    )
-    return ibis_expr_to_table(table, runtime=context.runtime, name=name)
+    return read_delta_table_via_facade(context, path=path, name=name)
 
 
 __all__ = [

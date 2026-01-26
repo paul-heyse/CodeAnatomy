@@ -8,6 +8,7 @@ from weakref import WeakSet
 
 from datafusion import SessionContext
 
+from datafusion_engine.domain_planner import domain_planner_names_from_snapshot
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import (
     FunctionFactoryPolicy,
@@ -165,6 +166,13 @@ def install_rust_udf_platform(
         )
         validate_rust_udf_snapshot(snapshot)
         docs = rust_udf_docs(ctx)
+    planner_names = tuple(resolved.expr_planner_names)
+    if resolved.enable_expr_planners and resolved.expr_planner_hook is None:
+        derived = domain_planner_names_from_snapshot(snapshot)
+        if planner_names:
+            planner_names = tuple(dict.fromkeys((*planner_names, *derived)))
+        else:
+            planner_names = derived
     function_factory, function_factory_payload = _install_function_factory(
         ctx,
         enabled=resolved.enable_function_factory,
@@ -175,7 +183,7 @@ def install_rust_udf_platform(
         ctx,
         enabled=resolved.enable_expr_planners,
         hook=resolved.expr_planner_hook,
-        planner_names=resolved.expr_planner_names,
+        planner_names=planner_names,
     )
     if resolved.strict:
         if function_factory is not None and function_factory.error is not None:

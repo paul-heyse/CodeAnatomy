@@ -37,12 +37,12 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
         msg = "datafusion_ext.registry_snapshot returned a non-mapping payload."
         raise TypeError(msg)
     payload = dict(snapshot)
+    payload.pop("pycapsule_udfs", None)
     payload.setdefault("scalar", [])
     payload.setdefault("aggregate", [])
     payload.setdefault("window", [])
     payload.setdefault("table", [])
     payload.setdefault("aliases", {})
-    payload.setdefault("pycapsule_udfs", [])
     payload.setdefault("parameter_names", {})
     payload.setdefault("volatility", {})
     payload.setdefault("rewrite_tags", {})

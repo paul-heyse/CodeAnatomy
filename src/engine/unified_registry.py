@@ -10,7 +10,6 @@ from datafusion_engine.introspection import IntrospectionSnapshot
 from datafusion_engine.udf_catalog import DataFusionUdfSpec, datafusion_udf_specs
 from engine.function_registry import (
     DEFAULT_LANE_PRECEDENCE,
-    DEFAULT_RULE_PRIMITIVES,
     FunctionRegistryOptions,
     build_function_registry,
 )
@@ -73,7 +72,7 @@ def build_unified_function_registry(
         registry_snapshot=cast("Mapping[str, object]", registry_snapshot)
     )
     options = FunctionRegistryOptions(
-        primitives=DEFAULT_RULE_PRIMITIVES,
+        primitives=(),
         datafusion_specs=resolved_datafusion,
         ibis_specs=resolved_ibis,
         datafusion_function_catalog=datafusion_function_catalog,

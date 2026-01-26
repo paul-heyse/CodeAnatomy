@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
-from sqlglot import exp  # type: ignore[attr-defined]
-from sqlglot.diff import Insert, Keep, Move, Remove, Update, diff  # type: ignore[attr-defined]
+import sqlglot.diff as sqlglot_diff
+import sqlglot.expressions as exp
 
 if TYPE_CHECKING:
     from sqlglot.diff import Edit
@@ -53,7 +53,7 @@ class SemanticChange:
     category: ChangeCategory
 
     @classmethod
-    def from_edit(cls, edit: Insert | Remove | Move | Update | Keep) -> SemanticChange:
+    def from_edit(cls, edit: Edit) -> SemanticChange:
         """Create from SQLGlot diff edit.
 
         Parameters
@@ -68,7 +68,7 @@ class SemanticChange:
         """
         edit_type = type(edit).__name__
 
-        if isinstance(edit, Keep):
+        if isinstance(edit, sqlglot_diff.Keep):
             return cls(
                 edit_type=edit_type,
                 node_type=type(edit.source).__name__,
@@ -76,7 +76,7 @@ class SemanticChange:
                 category=ChangeCategory.NONE,
             )
 
-        if isinstance(edit, Insert):
+        if isinstance(edit, sqlglot_diff.Insert):
             node = edit.expression
             category = cls._categorize_insert(node)
             return cls(
@@ -86,7 +86,7 @@ class SemanticChange:
                 category=category,
             )
 
-        if isinstance(edit, Remove):
+        if isinstance(edit, sqlglot_diff.Remove):
             node = edit.expression
             return cls(
                 edit_type=edit_type,
@@ -95,7 +95,7 @@ class SemanticChange:
                 category=ChangeCategory.BREAKING,
             )
 
-        if isinstance(edit, Move):
+        if isinstance(edit, sqlglot_diff.Move):
             return cls(
                 edit_type=edit_type,
                 node_type=type(edit.source).__name__,
@@ -103,7 +103,7 @@ class SemanticChange:
                 category=ChangeCategory.BREAKING,
             )
 
-        if isinstance(edit, Update):
+        if isinstance(edit, sqlglot_diff.Update):
             return cls(
                 edit_type=edit_type,
                 node_type=type(edit.source).__name__,
@@ -189,7 +189,7 @@ class SemanticDiff:
         SemanticDiff
             Diff result with categorized changes.
         """
-        edits = diff(old_ast, new_ast, matchings=matchings)
+        edits = sqlglot_diff.diff(old_ast, new_ast, matchings=matchings)
         changes = [SemanticChange.from_edit(edit) for edit in edits]
 
         return cls(edits=edits, changes=changes)

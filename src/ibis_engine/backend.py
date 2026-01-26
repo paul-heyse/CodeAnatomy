@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol, cast
 
 import ibis
+from datafusion import SessionContext
 
 from datafusion_engine.diagnostics import recorder_for_profile
 from datafusion_engine.schema_introspection import SchemaIntrospector
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class _IbisDataFusionModule(Protocol):
-    def connect(self, ctx: object) -> ibis.backends.BaseBackend:
+    def connect(self, ctx: SessionContext) -> ibis.backends.BaseBackend:
         """Return an Ibis DataFusion backend."""
         ...
 
@@ -68,7 +69,7 @@ def _resolve_datafusion_profile(cfg: IbisBackendConfig) -> DataFusionRuntimeProf
 
 def _register_object_stores(
     *,
-    ctx: object,
+    ctx: SessionContext,
     cfg: IbisBackendConfig,
     profile: DataFusionRuntimeProfile,
 ) -> None:
@@ -80,7 +81,7 @@ def _register_object_stores(
         raise TypeError(msg)
     from datafusion_engine.io_adapter import DataFusionIOAdapter
 
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)  # type: ignore[arg-type]
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     for store in cfg.object_stores:
         if not store.scheme:
             msg = "ObjectStoreConfig.scheme must be non-empty."

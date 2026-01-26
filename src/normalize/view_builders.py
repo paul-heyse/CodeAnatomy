@@ -1,4 +1,4 @@
-"""Ibis plan builders for normalize outputs."""
+"""View builders for normalize outputs."""
 
 from __future__ import annotations
 

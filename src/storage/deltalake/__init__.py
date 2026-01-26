@@ -28,6 +28,7 @@ __all__ = (
     "delta_protocol_snapshot",
     "delta_schema_configuration",
     "delta_table_features",
+    "delta_table_schema",
     "delta_table_version",
     "delta_write_configuration",
     "enable_delta_features",
@@ -61,6 +62,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "delta_history_snapshot": ("storage.deltalake.delta", "delta_history_snapshot"),
     "delta_protocol_snapshot": ("storage.deltalake.delta", "delta_protocol_snapshot"),
     "delta_table_features": ("storage.deltalake.delta", "delta_table_features"),
+    "delta_table_schema": ("storage.deltalake.delta", "delta_table_schema"),
     "delta_table_version": ("storage.deltalake.delta", "delta_table_version"),
     "enable_delta_features": ("storage.deltalake.delta", "enable_delta_features"),
     "open_delta_table": ("storage.deltalake.delta", "open_delta_table"),
@@ -109,6 +111,7 @@ if TYPE_CHECKING:
     delta_protocol_snapshot = _delta_io.delta_protocol_snapshot
     delta_cdf_enabled = _delta_io.delta_cdf_enabled
     delta_table_features = _delta_io.delta_table_features
+    delta_table_schema = _delta_io.delta_table_schema
     delta_table_version = _delta_io.delta_table_version
     enable_delta_features = _delta_io.enable_delta_features
     open_delta_table = _delta_io.open_delta_table

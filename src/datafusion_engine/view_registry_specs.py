@@ -161,7 +161,7 @@ def view_graph_nodes(
 
 def _normalize_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
     from normalize.dataset_specs import dataset_spec
-    from normalize.ibis_plan_builders import (
+    from normalize.view_builders import (
         CFG_BLOCKS_NAME,
         CFG_EDGES_NAME,
         DEF_USE_NAME,

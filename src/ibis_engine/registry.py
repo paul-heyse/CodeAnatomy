@@ -24,7 +24,7 @@ from schema_spec.system import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
 )
-from storage.deltalake import DeltaCdfOptions
+from storage.deltalake import DeltaCdfOptions, delta_table_schema
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -420,6 +420,11 @@ def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
     -------
     SchemaLike | None
         Resolved schema when available, otherwise ``None``.
+
+    Raises
+    ------
+    ValueError
+        Raised when Delta schema resolution fails for a Delta dataset.
     """
     scan = resolve_datafusion_scan_options(location)
     if scan is not None and scan.table_schema_contract is not None:
@@ -428,6 +433,18 @@ def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
         return location.table_spec.to_arrow_schema()
     if location.dataset_spec is not None:
         return location.dataset_spec.schema()
+    if location.format == "delta":
+        schema = delta_table_schema(
+            str(location.path),
+            storage_options=location.storage_options or None,
+            log_storage_options=location.delta_log_storage_options or None,
+            version=location.delta_version,
+            timestamp=location.delta_timestamp,
+        )
+        if schema is None:
+            msg = f"Delta schema unavailable for dataset at {location.path!r}."
+            raise ValueError(msg)
+        return schema
     return None
 
 

@@ -238,9 +238,7 @@ class IntrospectionSnapshot:
         bool
             True if table exists in catalog
         """
-        import pyarrow.compute as pc
-
-        return pc.any(pc.equal(self.tables["table_name"], name)).as_py()  # type: ignore[attr-defined]
+        return name in self.tables["table_name"].to_pylist()
 
     def get_table_columns(self, name: str) -> list[tuple[str, str]]:
         """
@@ -256,12 +254,11 @@ class IntrospectionSnapshot:
         list[tuple[str, str]]
             List of (column_name, data_type) tuples ordered by position
         """
-        import pyarrow.compute as pc
-
-        mask = pc.equal(self.columns["table_name"], name)  # type: ignore[attr-defined]
-        filtered = self.columns.filter(mask)
-
-        return [(row["column_name"], row["data_type"]) for row in filtered.to_pylist()]
+        return [
+            (row["column_name"], row["data_type"])
+            for row in self.columns.to_pylist()
+            if row["table_name"] == name
+        ]
 
     def function_signatures(self) -> dict[str, list[tuple[list[str], str]]]:
         """

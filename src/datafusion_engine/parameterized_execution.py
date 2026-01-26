@@ -20,13 +20,13 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import ibis
 import pyarrow as pa
-from ibis.expr.types import Scalar
+from ibis.expr.types import Scalar, Value
 
 if TYPE_CHECKING:
     from ibis.backends.datafusion import Backend
@@ -75,7 +75,7 @@ class ParameterSpec:
         Scalar
             Ibis parameter scalar with the specified type.
         """
-        return ibis.param(self.ibis_type)  # type: ignore[arg-type]
+        return ibis.param(ibis.dtype(self.ibis_type))
 
     def validate_value(self, value: Any) -> None:
         """Validate a value against this specification.
@@ -260,7 +260,9 @@ class ParameterizedRulepack:
         resolved_values = self._resolve_values(values, validate=validate)
 
         # Map param objects to values
-        param_mapping = {self._params[name]: value for name, value in resolved_values.items()}
+        param_mapping: dict[Scalar, object] = {
+            self._params[name]: value for name, value in resolved_values.items()
+        }
 
         # Execute with params
         return self.expr.to_pyarrow(params=param_mapping)
@@ -293,10 +295,12 @@ class ParameterizedRulepack:
         """
         resolved_values = self._resolve_values(values, validate=validate)
 
-        param_mapping = {self._params[name]: value for name, value in resolved_values.items()}
+        param_mapping: dict[Scalar, object] = {
+            self._params[name]: value for name, value in resolved_values.items()
+        }
 
         return self.expr.to_pyarrow_batches(
-            params=param_mapping,  # type: ignore[arg-type]
+            params=cast("Mapping[Value, object]", param_mapping),
             chunk_size=chunk_size,
         )
 
@@ -323,7 +327,9 @@ class ParameterizedRulepack:
         """
         if values:
             resolved_values = self._resolve_values(values, validate=False)
-            param_mapping = {self._params[name]: value for name, value in resolved_values.items()}
+            param_mapping: dict[Scalar, object] = {
+                self._params[name]: value for name, value in resolved_values.items()
+            }
             return str(ibis.to_sql(self.expr, params=param_mapping))
         return str(ibis.to_sql(self.expr))
 

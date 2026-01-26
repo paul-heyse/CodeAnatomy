@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from relspec.inferred_deps import InferredDeps, infer_deps_from_sqlglot_expr
@@ -39,9 +41,11 @@ def test_infer_deps_from_sqlglot_expr() -> None:
 
 def test_infer_deps_from_sqlglot_expr_invalid_type() -> None:
     """Raise when expression is not SQLGlot Expression."""
+    from sqlglot_tools.compat import Expression
+
     with pytest.raises(TypeError, match="Expected SQLGlot Expression"):
         infer_deps_from_sqlglot_expr(
-            "not an expression",  # type: ignore[arg-type]
+            cast("Expression", "not an expression"),
             task_name="test",
             output="out",
         )

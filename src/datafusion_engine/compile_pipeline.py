@@ -15,8 +15,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+import sqlglot.expressions as exp
 from datafusion import DataFrame, SessionContext, SQLOptions
-from sqlglot import exp  # type: ignore[attr-defined]
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
@@ -109,7 +109,7 @@ class CompileOptions:
             from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 
             # Frozen dataclass requires object.__setattr__
-            object.__setattr__(self, "profile", SQLPolicyProfile())  # type: ignore[arg-type]
+            object.__setattr__(self, "profile", SQLPolicyProfile())
 
 
 class CompilationPipeline:

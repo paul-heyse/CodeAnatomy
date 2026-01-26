@@ -6,8 +6,8 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, cast
 
+import sqlglot.expressions as exp
 from datafusion import DataFrame, SessionContext
-from sqlglot import exp  # type: ignore[attr-defined]
 
 from datafusion_engine.bridge import (
     DataFusionSqlPolicy,

@@ -11,13 +11,32 @@ use datafusion_ffi::udf::ForeignScalarUDF;
 use datafusion_ffi::udtf::ForeignTableFunction;
 use datafusion_ffi::udwf::ForeignWindowUDF;
 
-use df_plugin_api::DfResult;
+use df_plugin_api::{caps, DfResult};
 
 use crate::loader::PluginHandle;
 
 impl PluginHandle {
+    fn require_capability(&self, mask: u64, label: &str) -> Result<()> {
+        if (self.manifest.capabilities & mask) != 0 {
+            return Ok(());
+        }
+        Err(DataFusionError::Plan(format!(
+            "Plugin {name} missing capability {label}",
+            name = self.manifest.plugin_name
+        )))
+    }
+
     pub fn register_udfs(&self, ctx: &SessionContext) -> Result<()> {
         let exports = (self.module().exports())();
+        if !exports.udf_bundle.scalar.is_empty() {
+            self.require_capability(caps::SCALAR_UDF, "scalar_udf")?;
+        }
+        if !exports.udf_bundle.aggregate.is_empty() {
+            self.require_capability(caps::AGG_UDF, "aggregate_udf")?;
+        }
+        if !exports.udf_bundle.window.is_empty() {
+            self.require_capability(caps::WINDOW_UDF, "window_udf")?;
+        }
         for udf in exports.udf_bundle.scalar.iter() {
             let foreign = ForeignScalarUDF::try_from(udf)?;
             ctx.register_udf(ScalarUDF::new_from_shared_impl(Arc::new(foreign)));
@@ -35,6 +54,9 @@ impl PluginHandle {
 
     pub fn register_table_functions(&self, ctx: &SessionContext) -> Result<()> {
         let exports = (self.module().exports())();
+        if !exports.table_functions.is_empty() {
+            self.require_capability(caps::TABLE_FUNCTION, "table_function")?;
+        }
         for table_fn in exports.table_functions.iter() {
             let name = table_fn.name.to_string();
             let foreign = ForeignTableFunction::from(table_fn.function.clone());
@@ -50,6 +72,9 @@ impl PluginHandle {
         options_json: Option<&std::collections::HashMap<String, String>>,
     ) -> Result<()> {
         let exports = (self.module().exports())();
+        if !exports.table_provider_names.is_empty() {
+            self.require_capability(caps::TABLE_PROVIDER, "table_provider")?;
+        }
         let requested = table_names.map(|names| {
             names
                 .iter()

@@ -136,11 +136,12 @@ def resolve_param_bindings(
 
     for key, value in values.items():
         # Extract name from Ibis scalar param or use string key
-        name = (
-            key.get_name()  # type: ignore[union-attr]
-            if hasattr(key, "get_name")
-            else str(key)
-        )
+        name = str(key)
+        get_name = getattr(key, "get_name", None)
+        if callable(get_name):
+            candidate = get_name()
+            if isinstance(candidate, str):
+                name = candidate
 
         if validate_names:
             validate_param_name(name)

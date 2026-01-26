@@ -794,13 +794,25 @@ def view_udf_parity_payload(
     dict[str, object]
         Diagnostics payload describing required/missing UDFs per view.
     """
+    from arrowdsl.schema.metadata import required_functions_from_metadata
     from datafusion_engine.udf_runtime import udf_names_from_snapshot
+
+    def _required_udfs(node: ViewNode) -> tuple[str, ...]:
+        required = list(node.required_udfs)
+        if node.schema_contract is not None:
+            metadata_required = required_functions_from_metadata(
+                node.schema_contract.schema_metadata
+            )
+            for name in metadata_required:
+                if name not in required:
+                    required.append(name)
+        return tuple(required)
 
     available = udf_names_from_snapshot(snapshot)
     rows: list[dict[str, object]] = []
     missing_views = 0
     for node in view_nodes:
-        required = tuple(node.required_udfs)
+        required = _required_udfs(node)
         missing = [name for name in required if name not in available]
         if missing:
             missing_views += 1
@@ -813,7 +825,7 @@ def view_udf_parity_payload(
         )
     return {
         "total_views": len(view_nodes),
-        "views_with_requirements": sum(1 for node in view_nodes if node.required_udfs),
+        "views_with_requirements": sum(1 for node in view_nodes if _required_udfs(node)),
         "views_missing_udfs": missing_views,
         "rows": rows,
     }

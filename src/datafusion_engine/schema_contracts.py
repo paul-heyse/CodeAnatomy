@@ -326,7 +326,7 @@ class SchemaContract:
             CREATE TABLE DDL statement
         """
         import ibis
-        from sqlglot import exp  # type: ignore[attr-defined]
+        import sqlglot.expressions as exp
 
         # Build Ibis schema
         ibis_schema = ibis.schema(

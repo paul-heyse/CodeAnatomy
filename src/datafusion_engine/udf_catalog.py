@@ -737,6 +737,21 @@ def _registry_rewrite_tags(snapshot: Mapping[str, object]) -> dict[str, tuple[st
     return resolved
 
 
+def rewrite_tag_index(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
+    """Return a tag-to-function index for registry rewrite tags.
+
+    Returns
+    -------
+    dict[str, tuple[str, ...]]
+        Mapping of rewrite tag to registered function names.
+    """
+    index: dict[str, set[str]] = {}
+    for name, tags in _registry_rewrite_tags(snapshot).items():
+        for tag in tags:
+            index.setdefault(tag, set()).add(name)
+    return {tag: tuple(sorted(names)) for tag, names in index.items()}
+
+
 def _apply_registry_metadata(
     specs: tuple[DataFusionUdfSpec, ...],
     snapshot: Mapping[str, object],
@@ -962,4 +977,5 @@ __all__ = [
     "datafusion_udf_specs",
     "get_default_udf_catalog",
     "get_strict_udf_catalog",
+    "rewrite_tag_index",
 ]

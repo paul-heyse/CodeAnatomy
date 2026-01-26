@@ -202,6 +202,34 @@ class DataFusionIOAdapter:
             {"name": name, "provider_type": type(provider).__name__},
         )
 
+    def register_delta_table_provider(
+        self,
+        name: str,
+        provider: object,
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        """Register a Delta table provider with diagnostics capture."""
+        self.register_table_provider(name, provider, overwrite=overwrite)
+        self._record_artifact(
+            "delta_table_provider_registered",
+            {"name": name, "provider_type": type(provider).__name__},
+        )
+
+    def register_delta_cdf_provider(
+        self,
+        name: str,
+        provider: object,
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        """Register a Delta CDF provider with diagnostics capture."""
+        self.register_table_provider(name, provider, overwrite=overwrite)
+        self._record_artifact(
+            "delta_cdf_provider_registered",
+            {"name": name, "provider_type": type(provider).__name__},
+        )
+
     def register_catalog_provider(
         self,
         name: str,

@@ -145,6 +145,35 @@ def delta_table_version(
     return DeltaTable(path, storage_options=storage).version()
 
 
+def delta_table_schema(
+    path: str,
+    *,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
+    version: int | None = None,
+    timestamp: str | None = None,
+) -> pa.Schema | None:
+    """Return the Delta table schema when the table exists.
+
+    Returns
+    -------
+    pyarrow.Schema | None
+        Arrow schema for the Delta table or ``None`` when the table does not exist.
+    """
+    storage = _log_storage_dict(storage_options, log_storage_options)
+    if not DeltaTable.is_deltatable(path, storage_options=storage):
+        return None
+    table = open_delta_table(
+        path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+        version=version,
+        timestamp=timestamp,
+    )
+    schema = table.schema()
+    return schema.to_arrow()
+
+
 def delta_table_features(
     path: str,
     *,

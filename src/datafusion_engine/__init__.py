@@ -37,11 +37,6 @@ if TYPE_CHECKING:
         apply_bindings_to_context,
         resolve_param_bindings,
     )
-    from datafusion_engine.parameterized_execution import (
-        ParameterizedRulepack,
-        ParameterSpec,
-        RulepackRegistry,
-    )
     from datafusion_engine.registry_loader import (
         RegistryTarget,
         register_registry_delta_tables,
@@ -142,14 +137,11 @@ __all__ = [
     "IntrospectionCache",
     "IntrospectionSnapshot",
     "MemoryPool",
-    "ParameterSpec",
-    "ParameterizedRulepack",
     "ParquetWritePolicy",
     "RebuildPolicy",
     "RegistryCatalogProvider",
     "RegistrySchemaProvider",
     "RegistryTarget",
-    "RulepackRegistry",
     "SQLPolicyProfile",
     "SafeExecutor",
     "SchemaContract",
@@ -257,13 +249,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "apply_bindings_to_context",
     ),
     "resolve_param_bindings": ("datafusion_engine.param_binding", "resolve_param_bindings"),
-    # Parameterized Execution
-    "ParameterizedRulepack": (
-        "datafusion_engine.parameterized_execution",
-        "ParameterizedRulepack",
-    ),
-    "ParameterSpec": ("datafusion_engine.parameterized_execution", "ParameterSpec"),
-    "RulepackRegistry": ("datafusion_engine.parameterized_execution", "RulepackRegistry"),
     # SQL Safety
     "ExecutionContext": ("datafusion_engine.sql_safety", "ExecutionContext"),
     "ExecutionPolicy": ("datafusion_engine.sql_safety", "ExecutionPolicy"),

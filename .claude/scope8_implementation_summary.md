@@ -73,25 +73,7 @@ Successfully implemented Scope 8 from the Combined Library Utilization Implement
 
 **Note:** The file-level filtering integration with DeltaTable provider is prepared but may require future deltalake-python API enhancements to fully support restricted file lists.
 
-### 4. `/home/paul/CodeAnatomy/src/obs/diagnostics_tables.py`
-**Changes:**
-- Added `FilePruningDiagnostics` dataclass
-  - Diagnostic metrics: candidate_count, total_files, pruned_percentage, filter_summary
-
-- Added `build_file_pruning_diagnostics_row()` function
-  - Creates single diagnostic row with pruning metrics
-  - Parameters: candidate_count, total_files, filter_summary, table_name, table_path, event_time_unix_ms
-
-- Added `file_pruning_diagnostics_table()` function
-  - Builds PyArrow table from diagnostic records
-  - Schema includes all pruning metrics and metadata
-
-- Added `_coerce_float()` helper function
-  - Type coercion for float values with default fallback
-
-- Added to `__all__` exports: `FilePruningDiagnostics`, `build_file_pruning_diagnostics_row`, `file_pruning_diagnostics_table`
-
-### 5. `/home/paul/CodeAnatomy/src/storage/deltalake/__init__.py`
+### 4. `/home/paul/CodeAnatomy/src/storage/deltalake/__init__.py`
 **Changes:**
 - Added exports for new file index and pruning modules:
   - `FileIndexEntry`, `build_delta_file_index`

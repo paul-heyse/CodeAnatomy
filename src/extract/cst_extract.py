@@ -33,7 +33,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from datafusion_engine.schema_introspection import find_struct_field_keys
-from datafusion_engine.schema_registry import default_attrs_value, schema_for
+from datafusion_engine.schema_registry import default_attrs_value
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -68,7 +68,7 @@ CST_END_EXCLUSIVE = True
 
 @cache
 def _libcst_schema_fingerprint() -> str:
-    schema = schema_for("libcst_files_v1")
+    schema = dataset_schema("libcst_files_v1")
     return schema_fingerprint(schema)
 
 

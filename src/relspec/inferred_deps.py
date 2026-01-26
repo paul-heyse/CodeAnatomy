@@ -189,6 +189,15 @@ def _required_types_from_registry(
 
 def _dataset_spec_for_table(name: str) -> DatasetSpec | None:
     try:
+        from datafusion_engine.extract_registry import dataset_spec as extract_dataset_spec
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        extract_dataset_spec = None
+    if extract_dataset_spec is not None:
+        try:
+            return extract_dataset_spec(name)
+        except KeyError:
+            pass
+    try:
         from normalize.registry_runtime import dataset_spec as normalize_dataset_spec
     except (ImportError, RuntimeError, TypeError, ValueError):
         normalize_dataset_spec = None

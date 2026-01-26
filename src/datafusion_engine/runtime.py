@@ -72,13 +72,7 @@ from datafusion_engine.schema_registry import (
     register_all_schemas,
     schema_for,
     schema_names,
-    validate_ast_views,
-    validate_bytecode_views,
-    validate_cst_views,
     validate_required_engine_functions,
-    validate_scip_views,
-    validate_symtable_views,
-    validate_ts_views,
     validate_udf_info_schema_parity,
 )
 from datafusion_engine.sql_safety import execution_policy_for_profile
@@ -87,6 +81,7 @@ from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_ud
 from datafusion_engine.udf_runtime import register_rust_udfs
 from engine.plan_cache import PlanCache
 from serde_msgspec import StructBase
+from sqlglot_tools.compat import exp
 from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
@@ -105,7 +100,6 @@ from schema_spec.system import (
     DataFusionScanOptions,
     DatasetSpec,
     DeltaScanOptions,
-    TableSchemaContract,
     dataset_spec_from_schema,
 )
 from schema_spec.view_specs import ViewSpec
@@ -1345,7 +1339,7 @@ def _read_only_sql_options() -> SQLOptions:
 
 def _sql_with_options(
     ctx: SessionContext,
-    sql: str,
+    expr: exp.Expression | str,
     *,
     sql_options: SQLOptions | None = None,
     runtime_profile: DataFusionRuntimeProfile | None = None,
@@ -1370,12 +1364,13 @@ def _sql_with_options(
         sql_ingest_hook=_sql_ingest,
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    try:
-        register_datafusion_dialect()
-        expr = parse_sql_strict(sql, dialect=options.dialect)
-    except (ParseError, TypeError, ValueError) as exc:
-        msg = "Runtime SQL parse failed."
-        raise ValueError(msg) from exc
+    if isinstance(expr, str):
+        try:
+            register_datafusion_dialect()
+            expr = parse_sql_strict(expr, dialect=options.dialect)
+        except (ParseError, TypeError, ValueError) as exc:
+            msg = "Runtime SQL parse failed."
+            raise ValueError(msg) from exc
     plan = facade.compile(expr, options=options)
     result = facade.execute(plan)
     if result.dataframe is None:
@@ -1468,7 +1463,8 @@ def record_view_definition(
 
 def _datafusion_version(ctx: SessionContext) -> str | None:
     try:
-        table = _sql_with_options(ctx, "SELECT version() AS version").to_arrow_table()
+        expr = exp.select(exp.func("version").as_("version"))
+        table = _sql_with_options(ctx, expr).to_arrow_table()
     except (RuntimeError, TypeError, ValueError):
         return None
     if "version" not in table.column_names or table.num_rows < 1:
@@ -1878,9 +1874,9 @@ class _CompileOptionResolution:
 class _ScipRegistrationSnapshot:
     name: str
     location: DatasetLocation
-    expected_fingerprint: str
-    actual_fingerprint: str
-    schema_match: bool
+    expected_fingerprint: str | None
+    actual_fingerprint: str | None
+    schema_match: bool | None
 
 
 def _resolve_prepared_statement_options(
@@ -2558,7 +2554,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     delta_commit_runs: dict[str, DataFusionRun] = field(default_factory=dict, repr=False)
     local_filesystem_root: str | None = None
     input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
-    prepared_statements: tuple[PreparedStatementSpec, ...] = INFO_SCHEMA_STATEMENTS
+    prepared_statements: tuple[PreparedStatementSpec, ...] = ()
     config_policy_name: str | None = "symtable"
     config_policy: DataFusionConfigPolicy | None = None
     schema_hardening_name: str | None = "schema_hardening"
@@ -3413,14 +3409,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "dataset": "ast_files_v1",
         }
         try:
-            table = _sql_with_options(
-                ctx,
-                "SELECT * FROM ast_span_metadata",
-                sql_options=self._sql_options(),
-            ).to_arrow_table()
+            table = ctx.table("ast_span_metadata").to_arrow_table()
             rows = table.to_pylist()
-            schema = schema_for("ast_files_v1")
-            payload["schema_fingerprint"] = schema_fingerprint(schema)
+            schema = self._resolved_table_schema(ctx, "ast_files_v1")
+            if schema is not None:
+                payload["schema_fingerprint"] = schema_fingerprint(schema)
             payload["metadata"] = rows[0] if rows else None
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
@@ -3434,12 +3427,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = "AST dataset config cannot set both external and delta locations."
             raise ValueError(msg)
         if self.ast_delta_location:
-            expected_schema = schema_for("ast_files_v1")
             delta_scan = self.ast_delta_scan
-            if delta_scan is None:
-                delta_scan = DeltaScanOptions(schema=expected_schema)
-            elif delta_scan.schema is None:
-                delta_scan = replace(delta_scan, schema=expected_schema)
             from ibis_engine.registry import DatasetLocation
 
             return DatasetLocation(
@@ -3456,16 +3444,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             if self.ast_external_format == "delta":
                 msg = "AST external format must not be 'delta'."
                 raise ValueError(msg)
-            expected_schema = schema_for("ast_files_v1")
             scan = DataFusionScanOptions(
                 partition_cols=self.ast_external_partition_cols,
                 file_sort_order=self.ast_external_ordering,
                 schema_force_view_types=self.ast_external_schema_force_view_types,
                 skip_arrow_metadata=self.ast_external_skip_arrow_metadata,
-                table_schema_contract=TableSchemaContract(
-                    file_schema=expected_schema,
-                    partition_cols=self.ast_external_partition_cols,
-                ),
                 listing_table_factory_infer_partitions=(
                     self.ast_external_listing_table_factory_infer_partitions
                 ),
@@ -3507,17 +3490,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
         facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=self)
-        df = facade.register_dataset(name="ast_files_v1", location=location)
-        expected = schema_for("ast_files_v1").remove_metadata()
-        actual = df.schema().remove_metadata()
-        expected_fingerprint = schema_fingerprint(expected)
-        actual_fingerprint = schema_fingerprint(actual)
-        if actual_fingerprint != expected_fingerprint:
-            msg = (
-                "AST dataset schema mismatch: expected "
-                f"{expected_fingerprint}, observed {actual_fingerprint}."
-            )
-            raise ValueError(msg)
+        facade.register_dataset(name="ast_files_v1", location=location)
         self._record_ast_registration(location=location)
 
     def _bytecode_dataset_location(self) -> DatasetLocation | None:
@@ -3525,12 +3498,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = "Bytecode dataset config cannot set both external and delta locations."
             raise ValueError(msg)
         if self.bytecode_delta_location:
-            expected_schema = schema_for("bytecode_files_v1")
             delta_scan = self.bytecode_delta_scan
-            if delta_scan is None:
-                delta_scan = DeltaScanOptions(schema=expected_schema)
-            elif delta_scan.schema is None:
-                delta_scan = replace(delta_scan, schema=expected_schema)
             from ibis_engine.registry import DatasetLocation
 
             return DatasetLocation(
@@ -3547,16 +3515,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             if self.bytecode_external_format == "delta":
                 msg = "Bytecode external format must not be 'delta'."
                 raise ValueError(msg)
-            expected_schema = schema_for("bytecode_files_v1")
             scan = DataFusionScanOptions(
                 partition_cols=self.bytecode_external_partition_cols,
                 file_sort_order=self.bytecode_external_ordering,
                 schema_force_view_types=self.bytecode_external_schema_force_view_types,
                 skip_arrow_metadata=self.bytecode_external_skip_arrow_metadata,
-                table_schema_contract=TableSchemaContract(
-                    file_schema=expected_schema,
-                    partition_cols=self.bytecode_external_partition_cols,
-                ),
                 listing_table_factory_infer_partitions=(
                     self.bytecode_external_listing_table_factory_infer_partitions
                 ),
@@ -3588,17 +3551,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
         facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=self)
-        df = facade.register_dataset(name="bytecode_files_v1", location=location)
-        expected = schema_for("bytecode_files_v1").remove_metadata()
-        actual = df.schema().remove_metadata()
-        expected_fingerprint = schema_fingerprint(expected)
-        actual_fingerprint = schema_fingerprint(actual)
-        if actual_fingerprint != expected_fingerprint:
-            msg = (
-                "Bytecode dataset schema mismatch: expected "
-                f"{expected_fingerprint}, observed {actual_fingerprint}."
-            )
-            raise ValueError(msg)
+        facade.register_dataset(name="bytecode_files_v1", location=location)
         self._record_bytecode_registration(location=location)
 
     def bytecode_dataset_location(self) -> DatasetLocation | None:
@@ -3672,57 +3625,23 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
         adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
         for name, location in sorted(self.scip_dataset_locations.items()):
-            try:
-                expected_schema = schema_for(name)
-            except KeyError as exc:
-                msg = f"Unknown SCIP dataset name: {name!r}."
-                raise ValueError(msg) from exc
             resolved = location
-            scan = resolved.datafusion_scan
-            if scan is None:
-                scan = DataFusionScanOptions(
-                    table_schema_contract=TableSchemaContract(file_schema=expected_schema),
-                )
-            elif scan.table_schema_contract is None:
-                scan = replace(
-                    scan,
-                    table_schema_contract=TableSchemaContract(
-                        file_schema=expected_schema,
-                        partition_cols=scan.partition_cols,
-                    ),
-                )
-            resolved = replace(resolved, datafusion_scan=scan)
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 adapter.deregister_table(name)
             from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
             facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=self)
             df = facade.register_dataset(name=name, location=resolved)
-            expected = expected_schema.remove_metadata()
-            actual = df.schema().remove_metadata()
-            expected_fingerprint = schema_fingerprint(expected)
-            actual_fingerprint = schema_fingerprint(actual)
-            match = expected_fingerprint == actual_fingerprint
-            if not match and not self.enable_schema_evolution_adapter:
-                msg = (
-                    "SCIP dataset schema mismatch for "
-                    f"{name!r}: expected {expected_fingerprint}, "
-                    f"observed {actual_fingerprint}."
-                )
-                raise ValueError(msg)
-            if not match:
-                logger.warning(
-                    "SCIP dataset schema mismatch: %s expected %s observed %s",
-                    name,
-                    expected_fingerprint,
-                    actual_fingerprint,
-                )
+            actual_schema = df.schema()
+            actual_fingerprint = None
+            if isinstance(actual_schema, pa.Schema):
+                actual_fingerprint = schema_fingerprint(actual_schema.remove_metadata())
             snapshot = _ScipRegistrationSnapshot(
                 name=name,
                 location=resolved,
-                expected_fingerprint=expected_fingerprint,
+                expected_fingerprint=None,
                 actual_fingerprint=actual_fingerprint,
-                schema_match=match,
+                schema_match=None,
             )
             self._record_scip_registration(snapshot=snapshot)
 
@@ -3882,15 +3801,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "dataset": "libcst_files_v1",
         }
         try:
-            table = _sql_with_options(
-                ctx,
-                "SELECT * FROM cst_schema_diagnostics",
-                sql_options=self._sql_options(),
-            ).to_arrow_table()
+            table = ctx.table("cst_schema_diagnostics").to_arrow_table()
             rows = table.to_pylist()
-            schema = schema_for("libcst_files_v1")
-            payload["schema_fingerprint"] = schema_fingerprint(schema)
-            default_entries = _default_value_entries(schema)
+            schema = self._resolved_table_schema(ctx, "libcst_files_v1")
+            if schema is not None:
+                payload["schema_fingerprint"] = schema_fingerprint(schema)
+            default_entries = _default_value_entries(schema) if schema is not None else None
             payload["default_values"] = default_entries or None
             payload["diagnostics"] = rows[0] if rows else None
             introspector = self._schema_introspector(ctx)
@@ -3910,14 +3826,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "dataset": "tree_sitter_files_v1",
         }
         try:
-            table = _sql_with_options(
-                ctx,
-                "SELECT * FROM ts_stats",
-                sql_options=self._sql_options(),
-            ).to_arrow_table()
+            table = ctx.table("ts_stats").to_arrow_table()
             rows = table.to_pylist()
-            schema = schema_for("tree_sitter_files_v1")
-            payload["schema_fingerprint"] = schema_fingerprint(schema)
+            schema = self._resolved_table_schema(ctx, "tree_sitter_files_v1")
+            if schema is not None:
+                payload["schema_fingerprint"] = schema_fingerprint(schema)
             payload["stats"] = rows[0] if rows else None
             introspector = self._schema_introspector(ctx)
             payload["table_definition"] = introspector.table_definition("tree_sitter_files_v1")
@@ -3979,12 +3892,22 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         errors: dict[str, str] = {}
         for name in TREE_SITTER_CHECK_VIEWS:
             try:
+                summary_expr = (
+                    exp.select(
+                        exp.func("count", exp.Star()).as_("row_count"),
+                        exp.func(
+                            "sum",
+                            exp.Case()
+                            .when(exp.column("mismatch"), exp.Literal.number(1))
+                            .else_(exp.Literal.number(0)),
+                        ).as_("mismatch_count"),
+                    )
+                    .from_(name)
+                )
                 summary_rows = (
                     _sql_with_options(
                         ctx,
-                        "SELECT COUNT(*) AS row_count, "
-                        "SUM(CASE WHEN mismatch THEN 1 ELSE 0 END) AS mismatch_count "
-                        f"FROM {name}",
+                        summary_expr,
                         sql_options=self._sql_options(),
                     )
                     .to_arrow_table()
@@ -4007,10 +3930,16 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     "mismatch_count": mismatch_count,
                 }
                 if mismatch_count:
+                    sample_expr = (
+                        exp.select("*")
+                        .from_(name)
+                        .where(exp.column("mismatch"))
+                        .limit(25)
+                    )
                     sample_rows = (
                         _sql_with_options(
                             ctx,
-                            f"SELECT * FROM {name} WHERE mismatch LIMIT 25",
+                            sample_expr,
                             sql_options=self._sql_options(),
                         )
                         .to_arrow_table()
@@ -4083,14 +4012,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "dataset": "bytecode_files_v1",
         }
         try:
-            table = _sql_with_options(
-                ctx,
-                "SELECT * FROM py_bc_metadata",
-                sql_options=self._sql_options(),
-            ).to_arrow_table()
+            table = ctx.table("py_bc_metadata").to_arrow_table()
             rows = table.to_pylist()
-            schema = schema_for("bytecode_files_v1")
-            payload["schema_fingerprint"] = schema_fingerprint(schema)
+            schema = self._resolved_table_schema(ctx, "bytecode_files_v1")
+            if schema is not None:
+                payload["schema_fingerprint"] = schema_fingerprint(schema)
             payload["metadata"] = rows[0] if rows else None
             introspector = self._schema_introspector(ctx)
             payload["table_definition"] = introspector.table_definition("bytecode_files_v1")
@@ -4216,17 +4142,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         *,
         ast_view_names: Sequence[str],
     ) -> dict[str, str]:
+        _ = ast_view_names
         view_errors: dict[str, str] = {}
-        try:
-            validate_ast_views(ctx, view_names=ast_view_names)
-        except (RuntimeError, TypeError, ValueError) as exc:
-            view_errors["ast_views"] = str(exc)
         for label, validator in (
-            ("cst_views", validate_cst_views),
-            ("ts_views", validate_ts_views),
-            ("scip_views", validate_scip_views),
-            ("symtable_views", validate_symtable_views),
-            ("bytecode_views", validate_bytecode_views),
             ("udf_info_schema_parity", validate_udf_info_schema_parity),
             ("engine_functions", validate_required_engine_functions),
         ):
@@ -4294,8 +4212,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 for statement in statements
                 if statement.name not in INFO_SCHEMA_STATEMENT_NAMES
             ]
-        if self.enable_schema_registry:
-            statements.extend(CST_DIAGNOSTIC_STATEMENTS)
         seen: set[str] = set()
         for statement in statements:
             if statement.name in seen:
@@ -4985,6 +4901,21 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             cache_ttl=self._diskcache_ttl_seconds("schema"),
         )
 
+    @staticmethod
+    def _resolved_table_schema(ctx: SessionContext, name: str) -> pa.Schema | None:
+        try:
+            schema = ctx.table(name).schema()
+        except (KeyError, RuntimeError, TypeError, ValueError):
+            return None
+        if isinstance(schema, pa.Schema):
+            return schema
+        to_arrow = getattr(schema, "to_arrow", None)
+        if callable(to_arrow):
+            resolved = to_arrow()
+            if isinstance(resolved, pa.Schema):
+                return resolved
+        return None
+
     def _settings_snapshot(self, ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion settings when information_schema is enabled.
 
@@ -5450,7 +5381,12 @@ def _datafusion_type_name(dtype: pa.DataType) -> str:
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_table_provider("t", ctx.from_arrow(table))
-    result = _sql_with_options(ctx, "SELECT arrow_typeof(value) AS dtype FROM t").to_arrow_table()
+    expr = (
+        exp.select(exp.func("arrow_typeof", exp.column("value")).as_("dtype"))
+        .from_("t")
+        .limit(1)
+    )
+    result = _sql_with_options(ctx, expr).to_arrow_table()
     value = result["dtype"][0].as_py()
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
@@ -5496,20 +5432,32 @@ def _align_projection_exprs(
     schema: pa.Schema,
     input_columns: Sequence[str],
     keep_extra_columns: bool,
-) -> list[str]:
-    selections: list[str] = []
+) -> list[exp.Expression]:
+    selections: list[exp.Expression] = []
     for schema_field in schema:
         dtype_name = _datafusion_type_name(schema_field.type)
-        col_name = _sql_identifier(schema_field.name)
+        col_name = schema_field.name
         if schema_field.name in input_columns:
-            selections.append(f"arrow_cast({col_name}, '{dtype_name}') AS {col_name}")
+            selections.append(
+                exp.func(
+                    "arrow_cast",
+                    exp.column(col_name),
+                    exp.Literal.string(dtype_name),
+                ).as_(col_name)
+            )
         else:
-            selections.append(f"arrow_cast(NULL, '{dtype_name}') AS {col_name}")
+            selections.append(
+                exp.func(
+                    "arrow_cast",
+                    exp.null(),
+                    exp.Literal.string(dtype_name),
+                ).as_(col_name)
+            )
     if keep_extra_columns:
         for name in input_columns:
             if name in schema.names:
                 continue
-            selections.append(_sql_identifier(name))
+            selections.append(exp.column(name))
     return selections
 
 
@@ -5547,8 +5495,8 @@ def align_table_to_schema(
             input_columns=resolved_table.column_names,
             keep_extra_columns=keep_extra_columns,
         )
-        select_sql = ", ".join(selections)
-        df = _sql_with_options(session, f"SELECT {select_sql} FROM {_sql_identifier(temp_name)}")
+        select_expr = exp.select(*selections).from_(temp_name)
+        df = _sql_with_options(session, select_expr)
         aligned = df.to_arrow_table()
     finally:
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
@@ -5637,34 +5585,37 @@ def read_delta_as_reader(
     path: str,
     *,
     storage_options: Mapping[str, str] | None = None,
+    log_storage_options: Mapping[str, str] | None = None,
     delta_scan: DeltaScanOptions | None = None,
 ) -> pa.RecordBatchReader:
-    """Return a streaming Delta table snapshot using Ibis read_delta.
+    """Return a streaming Delta table snapshot using the Delta TableProvider.
 
     Returns
     -------
     pyarrow.RecordBatchReader
         Streaming reader for the Delta table via DataFusion's Delta table provider.
-
-    Raises
-    ------
-    ValueError
-        Raised when DeltaScanConfig overrides are requested.
     """
-    if delta_scan is not None:
-        msg = "Ibis read_delta does not support DeltaScanConfig overrides."
-        raise ValueError(msg)
+    import uuid
+
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from ibis_engine.execution_factory import ibis_backend_from_profile
     from ibis_engine.io_bridge import ibis_table_to_reader
-    from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
+    from ibis_engine.registry import DatasetLocation
 
     runtime_profile = DataFusionRuntimeProfile()
+    ctx = runtime_profile.session_context()
     backend = ibis_backend_from_profile(runtime_profile)
-    table = read_delta_ibis(
-        backend,
-        path,
-        options=IbisDeltaReadOptions(storage_options=storage_options),
+    name = f"__delta_reader_{uuid.uuid4().hex}"
+    location = DatasetLocation(
+        path=path,
+        format="delta",
+        storage_options=dict(storage_options or {}),
+        delta_log_storage_options=dict(log_storage_options or {}),
+        delta_scan=delta_scan,
     )
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    facade.register_dataset(name=name, location=location)
+    table = backend.table(name)
     return ibis_table_to_reader(table)
 
 

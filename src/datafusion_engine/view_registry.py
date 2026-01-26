@@ -42,6 +42,22 @@ def _arrow_cast(expr: Expr, data_type: str) -> Expr:
     return f.arrow_cast(expr, lit(data_type))
 
 
+def _span_struct(span: Expr) -> Expr:
+    return f.named_struct(
+        [
+            ("start", span["start"]),
+            ("end", span["end"]),
+            ("end_exclusive", span["end_exclusive"]),
+            ("col_unit", span["col_unit"]),
+            ("byte_span", span["byte_span"]),
+        ]
+    )
+
+
+def _ast_record(span: Expr, attrs: Expr) -> Expr:
+    return f.named_struct([("span", _span_struct(span)), ("attrs", attrs)])
+
+
 VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "ast_call_attrs": (
         col("file_id").alias("file_id"),
@@ -79,33 +95,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct(
-            [
-                ("start", (col("span"))["start"]),
-                ("end", (col("span"))["end"]),
-                ("byte_span", (col("span"))["byte_span"]),
-                ("col_unit", (col("span"))["col_unit"]),
-                ("end_exclusive", (col("span"))["end_exclusive"]),
-            ]
-        ).alias("span"),
+        _span_struct(col("span")).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct(
-            [
-                (
-                    "span",
-                    f.named_struct(
-                        [
-                            ("start", (col("span"))["start"]),
-                            ("end", (col("span"))["end"]),
-                            ("byte_span", (col("span"))["byte_span"]),
-                            ("col_unit", (col("span"))["col_unit"]),
-                            ("end_exclusive", (col("span"))["end_exclusive"]),
-                        ]
-                    ),
-                ),
-                ("attrs", col("attrs")),
-            ]
-        ).alias("ast_record"),
+        _ast_record(col("span"), col("attrs")).alias("ast_record"),
     ),
     "ast_def_attrs": (
         col("file_id").alias("file_id"),
@@ -152,33 +144,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct(
-            [
-                ("start", (col("span"))["start"]),
-                ("end", (col("span"))["end"]),
-                ("byte_span", (col("span"))["byte_span"]),
-                ("col_unit", (col("span"))["col_unit"]),
-                ("end_exclusive", (col("span"))["end_exclusive"]),
-            ]
-        ).alias("span"),
+        _span_struct(col("span")).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct(
-            [
-                (
-                    "span",
-                    f.named_struct(
-                        [
-                            ("start", (col("span"))["start"]),
-                            ("end", (col("span"))["end"]),
-                            ("byte_span", (col("span"))["byte_span"]),
-                            ("col_unit", (col("span"))["col_unit"]),
-                            ("end_exclusive", (col("span"))["end_exclusive"]),
-                        ]
-                    ),
-                ),
-                ("attrs", col("attrs")),
-            ]
-        ).alias("ast_record"),
+        _ast_record(col("span"), col("attrs")).alias("ast_record"),
     ),
     "ast_docstrings": (
         col("file_id").alias("file_id"),
@@ -195,33 +163,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct(
-            [
-                ("start", (col("span"))["start"]),
-                ("end", (col("span"))["end"]),
-                ("byte_span", (col("span"))["byte_span"]),
-                ("col_unit", (col("span"))["col_unit"]),
-                ("end_exclusive", (col("span"))["end_exclusive"]),
-            ]
-        ).alias("span"),
+        _span_struct(col("span")).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct(
-            [
-                (
-                    "span",
-                    f.named_struct(
-                        [
-                            ("start", (col("span"))["start"]),
-                            ("end", (col("span"))["end"]),
-                            ("byte_span", (col("span"))["byte_span"]),
-                            ("col_unit", (col("span"))["col_unit"]),
-                            ("end_exclusive", (col("span"))["end_exclusive"]),
-                        ]
-                    ),
-                ),
-                ("attrs", col("attrs")),
-            ]
-        ).alias("ast_record"),
+        _ast_record(col("span"), col("attrs")).alias("ast_record"),
     ),
     "ast_edge_attrs": (
         col("file_id").alias("file_id"),
@@ -256,33 +200,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct(
-            [
-                ("start", (col("span"))["start"]),
-                ("end", (col("span"))["end"]),
-                ("byte_span", (col("span"))["byte_span"]),
-                ("col_unit", (col("span"))["col_unit"]),
-                ("end_exclusive", (col("span"))["end_exclusive"]),
-            ]
-        ).alias("span"),
+        _span_struct(col("span")).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct(
-            [
-                (
-                    "span",
-                    f.named_struct(
-                        [
-                            ("start", (col("span"))["start"]),
-                            ("end", (col("span"))["end"]),
-                            ("byte_span", (col("span"))["byte_span"]),
-                            ("col_unit", (col("span"))["col_unit"]),
-                            ("end_exclusive", (col("span"))["end_exclusive"]),
-                        ]
-                    ),
-                ),
-                ("attrs", col("attrs")),
-            ]
-        ).alias("ast_record"),
+        _ast_record(col("span"), col("attrs")).alias("ast_record"),
     ),
     "ast_imports": (
         col("file_id").alias("file_id"),
@@ -302,33 +222,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct(
-            [
-                ("start", (col("span"))["start"]),
-                ("end", (col("span"))["end"]),
-                ("byte_span", (col("span"))["byte_span"]),
-                ("col_unit", (col("span"))["col_unit"]),
-                ("end_exclusive", (col("span"))["end_exclusive"]),
-            ]
-        ).alias("span"),
+        _span_struct(col("span")).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct(
-            [
-                (
-                    "span",
-                    f.named_struct(
-                        [
-                            ("start", (col("span"))["start"]),
-                            ("end", (col("span"))["end"]),
-                            ("byte_span", (col("span"))["byte_span"]),
-                            ("col_unit", (col("span"))["col_unit"]),
-                            ("end_exclusive", (col("span"))["end_exclusive"]),
-                        ]
-                    ),
-                ),
-                ("attrs", col("attrs")),
-            ]
-        ).alias("ast_record"),
+        _ast_record(col("span"), col("attrs")).alias("ast_record"),
     ),
     "ast_node_attrs": (
         col("file_id").alias("file_id"),
@@ -360,33 +256,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
             (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]),
             "Int64",
         ).alias("bend"),
-        f.named_struct(
-            [
-                ("start", (col("span"))["start"]),
-                ("end", (col("span"))["end"]),
-                ("byte_span", (col("span"))["byte_span"]),
-                ("col_unit", (col("span"))["col_unit"]),
-                ("end_exclusive", (col("span"))["end_exclusive"]),
-            ]
-        ).alias("span"),
+        _span_struct(col("span")).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct(
-            [
-                (
-                    "span",
-                    f.named_struct(
-                        [
-                            ("start", (col("span"))["start"]),
-                            ("end", (col("span"))["end"]),
-                            ("byte_span", (col("span"))["byte_span"]),
-                            ("col_unit", (col("span"))["col_unit"]),
-                            ("end_exclusive", (col("span"))["end_exclusive"]),
-                        ]
-                    ),
-                ),
-                ("attrs", col("attrs")),
-            ]
-        ).alias("ast_record"),
+        _ast_record(col("span"), col("attrs")).alias("ast_record"),
     ),
     "ast_span_metadata": (
         arrow_metadata(col("nodes")["span"], "line_base").alias("nodes_line_base"),
@@ -427,33 +299,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct(
-            [
-                ("start", (col("span"))["start"]),
-                ("end", (col("span"))["end"]),
-                ("byte_span", (col("span"))["byte_span"]),
-                ("col_unit", (col("span"))["col_unit"]),
-                ("end_exclusive", (col("span"))["end_exclusive"]),
-            ]
-        ).alias("span"),
+        _span_struct(col("span")).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct(
-            [
-                (
-                    "span",
-                    f.named_struct(
-                        [
-                            ("start", (col("span"))["start"]),
-                            ("end", (col("span"))["end"]),
-                            ("byte_span", (col("span"))["byte_span"]),
-                            ("col_unit", (col("span"))["col_unit"]),
-                            ("end_exclusive", (col("span"))["end_exclusive"]),
-                        ]
-                    ),
-                ),
-                ("attrs", col("attrs")),
-            ]
-        ).alias("ast_record"),
+        _ast_record(col("span"), col("attrs")).alias("ast_record"),
     ),
     "bytecode_errors": (
         col("file_id").alias("file_id"),

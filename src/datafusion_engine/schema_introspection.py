@@ -43,89 +43,36 @@ def _stable_cache_key(prefix: str, payload: Mapping[str, object]) -> str:
     return f"{prefix}:{digest}"
 
 
-def _table_for_query(
+def _schema_from_expression(
     ctx: SessionContext,
-    query: str,
+    expr: object,
     *,
     sql_options: SQLOptions | None = None,
-    prepared_name: str | None = None,
-) -> pa.Table:
-    options = sql_options or _read_only_sql_options()
-    from sqlglot.errors import ParseError
-
+) -> pa.Schema:
     from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
+    from datafusion_engine.execution_helpers import _compilation_pipeline
+    from sqlglot_tools.compat import Expression
 
-    def _sql_ingest(_payload: Mapping[str, object]) -> None:
-        return None
-
-    if prepared_name is not None:
-        try:
-            allow_statements = True
-            statement_options = DataFusionCompileOptions(
-                sql_options=options.with_allow_statements(allow_statements),
-                sql_policy=DataFusionSqlPolicy(allow_statements=True),
-                sql_ingest_hook=_sql_ingest,
-            )
-            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-            try:
-                register_datafusion_dialect()
-                statement_expr = parse_sql_strict(
-                    f"EXECUTE {prepared_name}",
-                    dialect=statement_options.dialect,
-                )
-            except (ParseError, TypeError, ValueError) as exc:
-                msg = "Prepared statement SQL parse failed."
-                raise ValueError(msg) from exc
-            plan = facade.compile(statement_expr, options=statement_options)
-            result = facade.execute(plan)
-        except (RuntimeError, TypeError, ValueError):
-            pass
-        else:
-            if result.dataframe is not None:
-                return result.dataframe.to_arrow_table()
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    query_options = DataFusionCompileOptions(
-        sql_options=options,
+    if not isinstance(expr, Expression):
+        msg = f"Expected SQLGlot Expression, got {type(expr).__name__}."
+        raise TypeError(msg)
+    resolved_options = DataFusionCompileOptions(
+        sql_options=sql_options or _read_only_sql_options(),
         sql_policy=DataFusionSqlPolicy(),
-        sql_ingest_hook=_sql_ingest,
     )
-    try:
-        register_datafusion_dialect()
-        query_expr = parse_sql_strict(query, dialect=query_options.dialect)
-    except (ParseError, TypeError, ValueError) as exc:
-        msg = "Schema introspection SQL parse failed."
-        raise ValueError(msg) from exc
-    plan = facade.compile(query_expr, options=query_options)
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "Schema introspection SQL did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    return result.dataframe.to_arrow_table()
-
-
-def _rows_for_query(
-    ctx: SessionContext,
-    query: str,
-    *,
-    sql_options: SQLOptions | None = None,
-    prepared_name: str | None = None,
-) -> list[dict[str, object]]:
-    """Return a list of row mappings for a SQL query.
-
-    Returns
-    -------
-    list[dict[str, object]]
-        Rows represented as dictionaries keyed by column name.
-    """
-    table = _table_for_query(
-        ctx,
-        query,
-        sql_options=sql_options,
-        prepared_name=prepared_name,
-    )
-    return [dict(row) for row in table.to_pylist()]
+    pipeline = _compilation_pipeline(ctx, options=resolved_options)
+    compiled = pipeline.compile_ast(expr)
+    df = pipeline.execute(compiled, sql_options=resolved_options.sql_options)
+    schema = df.schema()
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Schema introspection failed to resolve a PyArrow schema."
+    raise TypeError(msg)
 
 
 def _normalized_rows(table: pa.Table) -> list[dict[str, object]]:
@@ -688,36 +635,6 @@ class SchemaIntrospector:
         }
         return _stable_cache_key("schema", key_payload)
 
-    def _cached_rows(
-        self,
-        kind: str,
-        *,
-        query: str,
-        prepared_name: str | None = None,
-        sql_options: SQLOptions | None = None,
-        payload: Mapping[str, object] | None = None,
-    ) -> list[dict[str, object]]:
-        cache = self.cache
-        if cache is None:
-            return _rows_for_query(
-                self.ctx,
-                query,
-                sql_options=sql_options or self.sql_options,
-                prepared_name=prepared_name,
-            )
-        key = self._cache_key(kind, payload=payload)
-        cached = cache.get(key, default=None, retry=True)
-        if isinstance(cached, list):
-            return cached
-        rows = _rows_for_query(
-            self.ctx,
-            query,
-            sql_options=sql_options or self.sql_options,
-            prepared_name=prepared_name,
-        )
-        cache.set(key, rows, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)
-        return rows
-
     def invalidate_cache(self, *, tag: str | None = None) -> int:
         """Evict cached schema rows for this introspector.
 
@@ -741,13 +658,54 @@ class SchemaIntrospector:
         -------
         list[dict[str, object]]
             ``DESCRIBE`` rows for the query.
+
+        Raises
+        ------
+        ValueError
+            Raised when the SQL cannot be parsed for schema introspection.
         """
-        query = f"DESCRIBE {sql}"
-        return self._cached_rows(
-            "describe_query",
-            query=query,
-            payload={"sql": sql},
+        cache = self.cache
+        payload = {"sql": sql}
+        key = self._cache_key("describe_query", payload=payload)
+        if cache is not None:
+            cached = cache.get(key, default=None, retry=True)
+            if isinstance(cached, list):
+                return cached
+        from sqlglot.errors import ParseError
+
+        from datafusion_engine.compile_options import DataFusionCompileOptions
+        from sqlglot_tools.optimizer import (
+            StrictParseOptions,
+            parse_sql_strict,
+            register_datafusion_dialect,
         )
+
+        try:
+            register_datafusion_dialect()
+            expr = parse_sql_strict(
+                sql,
+                dialect=DataFusionCompileOptions().dialect,
+                options=StrictParseOptions(preserve_params=True),
+            )
+        except (ParseError, TypeError, ValueError) as exc:
+            msg = "Schema introspection SQL parse failed."
+            raise ValueError(msg) from exc
+        schema = _schema_from_expression(
+            self.ctx,
+            expr,
+            sql_options=self.sql_options,
+        )
+        rows = [
+            {
+                "column_name": field.name,
+                "data_type": str(field.type),
+                "nullable": field.nullable,
+            }
+            for field in schema
+        ]
+        if cache is not None:
+            cache.set(key, rows, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)
+        return rows
 
     def table_columns(self, table_name: str) -> list[dict[str, object]]:
         """Return column metadata from information_schema for a table.
@@ -1046,24 +1004,8 @@ class SchemaIntrospector:
         str | None
             CREATE TABLE statement when available.
         """
-        try:
-            sql_options = self.sql_options or _statement_sql_options()
-            rows = self._cached_rows(
-                "table_definition",
-                query=f"SHOW CREATE TABLE {table_name}",
-                sql_options=sql_options,
-                payload={"table_name": table_name},
-            )
-        except (RuntimeError, TypeError, ValueError):
-            metadata = table_provider_metadata(id(self.ctx), table_name=table_name)
-            return metadata.ddl if metadata else None
-        if not rows:
-            metadata = table_provider_metadata(id(self.ctx), table_name=table_name)
-            return metadata.ddl if metadata else None
-        first = rows[0]
-        if len(first) == 1:
-            return str(next(iter(first.values())))
-        return repr(first)
+        metadata = table_provider_metadata(id(self.ctx), table_name=table_name)
+        return metadata.ddl if metadata else None
 
     def table_constraints(self, table_name: str) -> tuple[str, ...]:
         """Return constraint expressions for a table when available.

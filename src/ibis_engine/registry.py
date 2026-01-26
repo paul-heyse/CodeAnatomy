@@ -460,21 +460,16 @@ def read_dataset(
     if params.filesystem is not None and hasattr(backend, "register_filesystem"):
         backend_fs = cast("FilesystemBackend", backend)
         backend_fs.register_filesystem(params.filesystem)
-    datafusion_table = _read_via_datafusion_registry(backend, params=params)
+    datafusion_table = _read_via_datafusion_registry(
+        backend,
+        params=params,
+        force=params.dataset_format == "delta",
+    )
     if datafusion_table is not None:
         return datafusion_table
     if params.dataset_format == "delta":
-        options = dict(params.read_options or {})
-        if params.table_name is not None:
-            options.setdefault("table_name", params.table_name)
-        log_storage = params.delta_log_storage_options or params.storage_options
-        if log_storage:
-            options.setdefault("storage_options", dict(log_storage))
-        version = options.get("version")
-        if version is not None and not isinstance(version, int):
-            options.pop("version", None)
-        reader = _resolve_reader(backend, params.dataset_format)
-        return reader(params.path, **options)
+        msg = "Delta datasets require DataFusion registry-based reads."
+        raise ValueError(msg)
     options = dict(params.read_options or {})
     if params.table_name is not None:
         options.setdefault("table_name", params.table_name)
@@ -494,18 +489,22 @@ def _read_via_datafusion_registry(
     backend: ibis.backends.BaseBackend,
     *,
     params: ReadDatasetParams,
+    force: bool = False,
 ) -> Table | None:
-    if params.dataset_format == "delta":
-        return None
     if (
+        not force
+        and (
         params.datafusion_scan is None
         and params.datafusion_provider is None
         and params.dataset_spec is None
+        )
     ):
         return None
     try:
         ctx = datafusion_context(backend)
     except ValueError:
+        if force:
+            raise
         return None
     table_name = params.table_name or f"__ibis_{uuid.uuid4().hex}"
     scan = params.datafusion_scan
@@ -531,12 +530,17 @@ def _read_via_datafusion_registry(
     if callable(deregister):
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             deregister(table_name)
-    _register_datafusion_dataset(
-        ctx,
-        name=table_name,
-        location=location,
-        runtime_profile=None,
-    )
+    try:
+        _register_datafusion_dataset(
+            ctx,
+            name=table_name,
+            location=location,
+            runtime_profile=None,
+        )
+    except ValueError:
+        if force:
+            raise
+        return None
     return backend.table(table_name)
 
 

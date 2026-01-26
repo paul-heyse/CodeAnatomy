@@ -85,22 +85,7 @@ Extended schema capturing comprehensive plan diagnostics:
 - Graphviz visualization
 - Partition count and join operators
 
-### 3. Diagnostics Table Builders (`src/obs/diagnostics_tables.py`)
-
-#### `datafusion_runs_table(records) -> pa.Table`
-Builds an Arrow table from run envelope payloads, handling:
-- Timestamp coercion
-- Status normalization
-- Metadata JSON serialization
-
-#### `datafusion_plan_artifacts_table(artifacts) -> pa.Table`
-Builds an Arrow table from plan artifact payloads, handling:
-- Artifact path metadata extraction
-- Substrait validation status
-- Join operator lists
-- Nullable fields with proper defaults
-
-### 4. Enhanced Plan Artifacts (`src/datafusion_engine/bridge.py`)
+### 3. Enhanced Plan Artifacts (`src/datafusion_engine/bridge.py`)
 
 #### DataFusionPlanArtifacts Enhancements
 - **New field**: `run_id: str | None` - Correlation ID for run tracking
@@ -114,7 +99,7 @@ Builds an Arrow table from plan artifact payloads, handling:
 - Threads correlation ID through artifact collection
 - Returns artifacts with run correlation
 
-### 5. Compilation Options (`src/datafusion_engine/compile_options.py`)
+### 4. Compilation Options (`src/datafusion_engine/compile_options.py`)
 
 #### DataFusionCompileOptions Extension
 - **New field**: `run_id: str | None`
@@ -240,7 +225,6 @@ Tests cover:
 - `/home/paul/CodeAnatomy/src/datafusion_engine/schema_registry.py`
 - `/home/paul/CodeAnatomy/src/datafusion_engine/bridge.py`
 - `/home/paul/CodeAnatomy/src/datafusion_engine/compile_options.py`
-- `/home/paul/CodeAnatomy/src/obs/diagnostics_tables.py`
 
 ## References
 

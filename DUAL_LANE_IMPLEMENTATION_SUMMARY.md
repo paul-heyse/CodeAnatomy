@@ -52,23 +52,13 @@ This implementation adds dual-lane compilation support to the DataFusion bridge,
 The `ibis_to_datafusion_dual_lane()` function implements a two-lane compilation strategy:
 
 1. **Substrait Lane (Primary):**
-   - Attempted when `prefer_substrait=True`
-   - Uses `try_ibis_to_substrait_bytes()` from `ibis_engine.substrait_bridge`
-   - If successful, replays plan using `replay_substrait_bytes()`
-   - Optional validation via `validate_substrait_plan()` when `substrait_validation=True`
-   - Applies caching policy consistently with SQL lane
+   - Deprecated and removed in the legacy decommissioning pass
+   - SQL lane is now the only supported compilation path
 
-2. **SQL Lane (Fallback):**
+2. **SQL Lane (Only Path):**
    - Used when Substrait fails or is disabled
    - Delegates to existing `ibis_to_datafusion()` function
    - Records fallback reason when `prefer_substrait=True`
-
-### Gap Recording
-
-When `record_substrait_gaps=True`:
-- Substrait compilation failures are recorded via `record_substrait_gap()`
-- Includes expression type and failure reason
-- Helps identify which operations need SQL fallback
 
 ### Cache Integration
 
@@ -128,11 +118,6 @@ df = result.df
 ## Dependencies
 
 This implementation depends on:
-- `src/ibis_engine/substrait_bridge.py` (created in Phase 2)
-  - `try_ibis_to_substrait_bytes()`
-  - `record_substrait_gap()`
-  - `SubstraitCompilationResult` dataclass
-
 - Existing DataFusion bridge infrastructure:
   - `replay_substrait_bytes()`
   - `validate_substrait_plan()`

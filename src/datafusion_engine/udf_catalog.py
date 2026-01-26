@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
-from datafusion import SessionContext, SQLOptions
+from datafusion import SessionContext
 
 from datafusion_engine.schema_introspection import routines_snapshot_table
 from datafusion_engine.udf_signature import (
@@ -356,40 +356,6 @@ class FunctionCatalog:
         return func_id.lower() in self.function_names or func_id in self.function_names
 
 
-def _show_functions_table(introspector: SchemaIntrospector) -> pa.Table | None:
-    ctx = introspector.ctx
-    sql_options = introspector.sql_options or SQLOptions()
-    try:
-        from sqlglot.errors import ParseError
-
-        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
-        from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
-
-        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-        options = DataFusionCompileOptions(
-            sql_options=sql_options,
-            sql_policy=DataFusionSqlPolicy(),
-        )
-        try:
-            register_datafusion_dialect()
-            expr = parse_sql_strict("SHOW FUNCTIONS", dialect=options.dialect)
-        except (ParseError, TypeError, ValueError) as exc:
-            msg = "SHOW FUNCTIONS SQL parse failed."
-            raise ValueError(msg) from exc
-        plan = facade.compile(expr, options=options)
-        result = facade.execute(plan)
-        if result.dataframe is None:
-            return None
-        df = result.dataframe
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    try:
-        return df.to_arrow_table()
-    except (RuntimeError, TypeError, ValueError):
-        return None
-
-
 def _builtin_spec_from_signature(func_id: str, sig: FunctionSignature) -> BuiltinFunctionSpec:
     """Convert FunctionSignature to BuiltinFunctionSpec.
 
@@ -507,9 +473,6 @@ class UdfCatalog:
             parameters=parameters,
             parameters_available=parameters is not None,
         )
-        show_table = _show_functions_table(introspector)
-        if show_table is not None:
-            catalog = catalog.merge(FunctionCatalog.from_show_functions(show_table))
         self._runtime_catalog = catalog
 
     def _require_runtime_catalog(self) -> FunctionCatalog:

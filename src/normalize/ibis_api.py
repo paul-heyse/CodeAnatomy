@@ -11,7 +11,6 @@ from ibis.expr.types import Table
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering
-from arrowdsl.schema.build import empty_table
 from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.view_registry import ensure_view_graph
 from ibis_engine.catalog import IbisPlanSource
@@ -28,18 +27,16 @@ from normalize.ibis_spans import (
     normalize_cst_imports_span_struct_ibis,
 )
 from normalize.runtime import NormalizeRuntime, build_normalize_runtime
-from normalize.schemas import SPAN_ERROR_SCHEMA
-from normalize.view_builders import (
-    CFG_BLOCKS_NAME,
-    CFG_EDGES_NAME,
-    DEF_USE_NAME,
-    DIAG_NAME,
-    REACHES_NAME,
-    TYPE_EXPRS_NAME,
-    TYPE_NODES_NAME,
-)
 
 NormalizeSource = IbisPlanSource | None
+
+CFG_BLOCKS_NAME = "py_bc_blocks_norm_v1"
+CFG_EDGES_NAME = "py_bc_cfg_edges_norm_v1"
+DEF_USE_NAME = "py_bc_def_use_events_v1"
+REACHES_NAME = "py_bc_reaches_v1"
+TYPE_EXPRS_NAME = "type_exprs_norm_v1"
+TYPE_NODES_NAME = "type_nodes_v1"
+DIAG_NAME = "diagnostics_norm_v1"
 
 
 @dataclass(frozen=True)
@@ -331,8 +328,6 @@ def add_scip_occurrence_byte_spans(
     )
     occ_table = _materialize_table_expr(occ_expr, runtime=normalize_runtime).require_table()
     err_table = _materialize_table_expr(err_expr, runtime=normalize_runtime).require_table()
-    if err_table.num_rows == 0:
-        return occ_table, empty_table(SPAN_ERROR_SCHEMA)
     return occ_table, err_table
 
 

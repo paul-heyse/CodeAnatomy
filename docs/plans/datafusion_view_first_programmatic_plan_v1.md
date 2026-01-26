@@ -47,7 +47,7 @@ contract = contract.with_metadata(required_udfs=required_udfs_from_ast(ast))
 ### Checklist
 - [ ] Remove static view schema registries and constants (SCHEMA_REGISTRY/SCIP view schemas still exist).
 - [x] Derive view schema via builder or compiled AST at registration time for view‑driven nodes.
-- [ ] Ensure contracts are built from derived schema + metadata only (schema_contracts still enforces column lists).
+- [x] Ensure contracts are built from derived schema + metadata only for views (view contracts enforce metadata, not columns).
 - [x] Remove empty‑table fallbacks that depend on static view schemas (CPG/props paths now derive from plan schema).
 - [ ] Enforce missing view schema as a hard error globally (symtable views enforce; registry views still infer silently).
 
@@ -58,7 +58,7 @@ contract = contract.with_metadata(required_udfs=required_udfs_from_ast(ast))
 ## Goal
 Schema contracts become **metadata‑only** constraints; column lists are inferred from view definitions.
 
-Status: PARTIAL — relspec contracts are metadata‑only; schema_contracts remains column‑based.
+Status: PARTIAL — metadata validation enforced for view contracts; column enforcement remains for extract/explicit contracts.
 
 ### Representative pattern
 ```python
@@ -78,7 +78,7 @@ validate_schema_contract(contract, ctx)  # validates inferred schema only
 - Delete: contract helpers that assume static view schemas
 
 ### Checklist
-- [ ] Validate schema contract against inferred schema only (global contract validation still expects column lists).
+- [x] Validate schema contract against inferred schema only for view nodes (metadata enforced; column checks disabled).
 - [x] Require metadata validation (UDFs, ordering, evidence tags) for view‑driven nodes.
 - [ ] Remove column‑list assumptions from contracts (schema_contracts/registry still rely on column lists).
 
@@ -89,7 +89,7 @@ validate_schema_contract(contract, ctx)  # validates inferred schema only
 ## Goal
 Make the view spec registry the **only** orchestration layer. Eliminate plan builders and static task catalogs.
 
-Status: PARTIAL — view graph drives orchestration, but legacy plan catalog modules remain.
+Status: PARTIAL — view graph drives orchestration; Hamilton module registry still includes deprecated task_catalog.
 
 ### Representative pattern
 ```python
@@ -113,7 +113,7 @@ register_view_graph(ctx, nodes=nodes, snapshot=snapshot)
 ### Checklist
 - [x] All derived datasets are defined as view specs (normalize/relspec/CPG via view_graph_nodes).
 - [x] Register views topologically via graph registry.
-- [ ] Remove all plan builder execution paths (relspec plan_catalog + task_catalog modules still present).
+- [ ] Remove all plan builder execution paths (Hamilton task_catalog module still in module list).
 
 ---
 
@@ -122,7 +122,7 @@ register_view_graph(ctx, nodes=nodes, snapshot=snapshot)
 ## Goal
 Remove manual normalize view enumeration. Derive normalize views from dataset spec registry.
 
-Status: PARTIAL — dataset rows drive ordering, but manual builder registry still exists.
+Status: COMPLETE — dataset rows drive ordering and custom builders via row metadata.
 
 ### Representative pattern
 ```python
@@ -144,7 +144,7 @@ for spec in normalize_dataset_specs():
 ### Checklist
 - [x] Normalize view specs derived from dataset registry order.
 - [x] ExprIR/SqlExprSpec drives view expression construction.
-- [ ] No manual normalize view list remains (_NORMALIZE_VIEW_BUILDERS registry still required for custom plans).
+- [x] No manual normalize view list remains (view_builder field resolves custom plans).
 
 ---
 
@@ -181,7 +181,7 @@ required_udfs = referenced_udf_calls(ast)
 ## Goal
 Rust UDF snapshot is the **only** function registry; required UDFs are derived from AST.
 
-Status: PARTIAL — snapshots drive required UDFs for views, but Python registries still exist.
+Status: PARTIAL — snapshots drive required UDFs for views; Python registries still exist (snapshot‑derived).
 
 ### Representative pattern
 ```python
@@ -210,7 +210,7 @@ validate_required_udfs(snapshot, required_udfs_from_ast(ast))
 ## Goal
 Materialization is downstream and reads from registered views only.
 
-Status: PARTIAL — view materialization is enforced in main execution path; legacy plan paths still exist.
+Status: COMPLETE — view materialization enforced and plan execution paths removed.
 
 ### Representative pattern
 ```python
@@ -229,7 +229,7 @@ write_pipeline.write_view("cpg_edges_v1")
 
 ### Checklist
 - [x] Materialization consumes view names only in task execution and build_view_product.
-- [ ] Plan execution paths for derived datasets removed (plan_catalog/execute_plan_artifact still exist).
+- [x] Plan execution paths for derived datasets removed.
 - [x] Streaming executor stays intact.
 
 ---
@@ -307,8 +307,8 @@ These items should only be deleted when **all scopes above** are complete and va
 - [ ] View schemas are fully derived; no static view schema registry remains.
 - [ ] Contracts only attach metadata; no column lists are hardcoded.
 - [ ] View registry is the single orchestration surface.
-- [ ] Normalize views are generated from dataset specs programmatically.
+- [x] Normalize views are generated from dataset specs programmatically.
 - [x] View dependency DAG derived from AST lineage only.
 - [ ] Rust UDF snapshot drives all function requirements (Python registries removed).
 - [x] Scheduling is fully rustworkx‑driven and programmatic.
-- [ ] Materialization consumes views exclusively with no plan‑based paths.
+- [x] Materialization consumes views exclusively with no plan‑based paths.

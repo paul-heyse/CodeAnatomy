@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -120,9 +120,13 @@ def _sql_schema(
     from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
+    def _sql_ingest(_payload: Mapping[str, object]) -> None:
+        return None
+
     options = DataFusionCompileOptions(
         sql_options=_read_only_sql_options(sql_options),
         sql_policy=DataFusionSqlPolicy(),
+        sql_ingest_hook=_sql_ingest,
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
     plan = facade.compile(sql, options=options)

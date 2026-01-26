@@ -321,7 +321,8 @@ class DataFusionExecutionFacade:
         Parameters
         ----------
         expr
-            SQL text, SQLGlot expression, or Ibis table to compile.
+            SQLGlot expression or Ibis table to compile. SQL text is only accepted
+            when sql_ingest_hook is configured to mark explicit SQL ingress.
         options
             Optional compile options to override defaults.
 
@@ -329,6 +330,11 @@ class DataFusionExecutionFacade:
         -------
         CompiledPlan
             Compiled plan and resolved compile options.
+
+        Raises
+        ------
+        ValueError
+            Raised when SQL ingestion is not explicitly enabled.
         """
         resolved = self._resolve_compile_options(options)
         recorder = self.diagnostics_recorder(operation_id="compile")
@@ -340,7 +346,31 @@ class DataFusionExecutionFacade:
             )
         pipeline = _compilation_pipeline(self.ctx, options=resolved)
         if isinstance(expr, str):
-            compiled = pipeline.compile_sql(expr)
+            if resolved.sql_ingest_hook is None:
+                msg = (
+                    "SQL string compilation is restricted to explicit SQL ingress. "
+                    "Provide a SQLGlot AST/Ibis expression or configure sql_ingest_hook."
+                )
+                raise ValueError(msg)
+            from sqlglot.errors import ParseError
+
+            from sqlglot_tools.optimizer import (
+                StrictParseOptions,
+                parse_sql_strict,
+                register_datafusion_dialect,
+            )
+
+            try:
+                register_datafusion_dialect()
+                ast = parse_sql_strict(
+                    expr,
+                    dialect=resolved.dialect,
+                    options=StrictParseOptions(preserve_params=True),
+                )
+            except (ParseError, TypeError, ValueError) as exc:
+                msg = "SQL ingress parse failed."
+                raise ValueError(msg) from exc
+            compiled = pipeline.compile_ast(ast, original_sql=expr)
         elif isinstance(expr, exp.Expression):
             compiled = pipeline.compile_ast(expr)
         else:

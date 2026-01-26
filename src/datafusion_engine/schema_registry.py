@@ -94,12 +94,27 @@ SQLGLOT_PARSE_ERROR_DETAILS_TYPE = list_view_type(
 
 
 def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
+    from sqlglot.errors import ParseError
+
     from datafusion_engine.compile_options import DataFusionCompileOptions
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
-    options = DataFusionCompileOptions(sql_options=sql_options_for_profile(None))
+    def _sql_ingest(_payload: Mapping[str, object]) -> None:
+        return None
+
+    options = DataFusionCompileOptions(
+        sql_options=sql_options_for_profile(None),
+        sql_ingest_hook=_sql_ingest,
+    )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    plan = facade.compile(sql, options=options)
+    try:
+        register_datafusion_dialect()
+        expr = parse_sql_strict(sql, dialect=options.dialect)
+    except (ParseError, TypeError, ValueError) as exc:
+        msg = "Schema registry SQL parse failed."
+        raise ValueError(msg) from exc
+    plan = facade.compile(expr, options=options)
     result = facade.execute(plan)
     if result.dataframe is None:
         msg = "Schema registry SQL execution did not return a DataFusion DataFrame."
@@ -2471,7 +2486,9 @@ def _context_fields_for(name: str, root_schema: pa.Schema) -> tuple[pa.Field, ..
         else:
             struct_type = struct_for_path(root_schema, prefix)
             field = struct_type.field(field_name)
-        fields.append(pa.field(alias, field.type, field.nullable))
+        fields.append(
+            pa.field(alias, field.type, field.nullable, metadata=field.metadata)
+        )
     return tuple(fields)
 
 
@@ -2524,17 +2541,23 @@ def nested_schema_for(name: str, *, allow_derived: bool = False) -> pa.Schema:
     seen: set[str] = set()
     for field_name in identity_fields:
         field = root_schema.field(field_name)
-        fields.append(pa.field(field.name, field.type, field.nullable))
+        fields.append(
+            pa.field(field.name, field.type, field.nullable, metadata=field.metadata)
+        )
         seen.add(field.name)
     for field in context_fields:
         if field.name in seen:
             continue
-        fields.append(field)
+        fields.append(
+            pa.field(field.name, field.type, field.nullable, metadata=field.metadata)
+        )
         seen.add(field.name)
     for field in row_struct:
         if field.name in seen:
             continue
-        fields.append(pa.field(field.name, field.type, field.nullable))
+        fields.append(
+            pa.field(field.name, field.type, field.nullable, metadata=field.metadata)
+        )
         seen.add(field.name)
     return pa.schema(fields)
 

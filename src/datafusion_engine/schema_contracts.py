@@ -29,6 +29,7 @@ class SchemaViolationType(Enum):
     TYPE_MISMATCH = auto()
     NULLABILITY_MISMATCH = auto()
     MISSING_TABLE = auto()
+    METADATA_MISMATCH = auto()
 
 
 @dataclass(frozen=True)
@@ -65,23 +66,29 @@ class SchemaViolation:
         str
             Formatted violation description
         """
+        message = f"Unknown violation: {self.violation_type}"
         if self.violation_type == SchemaViolationType.MISSING_TABLE:
-            return f"Table '{self.table_name}' not found"
-        if self.violation_type == SchemaViolationType.MISSING_COLUMN:
-            return f"Column '{self.table_name}.{self.column_name}' not found"
-        if self.violation_type == SchemaViolationType.EXTRA_COLUMN:
-            return f"Unexpected column '{self.table_name}.{self.column_name}'"
-        if self.violation_type == SchemaViolationType.TYPE_MISMATCH:
-            return (
+            message = f"Table '{self.table_name}' not found"
+        elif self.violation_type == SchemaViolationType.METADATA_MISMATCH:
+            message = (
+                f"Metadata mismatch for '{self.table_name}': "
+                f"key={self.column_name!r} expected={self.expected!r} actual={self.actual!r}"
+            )
+        elif self.violation_type == SchemaViolationType.MISSING_COLUMN:
+            message = f"Column '{self.table_name}.{self.column_name}' not found"
+        elif self.violation_type == SchemaViolationType.EXTRA_COLUMN:
+            message = f"Unexpected column '{self.table_name}.{self.column_name}'"
+        elif self.violation_type == SchemaViolationType.TYPE_MISMATCH:
+            message = (
                 f"Type mismatch for '{self.table_name}.{self.column_name}': "
                 f"expected {self.expected}, got {self.actual}"
             )
-        if self.violation_type == SchemaViolationType.NULLABILITY_MISMATCH:
-            return (
+        elif self.violation_type == SchemaViolationType.NULLABILITY_MISMATCH:
+            message = (
                 f"Nullability mismatch for '{self.table_name}.{self.column_name}': "
                 f"expected {self.expected}, got {self.actual}"
             )
-        return f"Unknown violation: {self.violation_type}"
+        return message
 
 
 class EvolutionPolicy(Enum):
@@ -107,12 +114,15 @@ class ColumnContract:
         Whether column permits NULL values
     description : str | None
         Optional column documentation
+    metadata : dict[bytes, bytes] | None
+        Optional Arrow field metadata to preserve.
     """
 
     name: str
     arrow_type: pa.DataType
     nullable: bool = True
     description: str | None = None
+    metadata: dict[bytes, bytes] | None = None
 
     @classmethod
     def from_arrow_field(cls, field: pa.Field) -> ColumnContract:
@@ -133,6 +143,7 @@ class ColumnContract:
             name=field.name,
             arrow_type=field.type,
             nullable=field.nullable,
+            metadata=dict(field.metadata or {}) or None,
         )
 
     def to_arrow_field(self) -> pa.Field:
@@ -144,7 +155,8 @@ class ColumnContract:
         pa.Field
             PyArrow field representation
         """
-        return pa.field(self.name, self.arrow_type, nullable=self.nullable)
+        metadata = self.metadata or None
+        return pa.field(self.name, self.arrow_type, nullable=self.nullable, metadata=metadata)
 
 
 @dataclass(frozen=True)
@@ -499,6 +511,7 @@ def schema_contract_from_table_schema_contract(
     table_name: str,
     contract: TableSchemaContract,
     evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT,
+    enforce_columns: bool = True,
 ) -> SchemaContract:
     """Build a SchemaContract from a TableSchemaContract.
 
@@ -535,7 +548,16 @@ def schema_contract_from_table_schema_contract(
         partition_cols=partition_cols,
         evolution_policy=evolution_policy,
         schema_metadata=schema_metadata,
+        enforce_columns=enforce_columns,
     )
+
+
+def _should_enforce_columns(spec: DatasetSpec) -> bool:
+    if spec.view_specs:
+        return False
+    if spec.query_spec is not None:
+        return False
+    return True
 
 
 def schema_contract_from_dataset_spec(
@@ -543,6 +565,7 @@ def schema_contract_from_dataset_spec(
     name: str,
     spec: DatasetSpec,
     evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT,
+    enforce_columns: bool | None = None,
 ) -> SchemaContract:
     """Build a SchemaContract from a DatasetSpec.
 
@@ -568,10 +591,12 @@ def schema_contract_from_dataset_spec(
         file_schema=table_schema,
         partition_cols=partition_cols,
     )
+    resolved_enforce = _should_enforce_columns(spec) if enforce_columns is None else enforce_columns
     return schema_contract_from_table_schema_contract(
         table_name=name,
         contract=table_contract,
         evolution_policy=evolution_policy,
+        enforce_columns=resolved_enforce,
     )
 
 
@@ -580,6 +605,7 @@ def schema_contract_from_contract_spec(
     name: str,
     spec: ContractSpec,
     evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT,
+    enforce_columns: bool = True,
 ) -> SchemaContract:
     """Build a SchemaContract from a ContractSpec.
 
@@ -603,6 +629,7 @@ def schema_contract_from_contract_spec(
         table_name=name,
         contract=table_contract,
         evolution_policy=evolution_policy,
+        enforce_columns=enforce_columns,
     )
 
 

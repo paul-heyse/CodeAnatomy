@@ -12,7 +12,11 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.schema_contracts import SchemaContract, SchemaViolation
+from datafusion_engine.schema_contracts import (
+    SchemaContract,
+    SchemaViolation,
+    SchemaViolationType,
+)
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.udf_runtime import (
     udf_names_from_snapshot,
@@ -90,8 +94,9 @@ def register_view_graph(
             temporary=resolved.temporary,
         )
         if resolved.validate_schema and node.contract_builder is not None:
-            contract = node.contract_builder(_schema_from_df(df))
-            _validate_schema_contract(ctx, contract)
+            schema = _schema_from_df(df)
+            contract = node.contract_builder(schema)
+            _validate_schema_contract(ctx, contract, schema=schema)
 
 
 def _validate_deps(
@@ -167,18 +172,66 @@ def _required_udfs_from_ast(
     return tuple(sorted(required))
 
 
-def _validate_schema_contract(ctx: SessionContext, contract: SchemaContract) -> None:
+def _validate_schema_contract(
+    ctx: SessionContext,
+    contract: SchemaContract,
+    *,
+    schema: pa.Schema | None = None,
+) -> None:
     introspector = SchemaIntrospector(ctx)
     snapshot = introspector.snapshot
     if snapshot is None:
         msg = "Schema introspection snapshot unavailable for view validation."
         raise ValueError(msg)
     violations = contract.validate_against_introspection(snapshot)
+    if schema is not None:
+        violations.extend(_schema_metadata_violations(schema, contract))
     if violations:
         raise SchemaContractViolationError(
             table_name=contract.table_name,
             violations=violations,
         )
+
+
+def _schema_metadata_violations(
+    schema: pa.Schema,
+    contract: SchemaContract,
+) -> list[SchemaViolation]:
+    expected = contract.schema_metadata or {}
+    if not expected:
+        return []
+    actual = schema.metadata or {}
+    violations: list[SchemaViolation] = []
+    for key, expected_value in expected.items():
+        actual_value = actual.get(key)
+        if actual_value == expected_value:
+            continue
+        violations.append(
+            SchemaViolation(
+                violation_type=SchemaViolationType.METADATA_MISMATCH,
+                table_name=contract.table_name,
+                column_name=_metadata_key_label(key),
+                expected=_format_metadata_value(expected_value),
+                actual=_format_metadata_value(actual_value),
+            )
+        )
+    return violations
+
+
+def _metadata_key_label(key: bytes) -> str:
+    try:
+        return key.decode("utf-8")
+    except UnicodeDecodeError:
+        return key.hex()
+
+
+def _format_metadata_value(value: bytes | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value.hex()
 
 
 def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -> None:

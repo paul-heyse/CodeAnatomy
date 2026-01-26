@@ -10,12 +10,10 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, Table, Value
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.schema.build import empty_table
 from datafusion_engine.nested_tables import ViewReference
 from ibis_engine.expr_compiler import expr_ir_to_ibis
 from ibis_engine.hashing import HashExprSpec, masked_stable_id_expr_ir
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
-from normalize.schemas import SPAN_ERROR_SCHEMA
 from normalize.span_logic import (
     SpanStructInputs,
     end_exclusive_value,
@@ -57,10 +55,6 @@ def masked_stable_id_expr_from_spec(
         table,
         masked_stable_id_expr_ir(spec=spec, required=tuple(required), use_128=use_128),
     )
-
-
-def _empty_span_errors_table() -> TableLike:
-    return empty_table(SPAN_ERROR_SCHEMA)
 
 
 def add_ast_span_struct_ibis(

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import ibis
 import pyarrow as pa
@@ -43,43 +44,16 @@ from normalize.span_logic import (
     span_struct_expr,
     zero_based_line,
 )
-from sqlglot_tools.expr_spec import SqlExprSpec
 
-TYPE_EXPRS_NAME = "type_exprs_norm_v1"
-TYPE_NODES_NAME = "type_nodes_v1"
-CFG_BLOCKS_NAME = "py_bc_blocks_norm_v1"
-CFG_EDGES_NAME = "py_bc_cfg_edges_norm_v1"
-DEF_USE_NAME = "py_bc_def_use_events_v1"
-REACHES_NAME = "py_bc_reaches_v1"
-DIAG_NAME = "diagnostics_norm_v1"
+if TYPE_CHECKING:
+    from normalize.dataset_rows import DatasetRow
+from sqlglot_tools.expr_spec import SqlExprSpec
 
 _DEF_USE_OPS: tuple[str, ...] = ("IMPORT_NAME", "IMPORT_FROM")
 _DEF_USE_PREFIXES: tuple[str, ...] = ("STORE_", "DELETE_")
 _USE_PREFIXES: tuple[str, ...] = ("LOAD_",)
 
 IbisPlanDeriver = Callable[[IbisPlanCatalog, ExecutionContext, BaseBackend], IbisPlan | None]
-
-_NORMALIZE_VIEW_BUILDERS: dict[str, tuple[IbisPlanDeriver, str]] = {}
-
-
-def register_normalize_view(
-    name: str,
-    *,
-    label: str | None = None,
-) -> Callable[[IbisPlanDeriver], IbisPlanDeriver]:
-    """Register a normalize view builder for a dataset name.
-
-    Returns
-    -------
-    Callable[[IbisPlanDeriver], IbisPlanDeriver]
-        Decorator that registers the view builder.
-    """
-
-    def _register(builder: IbisPlanDeriver) -> IbisPlanDeriver:
-        _NORMALIZE_VIEW_BUILDERS[name] = (builder, label or name)
-        return builder
-
-    return _register
 
 
 def _expr_from_spec(table: Table, spec: SqlExprSpec) -> Value:
@@ -161,7 +135,6 @@ def _default_view_builder(name: str) -> IbisPlanDeriver:
     return _build
 
 
-@register_normalize_view(TYPE_EXPRS_NAME, label="type_exprs")
 def type_exprs_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -240,7 +213,6 @@ def type_exprs_plan_ibis(
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
-@register_normalize_view(TYPE_NODES_NAME, label="type_nodes")
 def type_nodes_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -271,7 +243,7 @@ def type_nodes_plan_ibis(
         type_node_columns=type_node_columns,
     )
     combined = _prefer_type_rows(expr_rows, scip_rows)
-    ordering = dataset_spec(TYPE_NODES_NAME).ordering()
+    ordering = dataset_spec("type_nodes_v1").ordering()
     return IbisPlan(expr=combined, ordering=ordering)
 
 
@@ -362,7 +334,6 @@ def _prefer_type_rows(expr_rows: Table, scip_rows: Table | None) -> Table:
     return expr_rows
 
 
-@register_normalize_view(CFG_BLOCKS_NAME, label="cfg_blocks")
 def cfg_blocks_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -418,7 +389,6 @@ def cfg_blocks_plan_ibis(
     return IbisPlan(expr=joined, ordering=Ordering.unordered())
 
 
-@register_normalize_view(CFG_EDGES_NAME, label="cfg_edges")
 def cfg_edges_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -463,7 +433,6 @@ def cfg_edges_plan_ibis(
     return IbisPlan(expr=joined, ordering=Ordering.unordered())
 
 
-@register_normalize_view(DEF_USE_NAME, label="def_use_events")
 def def_use_events_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -517,7 +486,6 @@ def def_use_events_plan_ibis(
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
-@register_normalize_view(REACHES_NAME, label="reaching_defs")
 def reaching_defs_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -1020,7 +988,6 @@ def _scip_diag_context(diags: Table, docs: Table, line_index: Table) -> _ScipDia
     )
 
 
-@register_normalize_view(DIAG_NAME, label="diagnostics")
 def diagnostics_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -1099,7 +1066,6 @@ def _diagnostic_exprs(
     ]
 
 
-@register_normalize_view("span_errors_v1", label="span_errors")
 def span_errors_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -1138,6 +1104,16 @@ class NormalizeViewSpec:
     label: str
 
 
+def _resolve_view_builder(row: DatasetRow) -> tuple[IbisPlanDeriver, str]:
+    if row.view_builder is None:
+        return _default_view_builder(row.name), row.name
+    builder = getattr(sys.modules[__name__], row.view_builder, None)
+    if not callable(builder):
+        msg = f"Normalize view builder {row.view_builder!r} not found."
+        raise KeyError(msg)
+    return cast("IbisPlanDeriver", builder), row.view_builder
+
+
 
 def normalize_view_specs() -> tuple[NormalizeViewSpec, ...]:
     """Return normalize view specs for view registration.
@@ -1155,31 +1131,16 @@ def normalize_view_specs() -> tuple[NormalizeViewSpec, ...]:
     from normalize.dataset_rows import DATASET_ROWS
 
     ordered: list[NormalizeViewSpec] = []
-    known = {row.name for row in DATASET_ROWS}
     unexpected: list[str] = []
     for row in DATASET_ROWS:
-        builder_entry = _NORMALIZE_VIEW_BUILDERS.get(row.name)
         if not row.register_view:
-            if builder_entry is not None:
+            if row.view_builder is not None:
                 unexpected.append(row.name)
             continue
-        if builder_entry is None:
-            ordered.append(
-                NormalizeViewSpec(
-                    name=row.name,
-                    builder=_default_view_builder(row.name),
-                    label=row.name,
-                )
-            )
-            continue
-        builder, label = builder_entry
+        builder, label = _resolve_view_builder(row)
         ordered.append(NormalizeViewSpec(name=row.name, builder=builder, label=label))
-    unknown = [name for name in _NORMALIZE_VIEW_BUILDERS if name not in known]
-    if unknown:
-        msg = f"Normalize view builders registered for unknown datasets: {sorted(unknown)}."
-        raise KeyError(msg)
     if unexpected:
-        msg = f"Normalize view builders registered for non-view datasets: {sorted(unexpected)}."
+        msg = f"Normalize view builders configured for non-view datasets: {sorted(unexpected)}."
         raise KeyError(msg)
     return tuple(ordered)
 

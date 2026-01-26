@@ -46,10 +46,13 @@ class EvidenceCatalog:
         """Register an evidence dataset using a SchemaContract."""
         self.sources.add(name)
         self.contracts_by_dataset[name] = contract
-        self.columns_by_dataset[name] = {col.name for col in contract.columns}
-        self.types_by_dataset[name] = {
-            col.name: str(col.arrow_type) for col in contract.columns
-        }
+        if contract.enforce_columns:
+            self.columns_by_dataset[name] = {col.name for col in contract.columns}
+            self.types_by_dataset[name] = {
+                col.name: str(col.arrow_type) for col in contract.columns
+            }
+        if contract.schema_metadata:
+            self.metadata_by_dataset.setdefault(name, {}).update(contract.schema_metadata)
         if snapshot is not None:
             violations = contract.validate_against_introspection(snapshot)
             self.contract_violations_by_dataset[name] = tuple(violations)

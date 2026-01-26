@@ -85,20 +85,27 @@ class IntrospectionSnapshot:
             Snapshot containing all available catalog metadata
         """
         def _table(sql: str) -> pa.Table:
+            from sqlglot.errors import ParseError
+
             from datafusion_engine.compile_options import (
                 DataFusionCompileOptions,
                 DataFusionSqlPolicy,
             )
             from datafusion_engine.execution_facade import DataFusionExecutionFacade
+            from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
             facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-            plan = facade.compile(
-                sql,
-                options=DataFusionCompileOptions(
-                    sql_options=sql_options,
-                    sql_policy=DataFusionSqlPolicy(),
-                ),
+            options = DataFusionCompileOptions(
+                sql_options=sql_options,
+                sql_policy=DataFusionSqlPolicy(),
             )
+            try:
+                register_datafusion_dialect()
+                expr = parse_sql_strict(sql, dialect=options.dialect)
+            except (ParseError, TypeError, ValueError) as exc:
+                msg = "Introspection SQL parse failed."
+                raise ValueError(msg) from exc
+            plan = facade.compile(expr, options=options)
             result = facade.execute(plan)
             if result.dataframe is None:
                 msg = "Introspection SQL did not return a DataFusion DataFrame."
@@ -489,17 +496,24 @@ def _cache_snapshot_from_table(
 
 
 def _cache_snapshot_table(ctx: SessionContext, *, query: str) -> pa.Table:
+    from sqlglot.errors import ParseError
+
     from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    plan = facade.compile(
-        query,
-        options=DataFusionCompileOptions(
-            sql_options=sql_options_for_profile(None),
-            sql_policy=DataFusionSqlPolicy(),
-        ),
+    options = DataFusionCompileOptions(
+        sql_options=sql_options_for_profile(None),
+        sql_policy=DataFusionSqlPolicy(),
     )
+    try:
+        register_datafusion_dialect()
+        expr = parse_sql_strict(query, dialect=options.dialect)
+    except (ParseError, TypeError, ValueError) as exc:
+        msg = "Cache introspection SQL parse failed."
+        raise ValueError(msg) from exc
+    plan = facade.compile(expr, options=options)
     result = facade.execute(plan)
     if result.dataframe is None:
         msg = "Cache introspection SQL did not return a DataFusion DataFrame."

@@ -215,6 +215,8 @@ def _types_from_contract(
     contract: SchemaContract,
     columns: tuple[str, ...],
 ) -> tuple[tuple[str, str], ...]:
+    if not contract.enforce_columns:
+        return ()
     by_name = {col.name: col for col in contract.columns}
     pairs: list[tuple[str, str]] = []
     for name in columns:

@@ -11,7 +11,6 @@ _MODULE_NAMES: tuple[str, ...] = (
     "inputs",
     "dataloaders",
     "params",
-    "task_catalog",
     "task_graph",
     "incremental_plan",
     "task_execution",
@@ -25,7 +24,6 @@ if TYPE_CHECKING:
         inputs,
         outputs,
         params,
-        task_catalog,
         task_execution,
         task_graph,
     )
@@ -84,7 +82,6 @@ __all__ = [
     "load_all_modules",
     "outputs",
     "params",
-    "task_catalog",
     "task_execution",
     "task_graph",
 ]

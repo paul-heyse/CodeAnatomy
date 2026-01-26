@@ -334,8 +334,15 @@ class StreamingExecutor:
         >>> table = result.to_table()
         """
         resolved_options = sql_options or self.sql_options
+        from sqlglot.errors import ParseError
+
         from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
         from datafusion_engine.execution_facade import DataFusionExecutionFacade
+        from sqlglot_tools.optimizer import (
+            StrictParseOptions,
+            parse_sql_strict,
+            register_datafusion_dialect,
+        )
 
         options = DataFusionCompileOptions(
             sql_options=resolved_options,
@@ -343,7 +350,17 @@ class StreamingExecutor:
             params=params or None,
         )
         facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
-        plan = facade.compile(sql, options=options)
+        try:
+            register_datafusion_dialect()
+            expr = parse_sql_strict(
+                sql,
+                dialect=options.dialect,
+                options=StrictParseOptions(preserve_params=True),
+            )
+        except (ParseError, TypeError, ValueError) as exc:
+            msg = "Streaming SQL parse failed."
+            raise ValueError(msg) from exc
+        plan = facade.compile(expr, options=options)
         result = facade.execute(plan)
         if result.dataframe is None:
             msg = "Streaming SQL did not return a DataFusion DataFrame."

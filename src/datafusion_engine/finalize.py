@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
@@ -84,18 +84,32 @@ def _execute_sql_df(
     sql_options: SQLOptions | None = None,
     allow_statements: bool = False,
 ) -> DataFrame:
+    from sqlglot.errors import ParseError
+
     from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
     resolved_sql_options = sql_options or sql_options_for_profile(None)
     if allow_statements:
         resolved_sql_options = resolved_sql_options.with_allow_statements(allow=True)
+
+    def _sql_ingest(_payload: Mapping[str, object]) -> None:
+        return None
+
     options = DataFusionCompileOptions(
         sql_options=resolved_sql_options,
         sql_policy=DataFusionSqlPolicy(allow_statements=allow_statements),
+        sql_ingest_hook=_sql_ingest,
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    plan = facade.compile(sql, options=options)
+    try:
+        register_datafusion_dialect()
+        expr = parse_sql_strict(sql, dialect=options.dialect)
+    except (ParseError, TypeError, ValueError) as exc:
+        msg = "Finalize SQL parse failed."
+        raise ValueError(msg) from exc
+    plan = facade.compile(expr, options=options)
     result = facade.execute(plan)
     if result.dataframe is None:
         msg = "Finalize SQL execution did not return a DataFusion DataFrame."

@@ -1740,8 +1740,11 @@ def _set_runtime_setting(
         Raised when SQL violates the execution policy.
     """
     sql = f"SET {key} = '{value}'"
+    from sqlglot.errors import ParseError
+
     from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
     allow_statements_flag = True
     resolved_sql_options = sql_options.with_allow_statements(allow_statements_flag)
@@ -1751,7 +1754,13 @@ def _set_runtime_setting(
         runtime_profile=runtime_profile,
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    plan = facade.compile(sql, options=options)
+    try:
+        register_datafusion_dialect()
+        expr = parse_sql_strict(sql, dialect=options.dialect)
+    except (ParseError, TypeError, ValueError) as exc:
+        msg = "SET SQL parse failed."
+        raise ValueError(msg) from exc
+    plan = facade.compile(expr, options=options)
     result = facade.execute(plan)
     if result.dataframe is None:
         msg = "SET execution did not return a DataFusion DataFrame."

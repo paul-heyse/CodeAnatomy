@@ -1,4 +1,4 @@
-"""Unified compilation pipeline for Ibis expressions and SQL.
+"""Unified compilation pipeline for Ibis expressions and SQLGlot ASTs.
 
 This module provides a centralized compilation orchestration layer that
 routes all expression types through a single deterministic pipeline:
@@ -115,7 +115,8 @@ class CompileOptions:
 class CompilationPipeline:
     """Unified compilation pipeline for all expression types.
 
-    Supports Ibis expressions, raw SQL, and SQLGlot ASTs. All expressions
+    Supports Ibis expressions and SQLGlot ASTs. Raw SQL is reserved for
+    explicit external ingress and is rejected here. All expressions
     flow through the same canonicalization and policy application pipeline.
 
     Parameters
@@ -210,71 +211,26 @@ class CompilationPipeline:
             source="ibis",
         )
 
-    def compile_sql(
-        self,
-        sql: str,
-    ) -> CompiledExpression:
-        """Compile raw SQL through SQLGlot canonicalization.
+    @staticmethod
+    def compile_sql(sql: str) -> CompiledExpression:
+        """Reject raw SQL compilation for internal pipelines.
 
         Parameters
         ----------
         sql
-            Raw SQL string to compile.
-
-        Returns
-        -------
-        CompiledExpression
-            Compiled expression with AST, SQL, and artifacts.
+            Raw SQL string that is rejected for internal execution.
 
         Raises
         ------
         ValueError
-            Raised when the SQL policy profile is missing.
+            Raised to enforce AST-only internal compilation.
         """
-        from datafusion_engine.sql_policy_engine import (
-            compile_sql_policy,
-            render_for_execution,
+        _ = sql
+        msg = (
+            "Raw SQL compilation is disabled for internal pipelines. "
+            "Provide a SQLGlot AST or Ibis expression, or use an external SQL ingress path."
         )
-
-        profile = self.options.profile
-        if profile is None:
-            msg = "SQL policy profile is required for compilation."
-            raise ValueError(msg)
-
-        from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
-
-        raw_ast = parse_sql_strict(
-            sql,
-            dialect=profile.read_dialect,
-            options=StrictParseOptions(
-                error_level=profile.error_level,
-                unsupported_level=profile.unsupported_level,
-            ),
-        )
-        if self.options.enable_rewrites and self.options.rewrite_hook is not None:
-            raw_ast = self.options.rewrite_hook(raw_ast)
-
-        # Get schema
-        schema = self._get_schema()
-
-        # Canonicalize
-        canonical_ast, artifacts = compile_sql_policy(
-            raw_ast,
-            schema=schema,
-            profile=profile,
-            original_sql=sql,
-        )
-
-        # Render
-        rendered = render_for_execution(canonical_ast, profile)
-
-        return CompiledExpression(
-            ibis_expr=None,
-            sqlglot_ast=canonical_ast,
-            rendered_sql=rendered,
-            artifacts=artifacts,
-            source="sql",
-        )
+        raise ValueError(msg)
 
     def compile_ast(
         self,
@@ -390,7 +346,7 @@ class CompilationPipeline:
 
     def compile_and_execute(
         self,
-        expr: IbisTable | str,
+        expr: IbisTable,
         *,
         params: Mapping[str, object] | Mapping[IbisValue, object] | None = None,
         named_params: Mapping[str, object] | None = None,
@@ -402,7 +358,7 @@ class CompilationPipeline:
         Parameters
         ----------
         expr
-            Ibis expression or SQL string to compile and execute.
+            Ibis expression to compile and execute.
         params
             Parameter bindings for execution.
         named_params
@@ -416,8 +372,19 @@ class CompilationPipeline:
         -------
         DataFrame
             DataFusion DataFrame result.
+
+        Raises
+        ------
+        TypeError
+            Raised when a raw SQL string is provided.
         """
-        compiled = self.compile_sql(expr) if isinstance(expr, str) else self.compile_ibis(expr)
+        if isinstance(expr, str):
+            msg = (
+                "Raw SQL execution is disabled for internal pipelines. "
+                "Provide a SQLGlot AST or Ibis expression."
+            )
+            raise TypeError(msg)
+        compiled = self.compile_ibis(expr)
         return self.execute(
             compiled,
             params=params,

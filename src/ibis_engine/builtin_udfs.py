@@ -212,7 +212,15 @@ def ibis_udf_registry() -> Mapping[str, Callable[..., Value]]:
     -------
     Mapping[str, Callable[..., Value]]
         Snapshot-registered Ibis UDF callables.
+
+    Raises
+    ------
+    ValueError
+        Raised when the registry has not been initialized.
     """
+    if not _IBIS_UDF_CALLS:
+        msg = "Ibis UDF registry is empty; call register_ibis_udf_snapshot first."
+        raise ValueError(msg)
     return dict(_IBIS_UDF_CALLS)
 
 
@@ -237,6 +245,9 @@ def ibis_udf_call(name: str, *args: Value | Deferred) -> Value | Deferred:
     ValueError
         Raised when the requested UDF is not registered.
     """
+    if not _IBIS_UDF_CALLS:
+        msg = "Ibis UDF registry is empty; call register_ibis_udf_snapshot first."
+        raise ValueError(msg)
     udf = _IBIS_UDF_CALLS.get(name)
     if udf is None:
         msg = (

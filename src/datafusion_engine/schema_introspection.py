@@ -51,8 +51,14 @@ def _table_for_query(
     prepared_name: str | None = None,
 ) -> pa.Table:
     options = sql_options or _read_only_sql_options()
+    from sqlglot.errors import ParseError
+
     from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
+
+    def _sql_ingest(_payload: Mapping[str, object]) -> None:
+        return None
 
     if prepared_name is not None:
         try:
@@ -60,9 +66,19 @@ def _table_for_query(
             statement_options = DataFusionCompileOptions(
                 sql_options=options.with_allow_statements(allow_statements),
                 sql_policy=DataFusionSqlPolicy(allow_statements=True),
+                sql_ingest_hook=_sql_ingest,
             )
             facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-            plan = facade.compile(f"EXECUTE {prepared_name}", options=statement_options)
+            try:
+                register_datafusion_dialect()
+                statement_expr = parse_sql_strict(
+                    f"EXECUTE {prepared_name}",
+                    dialect=statement_options.dialect,
+                )
+            except (ParseError, TypeError, ValueError) as exc:
+                msg = "Prepared statement SQL parse failed."
+                raise ValueError(msg) from exc
+            plan = facade.compile(statement_expr, options=statement_options)
             result = facade.execute(plan)
         except (RuntimeError, TypeError, ValueError):
             pass
@@ -70,13 +86,18 @@ def _table_for_query(
             if result.dataframe is not None:
                 return result.dataframe.to_arrow_table()
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    plan = facade.compile(
-        query,
-        options=DataFusionCompileOptions(
-            sql_options=options,
-            sql_policy=DataFusionSqlPolicy(),
-        ),
+    query_options = DataFusionCompileOptions(
+        sql_options=options,
+        sql_policy=DataFusionSqlPolicy(),
+        sql_ingest_hook=_sql_ingest,
     )
+    try:
+        register_datafusion_dialect()
+        query_expr = parse_sql_strict(query, dialect=query_options.dialect)
+    except (ParseError, TypeError, ValueError) as exc:
+        msg = "Schema introspection SQL parse failed."
+        raise ValueError(msg) from exc
+    plan = facade.compile(query_expr, options=query_options)
     result = facade.execute(plan)
     if result.dataframe is None:
         msg = "Schema introspection SQL did not return a DataFusion DataFrame."

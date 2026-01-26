@@ -362,17 +362,24 @@ def _show_functions_table(introspector: SchemaIntrospector) -> pa.Table | None:
     ctx = introspector.ctx
     sql_options = introspector.sql_options or SQLOptions()
     try:
+        from sqlglot.errors import ParseError
+
         from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
         from datafusion_engine.execution_facade import DataFusionExecutionFacade
+        from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
         facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-        plan = facade.compile(
-            "SHOW FUNCTIONS",
-            options=DataFusionCompileOptions(
-                sql_options=sql_options,
-                sql_policy=DataFusionSqlPolicy(),
-            ),
+        options = DataFusionCompileOptions(
+            sql_options=sql_options,
+            sql_policy=DataFusionSqlPolicy(),
         )
+        try:
+            register_datafusion_dialect()
+            expr = parse_sql_strict("SHOW FUNCTIONS", dialect=options.dialect)
+        except (ParseError, TypeError, ValueError) as exc:
+            msg = "SHOW FUNCTIONS SQL parse failed."
+            raise ValueError(msg) from exc
+        plan = facade.compile(expr, options=options)
         result = facade.execute(plan)
         if result.dataframe is None:
             return None

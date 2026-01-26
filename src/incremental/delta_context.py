@@ -8,7 +8,11 @@ from pathlib import Path
 import pyarrow as pa
 
 from datafusion_engine.execution_facade import DataFusionExecutionFacade
-from ibis_engine.registry import DatasetLocation
+from ibis_engine.registry import (
+    DatasetLocation,
+    resolve_delta_log_storage_options,
+    resolve_delta_scan_options,
+)
 from incremental.ibis_exec import ibis_expr_to_table
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from storage.deltalake import StorageOptions
@@ -60,13 +64,31 @@ def read_delta_table_via_facade(
     """
     ctx = context.runtime.session_context()
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=context.runtime.profile)
+    profile_location = context.runtime.profile.dataset_location(name)
+    resolved_storage = context.storage.storage_options or {}
+    resolved_log_storage = context.storage.log_storage_options or {}
+    resolved_scan = None
+    resolved_version = version
+    resolved_timestamp = timestamp
+    if profile_location is not None and profile_location.format == "delta":
+        if profile_location.storage_options:
+            resolved_storage = profile_location.storage_options
+        resolved_log_storage = (
+            resolve_delta_log_storage_options(profile_location) or resolved_log_storage
+        )
+        resolved_scan = resolve_delta_scan_options(profile_location)
+        if resolved_version is None:
+            resolved_version = profile_location.delta_version
+        if resolved_timestamp is None:
+            resolved_timestamp = profile_location.delta_timestamp
     location = DatasetLocation(
         path=str(path),
         format="delta",
-        storage_options=context.storage.storage_options or {},
-        delta_log_storage_options=context.storage.log_storage_options or {},
-        delta_version=version,
-        delta_timestamp=timestamp,
+        storage_options=resolved_storage,
+        delta_log_storage_options=resolved_log_storage,
+        delta_version=resolved_version,
+        delta_timestamp=resolved_timestamp,
+        delta_scan=resolved_scan,
     )
     with TempTableRegistry(ctx) as registry:
         facade.register_dataset(name=name, location=location)

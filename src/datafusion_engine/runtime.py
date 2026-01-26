@@ -1363,13 +1363,24 @@ def _sql_with_options(
         allow_statements_flag = True
         resolved_sql_options = resolved_sql_options.with_allow_statements(allow_statements_flag)
     sql_policy = DataFusionSqlPolicy(allow_statements=bool(allow_statements))
+
+    def _sql_ingest(_payload: Mapping[str, object]) -> None:
+        return None
+
     options = DataFusionCompileOptions(
         sql_options=resolved_sql_options,
         sql_policy=sql_policy,
         runtime_profile=runtime_profile,
+        sql_ingest_hook=_sql_ingest,
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    plan = facade.compile(sql, options=options)
+    try:
+        register_datafusion_dialect()
+        expr = parse_sql_strict(sql, dialect=options.dialect)
+    except (ParseError, TypeError, ValueError) as exc:
+        msg = "Runtime SQL parse failed."
+        raise ValueError(msg) from exc
+    plan = facade.compile(expr, options=options)
     result = facade.execute(plan)
     if result.dataframe is None:
         msg = "Runtime SQL execution did not return a DataFusion DataFrame."

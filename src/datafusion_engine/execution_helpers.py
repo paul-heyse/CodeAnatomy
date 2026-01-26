@@ -234,6 +234,8 @@ def _plan_cache_key(
         return None
     if options.params is not None or options.named_params is not None:
         return None
+    if not options.diagnostics_allow_sql:
+        return None
     plan_hash = options.plan_hash or canonical_ast_fingerprint(expr)
     _ensure_dialect(options.dialect)
     try:
@@ -377,36 +379,6 @@ def _sql_options_for_options(options: DataFusionCompileOptions) -> SQLOptions:
         fallback=_default_sql_policy(),
     )
     return policy.to_sql_options()
-
-
-def _safe_sql(
-    ctx: SessionContext,
-    sql: str,
-    *,
-    options: DataFusionCompileOptions,
-    sql_options: SQLOptions,
-    allow_statements: bool | None = None,
-) -> DataFrame:
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-    resolved_policy = options.sql_policy
-    if allow_statements is not None:
-        resolved_policy = _merge_sql_policies(
-            resolved_policy,
-            DataFusionSqlPolicy(allow_statements=allow_statements),
-        )
-    resolved = replace(
-        options,
-        sql_options=sql_options,
-        sql_policy=resolved_policy,
-    )
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=resolved.runtime_profile)
-    plan = facade.compile(sql, options=resolved)
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "SQL execution did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    return result.dataframe
 
 
 def _ensure_dialect(name: str) -> None:
@@ -676,60 +648,29 @@ def _collect_plan_artifacts_details(
     df: DataFrame | None,
     substrait_plan_override: bytes | None = None,
 ) -> _PlanArtifactsDetails:
-    if not options.diagnostics_allow_sql:
-        plan_df = df
-        explain_rows: ExplainRows | None = None
-        analyze_rows: ExplainRows | None = None
-        substrait_plan = substrait_plan_override
-        substrait_validation = None
-        if substrait_plan is not None and options.substrait_validation and plan_df is not None:
-            substrait_validation = _substrait_validation_payload(
-                substrait_plan,
-                df=plan_df,
-            )
-        plan_details = _df_plan_details(plan_df) if plan_df is not None else {}
-        unparsed_sql = None
-        unparse_error = None
-        if plan_df is not None:
-            unparse_plan = _df_plan(plan_df, "optimized_logical_plan") or _df_plan(
-                plan_df,
-                "logical_plan",
-            )
-            unparsed_sql, unparse_error = _unparse_plan(unparse_plan)
-        return _PlanArtifactsDetails(
-            df=plan_df,
-            explain_rows=explain_rows,
-            analyze_rows=analyze_rows,
-            substrait_plan=substrait_plan,
-            substrait_validation=substrait_validation,
-            plan_details=plan_details,
-            unparsed_sql=unparsed_sql,
-            unparse_error=unparse_error,
-        )
-
-    sql_options = _sql_options_for_options(options)
-    plan_df = df or _safe_sql(ctx, sql, options=options, sql_options=sql_options)
-    explain_rows = _collect_reader(
-        _safe_sql(ctx, f"EXPLAIN {sql}", options=options, sql_options=sql_options)
-    )
-    analyze_rows = None
-    if options.explain_analyze:
-        analyze_rows = _collect_reader(
-            _safe_sql(ctx, f"EXPLAIN ANALYZE {sql}", options=options, sql_options=sql_options)
-        )
-    substrait_plan = substrait_plan_override or _substrait_bytes(ctx, sql)
+    _ = ctx
+    plan_df = df
+    explain_rows: ExplainRows | None = None
+    analyze_rows: ExplainRows | None = None
+    substrait_plan = substrait_plan_override
     substrait_validation = None
-    if substrait_plan is not None and options.substrait_validation:
+    if substrait_plan is not None and options.substrait_validation and plan_df is not None:
         substrait_validation = _substrait_validation_payload(
             substrait_plan,
             df=plan_df,
         )
-    plan_details = _df_plan_details(plan_df)
-    unparse_plan = _df_plan(plan_df, "optimized_logical_plan") or _df_plan(
-        plan_df,
-        "logical_plan",
-    )
-    unparsed_sql, unparse_error = _unparse_plan(unparse_plan)
+    plan_details = _df_plan_details(plan_df) if plan_df is not None else {}
+    unparsed_sql = None
+    unparse_error = None
+    if plan_df is not None:
+        unparse_plan = _df_plan(plan_df, "optimized_logical_plan") or _df_plan(
+            plan_df,
+            "logical_plan",
+        )
+        unparsed_sql, unparse_error = _unparse_plan(unparse_plan)
+    elif options.diagnostics_allow_sql:
+        unparsed_sql = sql
+        unparse_error = "plan_df_missing"
     return _PlanArtifactsDetails(
         df=plan_df,
         explain_rows=explain_rows,
@@ -1088,23 +1029,10 @@ def _maybe_explain(
     *,
     options: DataFusionCompileOptions,
 ) -> None:
-    if not options.diagnostics_allow_sql:
-        return
     if not options.capture_explain and options.explain_hook is None:
         return
-    _ensure_dialect(options.dialect)
-    sql = _emit_sql(expr, options=options)
-    prefix = "EXPLAIN ANALYZE" if options.explain_analyze else "EXPLAIN"
-    sql_options = _sql_options_for_options(options)
-    explain_df = _safe_sql(
-        ctx,
-        f"{prefix} {sql}",
-        options=options,
-        sql_options=sql_options,
-    )
-    rows = _explain_reader(explain_df)
-    if options.explain_hook is not None:
-        options.explain_hook(sql, rows)
+    _ = (ctx, expr, options)
+    return
 
 
 def _maybe_collect_plan_artifacts(
@@ -1153,7 +1081,17 @@ def _semantic_diff_base_expr(
         return plan.compiled.sqlglot_ast
     if options.semantic_diff_base_sql is None:
         return None
-    plan = facade.compile(options.semantic_diff_base_sql, options=base_options)
+    from sqlglot.errors import ParseError
+
+    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
+
+    try:
+        register_datafusion_dialect()
+        base_expr = parse_sql_strict(options.semantic_diff_base_sql, dialect=base_options.dialect)
+    except (ParseError, TypeError, ValueError) as exc:
+        msg = "Semantic diff base SQL parse failed."
+        raise ValueError(msg) from exc
+    plan = facade.compile(base_expr, options=base_options)
     return plan.compiled.sqlglot_ast
 
 
@@ -1240,18 +1178,18 @@ async def datafusion_to_async_batches(df: DataFrame) -> AsyncIterator[pa.RecordB
 
 def df_from_sqlglot_or_sql(
     ctx: SessionContext,
-    expr: Expression | str,
+    expr: Expression,
     *,
     options: DataFusionCompileOptions | None = None,
 ) -> DataFrame:
-    """Compile SQL/SQLGlot input and return a DataFusion DataFrame.
+    """Compile SQLGlot input and return a DataFusion DataFrame.
 
     Parameters
     ----------
     ctx : datafusion.SessionContext
         DataFusion session context used for compilation and execution.
-    expr : sqlglot.Expression | str
-        SQLGlot expression or SQL string to compile.
+    expr : sqlglot.Expression
+        SQLGlot expression to compile.
     options : DataFusionCompileOptions | None
         Optional compile options to override defaults.
 
@@ -1263,16 +1201,14 @@ def df_from_sqlglot_or_sql(
     Raises
     ------
     TypeError
-        Raised when expr is not a SQL string or SQLGlot expression.
+        Raised when expr is not a SQLGlot expression.
     """
     resolved = options or DataFusionCompileOptions()
     pipeline = _compilation_pipeline(ctx, options=resolved)
-    if isinstance(expr, str):
-        compiled = pipeline.compile_sql(expr)
-    elif isinstance(expr, exp.Expression):
+    if isinstance(expr, exp.Expression):
         compiled = pipeline.compile_ast(expr)
     else:
-        msg = "Expected SQL string or SQLGlot expression."
+        msg = "Expected SQLGlot expression."
         raise TypeError(msg)
     return pipeline.execute(
         compiled,

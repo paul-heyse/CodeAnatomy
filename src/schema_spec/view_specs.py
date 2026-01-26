@@ -2,26 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.compile_options import DataFusionSqlPolicy
-from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_introspection import SchemaIntrospector
-from sqlglot_tools.compat import exp
-from sqlglot_tools.optimizer import (
-    StrictParseOptions,
-    normalize_ddl_sql,
-    parse_sql_strict,
-    register_datafusion_dialect,
-    resolve_sqlglot_policy,
-    sqlglot_sql,
-    transpile_sql,
-)
 
 
 class ViewSchemaMismatchError(ValueError):
@@ -37,35 +25,6 @@ def _schema_signature(schema: pa.Schema) -> tuple[tuple[str, pa.DataType, bool],
         Column name, data type, and nullability signatures.
     """
     return tuple((field.name, field.type, field.nullable) for field in schema)
-
-
-def view_spec_from_sql(
-    ctx: SessionContext,
-    *,
-    name: str,
-    sql: str,
-    sql_options: SQLOptions | None = None,
-) -> ViewSpec:
-    """Return a view spec derived from DataFusion schema inference.
-
-    Parameters
-    ----------
-    ctx:
-        DataFusion session context used to infer the schema.
-    name:
-        Name to assign to the view spec.
-    sql:
-        SQL statement used to infer the schema.
-    sql_options:
-        Optional SQL options to enforce SQL execution policy.
-
-    Returns
-    -------
-    ViewSpec
-        View specification with the inferred schema.
-    """
-    schema = _sql_schema(ctx, sql, sql_options=sql_options)
-    return ViewSpec(name=name, sql=sql, schema=schema)
 
 
 def view_spec_from_builder(
@@ -97,46 +56,6 @@ def view_spec_from_builder(
     return ViewSpec(name=name, sql=sql, schema=schema, builder=builder)
 
 
-def _read_only_sql_options(sql_options: SQLOptions | None) -> SQLOptions:
-    return sql_options or DataFusionSqlPolicy().to_sql_options()
-
-
-def _statement_sql_options(sql_options: SQLOptions | None) -> SQLOptions:
-    return (
-        sql_options
-        or DataFusionSqlPolicy(
-            allow_ddl=True,
-            allow_statements=True,
-        ).to_sql_options()
-    )
-
-
-def _sql_schema(
-    ctx: SessionContext,
-    sql: str,
-    *,
-    sql_options: SQLOptions | None,
-) -> pa.Schema:
-    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-    def _sql_ingest(_payload: Mapping[str, object]) -> None:
-        return None
-
-    options = DataFusionCompileOptions(
-        sql_options=_read_only_sql_options(sql_options),
-        sql_policy=DataFusionSqlPolicy(),
-        sql_ingest_hook=_sql_ingest,
-    )
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    plan = facade.compile(sql, options=options)
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "View schema SQL execution did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    return result.dataframe.schema()
-
-
 def _schema_from_df(df: DataFrame) -> pa.Schema:
     schema = df.schema()
     if isinstance(schema, pa.Schema):
@@ -158,39 +77,6 @@ class ViewSpec:
     sql: str | None
     schema: pa.Schema
     builder: Callable[[SessionContext], DataFrame] | None = None
-
-    def create_view_sql(self) -> str:
-        """Return a CREATE OR REPLACE VIEW statement for the view.
-
-        Returns
-        -------
-        str
-            SQL statement that creates or replaces the view.
-
-        Raises
-        ------
-        ValueError
-            Raised when the view does not define SQL.
-        """
-        if self.sql is None:
-            msg = f"View {self.name!r} does not define SQL."
-            raise ValueError(msg)
-        policy = resolve_sqlglot_policy(name="datafusion_ddl")
-        register_datafusion_dialect()
-        transpiled_sql = transpile_sql(self.sql, policy=policy)
-        query = parse_sql_strict(
-            transpiled_sql,
-            dialect=policy.write_dialect,
-            options=StrictParseOptions(error_level=policy.error_level),
-        )
-        create_expr = exp.Create(
-            this=exp.Table(this=exp.Identifier(this=self.name)),
-            kind="VIEW",
-            replace=True,
-            expression=query,
-        )
-        ddl = sqlglot_sql(create_expr, policy=policy)
-        return normalize_ddl_sql(ddl)
 
     def describe(
         self,
@@ -254,35 +140,17 @@ class ViewSpec:
         ValueError
             Raised when SQL execution does not return a DataFrame.
         """
-        if self.builder is not None:
-            from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-            df = self.builder(ctx)
-            adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-            adapter.register_view(self.name, df, overwrite=False, temporary=False)
-            if record_view is not None:
-                record_view(self.name, self.sql)
-            if validate:
-                self.validate(ctx, sql_options=sql_options)
-            return
-        create_sql = self.create_view_sql()
-        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-        plan = facade.compile(
-            create_sql,
-            options=DataFusionCompileOptions(
-                sql_options=_statement_sql_options(sql_options),
-                sql_policy=DataFusionSqlPolicy(allow_statements=True),
-            ),
-        )
-        result = facade.execute(plan)
-        if result.dataframe is None:
-            msg = "View DDL execution did not return a DataFusion DataFrame."
+        if self.builder is None:
+            msg = (
+                f"View {self.name!r} requires a DataFrame builder; "
+                "SQL-string registration is disabled."
+            )
             raise ValueError(msg)
-        result.dataframe.collect()
-        invalidate_introspection_cache(ctx)
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        df = self.builder(ctx)
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        adapter.register_view(self.name, df, overwrite=False, temporary=False)
         if record_view is not None:
             record_view(self.name, self.sql)
         if validate:
@@ -310,15 +178,14 @@ class ViewSpec:
             raise ViewSchemaMismatchError(msg)
 
     def _resolve_schema(self, ctx: SessionContext, *, sql_options: SQLOptions | None) -> pa.Schema:
+        _ = sql_options
         try:
             return ctx.table(self.name).schema()
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             if self.builder is not None:
                 return _schema_from_df(self.builder(ctx))
-            if self.sql is None:
-                msg = f"View {self.name!r} does not define SQL."
-                raise ValueError(msg) from exc
-            return _sql_schema(ctx, self.sql, sql_options=sql_options)
+            msg = f"View {self.name!r} does not define a builder."
+            raise ValueError(msg) from exc
 
 
-__all__ = ["ViewSchemaMismatchError", "ViewSpec", "view_spec_from_builder", "view_spec_from_sql"]
+__all__ = ["ViewSchemaMismatchError", "ViewSpec", "view_spec_from_builder"]

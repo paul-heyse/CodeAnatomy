@@ -817,7 +817,6 @@ def _record_extract_udf_parity(
     from datafusion_engine.diagnostics import record_artifact
     from datafusion_engine.udf_parity import udf_parity_report
     from datafusion_engine.udf_runtime import register_rust_udfs
-    from ibis_engine.builtin_udfs import ibis_udf_specs
 
     session = profile.session_context()
     async_timeout_ms = None
@@ -831,10 +830,7 @@ def _record_extract_udf_parity(
         async_udf_timeout_ms=async_timeout_ms,
         async_udf_batch_size=async_batch_size,
     )
-    report = udf_parity_report(
-        session,
-        ibis_specs=ibis_udf_specs(registry_snapshot=registry_snapshot),
-    )
+    report = udf_parity_report(session, snapshot=registry_snapshot)
     payload = report.payload()
     payload["dataset"] = name
     record_artifact(profile, "extract_udf_parity_v1", payload)

@@ -5,14 +5,16 @@ from __future__ import annotations
 import contextlib
 import importlib
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.types as patypes
-from datafusion import SessionContext, SQLOptions, col
+from datafusion import SessionContext, col, lit
 from datafusion import functions as f
+from datafusion.expr import Expr
 
 from arrowdsl.core.array_iter import iter_array_values
 from arrowdsl.core.execution_context import ExecutionContext
@@ -35,12 +37,10 @@ from arrowdsl.schema.validation import ArrowValidationOptions
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 from datafusion_engine.schema_introspection import SchemaIntrospector
-from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_ext import stable_hash64
 from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
-    from datafusion.dataframe import DataFrame
-
     from arrowdsl.schema.policy import SchemaPolicy
 
 
@@ -75,61 +75,6 @@ def _validate_arrow_table(
     module = importlib.import_module("schema_spec.system")
     validate_fn = cast("_ValidateArrowTable", module.validate_arrow_table)
     return validate_fn(table, spec=spec, options=options)
-
-
-def _execute_sql_df(
-    ctx: SessionContext,
-    sql: str,
-    *,
-    sql_options: SQLOptions | None = None,
-    allow_statements: bool = False,
-) -> DataFrame:
-    from sqlglot.errors import ParseError
-
-    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
-
-    resolved_sql_options = sql_options or sql_options_for_profile(None)
-    if allow_statements:
-        resolved_sql_options = resolved_sql_options.with_allow_statements(allow=True)
-
-    def _sql_ingest(_payload: Mapping[str, object]) -> None:
-        return None
-
-    options = DataFusionCompileOptions(
-        sql_options=resolved_sql_options,
-        sql_policy=DataFusionSqlPolicy(allow_statements=allow_statements),
-        sql_ingest_hook=_sql_ingest,
-    )
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    try:
-        register_datafusion_dialect()
-        expr = parse_sql_strict(sql, dialect=options.dialect)
-    except (ParseError, TypeError, ValueError) as exc:
-        msg = "Finalize SQL parse failed."
-        raise ValueError(msg) from exc
-    plan = facade.compile(expr, options=options)
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "Finalize SQL execution did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    return result.dataframe
-
-
-def _execute_sql_table(
-    ctx: SessionContext,
-    sql: str,
-    *,
-    sql_options: SQLOptions | None = None,
-    allow_statements: bool = False,
-) -> pa.Table:
-    return _execute_sql_df(
-        ctx,
-        sql,
-        sql_options=sql_options,
-        allow_statements=allow_statements,
-    ).to_arrow_table()
 
 
 @dataclass(frozen=True)
@@ -354,7 +299,7 @@ def _required_non_null_results(
     table: TableLike,
     cols: Sequence[str],
     *,
-    ctx: ExecutionContext,
+    _ctx: ExecutionContext,
 ) -> tuple[list[InvariantResult], ArrayLike]:
     """Return invariant results and combined mask for required non-null checks.
 
@@ -362,56 +307,38 @@ def _required_non_null_results(
     -------
     tuple[list[InvariantResult], ArrayLike]
         Invariant results and combined bad-row mask.
-
-    Raises
-    ------
-    TypeError
-        Raised when DataFusion is required but unavailable.
     """
     if not cols:
         return [], pa.array([False] * table.num_rows, type=pa.bool_())
-    df_ctx = _datafusion_context(ctx)
-    if df_ctx is None:
-        msg = "DataFusion SessionContext required for required_non_null checks."
-        raise TypeError(msg)
-    table_name, resolved = _register_temp_table(df_ctx, table, prefix="finalize_required")
-    try:
-        mask_exprs: list[str] = []
-        combined_parts: list[str] = []
-        for column_name in cols:
-            if column_name in resolved.column_names:
-                expr = f"{_sql_identifier(column_name)} IS NULL"
-            else:
-                expr = "TRUE"
-            mask_expr = f"COALESCE({expr}, FALSE)"
-            mask_exprs.append(f"{mask_expr} AS {_sql_identifier(column_name)}")
-            combined_parts.append(mask_expr)
-        combined_expr = " OR ".join(combined_parts) if combined_parts else "FALSE"
-        sql = (
-            f"SELECT {', '.join(mask_exprs)}, {combined_expr} AS bad_any "
-            f"FROM {_sql_identifier(table_name)}"
-        )
-        result = _execute_sql_table(
-            df_ctx,
-            sql,
-            sql_options=sql_options_for_profile(None),
-        )
-    finally:
-        deregister = getattr(df_ctx, "deregister_table", None)
-        if callable(deregister):
-            deregister(table_name)
+    resolved = coerce_table_like(table)
+    if isinstance(resolved, pa.RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", resolved)
+        resolved_table = pa.Table.from_batches(list(reader))
+    else:
+        resolved_table = cast("pa.Table", resolved)
+    masks: list[ArrayLike] = []
+    for column_name in cols:
+        if column_name in resolved_table.column_names:
+            raw_mask = _compute_is_null(resolved_table[column_name])
+            mask = _fill_null(raw_mask, fill_value=False)
+        else:
+            mask = pa.array([True] * resolved_table.num_rows, type=pa.bool_())
+        masks.append(mask)
+    combined = _combine_or(masks[0], masks[1]) if len(masks) > 1 else masks[0]
+    for mask in masks[2:]:
+        combined = _combine_or(combined, mask)
     results = [
         InvariantResult(
-            mask=result[column_name],
+            mask=masks[idx],
             code="REQUIRED_NON_NULL",
             message=f"{column_name} is required.",
             column=column_name,
             severity="ERROR",
             source="required_non_null",
         )
-        for column_name in cols
+        for idx, column_name in enumerate(cols)
     ]
-    return results, result["bad_any"]
+    return results, combined
 
 
 def _collect_invariant_results(
@@ -426,16 +353,11 @@ def _collect_invariant_results(
     -------
     tuple[list[InvariantResult], ArrayLike]
         Invariant results and combined bad-row mask.
-
-    Raises
-    ------
-    TypeError
-        Raised when DataFusion is required but unavailable.
     """
     results, required_bad_any = _required_non_null_results(
         table,
         contract.required_non_null,
-        ctx=ctx,
+        _ctx=ctx,
     )
     masks: list[ArrayLike] = [required_bad_any]
     for inv in contract.invariants:
@@ -451,38 +373,20 @@ def _collect_invariant_results(
             )
         )
         masks.append(bad_mask)
-    df_ctx = _datafusion_context(ctx)
-    if df_ctx is None:
-        msg = "DataFusion SessionContext required to combine invariant masks."
-        raise TypeError(msg)
-    bad_any = _combine_masks_df(df_ctx, masks, table.num_rows)
+    bad_any = _combine_masks_df(masks, table.num_rows)
     return results, bad_any
 
 
 def _combine_masks_df(
-    ctx: SessionContext,
     masks: Sequence[ArrayLike],
     length: int,
 ) -> ArrayLike:
     if not masks:
         return pa.array([False] * length, type=pa.bool_())
-    columns = {f"mask_{idx}": mask for idx, mask in enumerate(masks)}
-    table = pa.Table.from_pydict(columns)
-    table_name, _ = _register_temp_table(ctx, table, prefix="finalize_masks")
-    try:
-        parts = [f"COALESCE(mask_{idx}, FALSE)" for idx in range(len(masks))]
-        combined_expr = " OR ".join(parts) if parts else "FALSE"
-        sql = f"SELECT {combined_expr} AS bad_any FROM {_sql_identifier(table_name)}"
-        result = _execute_sql_table(
-            ctx,
-            sql,
-            sql_options=sql_options_for_profile(None),
-        )
-    finally:
-        deregister = getattr(ctx, "deregister_table", None)
-        if callable(deregister):
-            deregister(table_name)
-    return result["bad_any"]
+    combined = _fill_null(masks[0], fill_value=False)
+    for mask in masks[1:]:
+        combined = _combine_or(combined, _fill_null(mask, fill_value=False))
+    return combined
 
 
 def _filter_good_rows(
@@ -493,25 +397,15 @@ def _filter_good_rows(
 ) -> TableLike:
     if table.num_rows == 0:
         return table
-    df_ctx = _datafusion_context(ctx)
-    if df_ctx is None:
-        msg = "DataFusion SessionContext required to filter invariant failures."
-        raise TypeError(msg)
-    masked = table.append_column("_bad_any", bad_any)
-    table_name, resolved = _register_temp_table(df_ctx, masked, prefix="finalize_good")
-    try:
-        columns = [name for name in resolved.schema.names if name != "_bad_any"]
-        select_cols = ", ".join(_sql_identifier(name) for name in columns)
-        sql = f"SELECT {select_cols} FROM {_sql_identifier(table_name)} WHERE NOT _bad_any"
-        return _execute_sql_table(
-            df_ctx,
-            sql,
-            sql_options=sql_options_for_profile(None),
-        )
-    finally:
-        deregister = getattr(df_ctx, "deregister_table", None)
-        if callable(deregister):
-            deregister(table_name)
+    _ = ctx
+    resolved = coerce_table_like(table)
+    if isinstance(resolved, pa.RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", resolved)
+        resolved_table = pa.Table.from_batches(list(reader))
+    else:
+        resolved_table = cast("pa.Table", resolved)
+    filtered_mask = _invert_mask(_fill_null(bad_any, fill_value=False))
+    return resolved_table.filter(filtered_mask)
 
 
 def _build_error_table(
@@ -563,18 +457,19 @@ def _raise_on_errors_if_strict(
 
 
 def _error_code_counts_table(errors: TableLike) -> pa.Table:
-    from datafusion_engine.arrow_ingest import datafusion_from_arrow
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
-
-    ctx = DataFusionRuntimeProfile().ephemeral_context()
-    datafusion_from_arrow(ctx, name="errors", value=errors)
-    sql = "SELECT error_code, COUNT(*) AS count FROM errors GROUP BY error_code"
-    table = _execute_sql_table(
-        ctx,
-        sql,
-        sql_options=sql_options_for_profile(None),
+    resolved = coerce_table_like(errors)
+    if isinstance(resolved, pa.RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", resolved)
+        table = pa.Table.from_batches(list(reader))
+    else:
+        table = cast("pa.Table", resolved)
+    counts = _value_counts(table["error_code"])
+    return pa.table(
+        {
+            "error_code": counts.field("values"),
+            "count": counts.field("counts"),
+        }
     )
-    return cast("pa.Table", table)
 
 
 def _maybe_validate_with_arrow(
@@ -625,26 +520,24 @@ _HASH_JOIN_SEPARATOR = "\x1f"
 _HASH_NULL_SENTINEL = "__NULL__"
 
 
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
+def _compute_is_null(values: ArrayLike) -> ArrayLike:
+    return pc.call_function("is_null", [values])
 
 
-def _sql_literal(value: str) -> str:
-    escaped = value.replace("'", "''")
-    return f"'{escaped}'"
+def _combine_or(left: ArrayLike, right: ArrayLike) -> ArrayLike:
+    return pc.call_function("or", [left, right])
 
 
-def _coalesce_cast(name: str) -> str:
-    return f"coalesce(CAST({_sql_identifier(name)} AS STRING), {_sql_literal(_HASH_NULL_SENTINEL)})"
+def _invert_mask(values: ArrayLike) -> ArrayLike:
+    return pc.call_function("invert", [values])
 
 
-def _row_id_sql(prefix: str, cols: Sequence[str]) -> str:
-    parts = [_sql_literal(prefix)]
-    parts.extend(_coalesce_cast(name) for name in cols)
-    delimiter = _sql_literal(_HASH_JOIN_SEPARATOR)
-    joined = f"concat_ws({delimiter}, {', '.join(parts)})"
-    return f"stable_hash64({joined})"
+def _value_counts(values: ArrayLike) -> ArrayLike:
+    return pc.call_function("value_counts", [values])
+
+
+def _fill_null(values: ArrayLike, *, fill_value: bool) -> ArrayLike:
+    return pc.fill_null(values, fill_value=fill_value)
 
 
 def _row_id_for_errors(
@@ -670,13 +563,17 @@ def _row_id_for_errors(
         adapter.register_record_batches(table_name, [resolved_table.to_batches()])
         try:
             prefix = f"{contract.name}:row"
-            row_sql = _row_id_sql(prefix, key_cols)
-            sql = f"SELECT {row_sql} AS row_id FROM {_sql_identifier(table_name)}"
-            result = _execute_sql_table(
-                df_ctx,
-                sql,
-                sql_options=sql_options_for_profile(None),
-            )
+            df = df_ctx.table(table_name)
+            parts = [lit(prefix)]
+            for name in key_cols:
+                if name in resolved_table.column_names:
+                    expr = f.arrow_cast(col(name), lit("Utf8"))
+                    expr = f.coalesce(expr, lit(_HASH_NULL_SENTINEL))
+                else:
+                    expr = lit(_HASH_NULL_SENTINEL)
+                parts.append(expr)
+            concat_expr = f.concat_ws(_HASH_JOIN_SEPARATOR, *parts)
+            result = df.select(stable_hash64(concat_expr).alias("row_id")).to_arrow_table()
         finally:
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                 adapter.deregister_table(table_name)
@@ -765,28 +662,6 @@ def _register_temp_table(
     return table_name, resolved_table
 
 
-def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
-    temp_name = f"_dtype_{uuid.uuid4().hex}"
-    table = pa.table({"value": pa.array([None], type=dtype)})
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_record_batches(temp_name, [table.to_batches()])
-    try:
-        sql = f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}"
-        result = _execute_sql_table(
-            ctx,
-            sql,
-            sql_options=sql_options_for_profile(None),
-        )
-        value = result["dtype"][0].as_py()
-    finally:
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            adapter.deregister_table(temp_name)
-    if not isinstance(value, str):
-        msg = "Failed to resolve DataFusion type name."
-        raise TypeError(msg)
-    return value
-
-
 def _supports_error_detail_aggregation(ctx: SessionContext) -> bool:
     from datafusion_engine.runtime import sql_options_for_profile
 
@@ -807,23 +682,16 @@ def _aggregate_error_detail_lists_df(
 ) -> pa.Table:
     table_name, resolved = _register_temp_table(ctx, table, prefix="finalize_errors")
     try:
-        selections: list[str] = []
+        df = ctx.table(table_name)
+        exprs: list[Expr] = []
         for field in resolved.schema:
             name = field.name
+            expr = col(name)
             if patypes.is_dictionary(field.type):
                 dict_type = cast("pa.DictionaryType", field.type)
-                value_name = _arrow_type_name(ctx, dict_type.value_type)
-                source = _sql_identifier(name)
-                alias = _sql_identifier(name)
-                selections.append(f"arrow_cast({source}, '{value_name}') AS {alias}")
-            else:
-                selections.append(_sql_identifier(name))
-        select_sql = f"SELECT {', '.join(selections)} FROM {_sql_identifier(table_name)}"
-        df = _execute_sql_df(
-            ctx,
-            select_sql,
-            sql_options=sql_options_for_profile(None),
-        )
+                expr = f.arrow_cast(expr, lit(str(dict_type.value_type)))
+            exprs.append(expr.alias(name))
+        df = df.select(*exprs)
         struct_expr = f.named_struct([(name, col(name)) for name in detail_field_names])
         aggregated = df.aggregate(
             group_by=list(group_cols),

@@ -12,7 +12,6 @@ if TYPE_CHECKING:
         delta_history,
         delta_vacuum,
     )
-    from engine.function_registry import FunctionRegistry, default_function_registry
     from engine.materialize_pipeline import (
         build_plan_product,
         build_view_product,
@@ -31,7 +30,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaVacuumResult": ("engine.delta_tools", "DeltaVacuumResult"),
     "EngineSession": ("engine.session", "EngineSession"),
     "ExecutionSurfacePolicy": ("engine.plan_policy", "ExecutionSurfacePolicy"),
-    "FunctionRegistry": ("engine.function_registry", "FunctionRegistry"),
     "PlanProduct": ("engine.plan_product", "PlanProduct"),
     "EngineRuntime": ("engine.runtime", "EngineRuntime"),
     "build_engine_runtime": ("engine.runtime", "build_engine_runtime"),
@@ -40,7 +38,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "build_engine_session": ("engine.session_factory", "build_engine_session"),
     "build_plan_product": ("engine.materialize_pipeline", "build_plan_product"),
     "build_view_product": ("engine.materialize_pipeline", "build_view_product"),
-    "default_function_registry": ("engine.function_registry", "default_function_registry"),
     "delta_history": ("engine.delta_tools", "delta_history"),
     "delta_vacuum": ("engine.delta_tools", "delta_vacuum"),
     "resolve_cache_policy": ("engine.materialize_pipeline", "resolve_cache_policy"),
@@ -69,7 +66,6 @@ __all__ = [
     "EngineRuntime",
     "EngineSession",
     "ExecutionSurfacePolicy",
-    "FunctionRegistry",
     "PlanProduct",
     "RuntimeProfileSpec",
     "WriterStrategy",
@@ -77,7 +73,6 @@ __all__ = [
     "build_engine_session",
     "build_plan_product",
     "build_view_product",
-    "default_function_registry",
     "delta_history",
     "delta_vacuum",
     "resolve_cache_policy",

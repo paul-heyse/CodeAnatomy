@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
@@ -14,7 +14,6 @@ import pyarrow as pa
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
 from arrowdsl.schema.serialization import schema_to_msgpack
-from engine.function_registry import FunctionRegistryOptions, build_function_registry
 from serde_msgspec import dumps_msgpack, to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 from storage.ipc import payload_hash
@@ -197,7 +196,6 @@ _PROFILE_HASH_SCHEMA = pa.schema(
 @dataclass(frozen=True)
 class _RegistryContext:
     session: object | None
-    function_catalog: Sequence[Mapping[str, object]] | None
     registry_snapshot: Mapping[str, object] | None
 
 
@@ -254,20 +252,12 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
 
 
 def _build_registry_context(runtime: RuntimeProfile) -> _RegistryContext:
-    function_catalog = None
     session = None
-    if runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
+    if runtime.datafusion is not None:
         try:
-            from datafusion_engine.runtime import function_catalog_snapshot_for_profile
-
             session = runtime.datafusion.session_context()
-            function_catalog = function_catalog_snapshot_for_profile(
-                runtime.datafusion,
-                session,
-                include_routines=True,
-            )
         except (RuntimeError, TypeError, ValueError):
-            function_catalog = None
+            session = None
     registry_snapshot = None
     if session is not None:
         from datafusion_engine.udf_runtime import register_rust_udfs
@@ -286,20 +276,17 @@ def _build_registry_context(runtime: RuntimeProfile) -> _RegistryContext:
             async_udf_timeout_ms=async_timeout_ms,
             async_udf_batch_size=async_batch_size,
         )
-    return _RegistryContext(
-        session=session,
-        function_catalog=function_catalog,
-        registry_snapshot=registry_snapshot,
-    )
+    return _RegistryContext(session=session, registry_snapshot=registry_snapshot)
 
 
 def _function_registry_hash(context: _RegistryContext) -> str:
-    options = FunctionRegistryOptions(
-        datafusion_function_catalog=context.function_catalog,
-        registry_snapshot=context.registry_snapshot,
-    )
-    function_registry = build_function_registry(options=options)
-    return function_registry.fingerprint()
+    snapshot = context.registry_snapshot
+    if snapshot is None:
+        msg = "Rust UDF snapshot unavailable for runtime profile hashing."
+        raise ValueError(msg)
+    from datafusion_engine.udf_runtime import rust_udf_snapshot_hash
+
+    return rust_udf_snapshot_hash(snapshot)
 
 
 def _runtime_snapshot_payload(
@@ -345,25 +332,6 @@ def _runtime_hash_payload(
     }
 
 
-def _function_catalog_snapshot(
-    runtime: RuntimeProfile,
-) -> Sequence[Mapping[str, object]] | None:
-    profile = runtime.datafusion
-    if profile is None or not profile.enable_information_schema:
-        return None
-    try:
-        from datafusion_engine.runtime import function_catalog_snapshot_for_profile
-
-        session = profile.session_context()
-        return function_catalog_snapshot_for_profile(
-            profile,
-            session,
-            include_routines=True,
-        )
-    except (RuntimeError, TypeError, ValueError):
-        return None
-
-
 def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
     """Return an engine runtime artifact payload for diagnostics.
 
@@ -374,7 +342,12 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
     """
     snapshot = runtime_profile_snapshot(runtime)
     policy_snapshot = sqlglot_policy_snapshot()
-    function_catalog = _function_catalog_snapshot(runtime)
+    from datafusion_engine.udf_runtime import (
+        register_rust_udfs,
+        rust_udf_snapshot_bytes,
+        rust_udf_snapshot_hash,
+    )
+
     session = None
     if runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
         try:
@@ -383,8 +356,6 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
             session = None
     registry_snapshot = None
     if session is not None:
-        from datafusion_engine.udf_runtime import register_rust_udfs
-
         enable_async = False
         async_timeout_ms = None
         async_batch_size = None
@@ -399,11 +370,11 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
             async_udf_timeout_ms=async_timeout_ms,
             async_udf_batch_size=async_batch_size,
         )
-    function_registry = build_function_registry(
-        options=FunctionRegistryOptions(
-            datafusion_function_catalog=function_catalog or [],
-            registry_snapshot=registry_snapshot,
-        )
+    registry_hash = (
+        rust_udf_snapshot_hash(registry_snapshot) if registry_snapshot is not None else None
+    )
+    registry_payload = (
+        rust_udf_snapshot_bytes(registry_snapshot) if registry_snapshot is not None else None
     )
     datafusion_settings = (
         runtime.datafusion.settings_payload() if runtime.datafusion is not None else None
@@ -420,8 +391,8 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
         "sqlglot_policy_snapshot": (
             dumps_msgpack(policy_snapshot.payload()) if policy_snapshot is not None else None
         ),
-        "function_registry_hash": function_registry.fingerprint(),
-        "function_registry_snapshot": dumps_msgpack(function_registry.payload()),
+        "function_registry_hash": registry_hash,
+        "function_registry_snapshot": registry_payload,
         "datafusion_settings_hash": (
             runtime.datafusion.settings_hash() if runtime.datafusion is not None else None
         ),

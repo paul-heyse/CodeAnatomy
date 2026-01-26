@@ -1,21 +1,25 @@
-"""Unit tests for function registry snapshots."""
+"""Unit tests for UDF catalog snapshots."""
 
 from __future__ import annotations
 
-from engine.function_registry import default_function_registry
+from datafusion import SessionContext
+
+from datafusion_engine.udf_catalog import datafusion_udf_specs
+from datafusion_engine.udf_runtime import register_rust_udfs
 
 
-def test_function_registry_snapshot_is_stable() -> None:
-    """Keep function registry snapshots deterministic."""
-    first = default_function_registry()
-    second = default_function_registry()
-    assert first.payload() == second.payload()
-    assert first.fingerprint() == second.fingerprint()
+def test_udf_specs_are_stable() -> None:
+    """Keep UDF specs deterministic across snapshots."""
+    ctx = SessionContext()
+    snapshot = register_rust_udfs(ctx)
+    first = datafusion_udf_specs(registry_snapshot=snapshot)
+    second = datafusion_udf_specs(registry_snapshot=snapshot)
+    assert first == second
 
 
-def test_function_registry_payload_excludes_legacy_lists() -> None:
-    """Ensure legacy compute lists are not included in the payload."""
-    registry = default_function_registry()
-    payload = registry.payload()
-    assert "pyarrow_compute" not in payload
-    assert "pycapsule_ids" not in payload
+def test_udf_specs_only_include_builtin_tier() -> None:
+    """Ensure UDF specs only include Rust builtin tiers."""
+    ctx = SessionContext()
+    snapshot = register_rust_udfs(ctx)
+    specs = datafusion_udf_specs(registry_snapshot=snapshot)
+    assert all(spec.udf_tier == "builtin" for spec in specs)

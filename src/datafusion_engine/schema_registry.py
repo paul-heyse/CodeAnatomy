@@ -40,6 +40,7 @@ from arrowdsl.schema.semantic_types import (
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
+from sqlglot_tools.compat import exp
 
 BYTE_SPAN_T = byte_span_type()
 SPAN_T = span_type()
@@ -94,7 +95,7 @@ SQLGLOT_PARSE_ERROR_DETAILS_TYPE = list_view_type(
 )
 
 
-def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
+def _sql_with_options(ctx: SessionContext, expr: exp.Expression | str) -> DataFrame:
     from sqlglot.errors import ParseError
 
     from datafusion_engine.compile_options import DataFusionCompileOptions
@@ -109,12 +110,13 @@ def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
         sql_ingest_hook=_sql_ingest,
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    try:
-        register_datafusion_dialect()
-        expr = parse_sql_strict(sql, dialect=options.dialect)
-    except (ParseError, TypeError, ValueError) as exc:
-        msg = "Schema registry SQL parse failed."
-        raise ValueError(msg) from exc
+    register_datafusion_dialect()
+    if isinstance(expr, str):
+        try:
+            expr = parse_sql_strict(expr, dialect=options.dialect)
+        except (ParseError, TypeError, ValueError) as exc:
+            msg = "Schema registry SQL parse failed."
+            raise ValueError(msg) from exc
     plan = facade.compile(expr, options=options)
     result = facade.execute(plan)
     if result.dataframe is None:
@@ -2744,7 +2746,8 @@ def validate_schema_metadata(schema: pa.Schema) -> None:
 
 def validate_nested_types(ctx: SessionContext, name: str) -> None:
     """Validate nested dataset types using DataFusion arrow_typeof."""
-    _sql_with_options(ctx, f"SELECT arrow_typeof(*) AS row_type FROM {name} LIMIT 1").collect()
+    expr = exp.select(exp.func("arrow_typeof", exp.Star()).as_("row_type")).from_(name).limit(1)
+    _sql_with_options(ctx, expr).collect()
 
 
 def _require_semantic_type(
@@ -2754,16 +2757,19 @@ def _require_semantic_type(
     column_name: str,
     expected: str,
 ) -> None:
-    rows = (
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_metadata("
-            f"{column_name}, '{SEMANTIC_TYPE_META.decode('utf-8')}'"
-            f") AS semantic_type FROM {table_name} LIMIT 1",
+    meta_key = SEMANTIC_TYPE_META.decode("utf-8")
+    expr = (
+        exp.select(
+            exp.func(
+                "arrow_metadata",
+                exp.column(column_name),
+                exp.Literal.string(meta_key),
+            ).as_("semantic_type")
         )
-        .to_arrow_table()
-        .to_pylist()
+        .from_(table_name)
+        .limit(1)
     )
+    rows = _sql_with_options(ctx, expr).to_arrow_table().to_pylist()
     semantic_type = rows[0].get("semantic_type") if rows else None
     if semantic_type is None:
         msg = f"Missing semantic type metadata on {table_name}.{column_name}."

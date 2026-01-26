@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from weakref import WeakKeyDictionary, WeakSet
 
 from datafusion import SessionContext
 
 import datafusion_ext
+from serde_msgspec import dumps_msgpack
 
 _RUST_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _RUST_UDF_SNAPSHOTS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
@@ -223,6 +225,66 @@ def rust_udf_docs(ctx: SessionContext) -> Mapping[str, object]:
     return snapshot
 
 
+def _normalize_snapshot_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        ordered: dict[str, object] = {}
+        for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
+            ordered[str(key)] = _normalize_snapshot_value(item)
+        return ordered
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
+    if isinstance(value, set):
+        return sorted((_normalize_snapshot_value(item) for item in value), key=str)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_normalize_snapshot_value(item) for item in value]
+    return value
+
+
+def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> Mapping[str, object]:
+    """Return a normalized Rust UDF snapshot payload for hashing/serialization.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Normalized snapshot payload.
+
+    Raises
+    ------
+    TypeError
+        Raised when the normalized payload is not a mapping.
+    """
+    validate_rust_udf_snapshot(snapshot)
+    normalized = _normalize_snapshot_value(snapshot)
+    if not isinstance(normalized, Mapping):
+        msg = "Normalized Rust UDF snapshot must be a mapping."
+        raise TypeError(msg)
+    return normalized
+
+
+def rust_udf_snapshot_bytes(snapshot: Mapping[str, object]) -> bytes:
+    """Return a deterministic msgpack payload for a Rust UDF snapshot.
+
+    Returns
+    -------
+    bytes
+        Serialized snapshot payload.
+    """
+    payload = rust_udf_snapshot_payload(snapshot)
+    return dumps_msgpack(payload)
+
+
+def rust_udf_snapshot_hash(snapshot: Mapping[str, object]) -> str:
+    """Return a stable hash for a Rust UDF snapshot payload.
+
+    Returns
+    -------
+    str
+        SHA-256 hash of the snapshot payload.
+    """
+    payload = rust_udf_snapshot_bytes(snapshot)
+    return hashlib.sha256(payload).hexdigest()
+
+
 def register_rust_udfs(
     ctx: SessionContext,
     *,
@@ -280,6 +342,9 @@ __all__ = [
     "register_rust_udfs",
     "rust_udf_docs",
     "rust_udf_snapshot",
+    "rust_udf_snapshot_bytes",
+    "rust_udf_snapshot_hash",
+    "rust_udf_snapshot_payload",
     "udf_names_from_snapshot",
     "validate_required_udfs",
     "validate_rust_udf_snapshot",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.view_registry_defs import VIEW_SELECT_EXPRS
+from datafusion_engine.view_registry import VIEW_SELECT_EXPRS
 
 
 @pytest.mark.parametrize(

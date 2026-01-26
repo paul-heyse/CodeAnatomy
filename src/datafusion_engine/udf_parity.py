@@ -1,4 +1,4 @@
-"""Parity checks between Rust UDF registry snapshots and Ibis metadata."""
+"""Parity checks between Rust UDF registry snapshots and runtime metadata."""
 
 from __future__ import annotations
 
@@ -6,17 +6,15 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from datafusion_engine.udf_runtime import rust_udf_snapshot
+from datafusion_engine.udf_runtime import rust_udf_snapshot, validate_rust_udf_snapshot
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from ibis_engine.builtin_udfs import IbisUdfSpec
-
 
 @dataclass(frozen=True)
 class UdfParityMismatch:
-    """Record a mismatch between Rust registry and Ibis metadata."""
+    """Record a mismatch between Rust registry metadata sources."""
 
     func_id: str
     kind: str
@@ -105,56 +103,21 @@ class UdfInfoSchemaParityReport:
 def udf_parity_report(
     ctx: SessionContext,
     *,
-    ibis_specs: Iterable[IbisUdfSpec],
+    snapshot: Mapping[str, object] | None = None,
 ) -> UdfParityReport:
-    """Return parity mismatches between Rust registry snapshot and Ibis specs.
+    """Return parity mismatches for Rust registry snapshot metadata.
 
     Returns
     -------
     UdfParityReport
-        Summary of mismatches for diagnostics.
+        Summary of mismatches for diagnostics (empty when Rust snapshot is authoritative).
     """
-    snapshot = rust_udf_snapshot(ctx)
-    rust_names = _rust_function_names(snapshot)
-    rust_params = _rust_param_names(snapshot)
-    rust_volatility = _rust_volatility(snapshot)
-
-    missing: list[str] = []
-    param_mismatches: list[UdfParityMismatch] = []
-    volatility_mismatches: list[UdfParityMismatch] = []
-
-    for spec in ibis_specs:
-        if spec.func_id not in rust_names and spec.engine_name not in rust_names:
-            missing.append(spec.func_id)
-            continue
-        if spec.arg_names is not None:
-            rust_values = rust_params.get(spec.engine_name) or rust_params.get(spec.func_id)
-            if rust_values is not None and tuple(rust_values) != tuple(spec.arg_names):
-                param_mismatches.append(
-                    UdfParityMismatch(
-                        func_id=spec.func_id,
-                        kind=spec.kind,
-                        issue="param_names",
-                        ibis_value=spec.arg_names,
-                        rust_value=tuple(rust_values),
-                    )
-                )
-        rust_vol = rust_volatility.get(spec.engine_name) or rust_volatility.get(spec.func_id)
-        if rust_vol is not None and rust_vol != spec.volatility:
-            volatility_mismatches.append(
-                UdfParityMismatch(
-                    func_id=spec.func_id,
-                    kind=spec.kind,
-                    issue="volatility",
-                    ibis_value=spec.volatility,
-                    rust_value=rust_vol,
-                )
-            )
-
+    resolved_snapshot = snapshot or rust_udf_snapshot(ctx)
+    validate_rust_udf_snapshot(resolved_snapshot)
     return UdfParityReport(
-        missing_in_rust=tuple(sorted(set(missing))),
-        param_name_mismatches=tuple(param_mismatches),
-        volatility_mismatches=tuple(volatility_mismatches),
+        missing_in_rust=(),
+        param_name_mismatches=(),
+        volatility_mismatches=(),
     )
 
 

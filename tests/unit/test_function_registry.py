@@ -1,18 +1,25 @@
-"""Tests for function registry merging and lane selection."""
+"""Tests for DataFusion UDF catalog behavior."""
 
 from __future__ import annotations
 
-from engine.function_registry import default_function_registry
+from datafusion import SessionContext
+
+from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.udf_catalog import get_default_udf_catalog
+from datafusion_engine.udf_runtime import register_rust_udfs
 
 
-def test_function_registry_uses_rust_only_lane() -> None:
-    """Use the Rust-only lane for UDF execution."""
-    registry = default_function_registry()
-    spec = registry.specs["stable_hash64"]
-    assert spec.lanes == ("df_rust",)
+def _udf_catalog() -> SchemaIntrospector:
+    ctx = SessionContext()
+    register_rust_udfs(ctx)
+    return SchemaIntrospector(ctx, sql_options=None)
 
 
-def test_function_registry_resolve_lane_prefers_datafusion() -> None:
-    """Resolve the preferred lane using registry precedence."""
-    registry = default_function_registry()
-    assert registry.resolve_lane("stable_hash64") == "df_rust"
+def test_udf_catalog_resolves_builtin() -> None:
+    """Resolve Rust builtin UDFs from the catalog."""
+    introspector = _udf_catalog()
+    catalog = get_default_udf_catalog(introspector=introspector)
+    resolved = catalog.resolve_function("stable_hash64")
+    assert resolved is not None
+    assert resolved.tier == "builtin"
+    assert resolved.resolved_name == "stable_hash64"

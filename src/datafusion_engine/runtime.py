@@ -67,9 +67,7 @@ from datafusion_engine.schema_registry import (
     CST_VIEW_NAMES,
     TREE_SITTER_CHECK_VIEWS,
     TREE_SITTER_VIEW_NAMES,
-    is_nested_dataset,
     missing_schema_names,
-    nested_schema_for,
     nested_view_specs,
     register_all_schemas,
     schema_for,
@@ -3101,16 +3099,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         *,
         introspector: SchemaIntrospector,
     ) -> None:
-        """Validate Ibis builtin UDFs against the runtime catalog.
+        """Validate Rust UDF snapshot coverage against the runtime catalog.
 
         Raises
         ------
         ValueError
-            Raised when builtin Ibis UDFs are missing from DataFusion.
+            Raised when Rust UDFs are missing from DataFusion.
         """
         missing: list[str] = []
-        from datafusion_engine.udf_catalog import datafusion_udf_specs
-        from ibis_engine.builtin_udfs import ibis_udf_specs
+        from datafusion_engine.udf_runtime import udf_names_from_snapshot
 
         registry_snapshot = register_rust_udfs(
             introspector.ctx,
@@ -3118,13 +3115,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             async_udf_timeout_ms=self.async_udf_timeout_ms,
             async_udf_batch_size=self.async_udf_batch_size,
         )
-        required_builtins = {
-            spec.engine_name
-            for spec in (
-                *ibis_udf_specs(registry_snapshot=registry_snapshot),
-                *datafusion_udf_specs(registry_snapshot=registry_snapshot),
-            )
-        }
+        required_builtins = set(udf_names_from_snapshot(registry_snapshot))
         for name in sorted(required_builtins):
             try:
                 if catalog.is_builtin_from_runtime(name):
@@ -3143,7 +3134,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                         "missing_count": len(missing),
                     },
                 )
-            msg = f"Ibis builtin UDFs missing in DataFusion: {sorted(missing)}."
+            msg = f"Rust UDFs missing in DataFusion: {sorted(missing)}."
             raise ValueError(msg)
         from datafusion_engine.udf_parity import udf_info_schema_parity_report
 
@@ -5606,8 +5597,6 @@ def dataset_schema_from_context(name: str) -> SchemaLike:
     KeyError
         Raised when the dataset is not registered in the SessionContext.
     """
-    if is_nested_dataset(name):
-        return nested_schema_for(name, allow_derived=True)
     ctx = DataFusionRuntimeProfile().session_context()
     try:
         schema = ctx.table(name).schema()

@@ -374,8 +374,14 @@ def _view_payload(spec: ViewSpec) -> ViewSpecPayload:
 
 
 def _view_from_payload(payload: ViewSpecPayload) -> ViewSpec:
-    schema = schema_from_msgpack(payload.schema_msgpack)
-    return ViewSpec(name=payload.name, sql=payload.sql, schema=schema, builder=None)
+    if payload.builder_name is None:
+        msg = (
+            "ViewSpec payloads without a builder are no longer supported. "
+            "Provide a programmatic view builder and regenerate the payload."
+        )
+        raise ValueError(msg)
+    msg = f"ViewSpec builder resolution is not supported for {payload.builder_name!r}."
+    raise ValueError(msg)
 
 
 def _projection_payload(spec: IbisProjectionSpec) -> IbisProjectionPayload:

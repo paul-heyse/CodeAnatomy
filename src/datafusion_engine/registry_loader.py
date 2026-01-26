@@ -15,7 +15,11 @@ from core_types import PathLike, ensure_path
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.registry_bridge import DataFusionCachePolicy
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.registry import DatasetLocation
+from ibis_engine.registry import (
+    DatasetLocation,
+    resolve_delta_log_storage_options,
+    resolve_delta_scan_options,
+)
 from schema_spec.system import DataFusionScanOptions, DeltaScanOptions
 
 RegistryTarget = Literal["cpg", "relspec"]
@@ -96,6 +100,14 @@ def register_registry_delta_tables(
             storage_options=dict(resolved.storage_options or {}),
             datafusion_scan=resolved_scan,
             delta_scan=resolved.delta_scan,
+            delta_log_storage_options=dict(resolved.storage_options or {}),
+        )
+        resolved_delta_scan = resolve_delta_scan_options(location)
+        resolved_log_storage = resolve_delta_log_storage_options(location)
+        location = replace(
+            location,
+            delta_scan=resolved_delta_scan,
+            delta_log_storage_options=dict(resolved_log_storage or {}),
         )
         registered[name] = _register_location(
             ctx,

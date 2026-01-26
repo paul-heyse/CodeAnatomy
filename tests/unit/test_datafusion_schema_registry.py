@@ -93,7 +93,7 @@ def test_validate_ast_views_smoke() -> None:
     ctx = SessionContext()
     register_rust_udfs(ctx)
     register_schema(ctx, "ast_files_v1", schema_for("ast_files_v1"))
-    views = [view for view in nested_view_specs() if view.name in AST_VIEW_NAMES]
+    views = [view for view in nested_view_specs(ctx) if view.name in AST_VIEW_NAMES]
     for view in views:
         view.register(ctx, validate=False)
     validate_ast_views(ctx)

@@ -523,6 +523,8 @@ def schema_contract_from_table_schema_contract(
         Table schema contract containing file schema and partition columns.
     evolution_policy
         Evolution policy for the contract.
+    enforce_columns
+        Whether to enforce column-level schema matching.
 
     Returns
     -------
@@ -555,9 +557,7 @@ def schema_contract_from_table_schema_contract(
 def _should_enforce_columns(spec: DatasetSpec) -> bool:
     if spec.view_specs:
         return False
-    if spec.query_spec is not None:
-        return False
-    return True
+    return spec.query_spec is None
 
 
 def schema_contract_from_dataset_spec(
@@ -577,6 +577,8 @@ def schema_contract_from_dataset_spec(
         DatasetSpec providing schema and scan settings.
     evolution_policy
         Evolution policy for the contract.
+    enforce_columns
+        Override column enforcement; defaults to view/query-aware behavior.
 
     Returns
     -------
@@ -617,6 +619,8 @@ def schema_contract_from_contract_spec(
         ContractSpec providing a table schema specification.
     evolution_policy
         Evolution policy for the contract.
+    enforce_columns
+        Whether to enforce column-level schema matching.
 
     Returns
     -------

@@ -709,18 +709,8 @@ def _catalog_for_ctx(ctx: SessionContext, backend: BaseBackend) -> IbisPlanCatal
     names = table_names_snapshot(ctx)
     tables: dict[str, IbisPlanSource] = {name: ViewReference(name) for name in names}
     if not tables:
-        try:
-            from datafusion_engine.extract_metadata import extract_metadata_by_name
-            from datafusion_engine.extract_registry import dataset_schema as extract_dataset_schema
-        except (ImportError, RuntimeError, TypeError, ValueError):
-            extract_metadata_by_name = None
-            extract_dataset_schema = None
-        if extract_metadata_by_name is None or extract_dataset_schema is None:
-            msg = "No DataFusion tables registered; cannot build view catalog."
-            raise ValueError(msg)
-        for name in extract_metadata_by_name():
-            schema = extract_dataset_schema(name)
-            tables[name] = empty_table(schema)
+        msg = "No DataFusion tables registered; cannot build view catalog."
+        raise ValueError(msg)
     return IbisPlanCatalog(backend=backend, tables=tables)
 
 

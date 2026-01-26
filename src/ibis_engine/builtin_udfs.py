@@ -190,20 +190,6 @@ def register_ibis_udf_snapshot(
     return specs
 
 
-def ibis_udf_specs(
-    *,
-    registry_snapshot: Mapping[str, object],
-) -> tuple[IbisUdfSpec, ...]:
-    """Return the canonical Ibis UDF specs.
-
-    Returns
-    -------
-    tuple[IbisUdfSpec, ...]
-        Canonical Ibis UDF specifications.
-    """
-    return register_ibis_udf_snapshot(registry_snapshot)
-
-
 def ibis_udf_registry() -> Mapping[str, Callable[..., Value]]:
     """Return the cached Ibis UDF callables.
 
@@ -264,6 +250,5 @@ __all__ = [
     "IbisUdfSpec",
     "ibis_udf_call",
     "ibis_udf_registry",
-    "ibis_udf_specs",
     "register_ibis_udf_snapshot",
 ]

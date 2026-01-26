@@ -20,6 +20,9 @@ Unify all function execution around **Rust UDFs only**, remove alternate executi
 ## Goal
 Create one authoritative UDF platform initialization path that installs Rust UDFs, UDTFs, SQL macro factory, and Expr planners on every DataFusion session.
 
+## Status
+Completed.
+
 ## Representative pattern
 ```python
 # datafusion_engine/udf_platform.py (new)
@@ -43,9 +46,9 @@ def install_rust_udf_platform(ctx: SessionContext) -> RustUdfPlatform:
 - Remove any ad‑hoc UDF registration calls outside the facade/session factory.
 
 ## Implementation checklist
-- [ ] Create `install_rust_udf_platform(ctx)` as the single entry point.
-- [ ] Ensure all DataFusion sessions call the platform hook exactly once.
-- [ ] Surface snapshot + docs through facade diagnostics for evidence validation.
+- [x] Create `install_rust_udf_platform(ctx)` as the single entry point.
+- [x] Ensure all DataFusion sessions call the platform hook exactly once.
+- [x] Surface snapshot + docs through facade diagnostics for evidence validation.
 
 ---
 
@@ -53,6 +56,9 @@ def install_rust_udf_platform(ctx: SessionContext) -> RustUdfPlatform:
 
 ## Goal
 Enforce best‑in‑class Rust UDF implementation standards: correct metadata, scalar fast paths, return field correctness, and documentation coverage.
+
+## Status
+Not started.
 
 ## Representative pattern
 ```rust
@@ -109,6 +115,9 @@ impl ScalarUDFImpl for ArrowMetadataUdf {
 ## Goal
 Ensure named‑argument metadata is accurate and enforced via registry snapshots and planner validation.
 
+## Status
+Completed.
+
 ## Representative pattern
 ```rust
 let signature = Signature::one_of(variants, Volatility::Immutable)
@@ -131,9 +140,9 @@ assert "parameter_names" in snapshot
 - Remove Python‑side fallback maps for parameter names.
 
 ## Implementation checklist
-- [ ] Ensure `Signature.parameter_names` is populated for all eligible functions.
-- [ ] Validate named‑arg parity in schema registry checks.
-- [ ] Reject variadic signatures with parameter names.
+- [x] Ensure `Signature.parameter_names` is populated for all eligible functions.
+- [x] Validate named‑arg parity in schema registry checks.
+- [x] Reject variadic signatures with parameter names.
 
 ---
 
@@ -141,6 +150,9 @@ assert "parameter_names" in snapshot
 
 ## Goal
 Make async UDF usage an explicit policy decision with concurrency + timeout guards.
+
+## Status
+Completed.
 
 ## Representative pattern
 ```python
@@ -160,9 +172,9 @@ else:
 - Remove implicit async UDF registration paths without policy checks.
 
 ## Implementation checklist
-- [ ] Add policy flags for async UDF enablement.
-- [ ] Require `ideal_batch_size` and timeout config for async UDFs.
-- [ ] Disallow async UDFs in production unless explicitly enabled.
+- [x] Add policy flags for async UDF enablement.
+- [x] Require `ideal_batch_size` and timeout config for async UDFs.
+- [x] Disallow async UDFs in production unless explicitly enabled.
 
 ---
 
@@ -170,6 +182,9 @@ else:
 
 ## Goal
 Collapse execution lanes to a single Rust lane and delete all non‑Rust UDF paths.
+
+## Status
+Completed.
 
 ## Representative pattern
 ```python
@@ -192,9 +207,9 @@ LANE_UDF_TIER = {"df_rust": "builtin"}
 - Remove Arrow compute kernel snapshot paths when used as alternate lanes.
 
 ## Implementation checklist
-- [ ] Reduce lane definitions to `df_rust` only.
-- [ ] Remove tier ladders and policies that refer to non‑Rust tiers.
-- [ ] Simplify registry payload schemas accordingly.
+- [x] Reduce lane definitions to `df_rust` only.
+- [x] Remove tier ladders and policies that refer to non‑Rust tiers.
+- [x] Simplify registry payload schemas accordingly.
 
 ---
 
@@ -202,6 +217,9 @@ LANE_UDF_TIER = {"df_rust": "builtin"}
 
 ## Goal
 Generate Ibis builtin specs solely from the Rust registry snapshot (and docs snapshot).
+
+## Status
+Completed (snapshot‑driven registry + dynamic Ibis callables).
 
 ## Representative pattern
 ```python
@@ -221,9 +239,9 @@ def ibis_udf_specs(*, registry_snapshot: Mapping[str, object]) -> tuple[IbisUdfS
 - Remove any hard‑coded Ibis builtin name lists.
 
 ## Implementation checklist
-- [ ] Create a snapshot‑to‑Ibis spec builder.
-- [ ] Use registry snapshot for named args, volatility, rewrite tags.
-- [ ] Ensure Ibis registrations are fully derived from the snapshot.
+- [x] Create a snapshot‑to‑Ibis spec builder.
+- [x] Use registry snapshot for named args, volatility, rewrite tags.
+- [x] Ensure Ibis registrations are fully derived from the snapshot.
 
 ---
 
@@ -231,6 +249,9 @@ def ibis_udf_specs(*, registry_snapshot: Mapping[str, object]) -> tuple[IbisUdfS
 
 ## Goal
 Eliminate Python/Ibis ad‑hoc hash helpers and standardize on Rust UDF calls via ExprIR/SQLGlot builders.
+
+## Status
+Completed (hash/ID helpers now call Rust UDFs via ExprIR or registry).
 
 ## Representative pattern
 ```python
@@ -251,8 +272,8 @@ stable_id_expr = _call_expr("stable_id", _literal_expr(prefix), joined_parts)
 - Remove any non‑Rust hashing fallbacks.
 
 ## Implementation checklist
-- [ ] Ensure all ID/key generation flows through ExprIR builders.
-- [ ] Remove all remaining non‑UDF hash helpers from call sites.
+- [x] Ensure all ID/key generation flows through ExprIR builders.
+- [x] Remove all remaining non‑UDF hash helpers from call sites.
 
 ---
 
@@ -260,6 +281,9 @@ stable_id_expr = _call_expr("stable_id", _literal_expr(prefix), joined_parts)
 
 ## Goal
 Treat Rust registry snapshot as authoritative; validate it against information_schema in evidence/diagnostics.
+
+## Status
+Completed.
 
 ## Representative pattern
 ```python
@@ -278,8 +302,9 @@ ensure_info_schema_parity(snapshot, information_schema)
 - Remove fallback paths that read UDF metadata from non‑registry sources.
 
 ## Implementation checklist
-- [ ] Require snapshot + info_schema parity before execution.
-- [ ] Export parity diagnostics through facade recorder.
+- [x] Require snapshot + info_schema parity before execution (runtime validation hook).
+- [x] Export parity diagnostics through facade recorder.
+- [x] Enforce info_schema parity in schema registry validation and evidence workflows.
 
 ---
 
@@ -287,6 +312,9 @@ ensure_info_schema_parity(snapshot, information_schema)
 
 ## Goal
 Use FunctionFactory + AST builders for CREATE FUNCTION; remove SQL‑string registration entirely.
+
+## Status
+Completed.
 
 ## Representative pattern
 ```python
@@ -303,8 +331,8 @@ factory.register_function(spec)  # scalar/agg/window/table
 - Remove raw SQL UDF creation paths in Python or Rust.
 
 ## Implementation checklist
-- [ ] Ensure all UDF registration uses AST builders.
-- [ ] Ban SQL‑string UDF creation in production code paths.
+- [x] Ensure all UDF registration uses AST builders.
+- [x] Ban SQL‑string UDF creation in production code paths.
 
 ---
 
@@ -312,6 +340,9 @@ factory.register_function(spec)  # scalar/agg/window/table
 
 ## Goal
 Prefer DataFusion’s built‑in schema functions over bespoke UDFs where possible (arrow_typeof, arrow_cast, named_struct, map_*, union_*, unnest).
+
+## Status
+Not started.
 
 ## Representative pattern
 ```python
@@ -338,6 +369,9 @@ expr = call("arrow_cast", col("payload"), literal("struct<key:string,value:strin
 
 ## Goal
 Standardize catalog/schema configuration and require information_schema as canonical introspection surface.
+
+## Status
+Partially complete (information_schema parity enforced; catalog/schema defaults still pending).
 
 ## Representative pattern
 ```python
@@ -366,6 +400,9 @@ ctx = SessionContext(cfg)
 ## Goal
 Treat Delta as first‑class: register DeltaTableProvider and DeltaCdfTableProvider as canonical IO surfaces, and use Delta schema as contract authority.
 
+## Status
+Not started.
+
 ## Representative pattern
 ```rust
 let provider = DeltaTableProvider::try_new(snapshot, log_store, DeltaScanConfig::default())?;
@@ -392,6 +429,9 @@ ctx.register_table("delta_table", Arc::new(provider))?;
 
 ## Goal
 Ensure Ibis always uses the shared SessionContext and uses Arrow batch export for deterministic outputs.
+
+## Status
+Not started.
 
 ## Representative pattern
 ```python
@@ -420,6 +460,9 @@ reader = expr.to_pyarrow_batches(chunk_size=250_000)
 
 ## Goal
 Make SQLGlot canonicalization a mandatory pipeline: qualify, normalize, annotate types, canonicalize, and normalize predicates with deterministic artifacts.
+
+## Status
+Not started.
 
 ## Representative pattern
 ```python
@@ -451,6 +494,9 @@ expr = pushdown_projections(expr, schema=schema)
 ## Goal
 Ensure all execution paths use the centralized Rust UDF platform hook and the facade execution surface.
 
+## Status
+Not started.
+
 ## Representative pattern
 ```python
 facade = DataFusionExecutionFacade.from_execution_context(ctx, backend)
@@ -479,6 +525,9 @@ result = facade.execute(plan)
 ## Goal
 Encode DataFusion‑only rewrite tags in the Rust registry snapshot and wire planner/rewrite behavior exclusively from Rust metadata.
 
+## Status
+In progress (rewrite tags already in snapshot; planner wiring still pending).
+
 ## Representative pattern
 ```rust
 // registry_snapshot.rs
@@ -505,6 +554,9 @@ snapshot.rewrite_tags.insert(name.to_string(), vec!["df_only".to_string()]);
 ## Goal
 Use the ABI‑stable Rust plugin path for any extension UDFs/UDTFs and disallow Python UDFs entirely.
 
+## Status
+Not started.
+
 ## Representative pattern
 ```python
 handle = datafusion_ext.load_df_plugin(path)
@@ -529,8 +581,7 @@ datafusion_ext.register_df_plugin(ctx, handle, table_names, options)
 # Deferred deletions (after all scopes complete)
 
 These must remain until all migrations and parity checks are validated:
-- Python hash/ID helper implementations in `src/ibis_engine/ids.py` and any non‑ExprIR hash code.
-- Static `@ibis.udf.scalar.builtin` definitions in `src/ibis_engine/builtin_udfs.py`.
+- Any remaining non‑ExprIR hash code (if reintroduced).
 - Any remaining non‑facade SessionContext initialization in `src/relspec/*`, `src/normalize/*`, `src/extract/*`, `src/cpg/*`.
 - Any fallback UDF metadata sources outside the Rust registry snapshot.
 - Any SQL‑string UDF creation paths.

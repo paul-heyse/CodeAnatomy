@@ -190,9 +190,20 @@ fn extract_plugin_handle(
 }
 
 #[pyfunction]
-fn register_udfs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    udf_registry::register_all(&ctx.ctx)
-        .map_err(|err| PyRuntimeError::new_err(format!("Failed to register UDFs: {err}")))?;
+#[pyo3(signature = (ctx, enable_async = false, async_udf_timeout_ms = None, async_udf_batch_size = None))]
+fn register_udfs(
+    ctx: PyRef<PySessionContext>,
+    enable_async: bool,
+    async_udf_timeout_ms: Option<u64>,
+    async_udf_batch_size: Option<usize>,
+) -> PyResult<()> {
+    udf_registry::register_all(
+        &ctx.ctx,
+        enable_async,
+        async_udf_timeout_ms,
+        async_udf_batch_size,
+    )
+    .map_err(|err| PyRuntimeError::new_err(format!("Failed to register UDFs: {err}")))?;
     Ok(())
 }
 

@@ -11,7 +11,7 @@ import pyarrow as pa
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from arrowdsl.schema.serialization import schema_fingerprint
-from ibis_engine.builtin_udfs import sha256, stable_hash64
+from ibis_engine.builtin_udfs import ibis_udf_call
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,
@@ -95,7 +95,7 @@ def _row_hash_expr(
     for name, _dtype in columns:
         value = table[name].cast("string")
         parts.append(ibis.coalesce(value, ibis.literal(_HASH_NULL_SENTINEL)).cast("string"))
-    return stable_hash64(_concat_with_sep(parts, _HASH_SEPARATOR))
+    return ibis_udf_call("stable_hash64", _concat_with_sep(parts, _HASH_SEPARATOR))
 
 
 def _as_table(table: TableLike) -> pa.Table:
@@ -188,11 +188,12 @@ def build_scip_snapshot(
     ).distinct()
 
     fingerprints = hashes.group_by("document_id").aggregate(
-        fingerprint=sha256(
+        fingerprint=ibis_udf_call(
+            "sha256",
             hashes.row_hash.group_concat(
                 sep=_HASH_SEPARATOR,
                 order_by=hashes.row_hash,
-            )
+            ),
         )
     )
     occ_counts = _count_by_document(occs, column_name="occurrence_count")

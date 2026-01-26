@@ -20,16 +20,27 @@ SCHEMA_VERSION = 1
 
 @cache
 def _get_dataset_spec(name: str) -> DatasetSpec:
-    from datafusion_engine.runtime import dataset_spec_from_context
+    from schema_spec.system import dataset_spec_from_schema
 
-    return dataset_spec_from_context(name)
+    schema = _get_dataset_schema(name)
+    return dataset_spec_from_schema(name, schema)
 
 
 @cache
 def _get_dataset_schema(name: str) -> pa.Schema:
-    from datafusion_engine.runtime import dataset_schema_from_context
+    from datafusion_engine.schema_registry import schema_for
+    import pyarrow as pa
 
-    return dataset_schema_from_context(name)
+    if name == "cpg_props_by_file_id_v1":
+        base = schema_for("cpg_props_v1")
+        if "file_id" in base.names:
+            return base
+        fields = list(base)
+        fields.append(pa.field("file_id", pa.string(), nullable=True))
+        return pa.schema(fields, metadata=base.metadata)
+    if name in {"cpg_props_global_v1", "cpg_props_json_v1"}:
+        return schema_for("cpg_props_v1")
+    return schema_for(name)
 
 
 # Lazy property accessors

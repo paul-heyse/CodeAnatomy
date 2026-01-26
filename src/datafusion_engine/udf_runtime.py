@@ -14,6 +14,10 @@ _RUST_UDF_SNAPSHOTS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = (
     WeakKeyDictionary()
 )
 _RUST_UDF_DOCS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
+_RUST_UDF_POLICIES: WeakKeyDictionary[
+    SessionContext,
+    tuple[bool, int | None, int | None],
+] = WeakKeyDictionary()
 
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
@@ -35,6 +39,14 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     payload.setdefault("return_types", {})
     payload.setdefault("custom_udfs", [])
     return payload
+
+
+def _notify_ibis_snapshot(snapshot: Mapping[str, object]) -> None:
+    try:
+        from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
+    except ImportError:
+        return
+    register_ibis_udf_snapshot(snapshot)
 
 
 def _build_docs_snapshot(ctx: SessionContext) -> Mapping[str, object]:
@@ -62,6 +74,7 @@ def rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     if cached is not None:
         return cached
     snapshot = _build_registry_snapshot(ctx)
+    _notify_ibis_snapshot(snapshot)
     _RUST_UDF_SNAPSHOTS[ctx] = snapshot
     return snapshot
 
@@ -87,7 +100,13 @@ def rust_udf_docs(ctx: SessionContext) -> Mapping[str, object]:
     return snapshot
 
 
-def register_rust_udfs(ctx: SessionContext) -> Mapping[str, object]:
+def register_rust_udfs(
+    ctx: SessionContext,
+    *,
+    enable_async: bool = False,
+    async_udf_timeout_ms: int | None = None,
+    async_udf_batch_size: int | None = None,
+) -> Mapping[str, object]:
     """Register Rust-backed UDFs once per session context.
 
     Returns
@@ -95,10 +114,39 @@ def register_rust_udfs(ctx: SessionContext) -> Mapping[str, object]:
     Mapping[str, object]
         Snapshot payload for diagnostics.
     """
+    if not enable_async and (async_udf_timeout_ms is not None or async_udf_batch_size is not None):
+        msg = "Async UDF policy provided but enable_async is False."
+        raise ValueError(msg)
+    if enable_async:
+        if async_udf_timeout_ms is None or async_udf_timeout_ms <= 0:
+            msg = "async_udf_timeout_ms must be a positive integer when async UDFs are enabled."
+            raise ValueError(msg)
+        if async_udf_batch_size is None or async_udf_batch_size <= 0:
+            msg = "async_udf_batch_size must be a positive integer when async UDFs are enabled."
+            raise ValueError(msg)
+    policy = (enable_async, async_udf_timeout_ms, async_udf_batch_size)
     if ctx in _RUST_UDF_CONTEXTS:
+        existing = _RUST_UDF_POLICIES.get(ctx)
+        if (
+            existing is not None
+            and existing != policy
+            and not (
+                not enable_async
+                and async_udf_timeout_ms is None
+                and async_udf_batch_size is None
+            )
+        ):
+            msg = "Rust UDFs already registered with a different async policy."
+            raise ValueError(msg)
         return rust_udf_snapshot(ctx)
-    datafusion_ext.register_udfs(ctx)
+    datafusion_ext.register_udfs(
+        ctx,
+        enable_async,
+        async_udf_timeout_ms,
+        async_udf_batch_size,
+    )
     _RUST_UDF_CONTEXTS.add(ctx)
+    _RUST_UDF_POLICIES[ctx] = policy
     return rust_udf_snapshot(ctx)
 
 

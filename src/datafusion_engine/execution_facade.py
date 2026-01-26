@@ -219,6 +219,34 @@ class DataFusionExecutionFacade:
     runtime_profile: DataFusionRuntimeProfile | None = None
     ibis_backend: IbisCompilerBackend | None = None
 
+    def __post_init__(self) -> None:
+        """Ensure the Rust UDF platform is installed for this context."""
+        from datafusion_engine.udf_platform import install_rust_udf_platform
+
+        if self.runtime_profile is None:
+            install_rust_udf_platform(
+                self.ctx,
+                enable_udfs=True,
+                enable_function_factory=True,
+                enable_expr_planners=True,
+                expr_planner_names=("codeanatomy_domain",),
+                strict=True,
+            )
+            return
+        install_rust_udf_platform(
+            self.ctx,
+            enable_udfs=self.runtime_profile.enable_udfs,
+            enable_async_udfs=self.runtime_profile.enable_async_udfs,
+            async_udf_timeout_ms=self.runtime_profile.async_udf_timeout_ms,
+            async_udf_batch_size=self.runtime_profile.async_udf_batch_size,
+            enable_function_factory=self.runtime_profile.enable_function_factory,
+            enable_expr_planners=self.runtime_profile.enable_expr_planners,
+            function_factory_hook=self.runtime_profile.function_factory_hook,
+            expr_planner_hook=self.runtime_profile.expr_planner_hook,
+            expr_planner_names=self.runtime_profile.expr_planner_names,
+            strict=True,
+        )
+
     def io_adapter(self) -> DataFusionIOAdapter:
         """Return a DataFusionIOAdapter for the session context.
 

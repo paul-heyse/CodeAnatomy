@@ -63,6 +63,9 @@ class EvidenceCatalog:
         """Register an evidence dataset using a DatasetSpec."""
         contract = schema_contract_from_dataset_spec(name=name, spec=spec)
         self.register_contract(name, contract, snapshot=snapshot)
+        metadata = spec.schema().metadata
+        if metadata:
+            self.metadata_by_dataset.setdefault(name, {}).update(metadata)
 
     def register_from_contract_spec(
         self,
@@ -186,6 +189,8 @@ def initial_evidence_from_plan(
         if task_names is None or artifact.task.name in task_names
     }
     requirements = evidence_requirements_from_plan(catalog, task_names=task_names)
+    if ctx is not None:
+        _validate_udf_info_schema_parity(ctx)
     seed_sources = requirements.sources - outputs
     evidence = EvidenceCatalog(sources=set(seed_sources))
     ctx_id = id(ctx) if ctx is not None else None
@@ -254,6 +259,27 @@ def _snapshot_from_ctx(ctx: SessionContext | None) -> IntrospectionSnapshot | No
     if ctx is None:
         return None
     return introspection_cache_for_ctx(ctx).snapshot
+
+
+def _validate_udf_info_schema_parity(ctx: SessionContext) -> None:
+    from datafusion_engine.udf_parity import udf_info_schema_parity_report
+
+    report = udf_info_schema_parity_report(ctx)
+    if report.error is not None:
+        msg = f"UDF information_schema parity failed: {report.error}"
+        raise ValueError(msg)
+    if report.missing_in_information_schema:
+        msg = (
+            "UDF information_schema parity failed; missing routines: "
+            f"{list(report.missing_in_information_schema)}"
+        )
+        raise ValueError(msg)
+    if report.param_name_mismatches:
+        msg = (
+            "UDF information_schema parity failed; parameter mismatches: "
+            f"{list(report.param_name_mismatches)}"
+        )
+        raise ValueError(msg)
 
 
 def _dataset_spec_from_known_registries(

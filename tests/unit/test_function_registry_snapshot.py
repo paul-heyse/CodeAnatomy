@@ -13,13 +13,9 @@ def test_function_registry_snapshot_is_stable() -> None:
     assert first.fingerprint() == second.fingerprint()
 
 
-def test_function_registry_includes_pyarrow_compute_list() -> None:
-    """Expose sorted PyArrow compute function names."""
+def test_function_registry_payload_excludes_legacy_lists() -> None:
+    """Ensure legacy compute lists are not included in the payload."""
     registry = default_function_registry()
     payload = registry.payload()
-    compute = payload.get("pyarrow_compute", [])
-    assert isinstance(compute, list)
-    assert compute == sorted(compute)
-    pycapsule_ids = payload.get("pycapsule_ids", [])
-    assert isinstance(pycapsule_ids, list)
-    assert pycapsule_ids == sorted(set(pycapsule_ids))
+    assert "pyarrow_compute" not in payload
+    assert "pycapsule_ids" not in payload

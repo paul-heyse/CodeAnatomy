@@ -446,7 +446,9 @@ fn signature_with_names(signature: Signature, names: &[&str]) -> Signature {
     signature
         .clone()
         .with_parameter_names(name_vec)
-        .unwrap_or(signature)
+        .unwrap_or_else(|err| {
+            panic!("Invalid parameter names for signature: {err}");
+        })
 }
 
 fn string_int_string_signature(volatility: Volatility) -> Signature {

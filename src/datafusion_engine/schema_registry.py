@@ -4412,6 +4412,35 @@ def validate_required_engine_functions(ctx: SessionContext) -> None:
         raise ValueError(msg)
 
 
+def validate_udf_info_schema_parity(ctx: SessionContext) -> None:
+    """Validate UDF parity against information_schema.
+
+    Raises
+    ------
+    ValueError
+        Raised when registry entries are missing from information_schema or
+        parameter names do not match.
+    """
+    from datafusion_engine.udf_parity import udf_info_schema_parity_report
+
+    report = udf_info_schema_parity_report(ctx)
+    if report.error is not None:
+        msg = f"UDF information_schema parity failed: {report.error}"
+        raise ValueError(msg)
+    if report.missing_in_information_schema:
+        msg = (
+            "UDF information_schema parity failed; missing routines: "
+            f"{list(report.missing_in_information_schema)}"
+        )
+        raise ValueError(msg)
+    if report.param_name_mismatches:
+        msg = (
+            "UDF information_schema parity failed; parameter mismatches: "
+            f"{list(report.param_name_mismatches)}"
+        )
+        raise ValueError(msg)
+
+
 def registered_table_names(ctx: SessionContext) -> set[str]:
     """Return registered table names from information_schema.
 
@@ -4588,6 +4617,7 @@ __all__ = [
     "validate_required_bytecode_functions",
     "validate_required_cst_functions",
     "validate_required_engine_functions",
+    "validate_udf_info_schema_parity",
     "validate_required_symtable_functions",
     "validate_schema_metadata",
     "validate_scip_views",

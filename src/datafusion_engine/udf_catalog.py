@@ -1,13 +1,9 @@
-"""UDF tier management and performance-based function resolution.
-
-This module implements a Rust-first UDF performance ladder that prioritizes
-DataFusion builtins and disallows Python/PyArrow/Pandas UDF execution.
-"""
+"""Rust UDF metadata and builtin resolution helpers."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
@@ -23,8 +19,8 @@ from datafusion_engine.udf_signature import (
 if TYPE_CHECKING:
     from datafusion_engine.schema_introspection import SchemaIntrospector
 
-# UdfTier type - must match engine UDF tier definitions
-UdfTier = Literal["builtin", "pyarrow", "pandas", "python"]
+# UdfTier type - Rust-only execution
+UdfTier = Literal["builtin"]
 
 BuiltinCategory = Literal[
     "math",
@@ -36,12 +32,6 @@ BuiltinCategory = Literal[
     "datetime",
 ]
 UdfKind = Literal["scalar", "aggregate", "window", "table"]
-
-# Performance tier ordering from fastest to slowest (non-Rust tiers retained
-# for compatibility, but rejected for DataFusion execution).
-UDF_TIER_LADDER: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
-NON_RUST_UDF_TIERS: frozenset[UdfTier] = frozenset({"pyarrow", "pandas", "python"})
-
 
 @dataclass(frozen=True)
 class DataFusionUdfSpec:
@@ -69,13 +59,10 @@ class DataFusionUdfSpec:
         ValueError
             Raised when the tier is not supported.
         """
-        if self.udf_tier not in UDF_TIER_LADDER:
-            msg = f"Unsupported UDF tier: {self.udf_tier!r}."
-            raise ValueError(msg)
-        if self.udf_tier in NON_RUST_UDF_TIERS:
+        if self.udf_tier != "builtin":
             msg = (
-                "Non-Rust UDF tiers are disabled for DataFusion. "
-                "Use Rust UDFs instead."
+                "Only Rust builtin UDFs are supported. "
+                f"Received tier {self.udf_tier!r}."
             )
             raise ValueError(msg)
 
@@ -455,80 +442,6 @@ def _default_builtin_spec(func_id: str) -> BuiltinFunctionSpec:
 
 
 @dataclass(frozen=True)
-class UdfTierPolicy:
-    """Policy for UDF tier preferences and performance gates.
-
-    This policy defines the preference order for function resolution and
-    gates for slow UDF usage.
-    """
-
-    tier_preference: tuple[UdfTier, ...] = ("builtin",)
-    allow_python_udfs: bool = False
-    allow_pyarrow_udfs: bool = False
-    allow_pandas_udfs: bool = False
-    require_builtin_when_available: bool = False
-    slow_udf_warning: bool = True
-
-    def __post_init__(self) -> None:
-        """Validate tier preferences.
-
-        Raises
-        ------
-        ValueError
-            If a tier preference is not part of the supported ladder.
-        """
-        for tier in self.tier_preference:
-            if tier not in UDF_TIER_LADDER:
-                msg = f"Invalid UDF tier: {tier!r}. Must be one of {UDF_TIER_LADDER}"
-                raise ValueError(msg)
-
-
-@dataclass(frozen=True)
-class UdfPerformancePolicy:
-    """Performance policy with gates for slow UDF execution.
-
-    This policy defines performance thresholds and restrictions for UDF usage
-    in performance-critical contexts.
-    """
-
-    allow_python_udfs: bool = False
-    allow_pyarrow_udfs: bool = False
-    allow_pandas_udfs: bool = False
-    max_python_udf_count: int | None = None
-    warn_on_python_udfs: bool = True
-    require_explicit_approval: frozenset[str] = field(default_factory=frozenset)
-
-    def is_udf_allowed(self, func_id: str, udf_tier: UdfTier) -> tuple[bool, str | None]:
-        """Check if a UDF is allowed under this performance policy.
-
-        Parameters
-        ----------
-        func_id:
-            Function identifier to check.
-        udf_tier:
-            Performance tier of the UDF.
-
-        Returns
-        -------
-        tuple[bool, str | None]
-            Tuple of (is_allowed, reason). If not allowed, reason contains explanation.
-        """
-        if udf_tier == "python" and not self.allow_python_udfs:
-            return False, f"Python UDFs are not allowed (function: {func_id!r})"
-
-        if udf_tier == "pyarrow" and not self.allow_pyarrow_udfs:
-            return False, f"PyArrow UDFs are not allowed (function: {func_id!r})"
-
-        if udf_tier == "pandas" and not self.allow_pandas_udfs:
-            return False, f"Pandas UDFs are not allowed (function: {func_id!r})"
-
-        if func_id in self.require_explicit_approval:
-            return False, f"Function {func_id!r} requires explicit approval"
-
-        return True, None
-
-
-@dataclass(frozen=True)
 class ResolvedFunction:
     """Result of function resolution with tier information."""
 
@@ -540,24 +453,20 @@ class ResolvedFunction:
 
 
 class UdfCatalog:
-    """Catalog for managing UDF registrations and tier-based resolution."""
+    """Catalog for managing UDF registrations and builtin resolution."""
 
     def __init__(
         self,
         *,
-        tier_policy: UdfTierPolicy | None = None,
         udf_specs: Mapping[str, DataFusionUdfSpec] | None = None,
     ) -> None:
         """Initialize the UDF catalog.
 
         Parameters
         ----------
-        tier_policy:
-            Optional tier policy for function resolution.
         udf_specs:
             Mapping of function IDs to UDF specifications.
         """
-        self._tier_policy = tier_policy or UdfTierPolicy()
         self._udf_specs = dict(udf_specs) if udf_specs else {}
         self._runtime_catalog: FunctionCatalog | None = None
 
@@ -642,9 +551,7 @@ class UdfCatalog:
         """
         catalog = self._require_runtime_catalog()
         builtin_available = catalog.is_builtin(func_id)
-        if builtin_available and (
-            prefer_builtin or self._tier_policy.require_builtin_when_available
-        ):
+        if builtin_available and prefer_builtin:
             sig = catalog.function_signatures.get(func_id)
             if sig is None:
                 sig = catalog.function_signatures.get(func_id.lower())
@@ -709,12 +616,8 @@ class UdfCatalog:
         resolved = self.resolve_function(func_id, prefer_builtin=True)
         if not resolved:
             return None
-
-        tiers = allowed_tiers or self._tier_policy.tier_preference
-        if resolved.tier not in tiers:
-            return None
-
-        return resolved
+        tiers = allowed_tiers or ("builtin",)
+        return resolved if resolved.tier in tiers else None
 
     def list_functions_by_tier(self, tier: UdfTier) -> tuple[str, ...]:
         """List all function IDs for a specific tier.
@@ -729,11 +632,11 @@ class UdfCatalog:
         tuple[str, ...]
             Tuple of function IDs in the specified tier.
         """
-        if tier == "builtin":
-            catalog = self._require_runtime_catalog()
-            return tuple(sorted(catalog.function_names))
-
-        return tuple(func_id for func_id, spec in self._udf_specs.items() if spec.udf_tier == tier)
+        if tier != "builtin":
+            msg = f"Unsupported UDF tier: {tier!r}."
+            raise ValueError(msg)
+        catalog = self._require_runtime_catalog()
+        return tuple(sorted(catalog.function_names))
 
     def get_tier_stats(self) -> Mapping[str, int]:
         """Get statistics on function counts by tier.
@@ -744,47 +647,7 @@ class UdfCatalog:
             Mapping of tier names to function counts.
         """
         catalog = self._require_runtime_catalog()
-        stats: dict[str, int] = {
-            "builtin": len(catalog.function_names),
-            "pandas": 0,
-            "pyarrow": 0,
-            "python": 0,
-        }
-
-        for spec in self._udf_specs.values():
-            tier = spec.udf_tier
-            if tier in stats:
-                stats[tier] += 1
-
-        return stats
-
-
-def check_udf_allowed(
-    func_id: str,
-    resolved: ResolvedFunction,
-    *,
-    policy: UdfPerformancePolicy,
-) -> tuple[bool, str | None]:
-    """Check if a resolved UDF is allowed under a performance policy.
-
-    Parameters
-    ----------
-    func_id:
-        Function identifier being checked.
-    resolved:
-        Resolved function information.
-    policy:
-        Performance policy to apply.
-
-    Returns
-    -------
-    tuple[bool, str | None]
-        Tuple of (is_allowed, reason). If not allowed, reason contains explanation.
-    """
-    if resolved.tier == "builtin":
-        return True, None
-
-    return policy.is_udf_allowed(func_id, resolved.tier)
+        return {"builtin": len(catalog.function_names)}
 
 
 def create_default_catalog(
@@ -802,14 +665,7 @@ def create_default_catalog(
     UdfCatalog
         Catalog with default configuration.
     """
-    policy = UdfTierPolicy(
-        tier_preference=("builtin",),
-        allow_python_udfs=False,
-        allow_pyarrow_udfs=False,
-        allow_pandas_udfs=False,
-        require_builtin_when_available=True,
-    )
-    return UdfCatalog(tier_policy=policy, udf_specs=udf_specs)
+    return UdfCatalog(udf_specs=udf_specs)
 
 
 def create_strict_catalog(
@@ -827,14 +683,7 @@ def create_strict_catalog(
     UdfCatalog
         Catalog with strict builtin-only configuration.
     """
-    policy = UdfTierPolicy(
-        tier_preference=("builtin",),
-        allow_python_udfs=False,
-        allow_pyarrow_udfs=False,
-        allow_pandas_udfs=False,
-        require_builtin_when_available=True,
-    )
-    return UdfCatalog(tier_policy=policy, udf_specs=udf_specs)
+    return UdfCatalog(udf_specs=udf_specs)
 
 
 def _registry_names(snapshot: Mapping[str, object]) -> set[str]:
@@ -1095,7 +944,6 @@ def get_strict_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
 
 
 __all__ = [
-    "UDF_TIER_LADDER",
     "BuiltinCategory",
     "BuiltinFunctionSpec",
     "DataFusionUdfSpec",
@@ -1103,10 +951,7 @@ __all__ = [
     "FunctionSignature",
     "ResolvedFunction",
     "UdfCatalog",
-    "UdfPerformancePolicy",
     "UdfTier",
-    "UdfTierPolicy",
-    "check_udf_allowed",
     "create_default_catalog",
     "create_strict_catalog",
     "datafusion_udf_specs",

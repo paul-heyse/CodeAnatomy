@@ -229,7 +229,20 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     if session is not None:
         from datafusion_engine.udf_runtime import register_rust_udfs
 
-        registry_snapshot = register_rust_udfs(session)
+        enable_async = False
+        async_timeout_ms = None
+        async_batch_size = None
+        if runtime.datafusion is not None:
+            enable_async = runtime.datafusion.enable_async_udfs
+            if enable_async:
+                async_timeout_ms = runtime.datafusion.async_udf_timeout_ms
+                async_batch_size = runtime.datafusion.async_udf_batch_size
+        registry_snapshot = register_rust_udfs(
+            session,
+            enable_async=enable_async,
+            async_udf_timeout_ms=async_timeout_ms,
+            async_udf_batch_size=async_batch_size,
+        )
     unified_registry = build_unified_function_registry(
         datafusion_function_catalog=function_catalog,
         snapshot=introspection_snapshot,
@@ -327,7 +340,20 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
     if session is not None:
         from datafusion_engine.udf_runtime import register_rust_udfs
 
-        registry_snapshot = register_rust_udfs(session)
+        enable_async = False
+        async_timeout_ms = None
+        async_batch_size = None
+        if runtime.datafusion is not None:
+            enable_async = runtime.datafusion.enable_async_udfs
+            if enable_async:
+                async_timeout_ms = runtime.datafusion.async_udf_timeout_ms
+                async_batch_size = runtime.datafusion.async_udf_batch_size
+        registry_snapshot = register_rust_udfs(
+            session,
+            enable_async=enable_async,
+            async_udf_timeout_ms=async_timeout_ms,
+            async_udf_batch_size=async_batch_size,
+        )
     unified_registry = build_unified_function_registry(
         datafusion_function_catalog=function_catalog or [],
         snapshot=introspection_snapshot,

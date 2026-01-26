@@ -40,14 +40,6 @@ if TYPE_CHECKING:
     )
     from extract.repo_blobs import RepoBlobOptions, scan_repo_blobs
     from extract.repo_scan import RepoScanOptions, scan_repo
-    from extract.runtime_inspect_extract import (
-        RuntimeInspectOptions,
-        RuntimeInspectResult,
-        extract_runtime_members,
-        extract_runtime_objects,
-        extract_runtime_signatures,
-        extract_runtime_tables,
-    )
     from extract.scip_extract import (
         SCIPIndexOptions,
         SCIPParseOptions,
@@ -83,8 +75,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "CSTExtractResult": ("extract.cst_extract", "CSTExtractResult"),
     "RepoBlobOptions": ("extract.repo_blobs", "RepoBlobOptions"),
     "RepoScanOptions": ("extract.repo_scan", "RepoScanOptions"),
-    "RuntimeInspectOptions": ("extract.runtime_inspect_extract", "RuntimeInspectOptions"),
-    "RuntimeInspectResult": ("extract.runtime_inspect_extract", "RuntimeInspectResult"),
     "SCIPIndexOptions": ("extract.scip_extract", "SCIPIndexOptions"),
     "SCIPParseOptions": ("extract.scip_extract", "SCIPParseOptions"),
     "ScipIdentity": ("extract.scip_identity", "ScipIdentity"),
@@ -102,10 +92,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "extract_cst": ("extract.cst_extract", "extract_cst"),
     "extract_cst_tables": ("extract.cst_extract", "extract_cst_tables"),
     "scan_repo_blobs": ("extract.repo_blobs", "scan_repo_blobs"),
-    "extract_runtime_members": ("extract.runtime_inspect_extract", "extract_runtime_members"),
-    "extract_runtime_objects": ("extract.runtime_inspect_extract", "extract_runtime_objects"),
-    "extract_runtime_signatures": ("extract.runtime_inspect_extract", "extract_runtime_signatures"),
-    "extract_runtime_tables": ("extract.runtime_inspect_extract", "extract_runtime_tables"),
     "extract_scip_tables": ("extract.scip_extract", "extract_scip_tables"),
     "extract_symtable": ("extract.symtable_extract", "extract_symtable"),
     "extract_symtables_table": ("extract.symtable_extract", "extract_symtables_table"),
@@ -141,8 +127,6 @@ __all__ = (
     "CSTExtractResult",
     "RepoBlobOptions",
     "RepoScanOptions",
-    "RuntimeInspectOptions",
-    "RuntimeInspectResult",
     "SCIPIndexOptions",
     "SCIPParseOptions",
     "ScipIdentity",
@@ -159,10 +143,6 @@ __all__ = (
     "extract_bytecode_table",
     "extract_cst",
     "extract_cst_tables",
-    "extract_runtime_members",
-    "extract_runtime_objects",
-    "extract_runtime_signatures",
-    "extract_runtime_tables",
     "extract_scip_tables",
     "extract_symtable",
     "extract_symtables_table",

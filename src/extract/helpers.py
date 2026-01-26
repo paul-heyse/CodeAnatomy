@@ -804,7 +804,17 @@ def _record_extract_udf_parity(
     from ibis_engine.builtin_udfs import ibis_udf_specs
 
     session = profile.session_context()
-    registry_snapshot = register_rust_udfs(session)
+    async_timeout_ms = None
+    async_batch_size = None
+    if profile.enable_async_udfs:
+        async_timeout_ms = profile.async_udf_timeout_ms
+        async_batch_size = profile.async_udf_batch_size
+    registry_snapshot = register_rust_udfs(
+        session,
+        enable_async=profile.enable_async_udfs,
+        async_udf_timeout_ms=async_timeout_ms,
+        async_udf_batch_size=async_batch_size,
+    )
     report = udf_parity_report(
         session,
         ibis_specs=ibis_udf_specs(registry_snapshot=registry_snapshot),

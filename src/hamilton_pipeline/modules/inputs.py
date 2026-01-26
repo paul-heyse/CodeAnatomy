@@ -27,7 +27,6 @@ from hamilton_pipeline.pipeline_types import (
     OutputStoragePolicy,
     RelspecConfig,
     RepoScanConfig,
-    RuntimeInspectConfig,
     ScipIdentityOverrides,
     ScipIndexConfig,
     TreeSitterConfig,
@@ -452,42 +451,6 @@ def enable_tree_sitter() -> bool:
 
 
 @tag(layer="inputs", kind="scalar")
-def enable_runtime_inspect() -> bool:
-    """Return whether runtime inspection is enabled.
-
-    Returns
-    -------
-    bool
-        True to enable runtime inspection.
-    """
-    return False
-
-
-@tag(layer="inputs", kind="scalar")
-def runtime_module_allowlist() -> list[str]:
-    """Return the default module allowlist for runtime inspection.
-
-    Returns
-    -------
-    list[str]
-        Module allowlist strings.
-    """
-    return []
-
-
-@tag(layer="inputs", kind="scalar")
-def runtime_timeout_s() -> int:
-    """Return the runtime inspection timeout in seconds.
-
-    Returns
-    -------
-    int
-        Timeout seconds for runtime inspection.
-    """
-    return 15
-
-
-@tag(layer="inputs", kind="scalar")
 def relspec_mode() -> Literal["memory", "filesystem"]:
     """Return the relationship spec mode.
 
@@ -774,24 +737,3 @@ def tree_sitter_config(*, enable_tree_sitter: bool) -> TreeSitterConfig:
         Tree-sitter configuration bundle.
     """
     return TreeSitterConfig(enable_tree_sitter=enable_tree_sitter)
-
-
-@tag(layer="inputs", kind="object")
-def runtime_inspect_config(
-    *,
-    enable_runtime_inspect: bool,
-    runtime_module_allowlist: list[str],
-    runtime_timeout_s: int,
-) -> RuntimeInspectConfig:
-    """Bundle runtime inspection configuration values.
-
-    Returns
-    -------
-    RuntimeInspectConfig
-        Runtime inspection configuration bundle.
-    """
-    return RuntimeInspectConfig(
-        enable_runtime_inspect=enable_runtime_inspect,
-        module_allowlist=tuple(runtime_module_allowlist),
-        timeout_s=int(runtime_timeout_s),
-    )

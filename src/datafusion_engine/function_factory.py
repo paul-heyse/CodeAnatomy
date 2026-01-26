@@ -11,7 +11,7 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from sqlglot_tools.ddl_builders import CreateFunctionConfig, build_create_function_ast
-from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_sql
+from sqlglot_tools.optimizer import resolve_sqlglot_policy
 from storage.ipc import payload_ipc_bytes
 
 if TYPE_CHECKING:
@@ -362,24 +362,6 @@ def create_udwf_spec(spec: UdwfSpecInput) -> RulePrimitive:
     )
 
 
-def create_function_statement(config: CreateFunctionConfig) -> str:
-    """Return CREATE FUNCTION SQL from a structured config.
-
-    Parameters
-    ----------
-    config
-        Create function configuration.
-
-    Returns
-    -------
-    str
-        Rendered CREATE FUNCTION statement.
-    """
-    policy = resolve_sqlglot_policy(name="datafusion_compile")
-    expr = build_create_function_ast(config=config)
-    return sqlglot_sql(expr, policy=policy)
-
-
 def register_function(
     ctx: SessionContext,
     *,
@@ -397,11 +379,17 @@ def register_function(
     runtime_profile
         Optional runtime profile for policy enforcement.
     """
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
+    import ibis
 
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
-    ddl = create_function_statement(config)
-    adapter.execute_statement(ddl, allow_statements=True)
+    from datafusion_engine.introspection import invalidate_introspection_cache
+    from sqlglot_tools.bridge import execute_sqlglot_ast
+
+    _ = runtime_profile
+    backend = ibis.datafusion.connect(ctx)
+    expr = build_create_function_ast(config=config)
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
+    execute_sqlglot_ast(backend, expr, dialect=policy.write_dialect)
+    invalidate_introspection_cache(ctx)
 
 
 __all__ = [
@@ -414,7 +402,6 @@ __all__ = [
     "UdfVolatility",
     "UdwfSpecInput",
     "build_create_function_ast",
-    "create_function_statement",
     "create_udaf_spec",
     "create_udwf_spec",
     "default_function_factory_policy",

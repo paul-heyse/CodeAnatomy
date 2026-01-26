@@ -159,15 +159,6 @@ class ScipIndexInputs:
 
 
 @dataclass(frozen=True)
-class RuntimeInspectConfig:
-    """Configuration for runtime inspection extraction."""
-
-    enable_runtime_inspect: bool
-    module_allowlist: tuple[str, ...]
-    timeout_s: int
-
-
-@dataclass(frozen=True)
 class CstRelspecInputs:
     """CST inputs required for relationship-spec datasets."""
 
@@ -271,16 +262,6 @@ class DiagnosticsInputs:
 
 
 @dataclass(frozen=True)
-class RuntimeInputs:
-    """Runtime inspection tables used in CPG build steps."""
-
-    rt_objects: TableLike | DatasetSource | ViewReference
-    rt_signatures: TableLike | DatasetSource | ViewReference
-    rt_signature_params: TableLike | DatasetSource | ViewReference
-    rt_members: TableLike | DatasetSource | ViewReference
-
-
-@dataclass(frozen=True)
 class CpgExtraInputs:
     """Optional inputs for CPG nodes/props/edges."""
 
@@ -290,10 +271,6 @@ class CpgExtraInputs:
     type_exprs_norm: TableLike | DatasetSource | ViewReference
     types_norm: TableLike | DatasetSource | ViewReference
     diagnostics_norm: TableLike | DatasetSource | ViewReference
-    rt_objects: TableLike | DatasetSource | ViewReference
-    rt_signatures: TableLike | DatasetSource | ViewReference
-    rt_signature_params: TableLike | DatasetSource | ViewReference
-    rt_members: TableLike | DatasetSource | ViewReference
 
 
 @dataclass(frozen=True)

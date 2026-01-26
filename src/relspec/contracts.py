@@ -7,7 +7,6 @@ from functools import cache
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import ordering_metadata_spec
-from datafusion_engine.runtime import dataset_schema_from_context
 from datafusion_engine.schema_contracts import SchemaContract, schema_contract_from_dataset_spec
 from datafusion_engine.schema_registry import (
     REL_CALLSITE_QNAME_SCHEMA,
@@ -15,6 +14,7 @@ from datafusion_engine.schema_registry import (
     REL_DEF_SYMBOL_SCHEMA,
     REL_IMPORT_SYMBOL_SCHEMA,
     REL_NAME_SYMBOL_SCHEMA,
+    RELATION_OUTPUT_SCHEMA as RELATION_OUTPUT_BASE_SCHEMA,
 )
 from relspec.errors import RelspecValidationError
 from schema_spec.system import (
@@ -48,7 +48,7 @@ RELATION_OUTPUT_ORDERING_KEYS: tuple[tuple[str, str], ...] = (
 RELATION_OUTPUT_SCHEMA = ordering_metadata_spec(
     OrderingLevel.EXPLICIT,
     keys=RELATION_OUTPUT_ORDERING_KEYS,
-).apply(dataset_schema_from_context(RELATION_OUTPUT_NAME))
+).apply(RELATION_OUTPUT_BASE_SCHEMA)
 
 
 @cache

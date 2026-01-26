@@ -44,10 +44,21 @@ def _session_context(ctx: ExecutionContext | None) -> SessionContext:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     if ctx is None or ctx.runtime.datafusion is None:
-        session = DataFusionRuntimeProfile().session_context()
+        profile = DataFusionRuntimeProfile()
     else:
-        session = ctx.runtime.datafusion.session_context()
-    register_rust_udfs(session)
+        profile = ctx.runtime.datafusion
+    session = profile.session_context()
+    async_timeout_ms = None
+    async_batch_size = None
+    if profile.enable_async_udfs:
+        async_timeout_ms = profile.async_udf_timeout_ms
+        async_batch_size = profile.async_udf_batch_size
+    register_rust_udfs(
+        session,
+        enable_async=profile.enable_async_udfs,
+        async_udf_timeout_ms=async_timeout_ms,
+        async_udf_batch_size=async_batch_size,
+    )
     return session
 
 

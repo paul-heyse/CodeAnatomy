@@ -84,11 +84,12 @@ from datafusion_engine.schema_registry import (
     validate_scip_views,
     validate_symtable_views,
     validate_ts_views,
+    validate_udf_info_schema_parity,
 )
 from datafusion_engine.sql_safety import execution_policy_for_profile
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
-from datafusion_engine.udf_runtime import register_rust_udfs, rust_udf_docs
+from datafusion_engine.udf_runtime import register_rust_udfs
 from engine.plan_cache import PlanCache
 from serde_msgspec import StructBase
 from storage.ipc import payload_hash
@@ -220,7 +221,12 @@ _EXTENSIONS_SCHEMA = pa.struct(
         pa.field("delta_plan_codec_logical", pa.string()),
         pa.field("expr_planners_enabled", pa.bool_()),
         pa.field("expr_planner_names", pa.list_(pa.string())),
+        pa.field("physical_expr_adapter_factory", pa.bool_()),
+        pa.field("schema_evolution_adapter_enabled", pa.bool_()),
         pa.field("named_args_supported", pa.bool_()),
+        pa.field("async_udfs_enabled", pa.bool_()),
+        pa.field("async_udf_timeout_ms", pa.int64()),
+        pa.field("async_udf_batch_size", pa.int64()),
         pa.field("distributed", pa.bool_()),
         pa.field("distributed_context_factory", pa.bool_()),
     ]
@@ -1998,7 +2004,12 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
             "delta_plan_codec_logical": profile.delta_plan_codec_logical,
             "expr_planners_enabled": profile.enable_expr_planners,
             "expr_planner_names": list(profile.expr_planner_names),
+            "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
+            "schema_evolution_adapter_enabled": profile.enable_schema_evolution_adapter,
             "named_args_supported": profile.named_args_supported(),
+            "async_udfs_enabled": profile.enable_async_udfs,
+            "async_udf_timeout_ms": profile.async_udf_timeout_ms,
+            "async_udf_batch_size": profile.async_udf_batch_size,
             "distributed": profile.distributed,
             "distributed_context_factory": bool(profile.distributed_context_factory),
         },
@@ -2231,6 +2242,10 @@ class _RuntimeDiagnosticsMixin:
             "expr_planners_enabled": profile.enable_expr_planners,
             "expr_planner_hook": bool(profile.expr_planner_hook),
             "expr_planner_names": list(profile.expr_planner_names),
+            "enable_udfs": profile.enable_udfs,
+            "enable_async_udfs": profile.enable_async_udfs,
+            "async_udf_timeout_ms": profile.async_udf_timeout_ms,
+            "async_udf_batch_size": profile.async_udf_batch_size,
             "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
             "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
             "delta_querybuilder_enabled": profile.enable_delta_querybuilder,
@@ -2369,6 +2384,9 @@ class _RuntimeDiagnosticsMixin:
                 "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
                 "schema_evolution_adapter_enabled": profile.enable_schema_evolution_adapter,
                 "named_args_supported": profile.named_args_supported(),
+                "async_udfs_enabled": profile.enable_async_udfs,
+                "async_udf_timeout_ms": profile.async_udf_timeout_ms,
+                "async_udf_batch_size": profile.async_udf_batch_size,
                 "distributed": profile.distributed,
                 "distributed_context_factory": bool(profile.distributed_context_factory),
             },
@@ -2497,6 +2515,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     schema_adapter_factories: Mapping[str, object] = field(default_factory=dict)
     enable_schema_evolution_adapter: bool = True
     enable_udfs: bool = True
+    enable_async_udfs: bool = False
+    async_udf_timeout_ms: int | None = None
+    async_udf_batch_size: int | None = None
     plugin_specs: tuple[DataFusionPluginSpec, ...] = ()
     plugin_manager: DataFusionPluginManager | None = None
     udf_catalog_policy: Literal["default", "strict"] = "default"
@@ -2577,6 +2598,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "plugin_manager",
                 DataFusionPluginManager(self.plugin_specs),
             )
+        async_policy = self.validate_async_udf_policy()
+        if not async_policy["valid"]:
+            msg = f"Async UDF policy invalid: {async_policy['errors']}."
+            raise ValueError(msg)
 
     def session_config(self) -> SessionConfig:
         """Return a SessionConfig configured from the profile.
@@ -2732,14 +2757,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_registry_catalogs(ctx)
         self._install_delta_table_factory(ctx)
         self._install_plugins(ctx)
-        self._install_udfs(ctx)
+        self._install_udf_platform(ctx)
         self._install_schema_registry(ctx)
         self._validate_rule_function_allowlist(ctx)
         self._prepare_statements(ctx)
         self.ensure_delta_plan_codecs(ctx)
-        self._install_function_factory(ctx)
-        self._install_expr_planners(ctx)
-        self._record_extension_parity_validation()
+        self._record_extension_parity_validation(ctx)
         self._install_physical_expr_adapter_factory(ctx)
         self._install_tracing(ctx)
         self._install_cache_tables(ctx)
@@ -2765,14 +2788,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._install_registry_catalogs(ctx)
         self._install_delta_table_factory(ctx)
         self._install_plugins(ctx)
-        self._install_udfs(ctx)
+        self._install_udf_platform(ctx)
         self._install_schema_registry(ctx)
         self._validate_rule_function_allowlist(ctx)
         self._prepare_statements(ctx)
         self.ensure_delta_plan_codecs(ctx)
-        self._install_function_factory(ctx)
-        self._install_expr_planners(ctx)
-        self._record_extension_parity_validation()
+        self._record_extension_parity_validation(ctx)
         self._install_physical_expr_adapter_factory(ctx)
         self._install_tracing(ctx)
         self._install_cache_tables(ctx)
@@ -2794,6 +2815,34 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.expr_planner_hook is not None:
             return True
         return bool(self.expr_planner_names)
+
+    def validate_async_udf_policy(self) -> dict[str, object]:
+        """Validate async UDF policy configuration.
+
+        Returns
+        -------
+        dict[str, object]
+            Validation report with status and configuration details.
+        """
+        errors: list[str] = []
+        if self.enable_async_udfs and not self.enable_udfs:
+            errors.append("Async UDFs require enable_udfs to be True.")
+        if not self.enable_async_udfs and (
+            self.async_udf_timeout_ms is not None or self.async_udf_batch_size is not None
+        ):
+            errors.append("Async UDF settings provided while async UDFs are disabled.")
+        if self.enable_async_udfs:
+            if self.async_udf_timeout_ms is None or self.async_udf_timeout_ms <= 0:
+                errors.append("async_udf_timeout_ms must be a positive integer.")
+            if self.async_udf_batch_size is None or self.async_udf_batch_size <= 0:
+                errors.append("async_udf_batch_size must be a positive integer.")
+        return {
+            "valid": not errors,
+            "enable_async_udfs": self.enable_async_udfs,
+            "async_udf_timeout_ms": self.async_udf_timeout_ms,
+            "async_udf_batch_size": self.async_udf_batch_size,
+            "errors": errors,
+        }
 
     def validate_named_args_extension_parity(self) -> dict[str, object]:
         """Validate that named-arg support aligns with extension capabilities.
@@ -2829,6 +2878,40 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "named_args_supported": self.named_args_supported(),
             "warnings": warnings,
         }
+
+    def validate_udf_info_schema_parity(self, ctx: SessionContext) -> dict[str, object]:
+        """Validate that Rust UDFs appear in information_schema.
+
+        Returns
+        -------
+        dict[str, object]
+            Parity report payload.
+        """
+        if not self.enable_information_schema:
+            return {
+                "missing_in_information_schema": [],
+                "routines_available": False,
+                "error": "information_schema disabled",
+            }
+        from datafusion_engine.udf_parity import udf_info_schema_parity_report
+
+        report = udf_info_schema_parity_report(ctx)
+        if report.error is not None:
+            msg = f"information_schema parity check failed: {report.error}"
+            raise ValueError(msg)
+        if report.missing_in_information_schema:
+            msg = (
+                "information_schema parity check failed; "
+                f"missing routines: {list(report.missing_in_information_schema)}"
+            )
+            raise ValueError(msg)
+        if report.param_name_mismatches:
+            msg = (
+                "information_schema parity check failed; "
+                f"parameter name mismatches: {list(report.param_name_mismatches)}"
+            )
+            raise ValueError(msg)
+        return report.payload()
 
     def record_schema_snapshots(self) -> None:
         """Record information_schema snapshots to diagnostics when enabled."""
@@ -2933,13 +3016,41 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             msg = "Delta session defaults require datafusion_ext."
             raise RuntimeError(msg) from cause
 
-    def _install_udfs(self, ctx: SessionContext) -> None:
-        """Install registered UDFs on the session context."""
-        if self.enable_udfs:
-            snapshot = register_rust_udfs(ctx)
-            self._record_udf_snapshot(snapshot)
-            if self.diagnostics_sink is not None:
-                self._record_udf_docs(rust_udf_docs(ctx))
+    def _install_udf_platform(self, ctx: SessionContext) -> None:
+        """Install the unified Rust UDF platform on the session context."""
+        from datafusion_engine.udf_platform import install_rust_udf_platform
+
+        platform = install_rust_udf_platform(
+            ctx,
+            enable_udfs=self.enable_udfs,
+            enable_async_udfs=self.enable_async_udfs,
+            async_udf_timeout_ms=self.async_udf_timeout_ms,
+            async_udf_batch_size=self.async_udf_batch_size,
+            enable_function_factory=self.enable_function_factory,
+            enable_expr_planners=self.enable_expr_planners,
+            function_factory_hook=self.function_factory_hook,
+            expr_planner_hook=self.expr_planner_hook,
+            expr_planner_names=self.expr_planner_names,
+            strict=True,
+        )
+        if platform.snapshot is not None:
+            self._record_udf_snapshot(platform.snapshot)
+        if platform.docs is not None and self.diagnostics_sink is not None:
+            self._record_udf_docs(platform.docs)
+        if platform.function_factory is not None:
+            self._record_function_factory(
+                available=platform.function_factory.available,
+                installed=platform.function_factory.installed,
+                error=platform.function_factory.error,
+                policy=platform.function_factory_policy,
+            )
+        if platform.expr_planners is not None:
+            self._record_expr_planners(
+                available=platform.expr_planners.available,
+                installed=platform.expr_planners.installed,
+                error=platform.expr_planners.error,
+                policy=platform.expr_planner_policy,
+            )
         self._refresh_udf_catalog(ctx)
 
     def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
@@ -2971,7 +3082,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         from datafusion_engine.udf_runtime import register_rust_udfs
         from engine.unified_registry import build_unified_function_registry
 
-        registry_snapshot = register_rust_udfs(introspector.ctx)
+        registry_snapshot = register_rust_udfs(
+            introspector.ctx,
+            enable_async=self.enable_async_udfs,
+            async_udf_timeout_ms=self.async_udf_timeout_ms,
+            async_udf_batch_size=self.async_udf_batch_size,
+        )
 
         unified_registry = build_unified_function_registry(
             datafusion_function_catalog=introspector.function_catalog_snapshot(
@@ -4110,6 +4226,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             ("scip_views", validate_scip_views),
             ("symtable_views", validate_symtable_views),
             ("bytecode_views", validate_bytecode_views),
+            ("udf_info_schema_parity", validate_udf_info_schema_parity),
             ("engine_functions", validate_required_engine_functions),
         ):
             try:
@@ -4300,10 +4417,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             },
         )
 
-    def _record_extension_parity_validation(self) -> None:
+    def _record_extension_parity_validation(self, ctx: SessionContext) -> None:
+        payload = dict(self.validate_named_args_extension_parity())
+        payload["async_udf_policy"] = self.validate_async_udf_policy()
+        payload["udf_info_schema_parity"] = self.validate_udf_info_schema_parity(ctx)
         if self.diagnostics_sink is None:
             return
-        payload = dict(self.validate_named_args_extension_parity())
         payload["event_time_unix_ms"] = int(time.time() * 1000)
         payload["profile_name"] = self.config_policy_name
         payload["settings_hash"] = self.settings_hash()
@@ -4498,6 +4617,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         available: bool,
         installed: bool,
         error: str | None,
+        policy: Mapping[str, object] | None = None,
     ) -> None:
         if self.diagnostics_sink is None:
             return
@@ -4509,7 +4629,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "installed": installed,
                 "hook_enabled": bool(self.expr_planner_hook),
                 "planner_names": list(self.expr_planner_names),
-                "policy": expr_planner_payloads(self.expr_planner_names),
+                "policy": policy or expr_planner_payloads(self.expr_planner_names),
                 "error": error,
             },
         )
@@ -4520,6 +4640,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         available: bool,
         installed: bool,
         error: str | None,
+        policy: Mapping[str, object] | None = None,
     ) -> None:
         if self.diagnostics_sink is None:
             return
@@ -4530,7 +4651,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "available": available,
                 "installed": installed,
                 "hook_enabled": bool(self.function_factory_hook),
-                "policy": function_factory_payloads(),
+                "policy": policy or function_factory_payloads(),
                 "error": error,
             },
         )

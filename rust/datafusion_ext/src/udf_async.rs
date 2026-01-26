@@ -1,5 +1,6 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -17,6 +18,53 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
+use tokio::time;
+
+#[derive(Clone, Copy, Debug)]
+pub struct AsyncUdfPolicy {
+    pub ideal_batch_size: Option<usize>,
+    pub timeout: Option<Duration>,
+}
+
+impl Default for AsyncUdfPolicy {
+    fn default() -> Self {
+        Self {
+            ideal_batch_size: None,
+            timeout: None,
+        }
+    }
+}
+
+static ASYNC_UDF_POLICY: OnceLock<RwLock<AsyncUdfPolicy>> = OnceLock::new();
+
+fn async_udf_policy_lock() -> &'static RwLock<AsyncUdfPolicy> {
+    ASYNC_UDF_POLICY.get_or_init(|| RwLock::new(AsyncUdfPolicy::default()))
+}
+
+pub fn set_async_udf_policy(
+    ideal_batch_size: Option<usize>,
+    timeout_ms: Option<u64>,
+) -> Result<()> {
+    let timeout = timeout_ms.map(Duration::from_millis);
+    let policy = AsyncUdfPolicy {
+        ideal_batch_size,
+        timeout,
+    };
+    let lock = async_udf_policy_lock();
+    let mut guard = lock
+        .write()
+        .map_err(|_| DataFusionError::Execution("Async UDF policy lock poisoned".into()))?;
+    *guard = policy;
+    Ok(())
+}
+
+pub fn async_udf_policy() -> AsyncUdfPolicy {
+    let lock = async_udf_policy_lock();
+    match lock.read() {
+        Ok(guard) => *guard,
+        Err(_) => AsyncUdfPolicy::default(),
+    }
+}
 
 pub const ASYNC_ECHO_NAME: &str = "async_echo";
 
@@ -87,11 +135,28 @@ impl ScalarUDFImpl for AsyncEchoUdf {
 
 #[async_trait]
 impl AsyncScalarUDFImpl for AsyncEchoUdf {
+    fn ideal_batch_size(&self) -> Option<usize> {
+        async_udf_policy().ideal_batch_size
+    }
+
     async fn invoke_async_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let value = args.args.first().ok_or_else(|| {
-            DataFusionError::Plan("async_echo expects exactly one argument".into())
-        })?;
-        Ok(value.clone())
+        let policy = async_udf_policy();
+        let fut = async move {
+            let value = args.args.first().ok_or_else(|| {
+                DataFusionError::Plan("async_echo expects exactly one argument".into())
+            })?;
+            Ok(value.clone())
+        };
+        if let Some(timeout) = policy.timeout {
+            match time::timeout(timeout, fut).await {
+                Ok(result) => result,
+                Err(_) => Err(DataFusionError::Execution(
+                    "async_echo timed out".to_string(),
+                )),
+            }
+        } else {
+            fut.await
+        }
     }
 }
 

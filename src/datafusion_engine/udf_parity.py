@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -66,6 +66,36 @@ class UdfParityReport:
         }
 
 
+@dataclass(frozen=True)
+class UdfInfoSchemaParityReport:
+    """Summary of Rust registry parity with information_schema."""
+
+    missing_in_information_schema: tuple[str, ...]
+    param_name_mismatches: tuple[UdfParityMismatch, ...]
+    routines_available: bool
+    parameters_available: bool
+    error: str | None = None
+
+    def payload(self) -> dict[str, object]:
+        """Return a diagnostics payload for information_schema parity."""
+        return {
+            "missing_in_information_schema": list(self.missing_in_information_schema),
+            "param_name_mismatches": [
+                {
+                    "func_id": item.func_id,
+                    "kind": item.kind,
+                    "issue": item.issue,
+                    "ibis_value": item.ibis_value,
+                    "rust_value": item.rust_value,
+                }
+                for item in self.param_name_mismatches
+            ],
+            "routines_available": self.routines_available,
+            "parameters_available": self.parameters_available,
+            "error": self.error,
+        }
+
+
 def udf_parity_report(
     ctx: SessionContext,
     *,
@@ -122,6 +152,80 @@ def udf_parity_report(
     )
 
 
+def udf_info_schema_parity_report(
+    ctx: SessionContext,
+    *,
+    snapshot: Mapping[str, object] | None = None,
+) -> UdfInfoSchemaParityReport:
+    """Return parity mismatches between Rust registry and information_schema.
+
+    Returns
+    -------
+    UdfInfoSchemaParityReport
+        Summary of parity mismatches for diagnostics.
+    """
+    resolved_snapshot = snapshot or rust_udf_snapshot(ctx)
+    registry_names = _rust_function_names(resolved_snapshot)
+    try:
+        from datafusion_engine.introspection import introspection_cache_for_ctx
+    except ImportError as exc:
+        return UdfInfoSchemaParityReport(
+            missing_in_information_schema=(),
+            param_name_mismatches=(),
+            routines_available=False,
+            parameters_available=False,
+            error=str(exc),
+        )
+    try:
+        snapshot_tables = introspection_cache_for_ctx(ctx).snapshot
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return UdfInfoSchemaParityReport(
+            missing_in_information_schema=(),
+            param_name_mismatches=(),
+            routines_available=False,
+            parameters_available=False,
+            error=str(exc),
+        )
+    routines_table = snapshot_tables.routines
+    if routines_table is None:
+        return UdfInfoSchemaParityReport(
+            missing_in_information_schema=(),
+            param_name_mismatches=(),
+            routines_available=False,
+            parameters_available=False,
+            error="information_schema.routines unavailable",
+        )
+    routines = list(routines_table.to_pylist())
+    info_names: set[str] = set()
+    for row in routines:
+        name = row.get("routine_name") or row.get("function_name") or row.get("name")
+        if isinstance(name, str) and name:
+            info_names.add(name.lower())
+    missing = sorted(name for name in registry_names if name.lower() not in info_names)
+    parameters_table = snapshot_tables.parameters
+    if parameters_table is None:
+        return UdfInfoSchemaParityReport(
+            missing_in_information_schema=tuple(missing),
+            param_name_mismatches=(),
+            routines_available=bool(info_names),
+            parameters_available=False,
+            error="information_schema.parameters unavailable",
+        )
+    param_rows = list(parameters_table.to_pylist())
+    param_mismatches = _parameter_name_mismatches(
+        registry_params=_rust_param_names(resolved_snapshot),
+        routines=routines,
+        parameters=param_rows,
+    )
+    return UdfInfoSchemaParityReport(
+        missing_in_information_schema=tuple(missing),
+        param_name_mismatches=tuple(param_mismatches),
+        routines_available=bool(info_names),
+        parameters_available=True,
+        error=None,
+    )
+
+
 def _rust_function_names(snapshot: Mapping[str, object]) -> set[str]:
     names: set[str] = set()
     for key in ("scalar", "aggregate", "window", "table"):
@@ -153,6 +257,73 @@ def _rust_param_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ..
     return params
 
 
+def _parameter_name_mismatches(
+    *,
+    registry_params: Mapping[str, tuple[str, ...]],
+    routines: Sequence[Mapping[str, object]],
+    parameters: Sequence[Mapping[str, object]],
+) -> list[UdfParityMismatch]:
+    specific_to_routine: dict[str, str] = {}
+    for row in routines:
+        specific = row.get("specific_name")
+        routine = row.get("routine_name") or row.get("function_name") or row.get("name")
+        if isinstance(specific, str) and isinstance(routine, str):
+            specific_to_routine[specific.lower()] = routine
+    info_param_names: dict[str, set[tuple[str, ...]]] = {}
+    per_specific: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for row in parameters:
+        specific = row.get("specific_name")
+        if not isinstance(specific, str):
+            continue
+        routine = specific_to_routine.get(specific.lower())
+        if routine is None:
+            continue
+        ordinal = row.get("ordinal_position")
+        param_name = row.get("parameter_name")
+        if not isinstance(param_name, str):
+            continue
+        if isinstance(ordinal, bool) or ordinal is None:
+            continue
+        if isinstance(ordinal, int):
+            position = ordinal
+        elif isinstance(ordinal, float):
+            position = int(ordinal)
+        elif isinstance(ordinal, str) and ordinal.isdigit():
+            position = int(ordinal)
+        else:
+            continue
+        key = (routine.lower(), specific.lower())
+        per_specific.setdefault(key, []).append((position, param_name))
+    for (routine, _specific), entries in per_specific.items():
+        ordered = tuple(name for _, name in sorted(entries, key=lambda item: item[0]))
+        info_param_names.setdefault(routine, set()).add(ordered)
+    mismatches: list[UdfParityMismatch] = []
+    for name, rust_params in registry_params.items():
+        info_sets = info_param_names.get(name.lower())
+        if not info_sets:
+            mismatches.append(
+                UdfParityMismatch(
+                    func_id=name,
+                    kind="info_schema",
+                    issue="missing_parameters",
+                    ibis_value=None,
+                    rust_value=rust_params,
+                )
+            )
+            continue
+        if rust_params not in info_sets:
+            mismatches.append(
+                UdfParityMismatch(
+                    func_id=name,
+                    kind="info_schema",
+                    issue="param_names",
+                    ibis_value=sorted(info_sets),
+                    rust_value=rust_params,
+                )
+            )
+    return mismatches
+
+
 def _rust_volatility(snapshot: Mapping[str, object]) -> dict[str, str]:
     values: dict[str, str] = {}
     raw = snapshot.get("volatility")
@@ -164,4 +335,10 @@ def _rust_volatility(snapshot: Mapping[str, object]) -> dict[str, str]:
     return values
 
 
-__all__ = ["UdfParityMismatch", "UdfParityReport", "udf_parity_report"]
+__all__ = [
+    "UdfInfoSchemaParityReport",
+    "UdfParityMismatch",
+    "UdfParityReport",
+    "udf_info_schema_parity_report",
+    "udf_parity_report",
+]

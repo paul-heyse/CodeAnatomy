@@ -19,7 +19,6 @@ class KernelLane(StrEnum):
     """Execution lane for a kernel."""
 
     BUILTIN = "builtin"
-    DF_UDF = "df_udf"
 
 
 @dataclass(frozen=True)
@@ -41,7 +40,7 @@ class KernelDef:
 KERNEL_REGISTRY: dict[str, KernelDef] = {
     "interval_align": KernelDef(
         name="interval_align",
-        lane=KernelLane.DF_UDF,
+        lane=KernelLane.BUILTIN,
         volatility="stable",
         requires_ordering=True,
     ),

@@ -186,7 +186,17 @@ def evidence_catalog(
         from ibis_engine.builtin_udfs import ibis_udf_specs
 
         session = df_profile.session_context()
-        registry_snapshot = register_rust_udfs(session)
+        async_timeout_ms = None
+        async_batch_size = None
+        if df_profile.enable_async_udfs:
+            async_timeout_ms = df_profile.async_udf_timeout_ms
+            async_batch_size = df_profile.async_udf_batch_size
+        registry_snapshot = register_rust_udfs(
+            session,
+            enable_async=df_profile.enable_async_udfs,
+            async_udf_timeout_ms=async_timeout_ms,
+            async_udf_batch_size=async_batch_size,
+        )
         report = udf_parity_report(
             session,
             ibis_specs=ibis_udf_specs(registry_snapshot=registry_snapshot),

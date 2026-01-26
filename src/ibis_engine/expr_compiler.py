@@ -20,13 +20,7 @@ from ibis.expr.types import (
     Value,
 )
 
-from ibis_engine.builtin_udfs import (
-    col_to_byte,
-    prefixed_hash64,
-    stable_hash64,
-    stable_hash128,
-    stable_id,
-)
+from ibis_engine.builtin_udfs import ibis_udf_registry
 from ibis_engine.schema_utils import ibis_schema_from_arrow
 
 IbisExprFn = Callable[..., Value]
@@ -213,36 +207,31 @@ def default_expr_registry() -> IbisExprRegistry:
     IbisExprRegistry
         Registry with default helper mappings.
     """
-    return IbisExprRegistry(
-        functions={
-            "add": _add_expr,
-            "array": ibis.array,
-            "binary_join_element_wise": _binary_join_element_wise_expr,
-            "bit_wise_or": _bitwise_or_expr,
-            "coalesce": _coalesce_expr,
-            "fill_null": _fill_null_expr,
-            "concat": _concat_expr,
-            "if_else": _if_else_expr,
-            "in_set": _in_set_expr,
-            "equal": _equal_expr,
-            "map": ibis.map,
-            "not_equal": _not_equal_expr,
-            "invert": _invert_expr,
-            "bit_wise_and": _bitwise_and_expr,
-            "strip": _strip_expr,
-            "struct": ibis.struct,
-            "starts_with": _starts_with_expr,
-            "subtract": _subtract_expr,
-            "stringify": _stringify_expr,
-            "is_null": _is_null_expr,
-            "utf8_trim_whitespace": _strip_expr,
-            "stable_hash64": stable_hash64,
-            "stable_hash128": stable_hash128,
-            "prefixed_hash64": prefixed_hash64,
-            "stable_id": stable_id,
-            "col_to_byte": col_to_byte,
-        }
-    )
+    functions: dict[str, IbisExprFn] = {
+        "add": _add_expr,
+        "array": ibis.array,
+        "binary_join_element_wise": _binary_join_element_wise_expr,
+        "bit_wise_or": _bitwise_or_expr,
+        "coalesce": _coalesce_expr,
+        "fill_null": _fill_null_expr,
+        "concat": _concat_expr,
+        "if_else": _if_else_expr,
+        "in_set": _in_set_expr,
+        "equal": _equal_expr,
+        "map": ibis.map,
+        "not_equal": _not_equal_expr,
+        "invert": _invert_expr,
+        "bit_wise_and": _bitwise_and_expr,
+        "strip": _strip_expr,
+        "struct": ibis.struct,
+        "starts_with": _starts_with_expr,
+        "subtract": _subtract_expr,
+        "stringify": _stringify_expr,
+        "is_null": _is_null_expr,
+        "utf8_trim_whitespace": _strip_expr,
+    }
+    functions.update(ibis_udf_registry())
+    return IbisExprRegistry(functions=functions)
 
 
 def expr_ir_to_ibis(

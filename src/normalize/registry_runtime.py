@@ -449,12 +449,6 @@ def _metadata_for_table(ctx: SessionContext, name: str) -> dict[str, str]:
     provider = table_provider_metadata(id(ctx), table_name=name)
     if isinstance(provider, TableProviderMetadata) and provider.metadata:
         metadata.update(provider.metadata)
-    try:
-        schema = ctx.table(name).schema()
-    except (KeyError, RuntimeError, TypeError, ValueError):
-        return metadata
-    if isinstance(schema, pa.Schema) and schema.metadata:
-        metadata.update(_decode_metadata(schema.metadata))
     return metadata
 
 

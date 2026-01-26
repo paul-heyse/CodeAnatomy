@@ -1,10 +1,10 @@
-"""Builtin Ibis UDFs for backend-native execution (Rust-only DataFusion)."""
+"""Builtin Ibis UDF specs derived from Rust registry snapshots."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import Literal, cast
 
 import ibis
 import ibis.expr.datatypes as dt
@@ -12,6 +12,7 @@ import pyarrow as pa
 from ibis.expr.types import Value
 
 from datafusion_engine.udf_signature import signature_inputs, signature_returns
+from ibis_engine.schema_utils import ibis_dtype_from_arrow
 
 UdfVolatility = Literal["immutable", "stable", "volatile"]
 IbisUdfLane = Literal["ibis_builtin"]
@@ -35,103 +36,8 @@ class IbisUdfSpec:
     database: str | None = None
 
 
-class _IbisUdfCallable(Protocol):
-    __codex_ibis_udf__: bool
-
-    def __call__(self, *args: Value, **kwargs: Value) -> Value: ...
-
-
-def _mark_ibis_udf(func: Callable[..., Value]) -> Callable[..., Value]:
-    tagged = cast("_IbisUdfCallable", func)
-    tagged.__codex_ibis_udf__ = True
-    return func
-
-
-@_mark_ibis_udf
-@ibis.udf.scalar.builtin(signature=((dt.string,), dt.int64), name="stable_hash64")
-def stable_hash64(value: Value) -> Value:
-    """Return a stable 64-bit hash for string inputs.
-
-    Returns
-    -------
-    ibis.expr.types.Value
-        Stable 64-bit hash expression.
-    """
-    return value.cast("int64")
-
-
-@_mark_ibis_udf
-@ibis.udf.scalar.builtin(signature=((dt.string,), dt.string), name="stable_hash128")
-def stable_hash128(value: Value) -> Value:
-    """Return a stable 128-bit hash for string inputs.
-
-    Returns
-    -------
-    ibis.expr.types.Value
-        Stable 128-bit hash expression.
-    """
-    return value.cast("string")
-
-
-@_mark_ibis_udf
-@ibis.udf.scalar.builtin(signature=((dt.string,), dt.string), name="sha256")
-def sha256(value: Value) -> Value:
-    """Return a SHA-256 hash for string inputs.
-
-    Returns
-    -------
-    ibis.expr.types.Value
-        SHA-256 hash expression.
-    """
-    return value.cast("string")
-
-
-@_mark_ibis_udf
-@ibis.udf.scalar.builtin(signature=((dt.string, dt.string), dt.string), name="prefixed_hash64")
-def prefixed_hash64(_prefix: Value, value: Value) -> Value:
-    """Return a prefixed stable 64-bit hash for string inputs.
-
-    Returns
-    -------
-    ibis.expr.types.Value
-        Prefixed hash expression.
-    """
-    return value.cast("string")
-
-
-@_mark_ibis_udf
-@ibis.udf.scalar.builtin(signature=((dt.string, dt.string), dt.string), name="stable_id")
-def stable_id(_prefix: Value, value: Value) -> Value:
-    """Return a prefixed stable 128-bit hash for string inputs.
-
-    Returns
-    -------
-    ibis.expr.types.Value
-        Prefixed hash expression.
-    """
-    return value.cast("string")
-
-
-@_mark_ibis_udf
-@ibis.udf.scalar.builtin(signature=((dt.string, dt.int64, dt.string), dt.int64), name="col_to_byte")
-def col_to_byte(_line: Value, offset: Value, _col_unit: Value) -> Value:
-    """Convert a line/offset pair into a UTF-8 byte offset.
-
-    Returns
-    -------
-    ibis.expr.types.Value
-        Byte offset expression.
-    """
-    return offset.cast("int64")
-
-
-def _ibis_builtin_udf_names() -> tuple[str, ...]:
-    names = [
-        name
-        for name, value in globals().items()
-        if getattr(value, "__codex_ibis_udf__", False)
-    ]
-    return tuple(sorted(names))
+_IBIS_UDF_SPECS: dict[str, IbisUdfSpec] = {}
+_IBIS_UDF_CALLS: dict[str, Callable[..., Value]] = {}
 
 
 def _registry_parameter_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
@@ -209,34 +115,16 @@ def _snapshot_kind_map(snapshot: Mapping[str, object]) -> dict[str, IbisUdfKind]
     return kinds
 
 
-def ibis_udf_specs(
-    *,
-    registry_snapshot: Mapping[str, object],
-) -> tuple[IbisUdfSpec, ...]:
-    """Return the canonical Ibis UDF specs.
-
-    Returns
-    -------
-    tuple[IbisUdfSpec, ...]
-        Canonical Ibis UDF specifications.
-
-    Raises
-    ------
-    ValueError
-        Raised when the Rust UDF registry is missing required metadata.
-    """
-    param_names = _registry_parameter_names(registry_snapshot)
-    volatilities = _registry_volatility(registry_snapshot)
-    rewrite_tags = _registry_rewrite_tags(registry_snapshot)
-    kinds = _snapshot_kind_map(registry_snapshot)
+def _ibis_specs_from_snapshot(snapshot: Mapping[str, object]) -> tuple[IbisUdfSpec, ...]:
+    param_names = _registry_parameter_names(snapshot)
+    volatilities = _registry_volatility(snapshot)
+    rewrite_tags = _registry_rewrite_tags(snapshot)
+    kinds = _snapshot_kind_map(snapshot)
+    names = sorted(name for name, kind in kinds.items() if kind == "scalar")
     specs: list[IbisUdfSpec] = []
-    for name in _ibis_builtin_udf_names():
-        kind = kinds.get(name)
-        if kind is None:
-            msg = f"Rust UDF registry missing {name!r} for Ibis builtins."
-            raise ValueError(msg)
-        input_sets = signature_inputs(registry_snapshot, name)
-        return_sets = signature_returns(registry_snapshot, name)
+    for name in names:
+        input_sets = signature_inputs(snapshot, name)
+        return_sets = signature_returns(snapshot, name)
         input_types, return_type = _select_signature(input_sets, return_sets)
         if not input_types or pa.types.is_null(return_type):
             msg = f"Rust UDF registry missing signature metadata for {name!r}."
@@ -245,7 +133,7 @@ def ibis_udf_specs(
             IbisUdfSpec(
                 func_id=name,
                 engine_name=name,
-                kind=kind,
+                kind="scalar",
                 input_types=input_types,
                 return_type=return_type,
                 volatility=volatilities.get(name, "stable"),
@@ -257,13 +145,83 @@ def ibis_udf_specs(
     return tuple(specs)
 
 
+def _ibis_signature(spec: IbisUdfSpec) -> tuple[tuple[dt.DataType, ...], dt.DataType]:
+    inputs = tuple(ibis_dtype_from_arrow(dtype) for dtype in spec.input_types)
+    return_type = ibis_dtype_from_arrow(spec.return_type)
+    return inputs, return_type
+
+
+def _build_ibis_builtin(spec: IbisUdfSpec) -> Callable[..., Value]:
+    if spec.kind != "scalar":
+        msg = f"Unsupported Ibis UDF kind: {spec.kind!r}."
+        raise ValueError(msg)
+    signature = _ibis_signature(spec)
+
+    @ibis.udf.scalar.builtin(
+        signature=signature,
+        name=spec.engine_name,
+        catalog=spec.catalog,
+        database=spec.database,
+    )
+    def _builtin(*args: Value) -> Value:
+        ...
+
+    return _builtin
+
+
+def register_ibis_udf_snapshot(
+    registry_snapshot: Mapping[str, object],
+) -> tuple[IbisUdfSpec, ...]:
+    """Register snapshot-derived Ibis UDF specs and callables.
+
+    Returns
+    -------
+    tuple[IbisUdfSpec, ...]
+        Registered UDF specifications.
+    """
+    specs = _ibis_specs_from_snapshot(registry_snapshot)
+    global _IBIS_UDF_SPECS
+    global _IBIS_UDF_CALLS
+    _IBIS_UDF_SPECS = {spec.func_id: spec for spec in specs}
+    _IBIS_UDF_CALLS = {spec.func_id: _build_ibis_builtin(spec) for spec in specs}
+    return specs
+
+
+def ibis_udf_specs(
+    *,
+    registry_snapshot: Mapping[str, object],
+) -> tuple[IbisUdfSpec, ...]:
+    """Return the canonical Ibis UDF specs.
+
+    Returns
+    -------
+    tuple[IbisUdfSpec, ...]
+        Canonical Ibis UDF specifications.
+    """
+    return register_ibis_udf_snapshot(registry_snapshot)
+
+
+def ibis_udf_registry() -> Mapping[str, Callable[..., Value]]:
+    """Return the cached Ibis UDF callables."""
+    return dict(_IBIS_UDF_CALLS)
+
+
+def ibis_udf_call(name: str, *args: Value) -> Value:
+    """Invoke a snapshot-registered Ibis UDF by name."""
+    udf = _IBIS_UDF_CALLS.get(name)
+    if udf is None:
+        msg = (
+            f"Ibis UDF registry missing {name!r}. "
+            "Ensure the Rust UDF platform is installed before compilation."
+        )
+        raise ValueError(msg)
+    return udf(*args)
+
+
 __all__ = [
     "IbisUdfSpec",
-    "col_to_byte",
+    "ibis_udf_call",
+    "ibis_udf_registry",
     "ibis_udf_specs",
-    "prefixed_hash64",
-    "sha256",
-    "stable_hash64",
-    "stable_hash128",
-    "stable_id",
+    "register_ibis_udf_snapshot",
 ]

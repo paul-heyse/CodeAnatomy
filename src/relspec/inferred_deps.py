@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -10,8 +10,8 @@ from sqlglot_tools.lineage import referenced_tables
 from sqlglot_tools.optimizer import plan_fingerprint
 
 if TYPE_CHECKING:
-    import pyarrow as pa
-
+    from datafusion_engine.schema_contracts import SchemaContract
+    from schema_spec.system import DatasetSpec
     from sqlglot_tools.compat import Expression
 
 
@@ -114,12 +114,12 @@ def _required_metadata_for_tables(
 ) -> dict[str, tuple[tuple[bytes, bytes], ...]]:
     required: dict[str, tuple[tuple[bytes, bytes], ...]] = {}
     for table_name in columns_by_table:
-        schema = _schema_for_table(table_name)
-        if schema is None:
+        spec = _dataset_spec_for_table(table_name)
+        if spec is None:
             continue
-        metadata = _metadata_from_schema(schema)
+        metadata = spec.schema().metadata
         if metadata:
-            required[table_name] = metadata
+            required[table_name] = tuple(sorted(metadata.items(), key=lambda item: item[0]))
     return required
 
 
@@ -142,42 +142,90 @@ def _required_types_from_registry(
 ) -> dict[str, tuple[tuple[str, str], ...]]:
     required: dict[str, tuple[tuple[str, str], ...]] = {}
     for table_name, columns in columns_by_table.items():
-        schema = _schema_for_table(table_name)
-        if schema is None:
+        contract = _schema_contract_for_table(table_name)
+        if contract is None:
             continue
-        pairs = _types_from_schema(schema, columns)
+        pairs = _types_from_contract(contract, columns)
         if pairs:
             required[table_name] = pairs
     return required
 
 
-def _schema_for_table(name: str) -> pa.Schema | None:
+def _dataset_spec_for_table(name: str) -> DatasetSpec | None:
     try:
-        from datafusion_engine.schema_registry import schema_for
+        from normalize.registry_runtime import dataset_spec as normalize_dataset_spec
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        normalize_dataset_spec = None
+    if normalize_dataset_spec is not None:
+        try:
+            return normalize_dataset_spec(name)
+        except KeyError:
+            pass
+    try:
+        from relspec.contracts import (
+            REL_CALLSITE_QNAME_NAME,
+            REL_CALLSITE_SYMBOL_NAME,
+            REL_DEF_SYMBOL_NAME,
+            REL_IMPORT_SYMBOL_NAME,
+            REL_NAME_SYMBOL_NAME,
+            RELATION_OUTPUT_NAME,
+            rel_callsite_qname_spec,
+            rel_callsite_symbol_spec,
+            rel_def_symbol_spec,
+            rel_import_symbol_spec,
+            rel_name_symbol_spec,
+            relation_output_spec,
+        )
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
-    try:
-        return schema_for(name)
-    except KeyError:
+    relspec_specs: dict[str, Callable[[], DatasetSpec]] = {
+        REL_NAME_SYMBOL_NAME: rel_name_symbol_spec,
+        REL_IMPORT_SYMBOL_NAME: rel_import_symbol_spec,
+        REL_DEF_SYMBOL_NAME: rel_def_symbol_spec,
+        REL_CALLSITE_SYMBOL_NAME: rel_callsite_symbol_spec,
+        REL_CALLSITE_QNAME_NAME: rel_callsite_qname_spec,
+        RELATION_OUTPUT_NAME: relation_output_spec,
+    }
+    spec_factory = relspec_specs.get(name)
+    if spec_factory is None:
+        try:
+            from cpg import schemas as cpg_schemas
+        except (ImportError, RuntimeError, TypeError, ValueError):
+            return None
+        cpg_specs: dict[str, DatasetSpec] = {
+            "cpg_nodes_v1": cpg_schemas.CPG_NODES_SPEC,
+            "cpg_edges_v1": cpg_schemas.CPG_EDGES_SPEC,
+            "cpg_props_v1": cpg_schemas.CPG_PROPS_SPEC,
+            "cpg_props_json_v1": cpg_schemas.CPG_PROPS_JSON_SPEC,
+            "cpg_props_by_file_id_v1": cpg_schemas.CPG_PROPS_BY_FILE_ID_SPEC,
+            "cpg_props_global_v1": cpg_schemas.CPG_PROPS_GLOBAL_SPEC,
+        }
+        return cpg_specs.get(name)
+    return spec_factory()
+
+
+def _schema_contract_for_table(name: str) -> SchemaContract | None:
+    spec = _dataset_spec_for_table(name)
+    if spec is None:
         return None
+    try:
+        from datafusion_engine.schema_contracts import schema_contract_from_dataset_spec
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
+    return schema_contract_from_dataset_spec(name=spec.name, spec=spec)
 
 
-def _types_from_schema(
-    schema: pa.Schema,
+def _types_from_contract(
+    contract: SchemaContract,
     columns: tuple[str, ...],
 ) -> tuple[tuple[str, str], ...]:
+    by_name = {col.name: col for col in contract.columns}
     pairs: list[tuple[str, str]] = []
     for name in columns:
-        if name in schema.names:
-            dtype = schema.field(name).type
-            pairs.append((name, str(dtype)))
+        column = by_name.get(name)
+        if column is not None:
+            pairs.append((name, str(column.arrow_type)))
     return tuple(pairs)
-
-
-def _metadata_from_schema(schema: pa.Schema) -> tuple[tuple[bytes, bytes], ...]:
-    if schema.metadata is None:
-        return ()
-    return tuple(sorted(schema.metadata.items(), key=lambda item: item[0]))
 
 
 __all__ = [

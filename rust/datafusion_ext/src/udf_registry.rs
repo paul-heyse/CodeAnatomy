@@ -85,7 +85,12 @@ pub fn all_udfs() -> Vec<UdfSpec> {
     ]
 }
 
-pub fn register_all(ctx: &SessionContext) -> Result<()> {
+pub fn register_all(
+    ctx: &SessionContext,
+    enable_async: bool,
+    async_udf_timeout_ms: Option<u64>,
+    async_udf_batch_size: Option<usize>,
+) -> Result<()> {
     for spec in all_udfs() {
         match (spec.kind, (spec.builder)()) {
             (UdfKind::Scalar, UdfHandle::Scalar(udf)) => {
@@ -131,8 +136,19 @@ pub fn register_all(ctx: &SessionContext) -> Result<()> {
     }
     udtf_builtin::register_builtin_udtfs(ctx)?;
     udtf_external::register_external_udtfs(ctx)?;
-    #[cfg(feature = "async-udf")]
-    udf_async::register_async_udfs(ctx)?;
+    if enable_async {
+        #[cfg(feature = "async-udf")]
+        {
+            udf_async::set_async_udf_policy(async_udf_batch_size, async_udf_timeout_ms)?;
+            udf_async::register_async_udfs(ctx)?;
+        }
+        #[cfg(not(feature = "async-udf"))]
+        {
+            return Err(datafusion_common::DataFusionError::Plan(
+                "Async UDFs require the async-udf feature".into(),
+            ));
+        }
+    }
     Ok(())
 }
 

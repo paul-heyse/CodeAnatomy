@@ -71,7 +71,6 @@ _BUNDLE_ORDER_OVERRIDES: dict[str, tuple[str, ...]] = {
         "scip_diagnostics",
     ),
     "tree_sitter_bundle": ("tree_sitter_files",),
-    "runtime_inspect_bundle": ("rt_objects", "rt_signatures", "rt_signature_params", "rt_members"),
 }
 
 

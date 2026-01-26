@@ -24,7 +24,11 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from datafusion_engine.schema_registry import DIAG_DETAILS_TYPE
+from datafusion_engine.schema_registry import (
+    DIAG_DETAILS_TYPE,
+    SCIP_VIEW_SCHEMA_MAP,
+    schema_for,
+)
 from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.expr_compiler import OperationSupportBackend, preflight_portability
 from ibis_engine.hash_exprs import (
@@ -177,20 +181,22 @@ def type_nodes_plan_ibis(
         Ibis plan for normalized type nodes.
     """
     type_node_columns = _type_node_columns(ctx)
+    expr_schema = dataset_schema(TYPE_EXPRS_NAME)
     expr_rows = _expr_type_rows(
         catalog.resolve_expr(
             "type_exprs_norm_v1",
             ctx=ctx,
-            schema=_expr_type_schema(),
+            schema=expr_schema,
         ),
         ctx=ctx,
         type_node_columns=type_node_columns,
     )
+    scip_schema = schema_for(SCIP_VIEW_SCHEMA_MAP["scip_symbol_information"])
     scip_rows = _scip_type_rows(
         catalog.resolve_expr(
             "scip_symbol_information",
             ctx=ctx,
-            schema=_scip_type_schema(),
+            schema=scip_schema,
         ),
         ctx=ctx,
         type_node_columns=type_node_columns,
@@ -210,19 +216,6 @@ def type_nodes_plan_ibis(
     ordering_keys = _ordering_keys_for_schema(target_schema)
     ordering = Ordering.explicit(ordering_keys) if ordering_keys else Ordering.unordered()
     return IbisPlan(expr=combined, ordering=ordering)
-
-
-def _expr_type_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            pa.field("type_id", pa.string()),
-            pa.field("type_repr", pa.string()),
-        ]
-    )
-
-
-def _scip_type_schema() -> pa.Schema:
-    return pa.schema([pa.field("type_repr", pa.string())])
 
 
 def _type_node_columns(ctx: ExecutionContext) -> list[str]:
@@ -277,7 +270,8 @@ def _scip_type_rows(
 ) -> Table | None:
     if "type_repr" not in scip.columns:
         return None
-    validate_expr_schema(scip, expected=_scip_type_schema(), allow_extra_columns=True)
+    expected_schema = schema_for(SCIP_VIEW_SCHEMA_MAP["scip_symbol_information"])
+    validate_expr_schema(scip, expected=expected_schema, allow_extra_columns=True)
     scip_trimmed = scip.type_repr.cast("string").strip()
     scip_non_empty = scip_trimmed.notnull() & (scip_trimmed.length() > ibis.literal(0))
     scip_rows = scip.filter(scip_non_empty).mutate(
@@ -335,14 +329,11 @@ def cfg_blocks_plan_ibis(
     input_schema = dataset_input_schema(CFG_BLOCKS_NAME)
     blocks = catalog.resolve_expr("py_bc_blocks", ctx=ctx, schema=input_schema)
     validate_expr_schema(blocks, expected=input_schema, allow_extra_columns=ctx.debug)
-    meta_schema = pa.schema(
-        [
-            pa.field("code_unit_id", pa.string()),
-            pa.field("file_id", pa.string()),
-            pa.field("path", pa.string()),
-        ]
+    code_units = catalog.resolve_expr(
+        "py_bc_code_units",
+        ctx=ctx,
+        schema=schema_for("py_bc_code_units"),
     )
-    code_units = catalog.resolve_expr("py_bc_code_units", ctx=ctx, schema=meta_schema)
     if "code_unit_id" in blocks.columns and "code_unit_id" in code_units.columns:
         code_units = code_units.select(
             code_unit_id=code_units.code_unit_id,
@@ -398,14 +389,11 @@ def cfg_edges_plan_ibis(
     input_schema = dataset_input_schema(CFG_EDGES_NAME)
     edges = catalog.resolve_expr("py_bc_cfg_edges", ctx=ctx, schema=input_schema)
     validate_expr_schema(edges, expected=input_schema, allow_extra_columns=ctx.debug)
-    meta_schema = pa.schema(
-        [
-            pa.field("code_unit_id", pa.string()),
-            pa.field("file_id", pa.string()),
-            pa.field("path", pa.string()),
-        ]
+    code_units = catalog.resolve_expr(
+        "py_bc_code_units",
+        ctx=ctx,
+        schema=schema_for("py_bc_code_units"),
     )
-    code_units = catalog.resolve_expr("py_bc_code_units", ctx=ctx, schema=meta_schema)
     if "code_unit_id" in edges.columns and "code_unit_id" in code_units.columns:
         code_units = code_units.select(
             code_unit_id=code_units.code_unit_id,

@@ -9,7 +9,6 @@ from typing import Literal, TypeVar, cast
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import pc
 from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
 from datafusion_engine.sql_expression_registry import (
     DataFusionSqlExpressionSpec,
@@ -19,34 +18,12 @@ from datafusion_engine.udf_catalog import DataFusionUdfSpec, UdfTier, datafusion
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
 from storage.ipc import payload_hash
 
-ExecutionLane = Literal[
-    "ibis_builtin",
-    "ibis_pyarrow",
-    "ibis_pandas",
-    "ibis_python",
-    "df_udf",
-    "df_rust",
-]
+ExecutionLane = Literal["df_rust"]
 FunctionKind = Literal["scalar", "aggregate", "window", "table"]
 
 DEFAULT_LANE_PRECEDENCE: tuple[ExecutionLane, ...] = (
     "df_rust",
-    "ibis_builtin",
-    "ibis_pyarrow",
-    "ibis_pandas",
-    "ibis_python",
-    "df_udf",
 )
-UDF_TIER_PRIORITY: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
-LANE_UDF_TIER: Mapping[ExecutionLane, UdfTier] = {
-    "df_rust": "builtin",
-    "ibis_builtin": "builtin",
-    "ibis_pyarrow": "pyarrow",
-    "ibis_pandas": "pandas",
-    "ibis_python": "python",
-    "df_udf": "python",
-}
-
 LaneTupleT = TypeVar("LaneTupleT", bound=str)
 
 REGISTRY_PAYLOAD_VERSION: int = 1
@@ -74,8 +51,6 @@ _FUNCTION_REGISTRY_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32()),
         pa.field("lane_precedence", pa.list_(pa.string())),
-        pa.field("pyarrow_compute", pa.list_(pa.string())),
-        pa.field("pycapsule_ids", pa.list_(pa.string())),
         pa.field("specs", pa.list_(_FUNCTION_SPEC_SCHEMA)),
     ]
 )
@@ -140,43 +115,6 @@ if callable(_month_day_nano_interval):
     _INTERVAL_FACTORIES["monthdaynano"] = _month_day_nano_interval
 
 
-def pyarrow_compute_functions() -> tuple[str, ...]:
-    """Return sorted PyArrow compute function names.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Sorted function names from ``pyarrow.compute``.
-
-    Raises
-    ------
-    TypeError
-        Raised when ``pyarrow.compute.list_functions`` is unavailable.
-    """
-    if not callable(pc.list_functions):
-        msg = "pyarrow.compute.list_functions is unavailable."
-        raise TypeError(msg)
-    return tuple(sorted(pc.list_functions()))
-
-
-def arrow_kernel_registry_snapshot() -> dict[str, object]:
-    """Return a snapshot of available Arrow compute kernels.
-
-    Returns
-    -------
-    dict[str, object]
-        Snapshot payload for kernel availability.
-    """
-    functions = list(pyarrow_compute_functions())
-    return {
-        "version": 1,
-        "available_kernels": functions,
-        "registered_udfs": [],
-        "registered_kernels": [],
-        "pyarrow_compute": functions,
-    }
-
-
 @dataclass(frozen=True)
 class FunctionSpec:
     """Cross-lane function specification."""
@@ -230,8 +168,6 @@ class FunctionRegistry:
 
     specs: dict[str, FunctionSpec] = field(default_factory=dict)
     lane_precedence: tuple[ExecutionLane, ...] = DEFAULT_LANE_PRECEDENCE
-    pyarrow_compute: tuple[str, ...] = ()
-    pycapsule_ids: tuple[str, ...] = ()
 
     def resolve_lane(self, name: str) -> ExecutionLane | None:
         """Return the preferred execution lane for a function name.
@@ -261,8 +197,6 @@ class FunctionRegistry:
         return {
             "specs": {name: spec.payload() for name, spec in sorted(self.specs.items())},
             "lane_precedence": list(self.lane_precedence),
-            "pyarrow_compute": list(self.pyarrow_compute),
-            "pycapsule_ids": list(self.pycapsule_ids),
         }
 
     def fingerprint(self) -> str:
@@ -276,14 +210,14 @@ class FunctionRegistry:
         payload = {
             "version": REGISTRY_PAYLOAD_VERSION,
             "lane_precedence": list(self.lane_precedence),
-            "pyarrow_compute": list(self.pyarrow_compute),
-            "pycapsule_ids": list(self.pycapsule_ids),
             "specs": [
                 _spec_payload(spec)
                 for _, spec in sorted(self.specs.items(), key=lambda item: item[0])
             ],
         }
         return payload_hash(payload, _FUNCTION_REGISTRY_SCHEMA)
+
+
 @dataclass(frozen=True)
 class FunctionRegistryOptions:
     """Configuration for building a function registry."""
@@ -352,8 +286,6 @@ def build_function_registry(
     return FunctionRegistry(
         specs=specs,
         lane_precedence=lane_precedence,
-        pyarrow_compute=pyarrow_compute_functions(),
-        pycapsule_ids=_pycapsule_ids(specs),
     )
 
 
@@ -400,31 +332,11 @@ def default_function_registry(
     return build_function_registry(options=options)
 
 
-def _pycapsule_ids(specs: Mapping[str, FunctionSpec]) -> tuple[str, ...]:
-    ids = {spec.capsule_id for spec in specs.values() if spec.capsule_id}
-    return tuple(sorted(ids))
-
-
-def _udf_tier_for_lanes(
-    lanes: Sequence[ExecutionLane],
-    *,
-    lane_precedence: Sequence[ExecutionLane],
-) -> UdfTier | None:
-    for lane in lane_precedence:
-        if lane not in lanes:
-            continue
-        tier = LANE_UDF_TIER.get(lane)
-        if tier is not None:
-            return tier
-    return None
-
-
 def _spec_from_datafusion(
     spec: DataFusionUdfSpec,
     *,
     lane_precedence: tuple[ExecutionLane, ...],
 ) -> FunctionSpec:
-    lane: ExecutionLane = "df_rust" if spec.udf_tier == "builtin" else "df_udf"
     return FunctionSpec(
         func_id=spec.func_id,
         engine_name=spec.engine_name,
@@ -434,7 +346,7 @@ def _spec_from_datafusion(
         state_type=spec.state_type,
         volatility=spec.volatility,
         arg_names=spec.arg_names,
-        lanes=(lane,),
+        lanes=("df_rust",),
         lane_precedence=lane_precedence,
         rewrite_tags=spec.rewrite_tags,
         catalog=spec.catalog,
@@ -782,12 +694,12 @@ def _spec_from_ibis(
         return_type=spec.return_type,
         volatility=spec.volatility,
         arg_names=spec.arg_names,
-        lanes=cast("tuple[ExecutionLane, ...]", spec.lanes),
+        lanes=("df_rust",),
         lane_precedence=lane_precedence,
         rewrite_tags=spec.rewrite_tags,
         catalog=spec.catalog,
         database=spec.database,
-        udf_tier=_udf_tier_for_lanes(spec.lanes, lane_precedence=lane_precedence),
+        udf_tier=None,
     )
 
 
@@ -906,8 +818,6 @@ __all__ = [
     "FunctionRegistry",
     "FunctionRegistryOptions",
     "FunctionSpec",
-    "arrow_kernel_registry_snapshot",
     "build_function_registry",
     "default_function_registry",
-    "pyarrow_compute_functions",
 ]

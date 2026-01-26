@@ -13,7 +13,6 @@ _REQUIRED_INPUTS: dict[str, tuple[str, ...]] = {
     "tree_sitter": ("repo_files",),
     "bytecode": ("repo_files",),
     "symtable": ("repo_files",),
-    "runtime_inspect": ("repo_root",),
     "scip": ("scip_index_path", "repo_root"),
     "repo_scan": ("repo_root",),
 }
@@ -24,7 +23,6 @@ _SUPPORTS_PLAN: dict[str, bool] = {
     "tree_sitter": True,
     "bytecode": True,
     "symtable": True,
-    "runtime_inspect": True,
     "scip": True,
     "repo_scan": False,
 }
@@ -34,7 +32,6 @@ _SUPPORTS_IBIS: dict[str, bool] = {
     "tree_sitter": True,
     "bytecode": True,
     "symtable": True,
-    "runtime_inspect": True,
     "scip": True,
     "repo_scan": False,
 }

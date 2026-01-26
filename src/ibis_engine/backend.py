@@ -117,7 +117,17 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
         introspector = SchemaIntrospector(ctx)
         from datafusion_engine.udf_runtime import register_rust_udfs
 
-        registry_snapshot = register_rust_udfs(ctx)
+        async_timeout_ms = None
+        async_batch_size = None
+        if profile.enable_async_udfs:
+            async_timeout_ms = profile.async_udf_timeout_ms
+            async_batch_size = profile.async_udf_batch_size
+        registry_snapshot = register_rust_udfs(
+            ctx,
+            enable_async=profile.enable_async_udfs,
+            async_udf_timeout_ms=async_timeout_ms,
+            async_udf_batch_size=async_batch_size,
+        )
         unified_registry = build_unified_function_registry(
             datafusion_function_catalog=introspector.function_catalog_snapshot(
                 include_parameters=True

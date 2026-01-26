@@ -134,20 +134,6 @@ TEMPLATES: dict[str, ExtractorTemplate] = {
             ),
         ),
     ),
-    "runtime_inspect": ExtractorTemplate(
-        extractor_name="runtime_inspect",
-        evidence_rank=7,
-        metadata_extra=evidence_metadata(
-            spec=EvidenceMetadataSpec(
-                evidence_family="runtime_inspect",
-                coordinate_system="none",
-                ambiguity_policy="preserve",
-                superior_rank=7,
-                streaming_safe=True,
-                pipeline_breaker=False,
-            ),
-        ),
-    ),
     "scip": ExtractorTemplate(
         extractor_name="scip",
         evidence_rank=1,
@@ -314,13 +300,6 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
             "max_file_bytes": None,
             "max_files": None,
             "source_ref": None,
-        },
-    ),
-    "runtime_inspect": ExtractorConfigSpec(
-        extractor_name="runtime_inspect",
-        defaults={
-            "module_allowlist": (),
-            "timeout_s": 15,
         },
     ),
     "scip": ExtractorConfigSpec(
@@ -900,99 +879,6 @@ def _tree_sitter_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, .
     )
 
 
-def _runtime_inspect_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
-    version = _param_int(spec, "version", default=1)
-    base: dict[str, object] = {
-        "version": version,
-        "bundles": None,
-        "template": spec.template,
-        "enabled_when": "allowlist",
-    }
-    return (
-        {
-            **base,
-            "name": "rt_objects_v1",
-            "fields": [
-                "rt_id",
-                "module",
-                "qualname",
-                "name",
-                "obj_type",
-                "source_path",
-                "source_line",
-                "meta",
-            ],
-            "derived": _derived_specs(("rt_id", "rt_object_id", None, None)),
-            "row_fields": [
-                "object_key",
-                "module",
-                "qualname",
-                "name",
-                "obj_type",
-                "source_path",
-                "source_line",
-                "meta",
-            ],
-            "join_keys": ["module", "qualname"],
-        },
-        {
-            **base,
-            "name": "rt_signatures_v1",
-            "fields": ["sig_id", "rt_id", "signature", "return_annotation"],
-            "derived": _derived_specs(("sig_id", "rt_signature_id", None, None)),
-            "row_fields": ["object_key", "signature", "return_annotation"],
-            "join_keys": ["rt_id", "signature"],
-        },
-        {
-            **base,
-            "name": "rt_signature_params_v1",
-            "fields": [
-                "param_id",
-                "sig_id",
-                "name",
-                "kind",
-                "default_repr",
-                "annotation_repr",
-                "position",
-            ],
-            "derived": _derived_specs(("param_id", "rt_param_id", None, None)),
-            "row_fields": [
-                "object_key",
-                "signature",
-                "name",
-                "kind",
-                "default_repr",
-                "annotation_repr",
-                "position",
-            ],
-            "join_keys": ["sig_id", "name", "position"],
-        },
-        {
-            **base,
-            "name": "rt_members_v1",
-            "fields": [
-                "member_id",
-                "rt_id",
-                "name",
-                "member_kind",
-                "value_repr",
-                "value_module",
-                "value_qualname",
-            ],
-            "derived": _derived_specs(("member_id", "rt_member_id", None, None)),
-            "row_fields": [
-                "object_key",
-                "name",
-                "member_kind",
-                "value_repr",
-                "value_module",
-                "value_qualname",
-            ],
-            "join_keys": ["rt_id", "name"],
-        },
-    )
-
-
 _DATASET_TEMPLATE_REGISTRY: Mapping[
     str, Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]
 ] = {
@@ -1003,7 +889,6 @@ _DATASET_TEMPLATE_REGISTRY: Mapping[
     "symtable": _symtable_records,
     "scip": _scip_records,
     "tree_sitter": _tree_sitter_records,
-    "runtime_inspect": _runtime_inspect_records,
 }
 
 

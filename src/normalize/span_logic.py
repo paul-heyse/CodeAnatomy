@@ -11,7 +11,7 @@ from ibis.expr.types import BooleanValue, NumericValue, Value
 
 from arrowdsl.schema.semantic_types import SPAN_STORAGE
 from datafusion_engine.span_utils import ENC_UTF8, ENC_UTF16, ENC_UTF32
-from ibis_engine.builtin_udfs import col_to_byte
+from ibis_engine.builtin_udfs import ibis_udf_call
 from ibis_engine.schema_utils import ibis_null_literal
 
 
@@ -133,7 +133,12 @@ def line_offset_expr(
         Byte offset expression.
     """
     offset = column.cast("int64")
-    byte_in_line = col_to_byte(line_text, offset, col_unit.cast("string"))
+    byte_in_line = ibis_udf_call(
+        "col_to_byte",
+        line_text,
+        offset,
+        col_unit.cast("string"),
+    )
     left = line_start.cast("int64")
     right = byte_in_line.cast("int64")
     return left + right

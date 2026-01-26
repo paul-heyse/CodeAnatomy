@@ -4160,11 +4160,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         *,
         fragment_views: Sequence[ViewSpec],
     ) -> set[str]:
-        from datafusion_engine.schema_registry import (
-            symtable_binding_resolution_view_specs,
-            symtable_derived_view_specs,
-        )
-
         fragment_names = {view.name for view in fragment_views}
         if fragment_views:
             register_view_specs(
@@ -4180,22 +4175,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             register_view_specs(
                 ctx,
                 views=nested_views,
-                runtime_profile=self,
-                validate=True,
-            )
-        symtable_views = symtable_derived_view_specs(ctx)
-        if symtable_views:
-            register_view_specs(
-                ctx,
-                views=symtable_views,
-                runtime_profile=self,
-                validate=True,
-            )
-        symtable_resolution_views = symtable_binding_resolution_view_specs(ctx)
-        if symtable_resolution_views:
-            register_view_specs(
-                ctx,
-                views=symtable_resolution_views,
                 runtime_profile=self,
                 validate=True,
             )

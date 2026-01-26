@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -11,9 +10,7 @@ import pyarrow as pa
 from ibis.expr.types import Table, Value
 
 from arrowdsl.core.ordering import Ordering
-from arrowdsl.schema.build import empty_table
 from cpg.kind_catalog import EntityKind
-from cpg.schemas import CPG_PROPS_SCHEMA
 from cpg.specs import (
     PropFieldSpec,
     PropOptions,
@@ -25,14 +22,7 @@ from cpg.specs import (
 from ibis_engine.expr_compiler import expr_ir_to_ibis
 from ibis_engine.hashing import HashExprSpec, masked_stable_id_expr_ir
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import (
-    bind_expr_schema,
-    ensure_columns,
-    ibis_dtype_from_arrow,
-    ibis_null_literal,
-    ibis_schema_from_arrow,
-    validate_expr_schema,
-)
+from ibis_engine.schema_utils import ibis_dtype_from_arrow, ibis_null_literal
 from sqlglot_tools.expr_spec import SqlExprSpec
 
 
@@ -57,6 +47,20 @@ def masked_stable_id_expr_from_spec(
     )
 
 SQLGLOT_UNION_THRESHOLD = 96
+_PROP_OUTPUT_COLUMNS: tuple[str, ...] = (
+    "entity_kind",
+    "entity_id",
+    "node_kind",
+    "prop_key",
+    "value_type",
+    "value_string",
+    "value_int",
+    "value_float",
+    "value_bool",
+    "value_json",
+    "task_name",
+    "task_priority",
+)
 
 
 @dataclass(frozen=True)
@@ -106,14 +110,7 @@ def emit_props_ibis(
         combined = union_builder(rows)
     else:
         combined = _union_rows(rows)
-    combined = ensure_columns(combined, schema=CPG_PROPS_SCHEMA, only_missing=True)
-    combined = combined.select(*CPG_PROPS_SCHEMA.names)
-    validate_expr_schema(combined, expected=CPG_PROPS_SCHEMA, allow_extra_columns=False)
-    combined = bind_expr_schema(
-        combined,
-        schema=CPG_PROPS_SCHEMA,
-        allow_extra_columns=False,
-    )
+    combined = combined.select(*_PROP_OUTPUT_COLUMNS)
     return IbisPlan(expr=combined, ordering=Ordering.unordered())
 
 
@@ -130,30 +127,20 @@ def _prop_row_expr(
         return None
     if field.skip_if_none:
         expr = expr.filter(value_expr.notnull())
-    schema = CPG_PROPS_SCHEMA
-    schema_names = set(schema.names)
     expr, entity_id = _entity_id_expr(expr, spec)
     columns: dict[str, Value] = {}
-    if "entity_kind" in schema_names:
-        columns["entity_kind"] = ibis.literal(spec.entity_kind.value)
-    if "entity_id" in schema_names:
-        columns["entity_id"] = entity_id
-    if "node_kind" in schema_names:
-        node_kind = str(spec.node_kind) if spec.node_kind is not None else None
-        columns["node_kind"] = _literal_or_null(node_kind, pa.string())
-    if "prop_key" in schema_names:
-        columns["prop_key"] = ibis.literal(field.prop_key)
+    columns["entity_kind"] = ibis.literal(spec.entity_kind.value)
+    columns["entity_id"] = entity_id
+    node_kind = str(spec.node_kind) if spec.node_kind is not None else None
+    columns["node_kind"] = _literal_or_null(node_kind, pa.string())
+    columns["prop_key"] = ibis.literal(field.prop_key)
     value_type = field.value_type or "string"
-    if "value_type" in schema_names:
-        columns["value_type"] = ibis.literal(value_type)
-    if "task_name" in schema_names:
-        columns["task_name"] = _literal_or_null(task_name, pa.string())
-    if "task_priority" in schema_names:
-        columns["task_priority"] = _literal_or_null(task_priority, pa.int32())
-    columns.update(_value_columns(schema, value_expr, value_type=value_type))
+    columns["value_type"] = ibis.literal(value_type)
+    columns["task_name"] = _literal_or_null(task_name, pa.string())
+    columns["task_priority"] = _literal_or_null(task_priority, pa.int32())
+    columns.update(_value_columns(value_expr, value_type=value_type))
     row = expr.select(**columns)
-    row = ensure_columns(row, schema=CPG_PROPS_SCHEMA, only_missing=True)
-    return row.select(*CPG_PROPS_SCHEMA.names)
+    return row.select(*_PROP_OUTPUT_COLUMNS)
 
 
 def _field_value_expr(expr: Table, field: PropFieldSpec) -> Value | None:
@@ -213,36 +200,31 @@ def _prepare_id_columns(
     return expr, tuple(columns), required
 
 
-def _value_columns(schema: pa.Schema, value_expr: Value, *, value_type: str) -> dict[str, Value]:
-    names = set(schema.names)
-    value_column = _resolve_value_column(names, value_type)
-    columns: dict[str, Value] = {}
-    if value_column is None:
-        return columns
-    value_field = schema.field(value_column)
-    columns[value_column] = ibis.cast(value_expr, ibis_dtype_from_arrow(value_field.type))
-    for field in schema:
-        if field.name == value_column:
-            continue
-        if field.name.startswith("value_") and field.name in names:
-            columns[field.name] = ibis_null_literal(field.type)
-    return columns
-
-
-def _resolve_value_column(names: set[str], value_type: str) -> str | None:
-    candidates: dict[str, tuple[str, ...]] = {
-        "string": ("value_string", "value_str", "value"),
-        "int": ("value_int", "value_i64", "value"),
-        "float": ("value_float", "value_f64", "value"),
-        "bool": ("value_bool", "value"),
-        "json": ("value_json", "value"),
+def _value_columns(value_expr: Value, *, value_type: str) -> dict[str, Value]:
+    columns: dict[str, Value] = {
+        "value_string": ibis_null_literal(pa.string()),
+        "value_int": ibis_null_literal(pa.int64()),
+        "value_float": ibis_null_literal(pa.float64()),
+        "value_bool": ibis_null_literal(pa.bool_()),
+        "value_json": ibis_null_literal(pa.string()),
     }
-    for candidate in candidates.get(value_type, ("value",)):
-        if candidate in names:
-            return candidate
-    if "prop_value" in names:
-        return "prop_value"
-    return None
+    dtype_map: dict[str, pa.DataType] = {
+        "string": pa.string(),
+        "int": pa.int64(),
+        "float": pa.float64(),
+        "bool": pa.bool_(),
+        "json": pa.string(),
+    }
+    target = {
+        "string": "value_string",
+        "int": "value_int",
+        "float": "value_float",
+        "bool": "value_bool",
+        "json": "value_json",
+    }.get(value_type, "value_string")
+    target_dtype = dtype_map.get(value_type, pa.string())
+    columns[target] = ibis.cast(value_expr, ibis_dtype_from_arrow(target_dtype))
+    return columns
 
 
 def _literal_or_null(value: object | None, dtype: pa.DataType) -> Value:
@@ -269,22 +251,22 @@ def _union_exprs(exprs: Sequence[Table]) -> Table:
 
 
 def _empty_props_plan(expr: Table) -> IbisPlan:
-    backend = getattr(expr, "_find_backend", lambda: None)()
-    if backend is None:
-        backend = getattr(expr, "backend", None)
-    if backend is None:
-        msg = "CPG property emission requires an Ibis backend."
-        raise ValueError(msg)
-    empty = empty_table(CPG_PROPS_SCHEMA)
-    table_name = f"__cpg_props_empty_{uuid.uuid4().hex}"
-    backend.create_table(
-        table_name,
-        obj=empty,
-        schema=ibis_schema_from_arrow(empty.schema),
-        temp=True,
-        overwrite=True,
+    row = expr.select(
+        entity_kind=ibis_null_literal(pa.string()),
+        entity_id=ibis_null_literal(pa.string()),
+        node_kind=ibis_null_literal(pa.string()),
+        prop_key=ibis_null_literal(pa.string()),
+        value_type=ibis_null_literal(pa.string()),
+        value_string=ibis_null_literal(pa.string()),
+        value_int=ibis_null_literal(pa.int64()),
+        value_float=ibis_null_literal(pa.float64()),
+        value_bool=ibis_null_literal(pa.bool_()),
+        value_json=ibis_null_literal(pa.string()),
+        task_name=ibis_null_literal(pa.string()),
+        task_priority=ibis_null_literal(pa.int32()),
     )
-    return IbisPlan(expr=backend.table(table_name), ordering=Ordering.unordered())
+    empty = row.filter(ibis.literal(value=False))
+    return IbisPlan(expr=empty, ordering=Ordering.unordered())
 
 
 __all__ = ["CpgPropOptions", "emit_props_ibis"]

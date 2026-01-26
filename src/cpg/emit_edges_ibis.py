@@ -7,18 +7,11 @@ import pyarrow as pa
 from ibis.expr.types import Table, Value
 
 from arrowdsl.core.ordering import Ordering
-from cpg.schemas import CPG_EDGES_SCHEMA
 from cpg.specs import EdgeEmitSpec
 from ibis_engine.expr_compiler import expr_ir_to_ibis
 from ibis_engine.hashing import HashExprSpec, hash_expr_ir, stable_id_expr_ir
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import (
-    bind_expr_schema,
-    coalesce_columns,
-    ibis_dtype_from_arrow,
-    ibis_null_literal,
-    validate_expr_schema,
-)
+from ibis_engine.schema_utils import coalesce_columns, ibis_dtype_from_arrow, ibis_null_literal
 from sqlglot_tools.expr_spec import SqlExprSpec
 
 
@@ -46,6 +39,26 @@ def stable_key_hash_expr_from_spec(
     use_128: bool | None = False,
 ) -> Value:
     return _expr_from_spec(table, hash_expr_ir(spec=spec, use_128=use_128))
+
+
+_EDGE_OUTPUT_COLUMNS: tuple[str, ...] = (
+    "edge_id",
+    "edge_kind",
+    "src_node_id",
+    "dst_node_id",
+    "path",
+    "bstart",
+    "bend",
+    "origin",
+    "resolution_method",
+    "confidence",
+    "score",
+    "symbol_roles",
+    "qname_source",
+    "ambiguity_group_id",
+    "task_name",
+    "task_priority",
+)
 
 
 def emit_edges_ibis(
@@ -87,16 +100,7 @@ def emit_edges_ibis(
         task_name=output.task_name,
         task_priority=output.task_priority,
     )
-    validate_expr_schema(
-        output,
-        expected=CPG_EDGES_SCHEMA,
-        allow_extra_columns=include_keys,
-    )
-    output = bind_expr_schema(
-        output,
-        schema=CPG_EDGES_SCHEMA,
-        allow_extra_columns=include_keys,
-    )
+    output = output.select(*_EDGE_OUTPUT_COLUMNS)
     return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 
@@ -131,8 +135,7 @@ def emit_edges_from_relation_output(rel: IbisPlan | Table) -> IbisPlan:
         task_name=output.task_name,
         task_priority=output.task_priority,
     )
-    validate_expr_schema(output, expected=CPG_EDGES_SCHEMA, allow_extra_columns=False)
-    output = bind_expr_schema(output, schema=CPG_EDGES_SCHEMA, allow_extra_columns=False)
+    output = output.select(*_EDGE_OUTPUT_COLUMNS)
     return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 

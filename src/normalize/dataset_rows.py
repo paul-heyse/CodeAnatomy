@@ -102,6 +102,7 @@ class DatasetRow:
     contract: ContractRow | None = None
     template: str | None = None
     metadata_extra: dict[bytes, bytes] = field(default_factory=dict)
+    register_view: bool = True
 
 
 def _def_use_kind_expr() -> ExprIR:
@@ -142,6 +143,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
         ),
         template="normalize_evidence",
+        register_view=False,
     ),
     DatasetRow(
         name="type_exprs_norm_v1",

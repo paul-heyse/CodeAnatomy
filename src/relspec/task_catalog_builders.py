@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.ordering import Ordering
-from datafusion_engine.schema_registry import schema_for
 from datafusion_engine.view_registry import ensure_view_graph
-from datafusion_engine.view_registry_specs import view_graph_output_names
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import bind_expr_schema
 from relspec.task_catalog import TaskBuildContext, TaskCatalog, TaskSpec
 from relspec.view_defs import (
     DEFAULT_REL_TASK_PRIORITY,
@@ -23,8 +20,10 @@ from relspec.view_defs import (
 )
 
 if TYPE_CHECKING:
-    import pyarrow as pa
     from datafusion import SessionContext
+
+    from datafusion_engine.view_graph_registry import ViewNode
+    from sqlglot_tools.compat import Expression
 
 
 _RELSPEC_OUTPUTS: frozenset[str] = frozenset(
@@ -62,13 +61,19 @@ def _view_plan(context: TaskBuildContext, *, output: str) -> IbisPlan:
         include_registry_views=True,
     )
     expr = context.backend.table(output)
-    schema = _schema_for(output)
-    bound = bind_expr_schema(expr, schema=schema, allow_extra_columns=False)
-    return IbisPlan(expr=bound, ordering=Ordering.unordered())
+    return IbisPlan(expr=expr, ordering=Ordering.unordered())
 
 
-def _schema_for(name: str) -> pa.Schema:
-    return schema_for(name)
+def _sqlglot_builder_from_ast(
+    ast: Expression | None,
+) -> Callable[[TaskBuildContext], Expression] | None:
+    if ast is None:
+        return None
+
+    def _build(_context: TaskBuildContext) -> Expression:
+        return ast
+
+    return _build
 
 
 def _session_context(context: TaskBuildContext) -> SessionContext:
@@ -82,22 +87,36 @@ def _session_context(context: TaskBuildContext) -> SessionContext:
 
 
 def default_task_catalog() -> TaskCatalog:
-    """Return the default task catalog for the pipeline.
+    """Raise because the default catalog is deprecated.
+
+    Raises
+    ------
+    ValueError
+        Always raised to enforce view-driven task catalogs.
+    """
+    msg = "default_task_catalog is deprecated; use task_catalog_from_view_nodes."
+    raise ValueError(msg)
+
+
+def task_catalog_from_view_nodes(nodes: Sequence[ViewNode]) -> TaskCatalog:
+    """Return a task catalog derived from view registry nodes.
 
     Returns
     -------
     TaskCatalog
-        Combined task catalog for normalization + CPG outputs.
+        Task catalog with one view task per node.
     """
     tasks = tuple(
         TaskSpec(
-            name=f"view.{output_name}",
-            output=output_name,
-            build=_view_task_builder(output_name),
+            name=node.name,
+            output=node.name,
+            build=_view_task_builder(node.name),
             kind="view",
-            priority=_priority_for_output(output_name),
+            priority=_priority_for_output(node.name),
+            sqlglot_builder=_sqlglot_builder_from_ast(node.sqlglot_ast),
         )
-        for output_name in view_graph_output_names()
+        for node in nodes
+        if node.sqlglot_ast is not None
     )
     return TaskCatalog(tasks=tasks)
 
@@ -113,4 +132,4 @@ def build_task_catalog() -> TaskCatalog:
     return default_task_catalog()
 
 
-__all__ = ["build_task_catalog", "default_task_catalog"]
+__all__ = ["build_task_catalog", "default_task_catalog", "task_catalog_from_view_nodes"]

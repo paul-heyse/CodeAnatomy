@@ -12,16 +12,14 @@ from hamilton.function_modifiers import (
     check_output_custom,
     datasaver,
     pipe_input,
-    schema,
     step,
     tag,
 )
 
 from arrowdsl.core.interop import TableLike
 from core_types import JsonDict
-from cpg.schemas import CPG_EDGES_CONTRACT, CPG_NODES_CONTRACT, CPG_PROPS_CONTRACT
 from hamilton_pipeline.pipeline_types import OutputConfig
-from hamilton_pipeline.validators import NonEmptyTableValidator, TableSchemaValidator
+from hamilton_pipeline.validators import NonEmptyTableValidator
 from ibis_engine.io_bridge import IbisDatasetWriteOptions, IbisDeltaWriteOptions
 from storage.io import write_ibis_dataset_delta
 from storage.ipc import payload_hash
@@ -45,14 +43,6 @@ def _stage_identity(table: TableLike) -> TableLike:
 
 def _stage_ready(table: TableLike) -> TableLike:
     return table
-
-
-def _schema_pairs(schema: pa.Schema) -> tuple[tuple[str, str], ...]:
-    return tuple((field.name, str(field.type)) for field in schema)
-
-
-def _expected_columns(schema: pa.Schema) -> tuple[str, ...]:
-    return tuple(field.name for field in schema)
 
 
 def _delta_write(
@@ -105,10 +95,6 @@ def _delta_write(
     namespace="cpg_nodes",
 )
 @cache(format="parquet", behavior="default")
-@schema.output(*_schema_pairs(CPG_NODES_CONTRACT.schema))
-@check_output_custom(
-    TableSchemaValidator(expected_columns=_expected_columns(CPG_NODES_CONTRACT.schema))
-)
 @check_output_custom(NonEmptyTableValidator())
 @tag(layer="outputs", artifact="cpg_nodes", kind="table")
 def cpg_nodes(cpg_nodes_final: TableLike) -> TableLike:
@@ -129,10 +115,6 @@ def cpg_nodes(cpg_nodes_final: TableLike) -> TableLike:
     namespace="cpg_edges",
 )
 @cache(format="parquet", behavior="default")
-@schema.output(*_schema_pairs(CPG_EDGES_CONTRACT.schema))
-@check_output_custom(
-    TableSchemaValidator(expected_columns=_expected_columns(CPG_EDGES_CONTRACT.schema))
-)
 @check_output_custom(NonEmptyTableValidator())
 @tag(layer="outputs", artifact="cpg_edges", kind="table")
 def cpg_edges(cpg_edges_final: TableLike) -> TableLike:
@@ -153,10 +135,6 @@ def cpg_edges(cpg_edges_final: TableLike) -> TableLike:
     namespace="cpg_props",
 )
 @cache(format="parquet", behavior="default")
-@schema.output(*_schema_pairs(CPG_PROPS_CONTRACT.schema))
-@check_output_custom(
-    TableSchemaValidator(expected_columns=_expected_columns(CPG_PROPS_CONTRACT.schema))
-)
 @check_output_custom(NonEmptyTableValidator())
 @tag(layer="outputs", artifact="cpg_props", kind="table")
 def cpg_props(cpg_props_final: TableLike) -> TableLike:

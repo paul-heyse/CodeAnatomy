@@ -187,6 +187,6 @@ class DataFusionCompileOptions:
     sql_policy_profile: SQLPolicyProfile | None = None
     run_id: str | None = None
     prefer_substrait: bool = False
-    prefer_ast_execution: bool = False
+    prefer_ast_execution: bool = True
     record_substrait_gaps: bool = False
     dynamic_projection: bool = True

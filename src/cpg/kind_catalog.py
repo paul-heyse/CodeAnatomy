@@ -8,8 +8,6 @@ from typing import TYPE_CHECKING, NewType, cast
 
 import pyarrow as pa
 
-from datafusion_engine.schema_registry import RELATION_OUTPUT_SCHEMA
-
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
 
@@ -173,22 +171,20 @@ def edge_kind_required_props() -> dict[str, set[str]]:
     return {str(spec.kind): set(spec.required_props) for spec in EDGE_KIND_SPECS}
 
 
-def validate_edge_kind_requirements(schema: SchemaLike | None = None) -> None:
+def validate_edge_kind_requirements(schema: SchemaLike) -> None:
     """Validate edge-kind requirements against relation output schema.
 
     Parameters
     ----------
     schema:
-        Optional schema to validate against. Defaults to the canonical
-        relation output schema.
+        Relation output schema to validate against.
 
     Raises
     ------
     ValueError
         Raised when required edge props are missing from the schema.
     """
-    resolved_schema = schema or RELATION_OUTPUT_SCHEMA
-    available = _schema_names(resolved_schema)
+    available = _schema_names(schema)
     errors: list[str] = []
     for spec in EDGE_KIND_SPECS:
         missing = sorted(prop for prop in spec.required_props if prop not in available)
@@ -205,6 +201,12 @@ def _schema_names(schema: SchemaLike) -> set[str]:
     names = getattr(schema, "names", None)
     if names is not None:
         return set(names)
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            resolved_schema = cast("pa.Schema", resolved)
+            return set(resolved_schema.names)
     to_pyarrow = getattr(schema, "to_pyarrow", None)
     if callable(to_pyarrow):
         resolved = to_pyarrow()

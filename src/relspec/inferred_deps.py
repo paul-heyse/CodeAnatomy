@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -11,6 +11,7 @@ from sqlglot_tools.optimizer import plan_fingerprint
 
 if TYPE_CHECKING:
     from datafusion_engine.schema_contracts import SchemaContract
+    from datafusion_engine.view_graph_registry import ViewNode
     from schema_spec.system import DatasetSpec
     from sqlglot_tools.compat import Expression
 
@@ -109,6 +110,41 @@ def infer_deps_from_sqlglot_expr(
     )
 
 
+def infer_deps_from_view_nodes(
+    nodes: Sequence[ViewNode],
+) -> tuple[InferredDeps, ...]:
+    """Infer dependencies for view nodes using their SQLGlot ASTs.
+
+    Parameters
+    ----------
+    nodes : Sequence[ViewNode]
+        View nodes with SQLGlot ASTs attached.
+
+    Returns
+    -------
+    tuple[InferredDeps, ...]
+        Inferred dependency records for each view node.
+
+    Raises
+    ------
+    ValueError
+        Raised when a view node lacks a SQLGlot AST.
+    """
+    inferred: list[InferredDeps] = []
+    for node in nodes:
+        if node.sqlglot_ast is None:
+            msg = f"View node {node.name!r} is missing a SQLGlot AST."
+            raise ValueError(msg)
+        inferred.append(
+            infer_deps_from_sqlglot_expr(
+                node.sqlglot_ast,
+                task_name=node.name,
+                output=node.name,
+            )
+        )
+    return tuple(inferred)
+
+
 def _required_metadata_for_tables(
     columns_by_table: Mapping[str, tuple[str, ...]],
 ) -> dict[str, tuple[tuple[bytes, bytes], ...]]:
@@ -161,47 +197,7 @@ def _dataset_spec_for_table(name: str) -> DatasetSpec | None:
             return normalize_dataset_spec(name)
         except KeyError:
             pass
-    try:
-        from relspec.contracts import (
-            REL_CALLSITE_QNAME_NAME,
-            REL_CALLSITE_SYMBOL_NAME,
-            REL_DEF_SYMBOL_NAME,
-            REL_IMPORT_SYMBOL_NAME,
-            REL_NAME_SYMBOL_NAME,
-            RELATION_OUTPUT_NAME,
-            rel_callsite_qname_spec,
-            rel_callsite_symbol_spec,
-            rel_def_symbol_spec,
-            rel_import_symbol_spec,
-            rel_name_symbol_spec,
-            relation_output_spec,
-        )
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None
-    relspec_specs: dict[str, Callable[[], DatasetSpec]] = {
-        REL_NAME_SYMBOL_NAME: rel_name_symbol_spec,
-        REL_IMPORT_SYMBOL_NAME: rel_import_symbol_spec,
-        REL_DEF_SYMBOL_NAME: rel_def_symbol_spec,
-        REL_CALLSITE_SYMBOL_NAME: rel_callsite_symbol_spec,
-        REL_CALLSITE_QNAME_NAME: rel_callsite_qname_spec,
-        RELATION_OUTPUT_NAME: relation_output_spec,
-    }
-    spec_factory = relspec_specs.get(name)
-    if spec_factory is None:
-        try:
-            from cpg import schemas as cpg_schemas
-        except (ImportError, RuntimeError, TypeError, ValueError):
-            return None
-        cpg_specs: dict[str, DatasetSpec] = {
-            "cpg_nodes_v1": cpg_schemas.CPG_NODES_SPEC,
-            "cpg_edges_v1": cpg_schemas.CPG_EDGES_SPEC,
-            "cpg_props_v1": cpg_schemas.CPG_PROPS_SPEC,
-            "cpg_props_json_v1": cpg_schemas.CPG_PROPS_JSON_SPEC,
-            "cpg_props_by_file_id_v1": cpg_schemas.CPG_PROPS_BY_FILE_ID_SPEC,
-            "cpg_props_global_v1": cpg_schemas.CPG_PROPS_GLOBAL_SPEC,
-        }
-        return cpg_specs.get(name)
-    return spec_factory()
+    return None
 
 
 def _schema_contract_for_table(name: str) -> SchemaContract | None:

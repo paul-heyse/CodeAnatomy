@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from sqlglot.errors import ParseError
 
@@ -26,6 +27,9 @@ from relspec.plan_catalog import PlanCatalog
 from relspec.rustworkx_graph import TaskGraph
 from relspec.rustworkx_schedule import impacted_tasks
 from sqlglot_tools.optimizer import register_datafusion_dialect, sqlglot_sql
+
+if TYPE_CHECKING:
+    from datafusion_engine.view_graph_registry import ViewNode
 
 
 @dataclass(frozen=True)
@@ -220,6 +224,46 @@ def plan_snapshot_map(catalog: PlanCatalog) -> dict[str, PlanFingerprintSnapshot
     return snapshots
 
 
+def view_fingerprint_map(nodes: Sequence[ViewNode]) -> dict[str, str]:
+    """Return a mapping of view names to plan fingerprints.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of view name to plan fingerprint.
+    """
+    from relspec.inferred_deps import infer_deps_from_view_nodes
+
+    inferred = infer_deps_from_view_nodes(nodes)
+    return {dep.task_name: dep.plan_fingerprint for dep in inferred}
+
+
+def view_snapshot_map(nodes: Sequence[ViewNode]) -> dict[str, PlanFingerprintSnapshot]:
+    """Return a mapping of view names to plan snapshots.
+
+    Returns
+    -------
+    dict[str, PlanFingerprintSnapshot]
+        Mapping of view name to snapshot metadata.
+    """
+    from relspec.inferred_deps import infer_deps_from_view_nodes
+
+    register_datafusion_dialect()
+    inferred = {dep.task_name: dep for dep in infer_deps_from_view_nodes(nodes)}
+    snapshots: dict[str, PlanFingerprintSnapshot] = {}
+    for node in nodes:
+        if node.sqlglot_ast is None:
+            msg = f"View node {node.name!r} is missing a SQLGlot AST."
+            raise ValueError(msg)
+        dep = inferred.get(node.name)
+        fingerprint = dep.plan_fingerprint if dep is not None else ""
+        snapshots[node.name] = PlanFingerprintSnapshot(
+            plan_fingerprint=fingerprint,
+            plan_sql=sqlglot_sql(node.sqlglot_ast),
+        )
+    return snapshots
+
+
 def _semantic_diff_map(
     prev: Mapping[str, PlanFingerprintSnapshot],
     curr: Mapping[str, PlanFingerprintSnapshot],
@@ -268,4 +312,6 @@ __all__ = [
     "impacted_tasks_for_cdf",
     "plan_fingerprint_map",
     "plan_snapshot_map",
+    "view_fingerprint_map",
+    "view_snapshot_map",
 ]

@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
-from cpg.schemas import CPG_EDGES_SCHEMA, CPG_NODES_SCHEMA
 from datafusion_engine.extract_bundles import dataset_name_for_output
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
@@ -165,7 +164,7 @@ def upsert_cpg_nodes(
     spec = PartitionedDatasetSpec(
         name="cpg_nodes_v1",
         partition_column="file_id",
-        schema=CPG_NODES_SCHEMA,
+        schema=None,
     )
     path = upsert_partitioned_dataset(
         nodes,
@@ -194,7 +193,7 @@ def upsert_cpg_edges(
     spec = PartitionedDatasetSpec(
         name="cpg_edges_v1",
         partition_column="edge_owner_file_id",
-        schema=CPG_EDGES_SCHEMA,
+        schema=None,
     )
     path = upsert_partitioned_dataset(
         edges,

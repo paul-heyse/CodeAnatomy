@@ -248,7 +248,6 @@ def build_function_registry(
     resolved = options or FunctionRegistryOptions()
     datafusion_specs = resolved.datafusion_specs
     ibis_specs = resolved.ibis_specs
-    datafusion_function_catalog = resolved.datafusion_function_catalog
     registry_snapshot = resolved.registry_snapshot
     lane_precedence = resolved.lane_precedence
     specs: dict[str, FunctionSpec] = {}
@@ -266,12 +265,6 @@ def build_function_registry(
         registry_snapshot=cast("Mapping[str, object]", registry_snapshot),
     ):
         _merge_spec(specs, _spec_from_ibis(spec, lane_precedence=lane_precedence))
-    if datafusion_function_catalog:
-        _merge_datafusion_builtins(
-            specs,
-            catalog=datafusion_function_catalog,
-            lane_precedence=lane_precedence,
-        )
     return FunctionRegistry(
         specs=specs,
         lane_precedence=lane_precedence,

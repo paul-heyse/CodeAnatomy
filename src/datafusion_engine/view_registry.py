@@ -11,12 +11,7 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_engine.schema_registry import (
-    has_schema,
-    nested_base_df,
-    nested_dataset_names,
-    schema_for,
-)
+from datafusion_engine.schema_registry import nested_base_df, nested_dataset_names
 from datafusion_engine.view_registry_defs import VIEW_BASE_TABLE, VIEW_SELECT_EXPRS
 from datafusion_ext import map_entries, map_keys, map_values, union_extract, union_tag
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
@@ -446,10 +441,7 @@ def registry_view_specs(
         if name in excluded:
             continue
         builder = partial(_view_df, name=name)
-        if has_schema(name):
-            specs.append(ViewSpec(name=name, sql=None, schema=schema_for(name), builder=builder))
-        else:
-            specs.append(view_spec_from_builder(ctx, name=name, builder=builder, sql=None))
+        specs.append(view_spec_from_builder(ctx, name=name, builder=builder, sql=None))
     return tuple(specs)
 
 

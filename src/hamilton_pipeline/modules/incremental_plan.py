@@ -12,18 +12,18 @@ from incremental.plan_fingerprints import read_plan_snapshots, write_plan_snapsh
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig
-from relspec.incremental import diff_plan_snapshots, plan_snapshot_map
-from relspec.plan_catalog import PlanCatalog
+from relspec.incremental import diff_plan_snapshots, view_snapshot_map
 
 if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
+    from datafusion_engine.view_graph_registry import ViewNode
     from ibis_engine.execution import IbisExecutionContext
     from relspec.incremental import IncrementalDiff
 
 
 @tag(layer="incremental", artifact="incremental_plan_diff", kind="mapping")
 def incremental_plan_diff(
-    plan_catalog: PlanCatalog,
+    view_nodes: tuple[ViewNode, ...],
     incremental_config: IncrementalConfig,
     ctx: ExecutionContext,
     ibis_execution: IbisExecutionContext,
@@ -44,7 +44,7 @@ def incremental_plan_diff(
     state_store = StateStore(root=incremental_config.state_dir)
     context = DeltaAccessContext(runtime=runtime)
     previous = read_plan_snapshots(state_store, context=context)
-    current = plan_snapshot_map(plan_catalog)
+    current = view_snapshot_map(view_nodes)
     diff = diff_plan_snapshots(previous, current)
     _record_plan_diff(diff, ctx=ctx, total_tasks=len(current))
     write_plan_snapshots(state_store, current, execution=ibis_execution)

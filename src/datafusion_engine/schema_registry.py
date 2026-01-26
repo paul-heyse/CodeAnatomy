@@ -869,199 +869,6 @@ SYMTABLE_FILES_SCHEMA = pa.schema(
     ]
 )
 
-SYMTABLE_SCOPES_VIEW_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("table_id", pa.int64()),
-        ("scope_id", pa.string()),
-        ("scope_local_id", pa.int64()),
-        ("scope_type", pa.string()),
-        ("scope_type_value", pa.int32()),
-        ("scope_name", pa.string()),
-        ("qualpath", pa.string()),
-        ("function_partitions", SYM_FUNCTION_PARTITIONS_T),
-        ("class_methods", pa.list_(pa.string())),
-        ("lineno", pa.int32()),
-        ("is_meta_scope", pa.bool_()),
-        ("parent_table_id", pa.int64()),
-    ]
-)
-
-SYMTABLE_SYMBOLS_VIEW_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("table_id", pa.int64()),
-        ("scope_id", pa.string()),
-        ("symbol_name", pa.string()),
-        ("sym_symbol_id", pa.string()),
-        ("is_referenced", pa.bool_()),
-        ("is_imported", pa.bool_()),
-        ("is_parameter", pa.bool_()),
-        ("is_type_parameter", pa.bool_()),
-        ("is_global", pa.bool_()),
-        ("is_nonlocal", pa.bool_()),
-        ("is_declared_global", pa.bool_()),
-        ("is_local", pa.bool_()),
-        ("is_annotated", pa.bool_()),
-        ("is_free", pa.bool_()),
-        ("is_assigned", pa.bool_()),
-        ("is_namespace", pa.bool_()),
-        ("namespace_count", pa.int32()),
-        ("namespace_block_ids", pa.list_(pa.int64())),
-    ]
-)
-
-SYMTABLE_SCOPE_EDGES_VIEW_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("parent_table_id", pa.int64()),
-        ("child_table_id", pa.int64()),
-        ("parent_scope_id", pa.string()),
-        ("child_scope_id", pa.string()),
-    ]
-)
-
-SYMTABLE_NAMESPACE_EDGES_VIEW_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("scope_id", pa.string()),
-        ("symbol_name", pa.string()),
-        ("child_table_id", pa.int64()),
-        ("child_scope_id", pa.string()),
-        ("namespace_count", pa.int32()),
-    ]
-)
-
-SYMTABLE_FUNCTION_PARTITIONS_VIEW_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("scope_id", pa.string()),
-        ("scope_name", pa.string()),
-        ("parameters", pa.list_(pa.string())),
-        ("locals", pa.list_(pa.string())),
-        ("globals", pa.list_(pa.string())),
-        ("nonlocals", pa.list_(pa.string())),
-        ("frees", pa.list_(pa.string())),
-    ]
-)
-
-SYMTABLE_CLASS_METHODS_VIEW_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("scope_id", pa.string()),
-        ("scope_name", pa.string()),
-        ("method_name", pa.string()),
-    ]
-)
-
-SYMTABLE_SYMBOL_ATTRS_VIEW_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("scope_id", pa.string()),
-        ("symbol_name", pa.string()),
-        ("attr_key", pa.string()),
-        ("attr_value", pa.string()),
-    ]
-)
-
-SYMTABLE_BINDINGS_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("scope_id", pa.string()),
-        ("scope_type", pa.string()),
-        ("scope_name", pa.string()),
-        ("scope_lineno", pa.int32()),
-        ("name", pa.string()),
-        ("binding_id", pa.string()),
-        ("binding_kind", pa.string()),
-        ("declared_here", pa.bool_()),
-        ("referenced_here", pa.bool_()),
-        ("assigned_here", pa.bool_()),
-        ("annotated_here", pa.bool_()),
-        ("is_imported", pa.bool_()),
-        ("is_parameter", pa.bool_()),
-        ("is_free", pa.bool_()),
-        ("is_nonlocal", pa.bool_()),
-        ("is_global", pa.bool_()),
-        ("is_declared_global", pa.bool_()),
-    ]
-)
-
-SYMTABLE_DEF_SITES_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("scope_id", pa.string()),
-        ("binding_id", pa.string()),
-        ("name", pa.string()),
-        ("def_id", pa.string()),
-        ("bstart", pa.int64()),
-        ("bend", pa.int64()),
-        ("def_site_kind", pa.string()),
-        ("anchor_confidence", pa.float64()),
-        ("anchor_reason", pa.string()),
-        ("ambiguity_group_id", pa.string()),
-        ("def_site_id", pa.string()),
-    ]
-)
-
-SYMTABLE_USE_SITES_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("scope_id", pa.string()),
-        ("binding_id", pa.string()),
-        ("name", pa.string()),
-        ("ref_id", pa.string()),
-        ("bstart", pa.int64()),
-        ("bend", pa.int64()),
-        ("use_kind", pa.string()),
-        ("anchor_confidence", pa.float64()),
-        ("anchor_reason", pa.string()),
-        ("ambiguity_group_id", pa.string()),
-        ("use_site_id", pa.string()),
-    ]
-)
-
-SYMTABLE_TYPE_PARAMS_SCHEMA = pa.schema(
-    [
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("type_param_id", pa.string()),
-        ("scope_id", pa.string()),
-        ("name", pa.string()),
-        ("variance", pa.string()),
-    ]
-)
-
-SYMTABLE_TYPE_PARAM_EDGES_SCHEMA = pa.schema(
-    [
-        ("path", pa.string()),
-        ("type_param_id", pa.string()),
-        ("owner_scope_id", pa.string()),
-        ("scope_type", pa.string()),
-    ]
-)
-
-SYMTABLE_BINDING_RESOLUTIONS_SCHEMA = pa.schema(
-    [
-        ("binding_id", pa.string()),
-        ("outer_binding_id", pa.string()),
-        ("kind", pa.string()),
-        ("reason", pa.string()),
-        ("path", pa.string()),
-        ("ambiguity_group_id", pa.string()),
-        ("confidence", pa.float32()),
-    ]
-)
 
 BYTECODE_SPAN_META: dict[bytes, bytes] = {
     b"line_base": b"0",
@@ -1658,196 +1465,6 @@ CALLSITE_QNAME_CANDIDATES_SCHEMA = _schema_with_metadata(
     ),
 )
 
-REL_NAME_SYMBOL_SCHEMA = _schema_with_metadata(
-    "rel_name_symbol_v1",
-    pa.schema(
-        [
-            pa.field("ref_id", pa.string()),
-            pa.field("symbol", pa.string()),
-            pa.field("symbol_roles", pa.int32()),
-            pa.field("path", pa.string()),
-            pa.field("edge_owner_file_id", pa.string()),
-            pa.field("bstart", pa.int64()),
-            pa.field("bend", pa.int64()),
-            pa.field("resolution_method", pa.string()),
-            pa.field("confidence", pa.float32()),
-            pa.field("score", pa.float32()),
-            pa.field("task_name", pa.string()),
-            pa.field("task_priority", pa.int32()),
-        ]
-    ),
-)
-
-REL_IMPORT_SYMBOL_SCHEMA = _schema_with_metadata(
-    "rel_import_symbol_v1",
-    pa.schema(
-        [
-            pa.field("import_alias_id", pa.string()),
-            pa.field("symbol", pa.string()),
-            pa.field("symbol_roles", pa.int32()),
-            pa.field("path", pa.string()),
-            pa.field("edge_owner_file_id", pa.string()),
-            pa.field("bstart", pa.int64()),
-            pa.field("bend", pa.int64()),
-            pa.field("resolution_method", pa.string()),
-            pa.field("confidence", pa.float32()),
-            pa.field("score", pa.float32()),
-            pa.field("task_name", pa.string()),
-            pa.field("task_priority", pa.int32()),
-        ]
-    ),
-)
-
-REL_DEF_SYMBOL_SCHEMA = _schema_with_metadata(
-    "rel_def_symbol_v1",
-    pa.schema(
-        [
-            pa.field("def_id", pa.string()),
-            pa.field("symbol", pa.string()),
-            pa.field("symbol_roles", pa.int32()),
-            pa.field("path", pa.string()),
-            pa.field("edge_owner_file_id", pa.string()),
-            pa.field("bstart", pa.int64()),
-            pa.field("bend", pa.int64()),
-            pa.field("resolution_method", pa.string()),
-            pa.field("confidence", pa.float32()),
-            pa.field("score", pa.float32()),
-            pa.field("task_name", pa.string()),
-            pa.field("task_priority", pa.int32()),
-        ]
-    ),
-)
-
-REL_CALLSITE_SYMBOL_SCHEMA = _schema_with_metadata(
-    "rel_callsite_symbol_v1",
-    pa.schema(
-        [
-            pa.field("call_id", pa.string()),
-            pa.field("symbol", pa.string()),
-            pa.field("symbol_roles", pa.int32()),
-            pa.field("path", pa.string()),
-            pa.field("edge_owner_file_id", pa.string()),
-            pa.field("call_bstart", pa.int64()),
-            pa.field("call_bend", pa.int64()),
-            pa.field("resolution_method", pa.string()),
-            pa.field("confidence", pa.float32()),
-            pa.field("score", pa.float32()),
-            pa.field("task_name", pa.string()),
-            pa.field("task_priority", pa.int32()),
-        ]
-    ),
-)
-
-REL_CALLSITE_QNAME_SCHEMA = _schema_with_metadata(
-    "rel_callsite_qname_v1",
-    pa.schema(
-        [
-            pa.field("call_id", pa.string()),
-            pa.field("qname_id", pa.string()),
-            pa.field("qname_source", pa.string()),
-            pa.field("path", pa.string()),
-            pa.field("edge_owner_file_id", pa.string()),
-            pa.field("call_bstart", pa.int64()),
-            pa.field("call_bend", pa.int64()),
-            pa.field("confidence", pa.float32()),
-            pa.field("score", pa.float32()),
-            pa.field("ambiguity_group_id", pa.string()),
-            pa.field("task_name", pa.string()),
-            pa.field("task_priority", pa.int32()),
-        ]
-    ),
-)
-
-RELATION_OUTPUT_SCHEMA = _schema_with_metadata(
-    "relation_output_v1",
-    pa.schema(
-        [
-            pa.field("src", pa.string(), nullable=True),
-            pa.field("dst", pa.string(), nullable=True),
-            pa.field("path", pa.string(), nullable=True),
-            pa.field("edge_owner_file_id", pa.string(), nullable=True),
-            pa.field("bstart", pa.int64(), nullable=True),
-            pa.field("bend", pa.int64(), nullable=True),
-            pa.field("origin", pa.string(), nullable=True),
-            pa.field("resolution_method", pa.string(), nullable=True),
-            pa.field("binding_kind", pa.string(), nullable=True),
-            pa.field("def_site_kind", pa.string(), nullable=True),
-            pa.field("use_kind", pa.string(), nullable=True),
-            pa.field("kind", pa.string(), nullable=True),
-            pa.field("reason", pa.string(), nullable=True),
-            pa.field("confidence", pa.float32(), nullable=True),
-            pa.field("score", pa.float32(), nullable=True),
-            pa.field("symbol_roles", pa.int32(), nullable=True),
-            pa.field("qname_source", pa.string(), nullable=True),
-            pa.field("ambiguity_group_id", pa.string(), nullable=True),
-            pa.field("diag_source", pa.string(), nullable=True),
-            pa.field("severity", pa.string(), nullable=True),
-            pa.field("task_name", pa.string(), nullable=True),
-            pa.field("task_priority", pa.int32(), nullable=True),
-        ]
-    ),
-)
-
-CPG_NODES_SCHEMA = _schema_with_metadata(
-    "cpg_nodes_v1",
-    pa.schema(
-        [
-            pa.field("node_id", pa.string(), nullable=True),
-            pa.field("node_kind", pa.string(), nullable=True),
-            pa.field("path", pa.string(), nullable=True),
-            pa.field("bstart", pa.int64(), nullable=True),
-            pa.field("bend", pa.int64(), nullable=True),
-            pa.field("file_id", pa.string(), nullable=True),
-            pa.field("task_name", pa.string(), nullable=True),
-            pa.field("task_priority", pa.int32(), nullable=True),
-        ]
-    ),
-)
-
-CPG_EDGES_SCHEMA = _schema_with_metadata(
-    "cpg_edges_v1",
-    pa.schema(
-        [
-            pa.field("edge_id", pa.string(), nullable=True),
-            pa.field("edge_kind", pa.string(), nullable=True),
-            pa.field("src_node_id", pa.string(), nullable=True),
-            pa.field("dst_node_id", pa.string(), nullable=True),
-            pa.field("path", pa.string(), nullable=True),
-            pa.field("bstart", pa.int64(), nullable=True),
-            pa.field("bend", pa.int64(), nullable=True),
-            pa.field("origin", pa.string(), nullable=True),
-            pa.field("resolution_method", pa.string(), nullable=True),
-            pa.field("confidence", pa.float32(), nullable=True),
-            pa.field("score", pa.float32(), nullable=True),
-            pa.field("symbol_roles", pa.int32(), nullable=True),
-            pa.field("qname_source", pa.string(), nullable=True),
-            pa.field("ambiguity_group_id", pa.string(), nullable=True),
-            pa.field("task_name", pa.string(), nullable=True),
-            pa.field("task_priority", pa.int32(), nullable=True),
-        ]
-    ),
-)
-
-CPG_PROPS_SCHEMA = _schema_with_metadata(
-    "cpg_props_v1",
-    pa.schema(
-        [
-            pa.field("entity_kind", pa.string(), nullable=True),
-            pa.field("entity_id", pa.string(), nullable=True),
-            pa.field("node_kind", pa.string(), nullable=True),
-            pa.field("prop_key", pa.string(), nullable=True),
-            pa.field("value_type", pa.string(), nullable=True),
-            pa.field("value_string", pa.string(), nullable=True),
-            pa.field("value_int", pa.int64(), nullable=True),
-            pa.field("value_float", pa.float64(), nullable=True),
-            pa.field("value_bool", pa.bool_(), nullable=True),
-            pa.field("value_json", pa.string(), nullable=True),
-            pa.field("task_name", pa.string(), nullable=True),
-            pa.field("task_priority", pa.int32(), nullable=True),
-        ]
-    ),
-)
-
 SCALAR_PARAM_SIGNATURE_SCHEMA = _schema_with_metadata(
     "scalar_param_signature_v1",
     pa.schema(
@@ -1896,9 +1513,6 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "ast_files_v1": AST_FILES_SCHEMA,
     "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
     "callsite_qname_candidates_v1": CALLSITE_QNAME_CANDIDATES_SCHEMA,
-    "cpg_edges_v1": CPG_EDGES_SCHEMA,
-    "cpg_nodes_v1": CPG_NODES_SCHEMA,
-    "cpg_props_v1": CPG_PROPS_SCHEMA,
     "dataset_fingerprint_v1": DATASET_FINGERPRINT_SCHEMA,
     "datafusion_cache_state_v1": DATAFUSION_CACHE_STATE_SCHEMA,
     "datafusion_explains_v1": DATAFUSION_EXPLAINS_SCHEMA,
@@ -1914,12 +1528,6 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "libcst_files_v1": LIBCST_FILES_SCHEMA,
     "sqlglot_parse_errors_v1": SQLGLOT_PARSE_ERRORS_SCHEMA,
     "param_file_ids_v1": PARAM_FILE_IDS_SCHEMA,
-    "rel_callsite_qname_v1": REL_CALLSITE_QNAME_SCHEMA,
-    "rel_callsite_symbol_v1": REL_CALLSITE_SYMBOL_SCHEMA,
-    "rel_def_symbol_v1": REL_DEF_SYMBOL_SCHEMA,
-    "rel_import_symbol_v1": REL_IMPORT_SYMBOL_SCHEMA,
-    "rel_name_symbol_v1": REL_NAME_SYMBOL_SCHEMA,
-    "relation_output_v1": RELATION_OUTPUT_SCHEMA,
     "repo_snapshot_v1": REPO_SNAPSHOT_SCHEMA,
     "scalar_param_signature_v1": SCALAR_PARAM_SIGNATURE_SCHEMA,
     "scip_metadata_v1": SCIP_METADATA_SCHEMA,
@@ -1935,22 +1543,6 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "scip_diagnostics_v1": SCIP_DIAGNOSTICS_SCHEMA,
     "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
     "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
-}
-
-VIEW_SCHEMA_REGISTRY: dict[str, pa.Schema] = {
-    "symtable_scopes": SYMTABLE_SCOPES_VIEW_SCHEMA,
-    "symtable_symbols": SYMTABLE_SYMBOLS_VIEW_SCHEMA,
-    "symtable_scope_edges": SYMTABLE_SCOPE_EDGES_VIEW_SCHEMA,
-    "symtable_namespace_edges": SYMTABLE_NAMESPACE_EDGES_VIEW_SCHEMA,
-    "symtable_function_partitions": SYMTABLE_FUNCTION_PARTITIONS_VIEW_SCHEMA,
-    "symtable_class_methods": SYMTABLE_CLASS_METHODS_VIEW_SCHEMA,
-    "symtable_symbol_attrs": SYMTABLE_SYMBOL_ATTRS_VIEW_SCHEMA,
-    "symtable_bindings": SYMTABLE_BINDINGS_SCHEMA,
-    "symtable_def_sites": SYMTABLE_DEF_SITES_SCHEMA,
-    "symtable_use_sites": SYMTABLE_USE_SITES_SCHEMA,
-    "symtable_type_params": SYMTABLE_TYPE_PARAMS_SCHEMA,
-    "symtable_type_param_edges": SYMTABLE_TYPE_PARAM_EDGES_SCHEMA,
-    "symtable_binding_resolutions": SYMTABLE_BINDING_RESOLUTIONS_SCHEMA,
 }
 
 NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
@@ -3336,76 +2928,6 @@ def nested_view_specs(*, table: str | None = None) -> tuple[ViewSpec, ...]:
     return tuple(nested_view_spec(name, table=table) for name in nested_dataset_names())
 
 
-def symtable_derived_view_specs(_ctx: SessionContext) -> tuple[ViewSpec, ...]:
-    """Return ViewSpecs for symtable-derived views.
-
-    Returns
-    -------
-    tuple[ViewSpec, ...]
-        View specifications for symtable-derived views.
-    """
-    from datafusion_engine.symtable_views import (
-        symtable_bindings_df,
-        symtable_def_sites_df,
-        symtable_type_param_edges_df,
-        symtable_type_params_df,
-        symtable_use_sites_df,
-    )
-
-    return (
-        ViewSpec(
-            name="symtable_bindings",
-            sql=None,
-            schema=schema_for("symtable_bindings"),
-            builder=symtable_bindings_df,
-        ),
-        ViewSpec(
-            name="symtable_def_sites",
-            sql=None,
-            schema=schema_for("symtable_def_sites"),
-            builder=symtable_def_sites_df,
-        ),
-        ViewSpec(
-            name="symtable_use_sites",
-            sql=None,
-            schema=schema_for("symtable_use_sites"),
-            builder=symtable_use_sites_df,
-        ),
-        ViewSpec(
-            name="symtable_type_params",
-            sql=None,
-            schema=schema_for("symtable_type_params"),
-            builder=symtable_type_params_df,
-        ),
-        ViewSpec(
-            name="symtable_type_param_edges",
-            sql=None,
-            schema=schema_for("symtable_type_param_edges"),
-            builder=symtable_type_param_edges_df,
-        ),
-    )
-
-
-def symtable_binding_resolution_view_specs(_ctx: SessionContext) -> tuple[ViewSpec, ...]:
-    """Return ViewSpecs for symtable binding resolution views.
-
-    Returns
-    -------
-    tuple[ViewSpec, ...]
-        View specifications for binding resolution views.
-    """
-    from datafusion_engine.symtable_views import symtable_binding_resolutions_df
-
-    return (
-        ViewSpec(
-            name="symtable_binding_resolutions",
-            sql=None,
-            schema=schema_for("symtable_binding_resolutions"),
-            builder=symtable_binding_resolutions_df,
-        ),
-    )
-
-
 def validate_schema_metadata(schema: pa.Schema) -> None:
     """Validate required schema metadata tags.
 
@@ -4699,7 +4221,7 @@ def schema_names() -> tuple[str, ...]:
     tuple[str, ...]
         Sorted schema name tuple.
     """
-    return tuple(sorted({*SCHEMA_REGISTRY, *VIEW_SCHEMA_REGISTRY, *nested_schema_names()}))
+    return tuple(sorted({*SCHEMA_REGISTRY, *nested_schema_names()}))
 
 
 def has_schema(name: str) -> bool:
@@ -4712,7 +4234,6 @@ def has_schema(name: str) -> bool:
     """
     return (
         name in SCHEMA_REGISTRY
-        or name in VIEW_SCHEMA_REGISTRY
         or is_intrinsic_nested_dataset(name)
     )
 
@@ -4731,9 +4252,6 @@ def schema_for(name: str) -> pa.Schema:
         Raised when the schema name is not registered.
     """
     schema = SCHEMA_REGISTRY.get(name)
-    if schema is not None:
-        return schema
-    schema = VIEW_SCHEMA_REGISTRY.get(name)
     if schema is not None:
         return schema
     if is_intrinsic_nested_dataset(name):
@@ -4772,9 +4290,6 @@ __all__ = [
     "AST_VIEW_NAMES",
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
-    "CPG_EDGES_SCHEMA",
-    "CPG_NODES_SCHEMA",
-    "CPG_PROPS_SCHEMA",
     "CST_VIEW_NAMES",
     "DIAG_DETAILS_TYPE",
     "DIAG_DETAIL_STRUCT",
@@ -4825,8 +4340,6 @@ __all__ = [
     "schema_names",
     "schema_registry",
     "struct_for_path",
-    "symtable_binding_resolution_view_specs",
-    "symtable_derived_view_specs",
     "validate_ast_views",
     "validate_bytecode_views",
     "validate_cst_views",

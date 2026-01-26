@@ -45,10 +45,8 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.core.interop import (
     RecordBatchReaderLike,
     TableLike,
-    coerce_table_like,
 )
 from arrowdsl.core.streaming import to_reader
-from arrowdsl.schema.build import table_from_row_dicts
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -58,14 +56,12 @@ from datafusion_engine.compile_options import (
     resolve_sql_policy,
 )
 from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
-from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.registry_bridge import (
     apply_projection_overrides,
     apply_projection_scan_overrides,
 )
-from datafusion_engine.schema_registry import has_schema, schema_for
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.sql_safety import ExecutionPolicy
 from engine.plan_cache import PlanCacheKey
@@ -138,16 +134,6 @@ class CopyToOptions:
     allow_file_output: bool = False
 
 
-@dataclass(frozen=True)
-class ArrowIngestEvent:
-    """Arrow ingest event payload for diagnostics."""
-
-    name: str
-    method: str
-    partitioning: str | None
-    batch_size: int | None
-    batch_count: int | None
-    row_count: int | None
 
 
 try:
@@ -530,6 +516,8 @@ def validate_table_constraints(
     violations: list[str] = []
     sql_options = _default_sql_policy().to_sql_options()
     policy = resolve_sqlglot_policy(name="datafusion_compile")
+    options = DataFusionCompileOptions()
+    pipeline = _compilation_pipeline(ctx, options=options)
     try:
         for constraint in constraints:
             if not constraint.strip():
@@ -541,13 +529,8 @@ def validate_table_constraints(
                 where=exp.not_(constraint_expr),
                 limit=1,
             )
-            query = sqlglot_emit(query_expr, policy=policy)
-            df = _safe_sql(
-                ctx,
-                query,
-                options=DataFusionCompileOptions(),
-                sql_options=sql_options,
-            )
+            compiled = pipeline.compile_ast(query_expr)
+            df = pipeline.execute(compiled, sql_options=sql_options)
             if _df_has_rows(df):
                 violations.append(constraint)
     finally:
@@ -1729,157 +1712,6 @@ def _parquet_column_options_payload(options: ParquetColumnOptions) -> dict[str, 
     }
 
 
-def _record_batches(
-    table: TableLike | RecordBatchReaderLike,
-    *,
-    batch_size: int | None,
-) -> list[pa.RecordBatch]:
-    if isinstance(table, RecordBatchReaderLike):
-        resolved_table = cast("pa.Table", table.read_all())
-    else:
-        resolved_table = cast("pa.Table", table)
-    if batch_size is None or batch_size <= 0:
-        return list(resolved_table.to_batches())
-    return list(resolved_table.to_batches(max_chunksize=batch_size))
-
-
-def _is_pydict_input(value: object) -> bool:
-    if not isinstance(value, Mapping):
-        return False
-    if not value:
-        return True
-    return all(isinstance(key, str) for key in value)
-
-
-def _is_row_mapping_sequence(value: object) -> bool:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return False
-    if not value:
-        return True
-    sample = value[0]
-    return isinstance(sample, Mapping)
-
-
-def _emit_arrow_ingest(
-    ingest_hook: Callable[[Mapping[str, object]], None] | None,
-    event: ArrowIngestEvent,
-) -> None:
-    if ingest_hook is None:
-        return
-    ingest_hook(
-        {
-            "name": event.name,
-            "method": event.method,
-            "partitioning": event.partitioning,
-            "batch_size": event.batch_size,
-            "batch_count": event.batch_count,
-            "row_count": event.row_count,
-        }
-    )
-
-
-def datafusion_from_arrow(
-    ctx: SessionContext,
-    *,
-    name: str,
-    value: object,
-    batch_size: int | None = None,
-    ingest_hook: Callable[[Mapping[str, object]], None] | None = None,
-) -> DataFrame:
-    """Register Arrow-like input and return a DataFusion DataFrame.
-
-    Raises
-    ------
-    TypeError
-        Raised when the DataFusion SessionContext lacks ingestion support.
-
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFrame for the registered table.
-    """
-    if _is_pydict_input(value):
-        from_pydict = getattr(ctx, "from_pydict", None)
-        pydict = cast("Mapping[str, object]", value)
-        if callable(from_pydict) and batch_size is None:
-            df = cast("DataFrame", from_pydict(dict(pydict), name=name))
-            _emit_arrow_ingest(
-                ingest_hook,
-                ArrowIngestEvent(
-                    name=name,
-                    method="from_pydict",
-                    partitioning="datafusion_native",
-                    batch_size=None,
-                    batch_count=None,
-                    row_count=None,
-                ),
-            )
-            return df
-        table = pa.Table.from_pydict(dict(pydict))
-        batches = _record_batches(table, batch_size=batch_size)
-        register_batches = getattr(ctx, "register_record_batches", None)
-        if not callable(register_batches):
-            msg = "DataFusion SessionContext missing register_record_batches."
-            raise TypeError(msg)
-        register_batches(name, batches)
-        invalidate_introspection_cache(ctx)
-        _emit_arrow_ingest(
-            ingest_hook,
-            ArrowIngestEvent(
-                name=name,
-                method="record_batches",
-                partitioning="record_batches",
-                batch_size=batch_size,
-                batch_count=len(batches),
-                row_count=table.num_rows,
-            ),
-        )
-        return ctx.table(name)
-    if _is_row_mapping_sequence(value):
-        rows = cast("Sequence[Mapping[str, object]]", value)
-        value = table_from_row_dicts(rows)
-    requested_schema = schema_for(name) if has_schema(name) else None
-    table = coerce_table_like(value, requested_schema=requested_schema)
-    from_arrow = getattr(ctx, "from_arrow", None)
-    if callable(from_arrow) and batch_size is None:
-        try:
-            df = cast("DataFrame", from_arrow(table, name=name))
-        except (TypeError, ValueError):
-            df = None
-        if df is not None:
-            row_count = cast("pa.Table", table).num_rows if isinstance(table, pa.Table) else None
-            _emit_arrow_ingest(
-                ingest_hook,
-                ArrowIngestEvent(
-                    name=name,
-                    method="from_arrow",
-                    partitioning="datafusion_native",
-                    batch_size=None,
-                    batch_count=None,
-                    row_count=row_count,
-                ),
-            )
-            return df
-    batches = _record_batches(table, batch_size=batch_size)
-    register_batches = getattr(ctx, "register_record_batches", None)
-    if not callable(register_batches):
-        msg = "DataFusion SessionContext missing register_record_batches."
-        raise TypeError(msg)
-    register_batches(name, batches)
-    invalidate_introspection_cache(ctx)
-    row_count = sum(batch.num_rows for batch in batches)
-    _emit_arrow_ingest(
-        ingest_hook,
-        ArrowIngestEvent(
-            name=name,
-            method="record_batches",
-            partitioning="record_batches",
-            batch_size=batch_size,
-            batch_count=len(batches),
-            row_count=row_count,
-        ),
-    )
-    return ctx.table(name)
 
 
 def replay_substrait_bytes(ctx: SessionContext, plan_bytes: bytes) -> DataFrame:
@@ -1957,7 +1789,6 @@ __all__ = [
     "IbisCompilerBackend",
     "MaterializationPolicy",
     "collect_plan_artifacts",
-    "datafusion_from_arrow",
     "datafusion_to_async_batches",
     "datafusion_to_reader",
     "datafusion_write_options",

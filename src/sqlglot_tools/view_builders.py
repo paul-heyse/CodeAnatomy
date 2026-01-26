@@ -81,7 +81,14 @@ def sqlglot_view_builder(
     sql = expr.sql(dialect=dialect)
 
     def _build(ctx: SessionContext) -> DataFrame:
-        return ctx.sql(sql)
+        import ibis
+
+        backend = ibis.datafusion.connect(ctx)
+        df = backend.raw_sql(expr)
+        if not isinstance(df, DataFrame):
+            msg = f"SQLGlot AST execution did not return a DataFusion DataFrame for {sql!r}."
+            raise TypeError(msg)
+        return df
 
     return _build
 

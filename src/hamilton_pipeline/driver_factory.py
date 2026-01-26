@@ -20,6 +20,8 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from core_types import JsonValue
 from cpg.kind_catalog import validate_edge_kind_requirements
+from datafusion_engine.view_registry import ensure_view_graph
+from datafusion_engine.view_registry_specs import view_graph_nodes
 from engine.runtime_profile import resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
 from hamilton_pipeline.lifecycle import (
@@ -30,27 +32,22 @@ from hamilton_pipeline.task_module_builder import (
     TaskExecutionModuleOptions,
     build_task_execution_module,
 )
-from ibis_engine.catalog import IbisPlanCatalog
-from ibis_engine.execution_factory import datafusion_facade_from_ctx, ibis_backend_from_ctx
 from obs.diagnostics import DiagnosticsCollector
-from relspec.context import ensure_task_build_context
-from relspec.evidence import initial_evidence_from_plan
-from relspec.plan_catalog import compile_task_catalog
-from relspec.rustworkx_graph import (
-    build_task_graph_from_inferred_deps,
-    task_graph_signature,
-    task_graph_snapshot,
-)
+from relspec.evidence import initial_evidence_from_views
+from relspec.graph_inference import build_task_graph_from_views
+from relspec.inferred_deps import infer_deps_from_view_nodes
+from relspec.rustworkx_graph import task_graph_signature, task_graph_snapshot
 from relspec.rustworkx_schedule import schedule_tasks, task_schedule_metadata
-from relspec.task_catalog import TaskBuildContext
-from relspec.task_catalog_builders import build_task_catalog
+from relspec.task_catalog import TaskCatalog
+from relspec.task_catalog_builders import task_catalog_from_view_nodes
+from relspec.view_defs import RELATION_OUTPUT_NAME
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
     from hamilton.io.materialization import MaterializerFactory
 
-    from relspec.plan_catalog import PlanCatalog
+    from datafusion_engine.view_graph_registry import ViewNode
     from relspec.schedule_events import TaskScheduleMetadata
-    from relspec.task_catalog import TaskCatalog
 from storage.ipc import ipc_hash
 
 try:
@@ -135,69 +132,70 @@ def _build_dependency_map(
     str,
     Mapping[str, TaskScheduleMetadata],
 ]:
-    task_catalog = build_task_catalog()
+    ctx, nodes_with_ast = _view_graph_context(config)
+    task_catalog = task_catalog_from_view_nodes(nodes_with_ast)
+    dependency_map, plan_fingerprints = _dependency_payloads(nodes_with_ast)
+    signature, schedule_metadata = _task_graph_metadata(nodes_with_ast, ctx=ctx)
+    return dependency_map, task_catalog, plan_fingerprints, signature, schedule_metadata
+
+
+def _view_graph_context(
+    config: Mapping[str, JsonValue],
+) -> tuple[ExecutionContext, tuple[ViewNode, ...]]:
     runtime_profile_spec = resolve_runtime_profile(
         _runtime_profile_name(config),
         determinism=_determinism_override(config),
     )
     runtime_profile_spec.runtime.apply_global_thread_pools()
     ctx = ExecutionContext(runtime=runtime_profile_spec.runtime)
-    backend = ibis_backend_from_ctx(ctx)
-    facade = datafusion_facade_from_ctx(ctx, backend=backend)
-    build_context = TaskBuildContext(
-        ctx=ctx,
-        backend=backend,
-        ibis_catalog=IbisPlanCatalog(backend=backend),
-        facade=facade,
+    profile = runtime_profile_spec.runtime.datafusion
+    if profile is None:
+        msg = "DataFusion runtime profile is required for view graph scheduling."
+        raise ValueError(msg)
+    session = profile.session_context()
+    snapshot = ensure_view_graph(
+        session,
+        runtime_profile=profile,
+        include_registry_views=True,
     )
-    build_context = ensure_task_build_context(
-        ctx,
-        backend,
-        build_context=build_context,
-    )
-    plan_catalog = compile_task_catalog(
-        task_catalog,
-        backend=backend,
-        ctx=ctx,
-        build_context=build_context,
-    )
-    outputs = {task.output for task in task_catalog.tasks}
+    validate_edge_kind_requirements(_relation_output_schema(session))
+    nodes = view_graph_nodes(session, snapshot=snapshot)
+    nodes_with_ast = tuple(node for node in nodes if node.sqlglot_ast is not None)
+    return ctx, nodes_with_ast
+
+
+def _dependency_payloads(
+    nodes: Sequence[ViewNode],
+) -> tuple[dict[str, tuple[str, ...]], dict[str, str]]:
+    outputs = {node.name for node in nodes}
     dependency_map: dict[str, tuple[str, ...]] = {}
     plan_fingerprints: dict[str, str] = {}
-    for artifact in plan_catalog.artifacts:
-        inputs = tuple(sorted(name for name in artifact.deps.inputs if name in outputs))
-        dependency_map[artifact.task.output] = inputs
-        plan_fingerprints[artifact.task.name] = artifact.plan_fingerprint
-    signature, schedule_metadata = _task_graph_metadata(plan_catalog, ctx=ctx)
-    return dependency_map, task_catalog, plan_fingerprints, signature, schedule_metadata
+    inferred = infer_deps_from_view_nodes(nodes)
+    for dep in inferred:
+        inputs = tuple(sorted(name for name in dep.inputs if name in outputs))
+        dependency_map[dep.output] = inputs
+        plan_fingerprints[dep.task_name] = dep.plan_fingerprint
+    return dependency_map, plan_fingerprints
 
 
 def _task_graph_metadata(
-    plan_catalog: PlanCatalog,
+    nodes: Sequence[ViewNode],
     *,
     ctx: ExecutionContext | None = None,
 ) -> tuple[str, Mapping[str, TaskScheduleMetadata]]:
-    artifacts = plan_catalog.artifacts
-    deps = tuple(artifact.deps for artifact in artifacts)
-    priorities = {
-        artifact.task.name: artifact.task.priority
-        for artifact in artifacts
-        if hasattr(artifact, "task")
-    }
-    task_signatures = {
-        artifact.task.name: artifact.plan_fingerprint
-        for artifact in artifacts
-        if hasattr(artifact, "task")
-    }
-    graph = build_task_graph_from_inferred_deps(deps, priorities=priorities)
+    inferred = infer_deps_from_view_nodes(nodes)
+    task_signatures = {dep.task_name: dep.plan_fingerprint for dep in inferred}
+    graph = build_task_graph_from_views(nodes)
     snapshot = task_graph_snapshot(
-        graph, label="hamilton_pipeline", task_signatures=task_signatures
+        graph,
+        label="hamilton_pipeline",
+        task_signatures=task_signatures,
     )
     signature = task_graph_signature(snapshot)
     session = None
     if ctx is not None and ctx.runtime.datafusion is not None:
         session = ctx.runtime.datafusion.session_context()
-    evidence = initial_evidence_from_plan(plan_catalog, ctx=session)
+    evidence = initial_evidence_from_views(nodes, ctx=session)
     schedule = schedule_tasks(graph, evidence=evidence, allow_partial=True)
     schedule_metadata = task_schedule_metadata(schedule)
     return signature, schedule_metadata
@@ -444,8 +442,6 @@ def build_driver(
         )
     )
 
-    validate_edge_kind_requirements()
-
     config_payload = _with_graph_tags(config, graph_signature=graph_signature)
 
     diagnostics = DiagnosticsCollector()
@@ -457,6 +453,13 @@ def build_driver(
     builder = _apply_materializers(builder, config=config_payload)
     builder = _apply_adapters(builder, config=config_payload, diagnostics=diagnostics)
     return builder.build()
+
+
+def _relation_output_schema(session: SessionContext) -> object:
+    if not session.table_exist(RELATION_OUTPUT_NAME):
+        msg = f"Relation output view {RELATION_OUTPUT_NAME!r} is not registered."
+        raise ValueError(msg)
+    return session.table(RELATION_OUTPUT_NAME).schema()
 
 
 @dataclass

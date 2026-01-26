@@ -6,24 +6,24 @@ from typing import TYPE_CHECKING
 
 from hamilton.function_modifiers import tag
 
-from relspec.graph_inference import TaskGraph, task_graph_from_catalog
+from relspec.graph_inference import TaskGraph, build_task_graph_from_views
 from relspec.rustworkx_schedule import TaskSchedule, schedule_tasks
 
 if TYPE_CHECKING:
+    from datafusion_engine.view_graph_registry import ViewNode
     from relspec.evidence import EvidenceCatalog
-from relspec.plan_catalog import PlanCatalog
 
 
 @tag(layer="graph", artifact="task_graph", kind="graph")
-def task_graph(plan_catalog: PlanCatalog) -> TaskGraph:
-    """Build the task graph from plan catalog.
+def task_graph(view_nodes: tuple[ViewNode, ...]) -> TaskGraph:
+    """Build the task graph from view nodes.
 
     Returns
     -------
     TaskGraph
         Task graph derived from inferred dependencies.
     """
-    return task_graph_from_catalog(plan_catalog)
+    return build_task_graph_from_views(view_nodes)
 
 
 @tag(layer="graph", artifact="task_schedule", kind="schedule")

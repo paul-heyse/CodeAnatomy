@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
     from arrowdsl.core.interop import SchemaLike
     from datafusion_engine.introspection import IntrospectionSnapshot
+    from datafusion_engine.view_graph_registry import ViewNode
     from relspec.plan_catalog import PlanCatalog
     from schema_spec.system import ContractSpec, DatasetSpec
 
@@ -159,6 +160,32 @@ class EvidenceRegistrationContext:
     snapshot: IntrospectionSnapshot | None
 
 
+def evidence_requirements_from_views(
+    nodes: Sequence[ViewNode],
+    *,
+    task_names: set[str] | None = None,
+) -> EvidenceRequirements:
+    """Return evidence requirements aggregated from view nodes.
+
+    Returns
+    -------
+    EvidenceRequirements
+        Aggregated evidence requirements for the selected views.
+    """
+    from relspec.inferred_deps import infer_deps_from_view_nodes
+
+    requirements = EvidenceRequirements()
+    inferred = infer_deps_from_view_nodes(nodes)
+    for dep in inferred:
+        if task_names is not None and dep.task_name not in task_names:
+            continue
+        requirements.sources.update(dep.inputs)
+        _merge_required_columns(requirements.columns, dep.required_columns)
+        _merge_required_types(requirements.types, dep.required_types)
+        _merge_required_metadata(requirements.metadata, dep.required_metadata)
+    return requirements
+
+
 def evidence_requirements_from_plan(
     catalog: PlanCatalog,
     *,
@@ -180,6 +207,46 @@ def evidence_requirements_from_plan(
         _merge_required_types(requirements.types, artifact.deps.required_types)
         _merge_required_metadata(requirements.metadata, artifact.deps.required_metadata)
     return requirements
+
+
+def initial_evidence_from_views(
+    nodes: Sequence[ViewNode],
+    *,
+    ctx: SessionContext | None = None,
+    snapshot: IntrospectionSnapshot | None = None,
+    task_names: set[str] | None = None,
+) -> EvidenceCatalog:
+    """Build initial evidence catalog seeded from view requirements.
+
+    Returns
+    -------
+    EvidenceCatalog
+        Evidence catalog with known sources registered.
+    """
+    outputs = {
+        node.name for node in nodes if task_names is None or node.name in task_names
+    }
+    requirements = evidence_requirements_from_views(nodes, task_names=task_names)
+    if ctx is not None:
+        _validate_udf_info_schema_parity(ctx)
+    seed_sources = requirements.sources - outputs
+    evidence = EvidenceCatalog(sources=set(seed_sources))
+    ctx_id = id(ctx) if ctx is not None else None
+    resolved_snapshot = snapshot or _snapshot_from_ctx(ctx)
+    registration_ctx = EvidenceRegistrationContext(
+        ctx=ctx,
+        ctx_id=ctx_id,
+        snapshot=resolved_snapshot,
+    )
+    for source in sorted(seed_sources):
+        registered = _register_evidence_source(
+            evidence,
+            source,
+            context=registration_ctx,
+        )
+        if not registered:
+            _seed_evidence_from_requirements(evidence, source, requirements)
+    return evidence
 
 
 def initial_evidence_from_plan(
@@ -213,7 +280,7 @@ def initial_evidence_from_plan(
         ctx_id=ctx_id,
         snapshot=resolved_snapshot,
     )
-    for source in seed_sources:
+    for source in sorted(seed_sources):
         registered = _register_evidence_source(
             evidence,
             source,
@@ -301,6 +368,15 @@ def _dataset_spec_from_known_registries(
     ctx: SessionContext | None = None,
 ) -> DatasetSpec | None:
     try:
+        from datafusion_engine.extract_registry import dataset_spec as extract_dataset_spec
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        extract_dataset_spec = None
+    if extract_dataset_spec is not None:
+        try:
+            return extract_dataset_spec(name)
+        except KeyError:
+            pass
+    try:
         from normalize.registry_runtime import dataset_spec as normalize_dataset_spec
     except (ImportError, RuntimeError, TypeError, ValueError):
         normalize_dataset_spec = None
@@ -309,34 +385,6 @@ def _dataset_spec_from_known_registries(
             return normalize_dataset_spec(name, ctx=ctx)
         except KeyError:
             pass
-    try:
-        from relspec.contracts import (
-            REL_CALLSITE_QNAME_NAME,
-            REL_CALLSITE_SYMBOL_NAME,
-            REL_DEF_SYMBOL_NAME,
-            REL_IMPORT_SYMBOL_NAME,
-            REL_NAME_SYMBOL_NAME,
-            RELATION_OUTPUT_NAME,
-            rel_callsite_qname_spec,
-            rel_callsite_symbol_spec,
-            rel_def_symbol_spec,
-            rel_import_symbol_spec,
-            rel_name_symbol_spec,
-            relation_output_spec,
-        )
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None
-    relspec_specs: dict[str, Callable[[], DatasetSpec]] = {
-        REL_NAME_SYMBOL_NAME: rel_name_symbol_spec,
-        REL_IMPORT_SYMBOL_NAME: rel_import_symbol_spec,
-        REL_DEF_SYMBOL_NAME: rel_def_symbol_spec,
-        REL_CALLSITE_SYMBOL_NAME: rel_callsite_symbol_spec,
-        REL_CALLSITE_QNAME_NAME: rel_callsite_qname_spec,
-        RELATION_OUTPUT_NAME: relation_output_spec,
-    }
-    spec_factory = relspec_specs.get(name)
-    if spec_factory is not None:
-        return spec_factory()
     return None
 
 
@@ -438,5 +486,7 @@ __all__ = [
     "EvidenceCatalog",
     "EvidenceRequirements",
     "evidence_requirements_from_plan",
+    "evidence_requirements_from_views",
     "initial_evidence_from_plan",
+    "initial_evidence_from_views",
 ]

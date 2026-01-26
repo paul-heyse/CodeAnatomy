@@ -40,11 +40,12 @@ from ibis_engine.param_tables import (
 from ibis_engine.param_tables import (
     scalar_param_signature as build_scalar_param_signature,
 )
+from relspec.inferred_deps import infer_deps_from_view_nodes
 from relspec.pipeline_policy import PipelinePolicy
-from relspec.plan_catalog import PlanCatalog
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
+    from datafusion_engine.view_graph_registry import ViewNode
     from ibis_engine.execution import IbisExecutionContext
 
 
@@ -144,10 +145,10 @@ def param_table_inputs(
 
 @tag(layer="params", artifact="relspec_param_dependency_reports", kind="bundle")
 def relspec_param_dependency_reports(
-    plan_catalog: PlanCatalog,
+    view_nodes: tuple[ViewNode, ...],
     param_table_policy: ParamTablePolicy,
 ) -> tuple[TaskDependencyReport, ...]:
-    """Infer param-table dependencies from plan catalog inputs.
+    """Infer param-table dependencies from view inputs.
 
     Returns
     -------
@@ -156,15 +157,16 @@ def relspec_param_dependency_reports(
     """
     prefix = param_table_policy.prefix
     reports: list[TaskDependencyReport] = []
-    for artifact in plan_catalog.artifacts:
-        inputs = artifact.deps.inputs
+    inferred = infer_deps_from_view_nodes(view_nodes)
+    for dep in inferred:
+        inputs = dep.inputs
         param_tables = {
             name[len(prefix) :] for name in inputs if prefix and name.startswith(prefix)
         }
         dataset_tables = {name for name in inputs if not name.startswith(prefix)}
         reports.append(
             TaskDependencyReport(
-                task_name=artifact.task.name,
+                task_name=dep.task_name,
                 param_tables=tuple(sorted(param_tables)),
                 dataset_tables=tuple(sorted(dataset_tables)),
             )

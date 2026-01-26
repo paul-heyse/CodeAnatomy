@@ -6,7 +6,7 @@ import contextlib
 import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
@@ -40,7 +40,6 @@ from datafusion_engine.write_pipeline import (
 )
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
-from ibis_engine.execution import execute_ibis_plan
 from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
@@ -60,13 +59,6 @@ if TYPE_CHECKING:
 
     from ibis_engine.execution import IbisExecutionContext
     from ibis_engine.registry import DatasetLocation
-
-
-def _default_plan_id(plan: IbisPlan) -> str:
-    label = getattr(plan, "label", "")
-    if isinstance(label, str) and label:
-        return label
-    return "plan"
 
 
 def _resolve_prefer_reader(
@@ -195,56 +187,16 @@ def build_plan_product(
     policy: ExecutionSurfacePolicy,
     plan_id: str | None = None,
 ) -> PlanProduct:
-    """Execute a plan and return a PlanProduct wrapper.
-
-    Returns
-    -------
-    PlanProduct
-        Plan output with schema and materialization metadata.
+    """Raise because plan materialization is deprecated.
 
     Raises
     ------
     ValueError
-        Raised when a reader materialization is missing the expected stream.
+        Always raised to enforce view-only materialization.
     """
-    ctx = execution.ctx
-    prefer_reader = _resolve_prefer_reader(ctx=ctx, policy=policy)
-    cache_policy = _resolve_cache_policy(
-        ctx=ctx,
-        policy=policy,
-        prefer_reader=prefer_reader,
-        params=execution.params,
-    )
-    reporter = _cache_event_reporter(ctx)
-    if reporter is not None:
-        cache_policy = replace(cache_policy, reporter=reporter)
-    execution = replace(execution, cache_policy=cache_policy)
-    stream: RecordBatchReaderLike | None = None
-    table: TableLike | None = None
-    result = execute_ibis_plan(
-        plan,
-        execution=execution,
-        streaming=prefer_reader,
-    )
-    if prefer_reader:
-        stream = result.require_reader()
-        if not isinstance(stream, pa.RecordBatchReader):
-            msg = "Expected RecordBatchReader for reader materialization."
-            raise ValueError(msg)
-        schema = stream.schema
-    else:
-        table = result.require_table()
-        schema = table.schema
-    _record_plan_execution(ctx, plan_id=plan_id or _default_plan_id(plan), result=result)
-    return PlanProduct(
-        plan_id=plan_id or _default_plan_id(plan),
-        schema=schema,
-        determinism_tier=ctx.determinism,
-        writer_strategy=policy.writer_strategy,
-        stream=stream,
-        table=table,
-        execution_result=result,
-    )
+    _ = (plan, execution, policy, plan_id)
+    msg = "Plan materialization is deprecated; use build_view_product instead."
+    raise ValueError(msg)
 
 
 def build_view_product(
@@ -814,7 +766,6 @@ def write_extract_outputs(
 
 
 __all__ = [
-    "build_plan_product",
     "build_view_product",
     "resolve_cache_policy",
     "resolve_prefer_reader",

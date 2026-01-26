@@ -12,10 +12,6 @@ import pyarrow as pa
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_schema
 from arrowdsl.schema.schema import align_table
-from cpg.schemas import (
-    CPG_PROPS_BY_FILE_ID_SCHEMA,
-    CPG_PROPS_GLOBAL_SCHEMA,
-)
 from incremental.delta_context import DeltaAccessContext
 from incremental.delta_updates import (
     OverwriteDatasetSpec,
@@ -86,7 +82,7 @@ def upsert_cpg_props(
     spec = PartitionedDatasetSpec(
         name=_PROPS_BY_FILE_DATASET,
         partition_column="file_id",
-        schema=CPG_PROPS_BY_FILE_ID_SCHEMA,
+        schema=None,
     )
     file_path = upsert_partitioned_dataset(
         props_by_file,
@@ -101,7 +97,7 @@ def upsert_cpg_props(
     if changes.full_refresh:
         global_spec = OverwriteDatasetSpec(
             name=_PROPS_GLOBAL_DATASET,
-            schema=CPG_PROPS_GLOBAL_SCHEMA,
+            schema=props_global.schema,
             commit_metadata={"snapshot_kind": "cpg_props_global"},
         )
         updated.update(
@@ -130,60 +126,47 @@ def split_props_by_file_id(
         File-scoped and global property tables.
     """
     props_table = _ensure_table(props)
+    base_schema = props_table.schema
+    file_schema = _schema_with_file_id(base_schema)
     if props_table.num_rows == 0:
-        return _empty_by_file(), _empty_global()
+        return _empty_table(file_schema), _empty_table(base_schema)
     if "entity_kind" not in props_table.column_names:
-        aligned = align_table(props_table, schema=CPG_PROPS_GLOBAL_SCHEMA, safe_cast=True)
-        return _empty_by_file(), aligned
+        return _empty_table(file_schema), align_table(
+            props_table,
+            schema=base_schema,
+            safe_cast=True,
+        )
     if "entity_id" not in props_table.column_names:
-        aligned = align_table(props_table, schema=CPG_PROPS_GLOBAL_SCHEMA, safe_cast=True)
-        return _empty_by_file(), aligned
-
-    backend = runtime.ibis_backend()
-    props_expr = ibis_table_from_arrow(backend, props_table, name="cpg_props")
-    nodes_expr = ibis_table_from_arrow(backend, _ensure_table(cpg_nodes), name="cpg_nodes")
-    edges_expr = ibis_table_from_arrow(backend, _ensure_table(cpg_edges), name="cpg_edges")
-
-    node_file, node_global = _attach_file_id_expr(
-        props_expr,
-        mapping_expr=nodes_expr,
-        inputs=_AttachFileIdInputs(
-            mapping_id="node_id",
-            mapping_file_id="file_id",
-            kind=_NODE_KIND,
-        ),
-    )
-    edge_file, edge_global = _attach_file_id_expr(
-        props_expr,
-        mapping_expr=edges_expr,
-        inputs=_AttachFileIdInputs(
-            mapping_id="edge_id",
-            mapping_file_id="edge_owner_file_id",
-            kind=_EDGE_KIND,
-        ),
-    )
-    other_props = _other_props_expr(props_expr)
-    file_expr = _union_exprs([expr for expr in (node_file, edge_file) if expr is not None])
-    global_expr = _union_exprs([node_global, edge_global, other_props])
-
-    if file_expr is None:
-        file_table = _empty_by_file()
-    else:
-        file_table = ibis_expr_to_table(
-            file_expr,
-            runtime=runtime,
-            name="cpg_props_by_file_id",
+        return _empty_table(file_schema), align_table(
+            props_table,
+            schema=base_schema,
+            safe_cast=True,
         )
-        file_table = align_table(file_table, schema=CPG_PROPS_BY_FILE_ID_SCHEMA, safe_cast=True)
-    if global_expr is None:
-        global_table = _empty_global()
-    else:
-        global_table = ibis_expr_to_table(
-            global_expr,
-            runtime=runtime,
-            name="cpg_props_global",
-        )
-        global_table = align_table(global_table, schema=CPG_PROPS_GLOBAL_SCHEMA, safe_cast=True)
+
+    props_expr, nodes_expr, edges_expr = _prop_input_exprs(
+        props_table,
+        cpg_nodes=cpg_nodes,
+        cpg_edges=cpg_edges,
+        runtime=runtime,
+    )
+    file_expr, global_expr = _split_prop_exprs(
+        props_expr,
+        nodes_expr=nodes_expr,
+        edges_expr=edges_expr,
+    )
+
+    file_table = _materialize_props_expr(
+        file_expr,
+        runtime=runtime,
+        name="cpg_props_by_file_id",
+        schema=file_schema,
+    )
+    global_table = _materialize_props_expr(
+        global_expr,
+        runtime=runtime,
+        name="cpg_props_global",
+        schema=base_schema,
+    )
     return file_table, global_table
 
 
@@ -238,12 +221,73 @@ def _ensure_table(value: TableLike | RecordBatchReaderLike) -> pa.Table:
     return cast("pa.Table", value)
 
 
-def _empty_by_file() -> pa.Table:
-    return table_from_schema(CPG_PROPS_BY_FILE_ID_SCHEMA, columns={}, num_rows=0)
+def _schema_with_file_id(schema: pa.Schema) -> pa.Schema:
+    if "file_id" in schema.names:
+        return schema
+    fields = list(schema)
+    fields.append(pa.field("file_id", pa.string(), nullable=True))
+    return pa.schema(fields, metadata=schema.metadata)
 
 
-def _empty_global() -> pa.Table:
-    return table_from_schema(CPG_PROPS_GLOBAL_SCHEMA, columns={}, num_rows=0)
+def _empty_table(schema: pa.Schema) -> pa.Table:
+    return table_from_schema(schema, columns={}, num_rows=0)
+
+
+def _prop_input_exprs(
+    props_table: pa.Table,
+    *,
+    cpg_nodes: TableLike | RecordBatchReaderLike,
+    cpg_edges: TableLike | RecordBatchReaderLike,
+    runtime: IncrementalRuntime,
+) -> tuple[ibis.Table, ibis.Table, ibis.Table]:
+    backend = runtime.ibis_backend()
+    props_expr = ibis_table_from_arrow(backend, props_table, name="cpg_props")
+    nodes_expr = ibis_table_from_arrow(backend, _ensure_table(cpg_nodes), name="cpg_nodes")
+    edges_expr = ibis_table_from_arrow(backend, _ensure_table(cpg_edges), name="cpg_edges")
+    return props_expr, nodes_expr, edges_expr
+
+
+def _materialize_props_expr(
+    expr: ibis.Table | None,
+    *,
+    runtime: IncrementalRuntime,
+    name: str,
+    schema: pa.Schema,
+) -> pa.Table:
+    if expr is None:
+        return _empty_table(schema)
+    table = ibis_expr_to_table(expr, runtime=runtime, name=name)
+    return align_table(table, schema=schema, safe_cast=True)
+
+
+def _split_prop_exprs(
+    props_expr: ibis.Table,
+    *,
+    nodes_expr: ibis.Table,
+    edges_expr: ibis.Table,
+) -> tuple[ibis.Table | None, ibis.Table | None]:
+    node_file, node_global = _attach_file_id_expr(
+        props_expr,
+        mapping_expr=nodes_expr,
+        inputs=_AttachFileIdInputs(
+            mapping_id="node_id",
+            mapping_file_id="file_id",
+            kind=_NODE_KIND,
+        ),
+    )
+    edge_file, edge_global = _attach_file_id_expr(
+        props_expr,
+        mapping_expr=edges_expr,
+        inputs=_AttachFileIdInputs(
+            mapping_id="edge_id",
+            mapping_file_id="edge_owner_file_id",
+            kind=_EDGE_KIND,
+        ),
+    )
+    other_props = _other_props_expr(props_expr)
+    file_expr = _union_exprs([expr for expr in (node_file, edge_file) if expr is not None])
+    global_expr = _union_exprs([node_global, edge_global, other_props])
+    return file_expr, global_expr
 
 
 __all__ = ["CpgPropsInputs", "split_props_by_file_id", "upsert_cpg_props"]

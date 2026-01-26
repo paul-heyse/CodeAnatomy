@@ -9,18 +9,11 @@ import pyarrow as pa
 from ibis.expr.types import Table, Value
 
 from arrowdsl.core.ordering import Ordering
-from cpg.schemas import CPG_NODES_SCHEMA
 from cpg.specs import NodeEmitSpec
 from ibis_engine.expr_compiler import expr_ir_to_ibis
 from ibis_engine.hashing import HashExprSpec, masked_stable_id_expr_ir
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import (
-    bind_expr_schema,
-    coalesce_columns,
-    ensure_columns,
-    ibis_null_literal,
-    validate_expr_schema,
-)
+from ibis_engine.schema_utils import coalesce_columns, ibis_null_literal
 from sqlglot_tools.expr_spec import SqlExprSpec
 
 
@@ -43,6 +36,18 @@ def masked_stable_id_expr_from_spec(
         table,
         masked_stable_id_expr_ir(spec=spec, required=tuple(required), use_128=use_128),
     )
+
+
+_NODE_OUTPUT_COLUMNS: tuple[str, ...] = (
+    "node_id",
+    "node_kind",
+    "path",
+    "bstart",
+    "bend",
+    "file_id",
+    "task_name",
+    "task_priority",
+)
 
 
 def emit_nodes_ibis(
@@ -76,7 +81,6 @@ def emit_nodes_ibis(
     bstart = _coalesced(expr, spec.bstart_cols, pa.int64())
     bend = _coalesced(expr, spec.bend_cols, pa.int64())
     file_id = _coalesced(expr, spec.file_id_cols, pa.string())
-    schema_names = set(CPG_NODES_SCHEMA.names)
     columns: dict[str, Value] = {
         "node_id": node_id,
         "node_kind": node_kind,
@@ -85,19 +89,10 @@ def emit_nodes_ibis(
         "bend": bend,
         "file_id": file_id,
     }
-    if "task_name" in schema_names:
-        columns["task_name"] = _literal_or_null(task_name, pa.string())
-    if "task_priority" in schema_names:
-        columns["task_priority"] = _literal_or_null(task_priority, pa.int32())
+    columns["task_name"] = _literal_or_null(task_name, pa.string())
+    columns["task_priority"] = _literal_or_null(task_priority, pa.int32())
     output = expr.mutate(**columns)
-    output = ensure_columns(output, schema=CPG_NODES_SCHEMA, only_missing=True)
-    output = output.select(*CPG_NODES_SCHEMA.names)
-    validate_expr_schema(output, expected=CPG_NODES_SCHEMA, allow_extra_columns=False)
-    output = bind_expr_schema(
-        output,
-        schema=CPG_NODES_SCHEMA,
-        allow_extra_columns=False,
-    )
+    output = output.select(*_NODE_OUTPUT_COLUMNS)
     return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 

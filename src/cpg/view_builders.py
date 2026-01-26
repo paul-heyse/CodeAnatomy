@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
 
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ordering import Ordering
-from arrowdsl.schema.build import empty_table
 from cpg.emit_edges_ibis import emit_edges_from_relation_output
 from cpg.emit_nodes_ibis import emit_nodes_ibis
 from cpg.emit_props_ibis import CpgPropOptions, emit_props_ibis
-from cpg.schemas import CPG_EDGES_SCHEMA, CPG_NODES_SCHEMA, CPG_PROPS_SCHEMA
 from cpg.spec_registry import (
     edge_prop_spec,
     node_plan_specs,
@@ -21,23 +20,21 @@ from cpg.spec_registry import (
     scip_role_flag_prop_spec,
 )
 from cpg.specs import TaskIdentity
-from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
-from datafusion_engine.schema_registry import has_schema, schema_for
+from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import ensure_columns
-from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from relspec.view_defs import RELATION_OUTPUT_NAME
 
 if TYPE_CHECKING:
-    from datafusion import SessionContext
     from ibis.expr.types import Table
 
     from cpg.specs import PropOptions
 
 
 def build_cpg_nodes_expr(
-    ctx: SessionContext,
-    backend: BaseBackend,
+    catalog: IbisPlanCatalog,
+    ctx: ExecutionContext,
+    _backend: BaseBackend,
     *,
     task_identity: TaskIdentity | None = None,
 ) -> IbisPlan:
@@ -53,9 +50,7 @@ def build_cpg_nodes_expr(
     task_priority = task_identity.priority if task_identity is not None else None
     plans: list[IbisPlan] = []
     for spec in specs:
-        table = _resolve_table_expr(ctx, backend=backend, name=spec.table_ref)
-        if table is None:
-            continue
+        table = _resolve_table_expr(catalog, ctx=ctx, name=spec.table_ref)
         plan = emit_nodes_ibis(
             table,
             spec=spec.emit,
@@ -63,12 +58,13 @@ def build_cpg_nodes_expr(
             task_priority=task_priority,
         )
         plans.append(plan)
-    return _union_plans(plans, schema=CPG_NODES_SCHEMA, backend=backend)
+    return _union_plans(plans)
 
 
 def build_cpg_edges_expr(
-    ctx: SessionContext,
-    backend: BaseBackend,
+    catalog: IbisPlanCatalog,
+    ctx: ExecutionContext,
+    _backend: BaseBackend,
 ) -> IbisPlan:
     """Return an Ibis plan for CPG edges from relation outputs.
 
@@ -77,15 +73,14 @@ def build_cpg_edges_expr(
     IbisPlan
         Plan for CPG edges.
     """
-    _ = ctx
-    relation_expr = backend.table(RELATION_OUTPUT_NAME)
-    plan = emit_edges_from_relation_output(relation_expr)
-    return _ensure_plan_schema(plan, schema=CPG_EDGES_SCHEMA)
+    relation_expr = _resolve_table_expr(catalog, ctx=ctx, name=RELATION_OUTPUT_NAME)
+    return emit_edges_from_relation_output(relation_expr)
 
 
 def build_cpg_props_expr(
-    ctx: SessionContext,
-    backend: BaseBackend,
+    catalog: IbisPlanCatalog,
+    ctx: ExecutionContext,
+    _backend: BaseBackend,
     *,
     options: PropOptions | None = None,
     task_identity: TaskIdentity | None = None,
@@ -98,15 +93,13 @@ def build_cpg_props_expr(
         Plan for CPG properties.
     """
     resolved_options = options or CpgPropOptions()
-    source_columns_lookup = _source_columns_lookup(ctx)
+    source_columns_lookup = _source_columns_lookup(catalog)
     prop_specs = list(prop_table_specs(source_columns_lookup=source_columns_lookup))
     prop_specs.append(scip_role_flag_prop_spec())
     prop_specs.append(edge_prop_spec())
     plans: list[IbisPlan] = []
     for spec in prop_specs:
-        table = _resolve_table_expr(ctx, backend=backend, name=spec.table_ref)
-        if table is None:
-            continue
+        table = _resolve_table_expr(catalog, ctx=ctx, name=spec.table_ref)
         plan = emit_props_ibis(
             table,
             spec=spec,
@@ -115,55 +108,62 @@ def build_cpg_props_expr(
             union_builder=None,
         )
         plans.append(plan)
-    return _union_plans(plans, schema=CPG_PROPS_SCHEMA, backend=backend)
+    return _union_plans(plans)
 
 
 def _resolve_table_expr(
-    ctx: SessionContext,
+    catalog: IbisPlanCatalog,
     *,
-    backend: BaseBackend,
+    ctx: ExecutionContext,
     name: str,
-) -> Table | None:
-    if ctx.table_exist(name):
-        return backend.table(name)
-    if not has_schema(name):
-        return None
-    empty = empty_table(schema_for(name))
-    plan = register_ibis_table(
-        empty,
-        options=SourceToIbisOptions(
-            backend=backend,
-            name=name,
-            ordering=Ordering.unordered(),
-            runtime_profile=None,
-        ),
-    )
-    return plan.expr
+) -> Table:
+    try:
+        return catalog.resolve_expr(name, ctx=ctx)
+    except KeyError as exc:
+        msg = f"Missing required source table {name!r} for CPG view."
+        raise ValueError(msg) from exc
 
 
 def _source_columns_lookup(
-    ctx: SessionContext,
+    catalog: IbisPlanCatalog,
 ) -> Callable[[str], Sequence[str] | None]:
-    names = set(table_names_snapshot(ctx))
-    introspector = SchemaIntrospector(ctx)
+    columns_by_table: dict[str, tuple[str, ...]] = {}
+    for name, source in catalog.tables.items():
+        cols = _columns_from_source(source)
+        if cols:
+            columns_by_table[name] = tuple(sorted(cols))
 
     def _lookup(table_name: str) -> Sequence[str] | None:
-        if table_name in names:
-            columns = introspector.table_column_names(table_name)
-            return tuple(sorted(columns))
-        if has_schema(table_name):
-            schema = schema_for(table_name)
-            return tuple(sorted(schema.names))
-        return None
+        return columns_by_table.get(table_name)
 
     return _lookup
 
 
-def _union_plans(plans: Iterable[IbisPlan], *, schema: pa.Schema, backend: BaseBackend) -> IbisPlan:
+def _columns_from_source(source: object) -> Sequence[str]:
+    if isinstance(source, IbisPlan):
+        schema = source.expr.schema()
+        return cast("Sequence[str]", schema.names)
+    schema = getattr(source, "schema", None)
+    if schema is not None:
+        names = getattr(schema, "names", None)
+        if names is not None:
+            return cast("Sequence[str]", names)
+        fields = getattr(schema, "fields", None)
+        if fields is not None:
+            return tuple(field.name for field in fields if hasattr(field, "name"))
+    return ()
+
+
+def _union_plans(plans: Iterable[IbisPlan]) -> IbisPlan:
     exprs = [plan.expr for plan in plans]
     if not exprs:
-        return _empty_plan(schema, backend=backend)
+        msg = "CPG view builder did not produce any plans."
+        raise ValueError(msg)
     combined = _union_exprs(exprs)
+    schema = _merge_schema_from_exprs(exprs)
+    if schema is None:
+        msg = "Unable to derive CPG schema from plan outputs."
+        raise ValueError(msg)
     combined = ensure_columns(combined, schema=schema, only_missing=True)
     combined = combined.select(*schema.names)
     return IbisPlan(expr=combined, ordering=Ordering.unordered())
@@ -177,22 +177,20 @@ def _union_exprs(exprs: Sequence[Table]) -> Table:
     return combined
 
 
-def _empty_plan(schema: pa.Schema, *, backend: BaseBackend) -> IbisPlan:
-    empty = empty_table(schema)
-    return register_ibis_table(
-        empty,
-        options=SourceToIbisOptions(
-            backend=backend,
-            name=None,
-            ordering=Ordering.unordered(),
-        ),
-    )
-
-
-def _ensure_plan_schema(plan: IbisPlan, *, schema: pa.Schema) -> IbisPlan:
-    expr = ensure_columns(plan.expr, schema=schema, only_missing=True)
-    expr = expr.select(*schema.names)
-    return IbisPlan(expr=expr, ordering=Ordering.unordered())
+def _merge_schema_from_exprs(exprs: Sequence[Table]) -> pa.Schema | None:
+    if not exprs:
+        return None
+    fields: dict[str, pa.Field] = {}
+    for expr in exprs:
+        schema = expr.schema()
+        arrow = schema.to_pyarrow() if hasattr(schema, "to_pyarrow") else None
+        if arrow is None:
+            continue
+        for field in arrow:
+            fields.setdefault(field.name, field)
+    if not fields:
+        return None
+    return pa.schema(list(fields.values()))
 
 
 __all__ = [

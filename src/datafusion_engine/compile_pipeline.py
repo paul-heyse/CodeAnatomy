@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
     from ibis.expr.types import Value as IbisValue
 
+    from datafusion_engine.param_binding import DataFusionParamBindings
     from datafusion_engine.sql_policy_engine import (
         CompilationArtifacts,
         SQLPolicyProfile,
@@ -29,7 +30,6 @@ if TYPE_CHECKING:
     from sqlglot_tools.compat import Expression
     from sqlglot_tools.optimizer import SchemaMapping
 
-from datafusion_engine.compile_options import DataFusionSqlPolicy
 
 
 @dataclass(frozen=True)
@@ -163,6 +163,11 @@ class CompilationPipeline:
         -------
         CompiledExpression
             Compiled expression with AST, SQL, and artifacts.
+
+        Raises
+        ------
+        ValueError
+            Raised when the SQL policy profile is missing.
         """
         from ibis.backends.datafusion import Backend
 
@@ -184,16 +189,18 @@ class CompilationPipeline:
         schema = self._get_schema()
 
         # 3. Apply policy canonicalization
-        # Type narrowing: profile is always non-None after __post_init__
-        assert self.options.profile is not None
+        profile = self.options.profile
+        if profile is None:
+            msg = "SQL policy profile is required for compilation."
+            raise ValueError(msg)
         canonical_ast, artifacts = compile_sql_policy(
             raw_ast,
             schema=schema,
-            profile=self.options.profile,
+            profile=profile,
         )
 
         # 4. Render for execution
-        rendered = render_for_execution(canonical_ast, self.options.profile)
+        rendered = render_for_execution(canonical_ast, profile)
 
         return CompiledExpression(
             ibis_expr=expr,
@@ -218,23 +225,30 @@ class CompilationPipeline:
         -------
         CompiledExpression
             Compiled expression with AST, SQL, and artifacts.
+
+        Raises
+        ------
+        ValueError
+            Raised when the SQL policy profile is missing.
         """
         from datafusion_engine.sql_policy_engine import (
             compile_sql_policy,
             render_for_execution,
         )
 
-        # Type narrowing: profile is always non-None after __post_init__
-        assert self.options.profile is not None
+        profile = self.options.profile
+        if profile is None:
+            msg = "SQL policy profile is required for compilation."
+            raise ValueError(msg)
 
         from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
 
         raw_ast = parse_sql_strict(
             sql,
-            dialect=self.options.profile.read_dialect,
+            dialect=profile.read_dialect,
             options=StrictParseOptions(
-                error_level=self.options.profile.error_level,
-                unsupported_level=self.options.profile.unsupported_level,
+                error_level=profile.error_level,
+                unsupported_level=profile.unsupported_level,
             ),
         )
         if self.options.enable_rewrites and self.options.rewrite_hook is not None:
@@ -247,12 +261,12 @@ class CompilationPipeline:
         canonical_ast, artifacts = compile_sql_policy(
             raw_ast,
             schema=schema,
-            profile=self.options.profile,
+            profile=profile,
             original_sql=sql,
         )
 
         # Render
-        rendered = render_for_execution(canonical_ast, self.options.profile)
+        rendered = render_for_execution(canonical_ast, profile)
 
         return CompiledExpression(
             ibis_expr=None,
@@ -281,14 +295,21 @@ class CompilationPipeline:
         -------
         CompiledExpression
             Compiled expression with AST, SQL, and artifacts.
+
+        Raises
+        ------
+        ValueError
+            Raised when the SQL policy profile is missing.
         """
         from datafusion_engine.sql_policy_engine import (
             compile_sql_policy,
             render_for_execution,
         )
 
-        # Type narrowing: profile is always non-None after __post_init__
-        assert self.options.profile is not None
+        profile = self.options.profile
+        if profile is None:
+            msg = "SQL policy profile is required for compilation."
+            raise ValueError(msg)
 
         raw_ast = expr
         if self.options.enable_rewrites and self.options.rewrite_hook is not None:
@@ -298,10 +319,10 @@ class CompilationPipeline:
         canonical_ast, artifacts = compile_sql_policy(
             raw_ast,
             schema=schema,
-            profile=self.options.profile,
+            profile=profile,
             original_sql=original_sql,
         )
-        rendered = render_for_execution(canonical_ast, self.options.profile)
+        rendered = render_for_execution(canonical_ast, profile)
         return CompiledExpression(
             ibis_expr=None,
             sqlglot_ast=canonical_ast,
@@ -343,59 +364,29 @@ class CompilationPipeline:
         ------
         ValueError
             If both ``params`` and keyword arguments are provided.
+        ValueError
+            If SQL safety or statement option validation fails.
+        TypeError
+            If AST execution does not yield a DataFusion DataFrame.
         """
-        from datafusion_engine.param_binding import (
-            register_table_params,
-            resolve_param_bindings,
-        )
-
         if params is not None and kwargs:
             msg = "Pass either params mapping or keyword parameters, not both."
             raise ValueError(msg)
         bound_params = params if params is not None else kwargs
+        _ = sql_options
 
-        # Resolve parameters
-        bindings = resolve_param_bindings(bound_params)
-        if named_params is not None:
-            named_bindings = resolve_param_bindings(named_params)
-            if named_bindings.param_values:
-                msg = "Named parameters must be table-like."
-                raise ValueError(msg)
-            bindings = bindings.merge(named_bindings)
-
-        resolved_options = sql_options or DataFusionSqlPolicy().to_sql_options()
-
-        # Register table params with cleanup
-        from datafusion_engine.sql_safety import (
-            ExecutionContext,
-            ExecutionPolicy,
-            validate_sql_safety,
-        )
-
-        if compiled.source == "sql":
-            profile = self.options.profile
-            assert profile is not None
-            policy = ExecutionPolicy.for_context(ExecutionContext.QUERY_ONLY)
-            violations = validate_sql_safety(
-                compiled.rendered_sql,
-                policy,
-                dialect=profile.write_dialect,
-            )
-            if violations:
-                msg = f"SQL policy violations: {'; '.join(violations)}"
-                raise ValueError(msg)
-        profile = self.options.profile
-        assert profile is not None
-        from datafusion_engine.sql_policy_engine import render_for_execution
-
-        execution_sql = render_for_execution(compiled.sqlglot_ast, profile)
-        param_values = dict(bindings.param_values) if bindings.param_values else None
-        with register_table_params(self.ctx, bindings):
-            return self.ctx.sql_with_options(
-                execution_sql,
-                resolved_options,
-                param_values=param_values,
-            )
+        bindings = _resolve_bindings(bound_params, named_params=named_params)
+        profile = _require_profile(self.options.profile)
+        _validate_sql_execution(compiled, profile)
+        exec_ast = _bind_exec_ast(compiled.sqlglot_ast, bindings)
+        if _requires_statement_options(exec_ast):
+            msg = "AST execution does not support statement options; use write pipeline."
+            raise ValueError(msg)
+        df = _execute_ast(self.ctx, exec_ast, bindings)
+        if not isinstance(df, DataFrame):
+            msg = "AST execution did not return a DataFusion DataFrame."
+            raise TypeError(msg)
+        return df
 
     def compile_and_execute(
         self,
@@ -453,6 +444,93 @@ class CompilationPipeline:
             self._schema_cache = build_schema_from_introspection(self.ctx)
 
         return self._schema_cache
+
+
+def _requires_statement_options(expr: exp.Expression) -> bool:
+    return (
+        bool(expr.find(exp.Create))
+        or bool(expr.find(exp.Drop))
+        or bool(expr.find(exp.Alter))
+        or bool(expr.find(exp.Insert))
+        or bool(expr.find(exp.Update))
+        or bool(expr.find(exp.Delete))
+        or bool(expr.find(exp.Merge))
+        or bool(expr.find(exp.Copy))
+        or bool(expr.find(exp.Replace))
+        or bool(expr.find(exp.Command))
+    )
+
+
+def _require_profile(profile: SQLPolicyProfile | None) -> SQLPolicyProfile:
+    if profile is None:
+        msg = "SQL policy profile is required for execution."
+        raise ValueError(msg)
+    return profile
+
+
+def _resolve_bindings(
+    params: Mapping[str, object] | Mapping[IbisValue, object] | None,
+    *,
+    named_params: Mapping[str, object] | None,
+) -> DataFusionParamBindings:
+    from datafusion_engine.param_binding import resolve_param_bindings
+
+    bindings = resolve_param_bindings(params)
+    if named_params is None:
+        return bindings
+    named_bindings = resolve_param_bindings(named_params)
+    if named_bindings.param_values:
+        msg = "Named parameters must be table-like."
+        raise ValueError(msg)
+    return bindings.merge(named_bindings)
+
+
+def _validate_sql_execution(
+    compiled: CompiledExpression,
+    profile: SQLPolicyProfile,
+) -> None:
+    if compiled.source != "sql":
+        return
+    from datafusion_engine.sql_safety import (
+        ExecutionContext,
+        ExecutionPolicy,
+        validate_sql_safety,
+    )
+
+    policy = ExecutionPolicy.for_context(ExecutionContext.QUERY_ONLY)
+    violations = validate_sql_safety(
+        compiled.rendered_sql,
+        policy,
+        dialect=profile.write_dialect,
+    )
+    if violations:
+        msg = f"SQL policy violations: {'; '.join(violations)}"
+        raise ValueError(msg)
+
+
+def _bind_exec_ast(
+    ast: exp.Expression,
+    bindings: DataFusionParamBindings,
+) -> exp.Expression:
+    if not bindings.param_values:
+        return ast
+    from sqlglot_tools.optimizer import bind_params
+
+    return bind_params(ast, params=bindings.param_values)
+
+
+def _execute_ast(
+    ctx: SessionContext,
+    exec_ast: exp.Expression,
+    bindings: DataFusionParamBindings,
+) -> DataFrame:
+    import ibis
+
+    from datafusion_engine.param_binding import register_table_params
+
+    backend = ibis.datafusion.connect(ctx)
+    with register_table_params(ctx, bindings):
+        return backend.raw_sql(exec_ast)
 
 
 def build_schema_from_introspection(ctx: SessionContext) -> SchemaMapping:

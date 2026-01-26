@@ -21,7 +21,6 @@ from ibis.expr.types import (
 )
 
 from ibis_engine.builtin_udfs import ibis_udf_registry
-from ibis_engine.schema_utils import ibis_schema_from_arrow
 
 IbisExprFn = Callable[..., Value]
 PORTABILITY_GATE_OPS: tuple[type[ops.Node], ...] = (
@@ -351,34 +350,6 @@ class PortabilityFallbackResult:
     fallback_reason: str | None = None
 
 
-def _sql_fallback_expr(
-    expr: Table,
-    *,
-    backend: OperationSupportBackend,
-    dialect: str | None,
-) -> Table:
-    sql_builder = getattr(backend, "sql", None)
-    if not callable(sql_builder):
-        msg = "SQL fallback requires a backend with sql() support."
-        raise TypeError(msg)
-    try:
-        compiled = expr.compile()
-    except (AttributeError, NotImplementedError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"SQL fallback compile failed: {exc}"
-        raise ValueError(msg) from exc
-    if compiled is None:
-        msg = "SQL fallback compile produced no SQL."
-        raise ValueError(msg)
-    compiled_sql = compiled if isinstance(compiled, str) else str(compiled)
-    ibis_schema = ibis_schema_from_arrow(expr.schema().to_pyarrow())
-    sql_fn = cast("Callable[..., Table]", sql_builder)
-    try:
-        return sql_fn(compiled_sql, schema=ibis_schema, dialect=dialect)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        msg = f"SQL fallback ingestion failed: {exc}"
-        raise ValueError(msg) from exc
-
-
 def preflight_portability(
     expr: Table,
     *,
@@ -392,16 +363,16 @@ def preflight_portability(
     PortabilityFallbackResult
         Result with missing ops metadata and any fallback expression.
     """
+    _ = dialect
     missing_ops = unsupported_operations(expr, backend=backend)
     missing_joins = unsupported_join_kinds(expr)
     missing = tuple(sorted({*missing_ops, *missing_joins}))
     if not missing:
         return PortabilityFallbackResult(expr=expr, missing_ops=())
-    fallback_expr = _sql_fallback_expr(expr, backend=backend, dialect=dialect)
     return PortabilityFallbackResult(
-        expr=fallback_expr,
+        expr=expr,
         missing_ops=missing,
-        fallback_reason="sql_fallback",
+        fallback_reason="unsupported_ops",
     )
 
 

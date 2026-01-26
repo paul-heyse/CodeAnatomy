@@ -12,10 +12,7 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import ArrayValue, BooleanValue, NumericValue, StringValue, Table, Value
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.ordering import Ordering, OrderingKey
-from arrowdsl.schema.build import empty_table
-from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
-from datafusion_engine.extract_registry import dataset_schema as extract_dataset_schema
+from arrowdsl.core.ordering import Ordering
 from datafusion_engine.normalize_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -23,11 +20,7 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from datafusion_engine.schema_registry import (
-    DIAG_DETAILS_TYPE,
-    SCIP_VIEW_SCHEMA_MAP,
-    schema_for,
-)
+from datafusion_engine.schema_registry import DIAG_DETAILS_TYPE
 from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.expr_compiler import expr_ir_to_ibis
 from ibis_engine.hashing import (
@@ -37,17 +30,9 @@ from ibis_engine.hashing import (
     stable_id_expr_ir,
 )
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import (
-    bind_expr_schema,
-    coalesce_columns,
-    ibis_null_literal,
-    validate_expr_schema,
-)
-from ibis_engine.sources import (
-    SourceToIbisOptions,
-    register_ibis_table,
-)
-from normalize.registry_runtime import dataset_input_schema, dataset_schema
+from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.schema_utils import coalesce_columns, ibis_null_literal
+from normalize.registry_runtime import dataset_spec
 from normalize.span_logic import (
     SpanStructInputs,
     end_exclusive_value,
@@ -71,6 +56,30 @@ DIAG_NAME = "diagnostics_norm_v1"
 _DEF_USE_OPS: tuple[str, ...] = ("IMPORT_NAME", "IMPORT_FROM")
 _DEF_USE_PREFIXES: tuple[str, ...] = ("STORE_", "DELETE_")
 _USE_PREFIXES: tuple[str, ...] = ("LOAD_",)
+
+IbisPlanDeriver = Callable[[IbisPlanCatalog, ExecutionContext, BaseBackend], IbisPlan | None]
+
+_NORMALIZE_VIEW_BUILDERS: dict[str, tuple[IbisPlanDeriver, str]] = {}
+
+
+def register_normalize_view(
+    name: str,
+    *,
+    label: str | None = None,
+) -> Callable[[IbisPlanDeriver], IbisPlanDeriver]:
+    """Register a normalize view builder for a dataset name.
+
+    Returns
+    -------
+    Callable[[IbisPlanDeriver], IbisPlanDeriver]
+        Decorator that registers the view builder.
+    """
+
+    def _register(builder: IbisPlanDeriver) -> IbisPlanDeriver:
+        _NORMALIZE_VIEW_BUILDERS[name] = (builder, label or name)
+        return builder
+
+    return _register
 
 
 def _expr_from_spec(table: Table, spec: SqlExprSpec) -> Value:
@@ -138,6 +147,21 @@ def _drop_columns(table: Table, names: Sequence[str]) -> Table:
     return table.drop(*cols) if cols else table
 
 
+def _default_view_builder(name: str) -> IbisPlanDeriver:
+    def _build(
+        catalog: IbisPlanCatalog,
+        ctx: ExecutionContext,
+        _backend: BaseBackend,
+    ) -> IbisPlan | None:
+        spec = dataset_spec(name)
+        table = catalog.resolve_expr(name, ctx=ctx, schema=spec.schema())
+        expr = apply_query_spec(table, spec=spec.query())
+        return IbisPlan(expr=expr, ordering=Ordering.unordered())
+
+    return _build
+
+
+@register_normalize_view(TYPE_EXPRS_NAME, label="type_exprs")
 def type_exprs_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -150,9 +174,7 @@ def type_exprs_plan_ibis(
     IbisPlan | None
         Ibis plan for normalized type expressions.
     """
-    input_schema = dataset_input_schema(TYPE_EXPRS_NAME)
-    table = catalog.resolve_expr("cst_type_exprs", ctx=ctx, schema=input_schema)
-    validate_expr_schema(table, expected=input_schema, allow_extra_columns=ctx.debug)
+    table = catalog.resolve_expr("cst_type_exprs", ctx=ctx)
     expr_text = table.expr_text.cast("string")
     trimmed = expr_text.strip()
     non_empty = trimmed.notnull() & (trimmed.length() > ibis.literal(0))
@@ -215,19 +237,10 @@ def type_exprs_plan_ibis(
         enriched,
         ("bstart", "bend", "line_base", "col_unit", "end_exclusive"),
     )
-    validate_expr_schema(
-        enriched,
-        expected=dataset_schema(TYPE_EXPRS_NAME),
-        allow_extra_columns=ctx.debug,
-    )
-    enriched = bind_expr_schema(
-        enriched,
-        schema=dataset_schema(TYPE_EXPRS_NAME),
-        allow_extra_columns=ctx.debug,
-    )
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
+@register_normalize_view(TYPE_NODES_NAME, label="type_nodes")
 def type_nodes_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -241,40 +254,24 @@ def type_nodes_plan_ibis(
         Ibis plan for normalized type nodes.
     """
     type_node_columns = _type_node_columns(ctx)
-    expr_schema = dataset_schema(TYPE_EXPRS_NAME)
     expr_rows = _expr_type_rows(
         catalog.resolve_expr(
             "type_exprs_norm_v1",
             ctx=ctx,
-            schema=expr_schema,
         ),
         ctx=ctx,
         type_node_columns=type_node_columns,
     )
-    scip_schema = schema_for(SCIP_VIEW_SCHEMA_MAP["scip_symbol_information"])
     scip_rows = _scip_type_rows(
         catalog.resolve_expr(
             "scip_symbol_information",
             ctx=ctx,
-            schema=scip_schema,
         ),
         ctx=ctx,
         type_node_columns=type_node_columns,
     )
     combined = _prefer_type_rows(expr_rows, scip_rows)
-    target_schema = dataset_schema(TYPE_NODES_NAME)
-    validate_expr_schema(
-        combined,
-        expected=target_schema,
-        allow_extra_columns=ctx.debug,
-    )
-    combined = bind_expr_schema(
-        combined,
-        schema=target_schema,
-        allow_extra_columns=ctx.debug,
-    )
-    ordering_keys = _ordering_keys_for_schema(target_schema)
-    ordering = Ordering.explicit(ordering_keys) if ordering_keys else Ordering.unordered()
+    ordering = dataset_spec(TYPE_NODES_NAME).ordering()
     return IbisPlan(expr=combined, ordering=ordering)
 
 
@@ -283,13 +280,6 @@ def _type_node_columns(ctx: ExecutionContext) -> list[str]:
     if ctx.debug:
         columns.append("type_id_key")
     return columns
-
-
-def _ordering_keys_for_schema(schema: pa.Schema) -> tuple[OrderingKey, ...]:
-    ordering = ordering_from_schema(schema)
-    if ordering.keys:
-        return ordering.keys
-    return infer_ordering_keys(schema.names)
 
 
 def _expr_type_rows(
@@ -330,8 +320,6 @@ def _scip_type_rows(
 ) -> Table | None:
     if "type_repr" not in scip.columns:
         return None
-    expected_schema = schema_for(SCIP_VIEW_SCHEMA_MAP["scip_symbol_information"])
-    validate_expr_schema(scip, expected=expected_schema, allow_extra_columns=True)
     scip_trimmed = scip.type_repr.cast("string").strip()
     scip_non_empty = scip_trimmed.notnull() & (scip_trimmed.length() > ibis.literal(0))
     scip_rows = scip.filter(scip_non_empty).mutate(
@@ -374,6 +362,7 @@ def _prefer_type_rows(expr_rows: Table, scip_rows: Table | None) -> Table:
     return expr_rows
 
 
+@register_normalize_view(CFG_BLOCKS_NAME, label="cfg_blocks")
 def cfg_blocks_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -386,13 +375,10 @@ def cfg_blocks_plan_ibis(
     IbisPlan | None
         Ibis plan for normalized CFG blocks.
     """
-    input_schema = dataset_input_schema(CFG_BLOCKS_NAME)
-    blocks = catalog.resolve_expr("py_bc_blocks", ctx=ctx, schema=input_schema)
-    validate_expr_schema(blocks, expected=input_schema, allow_extra_columns=ctx.debug)
+    blocks = catalog.resolve_expr("py_bc_blocks", ctx=ctx)
     code_units = catalog.resolve_expr(
         "py_bc_code_units",
         ctx=ctx,
-        schema=schema_for("py_bc_code_units"),
     )
     if "code_unit_id" in blocks.columns and "code_unit_id" in code_units.columns:
         code_units = code_units.select(
@@ -429,11 +415,10 @@ def cfg_blocks_plan_ibis(
         )
     )
     joined = joined.mutate(span=span)
-    validate_expr_schema(joined, expected=dataset_schema(CFG_BLOCKS_NAME))
-    joined = bind_expr_schema(joined, schema=dataset_schema(CFG_BLOCKS_NAME))
     return IbisPlan(expr=joined, ordering=Ordering.unordered())
 
 
+@register_normalize_view(CFG_EDGES_NAME, label="cfg_edges")
 def cfg_edges_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -446,13 +431,10 @@ def cfg_edges_plan_ibis(
     IbisPlan | None
         Ibis plan for normalized CFG edges.
     """
-    input_schema = dataset_input_schema(CFG_EDGES_NAME)
-    edges = catalog.resolve_expr("py_bc_cfg_edges", ctx=ctx, schema=input_schema)
-    validate_expr_schema(edges, expected=input_schema, allow_extra_columns=ctx.debug)
+    edges = catalog.resolve_expr("py_bc_cfg_edges", ctx=ctx)
     code_units = catalog.resolve_expr(
         "py_bc_code_units",
         ctx=ctx,
-        schema=schema_for("py_bc_code_units"),
     )
     if "code_unit_id" in edges.columns and "code_unit_id" in code_units.columns:
         code_units = code_units.select(
@@ -478,11 +460,10 @@ def cfg_edges_plan_ibis(
         )
     else:
         joined = edges
-    validate_expr_schema(joined, expected=dataset_schema(CFG_EDGES_NAME))
-    joined = bind_expr_schema(joined, schema=dataset_schema(CFG_EDGES_NAME))
     return IbisPlan(expr=joined, ordering=Ordering.unordered())
 
 
+@register_normalize_view(DEF_USE_NAME, label="def_use_events")
 def def_use_events_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -495,9 +476,7 @@ def def_use_events_plan_ibis(
     IbisPlan | None
         Ibis plan for bytecode def/use events.
     """
-    input_schema = dataset_input_schema(DEF_USE_NAME)
-    table = catalog.resolve_expr("py_bc_instructions", ctx=ctx, schema=input_schema)
-    validate_expr_schema(table, expected=input_schema, allow_extra_columns=ctx.debug)
+    table = catalog.resolve_expr("py_bc_instructions", ctx=ctx)
     symbol = coalesce_columns(table, ("argval_str", "argrepr"))
     kind = _def_use_kind_expr(table.opname)
     base = table.mutate(symbol=symbol, kind=kind)
@@ -535,23 +514,14 @@ def def_use_events_plan_ibis(
             use_128=False,
         )
     enriched = base.filter(valid).mutate(**updates)
-    validate_expr_schema(
-        enriched,
-        expected=dataset_schema(DEF_USE_NAME),
-        allow_extra_columns=ctx.debug,
-    )
-    enriched = bind_expr_schema(
-        enriched,
-        schema=dataset_schema(DEF_USE_NAME),
-        allow_extra_columns=ctx.debug,
-    )
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
+@register_normalize_view(REACHES_NAME, label="reaching_defs")
 def reaching_defs_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
-    backend: BaseBackend,
+    _backend: BaseBackend,
 ) -> IbisPlan | None:
     """Build an Ibis plan for reaching-def edges.
 
@@ -560,19 +530,10 @@ def reaching_defs_plan_ibis(
     IbisPlan | None
         Ibis plan for reaching-def edges.
     """
-    input_schema = dataset_schema(DEF_USE_NAME)
-    table = catalog.resolve_expr("py_bc_def_use_events_v1", ctx=ctx, schema=input_schema)
+    table = catalog.resolve_expr("py_bc_def_use_events_v1", ctx=ctx)
     required = {"kind", "code_unit_id", "symbol", "event_id"}
     if not required.issubset(set(table.columns)):
-        return register_ibis_table(
-            empty_table(dataset_schema(REACHES_NAME)),
-            options=SourceToIbisOptions(
-                backend=backend,
-                name=None,
-                ordering=Ordering.unordered(),
-                runtime_profile=ctx.runtime.datafusion,
-            ),
-        )
+        return _empty_reaches_plan(table)
     defs = table.filter(table.kind == ibis.literal("def")).select(
         code_unit_id=table.code_unit_id,
         symbol=table.symbol,
@@ -611,17 +572,21 @@ def reaching_defs_plan_ibis(
             use_128=False,
         )
     enriched = joined.mutate(**updates)
-    validate_expr_schema(
-        enriched,
-        expected=dataset_schema(REACHES_NAME),
-        allow_extra_columns=ctx.debug,
-    )
-    enriched = bind_expr_schema(
-        enriched,
-        schema=dataset_schema(REACHES_NAME),
-        allow_extra_columns=ctx.debug,
-    )
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
+
+
+def _empty_reaches_plan(table: Table) -> IbisPlan:
+    empty = table.select(
+        file_id=ibis_null_literal(pa.string()),
+        path=ibis_null_literal(pa.string()),
+        edge_id=ibis_null_literal(pa.string()),
+        code_unit_id=ibis_null_literal(pa.string()),
+        def_event_id=ibis_null_literal(pa.string()),
+        use_event_id=ibis_null_literal(pa.string()),
+        symbol=ibis_null_literal(pa.string()),
+    )
+    empty = empty.filter(ibis.literal(value=False))
+    return IbisPlan(expr=empty, ordering=Ordering.unordered())
 
 
 def _line_index_view(line_index: Table, *, prefix: str) -> Table:
@@ -1055,10 +1020,11 @@ def _scip_diag_context(diags: Table, docs: Table, line_index: Table) -> _ScipDia
     )
 
 
+@register_normalize_view(DIAG_NAME, label="diagnostics")
 def diagnostics_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
-    backend: BaseBackend,
+    _backend: BaseBackend,
 ) -> IbisPlan | None:
     """Build an Ibis plan for normalized diagnostics.
 
@@ -1067,22 +1033,8 @@ def diagnostics_plan_ibis(
     IbisPlan | None
         Ibis plan for normalized diagnostics.
     """
-    diag_schema = dataset_schema(DIAG_NAME)
-    line_index = _resolve_input(
-        catalog, ctx=ctx, name="file_line_index", schema="file_line_index_v1"
-    )
+    line_index = _resolve_input(catalog, ctx=ctx, name="file_line_index")
     exprs = _diagnostic_exprs(catalog, ctx=ctx, line_index=line_index)
-
-    if not exprs:
-        return register_ibis_table(
-            empty_table(diag_schema),
-            options=SourceToIbisOptions(
-                backend=backend,
-                name=None,
-                ordering=Ordering.unordered(),
-                runtime_profile=ctx.runtime.datafusion,
-            ),
-        )
 
     combined = exprs[0]
     for expr in exprs[1:]:
@@ -1113,16 +1065,6 @@ def diagnostics_plan_ibis(
         enriched,
         ("bstart", "bend", "line_base", "col_unit", "end_exclusive"),
     )
-    validate_expr_schema(
-        enriched,
-        expected=diag_schema,
-        allow_extra_columns=ctx.debug,
-    )
-    enriched = bind_expr_schema(
-        enriched,
-        schema=diag_schema,
-        allow_extra_columns=ctx.debug,
-    )
     return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
@@ -1131,12 +1073,8 @@ def _resolve_input(
     *,
     ctx: ExecutionContext,
     name: str,
-    schema: str,
 ) -> Table:
-    resolved_schema = extract_dataset_schema(schema)
-    table = catalog.resolve_expr(name, ctx=ctx, schema=resolved_schema)
-    validate_expr_schema(table, expected=resolved_schema, allow_extra_columns=ctx.debug)
-    return table
+    return catalog.resolve_expr(name, ctx=ctx)
 
 
 def _diagnostic_exprs(
@@ -1145,19 +1083,13 @@ def _diagnostic_exprs(
     ctx: ExecutionContext,
     line_index: Table,
 ) -> list[Table]:
-    cst = _resolve_input(catalog, ctx=ctx, name="cst_parse_errors", schema="py_cst_parse_errors_v1")
-    ts_errors = _resolve_input(catalog, ctx=ctx, name="ts_errors", schema="ts_errors_v1")
-    ts_missing = _resolve_input(catalog, ctx=ctx, name="ts_missing", schema="ts_missing_v1")
-    scip_diags = _resolve_input(
-        catalog, ctx=ctx, name="scip_diagnostics", schema="scip_diagnostics_v1"
-    )
-    scip_docs = _resolve_input(catalog, ctx=ctx, name="scip_documents", schema="scip_documents_v1")
-    symtable_scopes = _resolve_input(
-        catalog, ctx=ctx, name="symtable_scopes", schema="symtable_scopes"
-    )
-    code_units = _resolve_input(
-        catalog, ctx=ctx, name="py_bc_code_units", schema="py_bc_code_units"
-    )
+    cst = _resolve_input(catalog, ctx=ctx, name="cst_parse_errors")
+    ts_errors = _resolve_input(catalog, ctx=ctx, name="ts_errors")
+    ts_missing = _resolve_input(catalog, ctx=ctx, name="ts_missing")
+    scip_diags = _resolve_input(catalog, ctx=ctx, name="scip_diagnostics")
+    scip_docs = _resolve_input(catalog, ctx=ctx, name="scip_documents")
+    symtable_scopes = _resolve_input(catalog, ctx=ctx, name="symtable_scopes")
+    code_units = _resolve_input(catalog, ctx=ctx, name="py_bc_code_units")
     return [
         _cst_diag_expr(cst, line_index),
         _ts_diag_expr(ts_errors, severity="ERROR", message="tree-sitter error node"),
@@ -1167,6 +1099,7 @@ def _diagnostic_exprs(
     ]
 
 
+@register_normalize_view("span_errors_v1", label="span_errors")
 def span_errors_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
@@ -1179,10 +1112,7 @@ def span_errors_plan_ibis(
     IbisPlan | None
         Ibis plan for span error rows.
     """
-    schema = dataset_schema("span_errors_v1")
-    table = catalog.resolve_expr("span_errors_v1", ctx=ctx, schema=schema)
-    validate_expr_schema(table, expected=schema)
-    table = bind_expr_schema(table, schema=schema)
+    table = catalog.resolve_expr("span_errors_v1", ctx=ctx)
     return IbisPlan(expr=table, ordering=Ordering.unordered())
 
 
@@ -1199,9 +1129,6 @@ def _def_use_kind_expr(opname: Value) -> Value:
     )
 
 
-IbisPlanDeriver = Callable[[IbisPlanCatalog, ExecutionContext, BaseBackend], IbisPlan | None]
-
-
 @dataclass(frozen=True)
 class NormalizeViewSpec:
     """Specification for a normalize view builder."""
@@ -1211,80 +1138,50 @@ class NormalizeViewSpec:
     label: str
 
 
+
 def normalize_view_specs() -> tuple[NormalizeViewSpec, ...]:
     """Return normalize view specs for view registration.
 
     Raises
     ------
     KeyError
-        Raised when normalize view specs are missing for registered datasets.
+        Raised when normalize view builders reference unknown datasets.
 
     Returns
     -------
     tuple[NormalizeViewSpec, ...]
         Normalize view specifications in registration order.
     """
-    from normalize.registry_runtime import dataset_specs
+    from normalize.dataset_rows import DATASET_ROWS
 
-    specs = _NORMALIZE_VIEW_SPEC_MAP
     ordered: list[NormalizeViewSpec] = []
-    seen: set[str] = set()
-    for dataset in dataset_specs():
-        spec = specs.get(dataset.name)
-        if spec is None:
+    known = {row.name for row in DATASET_ROWS}
+    unexpected: list[str] = []
+    for row in DATASET_ROWS:
+        builder_entry = _NORMALIZE_VIEW_BUILDERS.get(row.name)
+        if not row.register_view:
+            if builder_entry is not None:
+                unexpected.append(row.name)
             continue
-        ordered.append(spec)
-        seen.add(dataset.name)
-    missing = [name for name in specs if name not in seen]
-    if missing:
-        msg = f"Normalize view specs missing dataset registration: {sorted(missing)}."
+        if builder_entry is None:
+            ordered.append(
+                NormalizeViewSpec(
+                    name=row.name,
+                    builder=_default_view_builder(row.name),
+                    label=row.name,
+                )
+            )
+            continue
+        builder, label = builder_entry
+        ordered.append(NormalizeViewSpec(name=row.name, builder=builder, label=label))
+    unknown = [name for name in _NORMALIZE_VIEW_BUILDERS if name not in known]
+    if unknown:
+        msg = f"Normalize view builders registered for unknown datasets: {sorted(unknown)}."
+        raise KeyError(msg)
+    if unexpected:
+        msg = f"Normalize view builders registered for non-view datasets: {sorted(unexpected)}."
         raise KeyError(msg)
     return tuple(ordered)
-
-
-_NORMALIZE_VIEW_SPEC_MAP: dict[str, NormalizeViewSpec] = {
-    TYPE_EXPRS_NAME: NormalizeViewSpec(
-        name=TYPE_EXPRS_NAME,
-        builder=type_exprs_plan_ibis,
-        label="type_exprs",
-    ),
-    TYPE_NODES_NAME: NormalizeViewSpec(
-        name=TYPE_NODES_NAME,
-        builder=type_nodes_plan_ibis,
-        label="type_nodes",
-    ),
-    CFG_BLOCKS_NAME: NormalizeViewSpec(
-        name=CFG_BLOCKS_NAME,
-        builder=cfg_blocks_plan_ibis,
-        label="cfg_blocks",
-    ),
-    CFG_EDGES_NAME: NormalizeViewSpec(
-        name=CFG_EDGES_NAME,
-        builder=cfg_edges_plan_ibis,
-        label="cfg_edges",
-    ),
-    DEF_USE_NAME: NormalizeViewSpec(
-        name=DEF_USE_NAME,
-        builder=def_use_events_plan_ibis,
-        label="def_use_events",
-    ),
-    REACHES_NAME: NormalizeViewSpec(
-        name=REACHES_NAME,
-        builder=reaching_defs_plan_ibis,
-        label="reaching_defs",
-    ),
-    DIAG_NAME: NormalizeViewSpec(
-        name=DIAG_NAME,
-        builder=diagnostics_plan_ibis,
-        label="diagnostics",
-    ),
-    "span_errors_v1": NormalizeViewSpec(
-        name="span_errors_v1",
-        builder=span_errors_plan_ibis,
-        label="span_errors",
-    ),
-}
-
 
 __all__ = [
     "IbisPlanCatalog",

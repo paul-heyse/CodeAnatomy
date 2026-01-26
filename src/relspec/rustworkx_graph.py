@@ -5,14 +5,17 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 import rustworkx as rx
 
 from relspec.errors import RelspecValidationError
-from relspec.inferred_deps import InferredDeps
+from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
 from storage.ipc import payload_hash
+
+if TYPE_CHECKING:
+    from datafusion_engine.view_graph_registry import ViewNode
 
 NodeKind = Literal["evidence", "task"]
 EdgeKind = Literal["requires", "produces"]
@@ -197,6 +200,29 @@ def build_task_graph_from_inferred_deps(
         output_policy=output_policy,
         fingerprints=fingerprints,
         requirements=requirements,
+    )
+
+
+def build_task_graph_from_views(
+    nodes: Sequence[ViewNode],
+    *,
+    output_policy: OutputPolicy = "all_producers",
+    priority: int = 100,
+    priorities: Mapping[str, int] | None = None,
+) -> TaskGraph:
+    """Build a task graph from view nodes and their SQLGlot ASTs.
+
+    Returns
+    -------
+    TaskGraph
+        Graph constructed from view node dependencies.
+    """
+    inferred = infer_deps_from_view_nodes(nodes)
+    return build_task_graph_from_inferred_deps(
+        inferred,
+        output_policy=output_policy,
+        priority=priority,
+        priorities=priorities,
     )
 
 
@@ -774,6 +800,7 @@ __all__ = [
     "TaskGraphSnapshot",
     "TaskNode",
     "build_task_graph_from_inferred_deps",
+    "build_task_graph_from_views",
     "task_graph_diagnostics",
     "task_graph_impact_subgraph",
     "task_graph_isolate_labels",

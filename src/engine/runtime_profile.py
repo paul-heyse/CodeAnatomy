@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 import pyarrow as pa
@@ -23,7 +23,9 @@ from storage.ipc import payload_hash
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from datafusion_engine.introspection import IntrospectionSnapshot
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from sqlglot_tools.optimizer import SqlGlotPolicySnapshot
 
 
 def _cpu_count() -> int:
@@ -196,6 +198,23 @@ _PROFILE_HASH_SCHEMA = pa.schema(
 )
 
 
+@dataclass(frozen=True)
+class _RegistryContext:
+    session: object | None
+    function_catalog: Sequence[Mapping[str, object]] | None
+    introspection_snapshot: IntrospectionSnapshot | None
+    registry_snapshot: Mapping[str, object] | None
+
+
+@dataclass(frozen=True)
+class _RuntimePayloads:
+    scan_payload: dict[str, object]
+    ibis_payload: dict[str, object]
+    arrow_payload: dict[str, object]
+    sqlglot_snapshot: SqlGlotPolicySnapshot | None
+    function_registry_hash: str
+
+
 def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     """Return a unified runtime profile snapshot.
 
@@ -204,10 +223,42 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     RuntimeProfileSnapshot
         Snapshot combining runtime, compiler, and engine policies.
     """
-    scan_payload = _scan_profile_payload(runtime.scan)
-    arrow_payload = runtime.arrow_resource_snapshot().to_payload()
-    ibis_payload = runtime.ibis_options_payload()
+    scan_payload = dict(_scan_profile_payload(runtime.scan))
+    arrow_payload = dict(runtime.arrow_resource_snapshot().to_payload())
+    ibis_payload = dict(runtime.ibis_options_payload())
     sqlglot_snapshot = sqlglot_policy_snapshot()
+    registry_context = _build_registry_context(runtime)
+    payloads = _RuntimePayloads(
+        scan_payload=scan_payload,
+        ibis_payload=ibis_payload,
+        arrow_payload=arrow_payload,
+        sqlglot_snapshot=sqlglot_snapshot,
+        function_registry_hash=_function_registry_hash(registry_context),
+    )
+    snapshot_payload = _runtime_snapshot_payload(runtime, payloads)
+    hash_payload = _runtime_hash_payload(runtime, payloads)
+    profile_hash = payload_hash(hash_payload, _PROFILE_HASH_SCHEMA)
+    sqlglot_policy = snapshot_payload["sqlglot_policy"]
+    datafusion_payload = snapshot_payload["datafusion"]
+    return RuntimeProfileSnapshot(
+        version=1,
+        name=runtime.name,
+        determinism_tier=runtime.determinism.value,
+        scan_profile=payloads.scan_payload,
+        plan_use_threads=runtime.plan_use_threads,
+        ibis_options=payloads.ibis_payload,
+        arrow_resources=payloads.arrow_payload,
+        sqlglot_policy=cast("dict[str, object] | None", sqlglot_policy),
+        datafusion=cast("dict[str, object] | None", datafusion_payload),
+        function_registry_hash=payloads.function_registry_hash,
+        profile_hash=profile_hash,
+        scan_profile_schema_msgpack=schema_to_msgpack(
+            pa.schema([pa.field("scan_profile", _SCAN_PROFILE_SCHEMA)])
+        ),
+    )
+
+
+def _build_registry_context(runtime: RuntimeProfile) -> _RegistryContext:
     function_catalog = None
     session = None
     if runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
@@ -243,58 +294,64 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
             async_udf_timeout_ms=async_timeout_ms,
             async_udf_batch_size=async_batch_size,
         )
-    unified_registry = build_unified_function_registry(
-        datafusion_function_catalog=function_catalog,
-        snapshot=introspection_snapshot,
+    return _RegistryContext(
+        session=session,
+        function_catalog=function_catalog,
+        introspection_snapshot=introspection_snapshot,
         registry_snapshot=registry_snapshot,
     )
-    function_registry_hash = unified_registry.fingerprint()
-    snapshot_payload = {
+
+
+def _function_registry_hash(context: _RegistryContext) -> str:
+    unified_registry = build_unified_function_registry(
+        datafusion_function_catalog=context.function_catalog,
+        snapshot=context.introspection_snapshot,
+        registry_snapshot=context.registry_snapshot,
+    )
+    return unified_registry.fingerprint()
+
+
+def _runtime_snapshot_payload(
+    runtime: RuntimeProfile,
+    payloads: _RuntimePayloads,
+) -> dict[str, object]:
+    return {
         "name": runtime.name,
         "determinism_tier": runtime.determinism.value,
-        "scan_profile": scan_payload,
+        "scan_profile": payloads.scan_payload,
         "plan_use_threads": runtime.plan_use_threads,
-        "ibis_options": ibis_payload,
-        "arrow_resources": arrow_payload,
-        "sqlglot_policy": sqlglot_snapshot.payload() if sqlglot_snapshot is not None else None,
+        "ibis_options": payloads.ibis_payload,
+        "arrow_resources": payloads.arrow_payload,
+        "sqlglot_policy": payloads.sqlglot_snapshot.payload()
+        if payloads.sqlglot_snapshot is not None
+        else None,
         "datafusion": runtime.datafusion.telemetry_payload_v1()
         if runtime.datafusion is not None
         else None,
-        "function_registry_hash": function_registry_hash,
+        "function_registry_hash": payloads.function_registry_hash,
     }
-    hash_payload = {
+
+
+def _runtime_hash_payload(
+    runtime: RuntimeProfile,
+    payloads: _RuntimePayloads,
+) -> dict[str, object]:
+    return {
         "version": PROFILE_HASH_VERSION,
         "name": runtime.name,
         "determinism_tier": runtime.determinism.value,
-        "scan_profile": scan_payload,
+        "scan_profile": payloads.scan_payload,
         "plan_use_threads": runtime.plan_use_threads,
-        "ibis_options": ibis_payload,
-        "arrow_resources": arrow_payload,
-        "sqlglot_policy_hash": sqlglot_snapshot.policy_hash
-        if sqlglot_snapshot is not None
+        "ibis_options": payloads.ibis_payload,
+        "arrow_resources": payloads.arrow_payload,
+        "sqlglot_policy_hash": payloads.sqlglot_snapshot.policy_hash
+        if payloads.sqlglot_snapshot is not None
         else None,
         "datafusion_hash": runtime.datafusion.telemetry_payload_hash()
         if runtime.datafusion is not None
         else None,
-        "function_registry_hash": function_registry_hash,
+        "function_registry_hash": payloads.function_registry_hash,
     }
-    profile_hash = payload_hash(hash_payload, _PROFILE_HASH_SCHEMA)
-    return RuntimeProfileSnapshot(
-        version=1,
-        name=runtime.name,
-        determinism_tier=runtime.determinism.value,
-        scan_profile=scan_payload,
-        plan_use_threads=runtime.plan_use_threads,
-        ibis_options=ibis_payload,
-        arrow_resources=arrow_payload,
-        sqlglot_policy=snapshot_payload["sqlglot_policy"],
-        datafusion=snapshot_payload["datafusion"],
-        function_registry_hash=function_registry_hash,
-        profile_hash=profile_hash,
-        scan_profile_schema_msgpack=schema_to_msgpack(
-            pa.schema([pa.field("scan_profile", _SCAN_PROFILE_SCHEMA)])
-        ),
-    )
 
 
 def _function_catalog_snapshot(

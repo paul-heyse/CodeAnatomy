@@ -4,20 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from ibis.expr.types import Scalar
 
 from arrowdsl.core.ordering import Ordering
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.parameterized_execution import ParameterizedRulepack, ParameterSpec
-from ibis_engine.compiler_checkpoint import compile_checkpoint
 from ibis_engine.execution_factory import datafusion_facade_from_ctx
 from ibis_engine.plan import IbisPlan
 from relspec.context import ensure_task_build_context
 from relspec.inferred_deps import InferredDeps, infer_deps_from_sqlglot_expr
 from relspec.task_catalog import TaskBuildContext, TaskCatalog, TaskSpec
-from sqlglot_tools.optimizer import NormalizeExprOptions, normalize_expr, resolve_sqlglot_policy
 
 if TYPE_CHECKING:
     from ibis.backends import BaseBackend
@@ -25,7 +23,6 @@ if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
     from datafusion_engine.diagnostics import DiagnosticsRecorder
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
-    from sqlglot_tools.bridge import IbisCompilerBackend
     from sqlglot_tools.compat import Expression
 
 
@@ -113,7 +110,7 @@ class _CompileContext:
     plan: IbisPlan
     parameterization: PlanParameterization | None
     backend: BaseBackend
-    facade: DataFusionExecutionFacade | None
+    facade: DataFusionExecutionFacade
     sqlglot_override: Expression | None
     compile_recorder: DiagnosticsRecorder | None
 
@@ -208,7 +205,7 @@ def _attach_build_diagnostics(
     task: TaskSpec,
     context: TaskBuildContext,
 ) -> TaskBuildContext:
-    if context.diagnostics is not None or context.facade is None:
+    if context.diagnostics is not None:
         return context
     recorder = context.facade.diagnostics_recorder(
         operation_id=f"relspec.build.{task.name}",
@@ -234,28 +231,19 @@ def _resolve_built_plan(
 def _resolve_compile_recorder(
     task: TaskSpec,
     context: TaskBuildContext,
-    facade: DataFusionExecutionFacade | None,
+    facade: DataFusionExecutionFacade,
 ) -> DiagnosticsRecorder | None:
     if context.diagnostics is not None:
         return context.diagnostics
-    if facade is None:
-        return None
     return facade.diagnostics_recorder(operation_id=f"relspec.compile.{task.name}")
 
 
 def _compile_plan_artifact(context: _CompileContext) -> PlanArtifact:
-    if context.facade is not None:
-        return _compile_with_facade(context)
-    if context.sqlglot_override is not None:
-        return _compile_with_override(context)
-    return _compile_with_checkpoint(context)
+    return _compile_with_facade(context)
 
 
 def _compile_with_facade(context: _CompileContext) -> PlanArtifact:
     facade = context.facade
-    if facade is None:
-        msg = "Facade compilation requires an execution facade."
-        raise ValueError(msg)
     compiled = facade.compile(context.sqlglot_override or context.plan.expr)
     sqlglot_ast = compiled.compiled.sqlglot_ast
     deps = infer_deps_from_sqlglot_expr(
@@ -277,69 +265,6 @@ def _compile_with_facade(context: _CompileContext) -> PlanArtifact:
         task=context.task,
         plan=context.plan,
         sqlglot_ast=sqlglot_ast,
-        deps=deps,
-        plan_fingerprint=fingerprint,
-        parameterization=context.parameterization,
-    )
-
-
-def _compile_with_override(context: _CompileContext) -> PlanArtifact:
-    if context.sqlglot_override is None:
-        msg = "SQLGlot override compilation requires an AST override."
-        raise ValueError(msg)
-    policy = resolve_sqlglot_policy(name="datafusion_compile")
-    options = NormalizeExprOptions(policy=policy)
-    normalized = normalize_expr(context.sqlglot_override, options=options)
-    deps = infer_deps_from_sqlglot_expr(
-        normalized,
-        task_name=context.task.name,
-        output=context.task.output,
-        dialect="datafusion",
-    )
-    fingerprint = deps.plan_fingerprint
-    _record_compile_artifact(
-        context.ctx,
-        recorder=context.compile_recorder,
-        task=context.task,
-        sqlglot_ast=normalized,
-        plan_fingerprint=fingerprint,
-    )
-    return PlanArtifact(
-        task=context.task,
-        plan=context.plan,
-        sqlglot_ast=normalized,
-        deps=deps,
-        plan_fingerprint=fingerprint,
-        parameterization=context.parameterization,
-    )
-
-
-def _compile_with_checkpoint(context: _CompileContext) -> PlanArtifact:
-    compiler_backend = cast("IbisCompilerBackend", context.backend)
-    checkpoint = compile_checkpoint(
-        context.plan.expr,
-        backend=compiler_backend,
-        schema_map=None,
-        dialect="datafusion",
-    )
-    deps = infer_deps_from_sqlglot_expr(
-        checkpoint.normalized,
-        task_name=context.task.name,
-        output=context.task.output,
-        dialect="datafusion",
-    )
-    fingerprint = checkpoint.plan_hash
-    _record_compile_artifact(
-        context.ctx,
-        recorder=context.compile_recorder,
-        task=context.task,
-        sqlglot_ast=checkpoint.normalized,
-        plan_fingerprint=fingerprint,
-    )
-    return PlanArtifact(
-        task=context.task,
-        plan=context.plan,
-        sqlglot_ast=checkpoint.normalized,
         deps=deps,
         plan_fingerprint=fingerprint,
         parameterization=context.parameterization,
@@ -405,7 +330,11 @@ def _record_compile_artifact(
     if recorder is not None:
         recorder.record_artifact("relspec_plan_compile_v1", payload)
         return
-    record_artifact(ctx.runtime.datafusion, "relspec_plan_compile_v1", payload)
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        msg = "DataFusion runtime profile is required for plan diagnostics."
+        raise ValueError(msg)
+    record_artifact(profile, "relspec_plan_compile_v1", payload)
 
 
 __all__ = [

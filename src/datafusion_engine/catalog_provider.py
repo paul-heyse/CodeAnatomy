@@ -370,7 +370,7 @@ def register_registry_catalog(
     ctx: SessionContext,
     *,
     registry: IbisDatasetRegistry | DatasetCatalog,
-    catalog_name: str = "registry",
+    catalog_name: str = "datafusion",
     schema_name: str = "public",
 ) -> RegistryCatalogProvider:
     """Register the registry-backed catalog provider on a SessionContext.
@@ -404,7 +404,7 @@ def register_registry_catalogs(
     ctx: SessionContext,
     *,
     catalogs: Mapping[str, DatasetCatalog],
-    catalog_name: str = "codeintel",
+    catalog_name: str = "datafusion",
     default_schema: str = "public",
 ) -> MultiRegistryCatalogProvider:
     """Register multiple registry catalogs on a SessionContext.

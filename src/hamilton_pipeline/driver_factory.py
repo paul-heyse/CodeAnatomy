@@ -31,7 +31,7 @@ from hamilton_pipeline.task_module_builder import (
     build_task_execution_module,
 )
 from ibis_engine.catalog import IbisPlanCatalog
-from ibis_engine.execution_factory import ibis_backend_from_ctx
+from ibis_engine.execution_factory import datafusion_facade_from_ctx, ibis_backend_from_ctx
 from obs.diagnostics import DiagnosticsCollector
 from relspec.context import ensure_task_build_context
 from relspec.evidence import initial_evidence_from_plan
@@ -143,10 +143,12 @@ def _build_dependency_map(
     runtime_profile_spec.runtime.apply_global_thread_pools()
     ctx = ExecutionContext(runtime=runtime_profile_spec.runtime)
     backend = ibis_backend_from_ctx(ctx)
+    facade = datafusion_facade_from_ctx(ctx, backend=backend)
     build_context = TaskBuildContext(
         ctx=ctx,
         backend=backend,
         ibis_catalog=IbisPlanCatalog(backend=backend),
+        facade=facade,
     )
     build_context = ensure_task_build_context(
         ctx,

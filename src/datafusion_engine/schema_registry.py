@@ -4617,10 +4617,10 @@ __all__ = [
     "validate_required_bytecode_functions",
     "validate_required_cst_functions",
     "validate_required_engine_functions",
-    "validate_udf_info_schema_parity",
     "validate_required_symtable_functions",
     "validate_schema_metadata",
     "validate_scip_views",
     "validate_symtable_views",
     "validate_ts_views",
+    "validate_udf_info_schema_parity",
 ]

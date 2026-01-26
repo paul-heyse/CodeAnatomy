@@ -625,8 +625,10 @@ def _record_plan_compile(
 ) -> None:
     """Record a compile fingerprint artifact for a normalize plan."""
     facade = datafusion_facade_from_ctx(ctx, backend=backend)
-    if facade is None:
-        return
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        msg = "DataFusion runtime profile is required for compile diagnostics."
+        raise ValueError(msg)
     compiled = facade.compile(plan.expr)
     payload = {
         "output": output,
@@ -634,7 +636,7 @@ def _record_plan_compile(
         "plan_fingerprint": compiled.compiled.fingerprint,
         "ast_type": compiled.compiled.sqlglot_ast.__class__.__name__,
     }
-    record_artifact(ctx.runtime.datafusion, "normalize_plan_compile_v1", payload)
+    record_artifact(profile, "normalize_plan_compile_v1", payload)
 
 
 def _record_udf_parity(
@@ -646,7 +648,8 @@ def _record_udf_parity(
     """Record normalize-scoped UDF parity diagnostics."""
     profile = ctx.runtime.datafusion
     if profile is None:
-        return
+        msg = "DataFusion runtime profile is required for UDF parity checks."
+        raise ValueError(msg)
     from datafusion_engine.udf_parity import udf_parity_report
     from datafusion_engine.udf_runtime import register_rust_udfs
     from ibis_engine.builtin_udfs import ibis_udf_specs

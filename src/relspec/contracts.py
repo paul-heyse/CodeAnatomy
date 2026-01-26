@@ -14,6 +14,8 @@ from datafusion_engine.schema_registry import (
     REL_DEF_SYMBOL_SCHEMA,
     REL_IMPORT_SYMBOL_SCHEMA,
     REL_NAME_SYMBOL_SCHEMA,
+)
+from datafusion_engine.schema_registry import (
     RELATION_OUTPUT_SCHEMA as RELATION_OUTPUT_BASE_SCHEMA,
 )
 from relspec.errors import RelspecValidationError

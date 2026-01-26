@@ -627,7 +627,10 @@ def _streaming_supported_for_extract(
     normalize: ExtractNormalizeOptions | None,
 ) -> bool:
     runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None or runtime_profile.dataset_location(name) is None:
+    if runtime_profile is None:
+        msg = "DataFusion runtime profile is required for extract materialization."
+        raise ValueError(msg)
+    if runtime_profile.dataset_location(name) is None:
         return False
     policy = normalized_schema_policy_for_dataset(
         name,
@@ -747,7 +750,8 @@ def _record_extract_execution(
 ) -> None:
     profile = ctx.runtime.datafusion
     if profile is None:
-        return
+        msg = "DataFusion runtime profile is required for extract diagnostics."
+        raise ValueError(msg)
     row_count: int | None = None
     table = result.table
     if table is not None:
@@ -770,15 +774,14 @@ def _record_extract_compile(
 ) -> None:
     """Record a compile fingerprint artifact for extract plans."""
     facade = datafusion_facade_from_ctx(ctx)
-    if facade is None:
-        return
     try:
         compiled = facade.compile(plan.expr)
     except (RuntimeError, TypeError, ValueError):
         return
     profile = ctx.runtime.datafusion
     if profile is None:
-        return
+        msg = "DataFusion runtime profile is required for extract diagnostics."
+        raise ValueError(msg)
     from datafusion_engine.diagnostics import record_artifact
 
     payload = {
@@ -797,7 +800,8 @@ def _record_extract_udf_parity(
     """Record extract-scoped UDF parity diagnostics."""
     profile = ctx.runtime.datafusion
     if profile is None:
-        return
+        msg = "DataFusion runtime profile is required for UDF parity checks."
+        raise ValueError(msg)
     from datafusion_engine.diagnostics import record_artifact
     from datafusion_engine.udf_parity import udf_parity_report
     from datafusion_engine.udf_runtime import register_rust_udfs

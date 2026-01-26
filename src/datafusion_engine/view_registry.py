@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import Final
 
@@ -441,4 +441,30 @@ def registry_view_specs(
     return tuple(specs)
 
 
-__all__ = ["registry_view_specs"]
+def register_all_views(
+    ctx: SessionContext,
+    *,
+    snapshot: Mapping[str, object],
+    runtime_profile: object | None = None,
+    include_registry_views: bool = True,
+) -> None:
+    """Register registry + pipeline views in dependency order."""
+    if include_registry_views:
+        from datafusion_engine.runtime import register_view_specs
+
+        fragment_views = registry_view_specs(ctx)
+        if fragment_views:
+            register_view_specs(
+                ctx,
+                views=fragment_views,
+                runtime_profile=runtime_profile,
+                validate=True,
+            )
+    from datafusion_engine.view_graph_registry import register_view_graph
+    from datafusion_engine.view_registry_specs import view_graph_nodes
+
+    nodes = view_graph_nodes(ctx, snapshot=snapshot)
+    register_view_graph(ctx, nodes=nodes, snapshot=snapshot)
+
+
+__all__ = ["register_all_views", "registry_view_specs"]

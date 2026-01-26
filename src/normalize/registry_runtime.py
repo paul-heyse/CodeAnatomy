@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -18,7 +18,6 @@ from arrowdsl.schema.schema import SchemaMetadataSpec
 from core_types import PathLike, ensure_path
 from datafusion_engine.introspection import introspection_cache_for_ctx
 from datafusion_engine.registry_bridge import DatasetRegistration, register_dataset_spec
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_contracts import (
     SchemaContract,
     SchemaViolation,
@@ -30,6 +29,9 @@ from datafusion_engine.table_provider_metadata import TableProviderMetadata, tab
 from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 NORMALIZE_STAGE_META = "normalize_stage"
 NORMALIZE_ALIAS_META = "normalize_alias"
@@ -146,7 +148,8 @@ def dataset_alias(name: str, *, ctx: SessionContext | None = None) -> str:
     name : str
         Dataset name to resolve.
     ctx : SessionContext | None
-        Optional DataFusion session context for metadata lookup.
+        Optional DataFusion session context for metadata lookup. When omitted,
+        returns the static schema without table metadata enrichment.
 
     Returns
     -------
@@ -223,12 +226,14 @@ def dataset_schema(name: str, *, ctx: SessionContext | None = None) -> SchemaLik
     KeyError
         Raised when the dataset is not registered.
     """
-    session = _resolve_session_context(ctx)
     try:
         schema = static_dataset_specs.dataset_schema(name)
     except KeyError as exc:
         msg = f"Unknown DataFusion schema: {name!r}."
         raise KeyError(msg) from exc
+    if ctx is None:
+        return schema
+    session = _resolve_session_context(ctx)
     metadata = _metadata_for_table(session, name)
     return _schema_with_table_metadata(schema, metadata=metadata)
 
@@ -241,7 +246,7 @@ def dataset_spec(name: str, *, ctx: SessionContext | None = None) -> DatasetSpec
     name : str
         Dataset name to resolve.
     ctx : SessionContext | None
-        Optional DataFusion session context.
+        DataFusion session context used for information_schema validation.
 
     Returns
     -------
@@ -441,7 +446,8 @@ def dataset_table_spec(name: str, *, ctx: SessionContext | None = None) -> Table
 def _resolve_session_context(ctx: SessionContext | None) -> SessionContext:
     if ctx is not None:
         return ctx
-    return DataFusionRuntimeProfile().session_context()
+    msg = "DataFusion SessionContext is required; pass an explicit context."
+    raise ValueError(msg)
 
 
 def _metadata_for_table(ctx: SessionContext, name: str) -> dict[str, str]:

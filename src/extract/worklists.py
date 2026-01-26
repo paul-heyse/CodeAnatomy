@@ -15,7 +15,7 @@ from cache.diskcache_factory import build_deque, build_index
 from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
-from extract.helpers import FileContext, iter_file_contexts
+from extract.helpers import FileContext
 from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import NormalizeExprOptions, normalize_expr, resolve_sqlglot_policy
 
@@ -111,13 +111,18 @@ def iter_worklist_contexts(
     ------
     FileContext
         File contexts matching the worklist query.
+
+    Raises
+    ------
+    ValueError
+        Raised when the execution context lacks a DataFusion runtime profile.
     """
     if file_contexts is not None:
         yield from file_contexts
         return
     if ctx is None or ctx.runtime.datafusion is None:
-        yield from iter_file_contexts(repo_files)
-        return
+        msg = "Worklist execution requires a DataFusion runtime profile."
+        raise ValueError(msg)
     if queue_name is None:
         yield from _worklist_stream(ctx, repo_files=repo_files, output_table=output_table)
         return
@@ -150,8 +155,8 @@ def _worklist_stream(
 ) -> Iterator[FileContext]:
     runtime_profile = ctx.runtime.datafusion
     if runtime_profile is None:
-        yield from iter_file_contexts(repo_files)
-        return
+        msg = "Worklist streaming requires a DataFusion runtime profile."
+        raise ValueError(msg)
     df_ctx = runtime_profile.session_context()
     repo_name = f"__repo_files_{uuid.uuid4().hex}"
     output_exists = _table_exists(df_ctx, output_table)

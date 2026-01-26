@@ -158,14 +158,22 @@ Completed.
 ```python
 # datafusion_engine/udf_platform.py
 if policy.allow_async_udfs:
-    register_rust_udfs(ctx)  # async UDFs are feature-gated in Rust
+    register_rust_udfs(
+        ctx,
+        enable_async=True,
+        async_udf_timeout_ms=policy.timeout_ms,
+        async_udf_batch_size=policy.batch_size,
+    )  # async UDFs are feature-gated in Rust
 else:
     register_rust_udfs(ctx)  # async UDFs remain unregistered by feature gate
 ```
 
 ## Target files
 - Modify: `rust/datafusion_ext/src/udf_async.rs`
+- Modify: `rust/datafusion_ext/src/udf_registry.rs`
+- Modify: `rust/datafusion_ext/src/lib.rs`
 - Modify: `src/datafusion_engine/runtime.py`
+- Modify: `src/datafusion_engine/udf_runtime.py`
 - Modify: `src/datafusion_engine/udf_platform.py`
 
 ## Deletions
@@ -295,6 +303,7 @@ ensure_info_schema_parity(snapshot, information_schema)
 ## Target files
 - Modify: `src/datafusion_engine/schema_registry.py`
 - Modify: `src/datafusion_engine/udf_catalog.py`
+- Modify: `src/datafusion_engine/udf_parity.py`
 - Modify: `src/datafusion_engine/introspection.py`
 - Modify: `src/relspec/evidence.py`
 

@@ -631,6 +631,11 @@ class UdfCatalog:
         -------
         tuple[str, ...]
             Tuple of function IDs in the specified tier.
+
+        Raises
+        ------
+        ValueError
+            Raised when an unsupported tier is requested.
         """
         if tier != "builtin":
             msg = f"Unsupported UDF tier: {tier!r}."

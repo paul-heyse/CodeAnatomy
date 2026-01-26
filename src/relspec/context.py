@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from ibis_engine.execution_factory import datafusion_facade_from_ctx
@@ -24,23 +23,24 @@ def ensure_task_build_context(
     ibis_catalog: IbisPlanCatalog | None = None,
     runtime: NormalizeRuntime | None = None,
 ) -> TaskBuildContext:
-    """Return a TaskBuildContext with a DataFusion facade when available.
+    """Return a TaskBuildContext with a DataFusion facade.
 
     Returns
     -------
     TaskBuildContext
-        Build context with a facade attached when DataFusion is configured.
+        Build context with a DataFusion execution facade attached.
     """
+    facade = datafusion_facade_from_ctx(ctx, backend=backend)
     resolved = build_context or TaskBuildContext(
         ctx=ctx,
         backend=backend,
         ibis_catalog=ibis_catalog,
         runtime=runtime,
+        facade=facade,
     )
     if resolved.facade is None:
-        facade = datafusion_facade_from_ctx(ctx, backend=backend)
-        if facade is not None:
-            resolved = replace(resolved, facade=facade)
+        msg = "TaskBuildContext requires a DataFusion execution facade."
+        raise ValueError(msg)
     return resolved
 
 

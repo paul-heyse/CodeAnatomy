@@ -77,7 +77,13 @@ class UdfInfoSchemaParityReport:
     error: str | None = None
 
     def payload(self) -> dict[str, object]:
-        """Return a diagnostics payload for information_schema parity."""
+        """Return a diagnostics payload for information_schema parity.
+
+        Returns
+        -------
+        dict[str, object]
+            Serializable diagnostics payload.
+        """
         return {
             "missing_in_information_schema": list(self.missing_in_information_schema),
             "param_name_mismatches": [
@@ -263,40 +269,83 @@ def _parameter_name_mismatches(
     routines: Sequence[Mapping[str, object]],
     parameters: Sequence[Mapping[str, object]],
 ) -> list[UdfParityMismatch]:
-    specific_to_routine: dict[str, str] = {}
+    routine_lookup = _routine_specific_lookup(routines)
+    per_specific = _parameter_entries(parameters, routine_lookup)
+    info_param_names = _info_schema_param_sets(per_specific)
+    return _registry_param_mismatches(registry_params, info_param_names)
+
+
+def _routine_specific_lookup(
+    routines: Sequence[Mapping[str, object]],
+) -> dict[str, str]:
+    lookup: dict[str, str] = {}
     for row in routines:
         specific = row.get("specific_name")
         routine = row.get("routine_name") or row.get("function_name") or row.get("name")
         if isinstance(specific, str) and isinstance(routine, str):
-            specific_to_routine[specific.lower()] = routine
-    info_param_names: dict[str, set[tuple[str, ...]]] = {}
+            lookup[specific.lower()] = routine
+    return lookup
+
+
+def _parameter_entries(
+    parameters: Sequence[Mapping[str, object]],
+    routine_lookup: Mapping[str, str],
+) -> dict[tuple[str, str], list[tuple[int, str]]]:
     per_specific: dict[tuple[str, str], list[tuple[int, str]]] = {}
     for row in parameters:
-        specific = row.get("specific_name")
-        if not isinstance(specific, str):
+        entry = _parameter_entry(row, routine_lookup)
+        if entry is None:
             continue
-        routine = specific_to_routine.get(specific.lower())
-        if routine is None:
-            continue
-        ordinal = row.get("ordinal_position")
-        param_name = row.get("parameter_name")
-        if not isinstance(param_name, str):
-            continue
-        if isinstance(ordinal, bool) or ordinal is None:
-            continue
-        if isinstance(ordinal, int):
-            position = ordinal
-        elif isinstance(ordinal, float):
-            position = int(ordinal)
-        elif isinstance(ordinal, str) and ordinal.isdigit():
-            position = int(ordinal)
-        else:
-            continue
-        key = (routine.lower(), specific.lower())
+        key, position, param_name = entry
         per_specific.setdefault(key, []).append((position, param_name))
+    return per_specific
+
+
+def _parameter_entry(
+    row: Mapping[str, object],
+    routine_lookup: Mapping[str, str],
+) -> tuple[tuple[str, str], int, str] | None:
+    specific = row.get("specific_name")
+    if not isinstance(specific, str):
+        return None
+    routine = routine_lookup.get(specific.lower())
+    if routine is None:
+        return None
+    param_name = row.get("parameter_name")
+    if not isinstance(param_name, str):
+        return None
+    ordinal = _coerce_ordinal(row.get("ordinal_position"))
+    if ordinal is None:
+        return None
+    return (routine.lower(), specific.lower()), ordinal, param_name
+
+
+def _coerce_ordinal(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _info_schema_param_sets(
+    per_specific: Mapping[tuple[str, str], Sequence[tuple[int, str]]],
+) -> dict[str, set[tuple[str, ...]]]:
+    info_param_names: dict[str, set[tuple[str, ...]]] = {}
     for (routine, _specific), entries in per_specific.items():
         ordered = tuple(name for _, name in sorted(entries, key=lambda item: item[0]))
         info_param_names.setdefault(routine, set()).add(ordered)
+    return info_param_names
+
+
+def _registry_param_mismatches(
+    registry_params: Mapping[str, tuple[str, ...]],
+    info_param_names: Mapping[str, set[tuple[str, ...]]],
+) -> list[UdfParityMismatch]:
     mismatches: list[UdfParityMismatch] = []
     for name, rust_params in registry_params.items():
         info_sets = info_param_names.get(name.lower())

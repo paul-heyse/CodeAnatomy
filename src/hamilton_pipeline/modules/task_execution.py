@@ -98,7 +98,7 @@ def _record_output(
 ) -> None:
     outputs[artifact.task.output] = table
     schema = table.schema
-    evidence.register(artifact.task.output, schema)
+    evidence.register_schema(artifact.task.output, schema)
     if artifact.task.output not in runtime.execution_artifacts:
         runtime.register_materialized(
             artifact.task.output,
@@ -254,7 +254,7 @@ def execute_task_from_catalog(
         existing = runtime.materialized_tables.get(task_output)
     if existing is not None:
         if task_output not in evidence.sources:
-            evidence.register(task_output, existing.schema)
+            evidence.register_schema(task_output, existing.schema)
         return existing
     by_task = plan_catalog.by_task()
     artifact = by_task.get(task_name)

@@ -28,8 +28,9 @@ def _get_dataset_spec(name: str) -> DatasetSpec:
 
 @cache
 def _get_dataset_schema(name: str) -> pa.Schema:
-    from datafusion_engine.schema_registry import schema_for
     import pyarrow as pa
+
+    from datafusion_engine.schema_registry import schema_for
 
     if name == "cpg_props_by_file_id_v1":
         base = schema_for("cpg_props_v1")

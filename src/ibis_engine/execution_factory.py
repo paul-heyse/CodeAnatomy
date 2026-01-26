@@ -51,17 +51,23 @@ def datafusion_facade_from_ctx(
     ctx: ExecutionContext,
     *,
     backend: BaseBackend | None = None,
-) -> DataFusionExecutionFacade | None:
+) -> DataFusionExecutionFacade:
     """Return a DataFusionExecutionFacade for the provided context.
 
     Returns
     -------
-    DataFusionExecutionFacade | None
-        Facade bound to the DataFusion session when configured.
+    DataFusionExecutionFacade
+        Facade bound to the DataFusion session.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is missing.
     """
     runtime_profile = ctx.runtime.datafusion
     if runtime_profile is None:
-        return None
+        msg = "DataFusion runtime profile is required for execution."
+        raise ValueError(msg)
     backend = ibis_backend_from_ctx(ctx) if backend is None else backend
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from sqlglot_tools.bridge import IbisCompilerBackend

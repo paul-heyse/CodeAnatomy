@@ -147,6 +147,7 @@ def deferred_hash_column(column_name: str) -> Deferred:
     >>> table.mutate(id_hash=hash_expr)
     """
     from ibis import _
+
     from ibis_engine.builtin_udfs import ibis_udf_call
 
     value = _[column_name].cast("string")

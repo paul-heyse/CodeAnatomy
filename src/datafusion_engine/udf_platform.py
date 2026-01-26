@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 from weakref import WeakSet
 
 from datafusion import SessionContext
@@ -15,10 +14,11 @@ from datafusion_engine.function_factory import (
     function_factory_payloads,
     install_function_factory,
 )
-from datafusion_engine.udf_runtime import register_rust_udfs, rust_udf_docs, rust_udf_snapshot
-
-if TYPE_CHECKING:
-    from datafusion_engine.expr_planner import ExprPlannerPolicy
+from datafusion_engine.udf_runtime import (
+    register_rust_udfs,
+    rust_udf_docs,
+    validate_rust_udf_snapshot,
+)
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,23 @@ class RustUdfPlatform:
     expr_planners: ExtensionInstallStatus | None
     function_factory_policy: Mapping[str, object] | None
     expr_planner_policy: Mapping[str, object] | None
+
+
+@dataclass(frozen=True)
+class RustUdfPlatformOptions:
+    """Configuration for installing the Rust UDF platform."""
+
+    enable_udfs: bool = True
+    enable_async_udfs: bool = False
+    async_udf_timeout_ms: int | None = None
+    async_udf_batch_size: int | None = None
+    enable_function_factory: bool = True
+    enable_expr_planners: bool = True
+    function_factory_policy: FunctionFactoryPolicy | None = None
+    function_factory_hook: Callable[[SessionContext], None] | None = None
+    expr_planner_hook: Callable[[SessionContext], None] | None = None
+    expr_planner_names: Sequence[str] = ()
+    strict: bool = True
 
 
 _FUNCTION_FACTORY_CTXS: WeakSet[SessionContext] = WeakSet()
@@ -115,17 +132,7 @@ def _install_expr_planners(
 def install_rust_udf_platform(
     ctx: SessionContext,
     *,
-    enable_udfs: bool = True,
-    enable_async_udfs: bool = False,
-    async_udf_timeout_ms: int | None = None,
-    async_udf_batch_size: int | None = None,
-    enable_function_factory: bool = True,
-    enable_expr_planners: bool = True,
-    function_factory_policy: FunctionFactoryPolicy | None = None,
-    function_factory_hook: Callable[[SessionContext], None] | None = None,
-    expr_planner_hook: Callable[[SessionContext], None] | None = None,
-    expr_planner_names: Sequence[str] = (),
-    strict: bool = True,
+    options: RustUdfPlatformOptions | None = None,
 ) -> RustUdfPlatform:
     """Install the Rust UDF platform in one step.
 
@@ -133,57 +140,44 @@ def install_rust_udf_platform(
     ----------
     ctx:
         DataFusion session context to configure.
-    enable_udfs:
-        Whether to register Rust UDFs/UDTFs.
-    enable_async_udfs:
-        Whether async Rust UDFs should be registered (feature-gated in the extension).
-    async_udf_timeout_ms:
-        Timeout in milliseconds for async UDF execution, required when async UDFs are enabled.
-    async_udf_batch_size:
-        Ideal batch size for async UDFs, required when async UDFs are enabled.
-    enable_function_factory:
-        Whether to install the FunctionFactory hook.
-    enable_expr_planners:
-        Whether to install ExprPlanner hooks.
-    function_factory_policy:
-        Optional FunctionFactory policy overrides.
-    function_factory_hook:
-        Optional hook to install the FunctionFactory.
-    expr_planner_hook:
-        Optional hook to install ExprPlanners.
-    expr_planner_names:
-        ExprPlanner identifiers to install when no hook is provided.
-    strict:
-        When True, raise if extension installation fails.
+    options:
+        Optional platform installation configuration.
 
     Returns
     -------
     RustUdfPlatform
         Installation snapshot for diagnostics.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when strict installation is enabled and extensions fail to install.
     """
+    resolved = options or RustUdfPlatformOptions()
     snapshot: Mapping[str, object] | None = None
     docs: Mapping[str, object] | None = None
-    if enable_udfs:
+    if resolved.enable_udfs:
         snapshot = register_rust_udfs(
             ctx,
-            enable_async=enable_async_udfs,
-            async_udf_timeout_ms=async_udf_timeout_ms,
-            async_udf_batch_size=async_udf_batch_size,
+            enable_async=resolved.enable_async_udfs,
+            async_udf_timeout_ms=resolved.async_udf_timeout_ms,
+            async_udf_batch_size=resolved.async_udf_batch_size,
         )
+        validate_rust_udf_snapshot(snapshot)
         docs = rust_udf_docs(ctx)
     function_factory, function_factory_payload = _install_function_factory(
         ctx,
-        enabled=enable_function_factory,
-        hook=function_factory_hook,
-        policy=function_factory_policy,
+        enabled=resolved.enable_function_factory,
+        hook=resolved.function_factory_hook,
+        policy=resolved.function_factory_policy,
     )
     expr_planners, expr_planner_payload = _install_expr_planners(
         ctx,
-        enabled=enable_expr_planners,
-        hook=expr_planner_hook,
-        planner_names=expr_planner_names,
+        enabled=resolved.enable_expr_planners,
+        hook=resolved.expr_planner_hook,
+        planner_names=resolved.expr_planner_names,
     )
-    if strict:
+    if resolved.strict:
         if function_factory is not None and function_factory.error is not None:
             msg = "FunctionFactory installation failed; native extension is required."
             raise RuntimeError(msg)
@@ -200,4 +194,9 @@ def install_rust_udf_platform(
     )
 
 
-__all__ = ["ExtensionInstallStatus", "RustUdfPlatform", "install_rust_udf_platform"]
+__all__ = [
+    "ExtensionInstallStatus",
+    "RustUdfPlatform",
+    "RustUdfPlatformOptions",
+    "install_rust_udf_platform",
+]

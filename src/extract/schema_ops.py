@@ -61,8 +61,12 @@ def _information_schema_column_order(
     ctx: ExecutionContext,
 ) -> tuple[str, ...] | None:
     runtime = ctx.runtime.datafusion
-    if runtime is None or not runtime.enable_information_schema:
-        return _fallback_column_order(name)
+    if runtime is None:
+        msg = "DataFusion runtime profile is required for schema introspection."
+        raise ValueError(msg)
+    if not runtime.enable_information_schema:
+        msg = "information_schema must be enabled for schema introspection."
+        raise ValueError(msg)
     sql_options = sql_options_for_profile(runtime)
     introspector = SchemaIntrospector(runtime.session_context(), sql_options=sql_options)
     try:

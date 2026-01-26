@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 import ibis
 import ibis.expr.datatypes as dt
 import pyarrow as pa
 from ibis.expr.types import Value
+
+if TYPE_CHECKING:
+    from ibis import Deferred
+
 
 from datafusion_engine.udf_signature import signature_inputs, signature_returns
 from ibis_engine.schema_utils import ibis_dtype_from_arrow
@@ -180,10 +184,10 @@ def register_ibis_udf_snapshot(
         Registered UDF specifications.
     """
     specs = _ibis_specs_from_snapshot(registry_snapshot)
-    global _IBIS_UDF_SPECS
-    global _IBIS_UDF_CALLS
-    _IBIS_UDF_SPECS = {spec.func_id: spec for spec in specs}
-    _IBIS_UDF_CALLS = {spec.func_id: _build_ibis_builtin(spec) for spec in specs}
+    _IBIS_UDF_SPECS.clear()
+    _IBIS_UDF_CALLS.clear()
+    _IBIS_UDF_SPECS.update({spec.func_id: spec for spec in specs})
+    _IBIS_UDF_CALLS.update({spec.func_id: _build_ibis_builtin(spec) for spec in specs})
     return specs
 
 
@@ -202,12 +206,37 @@ def ibis_udf_specs(
 
 
 def ibis_udf_registry() -> Mapping[str, Callable[..., Value]]:
-    """Return the cached Ibis UDF callables."""
+    """Return the cached Ibis UDF callables.
+
+    Returns
+    -------
+    Mapping[str, Callable[..., Value]]
+        Snapshot-registered Ibis UDF callables.
+    """
     return dict(_IBIS_UDF_CALLS)
 
 
-def ibis_udf_call(name: str, *args: Value) -> Value:
-    """Invoke a snapshot-registered Ibis UDF by name."""
+@overload
+def ibis_udf_call(name: str, *args: Value) -> Value: ...
+
+
+@overload
+def ibis_udf_call(name: str, *args: Deferred) -> Deferred: ...
+
+
+def ibis_udf_call(name: str, *args: Value | Deferred) -> Value | Deferred:
+    """Invoke a snapshot-registered Ibis UDF by name.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Ibis expression produced by the builtin UDF.
+
+    Raises
+    ------
+    ValueError
+        Raised when the requested UDF is not registered.
+    """
     udf = _IBIS_UDF_CALLS.get(name)
     if udf is None:
         msg = (
@@ -215,7 +244,10 @@ def ibis_udf_call(name: str, *args: Value) -> Value:
             "Ensure the Rust UDF platform is installed before compilation."
         )
         raise ValueError(msg)
-    return udf(*args)
+    result = cast("Callable[..., object]", udf)(*args)
+    if any(hasattr(arg, "_deferred") for arg in args):
+        return cast("Deferred", result)
+    return cast("Value", result)
 
 
 __all__ = [

@@ -17,6 +17,7 @@ from datafusion_engine.schema_contracts import (
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from arrowdsl.core.interop import SchemaLike
     from datafusion_engine.introspection import IntrospectionSnapshot
     from relspec.plan_catalog import PlanCatalog
     from schema_spec.system import ContractSpec, DatasetSpec
@@ -52,6 +53,18 @@ class EvidenceCatalog:
         if snapshot is not None:
             violations = contract.validate_against_introspection(snapshot)
             self.contract_violations_by_dataset[name] = tuple(violations)
+
+    def register_schema(self, name: str, schema: SchemaLike) -> None:
+        """Register an evidence dataset using a schema."""
+        self.sources.add(name)
+        self.columns_by_dataset[name] = set(getattr(schema, "names", []))
+        fields = getattr(schema, "fields", [])
+        self.types_by_dataset[name] = {
+            field.name: str(field.type) for field in fields if hasattr(field, "name")
+        }
+        metadata = getattr(schema, "metadata", None)
+        if metadata:
+            self.metadata_by_dataset.setdefault(name, {}).update(metadata)
 
     def register_from_dataset_spec(
         self,

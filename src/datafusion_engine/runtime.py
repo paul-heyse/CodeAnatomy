@@ -2441,7 +2441,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     spill_dir: str | None = None
     memory_pool: MemoryPool = "greedy"
     memory_limit_bytes: int | None = None
-    default_catalog: str = "codeintel"
+    default_catalog: str = "datafusion"
     default_schema: str = "public"
     registry_catalogs: Mapping[str, DatasetCatalog] = field(default_factory=dict)
     registry_catalog_name: str | None = None
@@ -2574,7 +2574,25 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     session_context_hook: Callable[[SessionContext], SessionContext] | None = None
 
     def __post_init__(self) -> None:
-        """Initialize defaults after dataclass construction."""
+        """Initialize defaults after dataclass construction.
+
+        Raises
+        ------
+        ValueError
+            Raised when the async UDF policy is invalid.
+        """
+        if not self.enable_information_schema:
+            msg = "information_schema must be enabled for DataFusion sessions."
+            raise ValueError(msg)
+        if (
+            self.registry_catalog_name is not None
+            and self.registry_catalog_name != self.default_catalog
+        ):
+            msg = (
+                "registry_catalog_name must match default_catalog; "
+                "custom catalog inference is not supported."
+            )
+            raise ValueError(msg)
         if self.plan_cache is None:
             object.__setattr__(
                 self,
@@ -2598,7 +2616,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 "plugin_manager",
                 DataFusionPluginManager(self.plugin_specs),
             )
-        async_policy = self.validate_async_udf_policy()
+        async_policy = self._validate_async_udf_policy()
         if not async_policy["valid"]:
             msg = f"Async UDF policy invalid: {async_policy['errors']}."
             raise ValueError(msg)
@@ -2816,7 +2834,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return True
         return bool(self.expr_planner_names)
 
-    def validate_async_udf_policy(self) -> dict[str, object]:
+    def _validate_async_udf_policy(self) -> dict[str, object]:
         """Validate async UDF policy configuration.
 
         Returns
@@ -2879,13 +2897,18 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "warnings": warnings,
         }
 
-    def validate_udf_info_schema_parity(self, ctx: SessionContext) -> dict[str, object]:
+    def _validate_udf_info_schema_parity(self, ctx: SessionContext) -> dict[str, object]:
         """Validate that Rust UDFs appear in information_schema.
 
         Returns
         -------
         dict[str, object]
             Parity report payload.
+
+        Raises
+        ------
+        ValueError
+            Raised when parity checks fail against information_schema.
         """
         if not self.enable_information_schema:
             return {
@@ -2937,9 +2960,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             catalog_name=catalog_name,
             default_schema=self.default_schema,
         )
-        set_default = getattr(ctx, "set_default_catalog_and_schema", None)
-        if callable(set_default) and catalog_name != self.default_catalog:
-            set_default(catalog_name, self.default_schema)
 
     def _install_delta_table_factory(self, ctx: SessionContext) -> None:
         """Install Delta TableProviderFactory for DDL registration.
@@ -3018,10 +3038,12 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
     def _install_udf_platform(self, ctx: SessionContext) -> None:
         """Install the unified Rust UDF platform on the session context."""
-        from datafusion_engine.udf_platform import install_rust_udf_platform
+        from datafusion_engine.udf_platform import (
+            RustUdfPlatformOptions,
+            install_rust_udf_platform,
+        )
 
-        platform = install_rust_udf_platform(
-            ctx,
+        options = RustUdfPlatformOptions(
             enable_udfs=self.enable_udfs,
             enable_async_udfs=self.enable_async_udfs,
             async_udf_timeout_ms=self.async_udf_timeout_ms,
@@ -3033,6 +3055,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             expr_planner_names=self.expr_planner_names,
             strict=True,
         )
+        platform = install_rust_udf_platform(ctx, options=options)
         if platform.snapshot is not None:
             self._record_udf_snapshot(platform.snapshot)
         if platform.docs is not None and self.diagnostics_sink is not None:
@@ -3079,7 +3102,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             Raised when builtin Ibis UDFs are missing from DataFusion.
         """
         missing: list[str] = []
-        from datafusion_engine.udf_runtime import register_rust_udfs
         from engine.unified_registry import build_unified_function_registry
 
         registry_snapshot = register_rust_udfs(
@@ -4419,8 +4441,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
     def _record_extension_parity_validation(self, ctx: SessionContext) -> None:
         payload = dict(self.validate_named_args_extension_parity())
-        payload["async_udf_policy"] = self.validate_async_udf_policy()
-        payload["udf_info_schema_parity"] = self.validate_udf_info_schema_parity(ctx)
+        payload["async_udf_policy"] = self._validate_async_udf_policy()
+        payload["udf_info_schema_parity"] = self._validate_udf_info_schema_parity(ctx)
         if self.diagnostics_sink is None:
             return
         payload["event_time_unix_ms"] = int(time.time() * 1000)

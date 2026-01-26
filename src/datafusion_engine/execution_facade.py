@@ -221,20 +221,22 @@ class DataFusionExecutionFacade:
 
     def __post_init__(self) -> None:
         """Ensure the Rust UDF platform is installed for this context."""
-        from datafusion_engine.udf_platform import install_rust_udf_platform
+        from datafusion_engine.udf_platform import (
+            RustUdfPlatformOptions,
+            install_rust_udf_platform,
+        )
 
         if self.runtime_profile is None:
-            install_rust_udf_platform(
-                self.ctx,
+            options = RustUdfPlatformOptions(
                 enable_udfs=True,
                 enable_function_factory=True,
                 enable_expr_planners=True,
                 expr_planner_names=("codeanatomy_domain",),
                 strict=True,
             )
+            install_rust_udf_platform(self.ctx, options=options)
             return
-        install_rust_udf_platform(
-            self.ctx,
+        options = RustUdfPlatformOptions(
             enable_udfs=self.runtime_profile.enable_udfs,
             enable_async_udfs=self.runtime_profile.enable_async_udfs,
             async_udf_timeout_ms=self.runtime_profile.async_udf_timeout_ms,
@@ -246,6 +248,7 @@ class DataFusionExecutionFacade:
             expr_planner_names=self.runtime_profile.expr_planner_names,
             strict=True,
         )
+        install_rust_udf_platform(self.ctx, options=options)
 
     def io_adapter(self) -> DataFusionIOAdapter:
         """Return a DataFusionIOAdapter for the session context.

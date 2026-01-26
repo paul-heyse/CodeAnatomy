@@ -1,7 +1,12 @@
 
 from datafusion import Expr, SessionContext
 
-def register_udfs(ctx: SessionContext) -> None: ...
+def register_udfs(
+    ctx: SessionContext,
+    enable_async: bool = ...,
+    async_udf_timeout_ms: int | None = ...,
+    async_udf_batch_size: int | None = ...,
+) -> None: ...
 
 def registry_snapshot(ctx: SessionContext) -> dict[str, object]: ...
 

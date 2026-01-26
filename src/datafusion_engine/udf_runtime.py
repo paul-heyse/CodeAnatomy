@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from weakref import WeakKeyDictionary, WeakSet
 
 from datafusion import SessionContext
@@ -18,6 +18,17 @@ _RUST_UDF_POLICIES: WeakKeyDictionary[
     SessionContext,
     tuple[bool, int | None, int | None],
 ] = WeakKeyDictionary()
+
+_REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
+    "scalar",
+    "aggregate",
+    "window",
+    "table",
+    "aliases",
+    "parameter_names",
+    "signature_inputs",
+    "return_types",
+)
 
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
@@ -39,6 +50,108 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     payload.setdefault("return_types", {})
     payload.setdefault("custom_udfs", [])
     return payload
+
+
+def _require_sequence(snapshot: Mapping[str, object], *, name: str) -> Sequence[object]:
+    value = snapshot.get(name, ())
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        msg = f"Rust UDF snapshot field {name!r} must be a sequence."
+        raise TypeError(msg)
+    return value
+
+
+def _require_mapping(snapshot: Mapping[str, object], *, name: str) -> Mapping[str, object]:
+    value = snapshot.get(name, {})
+    if not isinstance(value, Mapping):
+        msg = f"Rust UDF snapshot field {name!r} must be a mapping."
+        raise TypeError(msg)
+    return value
+
+
+def _snapshot_names(snapshot: Mapping[str, object]) -> frozenset[str]:
+    names: set[str] = set()
+    for key in ("scalar", "aggregate", "window", "table", "custom_udfs"):
+        entries = _require_sequence(snapshot, name=key)
+        for entry in entries:
+            if not isinstance(entry, str):
+                msg = f"Rust UDF snapshot field {key!r} contains non-string entries."
+                raise TypeError(msg)
+            names.add(entry)
+    aliases = _require_mapping(snapshot, name="aliases")
+    for alias, target in aliases.items():
+        if not isinstance(alias, str) or not isinstance(target, str):
+            msg = "Rust UDF snapshot aliases must map strings to strings."
+            raise TypeError(msg)
+        names.add(alias)
+        names.add(target)
+    return frozenset(names)
+
+
+def validate_rust_udf_snapshot(snapshot: Mapping[str, object]) -> None:
+    """Validate structural requirements for a Rust UDF snapshot.
+
+    Raises
+    ------
+    ValueError
+        Raised when required snapshot keys or metadata are missing.
+    """
+    missing = [key for key in _REQUIRED_SNAPSHOT_KEYS if key not in snapshot]
+    if missing:
+        msg = f"Rust UDF snapshot missing required keys: {missing}."
+        raise ValueError(msg)
+    _require_sequence(snapshot, name="scalar")
+    _require_sequence(snapshot, name="aggregate")
+    _require_sequence(snapshot, name="window")
+    _require_sequence(snapshot, name="table")
+    _require_mapping(snapshot, name="aliases")
+    _require_mapping(snapshot, name="parameter_names")
+    signature_inputs = _require_mapping(snapshot, name="signature_inputs")
+    return_types = _require_mapping(snapshot, name="return_types")
+    names = _snapshot_names(snapshot)
+    if names and not signature_inputs:
+        msg = "Rust UDF snapshot missing signature_inputs entries."
+        raise ValueError(msg)
+    if names and not return_types:
+        msg = "Rust UDF snapshot missing return_types entries."
+        raise ValueError(msg)
+
+
+def validate_required_udfs(
+    snapshot: Mapping[str, object],
+    *,
+    required: Sequence[str],
+) -> None:
+    """Validate required UDFs against a registry snapshot.
+
+    Raises
+    ------
+    ValueError
+        Raised when required UDFs or signature metadata are missing.
+    """
+    if not required:
+        return
+    names = _snapshot_names(snapshot)
+    missing = [name for name in required if name not in names]
+    if missing:
+        msg = f"Missing required Rust UDFs: {sorted(missing)}."
+        raise ValueError(msg)
+    aliases = _require_mapping(snapshot, name="aliases")
+    signature_inputs = _require_mapping(snapshot, name="signature_inputs")
+    return_types = _require_mapping(snapshot, name="return_types")
+    missing_signatures: list[str] = []
+    missing_returns: list[str] = []
+    for name in required:
+        canonical = aliases.get(name, name)
+        if canonical not in signature_inputs and name not in signature_inputs:
+            missing_signatures.append(name)
+        if canonical not in return_types and name not in return_types:
+            missing_returns.append(name)
+    if missing_signatures:
+        msg = f"Missing Rust UDF signature metadata for: {sorted(missing_signatures)}."
+        raise ValueError(msg)
+    if missing_returns:
+        msg = f"Missing Rust UDF return metadata for: {sorted(missing_returns)}."
+        raise ValueError(msg)
 
 
 def _notify_ibis_snapshot(snapshot: Mapping[str, object]) -> None:
@@ -113,8 +226,15 @@ def register_rust_udfs(
     -------
     Mapping[str, object]
         Snapshot payload for diagnostics.
+
+    Raises
+    ------
+    ValueError
+        Raised when async UDF policy configuration is invalid.
     """
-    if not enable_async and (async_udf_timeout_ms is not None or async_udf_batch_size is not None):
+    if not enable_async and (
+        async_udf_timeout_ms is not None or async_udf_batch_size is not None
+    ):
         msg = "Async UDF policy provided but enable_async is False."
         raise ValueError(msg)
     if enable_async:
@@ -150,4 +270,10 @@ def register_rust_udfs(
     return rust_udf_snapshot(ctx)
 
 
-__all__ = ["register_rust_udfs", "rust_udf_docs", "rust_udf_snapshot"]
+__all__ = [
+    "register_rust_udfs",
+    "rust_udf_docs",
+    "rust_udf_snapshot",
+    "validate_required_udfs",
+    "validate_rust_udf_snapshot",
+]

@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from ibis_engine.registry import (
     DatasetLocation,
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
 from incremental.ibis_exec import ibis_expr_to_table
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from storage.deltalake import StorageOptions
@@ -63,7 +63,6 @@ def read_delta_table_via_facade(
         Materialized table from the Delta provider.
     """
     ctx = context.runtime.session_context()
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=context.runtime.profile)
     profile_location = context.runtime.profile.dataset_location(name)
     resolved_storage = context.storage.storage_options or {}
     resolved_log_storage = context.storage.log_storage_options or {}
@@ -91,10 +90,19 @@ def read_delta_table_via_facade(
         delta_scan=resolved_scan,
     )
     with TempTableRegistry(ctx) as registry:
-        facade.register_dataset(name=name, location=location)
+        expr = read_delta_ibis(
+            context.runtime.ibis_backend(),
+            str(path),
+            options=IbisDeltaReadOptions(
+                table_name=name,
+                storage_options=location.storage_options,
+                log_storage_options=location.delta_log_storage_options,
+                delta_scan=location.delta_scan,
+                version=location.delta_version,
+                timestamp=location.delta_timestamp,
+            ),
+        )
         registry.track(name)
-        backend = context.runtime.ibis_backend()
-        expr = backend.table(name)
         return ibis_expr_to_table(expr, runtime=context.runtime, name=name)
 
 

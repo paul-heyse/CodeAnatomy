@@ -23,6 +23,7 @@ from datafusion_engine.sql_options import (
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from ibis_engine.schema_utils import sqlglot_column_defs
 from serde_msgspec import dumps_msgpack, to_builtins
+from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import SchemaMapping, schema_map_fingerprint_from_mapping
 
 if TYPE_CHECKING:
@@ -707,6 +708,40 @@ class SchemaIntrospector:
             cache.set(key, rows, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)
         return rows
 
+    def describe_expression(self, expr: Expression) -> list[dict[str, object]]:
+        """Return the computed output schema for a SQLGlot expression.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            ``DESCRIBE`` rows for the expression.
+        """
+        cache = self.cache
+        from sqlglot_tools.lineage import canonical_ast_fingerprint
+
+        payload = {"ast_fingerprint": canonical_ast_fingerprint(expr)}
+        key = self._cache_key("describe_expression", payload=payload)
+        if cache is not None:
+            cached = cache.get(key, default=None, retry=True)
+            if isinstance(cached, list):
+                return cached
+        schema = _schema_from_expression(
+            self.ctx,
+            expr,
+            sql_options=self.sql_options,
+        )
+        rows = [
+            {
+                "column_name": field.name,
+                "data_type": str(field.type),
+                "nullable": field.nullable,
+            }
+            for field in schema
+        ]
+        if cache is not None:
+            cache.set(key, rows, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)
+        return rows
+
     def table_columns(self, table_name: str) -> list[dict[str, object]]:
         """Return column metadata from information_schema for a table.
 
@@ -870,16 +905,6 @@ class SchemaIntrospector:
         if table is None:
             return []
         return [dict(row) for row in table.to_pylist()]
-
-    def parameters_snapshot_table(self) -> pa.Table | None:
-        """Return information_schema.parameters as Arrow table if available.
-
-        Returns
-        -------
-        pyarrow.Table | None
-            Parameter inventory from information_schema.parameters, or None if unavailable.
-        """
-        return parameters_snapshot_table(self.ctx, sql_options=self.sql_options)
 
     def function_catalog_snapshot(
         self, *, include_parameters: bool = False

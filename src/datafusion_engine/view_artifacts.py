@@ -9,12 +9,14 @@ import pyarrow as pa
 import sqlglot.expressions as exp
 from sqlglot.schema import MappingSchema
 
-from arrowdsl.schema.abi import schema_to_dict
+from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict, schema_to_msgpack
 from datafusion_engine.schema_introspection import schema_map_for_sqlglot
 from datafusion_engine.sql_policy_engine import CompilationArtifacts, SQLPolicyProfile
+from serde_msgspec import dumps_msgpack
 from sqlglot_tools.lineage import referenced_udf_calls
 from sqlglot_tools.optimizer import (
     StrictParseOptions,
+    ast_policy_fingerprint,
     parse_sql_strict,
     register_datafusion_dialect,
     sqlglot_policy_snapshot_for,
@@ -38,6 +40,7 @@ class ViewArtifact:
     serde_payload: list[dict[str, object]]
     ast_fingerprint: str
     policy_hash: str
+    plan_fingerprint: str
     schema: pa.Schema
     lineage: dict[str, set[tuple[str, str]]]
     required_udfs: tuple[str, ...]
@@ -53,6 +56,7 @@ class ViewArtifact:
         """
         return {
             "name": self.name,
+            "plan_fingerprint": self.plan_fingerprint,
             "ast_fingerprint": self.ast_fingerprint,
             "policy_hash": self.policy_hash,
             "schema": schema_to_dict(self.schema),
@@ -60,6 +64,34 @@ class ViewArtifact:
             "lineage": _lineage_payload(self.lineage),
             "sql": self.sql,
             "serde_payload": list(self.serde_payload),
+        }
+
+    def diagnostics_payload(self, *, event_time_unix_ms: int) -> dict[str, object]:
+        """Return a stable diagnostics payload.
+
+        Parameters
+        ----------
+        event_time_unix_ms:
+            Event timestamp in milliseconds.
+
+        Returns
+        -------
+        dict[str, object]
+            Diagnostics-ready payload with serialized schema and AST artifacts.
+        """
+        lineage_payload = _lineage_payload(self.lineage)
+        return {
+            "event_time_unix_ms": event_time_unix_ms,
+            "name": self.name,
+            "plan_fingerprint": self.plan_fingerprint,
+            "ast_fingerprint": self.ast_fingerprint,
+            "policy_hash": self.policy_hash,
+            "schema_fingerprint": schema_fingerprint(self.schema),
+            "schema_msgpack": schema_to_msgpack(self.schema),
+            "required_udfs": list(self.required_udfs),
+            "lineage_msgpack": dumps_msgpack(lineage_payload),
+            "sql": self.sql,
+            "serde_payload_msgpack": dumps_msgpack(list(self.serde_payload)),
         }
 
 
@@ -103,6 +135,10 @@ def build_view_artifact(inputs: ViewArtifactInputs) -> ViewArtifact:
     schema_map = schema_map_for_sqlglot(_schema_introspector(inputs.ctx))
     mapping = MappingSchema(dict(schema_map))
     artifacts = CompilationArtifacts.from_ast(inputs.ast, mapping)
+    plan_fingerprint = ast_policy_fingerprint(
+        ast_fingerprint=artifacts.ast_fingerprint,
+        policy_hash=policy_hash,
+    )
     required_udfs = (
         tuple(inputs.required_udfs)
         if inputs.required_udfs is not None
@@ -114,6 +150,7 @@ def build_view_artifact(inputs: ViewArtifactInputs) -> ViewArtifact:
         serde_payload=artifacts.serde_payload,
         ast_fingerprint=artifacts.ast_fingerprint,
         policy_hash=policy_hash,
+        plan_fingerprint=plan_fingerprint,
         schema=inputs.schema,
         lineage=artifacts.lineage_by_column,
         required_udfs=required_udfs,

@@ -16,7 +16,7 @@ from core_types import JsonDict
 from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.finalize import Contract, normalize_only
 from datafusion_engine.view_registry import ensure_view_graph
-from relspec.evidence import EvidenceCatalog, initial_evidence_from_views
+from relspec.evidence import EvidenceCatalog, initial_evidence_from_views, known_dataset_specs
 from relspec.inferred_deps import infer_deps_from_view_nodes
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
 from relspec.rustworkx_graph import task_graph_impact_subgraph
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from ibis_engine.execution import IbisExecutionContext
     from relspec.graph_inference import TaskGraph
     from relspec.incremental import IncrementalDiff
+    from schema_spec.system import DatasetSpec
 
 
 @dataclass(frozen=True)
@@ -73,11 +74,13 @@ def _initial_evidence(
     *,
     ctx: SessionContext | None = None,
     task_names: set[str] | None = None,
+    dataset_specs: Sequence[DatasetSpec] | None = None,
 ) -> EvidenceCatalog:
     return initial_evidence_from_views(
         nodes,
         ctx=ctx,
         task_names=task_names,
+        dataset_specs=dataset_specs,
     )
 
 
@@ -169,7 +172,8 @@ def evidence_catalog(
             runtime_profile=df_profile,
             include_registry_views=True,
         )
-    evidence = _initial_evidence(view_nodes, ctx=session)
+    dataset_specs = known_dataset_specs(ctx=session)
+    evidence = _initial_evidence(view_nodes, ctx=session, dataset_specs=dataset_specs)
     if df_profile is not None and evidence.contract_violations_by_dataset:
         from datafusion_engine.diagnostics import record_artifact
 

@@ -91,27 +91,32 @@ class SemanticChange:
 
         if isinstance(edit, sqlglot_diff.Remove):
             node = edit.expression
+            category = cls._categorize_change(node)
             return cls(
                 edit_type=edit_type,
                 node_type=type(node).__name__,
                 description=f"Removed {type(node).__name__}",
-                category=ChangeCategory.BREAKING,
+                category=category,
             )
 
         if isinstance(edit, sqlglot_diff.Move):
+            node = edit.source
+            category = cls._categorize_change(node)
             return cls(
                 edit_type=edit_type,
-                node_type=type(edit.source).__name__,
-                description=f"Moved {type(edit.source).__name__}",
-                category=ChangeCategory.BREAKING,
+                node_type=type(node).__name__,
+                description=f"Moved {type(node).__name__}",
+                category=category,
             )
 
         if isinstance(edit, sqlglot_diff.Update):
+            node = edit.source
+            category = cls._categorize_change(node)
             return cls(
                 edit_type=edit_type,
-                node_type=type(edit.source).__name__,
-                description=f"Updated {type(edit.source).__name__}",
-                category=ChangeCategory.BREAKING,
+                node_type=type(node).__name__,
+                description=f"Updated {type(node).__name__}",
+                category=category,
             )
 
         return cls(
@@ -139,16 +144,38 @@ class SemanticChange:
         if isinstance(node, (exp.Column, exp.Alias)):
             return ChangeCategory.ADDITIVE
 
-        # UDTFs can multiply rows
-        if isinstance(node, exp.Unnest):
-            return ChangeCategory.ROW_MULTIPLYING
-
-        # Joins can multiply rows
-        if isinstance(node, exp.Join):
+        # UDTFs and joins can multiply rows
+        if _is_row_multiplying(node):
             return ChangeCategory.ROW_MULTIPLYING
 
         # Default to breaking for safety
         return ChangeCategory.BREAKING
+
+    @staticmethod
+    def _categorize_change(node: exp.Expression) -> ChangeCategory:
+        if _is_row_multiplying(node):
+            return ChangeCategory.ROW_MULTIPLYING
+        if _is_window_related(node):
+            return ChangeCategory.BREAKING
+        return ChangeCategory.BREAKING
+
+
+def _is_row_multiplying(node: exp.Expression) -> bool:
+    explode = getattr(exp, "Explode", None)
+    return isinstance(node, (exp.Join, exp.Unnest)) or (
+        explode is not None and isinstance(node, explode)
+    )
+
+
+def _is_window_related(node: exp.Expression) -> bool:
+    window = getattr(exp, "Window", None)
+    window_spec = getattr(exp, "WindowSpec", None)
+    over = getattr(exp, "Over", None)
+    return bool(
+        (window is not None and isinstance(node, window))
+        or (window_spec is not None and isinstance(node, window_spec))
+        or (over is not None and isinstance(node, over))
+    )
 
 
 @dataclass

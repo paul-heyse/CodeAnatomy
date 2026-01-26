@@ -68,10 +68,9 @@ from datafusion_engine.schema_registry import (
     TREE_SITTER_CHECK_VIEWS,
     TREE_SITTER_VIEW_NAMES,
     missing_schema_names,
+    nested_dataset_names,
     nested_view_specs,
-    register_all_schemas,
-    schema_for,
-    schema_names,
+    validate_nested_types,
     validate_required_engine_functions,
     validate_udf_info_schema_parity,
 )
@@ -617,6 +616,24 @@ class DataFusionViewRegistry:
             for _, artifact in sorted(self.entries.items(), key=lambda item: item[0])
         ]
 
+    def diagnostics_snapshot(self, *, event_time_unix_ms: int) -> list[dict[str, object]]:
+        """Return diagnostics payloads for registered view artifacts.
+
+        Parameters
+        ----------
+        event_time_unix_ms:
+            Event timestamp to attach to each payload.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Diagnostics-ready payloads for registered view artifacts.
+        """
+        return [
+            artifact.diagnostics_payload(event_time_unix_ms=event_time_unix_ms)
+            for _, artifact in sorted(self.entries.items(), key=lambda item: item[0])
+        ]
+
 
 @dataclass(frozen=True)
 class PreparedStatementSpec:
@@ -886,7 +903,8 @@ def _collect_view_sql_parse_errors(
     dialect: str,
 ) -> dict[str, list[dict[str, object]]] | None:
     errors: dict[str, list[dict[str, object]]] = {}
-    for name, sql in registry.entries.items():
+    for name, entry in registry.entries.items():
+        sql = entry if isinstance(entry, str) else getattr(entry, "sql", None)
         if not isinstance(sql, str) or not sql:
             continue
         parse_errors = _sql_parse_errors(sql, dialect=dialect)
@@ -942,10 +960,14 @@ def _constraint_drift_entries(
     introspector: SchemaIntrospector,
     *,
     names: Sequence[str],
+    schemas: Mapping[str, pa.Schema] | None = None,
 ) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
+    schema_map = dict(schemas or {})
     for name in names:
-        schema = schema_for(name)
+        schema = schema_map.get(name)
+        if schema is None:
+            continue
         expected_required, expected_keys = schema_constraints_from_metadata(schema.metadata)
         expected_required_set = set(expected_required)
         expected_keys_set = set(expected_keys)
@@ -1005,6 +1027,33 @@ def _relationship_constraint_errors(
     if isinstance(result, Mapping) and result:
         return result
     return None
+
+
+@dataclass(frozen=True)
+class SchemaRegistryValidationResult:
+    """Summary of schema registry validation checks."""
+
+    missing: tuple[str, ...] = ()
+    type_errors: dict[str, str] = field(default_factory=dict)
+    view_errors: dict[str, str] = field(default_factory=dict)
+    constraint_drift: tuple[dict[str, object], ...] = ()
+    relationship_constraint_errors: dict[str, object] | None = None
+
+    def has_errors(self) -> bool:
+        """Return whether any validation errors are present.
+
+        Returns
+        -------
+        bool
+            ``True`` when the validation result includes any errors.
+        """
+        return bool(
+            self.missing
+            or self.type_errors
+            or self.view_errors
+            or self.constraint_drift
+            or self.relationship_constraint_errors
+        )
 
 
 def register_view_specs(
@@ -1473,6 +1522,8 @@ def record_view_definition(
     if profile.view_registry is None:
         return
     profile.view_registry.record(name=artifact.name, artifact=artifact)
+    payload = artifact.diagnostics_payload(event_time_unix_ms=int(time.time() * 1000))
+    record_artifact(profile, "datafusion_view_artifacts_v1", payload)
 
 
 def _datafusion_version(ctx: SessionContext) -> str | None:
@@ -3291,55 +3342,72 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self,
         ctx: SessionContext,
         *,
+        expected_names: Sequence[str] | None = None,
+        expected_schemas: Mapping[str, pa.Schema] | None = None,
         view_errors: Mapping[str, str] | None = None,
         tree_sitter_checks: Mapping[str, object] | None = None,
-    ) -> None:
-        if self.diagnostics_sink is None:
-            return
+    ) -> SchemaRegistryValidationResult:
         if not self.enable_information_schema:
-            return
-        expected_names = set(schema_names())
-        missing = missing_schema_names(ctx, expected=tuple(sorted(expected_names)))
+            return SchemaRegistryValidationResult()
+        expected = tuple(sorted(set(expected_names or ())))
+        missing = missing_schema_names(ctx, expected=expected) if expected else ()
         type_errors: dict[str, str] = {}
         introspector = self._schema_introspector(ctx)
         constraint_drift = _constraint_drift_entries(
             introspector,
-            names=tuple(sorted(expected_names)),
+            names=expected,
+            schemas=expected_schemas,
         )
         relationship_errors = _relationship_constraint_errors(
             ctx,
             sql_options=self._sql_options(),
         )
+        result = SchemaRegistryValidationResult(
+            missing=tuple(missing),
+            type_errors=dict(type_errors),
+            view_errors=dict(view_errors) if view_errors else {},
+            constraint_drift=tuple(constraint_drift),
+            relationship_constraint_errors=dict(relationship_errors)
+            if relationship_errors
+            else None,
+        )
+        if self.diagnostics_sink is None:
+            return result
         if (
-            not missing
-            and not type_errors
-            and not view_errors
-            and not constraint_drift
-            and relationship_errors is None
+            not result.missing
+            and not result.type_errors
+            and not result.view_errors
+            and not result.constraint_drift
+            and result.relationship_constraint_errors is None
         ):
-            return
+            return result
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
-            "missing": list(missing),
-            "type_errors": type_errors,
-            "view_errors": dict(view_errors) if view_errors else None,
-            "constraint_drift": constraint_drift or None,
-            "relationship_constraint_errors": dict(relationship_errors)
-            if relationship_errors
+            "missing": list(result.missing),
+            "type_errors": dict(result.type_errors),
+            "view_errors": dict(result.view_errors) if result.view_errors else None,
+            "constraint_drift": list(result.constraint_drift) if result.constraint_drift else None,
+            "relationship_constraint_errors": dict(result.relationship_constraint_errors)
+            if result.relationship_constraint_errors
             else None,
         }
         if tree_sitter_checks is not None:
-            payload["tree_sitter_checks"] = dict(tree_sitter_checks)
-        if view_errors and self.view_registry is not None:
+            import json
+
+            payload["tree_sitter_checks"] = json.dumps(tree_sitter_checks, default=str)
+        if result.view_errors and self.view_registry is not None:
             parser_dialect = _sql_parser_dialect(self)
             parse_errors = _collect_view_sql_parse_errors(
                 self.view_registry,
                 dialect=parser_dialect,
             )
             if parse_errors:
-                payload["sql_parse_errors"] = parse_errors
+                import json
+
+                payload["sql_parse_errors"] = json.dumps(parse_errors, default=str)
                 payload["sql_parser_dialect"] = parser_dialect
         self.record_artifact("datafusion_schema_registry_validation_v1", payload)
+        return result
 
     def _record_catalog_autoload_snapshot(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -4162,6 +4230,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 validator(ctx)
             except (RuntimeError, TypeError, ValueError) as exc:
                 view_errors[label] = str(exc)
+        for name in nested_dataset_names():
+            if not ctx.table_exist(name):
+                continue
+            try:
+                validate_nested_types(ctx, name)
+            except (RuntimeError, TypeError, ValueError) as exc:
+                view_errors[f"nested_types:{name}"] = str(exc)
         return view_errors
 
     def _install_schema_registry(self, ctx: SessionContext) -> None:
@@ -4175,7 +4250,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if not self.enable_schema_registry:
             return
         self._record_catalog_autoload_snapshot(ctx)
-        register_all_schemas(ctx)
         ast_view_names, ast_optional_disabled, ast_gate_payload = self._ast_feature_gates(ctx)
         self._record_ast_feature_gates(ast_gate_payload)
         ast_registration = (
@@ -4192,7 +4266,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         from datafusion_engine.view_registry import registry_view_specs
 
         fragment_views = registry_view_specs(ctx, exclude=ast_optional_disabled)
-        self._register_schema_views(ctx, fragment_views=fragment_views)
+        fragment_names = self._register_schema_views(ctx, fragment_views=fragment_views)
+        nested_views = tuple(
+            view for view in nested_view_specs(ctx) if view.name not in fragment_names
+        )
+        expected_schemas = {view.name: view.schema for view in (*fragment_views, *nested_views)}
         self._validate_catalog_autoloads(
             ctx,
             ast_registration=ast_registration,
@@ -4203,13 +4281,28 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             ast_view_names=ast_view_names,
         )
         view_errors = self._validate_schema_views(ctx, ast_view_names=ast_view_names)
-        self._record_schema_registry_validation(
+        validation = self._record_schema_registry_validation(
             ctx,
+            expected_names=tuple(expected_schemas),
+            expected_schemas=expected_schemas,
             view_errors=view_errors or None,
             tree_sitter_checks=tree_sitter_checks,
         )
-        if view_errors:
-            msg = f"Schema view validation failed: {view_errors}."
+        issues: dict[str, object] = {}
+        if validation.missing:
+            issues["missing"] = list(validation.missing)
+        if validation.type_errors:
+            issues["type_errors"] = dict(validation.type_errors)
+        if validation.view_errors:
+            issues["view_errors"] = dict(validation.view_errors)
+        if validation.constraint_drift:
+            issues["constraint_drift"] = list(validation.constraint_drift)
+        if validation.relationship_constraint_errors:
+            issues["relationship_constraint_errors"] = dict(
+                validation.relationship_constraint_errors
+            )
+        if issues:
+            msg = f"Schema registry validation failed: {issues}."
             raise ValueError(msg)
         self._record_schema_snapshots(ctx)
 
@@ -4889,9 +4982,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         artifact:
             View artifact payload for diagnostics.
         """
-        if self.view_registry is None:
-            return
-        self.view_registry.record(name=artifact.name, artifact=artifact)
+        record_view_definition(self, artifact=artifact)
 
     def _schema_introspector(self, ctx: SessionContext) -> SchemaIntrospector:
         """Return a schema introspector for the session.
@@ -5601,27 +5692,22 @@ def read_delta_as_reader(
     pyarrow.RecordBatchReader
         Streaming reader for the Delta table via DataFusion's Delta table provider.
     """
-    import uuid
-
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from ibis_engine.execution_factory import ibis_backend_from_profile
     from ibis_engine.io_bridge import ibis_table_to_reader
-    from ibis_engine.registry import DatasetLocation
+    from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
 
     runtime_profile = DataFusionRuntimeProfile()
-    ctx = runtime_profile.session_context()
     backend = ibis_backend_from_profile(runtime_profile)
-    name = f"__delta_reader_{uuid.uuid4().hex}"
-    location = DatasetLocation(
-        path=path,
-        format="delta",
-        storage_options=dict(storage_options or {}),
-        delta_log_storage_options=dict(log_storage_options or {}),
-        delta_scan=delta_scan,
+    table = read_delta_ibis(
+        backend,
+        path,
+        options=IbisDeltaReadOptions(
+            table_name=None,
+            storage_options=dict(storage_options or {}),
+            log_storage_options=dict(log_storage_options or {}),
+            delta_scan=delta_scan,
+        ),
     )
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    facade.register_dataset(name=name, location=location)
-    table = backend.table(name)
     return ibis_table_to_reader(table)
 
 

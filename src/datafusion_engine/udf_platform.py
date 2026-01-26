@@ -14,6 +14,7 @@ from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_p
 from datafusion_engine.function_factory import (
     FunctionFactoryPolicy,
     function_factory_payloads,
+    function_factory_policy_from_snapshot,
     install_function_factory,
 )
 from datafusion_engine.udf_runtime import (
@@ -177,11 +178,17 @@ def install_rust_udf_platform(
             planner_names = tuple(dict.fromkeys((*planner_names, *derived)))
         else:
             planner_names = derived
+    function_factory_policy = resolved.function_factory_policy
+    if function_factory_policy is None and snapshot is not None:
+        function_factory_policy = function_factory_policy_from_snapshot(
+            snapshot,
+            allow_async=resolved.enable_async_udfs,
+        )
     function_factory, function_factory_payload = _install_function_factory(
         ctx,
         enabled=resolved.enable_function_factory,
         hook=resolved.function_factory_hook,
-        policy=resolved.function_factory_policy,
+        policy=function_factory_policy,
     )
     expr_planners, expr_planner_payload = _install_expr_planners(
         ctx,

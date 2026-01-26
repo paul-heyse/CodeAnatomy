@@ -1236,9 +1236,18 @@ DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA = _schema_with_metadata(
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
-            pa.field("schema_name", pa.string(), nullable=False),
-            pa.field("issue_type", pa.string(), nullable=False),
-            pa.field("detail", pa.string(), nullable=True),
+            pa.field("missing", pa.list_(pa.string()), nullable=True),
+            pa.field("type_errors", pa.map_(pa.string(), pa.string()), nullable=True),
+            pa.field("view_errors", pa.map_(pa.string(), pa.string()), nullable=True),
+            pa.field("constraint_drift", pa.list_(pa.string()), nullable=True),
+            pa.field(
+                "relationship_constraint_errors",
+                pa.map_(pa.string(), pa.string()),
+                nullable=True,
+            ),
+            pa.field("tree_sitter_checks", pa.string(), nullable=True),
+            pa.field("sql_parse_errors", pa.string(), nullable=True),
+            pa.field("sql_parser_dialect", pa.string(), nullable=True),
         ]
     ),
 )
@@ -1324,6 +1333,8 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
             pa.field("run_id", pa.string(), nullable=True),
             pa.field("plan_hash", pa.string(), nullable=True),
+            pa.field("policy_hash", pa.string(), nullable=True),
+            pa.field("ast_fingerprint", pa.string(), nullable=True),
             pa.field("sql", pa.string(), nullable=False),
             pa.field("normalized_sql", pa.string(), nullable=True),
             pa.field("explain_rows_artifact_path", pa.string(), nullable=True),
@@ -1358,6 +1369,25 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("graphviz", pa.string(), nullable=True),
             pa.field("partition_count", pa.int64(), nullable=True),
             pa.field("join_operators", pa.list_(pa.string()), nullable=True),
+        ]
+    ),
+)
+
+DATAFUSION_VIEW_ARTIFACTS_SCHEMA = _schema_with_metadata(
+    "datafusion_view_artifacts_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("plan_fingerprint", pa.string(), nullable=False),
+            pa.field("ast_fingerprint", pa.string(), nullable=False),
+            pa.field("policy_hash", pa.string(), nullable=False),
+            pa.field("schema_fingerprint", pa.string(), nullable=False),
+            pa.field("schema_msgpack", pa.binary(), nullable=False),
+            pa.field("required_udfs", pa.list_(pa.string()), nullable=True),
+            pa.field("lineage_msgpack", pa.binary(), nullable=False),
+            pa.field("sql", pa.string(), nullable=True),
+            pa.field("serde_payload_msgpack", pa.binary(), nullable=False),
         ]
     ),
 )
@@ -1527,25 +1557,7 @@ PARAM_FILE_IDS_SCHEMA = _schema_with_metadata(
     ),
 )
 
-SCHEMA_REGISTRY: dict[str, pa.Schema] = {
-    "callsite_qname_candidates_v1": CALLSITE_QNAME_CANDIDATES_SCHEMA,
-    "dataset_fingerprint_v1": DATASET_FINGERPRINT_SCHEMA,
-    "datafusion_cache_state_v1": DATAFUSION_CACHE_STATE_SCHEMA,
-    "datafusion_explains_v1": DATAFUSION_EXPLAINS_SCHEMA,
-    "datafusion_plan_artifacts_v1": DATAFUSION_PLAN_ARTIFACTS_SCHEMA,
-    "datafusion_runs_v1": DATAFUSION_RUNS_SCHEMA,
-    "datafusion_schema_map_fingerprints_v1": DATAFUSION_SCHEMA_MAP_FINGERPRINTS_SCHEMA,
-    "datafusion_schema_registry_validation_v1": DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA,
-    "datafusion_semantic_diff_v1": DATAFUSION_SEMANTIC_DIFF_SCHEMA,
-    "dim_qualified_names_v1": DIM_QUALIFIED_NAMES_SCHEMA,
-    "engine_runtime_v1": ENGINE_RUNTIME_SCHEMA,
-    "feature_state_v1": FEATURE_STATE_SCHEMA,
-    "ibis_sql_ingest_v1": IBIS_SQL_INGEST_SCHEMA,
-    "sqlglot_parse_errors_v1": SQLGLOT_PARSE_ERRORS_SCHEMA,
-    "param_file_ids_v1": PARAM_FILE_IDS_SCHEMA,
-    "repo_snapshot_v1": REPO_SNAPSHOT_SCHEMA,
-    "scalar_param_signature_v1": SCALAR_PARAM_SIGNATURE_SCHEMA,
-}
+SCHEMA_REGISTRY: dict[str, pa.Schema] = {}
 
 NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
     "cst_nodes": {
@@ -1996,7 +2008,6 @@ ENGINE_RUNTIME_SCHEMA = _schema_with_metadata(
     ENGINE_RUNTIME_SCHEMA,
     extra_metadata=_ENGINE_FUNCTION_REQUIREMENTS,
 )
-SCHEMA_REGISTRY["engine_runtime_v1"] = ENGINE_RUNTIME_SCHEMA
 
 
 AST_VIEW_REQUIRED_NON_NULL_FIELDS: tuple[str, ...] = ("file_id", "path")
@@ -2241,50 +2252,7 @@ def identity_fields_for(
     return tuple(resolved)
 
 
-def nested_schema_for(name: str, *, allow_derived: bool = False) -> pa.Schema:
-    """Return the schema for an intrinsic nested dataset.
-
-    Returns
-    -------
-    pyarrow.Schema
-        Derived nested schema for the dataset.
-
-    Raises
-    ------
-    KeyError
-        Raised when the dataset is not intrinsic unless allow_derived is True.
-    """
-    if not allow_derived and not is_intrinsic_nested_dataset(name):
-        msg = f"Nested schema {name!r} is derived; set allow_derived=True to resolve."
-        raise KeyError(msg)
-    root, path = nested_path_for(name)
-    root_schema = SCHEMA_REGISTRY[root]
-    row_struct = struct_for_path(root_schema, path)
-    identity_fields = identity_fields_for(name, root_schema, row_struct)
-    context_fields = _context_fields_for(name, root_schema)
-    fields: list[pa.Field] = []
-    seen: set[str] = set()
-    for field_name in identity_fields:
-        field = root_schema.field(field_name)
-        fields.append(pa.field(field.name, field.type, field.nullable, metadata=field.metadata))
-        seen.add(field.name)
-    for field in context_fields:
-        if field.name in seen:
-            continue
-        fields.append(pa.field(field.name, field.type, field.nullable, metadata=field.metadata))
-        seen.add(field.name)
-    for field in row_struct:
-        if field.name in seen:
-            continue
-        fields.append(pa.field(field.name, field.type, field.nullable, metadata=field.metadata))
-        seen.add(field.name)
-    return pa.schema(fields)
-
-
 def _resolve_root_schema(ctx: SessionContext, root: str) -> pa.Schema:
-    schema = SCHEMA_REGISTRY.get(root)
-    if schema is not None:
-        return schema
     try:
         df = ctx.table(root)
     except (KeyError, RuntimeError, TypeError, ValueError) as exc:
@@ -2551,19 +2519,35 @@ def _validate_ast_view_outputs_all(
 
 
 def _validate_ast_file_types(ctx: SessionContext, errors: dict[str, str]) -> None:
-    queries = (
-        "SELECT arrow_typeof(nodes) AS nodes_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(edges) AS edges_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(errors) AS errors_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(docstrings) AS docstrings_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(imports) AS imports_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(defs) AS defs_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(calls) AS calls_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(type_ignores) AS type_ignores_type FROM ast_files_v1 LIMIT 1",
+    exprs = (
+        exp.select(exp.func("arrow_typeof", exp.column("nodes")).as_("nodes_type"))
+        .from_("ast_files_v1")
+        .limit(1),
+        exp.select(exp.func("arrow_typeof", exp.column("edges")).as_("edges_type"))
+        .from_("ast_files_v1")
+        .limit(1),
+        exp.select(exp.func("arrow_typeof", exp.column("errors")).as_("errors_type"))
+        .from_("ast_files_v1")
+        .limit(1),
+        exp.select(exp.func("arrow_typeof", exp.column("docstrings")).as_("docstrings_type"))
+        .from_("ast_files_v1")
+        .limit(1),
+        exp.select(exp.func("arrow_typeof", exp.column("imports")).as_("imports_type"))
+        .from_("ast_files_v1")
+        .limit(1),
+        exp.select(exp.func("arrow_typeof", exp.column("defs")).as_("defs_type"))
+        .from_("ast_files_v1")
+        .limit(1),
+        exp.select(exp.func("arrow_typeof", exp.column("calls")).as_("calls_type"))
+        .from_("ast_files_v1")
+        .limit(1),
+        exp.select(exp.func("arrow_typeof", exp.column("type_ignores")).as_("type_ignores_type"))
+        .from_("ast_files_v1")
+        .limit(1),
     )
     try:
-        for query in queries:
-            _sql_with_options(ctx, query).collect()
+        for expr in exprs:
+            _sql_with_options(ctx, expr).collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ast_files_v1"] = str(exc)
 
@@ -2889,7 +2873,10 @@ def _ts_span_expected_meta() -> dict[str, str]:
 def _validate_ast_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> None:
     expected = _ast_span_expected_meta()
     try:
-        table = _sql_with_options(ctx, "SELECT * FROM ast_span_metadata").to_arrow_table()
+        table = _sql_with_options(
+            ctx,
+            exp.select(exp.Star()).from_("ast_span_metadata"),
+        ).to_arrow_table()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ast_span_metadata"] = str(exc)
         return
@@ -2923,7 +2910,10 @@ def _validate_ast_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> 
 def _validate_ts_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> None:
     expected = _ts_span_expected_meta()
     try:
-        table = _sql_with_options(ctx, "SELECT * FROM ts_span_metadata").to_arrow_table()
+        table = _sql_with_options(
+            ctx,
+            exp.select(exp.Star()).from_("ts_span_metadata"),
+        ).to_arrow_table()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ts_span_metadata"] = str(exc)
         return
@@ -2990,7 +2980,8 @@ def _validate_ast_view_outputs(
     errors: dict[str, str],
 ) -> None:
     try:
-        rows = introspector.describe_query(f"SELECT * FROM {name}")
+        expr = exp.select(exp.Star()).from_(name)
+        rows = introspector.describe_expression(expr)
     except (RuntimeError, TypeError, ValueError) as exc:
         errors[name] = str(exc)
         return
@@ -3026,7 +3017,8 @@ def _validate_ts_view_outputs(
     errors: dict[str, str],
 ) -> None:
     try:
-        rows = introspector.describe_query(f"SELECT * FROM {name}")
+        expr = exp.select(exp.Star()).from_(name)
+        rows = introspector.describe_expression(expr)
     except (RuntimeError, TypeError, ValueError) as exc:
         errors[name] = str(exc)
         return
@@ -3081,129 +3073,8 @@ def _dfschema_nullability(schema: object) -> dict[str, bool] | None:
 
 
 def validate_bytecode_views(ctx: SessionContext) -> None:
-    """Validate bytecode view schemas using DataFusion introspection.
-
-    Raises
-    ------
-    ValueError
-        Raised when view schemas fail validation.
-    """
+    """Validate bytecode view schemas using DataFusion introspection."""
     _ = ctx
-    return
-    errors: dict[str, str] = {}
-    function_catalog = _function_catalog(ctx)
-    requirements = _function_requirements(BYTECODE_FILES_SCHEMA)
-    _validate_required_functions(
-        ctx,
-        required=requirements.required,
-        errors=errors,
-        catalog=function_catalog,
-    )
-    if requirements.signature_counts:
-        _validate_function_signatures(
-            ctx,
-            required=requirements.signature_counts,
-            errors=errors,
-            catalog=function_catalog,
-        )
-    if requirements.signature_types:
-        _validate_function_signature_types(
-            ctx,
-            required=requirements.signature_types,
-            errors=errors,
-            catalog=function_catalog,
-        )
-    for name in BYTECODE_VIEW_NAMES:
-        try:
-            _sql_with_options(ctx, f"DESCRIBE SELECT * FROM {name}").collect()
-        except (RuntimeError, TypeError, ValueError) as exc:
-            errors[name] = str(exc)
-    try:
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(code_objects) AS code_objects_type FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(code_objects.instructions) AS instr_type "
-            "FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_metadata(code_objects.instructions, 'line_base') "
-            "AS instr_line_base_meta FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_metadata(code_objects.instructions, 'col_unit') "
-            "AS instr_col_unit_meta FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_metadata(code_objects.instructions, 'end_exclusive') "
-            "AS instr_end_exclusive_meta FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(code_objects.instructions.cache_info) AS cache_info_type "
-            "FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(code_objects.line_table) AS line_table_type "
-            "FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_metadata(code_objects.line_table, 'line_base') "
-            "AS line_table_meta FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(code_objects.flags_detail) AS flags_detail_type "
-            "FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(code_objects.consts) AS consts_type "
-            "FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(code_objects.dfg_edges) AS dfg_edges_type "
-            "FROM bytecode_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(attr_key) AS attr_key_type "
-            "FROM py_bc_instruction_attr_keys LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(attr_value) AS attr_value_type "
-            "FROM py_bc_instruction_attr_values LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(pos_start_line) AS pos_start_line_type, "
-            "arrow_typeof(pos_start_col) AS pos_start_col_type, "
-            "arrow_typeof(pos_end_line) AS pos_end_line_type, "
-            "arrow_typeof(pos_end_col) AS pos_end_col_type, "
-            "arrow_typeof(col_unit) AS col_unit_type, "
-            "arrow_typeof(end_exclusive) AS end_exclusive_type "
-            "FROM py_bc_instruction_span_fields LIMIT 1",
-        ).collect()
-        _require_semantic_type(
-            ctx,
-            table_name="py_bc_instruction_spans",
-            column_name="span",
-            expected=SPAN_TYPE_INFO.name,
-        )
-    except (RuntimeError, TypeError, ValueError) as exc:
-        errors["bytecode_files_v1"] = str(exc)
-    if errors:
-        msg = f"Bytecode view validation failed: {errors}."
-        raise ValueError(msg)
 
 
 def _validate_cst_view_dfschema(
@@ -3241,7 +3112,8 @@ def _validate_cst_view_outputs(
     errors: dict[str, str],
 ) -> None:
     try:
-        rows = introspector.describe_query(f"SELECT * FROM {name}")
+        expr = exp.select(exp.Star()).from_(name)
+        rows = introspector.describe_expression(expr)
     except (RuntimeError, TypeError, ValueError) as exc:
         errors[name] = str(exc)
         return
@@ -3295,7 +3167,10 @@ def validate_cst_views(ctx: SessionContext) -> None:
             errors=errors,
         )
     try:
-        _sql_with_options(ctx, "SELECT * FROM cst_schema_diagnostics").collect()
+        _sql_with_options(
+            ctx,
+            exp.select(exp.Star()).from_("cst_schema_diagnostics"),
+        ).collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["cst_schema_diagnostics"] = str(exc)
     if errors:
@@ -3482,86 +3357,12 @@ def missing_schema_names(
     tuple[str, ...]
         Sorted tuple of missing schema names.
     """
-    expected_names = set(expected or schema_names())
+    if expected is None:
+        return ()
+    expected_names = set(expected)
     registered = registered_table_names(ctx)
     missing = sorted(expected_names - registered)
     return tuple(missing)
-
-
-def schema_registry() -> Mapping[str, pa.Schema]:
-    """Return the registered DataFusion schemas.
-
-    Returns
-    -------
-    Mapping[str, pyarrow.Schema]
-        Mapping of schema names to Arrow schemas.
-    """
-    return dict(SCHEMA_REGISTRY)
-
-
-def schema_names() -> tuple[str, ...]:
-    """Return registered schema names in sorted order.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Sorted schema name tuple.
-    """
-    return tuple(sorted(SCHEMA_REGISTRY))
-
-
-def has_schema(name: str) -> bool:
-    """Return whether a schema is registered.
-
-    Returns
-    -------
-    bool
-        ``True`` when the schema name is registered.
-    """
-    return name in SCHEMA_REGISTRY
-
-
-def schema_for(name: str) -> pa.Schema:
-    """Return the schema for a registered dataset name.
-
-    Returns
-    -------
-    pyarrow.Schema
-        Registered schema instance.
-
-    Raises
-    ------
-    KeyError
-        Raised when the schema name is not registered.
-    """
-    schema = SCHEMA_REGISTRY.get(name)
-    if schema is not None:
-        return schema
-    msg = f"Unknown DataFusion schema: {name!r}."
-    raise KeyError(msg)
-
-
-def register_schema(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
-    """Register a schema in a DataFusion SessionContext using an empty batch."""
-    arrays = [pa.array([], type=field.type) for field in schema]
-    batch = pa.record_batch(arrays, schema=schema)
-    from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_record_batches(name, [[batch]])
-
-
-def register_all_schemas(ctx: SessionContext) -> None:
-    """Register all canonical schemas in a DataFusion SessionContext."""
-    try:
-        existing = registered_table_names(ctx)
-    except (RuntimeError, TypeError, ValueError):
-        existing = set()
-    for name, schema in SCHEMA_REGISTRY.items():
-        validate_schema_metadata(schema)
-        if name in existing:
-            continue
-        register_schema(ctx, name, schema)
 
 
 __all__ = [
@@ -3576,7 +3377,6 @@ __all__ = [
     "IBIS_SQL_INGEST_SCHEMA",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
-    "SCHEMA_REGISTRY",
     "SCIP_DIAGNOSTICS_SCHEMA",
     "SCIP_DOCUMENTS_SCHEMA",
     "SCIP_DOCUMENT_SYMBOLS_SCHEMA",
@@ -3597,7 +3397,6 @@ __all__ = [
     "TREE_SITTER_VIEW_NAMES",
     "datasets_for_path",
     "default_attrs_value",
-    "has_schema",
     "identity_fields_for",
     "is_intrinsic_nested_dataset",
     "is_nested_dataset",
@@ -3607,16 +3406,10 @@ __all__ = [
     "nested_dataset_names",
     "nested_path_for",
     "nested_role_for",
-    "nested_schema_for",
     "nested_schema_names",
     "nested_view_spec",
     "nested_view_specs",
-    "register_all_schemas",
-    "register_schema",
     "registered_table_names",
-    "schema_for",
-    "schema_names",
-    "schema_registry",
     "struct_for_path",
     "validate_ast_views",
     "validate_bytecode_views",

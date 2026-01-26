@@ -26,8 +26,11 @@ from datafusion_engine.udf_runtime import (
 from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
 
 if TYPE_CHECKING:
+    from ibis.expr.types import Table
+
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+    from ibis_engine.sources import SourceToIbisOptions
     from sqlglot_tools.compat import Expression
 
 
@@ -41,6 +44,7 @@ class ViewNode:
     contract_builder: Callable[[pa.Schema], SchemaContract] | None = None
     required_udfs: tuple[str, ...] = ()
     sqlglot_ast: Expression | None = None
+    ibis_expr: Table | None = None
 
 
 class SchemaContractViolationError(ValueError):
@@ -93,6 +97,8 @@ def register_view_graph(
     ------
     ValueError
         Raised when a view node is missing a SQLGlot AST.
+    RuntimeError
+        Raised when Ibis view registration is requested without required sources.
     """
     resolved = options or ViewGraphOptions()
     runtime = runtime_options or ViewGraphRuntimeOptions()
@@ -100,15 +106,23 @@ def register_view_graph(
     materialized = _materialize_nodes(nodes, snapshot=snapshot)
     ordered = _topo_sort_nodes(materialized)
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime.runtime_profile)
-    import ibis
+    ibis_backend = None
+    register_ibis_view: Callable[[Table, SourceToIbisOptions], None] | None = None
+    source_to_ibis_options: type[SourceToIbisOptions] | None = None
+    if any(node.ibis_expr is not None for node in ordered):
+        import ibis
 
-    from datafusion_engine.sql_policy_engine import SQLPolicyProfile, render_for_execution
-    from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
+        ibis_backend = ibis.datafusion.connect(ctx)
+        from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
+        from ibis_engine.sources import SourceToIbisOptions
+        from ibis_engine.sources import register_ibis_view as register_ibis_view_func
 
-    backend = ibis.datafusion.connect(ctx)
-    register_ibis_udf_snapshot(snapshot)
+        source_to_ibis_options = SourceToIbisOptions
+        register_ibis_view = register_ibis_view_func
+        register_ibis_udf_snapshot(snapshot)
+    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+
     policy_profile = runtime.policy_profile or SQLPolicyProfile()
-    policy = policy_profile.to_sqlglot_policy()
     for node in ordered:
         _validate_deps(ctx, node, materialized)
         _validate_udf_calls(snapshot, node)
@@ -117,20 +131,29 @@ def register_view_graph(
         if node.sqlglot_ast is None:
             msg = f"View {node.name!r} missing SQLGlot AST."
             raise ValueError(msg)
-        if resolved.temporary:
-            df = node.builder(ctx)
+        df = node.builder(ctx)
+        if ibis_backend is not None and node.ibis_expr is not None and not resolved.temporary:
+            if register_ibis_view is None or source_to_ibis_options is None:
+                msg = "Ibis view registration requested without ibis sources."
+                raise RuntimeError(msg)
+            register_ibis_view(
+                node.ibis_expr,
+                options=source_to_ibis_options(
+                    backend=ibis_backend,
+                    name=node.name,
+                    ordering=None,
+                    overwrite=resolved.overwrite,
+                    runtime_profile=runtime.runtime_profile,
+                ),
+            )
+        else:
             adapter.register_view(
                 node.name,
                 df,
                 overwrite=resolved.overwrite,
-                temporary=True,
+                temporary=resolved.temporary,
             )
-            schema = _schema_from_df(df)
-        else:
-            sql_text = render_for_execution(node.sqlglot_ast, policy_profile)
-            expr = backend.sql(sql_text, dialect=policy.write_dialect)
-            backend.create_view(node.name, expr, overwrite=resolved.overwrite)
-            schema = _schema_from_table(ctx, node.name)
+        schema = _schema_from_df(df)
         if resolved.validate_schema and node.contract_builder is not None:
             contract = node.contract_builder(schema)
             _validate_schema_contract(ctx, contract, schema=schema)
@@ -253,10 +276,30 @@ def _schema_metadata_violations(
     expected = contract.schema_metadata or {}
     if not expected:
         return []
+    from arrowdsl.schema.abi import schema_fingerprint
+    from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
+
     actual = schema.metadata or {}
     violations: list[SchemaViolation] = []
+    expected_abi = expected.get(SCHEMA_ABI_FINGERPRINT_META)
+    if expected_abi is not None:
+        actual_abi = schema_fingerprint(schema).encode("utf-8")
+        if actual_abi != expected_abi:
+            violations.append(
+                SchemaViolation(
+                    violation_type=SchemaViolationType.METADATA_MISMATCH,
+                    table_name=contract.table_name,
+                    column_name=_metadata_key_label(SCHEMA_ABI_FINGERPRINT_META),
+                    expected=_format_metadata_value(expected_abi),
+                    actual=_format_metadata_value(actual_abi),
+                )
+            )
     for key, expected_value in expected.items():
+        if key == SCHEMA_ABI_FINGERPRINT_META:
+            continue
         actual_value = actual.get(key)
+        if actual_value is None:
+            continue
         if actual_value == expected_value:
             continue
         violations.append(

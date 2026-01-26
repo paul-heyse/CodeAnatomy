@@ -33,6 +33,7 @@ from ibis_engine.schema_utils import bind_expr_schema, ibis_schema_from_arrow, r
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from ibis_engine.registry import DatasetLocation
     from schema_spec.system import DeltaScanOptions
 
 DatabaseHint = tuple[str, str] | str | None
@@ -482,6 +483,112 @@ def _delta_table_alias(path: str) -> str:
     return f"delta_{digest}"
 
 
+def _delta_location_from_options(
+    path: str,
+    *,
+    resolved: IbisDeltaReadOptions,
+) -> DatasetLocation:
+    """Build a resolved Delta dataset location from read options.
+
+    Returns
+    -------
+    DatasetLocation
+        Resolved dataset location with Delta scan settings applied.
+    """
+    from ibis_engine.registry import (
+        DatasetLocation,
+        resolve_delta_log_storage_options,
+        resolve_delta_scan_options,
+    )
+
+    location = DatasetLocation(
+        path=path,
+        format="delta",
+        storage_options=dict(resolved.storage_options or {}),
+        delta_log_storage_options=dict(resolved.log_storage_options or {}),
+        delta_version=resolved.version,
+        delta_timestamp=resolved.timestamp,
+        delta_scan=resolved.delta_scan,
+    )
+    resolved_log_storage = resolve_delta_log_storage_options(location)
+    resolved_delta_scan = resolve_delta_scan_options(location)
+    if resolved_log_storage is None and resolved_delta_scan is None:
+        return location
+    return replace(
+        location,
+        delta_log_storage_options=dict(resolved_log_storage or {}),
+        delta_scan=resolved_delta_scan,
+    )
+
+
+def _delta_read_supported(
+    params: Mapping[str, inspect.Parameter],
+    *,
+    location: DatasetLocation,
+    resolved: IbisDeltaReadOptions,
+) -> bool:
+    requirements = (
+        (location.delta_scan is not None, "delta_scan"),
+        (bool(location.delta_log_storage_options), "log_storage_options"),
+        (location.delta_version is not None, "version"),
+        (location.delta_timestamp is not None, "timestamp"),
+        (resolved.options is not None, "options"),
+    )
+    return all(
+        not (required and param not in params) for required, param in requirements
+    )
+
+
+def _delta_read_kwargs(
+    *,
+    location: DatasetLocation,
+    resolved: IbisDeltaReadOptions,
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    if resolved.table_name is not None:
+        kwargs["table_name"] = resolved.table_name
+    if location.storage_options:
+        kwargs["storage_options"] = dict(location.storage_options)
+    if location.delta_log_storage_options:
+        kwargs["log_storage_options"] = dict(location.delta_log_storage_options)
+    if location.delta_scan is not None:
+        kwargs["delta_scan"] = location.delta_scan
+    if location.delta_version is not None:
+        kwargs["version"] = location.delta_version
+    if location.delta_timestamp is not None:
+        kwargs["timestamp"] = location.delta_timestamp
+    if resolved.options is not None:
+        kwargs["options"] = dict(resolved.options)
+    return kwargs
+
+
+def _try_read_delta_backend(
+    backend: BaseBackend,
+    path: str,
+    *,
+    location: DatasetLocation,
+    resolved: IbisDeltaReadOptions,
+) -> IbisTable | None:
+    """Attempt a backend-native Delta read when supported.
+
+    Returns
+    -------
+    ibis.expr.types.Table | None
+        Table expression when the backend supports native Delta reads.
+    """
+    read_delta = getattr(backend, "read_delta", None)
+    if not callable(read_delta):
+        return None
+    params = inspect.signature(read_delta).parameters
+    if not _delta_read_supported(params, location=location, resolved=resolved):
+        return None
+    kwargs = _delta_read_kwargs(location=location, resolved=resolved)
+    try:
+        return cast("IbisTable", read_delta(path, **_filter_kwargs(read_delta, kwargs)))
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
 def read_delta_ibis(
     backend: BaseBackend,
     path: str,
@@ -514,34 +621,21 @@ def read_delta_ibis(
 
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from datafusion_engine.io_adapter import DataFusionIOAdapter
-    from ibis_engine.registry import (
-        DatasetLocation,
-        resolve_delta_log_storage_options,
-        resolve_delta_scan_options,
-    )
 
     ctx = datafusion_context(backend)
     if not isinstance(ctx, SessionContext):
         msg = f"Backend {type(backend).__name__} does not expose a DataFusion context."
         raise TypeError(msg)
     name = resolved.table_name or _delta_table_alias(path)
-    location = DatasetLocation(
-        path=path,
-        format="delta",
-        storage_options=dict(resolved.storage_options or {}),
-        delta_log_storage_options=dict(resolved.log_storage_options or {}),
-        delta_version=resolved.version,
-        delta_timestamp=resolved.timestamp,
-        delta_scan=resolved.delta_scan,
+    location = _delta_location_from_options(path, resolved=resolved)
+    native = _try_read_delta_backend(
+        backend,
+        path,
+        location=location,
+        resolved=resolved,
     )
-    resolved_log_storage = resolve_delta_log_storage_options(location)
-    resolved_delta_scan = resolve_delta_scan_options(location)
-    if resolved_log_storage is not None or resolved_delta_scan is not None:
-        location = replace(
-            location,
-            delta_log_storage_options=dict(resolved_log_storage or {}),
-            delta_scan=resolved_delta_scan,
-        )
+    if native is not None:
+        return native
     if ctx.table_exist(name):
         adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
         adapter.deregister_table(name)

@@ -1,4 +1,4 @@
-"""Tests for incremental SQLGlot plan artifacts."""
+"""Tests for incremental view artifacts."""
 
 from __future__ import annotations
 
@@ -6,15 +6,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 import ibis
+import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from datafusion_engine.diagnostics import DiagnosticsSink
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from incremental.runtime import IncrementalRuntime
-from incremental.sqlglot_artifacts import record_sqlglot_plan_artifact
-
-_EXPECTED_ARTIFACT_COUNT = 2
+from incremental.sqlglot_artifacts import record_view_artifact
+from sqlglot_tools.optimizer import ast_policy_fingerprint
 
 
 @dataclass
@@ -51,18 +51,25 @@ def _runtime_with_sink() -> tuple[IncrementalRuntime, _DiagnosticsSink]:
     return runtime, sink
 
 
-def test_record_sqlglot_plan_artifact_payload_has_plan_hash() -> None:
-    """Ensure SQLGlot plan artifacts include stable plan hashes."""
-    runtime, sink = _runtime_with_sink()
+def test_record_view_artifact_payload_has_plan_hash() -> None:
+    """Ensure view artifacts yield stable plan hashes."""
+    runtime, _ = _runtime_with_sink()
     expr = ibis.memtable({"a": [1, 2]})
+    schema = pa.schema([pa.field("a", pa.int64(), nullable=True)])
 
-    record_sqlglot_plan_artifact(runtime, name="test_plan", expr=expr)
-    record_sqlglot_plan_artifact(runtime, name="test_plan", expr=expr)
+    artifact_one = record_view_artifact(runtime, name="test_plan", expr=expr, schema=schema)
+    artifact_two = record_view_artifact(runtime, name="test_plan", expr=expr, schema=schema)
 
-    artifacts = sink.artifacts_snapshot().get("incremental_sqlglot_plan_v1")
-    assert artifacts is not None
-    assert len(artifacts) == _EXPECTED_ARTIFACT_COUNT
-    payload = artifacts[0]
-    assert isinstance(payload.get("plan_hash"), str)
-    assert payload.get("plan_hash")
-    assert artifacts[0]["plan_hash"] == artifacts[1]["plan_hash"]
+    plan_hash_one = ast_policy_fingerprint(
+        ast_fingerprint=artifact_one.ast_fingerprint,
+        policy_hash=artifact_one.policy_hash,
+    )
+    plan_hash_two = ast_policy_fingerprint(
+        ast_fingerprint=artifact_two.ast_fingerprint,
+        policy_hash=artifact_two.policy_hash,
+    )
+    assert plan_hash_one
+    assert plan_hash_one == plan_hash_two
+    snapshot = runtime.profile.view_registry_snapshot()
+    assert snapshot is not None
+    assert len(snapshot) == 1

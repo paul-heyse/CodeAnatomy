@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
 
 from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.lineage import canonical_ast_fingerprint
-
-if TYPE_CHECKING:
-    from datafusion import SessionContext
-    from datafusion.dataframe import DataFrame
 
 
 def select_all(table: str) -> Expression:
@@ -60,40 +55,6 @@ def relation_output_sql() -> Expression:
     return build_relation_output_sql()
 
 
-def sqlglot_view_builder(
-    expr: Expression,
-    *,
-    dialect: str = "datafusion",
-) -> Callable[[SessionContext], DataFrame]:
-    """Return a DataFusion builder that executes a SQLGlot AST.
-
-    Parameters
-    ----------
-    expr
-        SQLGlot expression representing the view.
-    dialect
-        SQL dialect used for SQL emission.
-
-    Returns
-    -------
-    Callable[[SessionContext], DataFrame]
-        Builder that executes the SQL in a DataFusion session.
-    """
-    sql = expr.sql(dialect=dialect)
-
-    def _build(ctx: SessionContext) -> DataFrame:
-        import ibis
-
-        backend = ibis.datafusion.connect(ctx)
-        df = backend.raw_sql(expr)
-        if not isinstance(df, DataFrame):
-            msg = f"SQLGlot AST execution did not return a DataFusion DataFrame for {sql!r}."
-            raise TypeError(msg)
-        return df
-
-    return _build
-
-
 def view_sql(expr: Expression, *, dialect: str = "datafusion") -> str:
     """Return deterministic SQL for a SQLGlot expression.
 
@@ -119,7 +80,6 @@ def view_fingerprint(expr: Expression) -> str:
 __all__ = [
     "relation_output_sql",
     "select_all",
-    "sqlglot_view_builder",
     "union_all",
     "view_fingerprint",
     "view_sql",

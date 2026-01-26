@@ -168,15 +168,15 @@ class StateStore:
         """
         return self.metadata_dir() / "incremental_pruning_metrics"
 
-    def sqlglot_artifacts_path(self) -> Path:
-        """Return the Delta path for SQLGlot plan artifacts.
+    def view_artifacts_path(self) -> Path:
+        """Return the Delta path for view artifact snapshots.
 
         Returns
         -------
         Path
-            SQLGlot plan artifact Delta table path.
+            View artifact Delta table path.
         """
-        return self.metadata_dir() / "incremental_sqlglot_plan_artifacts"
+        return self.metadata_dir() / "incremental_view_artifacts"
 
 
 __all__ = ["StateStore"]

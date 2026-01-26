@@ -16,7 +16,7 @@ from ibis_engine.io_bridge import (
     write_ibis_dataset_delta,
 )
 from incremental.delta_context import read_delta_table_via_facade
-from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
+from sqlglot_tools.optimizer import ast_policy_fingerprint, sqlglot_policy_snapshot_for
 from storage.deltalake import delta_table_version, enable_delta_features
 from storage.ipc import payload_hash
 
@@ -255,14 +255,12 @@ def _incremental_plan_hashes(
     state_store: StateStore | None,
 ) -> dict[str, str]:
     runtime = context.runtime
-    sink = runtime.profile.diagnostics_sink
-    if sink is not None:
-        artifacts = sink.artifacts_snapshot().get("incremental_sqlglot_plan_v1")
-        if artifacts:
-            return _plan_hashes_from_artifacts(artifacts)
+    artifacts = runtime.profile.view_registry_snapshot()
+    if artifacts:
+        return _plan_hashes_from_artifacts(artifacts)
     if state_store is None:
         return {}
-    path = state_store.sqlglot_artifacts_path()
+    path = state_store.view_artifacts_path()
     if not path.exists():
         return {}
     storage = context.storage
@@ -284,10 +282,18 @@ def _plan_hashes_from_artifacts(
     resolved: dict[str, str] = {}
     for payload in artifacts:
         name = payload.get("name")
-        plan_hash = payload.get("plan_hash")
-        if not name or not plan_hash:
+        plan_fingerprint = payload.get("plan_fingerprint") or payload.get("plan_hash")
+        if name and plan_fingerprint:
+            resolved[str(name)] = str(plan_fingerprint)
             continue
-        resolved[str(name)] = str(plan_hash)
+        ast_fingerprint = payload.get("ast_fingerprint")
+        policy_hash = payload.get("policy_hash")
+        if not name or not ast_fingerprint or not policy_hash:
+            continue
+        resolved[str(name)] = ast_policy_fingerprint(
+            ast_fingerprint=str(ast_fingerprint),
+            policy_hash=str(policy_hash),
+        )
     return resolved
 
 

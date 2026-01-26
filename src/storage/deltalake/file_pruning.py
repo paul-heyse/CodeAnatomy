@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,6 +12,7 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.introspection import invalidate_introspection_cache
+from sqlglot_tools.compat import Expression, exp
 
 
 @dataclass(frozen=True)
@@ -158,15 +160,15 @@ def evaluate_filters_against_index(
         adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
         adapter.register_record_batches(temp_table_name, [list(index.to_batches())])
 
-        # Construct and execute filter query
-        sql = _build_filter_query(temp_table_name, policy)
+        # Construct and execute filter expression
+        expr = _build_filter_expr(temp_table_name, policy)
         from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
         from datafusion_engine.execution_facade import DataFusionExecutionFacade
         from datafusion_engine.sql_options import sql_options_for_profile
 
         facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
         plan = facade.compile(
-            sql,
+            expr,
             options=DataFusionCompileOptions(
                 sql_options=sql_options_for_profile(None),
                 sql_policy=DataFusionSqlPolicy(),
@@ -273,8 +275,8 @@ def evaluate_and_select_files(
     )
 
 
-def _build_filter_query(table_name: str, policy: FilePruningPolicy) -> str:
-    """Build SQL filter query for file index.
+def _build_filter_expr(table_name: str, policy: FilePruningPolicy) -> Expression:
+    """Build SQLGlot filter expression for file index.
 
     Parameters
     ----------
@@ -285,50 +287,56 @@ def _build_filter_query(table_name: str, policy: FilePruningPolicy) -> str:
 
     Returns
     -------
-    str
-        SQL query string.
+    sqlglot.expressions.Expression
+        SQLGlot select expression.
     """
-    predicate = policy.to_sql_predicate()
+    predicate = _combine_predicates((*policy.partition_filters, *policy.stats_filters))
+    select_expr = exp.select(exp.Star()).from_(table_name)
     if predicate is None:
-        return f"SELECT * FROM {table_name}"
+        return select_expr
+    return select_expr.where(predicate)
 
-    # For partition filters, we need to extract from the map
-    # For now, use a simple approach that works with DataFusion
-    partition_predicates = _build_partition_predicates(policy.partition_filters)
 
-    if partition_predicates and policy.stats_filters:
-        combined = (
-            partition_predicates + " AND " + " AND ".join(f"({f})" for f in policy.stats_filters)
+def _combine_predicates(filters: Sequence[str]) -> Expression | None:
+    predicates: list[Expression] = []
+    for raw in filters:
+        text = str(raw).strip()
+        if not text:
+            continue
+        predicates.append(_parse_predicate(text))
+    if not predicates:
+        return None
+    if len(predicates) == 1:
+        return predicates[0]
+    return exp.and_(*predicates)
+
+
+def _parse_predicate(predicate: str) -> Expression:
+    from sqlglot.errors import ParseError
+
+    from datafusion_engine.compile_options import DataFusionCompileOptions
+    from sqlglot_tools.optimizer import (
+        StrictParseOptions,
+        parse_sql_strict,
+        register_datafusion_dialect,
+    )
+
+    register_datafusion_dialect()
+    try:
+        expr = parse_sql_strict(
+            f"SELECT * FROM __file_index WHERE {predicate}",
+            dialect=DataFusionCompileOptions().dialect,
+            options=StrictParseOptions(error_level=None),
         )
-    elif partition_predicates:
-        combined = partition_predicates
-    elif policy.stats_filters:
-        combined = " AND ".join(f"({f})" for f in policy.stats_filters)
-    else:
-        combined = "TRUE"
-
-    return f"SELECT * FROM {table_name} WHERE {combined}"
-
-
-def _build_partition_predicates(partition_filters: list[str]) -> str:
-    """Build partition filter predicates.
-
-    For now, this is a simplified implementation that assumes
-    partition filters are already in a compatible SQL format.
-
-    Parameters
-    ----------
-    partition_filters : list[str]
-        List of partition filter predicates.
-
-    Returns
-    -------
-    str
-        Combined partition predicates.
-    """
-    if not partition_filters:
-        return ""
-    return " AND ".join(f"({f})" for f in partition_filters)
+    except (ParseError, TypeError, ValueError) as exc:
+        msg = f"Failed to parse pruning predicate: {predicate!r}."
+        raise ValueError(msg) from exc
+    where = expr.args.get("where")
+    condition = getattr(where, "this", None)
+    if not isinstance(condition, Expression):
+        msg = f"Failed to resolve pruning predicate expression: {predicate!r}."
+        raise TypeError(msg)
+    return condition
 
 
 def _parse_partition_filters(filters: list[str]) -> dict[str, str]:

@@ -17,11 +17,15 @@
 5. **Schema-as-contract** — derived schema + metadata, with nested types as the ABI.  
 6. **Deterministic artifacts** — serialized AST + policy hash drive cache keys, diffs, and invalidations.
 
+Status legend: [x] done, [~] partial, [ ] not started.
+
 ---
 
 # Scope 1 — Unified SQL policy lane (single canonical AST pipeline)
 
 **Intent**: Merge `sql_policy_engine` and `sqlglot_tools/optimizer` into one **canonical policy engine** that always applies strict parsing, templating hygiene, dialect‑compat transforms, qualification, canonicalization, and deterministic AST serialization.
+
+Status: Completed (canonical policy lane centralized in `sql_policy_engine`, compile pipeline aligned, external SQL sanitized, legacy sql_bridge removed).
 
 ### Representative pattern
 
@@ -51,17 +55,19 @@ def compile_policy(expr: Expression, *, schema: SchemaMapping, profile: SQLPolic
 - Any internal SQL compilation helpers that bypass the policy engine.
 
 ### Implementation checklist
-- [ ] Create a **single** canonical policy entrypoint used by all compile paths.  
-- [ ] Centralize strict parsing + templated SQL sanitization.  
-- [ ] Standardize transform lane (QUALIFY elimination, UNNEST normalization, join rewrites, move CTEs to top level).  
-- [ ] Emit deterministic AST serde + policy hash; use as cache keys.  
-- [ ] Remove policy duplication across `sql_policy_engine` and `sqlglot_tools/optimizer`.  
+- [x] Create a **single** canonical policy entrypoint used by all compile paths.  
+- [x] Centralize strict parsing + templated SQL sanitization.  
+- [x] Standardize transform lane (QUALIFY elimination, UNNEST normalization, join rewrites, move CTEs to top level).  
+- [x] Emit deterministic AST serde + policy hash; use as cache keys.  
+- [x] Remove policy duplication across `sql_policy_engine` and `sqlglot_tools/optimizer`.  
 
 ---
 
 # Scope 2 — AST artifact registry (deterministic compilation artifacts)
 
 **Intent**: Persist a stable AST artifact bundle at view registration time for **cache keys, invalidations, lineage, and diffs**.
+
+Status: Partial (view artifacts recorded for ViewGraph registrations; ViewSpec registration still records DataFrame-derived artifacts and needs AST-only artifacts everywhere).
 
 ### Representative pattern
 
@@ -90,16 +96,19 @@ class ViewArtifact:
 - Any ad‑hoc AST fingerprinting paths once the artifact registry is canonical.
 
 ### Implementation checklist
-- [ ] Create `ViewArtifact` and store it during view registration.  
-- [ ] Update incremental invalidations to use artifact payloads.  
-- [ ] Derive cache keys from `{ast_fingerprint + policy_hash}` only.  
-- [ ] Expose artifact bundles as diagnostics payloads (consistent schema).  
+- [x] Create `ViewArtifact` and store it during view registration.  
+- [x] Update incremental invalidations to use artifact payloads.  
+- [x] Derive cache keys from `{ast_fingerprint + policy_hash}` only.  
+- [~] Expose artifact bundles as diagnostics payloads (consistent schema).  
+- [ ] Eliminate `build_view_artifact_from_dataframe` for ViewSpec registration; require AST-only artifacts.  
 
 ---
 
 # Scope 3 — Lineage + semantic diff hardening
 
 **Intent**: Use SQLGlot scope caching and stable matchings for diffs; add a semantic equivalence test lane for rewrite safety.
+
+Status: Completed (scope caching + diff seeding done; executor equivalence tests added; diff classification hardened).
 
 ### Representative pattern
 
@@ -121,16 +130,18 @@ lineage = lineage(col, scope=scope, copy=False)
 - None (harden, don’t remove).
 
 ### Implementation checklist
-- [ ] Cache scope per AST serde hash + schema map hash.  
-- [ ] Seed diff matchings to stabilize large AST diffs.  
-- [ ] Add SQLGlot executor‑based equivalence tests for rewrites.  
-- [ ] Harden diff classifications for window/joins/unnest cases.  
+- [x] Cache scope per AST serde hash + schema map hash.  
+- [x] Seed diff matchings to stabilize large AST diffs.  
+- [x] Add SQLGlot executor‑based equivalence tests for rewrites.  
+- [x] Harden diff classifications for window/joins/unnest cases.  
 
 ---
 
 # Scope 4 — UDF platform v2 (registry + docs + SQL-defined wiring)
 
 **Intent**: Rust UDF snapshot drives **all** UDF surfaces, including docs and named args; add `CREATE FUNCTION` factory and planner rewrites.
+
+Status: Completed (snapshot docs + parameter names wired; function factory + expr planners driven by snapshot; metadata sources unified).
 
 ### Representative pattern
 
@@ -153,17 +164,19 @@ register_docs(snapshot)  # emits DataFusion Documentation + parameter names
 - Static operator maps or manual UDF lists once snapshot‑driven.
 
 ### Implementation checklist
-- [ ] Add parameter names + docs to the snapshot surface.  
-- [ ] Emit DataFusion `Documentation` for SHOW FUNCTIONS parity.  
-- [ ] Add `FunctionFactory` for SQL macro definitions (simplify rewrites).  
-- [ ] Add `ExprPlanner` / `FunctionRewrite` for custom operators.  
-- [ ] Remove parallel UDF metadata sources.  
+- [x] Add parameter names + docs to the snapshot surface.  
+- [x] Emit DataFusion `Documentation` for SHOW FUNCTIONS parity.  
+- [x] Add `FunctionFactory` for SQL macro definitions (simplify rewrites).  
+- [x] Add `ExprPlanner` / `FunctionRewrite` for custom operators.  
+- [x] Remove parallel UDF metadata sources.  
 
 ---
 
 # Scope 5 — Delta IO control plane (single Delta scan profile)
 
 **Intent**: Consolidate Delta scan/log options and enforce Delta TableProvider + CDF provider usage across all read paths.
+
+Status: Completed (central Delta scan config + log storage resolution; Delta providers enforced; object store registration standardized).
 
 ### Representative pattern
 
@@ -190,16 +203,18 @@ def build_delta_scan_config(location: DatasetLocation) -> DeltaScanConfig:
 - Any parquet‑fallback path used for Delta tables once providers are enforced.
 
 ### Implementation checklist
-- [ ] Centralize DeltaScanConfig + log storage option resolution.  
-- [ ] Enforce Delta TableProvider for Delta datasets everywhere.  
-- [ ] Use CDF provider for incremental when configured.  
-- [ ] Standardize object store registration (once per runtime).  
+- [x] Centralize DeltaScanConfig + log storage option resolution.  
+- [x] Enforce Delta TableProvider for Delta datasets everywhere.  
+- [x] Use CDF provider for incremental when configured.  
+- [x] Standardize object store registration (once per runtime).  
 
 ---
 
 # Scope 6 — Ibis as canonical view surface
 
 **Intent**: View registration and IO must flow through Ibis to preserve IR‑first semantics and unify policy enforcement.
+
+Status: Partial (ViewGraph registration is Ibis-first; ViewSpec registration in runtime still executes via DataFusion + DataFusionIOAdapter).
 
 ### Representative pattern
 
@@ -221,15 +236,18 @@ backend.create_view(name, expr, overwrite=True)
 - Direct internal `ctx.sql` execution paths for view creation.
 
 ### Implementation checklist
-- [ ] Use Ibis `create_view` for all view registrations.  
-- [ ] Use Ibis `read_delta` / `to_delta` for Delta IO surfaces.  
-- [ ] Ensure view DAG registration uses Ibis IR and captures AST artifacts.  
+- [~] Use Ibis `create_view` for all view registrations.  
+- [x] Use Ibis `read_delta` / `to_delta` for Delta IO surfaces.  
+- [~] Ensure view DAG registration uses Ibis IR and captures AST artifacts.  
+- [ ] Retire or refactor `schema_spec.ViewSpec.register` so runtime registration flows through Ibis.  
 
 ---
 
 # Scope 7 — Schema ABI enforcement (nested types as contract)
 
 **Intent**: Make nested struct/map/union shapes the canonical ABI for all view outputs; enforce via schema contracts.
+
+Status: Partial (ABI enforcement exists in schema contracts; static ViewSpec schemas still drive registry/nested view validation).
 
 ### Representative pattern
 
@@ -250,15 +268,18 @@ validate_schema_contract(contract, ctx)
 - Legacy schema helpers that bypass Arrow metadata or produce ad‑hoc layouts.
 
 ### Implementation checklist
-- [ ] Standardize nested ABI shapes (map/struct/union) for all views.  
-- [ ] Remove static view schema registries (view schema derived).  
-- [ ] Enforce ABI in schema contracts during view registration.  
+- [x] Standardize nested ABI shapes (map/struct/union) for all views.  
+- [~] Remove static view schema registries (view schema derived).  
+- [~] Enforce ABI in schema contracts during view registration.  
+- [ ] Replace ViewSpec schema storage with schema-contract-derived validation only.  
 
 ---
 
 # Scope 8 — Programmatic scheduling across views + datasets
 
 **Intent**: Use rustworkx DAG across **views + datasets** with deterministic ordering and incremental rebuild logic.
+
+Status: Completed (graph builder seeds dataset evidence nodes; incremental rebuild uses impact subgraph).
 
 ### Representative pattern
 
@@ -277,15 +298,17 @@ order = rx.lexicographical_topological_sort(graph, key=lambda n: n.name)
 - Any remaining static task catalogs or manual ordering logic.
 
 ### Implementation checklist
-- [ ] Build DAG from view specs + dataset specs.  
-- [ ] Deterministic topo‑sort with lexicographic tie‑breaks.  
-- [ ] Incremental rebuild via ancestor/descendant sets.  
+- [x] Build DAG from view specs + dataset specs.  
+- [x] Deterministic topo‑sort with lexicographic tie‑breaks.  
+- [x] Incremental rebuild via ancestor/descendant sets.  
 
 ---
 
 # Scope 9 — SQL ingress isolation + templating hygiene
 
 **Intent**: External SQL ingress is allowed; internal SQL must remain AST‑first. Add templating sanitization before parse.
+
+Status: Completed (external SQL sanitized; internal execution is AST-first; internal SQL builders removed).
 
 ### Representative pattern
 
@@ -306,15 +329,17 @@ def sanitize_external_sql(sql: str) -> str:
 - Internal SQL execution helpers not strictly for external ingress.
 
 ### Implementation checklist
-- [ ] Templated SQL preprocessing before parse.  
-- [ ] External SQL only; internal paths compile AST.  
-- [ ] Eliminate remaining internal SQL builders (DESCRIBE/SHOW).  
+- [x] Templated SQL preprocessing before parse.  
+- [x] External SQL only; internal paths compile AST.  
+- [x] Eliminate remaining internal SQL builders (DESCRIBE/SHOW).  
 
 ---
 
 # Scope 10 — Diagnostics + parity gates (AST/UDF/schema)
 
 **Intent**: Diagnostics become deterministic and policy‑aware; parity gates are enforced at runtime initialization.
+
+Status: Completed (policy hash + AST fingerprints recorded; parity enforced; diagnostics schemas aligned).
 
 ### Representative pattern
 
@@ -335,9 +360,9 @@ if report.missing_in_information_schema:
 - None (harden, don’t remove).
 
 ### Implementation checklist
-- [ ] Ensure diagnostics payloads include AST policy hash + serde fingerprint.  
-- [ ] Enforce parity at runtime init (UDF + schema).  
-- [ ] Standardize diagnostics schemas for plan artifacts.  
+- [x] Ensure diagnostics payloads include AST policy hash + serde fingerprint.  
+- [x] Enforce parity at runtime init (UDF + schema).  
+- [x] Standardize diagnostics schemas for plan artifacts.  
 
 ---
 
@@ -347,28 +372,45 @@ These cannot be safely removed until the unified architecture is fully deployed 
 
 ### Deferred deletion list
 - `src/ibis_engine/expr_compiler.py` (manual operator maps)  
-- `src/datafusion_engine/parameterized_execution.py` (if all execution is AST‑first + params)  
-- `src/ibis_engine/sql_bridge.py` (if external SQL ingress is fully isolated elsewhere)  
-- `src/arrowdsl/schema/serialization.py` (if schema contracts fully move to metadata)  
+- `src/datafusion_engine/parameterized_execution.py` (removed from repo)  
+- `src/ibis_engine/sql_bridge.py` (removed from repo)  
+- `src/arrowdsl/schema/serialization.py` (removed from repo)  
 - Any remaining static view schema registries or column maps  
 - Any remaining plan builder modules still referenced by orchestration
 
 ### Checklist
-- [ ] All view registration flows through Ibis.  
-- [ ] All internal SQL execution removed (AST‑only).  
-- [ ] Delta TableProvider + CDF enforced everywhere.  
+- [~] All view registration flows through Ibis.  
+- [x] All internal SQL execution removed (AST‑only).  
+- [x] Delta TableProvider + CDF enforced everywhere.  
 - [ ] Schema ABI enforcement complete (no static view schema registries remain).  
-- [ ] UDF snapshot parity checks pass with zero drift.  
+- [x] UDF snapshot parity checks pass with zero drift.  
 
 ---
 
 ## Final State Acceptance Criteria
 
-- [ ] **AST is the single canonical artifact**; SQL text is debug only.  
-- [ ] **One policy lane** (no duplicated canonicalization or transform logic).  
-- [ ] **Rust UDF snapshot** drives Ibis + DataFusion + docs + parity.  
-- [ ] **All pipelines are view‑defined** and DAG‑scheduled programmatically.  
-- [ ] **Delta TableProvider + CDF** is the default for Delta IO.  
-- [ ] **Schema contracts** validate nested ABI shapes end‑to‑end.  
-- [ ] **Deterministic artifacts** (serde payload + policy hash) power cache/diff.  
+- [~] **AST is the single canonical artifact**; SQL text is debug only.  
+- [x] **One policy lane** (no duplicated canonicalization or transform logic).  
+- [x] **Rust UDF snapshot** drives Ibis + DataFusion + docs + parity.  
+- [x] **All pipelines are view‑defined** and DAG‑scheduled programmatically.  
+- [x] **Delta TableProvider + CDF** is the default for Delta IO.  
+- [~] **Schema contracts** validate nested ABI shapes end‑to‑end.  
+- [~] **Deterministic artifacts** (serde payload + policy hash) power cache/diff.  
 
+---
+
+## Remaining scope identified from code review (Jan 26, 2026)
+
+1. **Finish Ibis-only view registration for all ViewSpecs**  
+   - `schema_spec/view_specs.py` uses `DataFusionExecutionFacade` + `DataFusionIOAdapter` in `ViewSpec.register`.  
+   - `datafusion_engine/runtime.py` calls `ViewSpec.register` via `register_view_specs`.  
+   - Target: route ViewSpec-based registrations through Ibis `create_view` (or remove ViewSpec registration path entirely in favor of ViewGraph).  
+
+2. **Remove static ViewSpec schema storage from registry/nested views**  
+   - `schema_spec/view_specs.py` stores schema snapshots and validates against them.  
+   - `datafusion_engine/schema_registry.py` and `datafusion_engine/view_registry.py` still build ViewSpecs for nested/registry views.  
+   - Target: derive schemas from Arrow + schema contracts only, and validate via ABI contracts (no static schema registry).  
+
+3. **AST-only artifacts for all view registrations**  
+   - `datafusion_engine/runtime.py` uses `build_view_artifact_from_dataframe` when recording ViewSpecs.  
+   - Target: ensure every view registration supplies a SQLGlot AST and records `ViewArtifact` from AST + policy hash (no DataFrame-only fallback).  

@@ -12,18 +12,22 @@ from relspec.rustworkx_schedule import TaskSchedule, schedule_tasks
 if TYPE_CHECKING:
     from datafusion_engine.view_graph_registry import ViewNode
     from relspec.evidence import EvidenceCatalog
+    from schema_spec.system import DatasetSpec
 
 
 @tag(layer="graph", artifact="task_graph", kind="graph")
-def task_graph(view_nodes: tuple[ViewNode, ...]) -> TaskGraph:
-    """Build the task graph from view nodes.
+def task_graph(
+    view_nodes: tuple[ViewNode, ...],
+    dataset_specs: tuple[DatasetSpec, ...] | None = None,
+) -> TaskGraph:
+    """Build the task graph from view nodes and optional dataset specs.
 
     Returns
     -------
     TaskGraph
         Task graph derived from inferred dependencies.
     """
-    return build_task_graph_from_views(view_nodes)
+    return build_task_graph_from_views(view_nodes, datasets=dataset_specs)
 
 
 @tag(layer="graph", artifact="task_schedule", kind="schedule")

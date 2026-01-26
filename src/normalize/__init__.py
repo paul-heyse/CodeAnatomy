@@ -14,19 +14,19 @@ if TYPE_CHECKING:
         TYPE_ID_SPEC,
         hash_spec,
     )
-    from datafusion_engine.schema_registry import (
-        DIAG_DETAIL_STRUCT,
-        DIAG_DETAILS_TYPE,
-        DIAG_TAGS_TYPE,
-    )
     from normalize.contracts import (
         NORMALIZE_EVIDENCE_NAME,
         normalize_evidence_contract,
         normalize_evidence_schema,
         normalize_evidence_spec,
     )
-    from normalize.dataset_fields import field, field_name, fields
+    from normalize.dataset_builders import field, field_name, fields
     from normalize.dataset_specs import dataset_contract_schema
+    from normalize.diagnostic_types import (
+        DIAG_DETAIL_STRUCT,
+        DIAG_DETAILS_TYPE,
+        DIAG_TAGS_TYPE,
+    )
     from normalize.ibis_api import (
         DiagnosticsSources,
         add_ast_byte_spans,
@@ -62,10 +62,10 @@ if TYPE_CHECKING:
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DEF_USE_EVENT_ID_SPEC": ("datafusion_engine.normalize_ids", "DEF_USE_EVENT_ID_SPEC"),
-    "DIAG_DETAILS_TYPE": ("datafusion_engine.schema_registry", "DIAG_DETAILS_TYPE"),
-    "DIAG_DETAIL_STRUCT": ("datafusion_engine.schema_registry", "DIAG_DETAIL_STRUCT"),
+    "DIAG_DETAILS_TYPE": ("normalize.diagnostic_types", "DIAG_DETAILS_TYPE"),
+    "DIAG_DETAIL_STRUCT": ("normalize.diagnostic_types", "DIAG_DETAIL_STRUCT"),
     "DIAG_ID_SPEC": ("datafusion_engine.normalize_ids", "DIAG_ID_SPEC"),
-    "DIAG_TAGS_TYPE": ("datafusion_engine.schema_registry", "DIAG_TAGS_TYPE"),
+    "DIAG_TAGS_TYPE": ("normalize.diagnostic_types", "DIAG_TAGS_TYPE"),
     "NORMALIZE_EVIDENCE_NAME": ("normalize.contracts", "NORMALIZE_EVIDENCE_NAME"),
     "REACH_EDGE_ID_SPEC": ("datafusion_engine.normalize_ids", "REACH_EDGE_ID_SPEC"),
     "TYPE_EXPR_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_EXPR_ID_SPEC"),
@@ -93,9 +93,9 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "dataset_spec": ("normalize.registry_runtime", "dataset_spec"),
     "dataset_specs": ("normalize.registry_runtime", "dataset_specs"),
     "dataset_table_spec": ("normalize.registry_runtime", "dataset_table_spec"),
-    "field": ("normalize.dataset_fields", "field"),
-    "field_name": ("normalize.dataset_fields", "field_name"),
-    "fields": ("normalize.dataset_fields", "fields"),
+    "field": ("normalize.dataset_builders", "field"),
+    "field_name": ("normalize.dataset_builders", "field_name"),
+    "fields": ("normalize.dataset_builders", "fields"),
     "hash_spec": ("datafusion_engine.normalize_ids", "hash_spec"),
     "normalize_cst_callsites_spans": (
         "normalize.ibis_api",

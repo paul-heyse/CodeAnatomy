@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -138,6 +139,15 @@ def write_cdf_cursor_snapshot(
     return result.path
 
 
+@dataclass(frozen=True)
+class ArtifactWriteContext:
+    """Shared write configuration for incremental artifacts."""
+
+    runtime: IncrementalRuntime
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+
+
 def write_incremental_artifacts(
     state_store: StateStore,
     *,
@@ -153,32 +163,76 @@ def write_incremental_artifacts(
         Mapping of artifact names to Delta table paths.
     """
     updated: dict[str, str] = {}
+    context = ArtifactWriteContext(
+        runtime=runtime,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
     artifact_map = {
         "incremental_file_pruning_v1": state_store.pruning_metrics_path(),
-        "incremental_sqlglot_plan_v1": state_store.sqlglot_artifacts_path(),
     }
     for name, path in artifact_map.items():
         result = _write_artifact_table(
             name=name,
             path=path,
-            runtime=runtime,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
+            context=context,
         )
         if result is not None:
             updated[name] = result
+    view_snapshot = runtime.profile.view_registry_snapshot()
+    if view_snapshot:
+        view_path = state_store.view_artifacts_path()
+        result = _write_artifact_rows(
+            name="incremental_view_artifacts_v1",
+            path=view_path,
+            rows=view_snapshot,
+            context=context,
+        )
+        if result is not None:
+            updated["incremental_view_artifacts_v1"] = result
     return updated
+
+
+def _write_artifact_rows(
+    *,
+    name: str,
+    path: Path,
+    rows: Sequence[Mapping[str, object]],
+    context: ArtifactWriteContext,
+) -> str | None:
+    if not rows:
+        return None
+    table = _artifacts_to_table(rows)
+    result = write_ibis_dataset_delta(
+        table,
+        str(path),
+        options=IbisDatasetWriteOptions(
+            execution=context.runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata={"artifact_name": name},
+                storage_options=context.storage_options,
+                log_storage_options=context.log_storage_options,
+            ),
+        ),
+    )
+    enable_delta_features(
+        result.path,
+        storage_options=context.storage_options,
+        log_storage_options=context.log_storage_options,
+    )
+    return result.path
 
 
 def _write_artifact_table(
     *,
     name: str,
     path: Path,
-    runtime: IncrementalRuntime,
-    storage_options: StorageOptions | None,
-    log_storage_options: StorageOptions | None,
+    context: ArtifactWriteContext,
 ) -> str | None:
-    sink = runtime.profile.diagnostics_sink
+    sink = context.runtime.profile.diagnostics_sink
     if sink is None:
         return None
     artifacts = sink.artifacts_snapshot().get(name)
@@ -189,21 +243,21 @@ def _write_artifact_table(
         table,
         str(path),
         options=IbisDatasetWriteOptions(
-            execution=runtime.ibis_execution(),
+            execution=context.runtime.ibis_execution(),
             writer_strategy="datafusion",
             delta_options=IbisDeltaWriteOptions(
                 mode="overwrite",
                 schema_mode="overwrite",
                 commit_metadata={"artifact_name": name},
-                storage_options=storage_options,
-                log_storage_options=log_storage_options,
+                storage_options=context.storage_options,
+                log_storage_options=context.log_storage_options,
             ),
         ),
     )
     enable_delta_features(
         result.path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
+        storage_options=context.storage_options,
+        log_storage_options=context.log_storage_options,
     )
     return result.path
 

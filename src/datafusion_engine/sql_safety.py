@@ -201,8 +201,9 @@ def execute_with_policy(
     DataFrame
         Query result.
     """
+    sanitized = sanitize_external_sql(sql)
     return ctx.sql_with_options(
-        sql,
+        sanitized,
         policy.to_sql_options(),
     )
 
@@ -237,9 +238,10 @@ def validate_sql_safety(
     from sqlglot_tools.optimizer import parse_sql_strict
 
     violations: list[str] = []
+    sanitized = sanitize_external_sql(sql)
 
     try:
-        ast = parse_sql_strict(sql, dialect=dialect)
+        ast = parse_sql_strict(sanitized, dialect=dialect)
     except (ParseError, SqlglotError, ValueError, TypeError) as e:
         parse_error = f"Parse error: {e}"
         violations.append(parse_error)
@@ -268,6 +270,19 @@ def validate_sql_safety(
             violations.append(f"External location detected: {path[:50]}...")
 
     return violations
+
+
+def sanitize_external_sql(sql: str, *, preserve_params: bool = True) -> str:
+    """Sanitize templated SQL prior to external ingress parsing.
+
+    Returns
+    -------
+    str
+        Sanitized SQL string safe for parsing.
+    """
+    from sqlglot_tools.optimizer import sanitize_templated_sql
+
+    return sanitize_templated_sql(sql, preserve_params=preserve_params)
 
 
 @dataclass

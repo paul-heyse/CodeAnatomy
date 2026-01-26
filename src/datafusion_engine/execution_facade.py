@@ -354,6 +354,7 @@ class DataFusionExecutionFacade:
                 raise ValueError(msg)
             from sqlglot.errors import ParseError
 
+            from datafusion_engine.sql_safety import sanitize_external_sql
             from sqlglot_tools.optimizer import (
                 StrictParseOptions,
                 parse_sql_strict,
@@ -361,9 +362,10 @@ class DataFusionExecutionFacade:
             )
 
             try:
+                sanitized = sanitize_external_sql(expr)
                 register_datafusion_dialect()
                 ast = parse_sql_strict(
-                    expr,
+                    sanitized,
                     dialect=resolved.dialect,
                     options=StrictParseOptions(preserve_params=True),
                 )

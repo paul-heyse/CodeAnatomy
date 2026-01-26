@@ -68,12 +68,7 @@ from engine.plan_cache import PlanCacheKey
 from ibis_engine.param_tables import scalar_param_signature
 from schema_spec.policies import DataFusionWritePolicy
 from serde_msgspec import dumps_msgpack
-from sqlglot_tools.bridge import (
-    AstExecutionResult,
-    IbisCompilerBackend,
-    execute_sqlglot_ast,
-    ibis_to_datafusion_ast_path,
-)
+from sqlglot_tools.bridge import IbisCompilerBackend
 from sqlglot_tools.compat import ErrorLevel, Expression, exp
 from sqlglot_tools.lineage import (
     LineageExtractionOptions,
@@ -864,6 +859,8 @@ class DataFusionPlanArtifacts:
     explain: TableLike | RecordBatchReaderLike | None
     explain_analyze: TableLike | RecordBatchReaderLike | None
     substrait_plan: bytes | None
+    policy_hash: str | None = None
+    ast_fingerprint: str | None = None
     normalized_sql: str | None = None
     substrait_validation: Mapping[str, object] | None = None
     sqlglot_ast: bytes | None = None
@@ -908,6 +905,8 @@ class DataFusionPlanArtifacts:
         )
         return {
             "plan_hash": self.plan_hash,
+            "policy_hash": self.policy_hash,
+            "ast_fingerprint": self.ast_fingerprint,
             "sql": self.sql,
             "normalized_sql": self.normalized_sql,
             "explain": self.explain,
@@ -969,6 +968,8 @@ class DataFusionPlanArtifacts:
             "event_time_unix_ms": int(time.time() * 1000),
             "run_id": self.run_id,
             "plan_hash": self.plan_hash,
+            "policy_hash": self.policy_hash,
+            "ast_fingerprint": self.ast_fingerprint,
             "sql": self.sql,
             "normalized_sql": self.normalized_sql,
             "explain": self.explain,
@@ -1564,6 +1565,7 @@ def collect_plan_artifacts(
         if lineage_payload is not None
         else canonical_ast_fingerprint(inputs.resolved_expr)
     )
+    policy_hash = _policy_hash_for_options(options)
     normalized_sql = _collect_normalized_sql(
         inputs.resolved_expr,
         policy=inputs.policy,
@@ -1571,6 +1573,8 @@ def collect_plan_artifacts(
     ibis_payload = _collect_ibis_artifacts(options)
     return DataFusionPlanArtifacts(
         plan_hash=inputs.plan_hash,
+        policy_hash=policy_hash,
+        ast_fingerprint=canonical_fingerprint,
         sql=inputs.sql,
         normalized_sql=normalized_sql,
         explain=inputs.details.explain_rows,
@@ -1723,7 +1727,6 @@ def _uuid_short() -> str:
 
 
 __all__ = [
-    "AstExecutionResult",
     "CopyToOptions",
     "DataFusionCompileOptions",
     "DataFusionDmlOptions",
@@ -1736,8 +1739,6 @@ __all__ = [
     "datafusion_to_reader",
     "datafusion_write_options",
     "df_from_sqlglot_or_sql",
-    "execute_sqlglot_ast",
-    "ibis_to_datafusion_ast_path",
     "rehydrate_plan_artifacts",
     "replay_substrait_bytes",
     "validate_substrait_plan",

@@ -17,6 +17,7 @@ from arrowdsl.core.interop import (
     coerce_table_like,
 )
 from datafusion_engine.introspection import invalidate_introspection_cache
+from sqlglot_tools.compat import Expression, exp
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -80,11 +81,6 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     -------
     TableLike
         Table with dictionary-encoded columns applied.
-
-    Raises
-    ------
-    ValueError
-        Raised when SQL execution does not return a DataFrame.
     """
     if not policy.dictionary_cols:
         return table
@@ -96,29 +92,13 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     adapter = DataFusionIOAdapter(ctx=df_ctx, profile=None)
     adapter.register_record_batches(table_name, [resolved.to_batches()])
     try:
-        sql = _encoding_select_sql(
+        expr = _encoding_select_expr(
             schema=resolved.schema,
             policy=policy,
             ctx=df_ctx,
             table_name=table_name,
         )
-        sql_options = _sql_options_for_profile(None)
-        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-        facade = DataFusionExecutionFacade(ctx=df_ctx, runtime_profile=None)
-        plan = facade.compile(
-            sql,
-            options=DataFusionCompileOptions(
-                sql_options=sql_options,
-                sql_policy=DataFusionSqlPolicy(),
-            ),
-        )
-        result = facade.execute(plan)
-        if result.dataframe is None:
-            msg = "Encoding policy SQL did not return a DataFusion DataFrame."
-            raise ValueError(msg)
-        return result.dataframe.to_arrow_table()
+        return _expr_table(df_ctx, expr)
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
@@ -126,17 +106,17 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
             invalidate_introspection_cache(df_ctx)
 
 
-def _encoding_select_sql(
+def _encoding_select_expr(
     *,
     schema: pa.Schema,
     policy: EncodingPolicy,
     ctx: SessionContext,
     table_name: str,
-) -> str:
-    selections: list[str] = []
+) -> Expression:
+    selections: list[Expression] = []
     for schema_field in schema:
         name = schema_field.name
-        identifier = _sql_identifier(name)
+        identifier = exp.column(name)
         if name not in policy.dictionary_cols:
             selections.append(identifier)
             continue
@@ -151,8 +131,10 @@ def _encoding_select_sql(
             schema_field.type,
             ordered=ordered,
         )
-        selections.append(f"arrow_cast({identifier}, '{dict_type}') AS {identifier}")
-    return f"SELECT {', '.join(selections)} FROM {table_name}"
+        selections.append(
+            exp.func("arrow_cast", identifier, exp.Literal.string(dict_type)).as_(name)
+        )
+    return exp.select(*selections).from_(table_name)
 
 
 def _datafusion_context() -> SessionContext:
@@ -168,6 +150,25 @@ def _sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOpt
     return sql_options_for_profile(profile)
 
 
+def _expr_table(ctx: SessionContext, expr: Expression) -> pa.Table:
+    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    plan = facade.compile(
+        expr,
+        options=DataFusionCompileOptions(
+            sql_options=_sql_options_for_profile(None),
+            sql_policy=DataFusionSqlPolicy(),
+        ),
+    )
+    result = facade.execute(plan)
+    if result.dataframe is None:
+        msg = "Encoding policy execution did not return a DataFusion DataFrame."
+        raise ValueError(msg)
+    return result.dataframe.to_arrow_table()
+
+
 def _ensure_table(value: TableLike) -> pa.Table:
     resolved = coerce_table_like(value)
     if isinstance(resolved, RecordBatchReaderLike):
@@ -175,11 +176,6 @@ def _ensure_table(value: TableLike) -> pa.Table:
     if isinstance(resolved, pa.Table):
         return resolved
     return pa.table(resolved.to_pydict())
-
-
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
 
 
 def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
@@ -190,23 +186,12 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_record_batches(temp_name, [list(table.to_batches())])
     try:
-        sql = f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}"
-        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-        plan = facade.compile(
-            sql,
-            options=DataFusionCompileOptions(
-                sql_options=_sql_options_for_profile(None),
-                sql_policy=DataFusionSqlPolicy(),
-            ),
+        expr = (
+            exp.select(exp.func("arrow_typeof", exp.column("value")).as_("dtype"))
+            .from_(temp_name)
+            .limit(1)
         )
-        result = facade.execute(plan)
-        if result.dataframe is None:
-            msg = "Arrow type resolution did not return a DataFusion DataFrame."
-            raise ValueError(msg)
-        result_table = result.dataframe.to_arrow_table()
+        result_table = _expr_table(ctx, expr)
         value = result_table["dtype"][0].as_py()
     finally:
         deregister = getattr(ctx, "deregister_table", None)

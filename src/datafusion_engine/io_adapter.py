@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from ibis_engine.registry import DatasetLocation
 
+_REGISTERED_OBJECT_STORES: dict[int, set[tuple[str, str | None]]] = {}
+
 
 @dataclass(frozen=True)
 class ListingTableRegistration:
@@ -91,7 +93,13 @@ class DataFusionIOAdapter:
         This method records a diagnostics artifact when a diagnostics
         sink is configured in the runtime profile.
         """
+        ctx_key = id(self.ctx)
+        registry = _REGISTERED_OBJECT_STORES.setdefault(ctx_key, set())
+        key = (scheme, host)
+        if key in registry:
+            return
         self.ctx.register_object_store(scheme, store, host)
+        registry.add(key)
         self._record_registration(
             name=scheme,
             registration_type="object_store",

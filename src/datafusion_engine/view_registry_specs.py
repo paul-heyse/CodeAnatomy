@@ -35,8 +35,9 @@ from sqlglot_tools.optimizer import (
     parse_sql_strict,
     register_datafusion_dialect,
     resolve_sqlglot_policy,
+    sqlglot_sql,
 )
-from sqlglot_tools.view_builders import select_all, sqlglot_view_builder
+from sqlglot_tools.view_builders import select_all
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -85,10 +86,12 @@ def _contract_builder(
     name: str,
     *,
     metadata_spec: SchemaMetadataSpec | None = None,
+    expected_schema: pa.Schema | None = None,
     enforce_columns: bool = False,
 ) -> Callable[[pa.Schema], SchemaContract]:
     def _build(schema: pa.Schema) -> SchemaContract:
-        resolved = metadata_spec.apply(schema) if metadata_spec is not None else schema
+        base_schema = expected_schema if expected_schema is not None else schema
+        resolved = metadata_spec.apply(base_schema) if metadata_spec is not None else base_schema
         return SchemaContract.from_arrow_schema(
             name,
             resolved,
@@ -165,6 +168,25 @@ def _sqlglot_from_dataframe(df: DataFrame) -> Expression | None:
     except (TypeError, ValueError):
         return None
     return ast
+
+
+def _ibis_expr_from_sqlglot(
+    build_ctx: ViewBuildContext,
+    expr: Expression,
+    *,
+    label: str,
+) -> Table:
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
+    sql = sqlglot_sql(expr, policy=policy)
+    sql_func = getattr(build_ctx.backend, "sql", None)
+    if not callable(sql_func):
+        msg = f"Backend does not support SQL compilation for view {label!r}."
+        raise TypeError(msg)
+    try:
+        return cast("Table", sql_func(sql))
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Failed to build Ibis expression for view {label!r}."
+        raise ValueError(msg) from exc
 
 
 def _arrow_schema_from_df(df: DataFrame) -> pa.Schema:
@@ -379,7 +401,7 @@ def view_graph_nodes(
         nodes.extend(_symtable_view_nodes(build_ctx))
     if stage in {"all", "cpg"}:
         nodes.extend(_cpg_view_nodes(build_ctx))
-    nodes.extend(_alias_nodes(nodes))
+    nodes.extend(_alias_nodes(nodes, build_ctx=build_ctx))
     return tuple(nodes)
 
 
@@ -395,14 +417,23 @@ def _normalize_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
         dataset = dataset_spec(spec.name)
         metadata = _metadata_from_dataset_spec(dataset)
         metadata = _metadata_with_required_udfs(metadata, required)
+        df = _plan_to_dataframe(build_ctx.ctx, plan, build_ctx.facade)
+        expected_schema = _arrow_schema_from_df(df)
+        ibis_expr = plan.expr if isinstance(plan, IbisPlan) else plan
         nodes.append(
             ViewNode(
                 name=spec.name,
                 deps=_deps_from_ast(ast),
                 builder=build_ctx.builder_from_plan(plan, label=spec.label),
-                contract_builder=_contract_builder(spec.name, metadata_spec=metadata),
+                contract_builder=_contract_builder(
+                    spec.name,
+                    metadata_spec=metadata,
+                    expected_schema=expected_schema,
+                    enforce_columns=True,
+                ),
                 required_udfs=required,
                 sqlglot_ast=ast,
+                ibis_expr=ibis_expr,
             )
         )
     return nodes
@@ -415,21 +446,25 @@ def _view_node_from_sqlglot(
     expr: Expression,
     schema_metadata: SchemaMetadataSpec | None = None,
 ) -> ViewNode:
-    builder = sqlglot_view_builder(expr)
+    compiled = build_ctx.facade.compile(expr)
+    canonical_ast = compiled.compiled.sqlglot_ast
+    ibis_expr = _ibis_expr_from_sqlglot(build_ctx, canonical_ast, label=name)
 
     def _build(actual_ctx: SessionContext) -> DataFrame:
         _ensure_ctx(actual_ctx, build_ctx.ctx, label=name)
-        return builder(actual_ctx)
+        result = build_ctx.facade.execute(compiled)
+        return result.require_dataframe()
 
-    required = _required_udfs_from_ast(expr, build_ctx.snapshot)
+    required = _required_udfs_from_ast(canonical_ast, build_ctx.snapshot)
     metadata = _metadata_with_required_udfs(schema_metadata, required)
     return ViewNode(
         name=name,
-        deps=_deps_from_ast(expr),
+        deps=_deps_from_ast(canonical_ast),
         builder=_build,
         contract_builder=_contract_builder(name, metadata_spec=metadata),
         required_udfs=required,
-        sqlglot_ast=expr,
+        sqlglot_ast=canonical_ast,
+        ibis_expr=ibis_expr,
     )
 
 
@@ -560,6 +595,7 @@ def _symtable_view_nodes(_build_ctx: ViewBuildContext) -> list[ViewNode]:
             raise ValueError(msg)
         deps = _deps_from_ast(ast)
         required = _required_udfs_from_ast(ast, _build_ctx.snapshot)
+        ibis_expr = _ibis_expr_from_sqlglot(_build_ctx, ast, label=name)
         return ViewNode(
             name=name,
             deps=deps,
@@ -567,6 +603,7 @@ def _symtable_view_nodes(_build_ctx: ViewBuildContext) -> list[ViewNode]:
             contract_builder=_contract_builder(name, metadata_spec=_metadata(required)),
             required_udfs=required,
             sqlglot_ast=ast,
+            ibis_expr=ibis_expr,
         )
 
     return [
@@ -638,6 +675,7 @@ def _cpg_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
             contract_builder=_contract_builder("cpg_nodes_v1", metadata_spec=nodes_metadata),
             required_udfs=nodes_required,
             sqlglot_ast=nodes_ast,
+            ibis_expr=nodes_plan.expr if isinstance(nodes_plan, IbisPlan) else nodes_plan,
         ),
         ViewNode(
             name="cpg_edges_v1",
@@ -646,6 +684,7 @@ def _cpg_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
             contract_builder=_contract_builder("cpg_edges_v1", metadata_spec=edges_metadata),
             required_udfs=edges_required,
             sqlglot_ast=edges_ast,
+            ibis_expr=edges_plan.expr if isinstance(edges_plan, IbisPlan) else edges_plan,
         ),
         ViewNode(
             name="cpg_props_v1",
@@ -654,11 +693,12 @@ def _cpg_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
             contract_builder=_contract_builder("cpg_props_v1", metadata_spec=props_metadata),
             required_udfs=props_required,
             sqlglot_ast=props_ast,
+            ibis_expr=props_plan.expr if isinstance(props_plan, IbisPlan) else props_plan,
         ),
     ]
 
 
-def _alias_nodes(nodes: Sequence[ViewNode]) -> list[ViewNode]:
+def _alias_nodes(nodes: Sequence[ViewNode], *, build_ctx: ViewBuildContext) -> list[ViewNode]:
     registered = {node.name for node in nodes}
     alias_nodes: list[ViewNode] = []
     for name in registered:
@@ -666,6 +706,7 @@ def _alias_nodes(nodes: Sequence[ViewNode]) -> list[ViewNode]:
         if alias == name or alias in registered:
             continue
         expr = select_all(name)
+        ibis_expr = _ibis_expr_from_sqlglot(build_ctx, expr, label=alias)
         alias_nodes.append(
             ViewNode(
                 name=alias,
@@ -674,6 +715,7 @@ def _alias_nodes(nodes: Sequence[ViewNode]) -> list[ViewNode]:
                 contract_builder=_contract_builder(alias, metadata_spec=None),
                 required_udfs=(),
                 sqlglot_ast=expr,
+                ibis_expr=ibis_expr,
             )
         )
     return alias_nodes

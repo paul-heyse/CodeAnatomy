@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import ibis
+import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
@@ -19,7 +20,7 @@ from incremental.invalidations import (
     write_invalidation_snapshot,
 )
 from incremental.runtime import IncrementalRuntime
-from incremental.sqlglot_artifacts import record_sqlglot_plan_artifact
+from incremental.sqlglot_artifacts import record_view_artifact
 from incremental.state_store import StateStore
 
 
@@ -61,7 +62,8 @@ def test_invalidation_snapshot_round_trip(tmp_path: Path) -> None:
     """Persist and reload invalidation snapshots from Delta."""
     runtime, _sink = _runtime_with_sink()
     expr = ibis.memtable({"a": [1, 2]})
-    record_sqlglot_plan_artifact(runtime, name="test_plan", expr=expr)
+    schema = pa.schema([pa.field("a", pa.int64(), nullable=True)])
+    record_view_artifact(runtime, name="test_plan", expr=expr, schema=schema)
 
     context = DeltaAccessContext(runtime=runtime)
     store = StateStore(tmp_path)

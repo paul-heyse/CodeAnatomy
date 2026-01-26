@@ -15,7 +15,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 
+from arrowdsl.schema.abi import schema_fingerprint
 from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
+
+SCHEMA_ABI_FINGERPRINT_META: bytes = b"schema_abi_fingerprint"
 
 if TYPE_CHECKING:
     from datafusion_engine.introspection import IntrospectionSnapshot
@@ -217,6 +220,10 @@ class SchemaContract:
         columns = tuple(ColumnContract.from_arrow_field(field) for field in schema)
         metadata_override = kwargs.pop("schema_metadata", None)
         metadata = dict(schema.metadata or {})
+        metadata.setdefault(
+            SCHEMA_ABI_FINGERPRINT_META,
+            schema_fingerprint(schema).encode("utf-8"),
+        )
         if metadata_override:
             metadata.update(metadata_override)
         return cls(

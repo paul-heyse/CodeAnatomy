@@ -5,17 +5,20 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+import pyarrow as pa
+
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import merge_metadata_specs, ordering_metadata_spec
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrowdsl.schema.semantic_types import SPAN_STORAGE
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from normalize.dataset_bundles import bundle
-from normalize.dataset_fields import field, field_name, fields
 from normalize.dataset_rows import ContractRow, DatasetRow
 from normalize.dataset_templates import template
+from normalize.diagnostic_types import DIAG_DETAILS_TYPE
 from schema_spec.registration import DatasetRegistration, register_dataset
-from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec, dict_field
 from schema_spec.system import (
     ContractSpec,
     DatasetSpec,
@@ -31,6 +34,114 @@ class MetadataContext:
 
     stage: str
     ordering_level: OrderingLevel = OrderingLevel.IMPLICIT
+
+
+def _spec(
+    name: str,
+    dtype: pa.DataType,
+    *,
+    nullable: bool = True,
+    metadata: Mapping[str, str] | None = None,
+) -> ArrowFieldSpec:
+    return ArrowFieldSpec(
+        name=name,
+        dtype=dtype,
+        nullable=nullable,
+        metadata=dict(metadata or {}),
+    )
+
+
+def _dict(name: str) -> ArrowFieldSpec:
+    return dict_field(name)
+
+
+_FIELD_SPECS: dict[str, ArrowFieldSpec] = {
+    "file_id": _spec("file_id", pa.string()),
+    "path": _spec("path", pa.string()),
+    "line_base": _spec("line_base", pa.int32()),
+    "col_unit": _spec("col_unit", pa.string()),
+    "end_exclusive": _spec("end_exclusive", pa.bool_()),
+    "span_id": _spec("span_id", pa.string()),
+    "span": _spec("span", SPAN_STORAGE),
+    "bstart": _spec("bstart", pa.int64()),
+    "bend": _spec("bend", pa.int64()),
+    "evidence_family": _spec("evidence_family", pa.string()),
+    "source": _spec("source", pa.string()),
+    "role": _spec("role", pa.string()),
+    "confidence": _spec("confidence", pa.float32()),
+    "ambiguity_group_id": _spec("ambiguity_group_id", pa.string()),
+    "task_name": _spec("task_name", pa.string()),
+    "type_expr_id": _spec("type_expr_id", pa.string()),
+    "owner_def_id": _spec("owner_def_id", pa.string()),
+    "param_name": _spec("param_name", pa.string()),
+    "expr_kind": _dict("expr_kind"),
+    "expr_role": _dict("expr_role"),
+    "expr_text": _spec("expr_text", pa.string()),
+    "type_repr": _spec("type_repr", pa.string()),
+    "type_id": _spec("type_id", pa.string()),
+    "type_form": _dict("type_form"),
+    "origin": _dict("origin"),
+    "block_id": _spec("block_id", pa.string()),
+    "code_unit_id": _spec("code_unit_id", pa.string()),
+    "start_offset": _spec("start_offset", pa.int32()),
+    "end_offset": _spec("end_offset", pa.int32()),
+    "kind": _dict("kind"),
+    "edge_id": _spec("edge_id", pa.string()),
+    "src_block_id": _spec("src_block_id", pa.string()),
+    "dst_block_id": _spec("dst_block_id", pa.string()),
+    "cond_instr_id": _spec("cond_instr_id", pa.string()),
+    "exc_index": _spec("exc_index", pa.int32()),
+    "event_id": _spec("event_id", pa.string()),
+    "instr_id": _spec("instr_id", pa.string()),
+    "symbol": _spec("symbol", pa.string()),
+    "opname": _dict("opname"),
+    "offset": _spec("offset", pa.int32()),
+    "argval_str": _spec("argval_str", pa.string()),
+    "argrepr": _spec("argrepr", pa.string()),
+    "def_event_id": _spec("def_event_id", pa.string()),
+    "use_event_id": _spec("use_event_id", pa.string()),
+    "document_id": _spec("document_id", pa.string()),
+    "reason": _dict("reason"),
+    "diag_id": _spec("diag_id", pa.string()),
+    "severity": _dict("severity"),
+    "message": _spec("message", pa.string()),
+    "diag_source": _dict("diag_source"),
+    "code": _spec("code", pa.string()),
+    "details": _spec("details", DIAG_DETAILS_TYPE),
+}
+
+
+def field(key: str) -> ArrowFieldSpec:
+    """Return the ArrowFieldSpec for a field key.
+
+    Returns
+    -------
+    ArrowFieldSpec
+        Field specification for the key.
+    """
+    return _FIELD_SPECS[key]
+
+
+def fields(keys: Sequence[str]) -> list[ArrowFieldSpec]:
+    """Return ArrowFieldSpec instances for field keys.
+
+    Returns
+    -------
+    list[ArrowFieldSpec]
+        Field specifications for the keys.
+    """
+    return [field(key) for key in keys]
+
+
+def field_name(key: str) -> str:
+    """Return the column name for a field key.
+
+    Returns
+    -------
+    str
+        Column name for the key.
+    """
+    return field(key).name
 
 
 def _dedupe(values: Iterable[str]) -> list[str]:
@@ -223,5 +334,8 @@ __all__ = [
     "build_input_schema",
     "build_metadata_spec",
     "build_query_spec",
+    "field",
+    "field_name",
+    "fields",
     "normalize_metadata_spec",
 ]

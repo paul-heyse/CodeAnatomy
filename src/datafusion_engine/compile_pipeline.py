@@ -291,12 +291,13 @@ class CompilationPipeline:
             original_sql=original_sql,
         )
         rendered = render_for_execution(canonical_ast, profile)
+        source = "sql" if original_sql is not None else "ast"
         return CompiledExpression(
             ibis_expr=None,
             sqlglot_ast=canonical_ast,
             rendered_sql=rendered,
             artifacts=artifacts,
-            source="ast",
+            source=source,
             policy_hash=policy_hash,
         )
 
@@ -345,12 +346,8 @@ class CompilationPipeline:
         _ = sql_options
 
         bindings = _resolve_bindings(bound_params, named_params=named_params)
-        profile = _require_profile(self.options.profile)
-        _validate_sql_execution(compiled, profile)
+        _require_profile(self.options.profile)
         exec_ast = _bind_exec_ast(compiled.sqlglot_ast, bindings)
-        if _requires_statement_options(exec_ast):
-            msg = "AST execution does not support statement options; use write pipeline."
-            raise ValueError(msg)
         df = _execute_ast(self.ctx, exec_ast, bindings)
         if not isinstance(df, DataFrame):
             msg = "AST execution did not return a DataFusion DataFrame."
@@ -426,21 +423,6 @@ class CompilationPipeline:
         return self._schema_cache
 
 
-def _requires_statement_options(expr: exp.Expression) -> bool:
-    return (
-        bool(expr.find(exp.Create))
-        or bool(expr.find(exp.Drop))
-        or bool(expr.find(exp.Alter))
-        or bool(expr.find(exp.Insert))
-        or bool(expr.find(exp.Update))
-        or bool(expr.find(exp.Delete))
-        or bool(expr.find(exp.Merge))
-        or bool(expr.find(exp.Copy))
-        or bool(expr.find(exp.Replace))
-        or bool(expr.find(exp.Command))
-    )
-
-
 def _require_profile(profile: SQLPolicyProfile | None) -> SQLPolicyProfile:
     if profile is None:
         msg = "SQL policy profile is required for execution."
@@ -463,29 +445,6 @@ def _resolve_bindings(
         msg = "Named parameters must be table-like."
         raise ValueError(msg)
     return bindings.merge(named_bindings)
-
-
-def _validate_sql_execution(
-    compiled: CompiledExpression,
-    profile: SQLPolicyProfile,
-) -> None:
-    if compiled.source != "sql":
-        return
-    from datafusion_engine.sql_safety import (
-        ExecutionContext,
-        ExecutionPolicy,
-        validate_sql_safety,
-    )
-
-    policy = ExecutionPolicy.for_context(ExecutionContext.QUERY_ONLY)
-    violations = validate_sql_safety(
-        compiled.rendered_sql,
-        policy,
-        dialect=profile.write_dialect or "datafusion",
-    )
-    if violations:
-        msg = f"SQL policy violations: {'; '.join(violations)}"
-        raise ValueError(msg)
 
 
 def _bind_exec_ast(

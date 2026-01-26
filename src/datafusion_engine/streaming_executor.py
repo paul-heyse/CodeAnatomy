@@ -338,6 +338,7 @@ class StreamingExecutor:
 
         from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
         from datafusion_engine.execution_facade import DataFusionExecutionFacade
+        from datafusion_engine.sql_safety import sanitize_external_sql
         from sqlglot_tools.optimizer import (
             StrictParseOptions,
             parse_sql_strict,
@@ -352,8 +353,9 @@ class StreamingExecutor:
         facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
         try:
             register_datafusion_dialect()
+            sanitized = sanitize_external_sql(sql)
             expr = parse_sql_strict(
-                sql,
+                sanitized,
                 dialect=options.dialect,
                 options=StrictParseOptions(preserve_params=True),
             )

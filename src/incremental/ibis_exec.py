@@ -10,7 +10,7 @@ from arrowdsl.core.ordering import Ordering
 from ibis_engine.execution import execute_ibis_plan
 from ibis_engine.plan import IbisPlan
 from incremental.runtime import IncrementalRuntime
-from incremental.sqlglot_artifacts import record_sqlglot_plan_artifact
+from incremental.sqlglot_artifacts import record_view_artifact
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
@@ -29,14 +29,15 @@ def ibis_expr_to_table(
     pyarrow.Table
         Materialized Arrow table for the expression.
     """
-    record_sqlglot_plan_artifact(runtime, name=name, expr=expr)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
     table = execute_ibis_plan(
         plan,
         execution=runtime.ibis_execution(),
         streaming=False,
     ).require_table()
-    return cast("pa.Table", table)
+    arrow_table = cast("pa.Table", table)
+    record_view_artifact(runtime, name=name, expr=expr, schema=arrow_table.schema)
+    return arrow_table
 
 
 __all__ = ["ibis_expr_to_table"]

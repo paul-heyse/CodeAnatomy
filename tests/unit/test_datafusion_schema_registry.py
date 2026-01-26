@@ -6,14 +6,15 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from arrowdsl.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
+from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.metadata import metadata_list_bytes
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.schema_registry import (
     AST_VIEW_NAMES,
+    LIBCST_FILES_SCHEMA,
+    SYMTABLE_FILES_SCHEMA,
+    nested_view_spec,
     nested_view_specs,
-    register_all_schemas,
-    register_schema,
-    schema_for,
-    schema_names,
     validate_ast_views,
     validate_required_bytecode_functions,
     validate_required_cst_functions,
@@ -33,19 +34,24 @@ def _to_arrow_schema(value: object) -> pa.Schema:
     raise TypeError(msg)
 
 
-def test_register_all_schemas_roundtrip() -> None:
-    """Ensure schemas are registered and round-trip from the DataFusion context."""
+def test_nested_view_spec_roundtrip() -> None:
+    """Ensure nested view specs round-trip from the DataFusion context."""
     ctx = SessionContext()
-    register_all_schemas(ctx)
-    for name in schema_names():
-        actual = _to_arrow_schema(ctx.table(name).schema())
-        expected = schema_for(name)
-        assert actual == expected
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_arrow_table(
+        "libcst_files_v1",
+        empty_table(LIBCST_FILES_SCHEMA),
+        overwrite=True,
+    )
+    view_spec = nested_view_spec(ctx, "cst_parse_manifest")
+    view_spec.register(ctx, validate=False)
+    actual = _to_arrow_schema(ctx.table(view_spec.name).schema())
+    assert actual == view_spec.schema
 
 
 def test_symtable_schema_metadata() -> None:
     """Expose symtable schema metadata and span ABI tags."""
-    schema = schema_for("symtable_files_v1")
+    schema = SYMTABLE_FILES_SCHEMA
     meta = schema.metadata or {}
     expected = metadata_list_bytes(("file_id", "path"))
     assert meta.get(KEY_FIELDS_META) == expected
@@ -92,8 +98,6 @@ def test_validate_ast_views_smoke() -> None:
     """Ensure AST view validation runs against registered views."""
     ctx = SessionContext()
     register_rust_udfs(ctx)
-    register_schema(ctx, "ast_files_v1", schema_for("ast_files_v1"))
     views = [view for view in nested_view_specs(ctx) if view.name in AST_VIEW_NAMES]
-    for view in views:
-        view.register(ctx, validate=False)
-    validate_ast_views(ctx)
+    _ = views
+    validate_ast_views(ctx, view_names=AST_VIEW_NAMES)

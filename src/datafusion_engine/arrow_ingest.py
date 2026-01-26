@@ -13,7 +13,6 @@ from datafusion.dataframe import DataFrame
 from arrowdsl.core.interop import RecordBatchReaderLike, coerce_table_like
 from arrowdsl.schema.build import table_from_row_dicts
 from datafusion_engine.introspection import invalidate_introspection_cache
-from datafusion_engine.schema_registry import has_schema, schema_for
 
 
 @dataclass(frozen=True)
@@ -55,8 +54,7 @@ def datafusion_from_arrow(
     if _is_row_mapping_sequence(value):
         rows = cast("Sequence[Mapping[str, object]]", value)
         value = table_from_row_dicts(rows)
-    requested_schema = schema_for(name) if has_schema(name) else None
-    table = coerce_table_like(value, requested_schema=requested_schema)
+    table = coerce_table_like(value, requested_schema=None)
     return _ingest_table(
         ctx,
         name=name,

@@ -27,6 +27,7 @@ from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict
 from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from core_types import ensure_path
 from datafusion_engine.diagnostics import record_artifact
+from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from datafusion_engine.introspection import (
     introspection_cache_for_ctx,
     invalidate_introspection_cache,
@@ -38,13 +39,13 @@ from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     table_constraint_rows,
 )
-from datafusion_engine.schema_registry import SCHEMA_REGISTRY
 from datafusion_engine.sql_options import (
     sql_options_for_profile as _sql_options_for_profile,
 )
 from datafusion_engine.sql_options import (
     statement_sql_options_for_profile as _statement_sql_options_for_profile,
 )
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
@@ -74,7 +75,6 @@ from sqlglot_tools.optimizer import (
     build_select,
     parse_sql_strict,
     resolve_sqlglot_policy,
-    sqlglot_emit,
 )
 from storage.deltalake import DeltaCdfOptions
 
@@ -82,7 +82,6 @@ if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
-_REGISTERED_OBJECT_STORES: dict[int, set[str]] = {}
 _CACHED_DATASETS: dict[int, set[str]] = {}
 _REGISTERED_CATALOGS: dict[int, set[str]] = {}
 _REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
@@ -394,7 +393,7 @@ class _ListingTableArtifactDetails:
     actual_schema: pa.Schema | None
 
 
-def _schema_field_type(dataset: str, field: str) -> pa.DataType | None:
+def _schema_field_type(schema: SchemaLike, field: str) -> pa.DataType | None:
     """Return the Arrow type for a schema field, when available.
 
     Returns
@@ -402,15 +401,16 @@ def _schema_field_type(dataset: str, field: str) -> pa.DataType | None:
     pyarrow.DataType | None
         Field type when available.
     """
-    schema = SCHEMA_REGISTRY.get(dataset)
-    if schema is None:
-        return None
     if field not in schema.names:
         return None
     return schema.field(field).type
 
 
-def _default_scan_options_for_dataset(name: str) -> DataFusionScanOptions | None:
+def _default_scan_options_for_dataset(
+    name: str,
+    *,
+    schema: SchemaLike | None,
+) -> DataFusionScanOptions | None:
     """Return default DataFusion scan options for supported datasets.
 
     Returns
@@ -421,12 +421,11 @@ def _default_scan_options_for_dataset(name: str) -> DataFusionScanOptions | None
     defaults = _DEFAULT_SCAN_CONFIGS.get(name)
     if defaults is None:
         return None
-    schema = SCHEMA_REGISTRY.get(name)
     if schema is None:
         return None
     partition_cols: list[tuple[str, pa.DataType]] = []
     for field_name in defaults.partition_fields:
-        dtype = _schema_field_type(name, field_name)
+        dtype = _schema_field_type(schema, field_name)
         if dtype is not None:
             partition_cols.append((field_name, dtype))
     file_sort_order = tuple(
@@ -459,7 +458,12 @@ def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocatio
     updated = location
     if location.datafusion_scan is not None:
         return updated
-    defaults = _default_scan_options_for_dataset(name)
+    schema: SchemaLike | None = None
+    try:
+        schema = resolve_dataset_schema(location)
+    except (RuntimeError, TypeError, ValueError):
+        schema = None
+    defaults = _default_scan_options_for_dataset(name, schema=schema)
     if defaults is None:
         return updated
     return replace(updated, datafusion_scan=defaults)
@@ -808,17 +812,12 @@ def _register_object_store_for_location(
     scheme = _scheme_prefix(location.path)
     if scheme is None:
         return
-    ctx_key = id(ctx)
-    registered = _REGISTERED_OBJECT_STORES.setdefault(ctx_key, set())
-    if scheme in registered:
-        return
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     adapter.register_object_store(
         scheme=scheme,
         store=location.filesystem,
         host=None,
     )
-    registered.add(scheme)
 
 
 def _prepare_runtime_profile(
@@ -838,16 +837,12 @@ def _prepare_runtime_profile(
 
 
 def _resolve_registry_options(
-    name: str,
+    _name: str,
     location: DatasetLocation,
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFusionRegistryOptions:
     options = resolve_registry_options(location)
-    if options.schema is None:
-        canonical = SCHEMA_REGISTRY.get(name)
-        if canonical is not None:
-            options = replace(options, schema=canonical)
     return _apply_runtime_scan_hardening(options, runtime_profile=runtime_profile)
 
 
@@ -1557,24 +1552,27 @@ def _apply_projection_exprs(
         msg = "Projection expressions are required for dynamic projection."
         raise ValueError(msg)
     view_expr = build_select(parsed_exprs, from_=table_name)
-    view_sql = sqlglot_emit(view_expr, policy=policy)
-    import ibis
+    policy_profile = SQLPolicyProfile(policy=policy)
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    from datafusion_engine.compile_options import DataFusionCompileOptions
 
-    backend = ibis.datafusion.connect(ctx)
-    expr = backend.sql(view_sql, dialect=policy.write_dialect)
-    backend.create_view(table_name, expr, overwrite=True)
+    plan = facade.compile(
+        view_expr,
+        options=DataFusionCompileOptions(
+            sql_policy_profile=policy_profile,
+            runtime_profile=runtime_profile,
+        ),
+    )
+    df = facade.execute(plan).require_dataframe()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    adapter.register_view(table_name, df, overwrite=True, temporary=False)
     if runtime_profile is not None:
         from datafusion_engine.runtime import record_view_definition
         from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
 
-        schema = ctx.table(table_name).schema()
-        if not isinstance(schema, pa.Schema):
-            to_arrow = getattr(schema, "to_arrow", None)
-            if callable(to_arrow):
-                schema = to_arrow()
-        if not isinstance(schema, pa.Schema):
-            msg = f"Failed to resolve schema for {table_name!r}."
-            raise TypeError(msg)
+        schema = _schema_from_df(df)
+        view_sql = plan.compiled.rendered_sql
+        view_expr = plan.compiled.sqlglot_ast
         artifact = build_view_artifact(
             ViewArtifactInputs(
                 ctx=ctx,
@@ -1587,6 +1585,19 @@ def _apply_projection_exprs(
         record_view_definition(runtime_profile, artifact=artifact)
         _invalidate_information_schema_cache(runtime_profile, ctx)
     return ctx.table(table_name)
+
+
+def _schema_from_df(df: DataFrame) -> pa.Schema:
+    schema = df.schema()
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Failed to resolve DataFusion schema."
+    raise TypeError(msg)
 
 
 def _sql_identifier(name: str) -> str:

@@ -170,6 +170,7 @@ def build_task_graph_from_inferred_deps(
     output_policy: OutputPolicy = "all_producers",
     priority: int = 100,
     priorities: Mapping[str, int] | None = None,
+    extra_evidence: Iterable[str] | None = None,
 ) -> TaskGraph:
     """Build a task graph from inferred dependencies.
 
@@ -200,6 +201,7 @@ def build_task_graph_from_inferred_deps(
         output_policy=output_policy,
         fingerprints=fingerprints,
         requirements=requirements,
+        extra_evidence=extra_evidence,
     )
 
 
@@ -209,6 +211,7 @@ def build_task_graph_from_views(
     output_policy: OutputPolicy = "all_producers",
     priority: int = 100,
     priorities: Mapping[str, int] | None = None,
+    extra_evidence: Iterable[str] | None = None,
 ) -> TaskGraph:
     """Build a task graph from view nodes and their SQLGlot ASTs.
 
@@ -223,6 +226,7 @@ def build_task_graph_from_views(
         output_policy=output_policy,
         priority=priority,
         priorities=priorities,
+        extra_evidence=extra_evidence,
     )
 
 
@@ -524,8 +528,9 @@ def _build_task_graph_inferred(
     output_policy: OutputPolicy,
     fingerprints: Mapping[str, str],
     requirements: TaskEdgeRequirements,
+    extra_evidence: Iterable[str] | None = None,
 ) -> TaskGraph:
-    evidence_names = _collect_evidence_names(tasks)
+    evidence_names = _collect_evidence_names(tasks, extra=extra_evidence)
     graph, evidence_idx, task_idx, tasks_sorted = _seed_inferred_task_graph(
         tasks,
         evidence_names=evidence_names,
@@ -646,11 +651,17 @@ def _task_edge_payloads(
     return payloads
 
 
-def _collect_evidence_names(tasks: Sequence[TaskNode]) -> set[str]:
+def _collect_evidence_names(
+    tasks: Sequence[TaskNode],
+    *,
+    extra: Iterable[str] | None = None,
+) -> set[str]:
     names: set[str] = set()
     for task in tasks:
         names.add(task.output)
         names.update(task.inputs)
+    if extra is not None:
+        names.update(extra)
     return names
 
 

@@ -34,7 +34,7 @@ from hamilton_pipeline.task_module_builder import (
     build_task_execution_module,
 )
 from obs.diagnostics import DiagnosticsCollector
-from relspec.evidence import initial_evidence_from_views
+from relspec.evidence import initial_evidence_from_views, known_dataset_specs
 from relspec.graph_inference import build_task_graph_from_views
 from relspec.inferred_deps import infer_deps_from_view_nodes
 from relspec.rustworkx_graph import task_graph_signature, task_graph_snapshot
@@ -183,17 +183,18 @@ def _task_graph_metadata(
 ) -> tuple[str, Mapping[str, TaskScheduleMetadata]]:
     inferred = infer_deps_from_view_nodes(nodes)
     task_signatures = {dep.task_name: dep.plan_fingerprint for dep in inferred}
-    graph = build_task_graph_from_views(nodes)
+    session = None
+    if ctx is not None and ctx.runtime.datafusion is not None:
+        session = ctx.runtime.datafusion.session_context()
+    dataset_specs = known_dataset_specs(ctx=session)
+    graph = build_task_graph_from_views(nodes, datasets=dataset_specs)
     snapshot = task_graph_snapshot(
         graph,
         label="hamilton_pipeline",
         task_signatures=task_signatures,
     )
     signature = task_graph_signature(snapshot)
-    session = None
-    if ctx is not None and ctx.runtime.datafusion is not None:
-        session = ctx.runtime.datafusion.session_context()
-    evidence = initial_evidence_from_views(nodes, ctx=session)
+    evidence = initial_evidence_from_views(nodes, ctx=session, dataset_specs=dataset_specs)
     schedule = schedule_tasks(graph, evidence=evidence, allow_partial=True)
     schedule_metadata = task_schedule_metadata(schedule)
     return signature, schedule_metadata

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import contextlib
+import importlib
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from datafusion_engine.introspection import introspection_cache_for_ctx
 from datafusion_engine.schema_contracts import (
@@ -20,6 +22,7 @@ if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
     from datafusion_engine.introspection import IntrospectionSnapshot
     from datafusion_engine.view_graph_registry import ViewNode
+    from incremental.registry_rows import DatasetRow
     from schema_spec.system import ContractSpec, DatasetSpec
 
 
@@ -194,6 +197,7 @@ def initial_evidence_from_views(
     ctx: SessionContext | None = None,
     snapshot: IntrospectionSnapshot | None = None,
     task_names: set[str] | None = None,
+    dataset_specs: Sequence[DatasetSpec] | None = None,
 ) -> EvidenceCatalog:
     """Build initial evidence catalog seeded from view requirements.
 
@@ -204,9 +208,11 @@ def initial_evidence_from_views(
     """
     outputs = {node.name for node in nodes if task_names is None or node.name in task_names}
     requirements = evidence_requirements_from_views(nodes, task_names=task_names)
+    spec_map = {spec.name: spec for spec in dataset_specs or ()}
+    spec_sources = set(spec_map)
     if ctx is not None:
         _validate_udf_info_schema_parity(ctx)
-    seed_sources = requirements.sources - outputs
+    seed_sources = (requirements.sources | spec_sources) - outputs
     evidence = EvidenceCatalog(sources=set(seed_sources))
     ctx_id = id(ctx) if ctx is not None else None
     resolved_snapshot = snapshot or _snapshot_from_ctx(ctx)
@@ -216,6 +222,11 @@ def initial_evidence_from_views(
         snapshot=resolved_snapshot,
     )
     for source in sorted(seed_sources):
+        spec = spec_map.get(source)
+        if spec is not None:
+            evidence.register_from_dataset_spec(source, spec, snapshot=registration_ctx.snapshot)
+            _merge_provider_metadata(evidence, source, ctx_id=registration_ctx.ctx_id)
+            continue
         registered = _register_evidence_source(
             evidence,
             source,
@@ -297,29 +308,105 @@ def _validate_udf_info_schema_parity(ctx: SessionContext) -> None:
         raise ValueError(msg)
 
 
+def _optional_module_attr(module: str, attr: str) -> object | None:
+    try:
+        loaded = importlib.import_module(module)
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
+    return getattr(loaded, attr, None)
+
+
+def _extract_dataset_spec(name: str, _ctx: SessionContext | None) -> DatasetSpec | None:
+    extract_dataset_spec = _optional_module_attr(
+        "datafusion_engine.extract_registry",
+        "dataset_spec",
+    )
+    if not callable(extract_dataset_spec):
+        return None
+    extract_dataset_spec = cast("Callable[[str], DatasetSpec]", extract_dataset_spec)
+    try:
+        return extract_dataset_spec(name)
+    except KeyError:
+        return None
+
+
+def _normalize_dataset_spec(name: str, ctx: SessionContext | None) -> DatasetSpec | None:
+    normalize_dataset_spec = _optional_module_attr(
+        "normalize.registry_runtime",
+        "dataset_spec",
+    )
+    if not callable(normalize_dataset_spec):
+        return None
+    normalize_dataset_spec = cast("Callable[..., DatasetSpec]", normalize_dataset_spec)
+    try:
+        return normalize_dataset_spec(name, ctx=ctx)
+    except KeyError:
+        return None
+
+
+def _incremental_dataset_spec_source(
+    _ctx: SessionContext | None,
+) -> tuple[Callable[[DatasetRow], DatasetSpec] | None, Sequence[DatasetRow]]:
+    try:
+        module = importlib.import_module("incremental.registry_builders")
+        rows_module = importlib.import_module("incremental.registry_rows")
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None, ()
+    build_dataset_spec = getattr(module, "build_dataset_spec", None)
+    dataset_rows = getattr(rows_module, "DATASET_ROWS", None)
+    if not callable(build_dataset_spec):
+        return None, ()
+    if not isinstance(dataset_rows, Sequence):
+        return None, ()
+    return (
+        cast("Callable[[DatasetRow], DatasetSpec]", build_dataset_spec),
+        cast("Sequence[DatasetRow]", dataset_rows),
+    )
+
+
+def _incremental_dataset_spec(name: str, ctx: SessionContext | None) -> DatasetSpec | None:
+    build_dataset_spec, dataset_rows = _incremental_dataset_spec_source(ctx)
+    if build_dataset_spec is None:
+        return None
+    for row in dataset_rows:
+        if row.name == name:
+            return build_dataset_spec(row)
+    return None
+
+
+def _relationship_dataset_spec(name: str, _ctx: SessionContext | None) -> DatasetSpec | None:
+    relationship_dataset_specs = _optional_module_attr(
+        "schema_spec.relationship_specs",
+        "relationship_dataset_specs",
+    )
+    if not callable(relationship_dataset_specs):
+        return None
+    relationship_dataset_specs = cast(
+        "Callable[[], Sequence[DatasetSpec]]",
+        relationship_dataset_specs,
+    )
+    with contextlib.suppress(RuntimeError, TypeError, ValueError):
+        for spec in relationship_dataset_specs():
+            if spec.name == name:
+                return spec
+    return None
+
+
 def _dataset_spec_from_known_registries(
     name: str,
     *,
     ctx: SessionContext | None = None,
 ) -> DatasetSpec | None:
-    try:
-        from datafusion_engine.extract_registry import dataset_spec as extract_dataset_spec
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        extract_dataset_spec = None
-    if extract_dataset_spec is not None:
-        try:
-            return extract_dataset_spec(name)
-        except KeyError:
-            pass
-    try:
-        from normalize.registry_runtime import dataset_spec as normalize_dataset_spec
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        normalize_dataset_spec = None
-    if normalize_dataset_spec is not None:
-        try:
-            return normalize_dataset_spec(name, ctx=ctx)
-        except KeyError:
-            pass
+    resolvers = (
+        _extract_dataset_spec,
+        _normalize_dataset_spec,
+        _incremental_dataset_spec,
+        _relationship_dataset_spec,
+    )
+    for resolver in resolvers:
+        spec = resolver(name, ctx)
+        if spec is not None:
+            return spec
     return None
 
 
@@ -338,6 +425,107 @@ def _contract_spec_from_known_registries(
         except KeyError:
             pass
     return None
+
+
+def known_dataset_specs(
+    *,
+    ctx: SessionContext | None = None,
+) -> tuple[DatasetSpec, ...]:
+    """Return dataset specs discovered from known registries.
+
+    Returns
+    -------
+    tuple[DatasetSpec, ...]
+        Dataset specs collected across extract/normalize/incremental registries.
+    """
+    specs: list[DatasetSpec] = []
+    seen: set[str] = set()
+    collections = (
+        _collect_extract_specs(),
+        _collect_normalize_specs(ctx),
+        _collect_incremental_specs(),
+        _collect_relationship_specs(),
+    )
+    for collection in collections:
+        _append_unique_specs(specs, collection, seen)
+    specs.sort(key=lambda spec: spec.name)
+    return tuple(specs)
+
+
+def _append_unique_specs(
+    specs: list[DatasetSpec],
+    incoming: Sequence[DatasetSpec],
+    seen: set[str],
+) -> None:
+    for spec in incoming:
+        if spec.name in seen:
+            continue
+        seen.add(spec.name)
+        specs.append(spec)
+
+
+def _collect_extract_specs() -> list[DatasetSpec]:
+    extract_metadata_by_name = _optional_module_attr(
+        "datafusion_engine.extract_metadata",
+        "extract_metadata_by_name",
+    )
+    extract_dataset_spec = _optional_module_attr(
+        "datafusion_engine.extract_registry",
+        "dataset_spec",
+    )
+    if not callable(extract_metadata_by_name) or not callable(extract_dataset_spec):
+        return []
+    extract_metadata_by_name = cast("Callable[[], Sequence[str]]", extract_metadata_by_name)
+    extract_dataset_spec = cast("Callable[[str], DatasetSpec]", extract_dataset_spec)
+    specs: list[DatasetSpec] = []
+    for name in sorted(extract_metadata_by_name()):
+        with contextlib.suppress(KeyError):
+            specs.append(extract_dataset_spec(name))
+    return specs
+
+
+def _collect_normalize_specs(ctx: SessionContext | None) -> list[DatasetSpec]:
+    normalize_dataset_names = _optional_module_attr(
+        "normalize.dataset_specs",
+        "dataset_names",
+    )
+    normalize_dataset_spec = _optional_module_attr(
+        "normalize.registry_runtime",
+        "dataset_spec",
+    )
+    if not callable(normalize_dataset_names) or not callable(normalize_dataset_spec):
+        return []
+    normalize_dataset_names = cast("Callable[[], Sequence[str]]", normalize_dataset_names)
+    normalize_dataset_spec = cast("Callable[..., DatasetSpec]", normalize_dataset_spec)
+    specs: list[DatasetSpec] = []
+    for name in normalize_dataset_names():
+        with contextlib.suppress(KeyError):
+            specs.append(normalize_dataset_spec(name, ctx=ctx))
+    return specs
+
+
+def _collect_incremental_specs() -> list[DatasetSpec]:
+    build_dataset_spec, dataset_rows = _incremental_dataset_spec_source(None)
+    if build_dataset_spec is None:
+        return []
+    return [build_dataset_spec(row) for row in dataset_rows]
+
+
+def _collect_relationship_specs() -> list[DatasetSpec]:
+    relationship_dataset_specs = _optional_module_attr(
+        "schema_spec.relationship_specs",
+        "relationship_dataset_specs",
+    )
+    if not callable(relationship_dataset_specs):
+        return []
+    relationship_dataset_specs = cast(
+        "Callable[[], Sequence[DatasetSpec]]",
+        relationship_dataset_specs,
+    )
+    try:
+        return list(relationship_dataset_specs())
+    except (RuntimeError, TypeError, ValueError):
+        return []
 
 
 def _register_evidence_source(
@@ -419,4 +607,5 @@ __all__ = [
     "EvidenceRequirements",
     "evidence_requirements_from_views",
     "initial_evidence_from_views",
+    "known_dataset_specs",
 ]

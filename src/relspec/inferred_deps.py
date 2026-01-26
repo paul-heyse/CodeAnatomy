@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import contextlib
+import importlib
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlglot_tools.lineage import referenced_tables
 from sqlglot_tools.optimizer import (
@@ -17,6 +19,7 @@ from sqlglot_tools.optimizer import (
 if TYPE_CHECKING:
     from datafusion_engine.schema_contracts import SchemaContract
     from datafusion_engine.view_graph_registry import ViewNode
+    from incremental.registry_rows import DatasetRow
     from schema_spec.system import DatasetSpec
     from sqlglot_tools.compat import Expression
 
@@ -198,25 +201,101 @@ def _required_types_from_registry(
     return required
 
 
+def _optional_module_attr(module: str, attr: str) -> object | None:
+    try:
+        loaded = importlib.import_module(module)
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
+    return getattr(loaded, attr, None)
+
+
+def _extract_dataset_spec(name: str) -> DatasetSpec | None:
+    extract_dataset_spec = _optional_module_attr(
+        "datafusion_engine.extract_registry",
+        "dataset_spec",
+    )
+    if not callable(extract_dataset_spec):
+        return None
+    extract_dataset_spec = cast("Callable[[str], DatasetSpec]", extract_dataset_spec)
+    try:
+        return extract_dataset_spec(name)
+    except KeyError:
+        return None
+
+
+def _normalize_dataset_spec(name: str) -> DatasetSpec | None:
+    normalize_dataset_spec = _optional_module_attr(
+        "normalize.registry_runtime",
+        "dataset_spec",
+    )
+    if not callable(normalize_dataset_spec):
+        return None
+    normalize_dataset_spec = cast("Callable[..., DatasetSpec]", normalize_dataset_spec)
+    try:
+        return normalize_dataset_spec(name, ctx=None)
+    except KeyError:
+        return None
+
+
+def _incremental_dataset_spec_source() -> tuple[
+    Callable[[DatasetRow], DatasetSpec] | None, Sequence[DatasetRow]
+]:
+    try:
+        module = importlib.import_module("incremental.registry_builders")
+        rows_module = importlib.import_module("incremental.registry_rows")
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None, ()
+    build_dataset_spec = getattr(module, "build_dataset_spec", None)
+    dataset_rows = getattr(rows_module, "DATASET_ROWS", None)
+    if not callable(build_dataset_spec):
+        return None, ()
+    if not isinstance(dataset_rows, Sequence):
+        return None, ()
+    return (
+        cast("Callable[[DatasetRow], DatasetSpec]", build_dataset_spec),
+        cast("Sequence[DatasetRow]", dataset_rows),
+    )
+
+
+def _incremental_dataset_spec(name: str) -> DatasetSpec | None:
+    build_dataset_spec, dataset_rows = _incremental_dataset_spec_source()
+    if build_dataset_spec is None:
+        return None
+    for row in dataset_rows:
+        if row.name == name:
+            return build_dataset_spec(row)
+    return None
+
+
+def _relationship_dataset_spec(name: str) -> DatasetSpec | None:
+    relationship_dataset_specs = _optional_module_attr(
+        "schema_spec.relationship_specs",
+        "relationship_dataset_specs",
+    )
+    if not callable(relationship_dataset_specs):
+        return None
+    relationship_dataset_specs = cast(
+        "Callable[[], Sequence[DatasetSpec]]",
+        relationship_dataset_specs,
+    )
+    with contextlib.suppress(RuntimeError, TypeError, ValueError):
+        for spec in relationship_dataset_specs():
+            if spec.name == name:
+                return spec
+    return None
+
+
 def _dataset_spec_for_table(name: str) -> DatasetSpec | None:
-    try:
-        from datafusion_engine.extract_registry import dataset_spec as extract_dataset_spec
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        extract_dataset_spec = None
-    if extract_dataset_spec is not None:
-        try:
-            return extract_dataset_spec(name)
-        except KeyError:
-            pass
-    try:
-        from normalize.registry_runtime import dataset_spec as normalize_dataset_spec
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        normalize_dataset_spec = None
-    if normalize_dataset_spec is not None:
-        try:
-            return normalize_dataset_spec(name)
-        except KeyError:
-            pass
+    resolvers = (
+        _extract_dataset_spec,
+        _normalize_dataset_spec,
+        _incremental_dataset_spec,
+        _relationship_dataset_spec,
+    )
+    for resolver in resolvers:
+        spec = resolver(name)
+        if spec is not None:
+            return spec
     return None
 
 

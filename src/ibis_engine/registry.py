@@ -25,6 +25,7 @@ from schema_spec.system import (
     DeltaWritePolicy,
 )
 from storage.deltalake import DeltaCdfOptions, delta_table_schema
+from storage.deltalake.scan_profile import build_delta_scan_config
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -343,47 +344,7 @@ def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | 
     DeltaScanOptions | None
         Delta scan options derived from the dataset location, when present.
     """
-    if location.format != "delta":
-        return None
-    base = DeltaScanOptions(
-        file_column_name="__delta_rs_path",
-        enable_parquet_pushdown=True,
-        schema_force_view_types=None,
-        wrap_partition_values=True,
-        schema=None,
-    )
-    resolved = location.dataset_spec.delta_scan if location.dataset_spec is not None else None
-    return _merge_delta_scan_options(
-        _merge_delta_scan_options(base, resolved),
-        location.delta_scan,
-    )
-
-
-def _merge_delta_scan_options(
-    base: DeltaScanOptions,
-    override: DeltaScanOptions | None,
-) -> DeltaScanOptions:
-    if override is None:
-        return base
-    return DeltaScanOptions(
-        file_column_name=override.file_column_name or base.file_column_name,
-        enable_parquet_pushdown=(
-            override.enable_parquet_pushdown
-            if override.enable_parquet_pushdown is not None
-            else base.enable_parquet_pushdown
-        ),
-        schema_force_view_types=(
-            override.schema_force_view_types
-            if override.schema_force_view_types is not None
-            else base.schema_force_view_types
-        ),
-        wrap_partition_values=(
-            override.wrap_partition_values
-            if override.wrap_partition_values is not None
-            else base.wrap_partition_values
-        ),
-        schema=override.schema or base.schema,
-    )
+    return build_delta_scan_config(location)
 
 
 def resolve_delta_log_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
@@ -501,16 +462,55 @@ def read_dataset(
     if params.filesystem is not None and hasattr(backend, "register_filesystem"):
         backend_fs = cast("FilesystemBackend", backend)
         backend_fs.register_filesystem(params.filesystem)
+    if params.dataset_format == "delta":
+        from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
+
+        location = DatasetLocation(
+            path=params.path,
+            format=params.dataset_format,
+            partitioning=params.partitioning,
+            read_options=dict(params.read_options or {}),
+            storage_options=dict(params.storage_options or {}),
+            delta_log_storage_options=dict(params.delta_log_storage_options or {}),
+            filesystem=params.filesystem,
+            dataset_spec=params.dataset_spec,
+            datafusion_scan=params.datafusion_scan,
+            datafusion_provider=params.datafusion_provider,
+        )
+        provider = resolve_datafusion_provider(location)
+        if provider == "delta_cdf":
+            datafusion_table = _read_via_datafusion_registry(
+                backend,
+                params=params,
+                force=True,
+            )
+            if datafusion_table is not None:
+                return datafusion_table
+            msg = "Delta CDF datasets require DataFusion registry-based reads."
+            raise ValueError(msg)
+        delta_scan = resolve_delta_scan_options(location)
+        delta_log_storage = resolve_delta_log_storage_options(location)
+        return read_delta_ibis(
+            backend,
+            str(params.path),
+            options=IbisDeltaReadOptions(
+                table_name=params.table_name,
+                storage_options=dict(location.storage_options)
+                if location.storage_options
+                else None,
+                log_storage_options=dict(delta_log_storage)
+                if delta_log_storage is not None
+                else None,
+                delta_scan=delta_scan,
+            ),
+        )
     datafusion_table = _read_via_datafusion_registry(
         backend,
         params=params,
-        force=params.dataset_format == "delta",
+        force=False,
     )
     if datafusion_table is not None:
         return datafusion_table
-    if params.dataset_format == "delta":
-        msg = "Delta datasets require DataFusion registry-based reads."
-        raise ValueError(msg)
     options = dict(params.read_options or {})
     if params.table_name is not None:
         options.setdefault("table_name", params.table_name)

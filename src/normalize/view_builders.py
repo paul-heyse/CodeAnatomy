@@ -21,7 +21,6 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from datafusion_engine.schema_registry import DIAG_DETAILS_TYPE
 from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.expr_compiler import expr_ir_to_ibis
 from ibis_engine.hashing import (
@@ -33,6 +32,7 @@ from ibis_engine.hashing import (
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.schema_utils import coalesce_columns, ibis_null_literal
+from normalize.diagnostic_types import DIAG_DETAILS_TYPE
 from normalize.registry_runtime import dataset_spec
 from normalize.span_logic import (
     SpanStructInputs,

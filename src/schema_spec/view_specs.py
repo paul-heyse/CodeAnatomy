@@ -17,7 +17,7 @@ from datafusion_engine.sql_policy_engine import (
     render_for_execution,
 )
 from sqlglot_tools.compat import Expression
-from sqlglot_tools.optimizer import register_datafusion_dialect, sqlglot_emit
+from sqlglot_tools.optimizer import register_datafusion_dialect
 
 
 class ViewSchemaMismatchError(ValueError):
@@ -135,6 +135,8 @@ class ViewSpec:
         """
         if introspector is None:
             introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+        if self.sqlglot_ast is not None:
+            return introspector.describe_expression(self.sqlglot_ast)
         if self.sql is None:
             return [
                 {
@@ -175,16 +177,21 @@ class ViewSpec:
         if self.sqlglot_ast is None:
             msg = f"View {self.name!r} missing SQLGlot AST for registration."
             raise ValueError(msg)
-        import ibis
+        from datafusion_engine.compile_options import DataFusionCompileOptions
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
 
-        backend = ibis.datafusion.connect(ctx)
-        register_datafusion_dialect()
-        policy = SQLPolicyProfile().to_sqlglot_policy()
-        sql_text = self.sql or sqlglot_emit(self.sqlglot_ast, policy=policy)
-        expr = backend.sql(sql_text, dialect=policy.write_dialect)
-        backend.create_view(self.name, expr, overwrite=False)
+        policy_profile = SQLPolicyProfile()
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+        plan = facade.compile(
+            self.sqlglot_ast,
+            options=DataFusionCompileOptions(sql_policy_profile=policy_profile),
+        )
+        df = facade.execute(plan).require_dataframe()
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        adapter.register_view(self.name, df, overwrite=False, temporary=False)
         if record_view is not None:
-            record_view(self.name, self.sql)
+            record_view(self.name, plan.compiled.rendered_sql or self.sql)
         if validate:
             self.validate(ctx, sql_options=sql_options)
 

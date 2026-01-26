@@ -12,7 +12,6 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.schema_registry import has_schema, schema_for
 from ibis_engine.registry import datafusion_context
 
 
@@ -38,8 +37,7 @@ def register_nested_table(
         return
     ctx = datafusion_context(backend)
     df_ctx = cast("_DatafusionContext", ctx)
-    requested_schema = schema_for(name) if has_schema(name) else None
-    resolved = coerce_table_like(table, requested_schema=requested_schema)
+    resolved = coerce_table_like(table, requested_schema=None)
     if isinstance(resolved, RecordBatchReaderLike):
         resolved_table = resolved.read_all()
     else:

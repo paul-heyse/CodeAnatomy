@@ -18,6 +18,7 @@ __all__ = (
     "StorageOptions",
     "build_commit_properties",
     "build_delta_file_index",
+    "build_delta_scan_config",
     "cleanup_delta_log",
     "coerce_delta_table",
     "create_delta_checkpoint",
@@ -53,6 +54,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaWriteResult": ("storage.deltalake.delta", "DeltaWriteResult"),
     "StorageOptions": ("storage.deltalake.delta", "StorageOptions"),
     "build_commit_properties": ("storage.deltalake.delta", "build_commit_properties"),
+    "build_delta_scan_config": ("storage.deltalake.scan_profile", "build_delta_scan_config"),
     "cleanup_delta_log": ("storage.deltalake.delta", "cleanup_delta_log"),
     "coerce_delta_table": ("storage.deltalake.delta", "coerce_delta_table"),
     "create_delta_checkpoint": ("storage.deltalake.delta", "create_delta_checkpoint"),
@@ -91,6 +93,7 @@ if TYPE_CHECKING:
     import storage.deltalake.file_index as _file_index
     import storage.deltalake.file_pruning as _file_pruning
     import storage.deltalake.query_builder as _query_builder
+    import storage.deltalake.scan_profile as _scan_profile
 
     DeltaSchemaPolicy = _delta_config.DeltaSchemaPolicy
     DeltaWritePolicy = _delta_config.DeltaWritePolicy
@@ -102,6 +105,7 @@ if TYPE_CHECKING:
     DeltaWriteResult = _delta_io.DeltaWriteResult
     StorageOptions = _delta_io.StorageOptions
     build_commit_properties = _delta_io.build_commit_properties
+    build_delta_scan_config = _scan_profile.build_delta_scan_config
     cleanup_delta_log = _delta_io.cleanup_delta_log
     coerce_delta_table = _delta_io.coerce_delta_table
     create_delta_checkpoint = _delta_io.create_delta_checkpoint

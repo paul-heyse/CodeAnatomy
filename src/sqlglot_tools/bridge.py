@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from contextlib import closing
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Protocol
 
 import msgspec
 from ibis.expr.types import Table as IbisTable
@@ -45,15 +44,6 @@ class SqlGlotCompiler(Protocol):
     ) -> Expression:
         """Return a SQLGlot expression."""
         ...
-
-
-class _AstCursor(Protocol):
-    def fetchall(self) -> list[tuple[object, ...]]: ...
-
-    @property
-    def description(self) -> Sequence[Sequence[object]] | None: ...
-
-    def close(self) -> None: ...
 
 
 class IbisCompilerBackend(Protocol):
@@ -370,103 +360,7 @@ def missing_schema_columns(
     return tuple(missing)
 
 
-@dataclass(frozen=True)
-class AstExecutionResult:
-    """Result of executing a SQLGlot AST via Ibis backend."""
-
-    expression: Expression
-    dialect: str
-    rows: list[tuple[Any, ...]] | None = None
-    columns: tuple[str, ...] | None = None
-
-
-def execute_sqlglot_ast(
-    backend: IbisCompilerBackend,
-    expr: Expression,
-    *,
-    dialect: str | None = None,
-) -> AstExecutionResult:
-    """Execute SQLGlot AST directly via Ibis DataFusion backend raw_sql.
-
-    The Ibis DataFusion backend's raw_sql() method accepts sqlglot Expression
-    objects directly, avoiding string round-trips that lose AST fidelity.
-
-    Parameters
-    ----------
-    backend : IbisCompilerBackend
-        Ibis backend (must be DataFusion with raw_sql support).
-    expr : Expression
-        SQLGlot expression to execute.
-    dialect : str | None
-        Optional dialect hint for the result.
-
-    Returns
-    -------
-    AstExecutionResult
-        Execution result with rows and column names.
-
-    Raises
-    ------
-    TypeError
-        Raised when backend doesn't support raw_sql with AST.
-    """
-    raw_sql = getattr(backend, "raw_sql", None)
-    if not callable(raw_sql):
-        msg = f"Backend {type(backend).__name__} does not support raw_sql"
-        raise TypeError(msg)
-
-    resolved_dialect = dialect or DEFAULT_WRITE_DIALECT
-
-    # DataFusion backend's raw_sql accepts Expression directly
-    cursor = cast("_AstCursor", raw_sql(expr))
-    with closing(cursor) as cursor:
-        # Fetch all results
-        rows = cursor.fetchall()
-        # Get column names from description
-        columns = tuple(str(desc[0]) for desc in cursor.description) if cursor.description else None
-
-    return AstExecutionResult(
-        expression=expr,
-        dialect=resolved_dialect,
-        rows=rows,
-        columns=columns,
-    )
-
-
-def ibis_to_datafusion_ast_path(
-    expr: IbisTable,
-    *,
-    backend: IbisCompilerBackend,
-    params: Mapping[Value, object] | None = None,
-) -> AstExecutionResult:
-    """Execute Ibis expression via SQLGlot AST path (no string round-trip).
-
-    This compiles Ibis to SQLGlot AST and executes directly via raw_sql,
-    preserving AST structure without serializing to string.
-
-    Parameters
-    ----------
-    expr : IbisTable
-        Ibis table expression to execute.
-    backend : IbisCompilerBackend
-        Ibis backend with SQLGlot compiler and raw_sql support.
-    params : Mapping[Value, object] | None
-        Optional parameters for compilation.
-
-    Returns
-    -------
-    AstExecutionResult
-        Execution result.
-    """
-    # 1. Compile Ibis to SQLGlot AST
-    sqlglot_expr = ibis_to_sqlglot(expr, backend=backend, params=params)
-
-    # 2. Execute via raw_sql with AST directly
-    return execute_sqlglot_ast(backend, sqlglot_expr)
-
-
 __all__ = [
-    "AstExecutionResult",
     "IbisCompilerBackend",
     "SchemaMapping",
     "SqlGlotCompiler",
@@ -476,8 +370,6 @@ __all__ = [
     "SqlGlotPlanOptions",
     "SqlGlotRelationDiff",
     "collect_sqlglot_plan_artifacts",
-    "execute_sqlglot_ast",
-    "ibis_to_datafusion_ast_path",
     "ibis_to_sqlglot",
     "missing_schema_columns",
     "relation_diff",

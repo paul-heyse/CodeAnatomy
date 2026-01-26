@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from datafusion import SessionContext
 
-from datafusion_engine.schema_introspection import routines_snapshot_table
+from datafusion_engine.schema_introspection import (
+    parameters_snapshot_table,
+    routines_snapshot_table,
+)
 from datafusion_engine.udf_signature import (
     custom_udf_names,
     signature_inputs,
@@ -468,7 +471,10 @@ class UdfCatalog:
                 introspector.ctx,
                 sql_options=introspector.sql_options,
             )
-        parameters = introspector.parameters_snapshot_table()
+        parameters = parameters_snapshot_table(
+            introspector.ctx,
+            sql_options=introspector.sql_options,
+        )
         catalog = FunctionCatalog.from_information_schema(
             routines=routines,
             parameters=parameters,
@@ -762,27 +768,6 @@ def _apply_registry_metadata(
     return tuple(enriched)
 
 
-def _table_schema_overrides_from_registry(
-    *,
-    registry_snapshot: Mapping[str, object] | None,
-) -> dict[str, pa.Schema]:
-    if registry_snapshot is None:
-        return {}
-    try:
-        from datafusion_engine.schema_registry import schema_registry
-    except ImportError:
-        return {}
-    registry = dict(schema_registry())
-    if not registry:
-        return {}
-    table_names = {
-        name for name, kind in _snapshot_kind_map(registry_snapshot).items() if kind == "table"
-    }
-    if not table_names:
-        return {}
-    return {name: schema for name, schema in registry.items() if name in table_names}
-
-
 def datafusion_udf_specs(
     *,
     registry_snapshot: Mapping[str, object],
@@ -899,15 +884,8 @@ def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
         Default catalog with standard tier policy.
     """
     registry_snapshot = _rust_udf_snapshot(introspector.ctx)
-    table_schema_overrides = _table_schema_overrides_from_registry(
-        registry_snapshot=registry_snapshot,
-    )
     specs = {
-        spec.func_id: spec
-        for spec in datafusion_udf_specs(
-            registry_snapshot=registry_snapshot,
-            table_schema_overrides=table_schema_overrides or None,
-        )
+        spec.func_id: spec for spec in datafusion_udf_specs(registry_snapshot=registry_snapshot)
     }
     catalog = create_default_catalog(udf_specs=specs)
     catalog.refresh_from_session(introspector)
@@ -923,15 +901,8 @@ def get_strict_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
         Catalog with strict builtin-only policy.
     """
     registry_snapshot = _rust_udf_snapshot(introspector.ctx)
-    table_schema_overrides = _table_schema_overrides_from_registry(
-        registry_snapshot=registry_snapshot,
-    )
     specs = {
-        spec.func_id: spec
-        for spec in datafusion_udf_specs(
-            registry_snapshot=registry_snapshot,
-            table_schema_overrides=table_schema_overrides or None,
-        )
+        spec.func_id: spec for spec in datafusion_udf_specs(registry_snapshot=registry_snapshot)
     }
     catalog = create_strict_catalog(udf_specs=specs)
     catalog.refresh_from_session(introspector)

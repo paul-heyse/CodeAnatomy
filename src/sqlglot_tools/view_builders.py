@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 
 from sqlglot_tools.compat import Expression, exp
+from sqlglot_tools.lineage import canonical_ast_fingerprint
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
 
 
 def select_all(table: str) -> Expression:
@@ -53,5 +59,60 @@ def relation_output_sql() -> Expression:
 
     return build_relation_output_sql()
 
+def sqlglot_view_builder(
+    expr: Expression,
+    *,
+    dialect: str = "datafusion",
+) -> Callable[[SessionContext], DataFrame]:
+    """Return a DataFusion builder that executes a SQLGlot AST.
 
-__all__ = ["relation_output_sql", "select_all", "union_all"]
+    Parameters
+    ----------
+    expr
+        SQLGlot expression representing the view.
+    dialect
+        SQL dialect used for SQL emission.
+
+    Returns
+    -------
+    Callable[[SessionContext], DataFrame]
+        Builder that executes the SQL in a DataFusion session.
+    """
+    sql = expr.sql(dialect=dialect)
+
+    def _build(ctx: SessionContext) -> DataFrame:
+        return ctx.sql(sql)
+
+    return _build
+
+
+def view_sql(expr: Expression, *, dialect: str = "datafusion") -> str:
+    """Return deterministic SQL for a SQLGlot expression.
+
+    Returns
+    -------
+    str
+        SQL text rendered for the requested dialect.
+    """
+    return expr.sql(dialect=dialect)
+
+
+def view_fingerprint(expr: Expression) -> str:
+    """Return canonical fingerprint for a view expression.
+
+    Returns
+    -------
+    str
+        Canonical fingerprint derived from the SQLGlot AST.
+    """
+    return canonical_ast_fingerprint(expr)
+
+
+__all__ = [
+    "relation_output_sql",
+    "select_all",
+    "sqlglot_view_builder",
+    "union_all",
+    "view_fingerprint",
+    "view_sql",
+]

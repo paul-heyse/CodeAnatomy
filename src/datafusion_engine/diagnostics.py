@@ -7,6 +7,7 @@ to ensure consistent payload shapes.
 Examples
 --------
 >>> from datafusion_engine.diagnostics import (
+...     CompilationRecord,
 ...     InMemoryDiagnosticsSink,
 ...     DiagnosticsContext,
 ...     DiagnosticsRecorder,
@@ -14,7 +15,7 @@ Examples
 >>> sink = InMemoryDiagnosticsSink()
 >>> context = DiagnosticsContext(session_id="test", operation_id="op1")
 >>> recorder = DiagnosticsRecorder(sink, context)
->>> recorder.record_compilation(
+>>> record = CompilationRecord(
 ...     input_sql="SELECT * FROM table",
 ...     output_sql="SELECT * FROM table",
 ...     ast_fingerprint="abc123",
@@ -22,6 +23,7 @@ Examples
 ...     dialect="postgres",
 ...     duration_ms=10.5,
 ... )
+>>> recorder.record_compilation(record)
 >>> sink.get_artifacts("sql_compilation")
 [{'session_id': 'test', 'operation_id': 'op1', ...}]
 """
@@ -34,6 +36,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
+
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.view_graph_registry import ViewNode
 
@@ -84,7 +88,7 @@ class DiagnosticsSink(Protocol):
         ...
 
     def record_events(self, name: str, rows: Sequence[Mapping[str, Any]]) -> None:
-        """Record a batch of event rows.
+        """Record a batch of events.
 
         Parameters
         ----------
@@ -96,12 +100,50 @@ class DiagnosticsSink(Protocol):
         ...
 
     def events_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
-        """Return collected event rows."""
+        """Return collected event rows by name."""
         ...
 
     def artifacts_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
-        """Return collected artifact payloads."""
+        """Return collected artifact payloads by name."""
         ...
+
+
+@dataclass(frozen=True)
+class CompilationRecord:
+    """Payload for SQL compilation diagnostics."""
+
+    input_sql: str
+    output_sql: str
+    ast_fingerprint: str
+    policy_fingerprint: str
+    dialect: str
+    duration_ms: float
+    lineage: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ExecutionRecord:
+    """Payload for SQL execution diagnostics."""
+
+    sql: str
+    ast_fingerprint: str
+    duration_ms: float
+    rows_produced: int | None = None
+    bytes_scanned: int | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class WriteRecord:
+    """Payload for write operation diagnostics."""
+
+    destination: str
+    format_: str
+    method: str
+    duration_ms: float
+    rows_written: int | None = None
+    bytes_written: int | None = None
+    partitions: int | None = None
 
 
 @dataclass
@@ -353,35 +395,13 @@ class DiagnosticsRecorder:
             return
         self._sink.record_metric(name, value, tags)
 
-    def record_compilation(  # noqa: PLR0913
-        self,
-        *,
-        input_sql: str,
-        output_sql: str,
-        ast_fingerprint: str,
-        policy_fingerprint: str,
-        dialect: str,
-        duration_ms: float,
-        lineage: dict[str, Any] | None = None,
-    ) -> None:
+    def record_compilation(self, record: CompilationRecord) -> None:
         """Record SQL compilation diagnostics.
 
         Parameters
         ----------
-        input_sql : str
-            Original SQL input.
-        output_sql : str
-            Compiled/normalized SQL output.
-        ast_fingerprint : str
-            Fingerprint of the SQL AST.
-        policy_fingerprint : str
-            Fingerprint of the safety policy applied.
-        dialect : str
-            SQL dialect used for compilation.
-        duration_ms : float
-            Compilation duration in milliseconds.
-        lineage : dict[str, Any] | None, optional
-            Column-level lineage information.
+        record
+            Compilation diagnostics payload.
         """
         if not self.enabled or self._sink is None:
             return
@@ -392,43 +412,24 @@ class DiagnosticsRecorder:
                 "session_id": self._context.session_id,
                 "operation_id": self._context.operation_id,
                 "timestamp": datetime.now().astimezone().isoformat(),
-                "input_sql": input_sql,
-                "output_sql": output_sql,
-                "ast_fingerprint": ast_fingerprint,
-                "policy_fingerprint": policy_fingerprint,
-                "dialect": dialect,
-                "duration_ms": duration_ms,
-                "lineage": lineage,
+                "input_sql": record.input_sql,
+                "output_sql": record.output_sql,
+                "ast_fingerprint": record.ast_fingerprint,
+                "policy_fingerprint": record.policy_fingerprint,
+                "dialect": record.dialect,
+                "duration_ms": record.duration_ms,
+                "lineage": record.lineage,
                 "tags": self._context.tags,
             },
         )
 
-    def record_execution(  # noqa: PLR0913
-        self,
-        *,
-        sql: str,
-        ast_fingerprint: str,
-        duration_ms: float,
-        rows_produced: int | None = None,
-        bytes_scanned: int | None = None,
-        error: str | None = None,
-    ) -> None:
+    def record_execution(self, record: ExecutionRecord) -> None:
         """Record SQL execution diagnostics.
 
         Parameters
         ----------
-        sql : str
-            SQL statement executed.
-        ast_fingerprint : str
-            Fingerprint of the SQL AST.
-        duration_ms : float
-            Execution duration in milliseconds.
-        rows_produced : int | None, optional
-            Number of rows produced by the query.
-        bytes_scanned : int | None, optional
-            Number of bytes scanned during execution.
-        error : str | None, optional
-            Error message if execution failed.
+        record
+            Execution diagnostics payload.
         """
         if not self.enabled or self._sink is None:
             return
@@ -439,46 +440,24 @@ class DiagnosticsRecorder:
                 "session_id": self._context.session_id,
                 "operation_id": self._context.operation_id,
                 "timestamp": datetime.now().astimezone().isoformat(),
-                "sql": sql,
-                "ast_fingerprint": ast_fingerprint,
-                "duration_ms": duration_ms,
-                "rows_produced": rows_produced,
-                "bytes_scanned": bytes_scanned,
-                "error": error,
-                "success": error is None,
+                "sql": record.sql,
+                "ast_fingerprint": record.ast_fingerprint,
+                "duration_ms": record.duration_ms,
+                "rows_produced": record.rows_produced,
+                "bytes_scanned": record.bytes_scanned,
+                "error": record.error,
+                "success": record.error is None,
                 "tags": self._context.tags,
             },
         )
 
-    def record_write(  # noqa: PLR0913
-        self,
-        *,
-        destination: str,
-        format_: str,  # "parquet", "csv", "json"
-        method: str,  # "copy", "streaming", "insert"
-        rows_written: int | None = None,
-        bytes_written: int | None = None,
-        partitions: int | None = None,
-        duration_ms: float,
-    ) -> None:
+    def record_write(self, record: WriteRecord) -> None:
         """Record write operation diagnostics.
 
         Parameters
         ----------
-        destination : str
-            Write destination path or table name.
-        format_ : str
-            Output format ("parquet", "csv", "json").
-        method : str
-            Write method ("copy", "streaming", "insert").
-        rows_written : int | None, optional
-            Number of rows written.
-        bytes_written : int | None, optional
-            Number of bytes written.
-        partitions : int | None, optional
-            Number of partitions written.
-        duration_ms : float
-            Write operation duration in milliseconds.
+        record
+            Write diagnostics payload.
         """
         if not self.enabled or self._sink is None:
             return
@@ -489,13 +468,13 @@ class DiagnosticsRecorder:
                 "session_id": self._context.session_id,
                 "operation_id": self._context.operation_id,
                 "timestamp": datetime.now().astimezone().isoformat(),
-                "destination": destination,
-                "format": format_,
-                "method": method,
-                "rows_written": rows_written,
-                "bytes_written": bytes_written,
-                "partitions": partitions,
-                "duration_ms": duration_ms,
+                "destination": record.destination,
+                "format": record.format_,
+                "method": record.method,
+                "rows_written": record.rows_written,
+                "bytes_written": record.bytes_written,
+                "partitions": record.partitions,
+                "duration_ms": record.duration_ms,
                 "tags": self._context.tags,
             },
         )
@@ -786,8 +765,18 @@ def view_udf_parity_payload(
     *,
     snapshot: Mapping[str, object],
     view_nodes: Sequence[ViewNode],
+    ctx: SessionContext | None = None,
 ) -> dict[str, object]:
     """Return a diagnostics payload describing view/UDF parity.
+
+    Parameters
+    ----------
+    snapshot
+        Rust UDF snapshot used for parity comparison.
+    view_nodes
+        View nodes containing UDF requirements.
+    ctx
+        Optional session context for information_schema parity checks.
 
     Returns
     -------
@@ -809,23 +798,128 @@ def view_udf_parity_payload(
         return tuple(required)
 
     available = udf_names_from_snapshot(snapshot)
+    info_available: set[str] | None = None
+    if ctx is not None:
+        from datafusion_engine.schema_introspection import SchemaIntrospector
+
+        introspector = SchemaIntrospector(ctx)
+        catalog = introspector.function_catalog_snapshot(include_parameters=False)
+        info_available = {
+            name.lower()
+            for row in catalog
+            for name in (
+                row.get("function_name"),
+                row.get("routine_name"),
+                row.get("name"),
+            )
+            if isinstance(name, str)
+        }
     rows: list[dict[str, object]] = []
-    missing_views = 0
+    missing_snapshot_views = 0
+    missing_info_views = 0
     for node in view_nodes:
         required = _required_udfs(node)
-        missing = [name for name in required if name not in available]
-        if missing:
-            missing_views += 1
+        missing_snapshot = [name for name in required if name not in available]
+        missing_info: list[str] | None = None
+        if info_available is not None:
+            missing_info = [name for name in required if name.lower() not in info_available]
+        if missing_snapshot:
+            missing_snapshot_views += 1
+        if missing_info:
+            missing_info_views += 1
         rows.append(
             {
                 "view": node.name,
                 "required_udfs": list(required) or None,
-                "missing_udfs": missing or None,
+                "missing_snapshot_udfs": missing_snapshot or None,
+                "missing_information_schema_udfs": missing_info or None,
             }
         )
     return {
         "total_views": len(view_nodes),
         "views_with_requirements": sum(1 for node in view_nodes if _required_udfs(node)),
-        "views_missing_udfs": missing_views,
+        "views_missing_snapshot_udfs": missing_snapshot_views,
+        "views_missing_information_schema_udfs": missing_info_views,
         "rows": rows,
+    }
+
+
+def view_fingerprint_payload(
+    *,
+    view_nodes: Sequence[ViewNode],
+) -> dict[str, object]:
+    """Return a diagnostics payload describing view fingerprints.
+
+    Parameters
+    ----------
+    view_nodes
+        View nodes to fingerprint.
+
+    Returns
+    -------
+    dict[str, object]
+        Diagnostics payload containing per-view fingerprints.
+    """
+    from sqlglot_tools.lineage import canonical_ast_fingerprint
+
+    rows: list[dict[str, object]] = []
+    views_with_fingerprint = 0
+    for node in view_nodes:
+        fingerprint: str | None = None
+        if node.sqlglot_ast is not None:
+            fingerprint = canonical_ast_fingerprint(node.sqlglot_ast)
+            views_with_fingerprint += 1
+        rows.append(
+            {
+                "view": node.name,
+                "fingerprint": fingerprint,
+            }
+        )
+    return {
+        "total_views": len(view_nodes),
+        "views_with_fingerprint": views_with_fingerprint,
+        "rows": rows,
+    }
+
+
+def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, object]:
+    """Return a diagnostics payload summarizing a Rust UDF snapshot.
+
+    Parameters
+    ----------
+    snapshot
+        Rust UDF registry snapshot payload.
+
+    Returns
+    -------
+    dict[str, object]
+        Summary payload with counts and metadata coverage.
+    """
+    from datafusion_engine.udf_runtime import udf_names_from_snapshot
+
+    def _count_seq(key: str) -> int:
+        value = snapshot.get(key, ())
+        if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+            return 0
+        return len(value)
+
+    def _count_map(key: str) -> int:
+        value = snapshot.get(key, {})
+        if not isinstance(value, Mapping):
+            return 0
+        return len(value)
+
+    return {
+        "total_udfs": len(udf_names_from_snapshot(snapshot)),
+        "scalar_udfs": _count_seq("scalar"),
+        "aggregate_udfs": _count_seq("aggregate"),
+        "window_udfs": _count_seq("window"),
+        "table_udfs": _count_seq("table"),
+        "custom_udfs": _count_seq("custom_udfs"),
+        "aliases": _count_map("aliases"),
+        "signature_inputs": _count_map("signature_inputs"),
+        "return_types": _count_map("return_types"),
+        "parameter_names": _count_map("parameter_names"),
+        "volatility": _count_map("volatility"),
+        "rewrite_tags": _count_map("rewrite_tags"),
     }

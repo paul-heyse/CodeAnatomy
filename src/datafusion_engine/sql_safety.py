@@ -226,6 +226,8 @@ def validate_sql_safety(
     list[str]
         List of policy violations. Empty list indicates valid SQL.
     """
+    from sqlglot.errors import ParseError, SqlglotError
+
     from sqlglot_tools.compat import exp
     from sqlglot_tools.optimizer import parse_sql_strict
 
@@ -233,7 +235,7 @@ def validate_sql_safety(
 
     try:
         ast = parse_sql_strict(sql, dialect=dialect)
-    except Exception as e:  # noqa: BLE001
+    except (ParseError, SqlglotError, ValueError, TypeError) as e:
         parse_error = f"Parse error: {e}"
         violations.append(parse_error)
         return violations

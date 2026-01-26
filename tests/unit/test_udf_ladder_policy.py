@@ -16,7 +16,6 @@ def test_udf_tier_tags_and_lane_precedence() -> None:
     options = FunctionRegistryOptions(
         datafusion_specs=datafusion_udf_specs(registry_snapshot=registry_snapshot),
         ibis_specs=(),
-        primitives=(),
     )
     registry = build_function_registry(options=options)
     spec = registry.specs["stable_hash64"]

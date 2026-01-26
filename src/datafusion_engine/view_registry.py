@@ -497,14 +497,30 @@ def ensure_view_graph(
         include_registry_views=include_registry_views,
     )
     if runtime_profile is not None:
-        from datafusion_engine.diagnostics import record_artifact, view_udf_parity_payload
+        from datafusion_engine.diagnostics import (
+            record_artifact,
+            rust_udf_snapshot_payload,
+            view_fingerprint_payload,
+            view_udf_parity_payload,
+        )
         from datafusion_engine.view_registry_specs import view_graph_nodes
 
-        payload = view_udf_parity_payload(
-            snapshot=snapshot,
-            view_nodes=view_graph_nodes(ctx, snapshot=snapshot),
+        nodes = view_graph_nodes(ctx, snapshot=snapshot)
+        record_artifact(
+            runtime_profile,
+            "rust_udf_snapshot_v1",
+            rust_udf_snapshot_payload(snapshot),
         )
-        record_artifact(runtime_profile, "view_udf_parity_v1", payload)
+        record_artifact(
+            runtime_profile,
+            "view_udf_parity_v1",
+            view_udf_parity_payload(snapshot=snapshot, view_nodes=nodes, ctx=ctx),
+        )
+        record_artifact(
+            runtime_profile,
+            "view_fingerprints_v1",
+            view_fingerprint_payload(view_nodes=nodes),
+        )
     return snapshot
 
 

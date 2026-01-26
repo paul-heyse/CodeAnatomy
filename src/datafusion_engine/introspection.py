@@ -124,7 +124,7 @@ class IntrospectionSnapshot:
                 SELECT catalog_name, schema_name
                 FROM information_schema.schemata
             """)
-        except Exception:  # noqa: BLE001
+        except (ValueError, TypeError, RuntimeError):
             schemata = pa.Table.from_arrays(
                 [pa.array([], type=pa.string()), pa.array([], type=pa.string())],
                 names=["catalog_name", "schema_name"],
@@ -153,7 +153,7 @@ class IntrospectionSnapshot:
                 FROM information_schema.parameters
                 ORDER BY specific_name, ordinal_position
             """)
-        except Exception:  # noqa: BLE001
+        except (ValueError, TypeError, RuntimeError):
             # DataFusion versions may not expose routines/parameters views
             routines = None
             parameters = None
@@ -166,7 +166,7 @@ class IntrospectionSnapshot:
             key_column_usage = _table("""
                 SELECT * FROM information_schema.key_column_usage
             """)
-        except Exception:  # noqa: BLE001
+        except (ValueError, TypeError, RuntimeError):
             table_constraints = None
             key_column_usage = None
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
@@ -14,9 +15,7 @@ from ibis_engine.io_bridge import (
     IbisDeltaWriteOptions,
     write_ibis_dataset_delta,
 )
-from incremental.delta_context import DeltaAccessContext, read_delta_table_via_facade
-from incremental.runtime import IncrementalRuntime
-from incremental.state_store import StateStore
+from incremental.delta_context import read_delta_table_via_facade
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
 from storage.deltalake import delta_table_version, enable_delta_features
 from storage.ipc import payload_hash
@@ -43,6 +42,11 @@ _INCREMENTAL_METADATA_SCHEMA = pa.schema(
         pa.field("sqlglot_policy_hash", pa.string(), nullable=False),
     ]
 )
+
+if TYPE_CHECKING:
+    from incremental.delta_context import DeltaAccessContext
+    from incremental.runtime import IncrementalRuntime
+    from incremental.state_store import StateStore
 
 
 @dataclass(frozen=True)

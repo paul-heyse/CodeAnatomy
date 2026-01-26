@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
@@ -18,6 +19,9 @@ from datafusion_engine.udf_runtime import (
     validate_rust_udf_snapshot,
 )
 
+if TYPE_CHECKING:
+    from sqlglot_tools.compat import Expression
+
 
 @dataclass(frozen=True)
 class ViewNode:
@@ -28,6 +32,7 @@ class ViewNode:
     builder: Callable[[SessionContext], DataFrame]
     schema_contract: SchemaContract | None
     required_udfs: tuple[str, ...] = ()
+    sqlglot_ast: Expression | None = None
 
 
 @dataclass(frozen=True)

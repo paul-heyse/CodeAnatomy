@@ -20,16 +20,15 @@ from ibis_engine.io_bridge import (
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.ibis_exec import ibis_expr_to_table
 from incremental.ibis_utils import ibis_table_from_arrow
-from incremental.runtime import TempTableRegistry
-from incremental.state_store import StateStore
 from storage.deltalake import delta_table_version, enable_delta_features
 
 if TYPE_CHECKING:
     from ibis.expr.types import StringValue, Value
+
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
     from incremental.delta_context import DeltaAccessContext
     from incremental.runtime import IncrementalRuntime
-
+    from incremental.state_store import StateStore
     from storage.deltalake import DeltaWriteResult
 
 _HASH_NULL_SENTINEL = "None"

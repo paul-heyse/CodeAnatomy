@@ -196,7 +196,7 @@ BUILTIN_UDFS = build_from_rust_snapshot(snapshot)
 ### Implementation checklist
 - [x] Generate Ibis builtin UDF metadata from Rust registry snapshot (or assert/validate parity).
 - [x] Ensure parameter names match across Rust + Ibis to support named arguments.
-- [ ] Keep `information_schema.parameters` consistent with snapshot data (add explicit QA check).
+- [x] Keep `information_schema.parameters` consistent with snapshot data (add explicit QA check).
 
 ---
 
@@ -254,7 +254,7 @@ fn documentation(&self) -> Option<&Documentation> {
 ### Implementation checklist
 - [x] Add docs for any function still missing documentation.
 - [x] Ensure `udf_docs()` UDTF and `udf_docs_snapshot` expose all classes.
-- [ ] Add `information_schema.routines/parameters` QA checks.
+- [x] Add `information_schema.routines/parameters` QA checks.
 
 ---
 
@@ -297,7 +297,7 @@ fn udf_named_args_resolve() {
 - Any remaining SQL‑string usage for UDFs once builder APIs exist.
 
 ### Implementation checklist
-- [ ] Validate parity tests across Rust snapshot, Ibis metadata, and information_schema.
+- [x] Validate parity tests across Rust snapshot, Ibis metadata, and information_schema.
 - [ ] Remove legacy registry lists and redundant wrappers.
 - [ ] Ensure documentation + discovery surfaces remain complete after deletion.
 

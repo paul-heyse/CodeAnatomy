@@ -272,6 +272,46 @@ class WriteRequest:
 
 
 @dataclass(frozen=True)
+class WriteViewRequest:
+    """Write request specification for registered views.
+
+    Parameters
+    ----------
+    view_name
+        Registered view name to write.
+    destination
+        Output destination path or table name.
+    format
+        Output format for the write.
+    mode
+        Write mode for existing data.
+    partition_by
+        Partition columns for Hive-style partitioning.
+    parquet_policy
+        Parquet-specific write policy overrides.
+    format_options
+        Format-specific write options.
+    single_file_output
+        Hint to prefer single-file output when supported.
+    table_name
+        Optional target table name for INSERT-based writes.
+    constraints
+        Optional SQL constraints for INSERT-based writes.
+    """
+
+    view_name: str
+    destination: str
+    format: WriteFormat = WriteFormat.PARQUET
+    mode: WriteMode = WriteMode.ERROR
+    partition_by: tuple[str, ...] = ()
+    parquet_policy: ParquetWritePolicy | None = None
+    format_options: dict[str, object] | None = None
+    single_file_output: bool | None = None
+    table_name: str | None = None
+    constraints: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class WriteResult:
     """Result of a write operation."""
 
@@ -538,12 +578,17 @@ class WritePipeline:
                 dataset_options: dict[str, Any] = dict(policy.to_dataset_options())
                 if request.format_options:
                     dataset_options.update(request.format_options)
+                from datafusion_engine.streaming_executor import PipeToDatasetOptions
+
                 result.pipe_to_dataset(
                     request.destination,
-                    partitioning=list(request.partition_by),
-                    existing_data_behavior=self._mode_to_behavior(request.mode),
-                    max_rows_per_group=policy.row_group_size,
-                    **dataset_options,
+                    options=PipeToDatasetOptions(
+                        file_format="parquet",
+                        partitioning=list(request.partition_by),
+                        existing_data_behavior=self._mode_to_behavior(request.mode),
+                        max_rows_per_group=policy.row_group_size,
+                        format_options=dataset_options,
+                    ),
                 )
             else:
                 policy = request.parquet_policy or ParquetWritePolicy()
@@ -685,6 +730,40 @@ class WritePipeline:
                 return self.write_via_streaming(request)
         return self.write_via_copy(request)
 
+    def write_view(
+        self,
+        request: WriteViewRequest,
+        *,
+        prefer_streaming: bool = True,
+    ) -> WriteResult:
+        """Write a registered view using the unified pipeline.
+
+        Parameters
+        ----------
+        request
+            Write request specifying the registered view.
+        prefer_streaming
+            Prefer streaming writes when possible.
+
+        Returns
+        -------
+        WriteResult
+            Write result metadata.
+        """
+        write_request = WriteRequest(
+            source=exp.select("*").from_(request.view_name),
+            destination=request.destination,
+            format=request.format,
+            mode=request.mode,
+            partition_by=request.partition_by,
+            parquet_policy=request.parquet_policy,
+            format_options=request.format_options,
+            single_file_output=request.single_file_output,
+            table_name=request.table_name,
+            constraints=request.constraints,
+        )
+        return self.write(write_request, prefer_streaming=prefer_streaming)
+
     @staticmethod
     def _mode_to_behavior(mode: WriteMode) -> str:
         """Convert WriteMode to PyArrow existing_data_behavior.
@@ -722,11 +801,15 @@ class WritePipeline:
         """
         if self.recorder is None:
             return
+        from datafusion_engine.diagnostics import WriteRecord
+
         self.recorder.record_write(
-            destination=result.request.destination,
-            format_=result.request.format.name.lower(),
-            method=result.method.name.lower(),
-            duration_ms=result.duration_ms or 0.0,
+            WriteRecord(
+                destination=result.request.destination,
+                format_=result.request.format.name.lower(),
+                method=result.method.name.lower(),
+                duration_ms=result.duration_ms or 0.0,
+            )
         )
 
     def _source_sql(self, request: WriteRequest) -> str:

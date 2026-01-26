@@ -145,76 +145,6 @@ class FunctionFactoryPolicy:
         }
 
 
-DEFAULT_RULE_PRIMITIVES: tuple[RulePrimitive, ...] = (
-    RulePrimitive(
-        name="stable_hash64",
-        params=(FunctionParameter(name="value", dtype="string"),),
-        return_type="int64",
-        volatility="stable",
-        description="Stable 64-bit hash for string inputs.",
-        supports_named_args=True,
-    ),
-    RulePrimitive(
-        name="stable_hash128",
-        params=(FunctionParameter(name="value", dtype="string"),),
-        return_type="string",
-        volatility="stable",
-        description="Stable 128-bit hash for string inputs.",
-        supports_named_args=True,
-    ),
-    RulePrimitive(
-        name="prefixed_hash64",
-        params=(
-            FunctionParameter(name="prefix", dtype="string"),
-            FunctionParameter(name="value", dtype="string"),
-        ),
-        return_type="string",
-        volatility="stable",
-        description="Prefix + stable 64-bit hash for string inputs.",
-        supports_named_args=True,
-    ),
-    RulePrimitive(
-        name="stable_id",
-        params=(
-            FunctionParameter(name="prefix", dtype="string"),
-            FunctionParameter(name="value", dtype="string"),
-        ),
-        return_type="string",
-        volatility="stable",
-        description="Prefix + stable 128-bit hash for string inputs.",
-        supports_named_args=True,
-    ),
-    RulePrimitive(
-        name="col_to_byte",
-        params=(
-            FunctionParameter(name="line_text", dtype="string"),
-            FunctionParameter(name="col", dtype="int64"),
-            FunctionParameter(name="col_unit", dtype="string"),
-        ),
-        return_type="int64",
-        volatility="stable",
-        description="Convert line/offset pairs into UTF-8 byte offsets.",
-        supports_named_args=True,
-    ),
-)
-
-
-def default_function_factory_policy() -> FunctionFactoryPolicy:
-    """Return the default FunctionFactory policy.
-
-    Returns
-    -------
-    FunctionFactoryPolicy
-        Default policy used for FunctionFactory registration.
-    """
-    return FunctionFactoryPolicy(
-        primitives=DEFAULT_RULE_PRIMITIVES,
-        prefer_named_arguments=True,
-        allow_async=False,
-        domain_operator_hooks=(),
-    )
-
-
 def _policy_payload(policy: FunctionFactoryPolicy) -> bytes:
     payload = policy.to_payload()
     row = {
@@ -282,7 +212,7 @@ def install_function_factory(
         Optional policy for primitive registration.
 
     """
-    payload = _policy_payload(policy or default_function_factory_policy())
+    payload = _policy_payload(policy or FunctionFactoryPolicy())
     _install_native_function_factory(ctx, payload=payload)
 
 
@@ -296,7 +226,7 @@ def function_factory_payloads(
     Mapping[str, object]
         Structured payload of function factory policy settings.
     """
-    resolved = policy or default_function_factory_policy()
+    resolved = policy or FunctionFactoryPolicy()
     return resolved.to_payload()
 
 
@@ -393,7 +323,6 @@ def register_function(
 
 
 __all__ = [
-    "DEFAULT_RULE_PRIMITIVES",
     "CreateFunctionConfig",
     "FunctionFactoryPolicy",
     "FunctionParameter",
@@ -404,7 +333,6 @@ __all__ = [
     "build_create_function_ast",
     "create_udaf_spec",
     "create_udwf_spec",
-    "default_function_factory_policy",
     "function_factory_payloads",
     "install_function_factory",
     "register_function",

@@ -9,7 +9,7 @@ datasets through Arrow RecordBatch iteration.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
@@ -19,6 +19,22 @@ if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext, SQLOptions
 
 from datafusion_engine.compile_options import DataFusionSqlPolicy
+
+
+@dataclass(frozen=True)
+class PipeToDatasetOptions:
+    """Options for streaming partitioned datasets to disk."""
+
+    file_format: str = "parquet"
+    partitioning: ds.Partitioning | list[str] | None = None
+    existing_data_behavior: str = "error"
+    file_visitor: Callable[[str], None] | None = None
+    max_partitions: int = 1024
+    max_open_files: int = 1024
+    max_rows_per_file: int = 10_000_000
+    min_rows_per_group: int = 0
+    max_rows_per_group: int = 1_000_000
+    format_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -134,20 +150,11 @@ class StreamingExecutionResult:
         """
         return self.to_table().to_pandas()
 
-    def pipe_to_dataset(  # noqa: PLR0913
+    def pipe_to_dataset(
         self,
         base_dir: str,
         *,
-        file_format: str = "parquet",
-        partitioning: ds.Partitioning | list[str] | None = None,
-        existing_data_behavior: str = "error",
-        file_visitor: Callable[[str], None] | None = None,
-        max_partitions: int = 1024,
-        max_open_files: int = 1024,
-        max_rows_per_file: int = 10_000_000,
-        min_rows_per_group: int = 0,
-        max_rows_per_group: int = 1_000_000,
-        **format_options: Any,
+        options: PipeToDatasetOptions | None = None,
     ) -> None:
         """
         Stream partitioned dataset to disk.
@@ -160,66 +167,48 @@ class StreamingExecutionResult:
         ----------
         base_dir : str
             Base directory for dataset output.
-        file_format : str, default="parquet"
-            Output format (parquet, ipc, csv, etc.).
-        partitioning : ds.Partitioning or list of str, optional
-            Partition scheme. If list of column names, creates
-            Hive-style string partitioning.
-        existing_data_behavior : str, default="error"
-            How to handle existing data. One of:
-            - "error": Raise if data exists
-            - "overwrite_or_ignore": Overwrite matching partitions
-            - "delete_matching": Delete and replace
-        file_visitor : callable, optional
-            Callback invoked with each written file path.
-            Useful for generating metadata sidecars.
-        max_partitions : int, default=1024
-            Maximum number of partitions to write.
-        max_open_files : int, default=1024
-            Maximum number of files to keep open.
-        max_rows_per_file : int, default=10_000_000
-            Maximum rows per output file.
-        min_rows_per_group : int, default=0
-            Minimum rows per row group (Parquet).
-        max_rows_per_group : int, default=1_000_000
-            Maximum rows per row group (Parquet).
-        **format_options
-            Format-specific options (compression, etc.).
+        options : PipeToDatasetOptions | None
+            Dataset streaming configuration.
 
         Examples
         --------
         >>> result.pipe_to_dataset(
         ...     "/data/events",
-        ...     partitioning=["year", "month", "day"],
-        ...     compression="zstd",
-        ...     compression_level=9,
+        ...     options=PipeToDatasetOptions(
+        ...         partitioning=["year", "month", "day"],
+        ...         format_options={"compression": "zstd", "compression_level": 9},
+        ...     ),
         ... )
         """
         # Build partitioning if list of column names
-        if isinstance(partitioning, list):
+        resolved = options or PipeToDatasetOptions()
+
+        if isinstance(resolved.partitioning, list):
             partitioning = ds.partitioning(
-                pa.schema([(col, pa.string()) for col in partitioning]),
+                pa.schema([(col, pa.string()) for col in resolved.partitioning]),
                 flavor="hive",
             )
+        else:
+            partitioning = resolved.partitioning
 
         # Build format options
-        if file_format == "parquet":
-            file_options = ds.ParquetFileFormat().make_write_options(**format_options)
+        if resolved.file_format == "parquet":
+            file_options = ds.ParquetFileFormat().make_write_options(**resolved.format_options)
         else:
             file_options = None
 
         ds.write_dataset(
             self.to_arrow_stream(),
             base_dir=base_dir,
-            format=file_format,
+            format=resolved.file_format,
             partitioning=partitioning,
-            existing_data_behavior=existing_data_behavior,
-            file_visitor=file_visitor,
-            max_partitions=max_partitions,
-            max_open_files=max_open_files,
-            max_rows_per_file=max_rows_per_file,
-            min_rows_per_group=min_rows_per_group,
-            max_rows_per_group=max_rows_per_group,
+            existing_data_behavior=resolved.existing_data_behavior,
+            file_visitor=resolved.file_visitor,
+            max_partitions=resolved.max_partitions,
+            max_open_files=resolved.max_open_files,
+            max_rows_per_file=resolved.max_rows_per_file,
+            min_rows_per_group=resolved.min_rows_per_group,
+            max_rows_per_group=resolved.max_rows_per_group,
             file_options=file_options,
         )
 

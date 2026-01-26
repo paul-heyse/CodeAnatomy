@@ -9,11 +9,6 @@ from typing import Literal, TypeVar, cast
 
 import pyarrow as pa
 
-from datafusion_engine.function_factory import RulePrimitive
-from datafusion_engine.sql_expression_registry import (
-    DataFusionSqlExpressionSpec,
-    datafusion_sql_expression_specs,
-)
 from datafusion_engine.udf_catalog import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
 from storage.ipc import payload_hash
@@ -222,7 +217,6 @@ class FunctionRegistry:
 class FunctionRegistryOptions:
     """Configuration for building a function registry."""
 
-    primitives: tuple[RulePrimitive, ...] = ()
     datafusion_specs: tuple[DataFusionUdfSpec, ...] | None = None
     ibis_specs: tuple[IbisUdfSpec, ...] | None = None
     datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None
@@ -244,7 +238,7 @@ def build_function_registry(
     Returns
     -------
     FunctionRegistry
-        Registry configured from the provided primitives.
+        Registry configured from the provided specs.
 
     Raises
     ------
@@ -252,15 +246,12 @@ def build_function_registry(
         Raised when required registry metadata is missing.
     """
     resolved = options or FunctionRegistryOptions()
-    primitives = resolved.primitives
     datafusion_specs = resolved.datafusion_specs
     ibis_specs = resolved.ibis_specs
     datafusion_function_catalog = resolved.datafusion_function_catalog
     registry_snapshot = resolved.registry_snapshot
     lane_precedence = resolved.lane_precedence
     specs: dict[str, FunctionSpec] = {}
-    for spec in datafusion_sql_expression_specs():
-        _merge_spec(specs, _spec_from_sql_expression(spec, lane_precedence=lane_precedence))
     if datafusion_specs is None and registry_snapshot is None:
         msg = "registry_snapshot is required when datafusion_specs is not provided."
         raise ValueError(msg)
@@ -275,8 +266,6 @@ def build_function_registry(
         registry_snapshot=cast("Mapping[str, object]", registry_snapshot),
     ):
         _merge_spec(specs, _spec_from_ibis(spec, lane_precedence=lane_precedence))
-    for primitive in primitives:
-        _merge_spec(specs, _spec_from_primitive(primitive, lane_precedence=lane_precedence))
     if datafusion_function_catalog:
         _merge_datafusion_builtins(
             specs,
@@ -353,25 +342,6 @@ def _spec_from_datafusion(
         database=spec.database,
         capsule_id=spec.capsule_id,
         udf_tier=spec.udf_tier,
-    )
-
-
-def _spec_from_sql_expression(
-    spec: DataFusionSqlExpressionSpec,
-    *,
-    lane_precedence: tuple[ExecutionLane, ...],
-) -> FunctionSpec:
-    return FunctionSpec(
-        func_id=spec.func_id,
-        engine_name=spec.func_id,
-        kind=spec.kind,
-        input_types=spec.input_types,
-        return_type=spec.return_type,
-        volatility=spec.volatility,
-        arg_names=spec.arg_names,
-        lanes=("df_rust",),
-        lane_precedence=lane_precedence,
-        udf_tier=None,
     )
 
 
@@ -703,26 +673,6 @@ def _spec_from_ibis(
     )
 
 
-def _spec_from_primitive(
-    primitive: RulePrimitive,
-    *,
-    lane_precedence: tuple[ExecutionLane, ...],
-) -> FunctionSpec:
-    input_types = tuple(_dtype_from_name(param.dtype) for param in primitive.params)
-    return FunctionSpec(
-        func_id=primitive.name,
-        engine_name=primitive.name,
-        kind="scalar",
-        input_types=input_types,
-        return_type=_dtype_from_name(primitive.return_type),
-        volatility=primitive.volatility,
-        arg_names=tuple(param.name for param in primitive.params) or None,
-        lanes=("df_rust",),
-        lane_precedence=lane_precedence,
-        udf_tier=None,
-    )
-
-
 def _merge_spec(specs: dict[str, FunctionSpec], incoming: FunctionSpec) -> None:
     existing = specs.get(incoming.func_id)
     if existing is None:
@@ -774,21 +724,6 @@ def _merge_volatility(left: str, right: str) -> str:
     if ranking.get(right, 1) > ranking.get(left, 1):
         return right
     return left
-
-
-def _dtype_from_name(value: str) -> pa.DataType:
-    mapping: dict[str, pa.DataType] = {
-        "string": pa.string(),
-        "float64": pa.float64(),
-        "int64": pa.int64(),
-        "int32": pa.int32(),
-        "bool": pa.bool_(),
-    }
-    dtype = mapping.get(value)
-    if dtype is None:
-        msg = f"Unsupported dtype for function registry: {value!r}."
-        raise ValueError(msg)
-    return dtype
 
 
 def _spec_payload(spec: FunctionSpec) -> dict[str, object]:

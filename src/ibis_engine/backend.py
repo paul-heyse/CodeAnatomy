@@ -11,13 +11,9 @@ import ibis
 from datafusion import SessionContext
 
 from datafusion_engine.diagnostics import recorder_for_profile
-from datafusion_engine.schema_introspection import SchemaIntrospector
-from engine.unified_registry import build_unified_function_registry
 from ibis_engine.config import IbisBackendConfig
 
 if TYPE_CHECKING:
-    from ibis.backends.datafusion import Backend as DataFusionBackend
-
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 logger = logging.getLogger(__name__)
@@ -113,8 +109,8 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
     _register_object_stores(ctx=ctx, cfg=cfg, profile=profile)
     backend = ibis_datafusion.connect(ctx)
     try:
-        introspector = SchemaIntrospector(ctx)
         from datafusion_engine.udf_runtime import register_rust_udfs
+        from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
 
         async_timeout_ms = None
         async_batch_size = None
@@ -127,15 +123,7 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
             async_udf_timeout_ms=async_timeout_ms,
             async_udf_batch_size=async_batch_size,
         )
-        unified_registry = build_unified_function_registry(
-            datafusion_function_catalog=introspector.function_catalog_snapshot(
-                include_parameters=True
-            ),
-            snapshot=introspector.snapshot,
-            registry_snapshot=registry_snapshot,
-        )
-        backend_df = cast("DataFusionBackend", backend)
-        unified_registry.udf_registry.apply_to_backend(backend_df)
+        register_ibis_udf_snapshot(registry_snapshot)
     except (RuntimeError, TypeError, ValueError) as exc:
-        logger.warning("Failed to apply unified UDF registry: %s", exc)
+        logger.warning("Failed to register Rust/Ibis UDFs: %s", exc)
     return backend

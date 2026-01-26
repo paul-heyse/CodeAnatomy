@@ -3102,7 +3102,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             Raised when builtin Ibis UDFs are missing from DataFusion.
         """
         missing: list[str] = []
-        from engine.unified_registry import build_unified_function_registry
+        from datafusion_engine.udf_catalog import datafusion_udf_specs
+        from ibis_engine.builtin_udfs import ibis_udf_specs
 
         registry_snapshot = register_rust_udfs(
             introspector.ctx,
@@ -3110,15 +3111,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             async_udf_timeout_ms=self.async_udf_timeout_ms,
             async_udf_batch_size=self.async_udf_batch_size,
         )
-
-        unified_registry = build_unified_function_registry(
-            datafusion_function_catalog=introspector.function_catalog_snapshot(
-                include_parameters=True
-            ),
-            snapshot=introspector.snapshot,
-            registry_snapshot=registry_snapshot,
-        )
-        for name in sorted(unified_registry.required_builtins):
+        required_builtins = {
+            spec.engine_name
+            for spec in (
+                *ibis_udf_specs(registry_snapshot=registry_snapshot),
+                *datafusion_udf_specs(registry_snapshot=registry_snapshot),
+            )
+        }
+        for name in sorted(required_builtins):
             try:
                 if catalog.is_builtin_from_runtime(name):
                     continue

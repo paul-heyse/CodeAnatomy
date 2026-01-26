@@ -230,7 +230,7 @@ class ParameterizedRulepack:
 
     def execute(
         self,
-        backend: Backend,  # noqa: ARG002
+        backend: Backend,
         values: dict[str, Any],
         *,
         validate: bool = True,
@@ -240,7 +240,7 @@ class ParameterizedRulepack:
         Parameters
         ----------
         backend
-            Ibis DataFusion backend (currently unused, reserved for future).
+            Ibis DataFusion backend used for validation.
         values
             Parameter name -> value mapping.
         validate
@@ -257,6 +257,7 @@ class ParameterizedRulepack:
         parameter provided. May raise TypeError if parameter value type
         is incompatible (when validate=True).
         """
+        self._validate_backend(backend)
         resolved_values = self._resolve_values(values, validate=validate)
 
         # Map param objects to values
@@ -269,7 +270,7 @@ class ParameterizedRulepack:
 
     def execute_streaming(
         self,
-        backend: Backend,  # noqa: ARG002
+        backend: Backend,
         values: dict[str, Any],
         *,
         chunk_size: int = 250_000,
@@ -280,7 +281,7 @@ class ParameterizedRulepack:
         Parameters
         ----------
         backend
-            Ibis DataFusion backend (currently unused, reserved for future).
+            Ibis DataFusion backend used for validation.
         values
             Parameter name -> value mapping.
         chunk_size
@@ -293,6 +294,7 @@ class ParameterizedRulepack:
         pa.RecordBatchReader
             Streaming reader over execution results.
         """
+        self._validate_backend(backend)
         resolved_values = self._resolve_values(values, validate=validate)
 
         param_mapping: dict[Scalar, object] = {
@@ -306,7 +308,7 @@ class ParameterizedRulepack:
 
     def compile_sql(
         self,
-        backend: Backend,  # noqa: ARG002
+        backend: Backend,
         values: dict[str, Any] | None = None,
     ) -> str:
         """Compile to SQL, optionally with specific values.
@@ -316,7 +318,7 @@ class ParameterizedRulepack:
         Parameters
         ----------
         backend
-            Ibis DataFusion backend (currently unused, reserved for future).
+            Ibis DataFusion backend used for validation.
         values
             Optional parameter values for substitution.
 
@@ -325,6 +327,7 @@ class ParameterizedRulepack:
         str
             Compiled SQL string.
         """
+        self._validate_backend(backend)
         if values:
             resolved_values = self._resolve_values(values, validate=False)
             param_mapping: dict[Scalar, object] = {
@@ -332,6 +335,13 @@ class ParameterizedRulepack:
             }
             return str(ibis.to_sql(self.expr, params=param_mapping))
         return str(ibis.to_sql(self.expr))
+
+    @staticmethod
+    def _validate_backend(backend: Backend) -> None:
+        name = getattr(backend, "name", None)
+        if name is not None and name != "datafusion":
+            msg = f"Parameterized execution requires DataFusion backend, got {name!r}."
+            raise ValueError(msg)
 
     def get_param_names(self) -> list[str]:
         """Get list of parameter names.

@@ -14,16 +14,12 @@ import pyarrow as pa
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
 from arrowdsl.schema.serialization import schema_to_msgpack
-from datafusion_engine.introspection import introspection_cache_for_ctx
-from engine.unified_registry import build_unified_function_registry
+from engine.function_registry import FunctionRegistryOptions, build_function_registry
 from serde_msgspec import dumps_msgpack, to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from datafusion_engine.introspection import IntrospectionSnapshot
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from sqlglot_tools.optimizer import SqlGlotPolicySnapshot
 
@@ -202,7 +198,6 @@ _PROFILE_HASH_SCHEMA = pa.schema(
 class _RegistryContext:
     session: object | None
     function_catalog: Sequence[Mapping[str, object]] | None
-    introspection_snapshot: IntrospectionSnapshot | None
     registry_snapshot: Mapping[str, object] | None
 
 
@@ -273,9 +268,6 @@ def _build_registry_context(runtime: RuntimeProfile) -> _RegistryContext:
             )
         except (RuntimeError, TypeError, ValueError):
             function_catalog = None
-    introspection_snapshot = None
-    if session is not None and runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
-        introspection_snapshot = introspection_cache_for_ctx(session).snapshot
     registry_snapshot = None
     if session is not None:
         from datafusion_engine.udf_runtime import register_rust_udfs
@@ -297,18 +289,17 @@ def _build_registry_context(runtime: RuntimeProfile) -> _RegistryContext:
     return _RegistryContext(
         session=session,
         function_catalog=function_catalog,
-        introspection_snapshot=introspection_snapshot,
         registry_snapshot=registry_snapshot,
     )
 
 
 def _function_registry_hash(context: _RegistryContext) -> str:
-    unified_registry = build_unified_function_registry(
+    options = FunctionRegistryOptions(
         datafusion_function_catalog=context.function_catalog,
-        snapshot=context.introspection_snapshot,
         registry_snapshot=context.registry_snapshot,
     )
-    return unified_registry.fingerprint()
+    function_registry = build_function_registry(options=options)
+    return function_registry.fingerprint()
 
 
 def _runtime_snapshot_payload(
@@ -390,9 +381,6 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
             session = runtime.datafusion.session_context()
         except (RuntimeError, TypeError, ValueError):
             session = None
-    introspection_snapshot = (
-        introspection_cache_for_ctx(session).snapshot if session is not None else None
-    )
     registry_snapshot = None
     if session is not None:
         from datafusion_engine.udf_runtime import register_rust_udfs
@@ -411,10 +399,11 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
             async_udf_timeout_ms=async_timeout_ms,
             async_udf_batch_size=async_batch_size,
         )
-    unified_registry = build_unified_function_registry(
-        datafusion_function_catalog=function_catalog or [],
-        snapshot=introspection_snapshot,
-        registry_snapshot=registry_snapshot,
+    function_registry = build_function_registry(
+        options=FunctionRegistryOptions(
+            datafusion_function_catalog=function_catalog or [],
+            registry_snapshot=registry_snapshot,
+        )
     )
     datafusion_settings = (
         runtime.datafusion.settings_payload() if runtime.datafusion is not None else None
@@ -431,10 +420,8 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
         "sqlglot_policy_snapshot": (
             dumps_msgpack(policy_snapshot.payload()) if policy_snapshot is not None else None
         ),
-        "function_registry_hash": unified_registry.fingerprint(),
-        "function_registry_snapshot": dumps_msgpack(
-            unified_registry.function_registry.payload()
-        ),
+        "function_registry_hash": function_registry.fingerprint(),
+        "function_registry_snapshot": dumps_msgpack(function_registry.payload()),
         "datafusion_settings_hash": (
             runtime.datafusion.settings_hash() if runtime.datafusion is not None else None
         ),

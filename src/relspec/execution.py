@@ -42,6 +42,10 @@ def execute_plan_artifact(request: TaskExecutionRequest) -> TableLike:
     if exec_ctx is None:
         msg = "RuntimeArtifacts.execution must be configured for plan execution."
         raise ValueError(msg)
+    if request.artifact.task.kind == "view":
+        result = _execute_view_artifact(request)
+        _register_execution_result(request, result)
+        return result.require_table()
     param_mapping = request.runtime.param_mapping_for_task(request.artifact)
     execution = replace(exec_ctx, params=param_mapping) if param_mapping is not None else exec_ctx
     result = execute_ibis_plan(
@@ -51,6 +55,42 @@ def execute_plan_artifact(request: TaskExecutionRequest) -> TableLike:
     )
     _register_execution_result(request, result)
     return result.require_table()
+
+
+def _execute_view_artifact(request: TaskExecutionRequest) -> ExecutionResult:
+    """Execute a view task using the DataFusion session context.
+
+    Parameters
+    ----------
+    request
+        Task execution request containing the view artifact.
+
+    Returns
+    -------
+    ExecutionResult
+        Execution result with materialized Arrow table.
+
+    Raises
+    ------
+    ValueError
+        Raised when the runtime execution context is missing.
+    """
+    exec_ctx = request.runtime.execution
+    if exec_ctx is None:
+        msg = "RuntimeArtifacts.execution must be configured for view execution."
+        raise ValueError(msg)
+    profile = exec_ctx.ctx.runtime.datafusion
+    if profile is None:
+        msg = "DataFusion runtime profile is required for view execution."
+        raise ValueError(msg)
+    session = profile.session_context()
+    output = request.artifact.task.output
+    if not session.table_exist(output):
+        msg = f"View {output!r} is not registered; call ensure_view_graph first."
+        raise ValueError(msg)
+    df = session.table(output)
+    table = df.to_arrow_table()
+    return ExecutionResult.from_table(table)
 
 
 def _register_execution_result(

@@ -27,6 +27,7 @@ from datafusion_engine.runtime import (
     statement_sql_options_for_profile,
 )
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+from datafusion_engine.streaming_executor import StreamingExecutionResult
 from datafusion_engine.write_pipeline import (
     ParquetWritePolicy,
     WriteFormat,
@@ -237,6 +238,69 @@ def build_plan_product(
     _record_plan_execution(ctx, plan_id=plan_id or _default_plan_id(plan), result=result)
     return PlanProduct(
         plan_id=plan_id or _default_plan_id(plan),
+        schema=schema,
+        determinism_tier=ctx.determinism,
+        writer_strategy=policy.writer_strategy,
+        stream=stream,
+        table=table,
+        execution_result=result,
+    )
+
+
+def build_view_product(
+    view_name: str,
+    *,
+    execution: IbisExecutionContext,
+    policy: ExecutionSurfacePolicy,
+    view_id: str | None = None,
+) -> PlanProduct:
+    """Execute a registered view and return a PlanProduct wrapper.
+
+    Parameters
+    ----------
+    view_name
+        Registered view name to materialize.
+    execution
+        Execution context containing runtime profile and backend configuration.
+    policy
+        Execution policy controlling streaming preferences.
+    view_id
+        Optional identifier to use for diagnostics.
+
+    Returns
+    -------
+    PlanProduct
+        Plan product with stream or table output.
+
+    Raises
+    ------
+    ValueError
+        Raised when the runtime profile or view registration is missing.
+    """
+    ctx = execution.ctx
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        msg = "DataFusion runtime profile is required for view materialization."
+        raise ValueError(msg)
+    session = profile.session_context()
+    if not session.table_exist(view_name):
+        msg = f"View {view_name!r} is not registered for materialization."
+        raise ValueError(msg)
+    prefer_reader = _resolve_prefer_reader(ctx=ctx, policy=policy)
+    stream: RecordBatchReaderLike | None = None
+    table: TableLike | None = None
+    df = session.table(view_name)
+    if prefer_reader:
+        stream = cast("RecordBatchReaderLike", StreamingExecutionResult(df).to_arrow_stream())
+        schema = stream.schema
+        result = ExecutionResult.from_reader(stream)
+    else:
+        table = cast("TableLike", df.to_arrow_table())
+        schema = table.schema
+        result = ExecutionResult.from_table(table)
+    _record_plan_execution(ctx, plan_id=view_id or view_name, result=result)
+    return PlanProduct(
+        plan_id=view_id or view_name,
         schema=schema,
         determinism_tier=ctx.determinism,
         writer_strategy=policy.writer_strategy,
@@ -751,6 +815,7 @@ def write_extract_outputs(
 
 __all__ = [
     "build_plan_product",
+    "build_view_product",
     "resolve_cache_policy",
     "resolve_prefer_reader",
     "write_extract_outputs",

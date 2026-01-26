@@ -28,7 +28,12 @@ from datafusion_engine.diagnostics import DiagnosticsRecorder, recorder_for_prof
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.sql_safety import validate_sql_safety
-from datafusion_engine.write_pipeline import WritePipeline, WriteRequest, WriteResult
+from datafusion_engine.write_pipeline import (
+    WritePipeline,
+    WriteRequest,
+    WriteResult,
+    WriteViewRequest,
+)
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 
 if TYPE_CHECKING:
@@ -475,6 +480,58 @@ class DataFusionExecutionFacade:
         pipeline = self.write_pipeline(profile=profile)
         result = pipeline.write(request)
         return ExecutionResult.from_write(result)
+
+    def write_view(
+        self,
+        request: WriteViewRequest,
+        *,
+        profile: SQLPolicyProfile,
+        prefer_streaming: bool = True,
+    ) -> ExecutionResult:
+        """Write a registered view using the write pipeline.
+
+        Parameters
+        ----------
+        request
+            Write request specifying the registered view.
+        profile
+            SQL policy profile for the write operation.
+        prefer_streaming
+            Prefer streaming writes when possible.
+
+        Returns
+        -------
+        ExecutionResult
+            Execution result wrapping the write metadata.
+        """
+        pipeline = self.write_pipeline(profile=profile)
+        result = pipeline.write_view(request, prefer_streaming=prefer_streaming)
+        return ExecutionResult.from_write(result)
+
+    def ensure_view_graph(
+        self,
+        *,
+        include_registry_views: bool = True,
+    ) -> Mapping[str, object]:
+        """Ensure the view graph is registered for the current context.
+
+        Parameters
+        ----------
+        include_registry_views
+            Whether to register view registry fragments prior to pipeline views.
+
+        Returns
+        -------
+        Mapping[str, object]
+            Rust UDF snapshot used for view registration.
+        """
+        from datafusion_engine.view_registry import ensure_view_graph
+
+        return ensure_view_graph(
+            self.ctx,
+            runtime_profile=self.runtime_profile,
+            include_registry_views=include_registry_views,
+        )
 
     def register_dataset(
         self,

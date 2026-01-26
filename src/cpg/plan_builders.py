@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
@@ -32,8 +32,6 @@ if TYPE_CHECKING:
     from ibis.expr.types import Table
 
     from cpg.specs import PropOptions
-    from sqlglot_tools.bridge import IbisCompilerBackend
-    from sqlglot_tools.compat import Expression
 
 
 def build_cpg_nodes_plan(
@@ -101,7 +99,6 @@ def build_cpg_props_plan(
     """
     resolved_options = options or CpgPropOptions()
     source_columns_lookup = _source_columns_lookup(catalog, ctx=ctx)
-    union_builder = _sqlglot_union_builder(backend)
     prop_specs = list(prop_table_specs(source_columns_lookup=source_columns_lookup))
     prop_specs.append(scip_role_flag_prop_spec())
     prop_specs.append(edge_prop_spec())
@@ -114,7 +111,7 @@ def build_cpg_props_plan(
             spec=spec,
             options=resolved_options,
             task_identity=task_identity,
-            union_builder=union_builder,
+            union_builder=None,
         )
         plans.append(plan)
     return _union_plans(plans, schema=CPG_PROPS_SCHEMA, backend=backend)
@@ -133,45 +130,6 @@ def _source_columns_lookup(
         return tuple(table.columns)
 
     return _lookup
-
-
-def _sqlglot_union_builder(
-    backend: BaseBackend,
-) -> Callable[[Sequence[Table]], Table] | None:
-    if not _supports_sqlglot_union(backend):
-        return None
-
-    def _builder(rows: Sequence[Table]) -> Table:
-        from sqlglot_tools.bridge import ibis_to_sqlglot
-        from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_sql
-
-        compiler_backend = cast("IbisCompilerBackend", backend)
-        expressions = [ibis_to_sqlglot(row, backend=compiler_backend) for row in rows]
-        union_expr = _balanced_union(expressions)
-        sql = sqlglot_sql(
-            union_expr,
-            policy=resolve_sqlglot_policy(name="datafusion_compile"),
-        )
-        return compiler_backend.sql(sql)
-
-    return _builder
-
-
-def _supports_sqlglot_union(backend: BaseBackend) -> bool:
-    return hasattr(backend, "compiler") and hasattr(backend, "sql")
-
-
-def _balanced_union(
-    exprs: Sequence[Expression],
-) -> Expression:
-    from sqlglot_tools.compat import exp
-
-    if len(exprs) == 1:
-        return exprs[0]
-    mid = len(exprs) // 2
-    left = _balanced_union(exprs[:mid])
-    right = _balanced_union(exprs[mid:])
-    return exp.Union(this=left, expression=right, distinct=False)
 
 
 def _preload_sources(

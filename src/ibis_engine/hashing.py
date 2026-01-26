@@ -126,6 +126,38 @@ def hash_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> SqlExprS
     return SqlExprSpec(expr_ir=_hash_expr_ir(spec, use_128=use_128))
 
 
+def stable_id_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> SqlExprSpec:
+    """Return an expression spec for stable_id UDF identifiers.
+
+    Returns
+    -------
+    SqlExprSpec
+        Expression spec that compiles to a stable_id UDF call.
+    """
+    return SqlExprSpec(expr_ir=_stable_id_expr_ir(spec, use_128=use_128))
+
+
+def masked_stable_id_expr_ir(
+    *,
+    spec: HashExprSpec,
+    required: Sequence[str],
+    use_128: bool | None = None,
+) -> SqlExprSpec:
+    """Return a stable_id expression spec with required-column masking.
+
+    Returns
+    -------
+    SqlExprSpec
+        Expression spec that yields null when required inputs are missing.
+    """
+    if not required:
+        return stable_id_expr_ir(spec=spec, use_128=use_128)
+    mask_expr = _required_mask_expr(required)
+    stable_expr = _stable_id_expr_ir(spec, use_128=use_128)
+    masked = _call_expr("if_else", mask_expr, stable_expr, _literal_expr(None))
+    return SqlExprSpec(expr_ir=masked)
+
+
 def masked_hash_expr_ir(
     *,
     spec: HashExprSpec,
@@ -175,6 +207,36 @@ def hash_expr_ir_from_parts(
     return SqlExprSpec(expr_ir=prefixed, policy_name=policy_name, dialect=dialect)
 
 
+def stable_id_expr_ir_from_parts(
+    *,
+    prefix: str,
+    parts: Sequence[SqlExprSpec],
+    null_sentinel: str,
+    as_string: bool,
+    use_128: bool | None = None,
+) -> SqlExprSpec:
+    """Return a stable_id expression spec for expression parts.
+
+    Returns
+    -------
+    SqlExprSpec
+        Expression spec that compiles to a stable_id UDF call.
+    """
+    if not as_string:
+        return hash_expr_ir_from_parts(
+            prefix=prefix,
+            parts=parts,
+            null_sentinel=null_sentinel,
+            as_string=as_string,
+            use_128=use_128,
+        )
+    policy_name, dialect = _resolve_parts_policy(parts)
+    prepared = [_coalesced_expr(_require_expr_ir(spec), null_sentinel) for spec in parts]
+    joined = _join_parts_expr(prepared)
+    stable_id_expr = _call_expr("stable_id", _literal_expr(prefix), joined)
+    return SqlExprSpec(expr_ir=stable_id_expr, policy_name=policy_name, dialect=dialect)
+
+
 def _resolve_parts_policy(parts: Sequence[SqlExprSpec]) -> tuple[str, str | None]:
     if not parts:
         return "datafusion_compile", None
@@ -200,6 +262,13 @@ def _hash_expr_ir(spec: HashExprSpec, *, use_128: bool | None) -> ExprIR:
     return _prefixed_hash_expr(hashed, prefix=spec.prefix)
 
 
+def _stable_id_expr_ir(spec: HashExprSpec, *, use_128: bool | None) -> ExprIR:
+    if not spec.as_string:
+        return _hash_expr_ir(spec, use_128=use_128)
+    joined = _join_parts_expr(_stable_id_parts_expr(spec))
+    return _call_expr("stable_id", _literal_expr(spec.prefix), joined)
+
+
 def _hash_name(spec: HashExprSpec, *, use_128: bool | None) -> str:
     if use_128 is None:
         use_128 = spec.as_string
@@ -218,6 +287,16 @@ def _hash_parts_expr(spec: HashExprSpec) -> list[ExprIR]:
         parts.append(_literal_expr(spec.prefix))
     parts.extend(_literal_expr(value) for value in spec.extra_literals)
     parts.extend(_coalesced_field_expr(name, spec.null_sentinel) for name in spec.cols)
+    return parts
+
+
+def _stable_id_parts_expr(spec: HashExprSpec) -> list[ExprIR]:
+    parts: list[ExprIR] = []
+    parts.extend(_literal_expr(value) for value in spec.extra_literals)
+    parts.extend(_coalesced_field_expr(name, spec.null_sentinel) for name in spec.cols)
+    if not parts:
+        msg = "stable_id expressions require at least one part."
+        raise ValueError(msg)
     return parts
 
 
@@ -289,4 +368,7 @@ __all__ = [
     "hash_expr_ir_from_parts",
     "hash_expr_spec_factory",
     "masked_hash_expr_ir",
+    "masked_stable_id_expr_ir",
+    "stable_id_expr_ir",
+    "stable_id_expr_ir_from_parts",
 ]

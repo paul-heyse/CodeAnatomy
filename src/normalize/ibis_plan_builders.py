@@ -27,12 +27,11 @@ from datafusion_engine.normalize_ids import (
 from datafusion_engine.schema_registry import DIAG_DETAILS_TYPE
 from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.expr_compiler import OperationSupportBackend, preflight_portability
-from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
+from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_hash_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
     bind_expr_schema,
     coalesce_columns,
-    ensure_columns,
     ibis_null_literal,
     validate_expr_schema,
 )
@@ -84,7 +83,7 @@ def type_exprs_plan_ibis(
     """
     input_schema = dataset_input_schema(TYPE_EXPRS_NAME)
     table = catalog.resolve_expr("cst_type_exprs", ctx=ctx, schema=input_schema)
-    table = ensure_columns(table, schema=input_schema)
+    validate_expr_schema(table, expected=input_schema, allow_extra_columns=ctx.debug)
     expr_text = table.expr_text.cast("string")
     trimmed = expr_text.strip()
     non_empty = trimmed.notnull() & (trimmed.length() > ibis.literal(0))
@@ -115,16 +114,16 @@ def type_exprs_plan_ibis(
         "span": span,
     }
     if ctx.debug:
-        updates["type_expr_key"] = stable_key_expr(
+        updates["type_expr_key"] = stable_key_hash_expr(
+            TYPE_EXPR_ID_SPEC.prefix,
             filtered.path,
             filtered.bstart,
             filtered.bend,
-            prefix=TYPE_EXPR_ID_SPEC.prefix,
             null_sentinel=TYPE_EXPR_ID_SPEC.null_sentinel,
         )
-        updates["type_id_key"] = stable_key_expr(
+        updates["type_id_key"] = stable_key_hash_expr(
+            TYPE_ID_SPEC.prefix,
             trimmed,
-            prefix=TYPE_ID_SPEC.prefix,
             null_sentinel=TYPE_ID_SPEC.null_sentinel,
         )
     enriched = filtered.mutate(**updates)
@@ -236,9 +235,9 @@ def _expr_type_rows(
     )
     if ctx.debug:
         expr_rows = expr_rows.mutate(
-            type_id_key=stable_key_expr(
+            type_id_key=stable_key_hash_expr(
+                TYPE_ID_SPEC.prefix,
                 expr_trimmed,
-                prefix=TYPE_ID_SPEC.prefix,
                 null_sentinel=TYPE_ID_SPEC.null_sentinel,
             )
         )
@@ -253,7 +252,7 @@ def _scip_type_rows(
 ) -> Table | None:
     if "type_repr" not in scip.columns:
         return None
-    scip = ensure_columns(scip, schema=_scip_type_schema())
+    validate_expr_schema(scip, expected=_scip_type_schema(), allow_extra_columns=True)
     scip_trimmed = scip.type_repr.cast("string").strip()
     scip_non_empty = scip_trimmed.notnull() & (scip_trimmed.length() > ibis.literal(0))
     scip_rows = scip.filter(scip_non_empty).mutate(
@@ -264,9 +263,9 @@ def _scip_type_rows(
     )
     if ctx.debug:
         scip_rows = scip_rows.mutate(
-            type_id_key=stable_key_expr(
+            type_id_key=stable_key_hash_expr(
+                TYPE_ID_SPEC.prefix,
                 scip_trimmed,
-                prefix=TYPE_ID_SPEC.prefix,
                 null_sentinel=TYPE_ID_SPEC.null_sentinel,
             )
         )
@@ -296,7 +295,7 @@ def cfg_blocks_plan_ibis(
     """
     input_schema = dataset_input_schema(CFG_BLOCKS_NAME)
     blocks = catalog.resolve_expr("py_bc_blocks", ctx=ctx, schema=input_schema)
-    blocks = ensure_columns(blocks, schema=input_schema)
+    validate_expr_schema(blocks, expected=input_schema, allow_extra_columns=ctx.debug)
     meta_schema = pa.schema(
         [
             pa.field("code_unit_id", pa.string()),
@@ -359,7 +358,7 @@ def cfg_edges_plan_ibis(
     """
     input_schema = dataset_input_schema(CFG_EDGES_NAME)
     edges = catalog.resolve_expr("py_bc_cfg_edges", ctx=ctx, schema=input_schema)
-    edges = ensure_columns(edges, schema=input_schema)
+    validate_expr_schema(edges, expected=input_schema, allow_extra_columns=ctx.debug)
     meta_schema = pa.schema(
         [
             pa.field("code_unit_id", pa.string()),
@@ -411,7 +410,7 @@ def def_use_events_plan_ibis(
     """
     input_schema = dataset_input_schema(DEF_USE_NAME)
     table = catalog.resolve_expr("py_bc_instructions", ctx=ctx, schema=input_schema)
-    table = ensure_columns(table, schema=input_schema)
+    validate_expr_schema(table, expected=input_schema, allow_extra_columns=ctx.debug)
     symbol = coalesce_columns(table, ("argval_str", "argrepr"))
     kind = _def_use_kind_expr(table.opname)
     event_id = stable_id_expr(
@@ -439,12 +438,12 @@ def def_use_events_plan_ibis(
         "span": span,
     }
     if ctx.debug:
-        updates["event_key"] = stable_key_expr(
+        updates["event_key"] = stable_key_hash_expr(
+            DEF_USE_EVENT_ID_SPEC.prefix,
             table.code_unit_id,
             table.instr_id,
             kind,
             symbol,
-            prefix=DEF_USE_EVENT_ID_SPEC.prefix,
             null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
         )
     enriched = table.filter(valid).mutate(**updates)
@@ -511,10 +510,10 @@ def reaching_defs_plan_ibis(
     )
     updates: dict[str, Value] = {"edge_id": edge_id}
     if ctx.debug:
-        updates["edge_key"] = stable_key_expr(
+        updates["edge_key"] = stable_key_hash_expr(
+            REACH_EDGE_ID_SPEC.prefix,
             joined.def_event_id,
             joined.use_event_id,
-            prefix=REACH_EDGE_ID_SPEC.prefix,
             null_sentinel=REACH_EDGE_ID_SPEC.null_sentinel,
         )
     enriched = joined.mutate(**updates)
@@ -1006,13 +1005,13 @@ def diagnostics_plan_ibis(
     )
     updates: dict[str, Value] = {"diag_id": diag_id}
     if ctx.debug:
-        updates["diag_key"] = stable_key_expr(
+        updates["diag_key"] = stable_key_hash_expr(
+            DIAG_ID_SPEC.prefix,
             combined.path,
             combined.bstart,
             combined.bend,
             combined.diag_source,
             combined.message,
-            prefix=DIAG_ID_SPEC.prefix,
             null_sentinel=DIAG_ID_SPEC.null_sentinel,
         )
     enriched = combined.mutate(**updates)
@@ -1042,7 +1041,8 @@ def _resolve_input(
 ) -> Table:
     resolved_schema = extract_dataset_schema(schema)
     table = catalog.resolve_expr(name, ctx=ctx, schema=resolved_schema)
-    return ensure_columns(table, schema=resolved_schema)
+    validate_expr_schema(table, expected=resolved_schema, allow_extra_columns=ctx.debug)
+    return table
 
 
 def _diagnostic_exprs(

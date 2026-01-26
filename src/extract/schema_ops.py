@@ -13,6 +13,7 @@ from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.extract_registry import (
     dataset_metadata_with_options,
+    dataset_schema,
     dataset_schema_policy,
     dataset_spec,
 )
@@ -61,13 +62,13 @@ def _information_schema_column_order(
 ) -> tuple[str, ...] | None:
     runtime = ctx.runtime.datafusion
     if runtime is None or not runtime.enable_information_schema:
-        return None
+        return _fallback_column_order(name)
     sql_options = sql_options_for_profile(runtime)
     introspector = SchemaIntrospector(runtime.session_context(), sql_options=sql_options)
     try:
         rows = introspector.table_columns_with_ordinal(name)
     except (RuntimeError, TypeError, ValueError):
-        return None
+        return _fallback_column_order(name)
     columns: list[str] = []
     for row in rows:
         value = row.get("column_name")
@@ -76,7 +77,7 @@ def _information_schema_column_order(
         if value in columns:
             continue
         columns.append(value)
-    return tuple(columns) if columns else None
+    return tuple(columns) if columns else _fallback_column_order(name)
 
 
 def _ordered_schema(schema: pa.Schema, ordered: Sequence[str]) -> pa.Schema:
@@ -86,6 +87,17 @@ def _ordered_schema(schema: pa.Schema, ordered: Sequence[str]) -> pa.Schema:
     ordered_names = {field.name for field in ordered_fields}
     remaining = [field for field in schema if field.name not in ordered_names]
     return pa.schema(ordered_fields + remaining, metadata=schema.metadata)
+
+
+def _fallback_column_order(name: str) -> tuple[str, ...] | None:
+    schema = dataset_schema(name)
+    names = getattr(schema, "names", None)
+    if names:
+        return tuple(names)
+    try:
+        return tuple(field.name for field in schema)
+    except TypeError:
+        return None
 
 
 def metadata_spec_for_dataset(

@@ -15,7 +15,11 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from ibis_engine.hashing import hash_expr_ir, hash_expr_ir_from_parts, masked_hash_expr_ir
+from ibis_engine.hashing import (
+    masked_stable_id_expr_ir,
+    stable_id_expr_ir,
+    stable_id_expr_ir_from_parts,
+)
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 from schema_spec.specs import DerivedFieldSpec
 from schema_spec.system import DedupeSpecSpec, SortKeySpec
@@ -158,17 +162,17 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             DerivedFieldSpec(name="type_repr", expr=_sql_spec(_trim_expr("expr_text"))),
             DerivedFieldSpec(
                 name="type_expr_id",
-                expr=masked_hash_expr_ir(
+                expr=masked_stable_id_expr_ir(
                     spec=TYPE_EXPR_ID_SPEC,
                     required=("path", "bstart", "bend"),
                 ),
             ),
             DerivedFieldSpec(
                 name="type_id",
-                expr=hash_expr_ir_from_parts(
+                expr=stable_id_expr_ir_from_parts(
                     prefix=TYPE_ID_SPEC.prefix,
-                    as_string=TYPE_ID_SPEC.as_string,
                     null_sentinel=TYPE_ID_SPEC.null_sentinel,
+                    as_string=TYPE_ID_SPEC.as_string,
                     parts=(_sql_spec(_trim_expr("expr_text")),),
                 ),
             ),
@@ -256,10 +260,10 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             DerivedFieldSpec(name="kind", expr=_sql_spec(_def_use_kind_expr())),
             DerivedFieldSpec(
                 name="event_id",
-                expr=hash_expr_ir_from_parts(
+                expr=stable_id_expr_ir_from_parts(
                     prefix=DEF_USE_EVENT_ID_SPEC.prefix,
-                    as_string=DEF_USE_EVENT_ID_SPEC.as_string,
                     null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
+                    as_string=DEF_USE_EVENT_ID_SPEC.as_string,
                     parts=(
                         _sql_spec(_field_expr("code_unit_id")),
                         _sql_spec(_field_expr("instr_id")),
@@ -290,7 +294,9 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         version=SCHEMA_VERSION,
         bundles=("file_identity",),
         fields=("edge_id", "code_unit_id", "def_event_id", "use_event_id", "symbol"),
-        derived=(DerivedFieldSpec(name="edge_id", expr=hash_expr_ir(spec=REACH_EDGE_ID_SPEC)),),
+        derived=(
+            DerivedFieldSpec(name="edge_id", expr=stable_id_expr_ir(spec=REACH_EDGE_ID_SPEC)),
+        ),
         join_keys=("code_unit_id", "symbol", "def_event_id", "use_event_id"),
         contract=ContractRow(
             canonical_sort=(
@@ -324,7 +330,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             "code",
             "details",
         ),
-        derived=(DerivedFieldSpec(name="diag_id", expr=hash_expr_ir(spec=DIAG_ID_SPEC)),),
+        derived=(DerivedFieldSpec(name="diag_id", expr=stable_id_expr_ir(spec=DIAG_ID_SPEC)),),
         join_keys=("diag_id",),
         contract=ContractRow(
             canonical_sort=(SortKeySpec(column="diag_id", order="ascending"),),

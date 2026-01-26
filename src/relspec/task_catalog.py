@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from ibis_engine.catalog import IbisPlanCatalog
     from ibis_engine.plan import IbisPlan
     from normalize.runtime import NormalizeRuntime
+    from sqlglot_tools.compat import Expression
 
 TaskKind = Literal["view", "compute", "materialization"]
 CachePolicy = Literal["none", "session", "persistent"]
@@ -60,6 +61,8 @@ class TaskSpec:
         Cache policy for runtime artifacts.
     metadata : Mapping[str, str]
         Optional metadata tags for observability.
+    sqlglot_builder : Callable[[TaskBuildContext], Expression] | None
+        Optional SQLGlot builder for AST-first lineage and fingerprints.
     """
 
     name: str
@@ -69,6 +72,7 @@ class TaskSpec:
     priority: int = 100
     cache_policy: CachePolicy = "none"
     metadata: Mapping[str, str] = field(default_factory=dict)
+    sqlglot_builder: Callable[[TaskBuildContext], Expression] | None = None
 
 
 @dataclass(frozen=True)

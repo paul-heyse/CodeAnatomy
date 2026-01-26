@@ -16,10 +16,12 @@ from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from datafusion_engine.diagnostics import record_artifact
+from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.finalize import FinalizeOptions, finalize
 from ibis_engine.catalog import IbisPlanCatalog, IbisPlanSource
 from ibis_engine.execution import execute_ibis_plan
-from ibis_engine.execution_factory import ibis_execution_from_ctx
+from ibis_engine.execution_factory import datafusion_facade_from_ctx, ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from normalize.ibis_bridge import resolve_plan_builder_ibis
@@ -96,14 +98,14 @@ def ensure_execution_context(
     return execution_context_factory(profile)
 
 
-def _materialize_table_expr(expr: Table, *, runtime: NormalizeRuntime) -> TableLike:
+def _materialize_table_expr(expr: Table, *, runtime: NormalizeRuntime) -> ExecutionResult:
     execution = ibis_execution_from_ctx(runtime.execution_ctx, backend=runtime.ibis_backend)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
     return execute_ibis_plan(
         plan,
         execution=execution,
         streaming=False,
-    ).require_table()
+    )
 
 
 def _empty_plan(output: str, *, backend: BaseBackend) -> IbisPlan:
@@ -148,11 +150,12 @@ def _finalize_plan(
     if plan is None:
         return empty_table(dataset_schema(output))
     execution = ibis_execution_from_ctx(ctx, backend=runtime.ibis_backend)
-    table = execute_ibis_plan(
+    result = execute_ibis_plan(
         plan,
         execution=execution,
         streaming=False,
-    ).require_table()
+    )
+    table = result.require_table()
     contract_spec = dataset_contract(output)
     contract = contract_spec.to_contract()
     metadata_spec = _metadata_with_determinism(dataset_spec(output).metadata_spec, ctx)
@@ -198,12 +201,21 @@ def _build_normalize_output(
     ctx: ExecutionContext,
     runtime: NormalizeRuntime,
 ) -> TableLike:
+    _record_udf_parity(ctx, output=output, builder_name=builder_name)
     catalog = _catalog_from_tables(
         runtime.ibis_backend,
         tables=dict(inputs),
     )
     builder = resolve_plan_builder_ibis(builder_name)
     plan = builder(catalog, ctx, runtime.ibis_backend)
+    if plan is not None:
+        _record_plan_compile(
+            plan,
+            ctx=ctx,
+            backend=runtime.ibis_backend,
+            output=output,
+            builder_name=builder_name,
+        )
     return _finalize_plan(
         plan,
         output=output,
@@ -373,9 +385,25 @@ def normalize_types(
     exprs_plan = exprs_builder(catalog, exec_ctx, normalize_runtime.ibis_backend)
     if exprs_plan is None:
         exprs_plan = _empty_plan(TYPE_EXPRS_NAME, backend=normalize_runtime.ibis_backend)
+    _record_udf_parity(exec_ctx, output=TYPE_EXPRS_NAME, builder_name="type_exprs")
+    _record_plan_compile(
+        exprs_plan,
+        ctx=exec_ctx,
+        backend=normalize_runtime.ibis_backend,
+        output=TYPE_EXPRS_NAME,
+        builder_name="type_exprs",
+    )
     catalog.add(TYPE_EXPRS_NAME, exprs_plan)
     nodes_builder = resolve_plan_builder_ibis("type_nodes")
     plan = nodes_builder(catalog, exec_ctx, normalize_runtime.ibis_backend)
+    if plan is not None:
+        _record_plan_compile(
+            plan,
+            ctx=exec_ctx,
+            backend=normalize_runtime.ibis_backend,
+            output=TYPE_NODES_NAME,
+            builder_name="type_nodes",
+        )
     return _finalize_plan(plan, output=TYPE_NODES_NAME, ctx=exec_ctx, runtime=normalize_runtime)
 
 
@@ -443,8 +471,8 @@ def add_scip_occurrence_byte_spans(
         _span_source("scip_occurrences", scip_occurrences),
         backend=normalize_runtime.ibis_backend,
     )
-    occ_table = _materialize_table_expr(occ_expr, runtime=normalize_runtime)
-    err_table = _materialize_table_expr(err_expr, runtime=normalize_runtime)
+    occ_table = _materialize_table_expr(occ_expr, runtime=normalize_runtime).require_table()
+    err_table = _materialize_table_expr(err_expr, runtime=normalize_runtime).require_table()
     if err_table.num_rows == 0:
         return occ_table, empty_table(SPAN_ERROR_SCHEMA)
     return occ_table, err_table
@@ -478,7 +506,7 @@ def normalize_cst_callsites_spans(
         backend=normalize_runtime.ibis_backend,
         primary=primary,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime)
+    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
 
 
 def normalize_cst_imports_spans(
@@ -509,7 +537,7 @@ def normalize_cst_imports_spans(
         backend=normalize_runtime.ibis_backend,
         primary=primary,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime)
+    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
 
 
 def normalize_cst_defs_spans(
@@ -540,7 +568,7 @@ def normalize_cst_defs_spans(
         backend=normalize_runtime.ibis_backend,
         primary=primary,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime)
+    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
 
 
 def anchor_instructions(
@@ -562,7 +590,7 @@ def anchor_instructions(
         _span_source("py_bc_instructions", py_bc_instructions),
         backend=normalize_runtime.ibis_backend,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime)
+    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
 
 
 def add_ast_byte_spans(
@@ -584,7 +612,50 @@ def add_ast_byte_spans(
         _span_source("py_ast_nodes", py_ast_nodes),
         backend=normalize_runtime.ibis_backend,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime)
+    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
+
+
+def _record_plan_compile(
+    plan: IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+    output: str,
+    builder_name: str,
+) -> None:
+    """Record a compile fingerprint artifact for a normalize plan."""
+    facade = datafusion_facade_from_ctx(ctx, backend=backend)
+    if facade is None:
+        return
+    compiled = facade.compile(plan.expr)
+    payload = {
+        "output": output,
+        "builder_name": builder_name,
+        "plan_fingerprint": compiled.compiled.fingerprint,
+        "ast_type": compiled.compiled.sqlglot_ast.__class__.__name__,
+    }
+    record_artifact(ctx.runtime.datafusion, "normalize_plan_compile_v1", payload)
+
+
+def _record_udf_parity(
+    ctx: ExecutionContext,
+    *,
+    output: str,
+    builder_name: str,
+) -> None:
+    """Record normalize-scoped UDF parity diagnostics."""
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return
+    from datafusion_engine.udf_parity import udf_parity_report
+    from ibis_engine.builtin_udfs import ibis_udf_specs
+
+    session = profile.session_context()
+    report = udf_parity_report(session, ibis_specs=ibis_udf_specs())
+    payload = report.payload()
+    payload["output"] = output
+    payload["builder_name"] = builder_name
+    record_artifact(profile, "normalize_udf_parity_v1", payload)
 
 
 __all__ = [

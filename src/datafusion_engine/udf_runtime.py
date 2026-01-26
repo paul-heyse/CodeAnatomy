@@ -30,6 +30,10 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     payload.setdefault("pycapsule_udfs", [])
     payload.setdefault("parameter_names", {})
     payload.setdefault("volatility", {})
+    payload.setdefault("rewrite_tags", {})
+    payload.setdefault("signature_inputs", {})
+    payload.setdefault("return_types", {})
+    payload.setdefault("custom_udfs", [])
     return payload
 
 

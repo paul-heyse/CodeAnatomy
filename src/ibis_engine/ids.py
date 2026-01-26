@@ -11,7 +11,7 @@ import ibis.expr.datatypes as dt
 from ibis.expr import operations as ops
 from ibis.expr.types import StringValue, Value
 
-from ibis_engine.builtin_udfs import stable_hash64, stable_hash128, stable_id
+from ibis_engine.builtin_udfs import prefixed_hash64, stable_hash64, stable_hash128, stable_id
 
 HASH_SEPARATOR = "\x1f"
 
@@ -81,6 +81,24 @@ def stable_key_expr(
     """
     values = _parts_with_prefix(parts, prefix=prefix, null_sentinel=null_sentinel)
     return _join_with_separator(values)
+
+
+def stable_key_hash_expr(
+    prefix: str,
+    *parts: Value | str | None,
+    null_sentinel: str = "None",
+) -> Value:
+    """Return a hashed key using the Rust prefixed_hash64 UDF.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Hashed key expression.
+    """
+    values = _parts_with_prefix(parts, prefix=None, null_sentinel=null_sentinel)
+    joined = _join_with_separator(values)
+    prefix_expr = cast("StringValue", ibis.literal(prefix))
+    return prefixed_hash64(prefix_expr, joined)
 
 
 def masked_stable_id_expr(
@@ -164,4 +182,5 @@ __all__ = [
     "stable_hash128_expr",
     "stable_id_expr",
     "stable_key_expr",
+    "stable_key_hash_expr",
 ]

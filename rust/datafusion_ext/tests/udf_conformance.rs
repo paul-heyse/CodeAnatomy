@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array,
+    BooleanArray,
     Int32Array,
     Int64Array,
     LargeStringArray,
@@ -11,17 +12,23 @@ use arrow::array::{
     StringViewArray,
     StructArray,
     UInt64Array,
+    UInt8Array,
 };
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::record_batch::RecordBatch;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use datafusion::datasource::MemTable;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::Result;
 use tokio::runtime::Runtime;
 
-use datafusion_ext::{install_expr_planners_native, install_sql_macro_factory_native, udf_registry};
+use datafusion_ext::{
+    install_expr_planners_native,
+    install_sql_macro_factory_native,
+    registry_snapshot,
+    udf_registry,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -62,6 +69,50 @@ fn write_temp_csv(contents: &str) -> PathBuf {
     path
 }
 
+fn normalize_type_name(value: &str) -> String {
+    let text = value.trim().to_ascii_lowercase();
+    if text.contains("utf8") {
+        return "string".to_string();
+    }
+    if text.contains("int64") || text.contains("bigint") {
+        return "int64".to_string();
+    }
+    if text.contains("int32") || text.contains("integer") {
+        return "int32".to_string();
+    }
+    if text.contains("int16") || text.contains("smallint") {
+        return "int16".to_string();
+    }
+    if text.contains("int8") || text.contains("tinyint") {
+        return "int8".to_string();
+    }
+    if text.contains("uint64") {
+        return "uint64".to_string();
+    }
+    if text.contains("uint32") {
+        return "uint32".to_string();
+    }
+    if text.contains("uint16") {
+        return "uint16".to_string();
+    }
+    if text.contains("uint8") {
+        return "uint8".to_string();
+    }
+    if text.contains("float64") || text.contains("double") {
+        return "float64".to_string();
+    }
+    if text.contains("float32") || text.contains("float") || text.contains("real") {
+        return "float32".to_string();
+    }
+    if text.contains("bool") {
+        return "bool".to_string();
+    }
+    if text.contains("decimal") {
+        return text;
+    }
+    text
+}
+
 #[test]
 fn stable_hash64_matches_expected() -> Result<()> {
     let ctx = SessionContext::new();
@@ -73,6 +124,226 @@ fn stable_hash64_matches_expected() -> Result<()> {
         .downcast_ref::<Int64Array>()
         .expect("int64 column");
     assert_eq!(array.value(0), hash64_value("alpha"));
+    Ok(())
+}
+
+#[test]
+fn information_schema_routines_match_snapshot() -> Result<()> {
+    let config = SessionConfig::new().with_information_schema(true);
+    let ctx = SessionContext::new_with_config(config);
+    udf_registry::register_all(&ctx)?;
+    let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
+    let custom_names: std::collections::HashSet<String> = snapshot.custom_udfs.into_iter().collect();
+
+    let batches = run_query(
+        &ctx,
+        "SELECT routine_name, function_type, data_type, is_deterministic FROM information_schema.routines",
+    )?;
+    let batch = &batches[0];
+    let routine_names = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("routine_name");
+    let function_types = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("function_type");
+    let data_types = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("data_type");
+    let deterministic = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .expect("is_deterministic");
+
+    let mut routine_map: HashMap<String, Vec<(String, Option<String>, bool)>> = HashMap::new();
+    for row in 0..batch.num_rows() {
+        if routine_names.is_null(row) || function_types.is_null(row) {
+            continue;
+        }
+        let name = routine_names.value(row).to_string();
+        let function_type = function_types.value(row).to_string();
+        let data_type = if data_types.is_null(row) {
+            None
+        } else {
+            Some(normalize_type_name(data_types.value(row)))
+        };
+        let is_det = deterministic.value(row);
+        routine_map
+            .entry(name)
+            .or_default()
+            .push((function_type, data_type, is_det));
+    }
+
+    let check_kind = |names: Vec<String>, expected_kind: &str| {
+        for name in names {
+            if !custom_names.contains(&name) {
+                continue;
+            }
+            let Some(rows) = routine_map.get(&name) else {
+                panic!("missing information_schema.routines entry for {name}");
+            };
+            let expected_returns = snapshot
+                .return_types
+                .get(&name)
+                .map(|types| {
+                    types
+                        .iter()
+                        .map(|value| normalize_type_name(value))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let has_any_signature = snapshot
+                .signature_inputs
+                .get(&name)
+                .map(|rows| {
+                    rows.iter()
+                        .any(|row| row.iter().any(|entry| entry == "null"))
+                })
+                .unwrap_or(false);
+            let expected_det = snapshot
+                .volatility
+                .get(&name)
+                .map(|value| value == "immutable")
+                .unwrap_or(false);
+            let matched = rows.iter().any(|(kind, dtype, det)| {
+                if kind != expected_kind || *det != expected_det {
+                    return false;
+                }
+                match dtype {
+                    Some(value) => expected_returns.contains(value),
+                    None => has_any_signature,
+                }
+            });
+            assert!(
+                matched,
+                "information_schema.routines mismatch for {name}"
+            );
+        }
+    };
+
+    check_kind(snapshot.scalar, "SCALAR");
+    check_kind(snapshot.aggregate, "AGGREGATE");
+    check_kind(snapshot.window, "WINDOW");
+    Ok(())
+}
+
+#[test]
+fn information_schema_parameters_match_snapshot() -> Result<()> {
+    let config = SessionConfig::new().with_information_schema(true);
+    let ctx = SessionContext::new_with_config(config);
+    udf_registry::register_all(&ctx)?;
+    let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
+    let custom_names: std::collections::HashSet<String> = snapshot.custom_udfs.into_iter().collect();
+
+    let batches = run_query(
+        &ctx,
+        "SELECT specific_name, parameter_mode, ordinal_position, parameter_name, data_type, rid FROM information_schema.parameters",
+    )?;
+    let batch = &batches[0];
+    let names = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("specific_name");
+    let modes = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("parameter_mode");
+    let ordinals = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("ordinal_position");
+    let param_names = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("parameter_name");
+    let data_types = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("data_type");
+    let rids = batch
+        .column(5)
+        .as_any()
+        .downcast_ref::<UInt8Array>()
+        .expect("rid");
+
+    let mut param_map: HashMap<String, HashMap<u8, Vec<(u64, Option<String>, String)>>> =
+        HashMap::new();
+    for row in 0..batch.num_rows() {
+        if names.is_null(row) || modes.is_null(row) || data_types.is_null(row) {
+            continue;
+        }
+        if modes.value(row) != "IN" {
+            continue;
+        }
+        let name = names.value(row).to_string();
+        let dtype = normalize_type_name(data_types.value(row));
+        let ordinal = ordinals.value(row);
+        let param_name = if param_names.is_null(row) {
+            None
+        } else {
+            Some(param_names.value(row).to_string())
+        };
+        let rid = rids.value(row);
+        param_map
+            .entry(name)
+            .or_default()
+            .entry(rid)
+            .or_default()
+            .push((ordinal, param_name, dtype));
+    }
+
+    for name in snapshot.scalar.into_iter().chain(snapshot.aggregate).chain(snapshot.window) {
+        if !custom_names.contains(&name) {
+            continue;
+        }
+        let expected_inputs = snapshot.signature_inputs.get(&name).cloned().unwrap_or_default();
+        let expected_param_names = snapshot.parameter_names.get(&name).cloned();
+        let has_any_signature = expected_inputs
+            .iter()
+            .any(|row| row.iter().any(|entry| entry == "null"));
+        if expected_inputs.is_empty() || has_any_signature {
+            continue;
+        }
+        let Some(signature_rows) = param_map.get(&name) else {
+            panic!("missing information_schema.parameters entries for {name}");
+        };
+
+        let mut matched = false;
+        for params in signature_rows.values() {
+            let mut params_sorted = params.clone();
+            params_sorted.sort_by_key(|(ordinal, _, _)| *ordinal);
+            let types = params_sorted
+                .iter()
+                .map(|(_, _, dtype)| dtype.clone())
+                .collect::<Vec<_>>();
+            if !expected_inputs.is_empty() && !expected_inputs.contains(&types) {
+                continue;
+            }
+            if let Some(expected_names) = expected_param_names.as_ref() {
+                let names = params_sorted
+                    .iter()
+                    .map(|(_, name, _)| name.clone().unwrap_or_default())
+                    .collect::<Vec<_>>();
+                if &names != expected_names {
+                    continue;
+                }
+            }
+            matched = true;
+            break;
+        }
+        assert!(matched, "information_schema.parameters mismatch for {name}");
+    }
     Ok(())
 }
 

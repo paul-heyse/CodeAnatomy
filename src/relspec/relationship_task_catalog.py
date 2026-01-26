@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from ibis_engine.plan import IbisPlan
 from relspec.relationship_plans import (
@@ -19,7 +20,18 @@ from relspec.relationship_plans import (
     build_rel_name_symbol_plan,
     build_relation_output_plan,
 )
+from relspec.relationship_sql import (
+    build_rel_callsite_qname_sql,
+    build_rel_callsite_symbol_sql,
+    build_rel_def_symbol_sql,
+    build_rel_import_symbol_sql,
+    build_rel_name_symbol_sql,
+    build_relation_output_sql,
+)
 from relspec.task_catalog import TaskBuildContext, TaskCatalog, TaskSpec
+
+if TYPE_CHECKING:
+    from sqlglot_tools.compat import Expression
 
 
 def relationship_task_catalog() -> TaskCatalog:
@@ -40,6 +52,11 @@ def relationship_task_catalog() -> TaskCatalog:
                 task_name="rel.name_symbol",
                 task_priority=default_priority,
             ),
+            sqlglot_builder=_sql_builder(
+                build_rel_name_symbol_sql,
+                task_name="rel.name_symbol",
+                task_priority=default_priority,
+            ),
             kind="view",
             priority=default_priority,
         ),
@@ -48,6 +65,11 @@ def relationship_task_catalog() -> TaskCatalog:
             output=REL_IMPORT_SYMBOL_OUTPUT,
             build=_plan_builder(
                 build_rel_import_symbol_plan,
+                task_name="rel.import_symbol",
+                task_priority=default_priority,
+            ),
+            sqlglot_builder=_sql_builder(
+                build_rel_import_symbol_sql,
                 task_name="rel.import_symbol",
                 task_priority=default_priority,
             ),
@@ -62,6 +84,11 @@ def relationship_task_catalog() -> TaskCatalog:
                 task_name="rel.def_symbol",
                 task_priority=default_priority,
             ),
+            sqlglot_builder=_sql_builder(
+                build_rel_def_symbol_sql,
+                task_name="rel.def_symbol",
+                task_priority=default_priority,
+            ),
             kind="view",
             priority=default_priority,
         ),
@@ -70,6 +97,11 @@ def relationship_task_catalog() -> TaskCatalog:
             output=REL_CALLSITE_SYMBOL_OUTPUT,
             build=_plan_builder(
                 build_rel_callsite_symbol_plan,
+                task_name="rel.callsite_symbol",
+                task_priority=default_priority,
+            ),
+            sqlglot_builder=_sql_builder(
+                build_rel_callsite_symbol_sql,
                 task_name="rel.callsite_symbol",
                 task_priority=default_priority,
             ),
@@ -84,6 +116,11 @@ def relationship_task_catalog() -> TaskCatalog:
                 task_name="rel.callsite_qname",
                 task_priority=default_priority,
             ),
+            sqlglot_builder=_sql_builder(
+                build_rel_callsite_qname_sql,
+                task_name="rel.callsite_qname",
+                task_priority=default_priority,
+            ),
             kind="view",
             priority=default_priority,
         ),
@@ -91,6 +128,7 @@ def relationship_task_catalog() -> TaskCatalog:
             name="rel.output",
             output=RELATION_OUTPUT_NAME,
             build=_plan_builder(build_relation_output_plan),
+            sqlglot_builder=_sql_builder(build_relation_output_sql),
             kind="view",
             priority=default_priority,
         ),
@@ -117,6 +155,20 @@ def _plan_builder(
                 task_priority=task_priority,
             )
         return builder(context.ibis_catalog, context.ctx, context.backend)
+
+    return _build
+
+
+def _sql_builder(
+    builder: Callable[..., Expression],
+    *,
+    task_name: str | None = None,
+    task_priority: int | None = None,
+) -> Callable[[TaskBuildContext], Expression]:
+    def _build(_context: TaskBuildContext) -> Expression:
+        if task_name is not None and task_priority is not None:
+            return builder(task_name=task_name, task_priority=task_priority)
+        return builder()
 
     return _build
 

@@ -8,7 +8,7 @@ from datafusion import col, lit
 from datafusion import functions as f
 from datafusion.expr import Expr
 
-from datafusion_engine.expr_functions import (
+from datafusion_ext import (
     arrow_metadata,
     list_extract,
     map_extract,

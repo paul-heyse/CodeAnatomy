@@ -59,6 +59,88 @@ class ExternalTableDDLConfig:
     dialect: str | None = "datafusion"
 
 
+@dataclass(frozen=True)
+class FunctionArgSpec:
+    """Argument definition for CREATE FUNCTION statements."""
+
+    name: str
+    dtype: str
+
+
+@dataclass(frozen=True)
+class CreateFunctionConfig:
+    """Configuration for CREATE FUNCTION statements."""
+
+    name: str
+    args: tuple[FunctionArgSpec, ...] = ()
+    return_type: str | None = None
+    returns_table: bool = False
+    body: exp.Expression | None = None
+    language: str | None = None
+    volatility: str | None = None
+    replace: bool = False
+
+
+def build_create_function_ast(*, config: CreateFunctionConfig) -> exp.Create:
+    """Build CREATE FUNCTION statements as SQLGlot AST.
+
+    Parameters
+    ----------
+    config
+        Function configuration including name, args, return type, and body.
+
+    Returns
+    -------
+    exp.Create
+        SQLGlot CREATE FUNCTION expression.
+
+    Raises
+    ------
+    ValueError
+        Raised when the function body is missing or the return type is invalid.
+    """
+    if config.body is None:
+        msg = "CREATE FUNCTION requires a function body expression."
+        raise ValueError(msg)
+    return_type = config.return_type
+    if return_type is None and not config.returns_table:
+        msg = "CREATE FUNCTION requires a return type or returns_table=True."
+        raise ValueError(msg)
+    args = [
+        exp.ColumnDef(
+            this=exp.to_identifier(arg.name),
+            kind=exp.DataType.build(arg.dtype),
+        )
+        for arg in config.args
+    ]
+    udf = exp.UserDefinedFunction(
+        this=exp.Table(this=exp.to_identifier(config.name)),
+        expressions=args,
+        wrapped=True,
+    )
+    properties: list[exp.Expression] = []
+    if config.returns_table:
+        properties.append(exp.ReturnsProperty(this=exp.Var(this="TABLE"), is_table=True))
+    else:
+        if return_type is None:
+            msg = "CREATE FUNCTION requires a return type when returns_table is False."
+            raise ValueError(msg)
+        properties.append(exp.ReturnsProperty(this=exp.DataType.build(return_type)))
+    if config.language:
+        properties.append(exp.LanguageProperty(this=exp.Var(this=config.language.upper())))
+    if config.volatility:
+        properties.append(
+            exp.StabilityProperty(this=exp.Literal.string(config.volatility.upper()))
+        )
+    return exp.Create(
+        this=udf,
+        kind="FUNCTION",
+        expression=config.body,
+        properties=exp.Properties(expressions=properties),
+        replace=config.replace,
+    )
+
+
 def build_copy_to_ast(
     *,
     query: exp.Expression,
@@ -343,7 +425,10 @@ def build_insert_into_ast(
 
 
 __all__ = [
+    "CreateFunctionConfig",
+    "FunctionArgSpec",
     "build_copy_to_ast",
+    "build_create_function_ast",
     "build_external_table_ddl",
     "build_insert_into_ast",
 ]

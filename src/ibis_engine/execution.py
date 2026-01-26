@@ -25,6 +25,7 @@ from engine.runtime_profile import runtime_profile_snapshot
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.execution_facade import ExecutionResult
 from ibis_engine.plan import IbisPlan
 from ibis_engine.runner import (
@@ -159,10 +160,34 @@ def _execute_plan(
             execution=execution.plan_options(),
         )
         reader = _apply_ordering_metadata(reader, plan=plan, ctx=execution.ctx)
-        return ExecutionResult.from_reader(reader)
+        result = ExecutionResult.from_reader(reader)
+        _record_ibis_execution(execution, result)
+        return result
     table = materialize_plan(plan, execution=execution.plan_options())
     table = _apply_ordering_metadata(table, plan=plan, ctx=execution.ctx)
-    return ExecutionResult.from_table(table)
+    result = ExecutionResult.from_table(table)
+    _record_ibis_execution(execution, result)
+    return result
+
+
+def _record_ibis_execution(
+    execution: IbisExecutionContext,
+    result: ExecutionResult,
+) -> None:
+    profile = execution.ctx.runtime.datafusion
+    if profile is None:
+        return
+    label = execution.execution_label
+    rows: int | None = None
+    if result.table is not None:
+        rows = result.table.num_rows
+    payload = {
+        "result_kind": result.kind.value,
+        "rows": rows,
+        "task_name": label.task_name if label is not None else None,
+        "output_dataset": label.output_dataset if label is not None else None,
+    }
+    record_artifact(profile, "ibis_plan_execute_v1", payload)
 
 
 @overload

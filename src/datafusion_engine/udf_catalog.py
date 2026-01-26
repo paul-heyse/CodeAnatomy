@@ -14,6 +14,11 @@ import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
 from datafusion_engine.schema_introspection import routines_snapshot_table
+from datafusion_engine.udf_signature import (
+    custom_udf_names,
+    signature_inputs,
+    signature_returns,
+)
 
 if TYPE_CHECKING:
     from datafusion_engine.schema_introspection import SchemaIntrospector
@@ -30,6 +35,7 @@ BuiltinCategory = Literal[
     "logical",
     "datetime",
 ]
+UdfKind = Literal["scalar", "aggregate", "window", "table"]
 
 # Performance tier ordering from fastest to slowest (non-Rust tiers retained
 # for compatibility, but rejected for DataFusion execution).
@@ -863,6 +869,20 @@ def _registry_volatility(snapshot: Mapping[str, object]) -> dict[str, str]:
     return {str(name): str(vol) for name, vol in value.items() if vol is not None}
 
 
+def _registry_rewrite_tags(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
+    value = snapshot.get("rewrite_tags")
+    if not isinstance(value, Mapping):
+        return {}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for name, tags in value.items():
+        if tags is None or isinstance(tags, str):
+            continue
+        if not isinstance(tags, Iterable):
+            continue
+        resolved[str(name)] = tuple(str(tag) for tag in tags if tag is not None)
+    return resolved
+
+
 def _apply_registry_metadata(
     specs: tuple[DataFusionUdfSpec, ...],
     snapshot: Mapping[str, object],
@@ -893,6 +913,7 @@ def _apply_registry_metadata(
 def datafusion_udf_specs(
     *,
     registry_snapshot: Mapping[str, object] | None = None,
+    table_schema_overrides: Mapping[str, pa.Schema | pa.DataType] | None = None,
 ) -> tuple[DataFusionUdfSpec, ...]:
     """Return the canonical DataFusion UDF specs.
 
@@ -901,156 +922,106 @@ def datafusion_udf_specs(
     tuple[DataFusionUdfSpec, ...]
         Canonical DataFusion UDF specifications.
     """
-    specs = (
-        DataFusionUdfSpec(
-            func_id="stable_hash64",
-            engine_name="stable_hash64",
-            kind="scalar",
-            input_types=(pa.string(),),
-            return_type=pa.int64(),
-            arg_names=("value",),
-            rewrite_tags=("hash",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="stable_hash128",
-            engine_name="stable_hash128",
-            kind="scalar",
-            input_types=(pa.string(),),
-            return_type=pa.string(),
-            arg_names=("value",),
-            rewrite_tags=("hash",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="prefixed_hash64",
-            engine_name="prefixed_hash64",
-            kind="scalar",
-            input_types=(pa.string(), pa.string()),
-            return_type=pa.string(),
-            arg_names=("prefix", "value"),
-            rewrite_tags=("hash",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="stable_id",
-            engine_name="stable_id",
-            kind="scalar",
-            input_types=(pa.string(), pa.string()),
-            return_type=pa.string(),
-            arg_names=("prefix", "value"),
-            rewrite_tags=("hash",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="col_to_byte",
-            engine_name="col_to_byte",
-            kind="scalar",
-            input_types=(pa.string(), pa.int64(), pa.string()),
-            return_type=pa.int64(),
-            arg_names=("line_text", "col", "col_unit"),
-            rewrite_tags=("position_encoding",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="list_unique",
-            engine_name="list_unique",
-            kind="aggregate",
-            input_types=(pa.string(),),
-            return_type=pa.list_(pa.string()),
-            state_type=pa.list_(pa.string()),
-            arg_names=("value",),
-            rewrite_tags=("list",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="first_value_agg",
-            engine_name="first_value_agg",
-            kind="aggregate",
-            input_types=(pa.string(),),
-            return_type=pa.string(),
-            state_type=pa.string(),
-            arg_names=("value",),
-            rewrite_tags=("aggregate",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="last_value_agg",
-            engine_name="last_value_agg",
-            kind="aggregate",
-            input_types=(pa.string(),),
-            return_type=pa.string(),
-            state_type=pa.string(),
-            arg_names=("value",),
-            rewrite_tags=("aggregate",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="count_distinct_agg",
-            engine_name="count_distinct_agg",
-            kind="aggregate",
-            input_types=(pa.string(),),
-            return_type=pa.int64(),
-            state_type=pa.list_(pa.string()),
-            arg_names=("value",),
-            rewrite_tags=("aggregate",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="string_agg",
-            engine_name="string_agg",
-            kind="aggregate",
-            input_types=(pa.string(), pa.string()),
-            return_type=pa.string(),
-            state_type=pa.list_(pa.string()),
-            arg_names=("value", "separator"),
-            rewrite_tags=("aggregate", "string"),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="row_number_window",
-            engine_name="row_number_window",
-            kind="window",
-            input_types=(pa.int64(),),
-            return_type=pa.int64(),
-            arg_names=("value",),
-            rewrite_tags=("window",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="lag_window",
-            engine_name="lag_window",
-            kind="window",
-            input_types=(pa.string(),),
-            return_type=pa.string(),
-            arg_names=("value",),
-            rewrite_tags=("window",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="lead_window",
-            engine_name="lead_window",
-            kind="window",
-            input_types=(pa.string(),),
-            return_type=pa.string(),
-            arg_names=("value",),
-            rewrite_tags=("window",),
-            udf_tier="builtin",
-        ),
-        DataFusionUdfSpec(
-            func_id="range_table",
-            engine_name="range_table",
-            kind="table",
-            input_types=(pa.int64(), pa.int64()),
-            return_type=pa.struct([pa.field("value", pa.int64())]),
-            arg_names=("start", "end"),
-            rewrite_tags=("table",),
-            udf_tier="builtin",
-        ),
-    )
-    if registry_snapshot is None:
-        return specs
-    return _apply_registry_metadata(specs, registry_snapshot)
+    snapshot = _resolve_registry_snapshot(registry_snapshot)
+    names = custom_udf_names(snapshot)
+    kinds = _snapshot_kind_map(snapshot)
+    param_names = _registry_parameter_names(snapshot)
+    volatilities = _registry_volatility(snapshot)
+    rewrite_tags = _registry_rewrite_tags(snapshot)
+    specs: list[DataFusionUdfSpec] = []
+    for name in sorted(set(names)):
+        kind = kinds.get(name)
+        if kind is None:
+            continue
+        input_sets = signature_inputs(snapshot, name)
+        return_sets = signature_returns(snapshot, name)
+        input_types, return_type = _select_signature(input_sets, return_sets)
+        if kind == "table":
+            return_type = _resolve_table_return_type(
+                name,
+                return_type,
+                table_schema_overrides,
+            )
+        specs.append(
+            DataFusionUdfSpec(
+                func_id=name,
+                engine_name=name,
+                kind=kind,
+                input_types=input_types,
+                return_type=return_type,
+                arg_names=param_names.get(name),
+                volatility=volatilities.get(name, "stable"),
+                rewrite_tags=rewrite_tags.get(name, ()),
+                udf_tier="builtin",
+            )
+        )
+    return tuple(specs)
+
+
+def _snapshot_kind_map(snapshot: Mapping[str, object]) -> dict[str, UdfKind]:
+    kind_map: dict[str, UdfKind] = {}
+    for kind in ("scalar", "aggregate", "window", "table"):
+        values = snapshot.get(kind)
+        if not isinstance(values, Iterable) or isinstance(values, (str, bytes)):
+            continue
+        for name in values:
+            if name is None:
+                continue
+            kind_map[str(name)] = kind
+    return kind_map
+
+
+def _select_signature(
+    input_sets: tuple[tuple[pa.DataType, ...], ...],
+    return_sets: tuple[pa.DataType, ...],
+) -> tuple[tuple[pa.DataType, ...], pa.DataType]:
+    if not input_sets:
+        return (), pa.null()
+    for index, input_types in enumerate(input_sets):
+        if all(not pa.types.is_null(dtype) for dtype in input_types):
+            return input_types, return_sets[index] if index < len(return_sets) else pa.null()
+    return input_sets[0], return_sets[0] if return_sets else pa.null()
+
+
+def _resolve_table_return_type(
+    name: str,
+    return_type: pa.DataType,
+    overrides: Mapping[str, pa.Schema | pa.DataType] | None,
+) -> pa.DataType:
+    if overrides is None:
+        return _normalize_table_return_type(return_type)
+    override = overrides.get(name)
+    if override is None:
+        return _normalize_table_return_type(return_type)
+    if isinstance(override, pa.Schema):
+        return pa.struct(override)
+    if isinstance(override, pa.DataType):
+        if not pa.types.is_struct(override):
+            msg = (
+                f"Table UDF schema override for {name!r} must be a struct DataType."
+            )
+            raise TypeError(msg)
+        return override
+    msg = f"Table UDF schema override for {name!r} must be a PyArrow Schema or DataType."
+    raise TypeError(msg)
+
+
+def _normalize_table_return_type(return_type: pa.DataType) -> pa.DataType:
+    if pa.types.is_null(return_type):
+        return pa.struct([])
+    return return_type
+
+
+def _resolve_registry_snapshot(
+    registry_snapshot: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    if registry_snapshot is not None:
+        return registry_snapshot
+    from datafusion_engine.udf_runtime import register_rust_udfs
+
+    ctx = SessionContext()
+    return register_rust_udfs(ctx)
+
 
 
 def _rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:

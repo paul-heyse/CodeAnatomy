@@ -9,7 +9,7 @@ from ibis.expr.types import Table, Value
 from arrowdsl.core.ordering import Ordering
 from cpg.schemas import CPG_EDGES_SCHEMA
 from cpg.specs import EdgeEmitSpec
-from ibis_engine.ids import stable_id_expr, stable_key_expr
+from ibis_engine.ids import stable_id_expr, stable_key_hash_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
     bind_expr_schema,
@@ -142,20 +142,20 @@ def _edge_id_expr_from_relation(rel: Table, *, edge_kind: Value) -> Value:
 
 def _edge_key_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
     edge_kind = str(spec.edge_kind)
-    base_key = stable_key_expr(
+    base_key = stable_key_hash_expr(
+        "edge",
         edge_kind,
         rel.src,
         rel.dst,
-        prefix="edge",
     )
-    span_key = stable_key_expr(
+    span_key = stable_key_hash_expr(
+        "edge",
         edge_kind,
         rel.src,
         rel.dst,
         rel.path,
         rel.bstart,
         rel.bend,
-        prefix="edge",
     )
     has_span = rel.path.notnull() & rel.bstart.notnull() & rel.bend.notnull()
     valid_nodes = rel.src.notnull() & rel.dst.notnull()

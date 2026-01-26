@@ -12,7 +12,7 @@ mod udwf_builtin;
 mod udtf_builtin;
 mod udtf_external;
 pub mod udf_registry;
-mod registry_snapshot;
+pub mod registry_snapshot;
 
 use std::any::Any;
 use std::borrow::Cow;
@@ -218,6 +218,26 @@ fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResul
         volatility_payload.set_item(name, volatility)?;
     }
     payload.set_item("volatility", volatility_payload)?;
+    let rewrite_payload = PyDict::new(py);
+    for (name, tags) in snapshot.rewrite_tags {
+        rewrite_payload.set_item(name, PyList::new(py, tags)?)?;
+    }
+    payload.set_item("rewrite_tags", rewrite_payload)?;
+    let signature_payload = PyDict::new(py);
+    for (name, signatures) in snapshot.signature_inputs {
+        let mut rows: Vec<Py<PyAny>> = Vec::with_capacity(signatures.len());
+        for row in signatures {
+            rows.push(PyList::new(py, row)?.into());
+        }
+        signature_payload.set_item(name, PyList::new(py, rows)?)?;
+    }
+    payload.set_item("signature_inputs", signature_payload)?;
+    let return_payload = PyDict::new(py);
+    for (name, return_types) in snapshot.return_types {
+        return_payload.set_item(name, PyList::new(py, return_types)?)?;
+    }
+    payload.set_item("return_types", return_payload)?;
+    payload.set_item("custom_udfs", PyList::new(py, snapshot.custom_udfs)?)?;
     payload.set_item("pycapsule_udfs", PyList::empty(py))?;
     Ok(payload.into())
 }

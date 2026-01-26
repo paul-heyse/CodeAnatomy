@@ -25,10 +25,12 @@ from cpg.specs import (
 from ibis_engine.ids import masked_stable_id_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
+    bind_expr_schema,
     ensure_columns,
     ibis_dtype_from_arrow,
     ibis_null_literal,
     ibis_schema_from_arrow,
+    validate_expr_schema,
 )
 
 SQLGLOT_UNION_THRESHOLD = 96
@@ -83,6 +85,12 @@ def emit_props_ibis(
         combined = _union_rows(rows)
     combined = ensure_columns(combined, schema=CPG_PROPS_SCHEMA, only_missing=True)
     combined = combined.select(*CPG_PROPS_SCHEMA.names)
+    validate_expr_schema(combined, expected=CPG_PROPS_SCHEMA, allow_extra_columns=False)
+    combined = bind_expr_schema(
+        combined,
+        schema=CPG_PROPS_SCHEMA,
+        allow_extra_columns=False,
+    )
     return IbisPlan(expr=combined, ordering=Ordering.unordered())
 
 

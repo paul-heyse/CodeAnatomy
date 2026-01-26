@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Literal, cast
 
 import ibis
 import ibis.expr.datatypes as dt
 import pyarrow as pa
 from ibis.expr.types import Value
+
+from datafusion_engine.udf_signature import signature_inputs, signature_returns
 
 UdfVolatility = Literal["immutable", "stable", "volatile"]
 IbisUdfLane = Literal["ibis_builtin"]
@@ -105,79 +107,14 @@ def col_to_byte(_line: Value, offset: Value, _col_unit: Value) -> Value:
     return offset.cast("int64")
 
 
-IBIS_UDF_SPECS: tuple[IbisUdfSpec, ...] = (
-    IbisUdfSpec(
-        func_id="stable_hash64",
-        engine_name="stable_hash64",
-        kind="scalar",
-        input_types=(pa.string(),),
-        return_type=pa.int64(),
-        arg_names=("value",),
-        lanes=("ibis_builtin",),
-        rewrite_tags=("hash",),
-    ),
-    IbisUdfSpec(
-        func_id="stable_hash128",
-        engine_name="stable_hash128",
-        kind="scalar",
-        input_types=(pa.string(),),
-        return_type=pa.string(),
-        arg_names=("value",),
-        lanes=("ibis_builtin",),
-        rewrite_tags=("hash",),
-    ),
-    IbisUdfSpec(
-        func_id="sha256",
-        engine_name="sha256",
-        kind="scalar",
-        input_types=(pa.string(),),
-        return_type=pa.string(),
-        arg_names=("value",),
-        lanes=("ibis_builtin",),
-        rewrite_tags=("hash",),
-    ),
-    IbisUdfSpec(
-        func_id="prefixed_hash64",
-        engine_name="prefixed_hash64",
-        kind="scalar",
-        input_types=(pa.string(), pa.string()),
-        return_type=pa.string(),
-        arg_names=("prefix", "value"),
-        lanes=("ibis_builtin",),
-        rewrite_tags=("hash",),
-    ),
-    IbisUdfSpec(
-        func_id="stable_id",
-        engine_name="stable_id",
-        kind="scalar",
-        input_types=(pa.string(), pa.string()),
-        return_type=pa.string(),
-        arg_names=("prefix", "value"),
-        lanes=("ibis_builtin",),
-        rewrite_tags=("hash",),
-    ),
-    IbisUdfSpec(
-        func_id="col_to_byte",
-        engine_name="col_to_byte",
-        kind="scalar",
-        input_types=(pa.string(), pa.int64(), pa.string()),
-        return_type=pa.int64(),
-        arg_names=("line_text", "col", "col_unit"),
-        lanes=("ibis_builtin",),
-        rewrite_tags=("position_encoding",),
-    ),
-)
-
-
-def _registry_names(snapshot: Mapping[str, object]) -> set[str]:
-    names: set[str] = set()
-    for key in ("scalar", "aggregate", "window", "table"):
-        value = snapshot.get(key, [])
-        if isinstance(value, str):
-            continue
-        if isinstance(value, Iterable):
-            names.update(str(name) for name in value if name is not None)
-    return names
+_IBIS_BUILTIN_SIGNATURES: Mapping[str, tuple[tuple[pa.DataType, ...], pa.DataType]] = {
+    "stable_hash64": ((pa.string(),), pa.int64()),
+    "stable_hash128": ((pa.string(),), pa.string()),
+    "sha256": ((pa.string(),), pa.string()),
+    "prefixed_hash64": ((pa.string(), pa.string()), pa.string()),
+    "stable_id": ((pa.string(), pa.string()), pa.string()),
+    "col_to_byte": ((pa.string(), pa.int64(), pa.string()), pa.int64()),
+}
 
 
 def _registry_parameter_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
@@ -216,31 +153,43 @@ def _registry_volatility(snapshot: Mapping[str, object]) -> dict[str, UdfVolatil
     return resolved
 
 
-def _apply_registry_metadata(
-    specs: tuple[IbisUdfSpec, ...],
-    snapshot: Mapping[str, object],
-) -> tuple[IbisUdfSpec, ...]:
-    names = _registry_names(snapshot)
-    if not names:
-        return specs
-    missing = sorted(spec.engine_name for spec in specs if spec.engine_name not in names)
-    if missing:
-        msg = f"Rust UDF registry missing expected functions: {missing}"
-        raise ValueError(msg)
-    param_names = _registry_parameter_names(snapshot)
-    volatilities = _registry_volatility(snapshot)
-    enriched: list[IbisUdfSpec] = []
-    for spec in specs:
-        arg_names = param_names.get(spec.engine_name, spec.arg_names)
-        volatility = volatilities.get(spec.engine_name, spec.volatility)
-        enriched.append(
-            replace(
-                spec,
-                arg_names=arg_names if arg_names else spec.arg_names,
-                volatility=volatility,
-            )
-        )
-    return tuple(enriched)
+def _registry_rewrite_tags(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
+    value = snapshot.get("rewrite_tags")
+    if not isinstance(value, Mapping):
+        return {}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for name, tags in value.items():
+        if tags is None or isinstance(tags, str):
+            continue
+        if not isinstance(tags, Iterable):
+            continue
+        resolved[str(name)] = tuple(str(tag) for tag in tags if tag is not None)
+    return resolved
+
+
+def _resolve_registry_snapshot(
+    registry_snapshot: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    if registry_snapshot is not None:
+        return registry_snapshot
+    from datafusion import SessionContext
+
+    from datafusion_engine.udf_runtime import register_rust_udfs
+
+    ctx = SessionContext()
+    return register_rust_udfs(ctx)
+
+
+def _select_signature(
+    input_sets: tuple[tuple[pa.DataType, ...], ...],
+    return_sets: tuple[pa.DataType, ...],
+) -> tuple[tuple[pa.DataType, ...], pa.DataType]:
+    if not input_sets:
+        return (), pa.null()
+    for index, input_types in enumerate(input_sets):
+        if all(not pa.types.is_null(dtype) for dtype in input_types):
+            return input_types, return_sets[index] if index < len(return_sets) else pa.null()
+    return input_sets[0], return_sets[0] if return_sets else pa.null()
 
 
 def ibis_udf_specs(
@@ -254,13 +203,34 @@ def ibis_udf_specs(
     tuple[IbisUdfSpec, ...]
         Canonical Ibis UDF specifications.
     """
-    if registry_snapshot is None:
-        return IBIS_UDF_SPECS
-    return _apply_registry_metadata(IBIS_UDF_SPECS, registry_snapshot)
+    snapshot = _resolve_registry_snapshot(registry_snapshot)
+    param_names = _registry_parameter_names(snapshot)
+    volatilities = _registry_volatility(snapshot)
+    rewrite_tags = _registry_rewrite_tags(snapshot)
+    specs: list[IbisUdfSpec] = []
+    for name, fallback in _IBIS_BUILTIN_SIGNATURES.items():
+        input_sets = signature_inputs(snapshot, name)
+        return_sets = signature_returns(snapshot, name)
+        input_types, return_type = _select_signature(input_sets, return_sets)
+        if not input_types or pa.types.is_null(return_type):
+            input_types, return_type = fallback
+        specs.append(
+            IbisUdfSpec(
+                func_id=name,
+                engine_name=name,
+                kind="scalar",
+                input_types=input_types,
+                return_type=return_type,
+                volatility=volatilities.get(name, "stable"),
+                arg_names=param_names.get(name),
+                lanes=("ibis_builtin",),
+                rewrite_tags=rewrite_tags.get(name, ()),
+            )
+        )
+    return tuple(specs)
 
 
 __all__ = [
-    "IBIS_UDF_SPECS",
     "IbisUdfSpec",
     "col_to_byte",
     "ibis_udf_specs",

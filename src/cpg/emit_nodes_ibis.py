@@ -13,7 +13,13 @@ from cpg.schemas import CPG_NODES_SCHEMA
 from cpg.specs import NodeEmitSpec
 from ibis_engine.ids import masked_stable_id_expr
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import coalesce_columns, ensure_columns, ibis_null_literal
+from ibis_engine.schema_utils import (
+    bind_expr_schema,
+    coalesce_columns,
+    ensure_columns,
+    ibis_null_literal,
+    validate_expr_schema,
+)
 
 
 def emit_nodes_ibis(
@@ -58,6 +64,12 @@ def emit_nodes_ibis(
     output = expr.mutate(**columns)
     output = ensure_columns(output, schema=CPG_NODES_SCHEMA, only_missing=True)
     output = output.select(*CPG_NODES_SCHEMA.names)
+    validate_expr_schema(output, expected=CPG_NODES_SCHEMA, allow_extra_columns=False)
+    output = bind_expr_schema(
+        output,
+        schema=CPG_NODES_SCHEMA,
+        allow_extra_columns=False,
+    )
     return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 

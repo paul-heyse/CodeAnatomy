@@ -27,16 +27,9 @@ logger = logging.getLogger(__name__)
 
 
 class UDFLane(Enum):
-    """
-    Performance tier for UDF execution.
+    """Execution lane for UDF registration (Rust-only DataFusion)."""
 
-    Listed in order of preference (fastest to slowest).
-    """
-
-    BUILTIN = auto()  # Backend native - fastest
-    PYARROW = auto()  # Arrow compute kernels - vectorized
-    PANDAS = auto()  # Pandas vectorized - good
-    PYTHON = auto()  # Row-by-row - slow (last resort)
+    BUILTIN = auto()  # Backend native
 
 
 @dataclass(frozen=True)
@@ -159,27 +152,15 @@ class UDFSpec:
             Raised when a non-builtin UDF lane is attempted.
         """
         if self.lane != UDFLane.BUILTIN:
-            msg = (
-                "Python/PyArrow/Pandas UDF lanes are disabled for DataFusion. "
-                "Convert this function to a Rust UDF."
-            )
+            msg = "Only builtin UDFs are supported for Rust-only DataFusion."
             raise RuntimeError(msg)
-        match self.lane:
-            case UDFLane.BUILTIN:
-                # Reference existing backend function
-                @ibis.udf.scalar.builtin(
-                    name=self.name,
-                    catalog=self.catalog,
-                    database=self.database,
-                )
-                def _builtin() -> None: ...
-
-            case UDFLane.PYARROW | UDFLane.PANDAS | UDFLane.PYTHON:
-                msg = (
-                    "Python/PyArrow/Pandas UDF lanes are disabled for DataFusion. "
-                    "Convert this function to a Rust UDF."
-                )
-                raise RuntimeError(msg)
+        # Reference existing backend function
+        @ibis.udf.scalar.builtin(
+            name=self.name,
+            catalog=self.catalog,
+            database=self.database,
+        )
+        def _builtin() -> None: ...
 
 
 @dataclass
@@ -256,93 +237,6 @@ class FunctionRegistry:
             )
         )
 
-    @staticmethod
-    def register_pyarrow(
-        name: str,
-        _func: Callable[..., object],
-        _signature: UDFSignature | None = None,
-    ) -> None:
-        """
-        Register PyArrow-based UDF (disabled in Rust-only DataFusion mode).
-
-        Parameters
-        ----------
-        name : str
-            Function name
-        _func : Callable
-            PyArrow-vectorized implementation (unused)
-        _signature : UDFSignature | None
-            Type signature (unused)
-
-        Raises
-        ------
-        RuntimeError
-            Raised when PyArrow UDFs are requested.
-        """
-        msg = (
-            "PyArrow UDFs are disabled for DataFusion. "
-            f"Convert '{name}' to a Rust UDF."
-        )
-        raise RuntimeError(msg)
-
-    @staticmethod
-    def register_pandas(
-        name: str,
-        _func: Callable[..., object],
-        _signature: UDFSignature | None = None,
-    ) -> None:
-        """
-        Register Pandas-based UDF (disabled in Rust-only DataFusion mode).
-
-        Parameters
-        ----------
-        name : str
-            Function name
-        _func : Callable
-            Pandas-vectorized implementation (unused)
-        _signature : UDFSignature | None
-            Type signature (unused)
-
-        Raises
-        ------
-        RuntimeError
-            Raised when Pandas UDFs are requested.
-        """
-        msg = (
-            "Pandas UDFs are disabled for DataFusion. "
-            f"Convert '{name}' to a Rust UDF."
-        )
-        raise RuntimeError(msg)
-
-    @staticmethod
-    def register_python(
-        name: str,
-        _func: Callable[..., object],
-        _signature: UDFSignature | None = None,
-    ) -> None:
-        """
-        Register Python row-by-row UDF (disabled in Rust-only DataFusion mode).
-
-        Parameters
-        ----------
-        name : str
-            Function name
-        _func : Callable
-            Row-by-row Python implementation (unused)
-        _signature : UDFSignature | None
-            Type signature (unused)
-
-        Raises
-        ------
-        RuntimeError
-            Raised when Python UDFs are requested.
-        """
-        msg = (
-            "Python UDFs are disabled for DataFusion. "
-            f"Convert '{name}' to a Rust UDF."
-        )
-        raise RuntimeError(msg)
-
     def apply_to_backend(self, backend: Backend) -> None:
         """
         Register all UDFs with the backend.
@@ -393,16 +287,3 @@ class FunctionRegistry:
         for spec in self._specs.values():
             stats[spec.lane] += 1
         return stats
-
-    def list_slow_functions(self) -> list[str]:
-        """
-        List functions using slow Python lane.
-
-        Useful for identifying optimization opportunities.
-
-        Returns
-        -------
-        list[str]
-            Names of functions using Python row-by-row execution
-        """
-        return [name for name, spec in self._specs.items() if spec.lane == UDFLane.PYTHON]

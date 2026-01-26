@@ -17,12 +17,14 @@ from ibis_engine.plan import IbisPlan
 from relspec.context import ensure_task_build_context
 from relspec.inferred_deps import InferredDeps, infer_deps_from_sqlglot_expr
 from relspec.task_catalog import TaskBuildContext, TaskCatalog, TaskSpec
+from sqlglot_tools.optimizer import NormalizeExprOptions, normalize_expr, resolve_sqlglot_policy
 
 if TYPE_CHECKING:
     from ibis.backends import BaseBackend
 
     from arrowdsl.core.execution_context import ExecutionContext
     from datafusion_engine.diagnostics import DiagnosticsRecorder
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from sqlglot_tools.bridge import IbisCompilerBackend
     from sqlglot_tools.compat import Expression
 
@@ -105,6 +107,18 @@ class PlanParameterization:
 
 
 @dataclass(frozen=True)
+class _CompileContext:
+    task: TaskSpec
+    ctx: ExecutionContext
+    plan: IbisPlan
+    parameterization: PlanParameterization | None
+    backend: BaseBackend
+    facade: DataFusionExecutionFacade | None
+    sqlglot_override: Expression | None
+    compile_recorder: DiagnosticsRecorder | None
+
+
+@dataclass(frozen=True)
 class PlanCatalog:
     """Immutable catalog of compiled plans."""
 
@@ -166,84 +180,169 @@ def compile_task_plan(
         backend,
         build_context=build_context,
     )
-    if resolved_context.diagnostics is None and resolved_context.facade is not None:
-        recorder = resolved_context.facade.diagnostics_recorder(
-            operation_id=f"relspec.build.{task.name}"
-        )
-        if recorder is not None:
-            resolved_context = replace(resolved_context, diagnostics=recorder)
+    resolved_context = _attach_build_diagnostics(task, resolved_context)
     built = task.build(resolved_context)
-    parameterization: PlanParameterization | None = None
+    if not isinstance(built, (IbisPlan, ParameterizedRulepack)):
+        msg = f"Task builder must return IbisPlan or ParameterizedRulepack, got {type(built)}."
+        raise TypeError(msg)
+    plan, parameterization = _resolve_built_plan(built)
+    facade = resolved_context.facade or datafusion_facade_from_ctx(ctx, backend=backend)
+    sqlglot_override = (
+        task.sqlglot_builder(resolved_context) if task.sqlglot_builder is not None else None
+    )
+    compile_recorder = _resolve_compile_recorder(task, resolved_context, facade)
+    compile_context = _CompileContext(
+        task=task,
+        ctx=ctx,
+        plan=plan,
+        parameterization=parameterization,
+        backend=backend,
+        facade=facade,
+        sqlglot_override=sqlglot_override,
+        compile_recorder=compile_recorder,
+    )
+    return _compile_plan_artifact(compile_context)
+
+
+def _attach_build_diagnostics(
+    task: TaskSpec,
+    context: TaskBuildContext,
+) -> TaskBuildContext:
+    if context.diagnostics is not None or context.facade is None:
+        return context
+    recorder = context.facade.diagnostics_recorder(
+        operation_id=f"relspec.build.{task.name}",
+    )
+    if recorder is None:
+        return context
+    return replace(context, diagnostics=recorder)
+
+
+def _resolve_built_plan(
+    built: IbisPlan | ParameterizedRulepack,
+) -> tuple[IbisPlan, PlanParameterization | None]:
     if isinstance(built, ParameterizedRulepack):
         plan = IbisPlan(expr=built.expr, ordering=Ordering.unordered())
         parameterization = PlanParameterization(
             param_specs=built.param_specs,
             params=built.param_objects(),
         )
-    else:
-        if not isinstance(built, IbisPlan):
-            msg = f"Task builder must return IbisPlan or ParameterizedRulepack, got {type(built)}."
-            raise TypeError(msg)
-        plan = built
-    compile_recorder = resolved_context.diagnostics
-    facade = resolved_context.facade or datafusion_facade_from_ctx(ctx, backend=backend)
-    if compile_recorder is None and facade is not None:
-        compile_recorder = facade.diagnostics_recorder(
-            operation_id=f"relspec.compile.{task.name}"
-        )
-    if facade is not None:
-        compiled = facade.compile(plan.expr)
-        sqlglot_ast = compiled.compiled.sqlglot_ast
-        deps = infer_deps_from_sqlglot_expr(
-            sqlglot_ast,
-            task_name=task.name,
-            output=task.output,
-            dialect="datafusion",
-        )
-        fingerprint = compiled.compiled.fingerprint
-        _record_compile_artifact(
-            ctx,
-            recorder=compile_recorder,
-            task=task,
-            sqlglot_ast=sqlglot_ast,
-            plan_fingerprint=fingerprint,
-        )
-        return PlanArtifact(
-            task=task,
-            plan=plan,
-            sqlglot_ast=sqlglot_ast,
-            deps=deps,
-            plan_fingerprint=fingerprint,
-            parameterization=parameterization,
-        )
-    compiler_backend = cast("IbisCompilerBackend", backend)
+        return plan, parameterization
+    return built, None
+
+
+def _resolve_compile_recorder(
+    task: TaskSpec,
+    context: TaskBuildContext,
+    facade: DataFusionExecutionFacade | None,
+) -> DiagnosticsRecorder | None:
+    if context.diagnostics is not None:
+        return context.diagnostics
+    if facade is None:
+        return None
+    return facade.diagnostics_recorder(operation_id=f"relspec.compile.{task.name}")
+
+
+def _compile_plan_artifact(context: _CompileContext) -> PlanArtifact:
+    if context.facade is not None:
+        return _compile_with_facade(context)
+    if context.sqlglot_override is not None:
+        return _compile_with_override(context)
+    return _compile_with_checkpoint(context)
+
+
+def _compile_with_facade(context: _CompileContext) -> PlanArtifact:
+    facade = context.facade
+    if facade is None:
+        msg = "Facade compilation requires an execution facade."
+        raise ValueError(msg)
+    compiled = facade.compile(context.sqlglot_override or context.plan.expr)
+    sqlglot_ast = compiled.compiled.sqlglot_ast
+    deps = infer_deps_from_sqlglot_expr(
+        sqlglot_ast,
+        task_name=context.task.name,
+        output=context.task.output,
+        dialect="datafusion",
+    )
+    fingerprint = compiled.compiled.fingerprint
+    deps = replace(deps, plan_fingerprint=fingerprint)
+    _record_compile_artifact(
+        context.ctx,
+        recorder=context.compile_recorder,
+        task=context.task,
+        sqlglot_ast=sqlglot_ast,
+        plan_fingerprint=fingerprint,
+    )
+    return PlanArtifact(
+        task=context.task,
+        plan=context.plan,
+        sqlglot_ast=sqlglot_ast,
+        deps=deps,
+        plan_fingerprint=fingerprint,
+        parameterization=context.parameterization,
+    )
+
+
+def _compile_with_override(context: _CompileContext) -> PlanArtifact:
+    if context.sqlglot_override is None:
+        msg = "SQLGlot override compilation requires an AST override."
+        raise ValueError(msg)
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
+    options = NormalizeExprOptions(policy=policy)
+    normalized = normalize_expr(context.sqlglot_override, options=options)
+    deps = infer_deps_from_sqlglot_expr(
+        normalized,
+        task_name=context.task.name,
+        output=context.task.output,
+        dialect="datafusion",
+    )
+    fingerprint = deps.plan_fingerprint
+    _record_compile_artifact(
+        context.ctx,
+        recorder=context.compile_recorder,
+        task=context.task,
+        sqlglot_ast=normalized,
+        plan_fingerprint=fingerprint,
+    )
+    return PlanArtifact(
+        task=context.task,
+        plan=context.plan,
+        sqlglot_ast=normalized,
+        deps=deps,
+        plan_fingerprint=fingerprint,
+        parameterization=context.parameterization,
+    )
+
+
+def _compile_with_checkpoint(context: _CompileContext) -> PlanArtifact:
+    compiler_backend = cast("IbisCompilerBackend", context.backend)
     checkpoint = compile_checkpoint(
-        plan.expr,
+        context.plan.expr,
         backend=compiler_backend,
         schema_map=None,
         dialect="datafusion",
     )
     deps = infer_deps_from_sqlglot_expr(
         checkpoint.normalized,
-        task_name=task.name,
-        output=task.output,
+        task_name=context.task.name,
+        output=context.task.output,
         dialect="datafusion",
     )
     fingerprint = checkpoint.plan_hash
     _record_compile_artifact(
-        ctx,
-        recorder=compile_recorder,
-        task=task,
+        context.ctx,
+        recorder=context.compile_recorder,
+        task=context.task,
         sqlglot_ast=checkpoint.normalized,
         plan_fingerprint=fingerprint,
     )
     return PlanArtifact(
-        task=task,
-        plan=plan,
+        task=context.task,
+        plan=context.plan,
         sqlglot_ast=checkpoint.normalized,
         deps=deps,
         plan_fingerprint=fingerprint,
-        parameterization=parameterization,
+        parameterization=context.parameterization,
     )
 
 

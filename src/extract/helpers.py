@@ -42,7 +42,7 @@ from extract.schema_ops import (
 from extract.session import ExtractSession, build_extract_session
 from extract.spec_helpers import ExtractExecutionOptions, plan_requires_row, rule_execution_options
 from ibis_engine.execution import execute_ibis_plan
-from ibis_engine.execution_factory import ibis_execution_from_ctx
+from ibis_engine.execution_factory import datafusion_facade_from_ctx, ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
 from serde_msgspec import to_builtins
@@ -652,6 +652,8 @@ def materialize_extract_plan(
         Materialized and normalized extract output.
     """
     resolved = options or ExtractMaterializeOptions()
+    _record_extract_compile(name, plan, ctx=ctx)
+    _record_extract_udf_parity(name, ctx=ctx)
     normalize = resolved.normalize
     streaming_supported = _streaming_supported_for_extract(
         name,
@@ -758,6 +760,53 @@ def _record_extract_execution(
         "rows": row_count,
     }
     record_artifact(profile, "extract_plan_execute_v1", payload)
+
+
+def _record_extract_compile(
+    name: str,
+    plan: IbisPlan,
+    *,
+    ctx: ExecutionContext,
+) -> None:
+    """Record a compile fingerprint artifact for extract plans."""
+    facade = datafusion_facade_from_ctx(ctx)
+    if facade is None:
+        return
+    try:
+        compiled = facade.compile(plan.expr)
+    except (RuntimeError, TypeError, ValueError):
+        return
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return
+    from datafusion_engine.diagnostics import record_artifact
+
+    payload = {
+        "dataset": name,
+        "plan_fingerprint": compiled.compiled.fingerprint,
+        "ast_type": compiled.compiled.sqlglot_ast.__class__.__name__,
+    }
+    record_artifact(profile, "extract_plan_compile_v1", payload)
+
+
+def _record_extract_udf_parity(
+    name: str,
+    *,
+    ctx: ExecutionContext,
+) -> None:
+    """Record extract-scoped UDF parity diagnostics."""
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return
+    from datafusion_engine.diagnostics import record_artifact
+    from datafusion_engine.udf_parity import udf_parity_report
+    from ibis_engine.builtin_udfs import ibis_udf_specs
+
+    session = profile.session_context()
+    report = udf_parity_report(session, ibis_specs=ibis_udf_specs())
+    payload = report.payload()
+    payload["dataset"] = name
+    record_artifact(profile, "extract_udf_parity_v1", payload)
 
 
 def ast_def_nodes(nodes: TableLike) -> TableLike:

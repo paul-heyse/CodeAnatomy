@@ -110,32 +110,6 @@ class EvidenceCatalog:
         contract = schema_contract_from_contract_spec(name=name, spec=spec)
         self.register_contract(name, contract, snapshot=snapshot)
 
-    def register_from_registry(
-        self,
-        name: str,
-        *,
-        ctx: SessionContext | None = None,
-        ctx_id: int | None = None,
-    ) -> bool:
-        """Register an evidence dataset using DataFusion or schema registry.
-
-        Returns
-        -------
-        bool
-            ``True`` when a schema was found and registered.
-        """
-        schema = _schema_from_context(name, ctx=ctx) if ctx is not None else None
-        if schema is None:
-            schema = _schema_from_registry(name)
-        if schema is None:
-            return False
-        self.register(name, schema)
-        if ctx_id is not None:
-            provider_metadata = _provider_metadata(ctx_id, name)
-            if provider_metadata:
-                self.metadata_by_dataset.setdefault(name, {}).update(provider_metadata)
-        return True
-
     def clone(self) -> EvidenceCatalog:
         """Return a shallow copy for staged updates.
 
@@ -168,6 +142,22 @@ class EvidenceCatalog:
         """
         return set(sources).issubset(self.sources)
 
+    def supports_cdf(self, name: str) -> bool | None:
+        """Return whether the dataset supports change data feed.
+
+        Returns
+        -------
+        bool | None
+            True/False when metadata is available, otherwise ``None``.
+        """
+        metadata = self.metadata_by_dataset.get(name)
+        if metadata is None:
+            return None
+        value = metadata.get(b"supports_cdf")
+        if value is None:
+            value = metadata.get(b"delta_cdf_enabled")
+        return _bool_from_metadata(value)
+
 
 @dataclass
 class EvidenceRequirements:
@@ -186,7 +176,6 @@ class EvidenceRegistrationContext:
     ctx: SessionContext | None
     ctx_id: int | None
     snapshot: IntrospectionSnapshot | None
-    allow_registry_fallback: bool
 
 
 def evidence_requirements_from_plan(
@@ -217,7 +206,6 @@ def initial_evidence_from_plan(
     *,
     ctx: SessionContext | None = None,
     snapshot: IntrospectionSnapshot | None = None,
-    allow_registry_fallback: bool = False,
     task_names: set[str] | None = None,
 ) -> EvidenceCatalog:
     """Build initial evidence catalog seeded from plan requirements.
@@ -241,7 +229,6 @@ def initial_evidence_from_plan(
         ctx=ctx,
         ctx_id=ctx_id,
         snapshot=resolved_snapshot,
-        allow_registry_fallback=allow_registry_fallback,
     )
     for source in seed_sources:
         registered = _register_evidence_source(
@@ -397,17 +384,6 @@ def _contract_spec_from_known_registries(
     return None
 
 
-def _schema_from_registry(name: str) -> SchemaLike | None:
-    try:
-        from datafusion_engine.schema_registry import schema_for
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None
-    try:
-        return schema_for(name)
-    except KeyError:
-        return None
-
-
 def _register_evidence_source(
     evidence: EvidenceCatalog,
     source: str,
@@ -427,11 +403,7 @@ def _register_evidence_source(
     if _register_from_introspection(evidence, source, snapshot=context.snapshot):
         _merge_provider_metadata(evidence, source, ctx_id=context.ctx_id)
         return True
-    return context.allow_registry_fallback and evidence.register_from_registry(
-        source,
-        ctx=context.ctx,
-        ctx_id=context.ctx_id,
-    )
+    return False
 
 
 def _merge_provider_metadata(
@@ -466,20 +438,6 @@ def _register_from_introspection(
     return True
 
 
-def _schema_from_context(name: str, *, ctx: SessionContext) -> SchemaLike | None:
-    try:
-        df = ctx.table(name)
-    except (KeyError, RuntimeError, TypeError, ValueError):
-        return None
-    schema_attr = getattr(df, "schema", None)
-    if callable(schema_attr):
-        try:
-            return cast("SchemaLike", schema_attr())
-        except (RuntimeError, TypeError, ValueError):
-            return None
-    return None
-
-
 def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:
     try:
         from datafusion_engine.table_provider_metadata import table_provider_metadata
@@ -488,8 +446,25 @@ def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:
     provider = table_provider_metadata(ctx_id, table_name=name)
     if provider is None:
         return {}
+    metadata: dict[str, object] = dict(provider.metadata)
+    if provider.storage_location is not None:
+        metadata.setdefault("storage_location", provider.storage_location)
+    if provider.file_format is not None:
+        metadata.setdefault("file_format", provider.file_format)
+    if provider.partition_columns:
+        metadata.setdefault("partition_columns", list(provider.partition_columns))
+    if provider.schema_fingerprint is not None:
+        metadata.setdefault("schema_fingerprint", provider.schema_fingerprint)
+    if provider.ddl_fingerprint is not None:
+        metadata.setdefault("ddl_fingerprint", provider.ddl_fingerprint)
+    metadata.setdefault("unbounded", provider.unbounded)
+    if provider.supports_cdf is not None:
+        metadata.setdefault("supports_cdf", provider.supports_cdf)
+    if provider.supports_insert is not None:
+        metadata.setdefault("supports_insert", provider.supports_insert)
     return {
-        key.encode("utf-8"): str(value).encode("utf-8") for key, value in provider.metadata.items()
+        key.encode("utf-8"): str(value).encode("utf-8")
+        for key, value in metadata.items()
     }
 
 
@@ -498,6 +473,21 @@ def _schema_names(schema: SchemaLike) -> tuple[str, ...]:
     if names is not None:
         return tuple(names)
     return tuple(field.name for field in schema)
+
+
+def _bool_from_metadata(value: object | None) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        text = value.decode("utf-8", errors="ignore")
+    else:
+        text = str(value)
+    lowered = text.strip().lower()
+    if lowered in {"true", "1", "yes"}:
+        return True
+    if lowered in {"false", "0", "no"}:
+        return False
+    return None
 
 
 def _schema_types(schema: SchemaLike) -> dict[str, str]:

@@ -59,6 +59,17 @@ from ibis_engine.registry import (
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from schema_spec.specs import ExternalTableConfigOverrides
+from schema_spec.system import (
+    DataFusionScanOptions,
+    DatasetSpec,
+    DeltaScanOptions,
+    ParquetColumnOptions,
+    TableSchemaContract,
+    dataset_spec_from_schema,
+    ddl_fingerprint_from_definition,
+    make_dataset_spec,
+)
 from sqlglot_tools.compat import exp
 from sqlglot_tools.optimizer import (
     StrictParseOptions,
@@ -67,19 +78,10 @@ from sqlglot_tools.optimizer import (
     resolve_sqlglot_policy,
     sqlglot_emit,
 )
+from storage.deltalake import DeltaCdfOptions
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
-from schema_spec.system import (
-    DataFusionScanOptions,
-    DatasetSpec,
-    DeltaScanOptions,
-    ParquetColumnOptions,
-    TableSchemaContract,
-    dataset_spec_from_schema,
-    make_dataset_spec,
-)
-from storage.deltalake import DeltaCdfOptions
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
 _REGISTERED_OBJECT_STORES: dict[int, set[str]] = {}
@@ -772,6 +774,15 @@ def _build_registration_context(
         cache=cache,
         runtime_profile=runtime_profile,
     )
+    provider_metadata: dict[str, str] = {}
+    if location.delta_version is not None:
+        provider_metadata["delta_version"] = str(location.delta_version)
+    if location.delta_timestamp is not None:
+        provider_metadata["delta_timestamp"] = str(location.delta_timestamp)
+    if location.delta_cdf_options is not None:
+        provider_metadata["delta_cdf_enabled"] = "true"
+    if location.datafusion_provider is not None:
+        provider_metadata["datafusion_provider"] = str(location.datafusion_provider)
     metadata = TableProviderMetadata(
         table_name=name,
         ddl=None,
@@ -782,6 +793,7 @@ def _build_registration_context(
         else (),
         unbounded=options.scan.unbounded if options.scan else False,
         ddl_fingerprint=None,
+        metadata=provider_metadata,
     )
     record_table_provider_metadata(id(ctx), metadata=metadata)
     return context
@@ -1159,6 +1171,8 @@ def _register_listing_table(
         DataFrame for the registered listing table.
     """
     scan = context.options.scan
+    if scan is not None and scan.unbounded:
+        return _register_unbounded_external_table(context)
     file_extension = _file_extension_for_location(context.location, scan=scan)
     table_schema_contract = _resolve_table_schema_contract(
         schema=context.options.schema,
@@ -1205,6 +1219,68 @@ def _register_listing_table(
             overwrite=bool(scan.listing_mutable) if scan is not None else False,
         )
     )
+    df = context.ctx.table(context.name)
+    inputs = _RegistrationInputs(
+        scan=scan,
+        file_extension=file_extension,
+        table_partition_cols=table_partition_cols_payload,
+        skip_metadata=skip_metadata,
+        table_schema_contract=table_schema_contract,
+    )
+    return _finalize_registered_df(
+        context,
+        df,
+        inputs=inputs,
+    )
+
+
+def _register_unbounded_external_table(
+    context: DataFusionRegistrationContext,
+) -> DataFrame:
+    scan = context.options.scan
+    file_extension = _file_extension_for_location(context.location, scan=scan)
+    table_schema_contract = _resolve_table_schema_contract(
+        schema=context.options.schema,
+        scan=scan,
+        partition_cols=scan.partition_cols if scan is not None else None,
+    )
+    _validate_table_schema_contract(table_schema_contract)
+    _validate_ordering_contract(context, scan=scan)
+    table_partition_cols_payload = (
+        [(col, str(dtype)) for col, dtype in scan.partition_cols]
+        if scan and scan.partition_cols
+        else None
+    )
+    file_sort_order = None
+    if scan is not None and scan.file_sort_order:
+        file_sort_order = [
+            (str(column), str(direction)) for column, direction in scan.file_sort_order
+        ]
+    skip_metadata = None
+    if scan is not None:
+        skip_metadata = _effective_skip_metadata(context.location, scan)
+    dataset_spec = _resolve_dataset_spec(context.name, context.location)
+    if dataset_spec is None:
+        msg = "Unbounded external table registration requires a dataset spec or schema."
+        raise ValueError(msg)
+    overrides = ExternalTableConfigOverrides(
+        table_name=context.name,
+        options=context.location.read_options or None,
+        partitioned_by=tuple(col for col, _ in scan.partition_cols)
+        if scan and scan.partition_cols
+        else None,
+        file_sort_order=tuple(file_sort_order) if file_sort_order else None,
+        unbounded=True,
+    )
+    config = dataset_spec.external_table_config_with_streaming(
+        location=str(context.location.path),
+        file_format=str(context.location.format or "parquet"),
+        overrides=overrides,
+    )
+    ddl = dataset_spec.external_table_sql(config)
+    adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
+    adapter.execute_statement(ddl, allow_statements=True)
+    _record_table_provider_ddl(context, ddl=ddl)
     df = context.ctx.table(context.name)
     inputs = _RegistrationInputs(
         scan=scan,
@@ -1404,6 +1480,19 @@ def _update_table_provider_capabilities(
         supports_cdf=supports_cdf,
     )
     record_table_provider_metadata(id(ctx), metadata=updated)
+
+
+def _record_table_provider_ddl(
+    context: DataFusionRegistrationContext,
+    *,
+    ddl: str,
+) -> None:
+    metadata = table_provider_metadata(id(context.ctx), table_name=context.name)
+    if metadata is None:
+        return
+    fingerprint = ddl_fingerprint_from_definition(ddl)
+    updated = replace(metadata, ddl=ddl, ddl_fingerprint=fingerprint)
+    record_table_provider_metadata(id(context.ctx), metadata=updated)
 
 
 def _record_listing_table_artifact(

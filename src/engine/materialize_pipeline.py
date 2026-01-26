@@ -19,6 +19,7 @@ from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_sta
 from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.dataset_locations import resolve_dataset_location
 from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
+from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import (
     DataFusionRuntimeProfile,
@@ -233,6 +234,7 @@ def build_plan_product(
     else:
         table = result.require_table()
         schema = table.schema
+    _record_plan_execution(ctx, plan_id=plan_id or _default_plan_id(plan), result=result)
     return PlanProduct(
         plan_id=plan_id or _default_plan_id(plan),
         schema=schema,
@@ -242,6 +244,26 @@ def build_plan_product(
         table=table,
         execution_result=result,
     )
+
+
+def _record_plan_execution(
+    ctx: ExecutionContext,
+    *,
+    plan_id: str,
+    result: ExecutionResult,
+) -> None:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return
+    rows: int | None = None
+    if result.table is not None:
+        rows = result.table.num_rows
+    payload = {
+        "plan_id": plan_id,
+        "result_kind": result.kind.value,
+        "rows": rows,
+    }
+    record_artifact(profile, "plan_execute_v1", payload)
 
 
 @dataclass(frozen=True)

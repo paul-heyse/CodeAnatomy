@@ -5,12 +5,17 @@ from __future__ import annotations
 import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 from datafusion import SessionContext
 
+from sqlglot_tools.ddl_builders import CreateFunctionConfig, build_create_function_ast
+from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_sql
 from storage.ipc import payload_ipc_bytes
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 UdfVolatility = Literal["immutable", "stable", "volatile"]
 
@@ -357,17 +362,63 @@ def create_udwf_spec(spec: UdwfSpecInput) -> RulePrimitive:
     )
 
 
+def create_function_statement(config: CreateFunctionConfig) -> str:
+    """Return CREATE FUNCTION SQL from a structured config.
+
+    Parameters
+    ----------
+    config
+        Create function configuration.
+
+    Returns
+    -------
+    str
+        Rendered CREATE FUNCTION statement.
+    """
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
+    expr = build_create_function_ast(config=config)
+    return sqlglot_sql(expr, policy=policy)
+
+
+def register_function(
+    ctx: SessionContext,
+    *,
+    config: CreateFunctionConfig,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> None:
+    """Register a SQL macro function using FunctionFactory support.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context to register the function in.
+    config
+        Function configuration payload.
+    runtime_profile
+        Optional runtime profile for policy enforcement.
+    """
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    ddl = create_function_statement(config)
+    adapter.execute_statement(ddl, allow_statements=True)
+
+
 __all__ = [
     "DEFAULT_RULE_PRIMITIVES",
+    "CreateFunctionConfig",
     "FunctionFactoryPolicy",
     "FunctionParameter",
     "RulePrimitive",
     "UdafSpecInput",
     "UdfVolatility",
     "UdwfSpecInput",
+    "build_create_function_ast",
+    "create_function_statement",
     "create_udaf_spec",
     "create_udwf_spec",
     "default_function_factory_policy",
     "function_factory_payloads",
     "install_function_factory",
+    "register_function",
 ]

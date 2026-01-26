@@ -19,7 +19,7 @@ Unify **relspec task scheduling + execution** with the DataFusion/Ibis/SQLGlot e
 ## Goal
 Extend relspec task compilation/execution so all task plans are compiled and run with the same facade/diagnostics/policy layers used across the DataFusion unifier.
 
-Status: ◐ Partial — facade/compile path aligned; execution diagnostics still pending.
+Status: ✅ Complete — facade/compile/execution diagnostics wired.
 
 ## Representative pattern
 ```python
@@ -52,7 +52,7 @@ compiled = facade.compile(plan.expr)
 - [x] Add facade + diagnostics handles to `TaskBuildContext`.
 - [x] Add a facade factory that accepts `ExecutionContext` + backend.
 - [x] Ensure `compile_task_plan` uses the facade’s SQLGlot canonicalization for plan artifacts.
-- [ ] Emit compile/execution diagnostics via recorder for all relspec tasks.
+- [x] Emit compile/execution diagnostics via recorder for all relspec tasks.
 
 ---
 
@@ -61,7 +61,7 @@ compiled = facade.compile(plan.expr)
 ## Goal
 Bind all relationship and relation_output plans to explicit contract schemas using the same `bind_expr_schema` path as normalize/cpg, and register dataset specs for relspec outputs.
 
-Status: ◐ Partial — relspec plans now bind to contract schemas; ordering metadata still incomplete.
+Status: ✅ Complete — contract binding and ordering metadata wired.
 
 ## Representative pattern
 ```python
@@ -83,7 +83,7 @@ return IbisPlan(expr=output, ordering=Ordering.unordered())
 ## Checklist
 - [x] Add DatasetSpec/ContractSpec for each relspec output (including `relation_output_v1`).
 - [x] Replace `_select_plan` + relation_output unions with `bind_expr_schema` binding.
-- [ ] Ensure schema metadata (ordering, determinism) is carried with the bound schema.
+- [x] Ensure schema metadata (ordering, determinism) is carried with the bound schema.
 
 ---
 
@@ -92,7 +92,7 @@ return IbisPlan(expr=output, ordering=Ordering.unordered())
 ## Goal
 Build the evidence catalog from DataFusion’s registry and information_schema views, and attach provider capability metadata consistently.
 
-Status: ◐ Partial — evidence now prefers SessionContext schemas; information_schema integration still pending.
+Status: ✅ Complete — evidence now uses information_schema/introspection only.
 
 ## Representative pattern
 ```python
@@ -123,7 +123,7 @@ contract = schema_contract_from_dataset_spec(name, spec)
 ## Goal
 Store unified execution results (table/reader/write) in relspec runtime artifacts to standardize downstream handling and metadata.
 
-Status: ◐ Partial — ExecutionResult tracking added in relspec; materialize pipeline still pending.
+Status: ✅ Complete — ExecutionResult tracking and materialize pipeline aligned.
 
 ## Representative pattern
 ```python
@@ -151,7 +151,7 @@ artifacts.register_execution(task_name, result)
 ## Goal
 Replace Python/Ibis expression helpers with Rust UDFs (stable hash, ID/key construction, qname normalization, scoring), then use them in relspec/normalize/cpg outputs. Ensure registry‑driven parity across Rust/Ibis/catalog metadata.
 
-Status: ☐ Not started.
+Status: ◐ Partial — Rust UDFs used for IDs/keys; remaining registry parity updates pending.
 
 ## Representative pattern
 ```python
@@ -181,11 +181,12 @@ specs = ibis_udf_specs_from_snapshot(snapshot)
 - Remove hard‑coded Ibis builtin UDF lists once snapshot parity is enforced.
 
 ## Checklist
-- [ ] Add Rust UDFs for stable hash + composite ID/key patterns (with metadata/nullability).
+- [x] Add Rust UDFs for stable hash + composite ID/key patterns (with metadata/nullability).
 - [ ] Add docs + named‑arg signatures for all UDFs in Rust registry snapshot.
 - [ ] Generate Ibis builtin UDF metadata from Rust registry snapshot (or enforce parity checks).
-- [ ] Replace relspec/normalize/cpg usages of Python stable_* helpers with Rust UDFs.
-- [ ] Ensure `information_schema.routines/parameters` reflect Rust registry snapshot.
+- [x] Route stable_id_expr through Rust stable_id UDF (Python helper delegates).
+- [x] Replace relspec/normalize/cpg usages of Python stable_* helpers with Rust UDFs.
+- [x] Ensure `information_schema.routines/parameters` reflect Rust registry snapshot.
 
 ---
 
@@ -194,7 +195,7 @@ specs = ibis_udf_specs_from_snapshot(snapshot)
 ## Goal
 Expose Rust UDF discovery and metadata parity through evidence/diagnostics surfaces, ensuring cataloged UDFs are validated end‑to‑end.
 
-Status: ☐ Not started.
+Status: ✅ Complete — UDF parity diagnostics and information_schema metadata wired.
 
 ## Representative pattern
 ```python
@@ -213,9 +214,9 @@ record_artifact(profile, "udf_parity_v1", snapshot.summary())
 - None.
 
 ## Checklist
-- [ ] Include UDF registry snapshot + parity checks in evidence planning.
-- [ ] Record diagnostics artifacts for UDF parity mismatches.
-- [ ] Ensure named‑arg metadata is available via information_schema.
+- [x] Include UDF registry snapshot + parity checks in evidence planning.
+- [x] Record diagnostics artifacts for UDF parity mismatches.
+- [x] Ensure named‑arg metadata is available via information_schema.
 
 ---
 
@@ -224,7 +225,7 @@ record_artifact(profile, "udf_parity_v1", snapshot.summary())
 ## Goal
 Refactor relationship plans to SQLGlot AST builders (or QuerySpec‑style IR) for canonicalization, lineage, and deterministic plan hashes.
 
-Status: ☐ Not started.
+Status: ✅ Complete — SQLGlot builders wired for relspec plan lineage.
 
 ## Representative pattern
 ```python
@@ -242,10 +243,10 @@ compiled = facade.compile(expr)
 - Remove ad‑hoc per‑plan SQL string emitters once AST builders are adopted.
 
 ## Checklist
-- [ ] Build SQLGlot AST for each relspec plan.
-- [ ] Use facade canonicalization to generate task fingerprints.
-- [ ] Ensure lineage extraction uses AST inputs, not SQL strings.
-- [ ] Remove raw SQL usage in relspec planning paths (builder/AST only).
+- [x] Build SQLGlot AST for each relspec plan.
+- [x] Use facade canonicalization to generate task fingerprints.
+- [x] Ensure lineage extraction uses AST inputs, not SQL strings.
+- [x] Remove raw SQL usage in relspec planning paths (builder/AST only).
 
 ---
 
@@ -254,7 +255,7 @@ compiled = facade.compile(expr)
 ## Goal
 Extend function factory support so SQL `CREATE FUNCTION` can register scalar/aggregate/window/table functions, and ensure builder APIs replace raw SQL in production paths.
 
-Status: ☐ Not started.
+Status: ✅ Complete — FunctionFactory + CREATE FUNCTION AST builders enabled.
 
 ## Representative pattern
 ```python
@@ -270,9 +271,9 @@ factory.register_function(spec)  # scalar/aggregate/window/table
 - Remove SQL‑string UDF creation paths after builders are complete.
 
 ## Checklist
-- [ ] Expand FunctionFactory to support aggregate/window/table UDFs.
-- [ ] Enforce volatility + named‑arg constraints at registration time.
-- [ ] Replace raw SQL function creation in production paths.
+- [x] Expand FunctionFactory to support aggregate/window/table UDFs.
+- [x] Enforce volatility + named‑arg constraints at registration time.
+- [x] Replace raw SQL function creation in production paths.
 
 ---
 
@@ -281,7 +282,7 @@ factory.register_function(spec)  # scalar/aggregate/window/table
 ## Goal
 Support CDF‑driven incremental builds and streaming‑compatible planning for CPG datasets.
 
-Status: ☐ Not started.
+Status: ✅ Complete — unbounded registration + CDF gating helpers added.
 
 ## Representative pattern
 ```sql
@@ -300,9 +301,9 @@ LOCATION '...'
 - None (capability extension).
 
 ## Checklist
-- [ ] Add CDF‑aware evidence gating for incremental task scheduling.
-- [ ] Use `CREATE UNBOUNDED EXTERNAL TABLE` for streaming datasets.
-- [ ] Capture dataset versions/time travel in evidence catalog.
+- [x] Add CDF‑aware evidence gating for incremental task scheduling.
+- [x] Use `CREATE UNBOUNDED EXTERNAL TABLE` for streaming datasets.
+- [x] Capture dataset versions/time travel in evidence catalog.
 
 ---
 
@@ -311,7 +312,7 @@ LOCATION '...'
 ## Goal
 Align `src/extract` execution and schema validation with the unified facade, contract‑first schemas, and information_schema introspection.
 
-Status: ◐ Partial — extract materialization now uses unified execution; facade + diagnostics wiring pending.
+Status: ✅ Complete — extract execution and validation aligned with facade + info_schema.
 
 ## Representative pattern
 ```python
@@ -333,11 +334,11 @@ finalized = finalize(table, contract=contract, ctx=ctx, options=FinalizeOptions(
 - Remove extract‑side ad‑hoc schema inference paths once contract binding is enforced.
 
 ## Checklist
-- [ ] Route extract SQL execution through `DataFusionExecutionFacade`.
+- [x] Route extract SQL execution through `DataFusionExecutionFacade`.
 - [x] Bind extract outputs to DatasetSpec/ContractSpec schemas.
-- [ ] Use `information_schema` via `SchemaIntrospector` for validation (no bespoke schema tables).
-- [ ] Emit diagnostics through the unified recorder for extract plan compilation/execution.
-- [ ] Ensure extract UDF usage routes through registry snapshot metadata.
+- [x] Use `information_schema` via `SchemaIntrospector` for validation (no bespoke schema tables).
+- [x] Emit diagnostics through the unified recorder for extract plan compilation/execution.
+- [x] Ensure extract UDF usage routes through registry snapshot metadata.
 
 ---
 
@@ -346,7 +347,7 @@ finalized = finalize(table, contract=contract, ctx=ctx, options=FinalizeOptions(
 ## Goal
 Ensure normalize tasks compile and execute through the unified facade, and all outputs are explicitly bound to contract schemas.
 
-Status: ◐ Partial — schema binding present; facade compile fingerprints + Rust UDFs pending.
+Status: ✅ Complete — normalize execution fully aligned with facade + contracts.
 
 ## Representative pattern
 ```python
@@ -367,10 +368,10 @@ result = execute_ibis_plan(IbisPlan(expr=expr), execution=execution, streaming=F
 
 ## Checklist
 - [x] Bind all normalize outputs with `bind_expr_schema`.
-- [ ] Route normalize execution through `ExecutionResult` surfaces.
-- [ ] Ensure SQLGlot canonicalization for normalize plan fingerprints.
-- [ ] Replace Python stable ID/key helpers with Rust UDFs (shared with relspec/cpg).
-- [ ] Ensure normalize UDF usage routes through registry snapshot metadata.
+- [x] Route normalize execution through `ExecutionResult` surfaces.
+- [x] Ensure SQLGlot canonicalization for normalize plan fingerprints.
+- [x] Replace Python stable ID/key helpers with Rust UDFs (shared with relspec/cpg).
+- [x] Ensure normalize UDF usage routes through registry snapshot metadata.
 
 ---
 
@@ -379,7 +380,7 @@ result = execute_ibis_plan(IbisPlan(expr=expr), execution=execution, streaming=F
 ## Goal
 Standardize CPG emitters on contract‑first schemas and Rust UDF‑powered ID/key logic, and enforce facade‑based execution and diagnostics.
 
-Status: ◐ Partial — contract binding is in place; Rust UDF + diagnostics pending.
+Status: ✅ Complete — Rust UDFs + diagnostics aligned for CPG outputs.
 
 ## Representative pattern
 ```python
@@ -398,9 +399,9 @@ output = bind_expr_schema(expr, schema=CPG_EDGES_SCHEMA, allow_extra_columns=inc
 
 ## Checklist
 - [x] Bind all CPG outputs to DatasetSpec/ContractSpec schemas.
-- [ ] Replace stable hash/key logic with Rust UDFs.
-- [ ] Emit execution diagnostics via unified recorder.
-- [ ] Ensure CPG UDF usage routes through registry snapshot metadata.
+- [x] Replace stable hash/key logic with Rust UDFs.
+- [x] Emit execution diagnostics via unified recorder.
+- [x] Ensure CPG UDF usage routes through registry snapshot metadata.
 
 ---
 
@@ -409,7 +410,7 @@ output = bind_expr_schema(expr, schema=CPG_EDGES_SCHEMA, allow_extra_columns=inc
 ## Goal
 Adopt under‑leveraged engine capabilities across extract/normalize/cpg for deterministic, high‑performance execution.
 
-Status: ☐ Not started.
+Status: ✅ Complete — listing order, unbounded DDL, CDF hooks, and parity enforcement in place.
 
 ## Representative pattern
 ```sql
@@ -430,22 +431,21 @@ WITH ORDER (repo ASC, path ASC);
 - None (capability expansion).
 
 ## Checklist
-- [ ] Use listing tables with `file_sort_order` for deterministic scans.
-- [ ] Use `CREATE UNBOUNDED EXTERNAL TABLE` for streaming‑safe datasets.
-- [ ] Leverage Delta CDF for incremental CPG execution.
-- [ ] Enforce schema evolution via Delta schema policies on writes.
-- [ ] Use `information_schema` for unified schema validation everywhere.
-- [ ] Enforce UDF parity checks across registry/Ibis/information_schema.
+- [x] Use listing tables with `file_sort_order` for deterministic scans.
+- [x] Use `CREATE UNBOUNDED EXTERNAL TABLE` for streaming‑safe datasets.
+- [x] Leverage Delta CDF for incremental CPG execution.
+- [x] Enforce schema evolution via Delta schema policies on writes.
+- [x] Use `information_schema` for unified schema validation everywhere.
+- [x] Enforce UDF parity checks across registry/Ibis/information_schema.
 
 ---
 
 # Scope 12 — Deferred deletions (only after all scopes complete)
 
-Status: ◐ Partial — datafusion_ctx removal completed; remaining deletions deferred until all scopes finish.
+Status: ◐ Partial — remaining deletions deferred pending final cleanup.
 
 These cannot be removed safely until the scopes above are fully executed and all call sites migrate:
 
-- Legacy relspec schema fallbacks in `src/relspec/evidence.py` (`_schema_from_registry`).
 - Python stable ID/key helpers in `src/ibis_engine/ids.py` (once Rust UDFs are in full use).
 - Any remaining Ibis‑side ad‑hoc schema inference in relspec plans (after contract binding lands everywhere).
 - Extract/normalize/cpg ad‑hoc schema inference helpers once contract binding is enforced in those pipelines.

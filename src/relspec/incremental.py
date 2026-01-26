@@ -15,8 +15,16 @@ from datafusion_engine.semantic_diff import (
     compute_rebuild_needed,
 )
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+from ibis_engine.registry import DatasetCatalog
+from incremental.cdf_cursors import CdfCursorStore
+from incremental.cdf_filters import CdfFilterPolicy
+from incremental.cdf_runtime import read_cdf_changes
+from incremental.delta_context import DeltaAccessContext
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
+from relspec.evidence import EvidenceCatalog
 from relspec.plan_catalog import PlanCatalog
+from relspec.rustworkx_graph import TaskGraph
+from relspec.rustworkx_schedule import impacted_tasks
 from sqlglot_tools.optimizer import register_datafusion_dialect, sqlglot_sql
 
 
@@ -48,6 +56,18 @@ class IncrementalDiff:
             if change is None or change.requires_rebuild(policy):
                 rebuild.add(name)
         return tuple(sorted(rebuild))
+
+
+@dataclass(frozen=True)
+class CdfImpactRequest:
+    """Inputs for determining CDF-driven task impacts."""
+
+    graph: TaskGraph
+    catalog: DatasetCatalog
+    context: DeltaAccessContext
+    cursor_store: CdfCursorStore
+    evidence: EvidenceCatalog | None = None
+    filter_policy: CdfFilterPolicy | None = None
 
 
 def diff_plan_catalog(prev: PlanCatalog, curr: PlanCatalog) -> IncrementalDiff:
@@ -137,6 +157,41 @@ def diff_plan_snapshots(
     )
 
 
+def impacted_tasks_for_cdf(request: CdfImpactRequest) -> tuple[str, ...]:
+    """Return tasks impacted by CDF changes in registered datasets.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted task names impacted by datasets with CDF changes.
+    """
+    evidence_names = (
+        request.evidence.sources if request.evidence is not None else set(request.catalog.names())
+    )
+    impacted: set[str] = set()
+    for name in sorted(evidence_names):
+        if not request.catalog.has(name):
+            continue
+        if request.evidence is not None:
+            supports = request.evidence.supports_cdf(name)
+            if supports is False:
+                continue
+        location = request.catalog.get(name)
+        if location.format != "delta":
+            continue
+        result = read_cdf_changes(
+            request.context,
+            dataset_path=str(location.path),
+            dataset_name=name,
+            cursor_store=request.cursor_store,
+            filter_policy=request.filter_policy,
+        )
+        if result is None:
+            continue
+        impacted.update(impacted_tasks(request.graph, evidence_name=name))
+    return tuple(sorted(impacted))
+
+
 def plan_fingerprint_map(catalog: PlanCatalog) -> dict[str, str]:
     """Return a mapping of task names to plan fingerprints.
 
@@ -205,10 +260,12 @@ def _semantic_diff_map(
 
 
 __all__ = [
+    "CdfImpactRequest",
     "IncrementalDiff",
     "diff_plan_catalog",
     "diff_plan_fingerprints",
     "diff_plan_snapshots",
+    "impacted_tasks_for_cdf",
     "plan_fingerprint_map",
     "plan_snapshot_map",
 ]

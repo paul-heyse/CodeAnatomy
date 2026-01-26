@@ -186,21 +186,11 @@ def _table_exists(ctx: SessionContext, name: str) -> bool:
         return name in table_names_snapshot(ctx)
     except (RuntimeError, TypeError, ValueError):
         pass
-    tables_expr = (
-        exp.select("table_name")
-        .from_(exp.to_table("tables", db="information_schema"))
-        .where(exp.EQ(this=exp.column("table_name"), expression=exp.Literal.string(name)))
-        .limit(1)
-    )
     try:
-        stream = _execute_expr_stream(ctx, tables_expr)
+        ctx.table(name)
     except (KeyError, RuntimeError, TypeError, ValueError):
-        try:
-            ctx.table(name)
-        except KeyError:
-            return False
-        return True
-    return any(batch.to_pyarrow().num_rows for batch in stream)
+        return False
+    return True
 
 
 def _normalize_worklist_expr(expr: Expression) -> Expression:

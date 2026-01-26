@@ -50,10 +50,10 @@ impl ScalarUDFImpl for StableHash64Udf {
 - None.
 
 ### Implementation checklist
-- [ ] Implement `return_field_from_args` for all scalar UDFs that currently only implement `return_type`.
-- [ ] Ensure nullability and metadata are preserved where possible.
-- [ ] Add targeted `simplify` hooks for literal‑foldable UDFs (hash/id/metadata extractors).
-- [ ] Add/verify parameter names on all scalar UDF signatures for named‑arg support.
+- [x] Implement `return_field_from_args` for all scalar UDFs that currently only implement `return_type`.
+- [x] Ensure nullability and metadata are preserved where possible.
+- [x] Add targeted `simplify` hooks for literal‑foldable UDFs (hash/id/metadata extractors).
+- [x] Add/verify parameter names on all scalar UDF signatures for named‑arg support.
 
 ---
 
@@ -97,9 +97,9 @@ impl AsyncScalarUDFImpl for RemoteLookupUdf {
 - None.
 
 ### Implementation checklist
-- [ ] Add async UDF module (no production usage required yet).
-- [ ] Provide a simple reference async UDF (feature‑gated or test‑only) to validate runtime behavior.
-- [ ] Document async UDF usage and caveats in docs snapshot.
+- [x] Add async UDF module (no production usage required yet).
+- [x] Provide a simple reference async UDF (feature‑gated or test‑only) to validate runtime behavior.
+- [x] Document async UDF usage and caveats in docs snapshot.
 
 ---
 
@@ -135,10 +135,10 @@ impl AggregateUDFImpl for CountDistinctUdaf {
 - None.
 
 ### Implementation checklist
-- [ ] Implement `supports_null_handling_clause` and honor `ignore_nulls` in accumulator logic.
-- [ ] Provide `default_value` for `count_distinct_agg` (and any other count-like aggregates).
-- [ ] Add `create_sliding_accumulator` with `retract_batch` for window use, or document unsupported window usage.
-- [ ] Implement `GroupsAccumulator::convert_to_state` for perf wins on large cardinality.
+- [x] Implement `supports_null_handling_clause` and honor `ignore_nulls` in accumulator logic.
+- [x] Provide `default_value` for `count_distinct_agg` (and any other count-like aggregates).
+- [x] Add `create_sliding_accumulator` with `retract_batch` for window use, or document unsupported window usage.
+- [x] Implement `GroupsAccumulator::convert_to_state` for perf wins on large cardinality.
 
 ---
 
@@ -166,10 +166,10 @@ fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
 - None.
 
 ### Implementation checklist
-- [ ] Add constant‑folding to UDTF arg parsing (ExprSimplifier).
-- [ ] Add a ListingTable‑backed `read_parquet`/`read_csv` UDTF with pushdown support.
-- [ ] Ensure UDTFs honor projection/filters/limit in provider scan.
-- [ ] Document UDTF usage in docs snapshot and SQL discovery surfaces.
+- [x] Add constant‑folding to UDTF arg parsing (ExprSimplifier).
+- [x] Add a ListingTable‑backed `read_parquet`/`read_csv` UDTF with pushdown support.
+- [x] Ensure UDTFs honor projection/filters/limit in provider scan.
+- [x] Document UDTF usage in docs snapshot and SQL discovery surfaces.
 
 ---
 
@@ -194,9 +194,9 @@ BUILTIN_UDFS = build_from_rust_snapshot(snapshot)
 - Remove hard‑coded builtin lists after generator is in place.
 
 ### Implementation checklist
-- [ ] Generate Ibis builtin UDF metadata from Rust registry snapshot (or assert/validate parity).
-- [ ] Ensure parameter names match across Rust + Ibis to support named arguments.
-- [ ] Keep `information_schema.parameters` consistent with snapshot data.
+- [x] Generate Ibis builtin UDF metadata from Rust registry snapshot (or assert/validate parity).
+- [x] Ensure parameter names match across Rust + Ibis to support named arguments.
+- [ ] Keep `information_schema.parameters` consistent with snapshot data (add explicit QA check).
 
 ---
 
@@ -223,9 +223,9 @@ match build_result {
 - None.
 
 ### Implementation checklist
-- [ ] Extend factory to support aggregate/window/table function creation.
-- [ ] Validate parameter names and enforce volatility constraints.
-- [ ] Add test coverage for CREATE/DROP across function classes.
+- [x] Extend factory to support aggregate/window/table function creation.
+- [x] Validate parameter names and enforce volatility constraints.
+- [x] Add test coverage for CREATE/DROP across function classes.
 
 ---
 
@@ -252,8 +252,8 @@ fn documentation(&self) -> Option<&Documentation> {
 - None.
 
 ### Implementation checklist
-- [ ] Add docs for any function still missing documentation.
-- [ ] Ensure `udf_docs()` UDTF and `udf_docs_snapshot` expose all classes.
+- [x] Add docs for any function still missing documentation.
+- [x] Ensure `udf_docs()` UDTF and `udf_docs_snapshot` expose all classes.
 - [ ] Add `information_schema.routines/parameters` QA checks.
 
 ---
@@ -280,10 +280,10 @@ fn udf_named_args_resolve() {
 - None.
 
 ### Implementation checklist
-- [ ] Add CREATE/DROP FUNCTION tests (macro expansion and explain output).
-- [ ] Add UDAF null‑handling + sliding window tests.
-- [ ] Add UDTF constant‑folding and pushdown behavior tests.
-- [ ] Add parity checks between Rust registry snapshot and Ibis metadata.
+- [x] Add CREATE/DROP FUNCTION tests (macro expansion and explain output).
+- [x] Add UDAF null‑handling + sliding window tests.
+- [x] Add UDTF constant‑folding and pushdown behavior tests.
+- [x] Add parity checks between Rust registry snapshot and Ibis metadata.
 
 ---
 

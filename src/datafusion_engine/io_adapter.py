@@ -416,6 +416,27 @@ class DataFusionIOAdapter:
             {"name": spec.name, "location": spec.location},
         )
 
+    def execute_statement(self, sql: str, *, allow_statements: bool = True) -> DataFrame:
+        """Execute a SQL statement with safety validation.
+
+        Parameters
+        ----------
+        sql
+            SQL statement to execute.
+        allow_statements
+            Whether statement execution should be allowed by policy.
+
+        Returns
+        -------
+        datafusion.dataframe.DataFrame
+            DataFrame returned by the DataFusion execution.
+        """
+        self._validate_sql(sql, allow_statements=allow_statements)
+        df = self.ctx.sql_with_options(sql, self._statement_options())
+        _ = df.collect()
+        invalidate_introspection_cache(self.ctx)
+        return df
+
     def deregister_table(self, name: str) -> None:
         """Deregister a table from the DataFusion catalog.
 

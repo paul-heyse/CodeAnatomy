@@ -36,3 +36,7 @@ deltalake = { version = "0.30.1", features = ["datafusion"] }
 hex = "0.4"
 pyo3 = { version = "0.26", features = ["extension-module"] }
 tokio = { version = "1.49.0", features = ["rt-multi-thread"] }
+
+[features]
+default = []
+async-udf = []

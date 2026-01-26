@@ -9,6 +9,7 @@ use datafusion::execution::context::{FunctionFactory, RegisterFunction};
 use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_doc::DocSection;
 use datafusion_expr::function::{
     AccumulatorArgs,
     AggregateFunctionSimplification,
@@ -52,6 +53,12 @@ enum FunctionKind {
     Window,
     Table,
 }
+
+const DOC_SECTION_SQL_MACRO: DocSection = DocSection {
+    include: true,
+    label: "SQL Macros",
+    description: Some("Functions defined via CREATE FUNCTION."),
+};
 
 fn kind_from_language(language: Option<&str>) -> Result<Option<FunctionKind>> {
     let Some(language) = language else {
@@ -161,6 +168,7 @@ fn build_register_function(
         FunctionKind::Scalar => build_scalar_macro(
             name,
             body,
+            &arg_list,
             arg_types,
             parameter_names,
             params.behavior,
@@ -190,6 +198,7 @@ fn build_register_function(
 fn build_scalar_macro(
     name: String,
     body: Expr,
+    arg_list: &[OperateFunctionArg],
     arg_types: Vec<DataType>,
     parameter_names: Vec<String>,
     requested_volatility: Option<Volatility>,
@@ -206,12 +215,14 @@ fn build_scalar_macro(
             ))
         })?;
     }
+    let documentation = sql_macro_documentation(&name, arg_list, &return_type);
     let udf_impl = SqlMacroUdf {
         name,
         signature,
         return_type,
         template: body,
         parameter_names,
+        documentation,
     };
     Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(udf_impl))))
 }
@@ -370,6 +381,7 @@ struct SqlMacroUdf {
     return_type: DataType,
     template: Expr,
     parameter_names: Vec<String>,
+    documentation: Documentation,
 }
 
 impl ScalarUDFImpl for SqlMacroUdf {
@@ -383,6 +395,10 @@ impl ScalarUDFImpl for SqlMacroUdf {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(&self.documentation)
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -418,6 +434,46 @@ impl ScalarUDFImpl for SqlMacroUdf {
         ));
         Ok(ExprSimplifyResult::Simplified(casted))
     }
+}
+
+fn sql_macro_documentation(
+    name: &str,
+    arg_list: &[OperateFunctionArg],
+    return_type: &DataType,
+) -> Documentation {
+    let args_display = arg_list
+        .iter()
+        .enumerate()
+        .map(|(idx, arg)| {
+            arg.name
+                .as_ref()
+                .map(|ident| ident.value.clone())
+                .unwrap_or_else(|| format!("arg{}", idx + 1))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let syntax = if args_display.is_empty() {
+        format!("{name}()")
+    } else {
+        format!("{name}({args_display})")
+    };
+    let description = format!(
+        "SQL macro defined via CREATE FUNCTION returning {return_type}."
+    );
+    let mut builder = Documentation::builder(DOC_SECTION_SQL_MACRO, description, syntax);
+    for (idx, arg) in arg_list.iter().enumerate() {
+        let arg_name = arg
+            .name
+            .as_ref()
+            .map(|ident| ident.value.clone())
+            .unwrap_or_else(|| format!("arg{}", idx + 1));
+        let mut arg_desc = format!("Type: {}", arg.data_type);
+        if let Some(default_expr) = &arg.default_expr {
+            arg_desc.push_str(&format!(". Default: {default_expr}"));
+        }
+        builder = builder.with_argument(arg_name, arg_desc);
+    }
+    builder.build()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

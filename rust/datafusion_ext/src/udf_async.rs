@@ -66,8 +66,11 @@ impl ScalarUDFImpl for AsyncEchoUdf {
         Ok(Arc::new(output))
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let arg_type = arg_types.first().ok_or_else(|| {
+            DataFusionError::Plan("async_echo expects one argument".into())
+        })?;
+        Ok(arg_type.clone())
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

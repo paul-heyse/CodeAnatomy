@@ -218,6 +218,16 @@ static STABLE_HASH128_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     .build()
 });
 
+static SHA256_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_HASHING,
+        "Compute a SHA-256 hash of a string.",
+        "sha256(value)",
+    )
+    .with_standard_argument("value", Some("String"))
+    .build()
+});
+
 static PREFIXED_HASH64_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_HASHING,
@@ -304,10 +314,23 @@ static READ_CSV_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_TABLE,
         "Read CSV files into a table provider.",
-        "read_csv(path [, limit])",
+        "read_csv(path [, limit] [, schema_ipc] [, has_header] [, delimiter] [, compression])",
     )
     .with_argument("path", "Path or URL to CSV files.")
     .with_argument("limit", "Optional maximum rows to return.")
+    .with_argument(
+        "schema_ipc",
+        "Optional Arrow schema IPC bytes (binary literal or hex string) to override inference.",
+    )
+    .with_argument("has_header", "Optional boolean indicating CSV header presence.")
+    .with_argument(
+        "delimiter",
+        "Optional single-character delimiter (defaults to comma).",
+    )
+    .with_argument(
+        "compression",
+        "Optional compression codec name (e.g., gzip, bz2, zstd).",
+    )
     .build()
 });
 
@@ -315,10 +338,14 @@ static READ_PARQUET_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_TABLE,
         "Read Parquet files into a table provider.",
-        "read_parquet(path [, limit])",
+        "read_parquet(path [, limit] [, schema_ipc])",
     )
     .with_argument("path", "Path or URL to Parquet files.")
     .with_argument("limit", "Optional maximum rows to return.")
+    .with_argument(
+        "schema_ipc",
+        "Optional Arrow schema IPC bytes (binary literal or hex string) to override inference.",
+    )
     .build()
 });
 
@@ -330,6 +357,42 @@ static RANGE_TABLE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     )
     .with_argument("start", "Start of the range (inclusive).")
     .with_argument("end", "End of the range (exclusive).")
+    .build()
+});
+
+static LIST_FILES_CACHE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_TABLE,
+        "Inspect the list-files cache snapshot.",
+        "list_files_cache()",
+    )
+    .build()
+});
+
+static METADATA_CACHE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_TABLE,
+        "Inspect the file metadata cache snapshot.",
+        "metadata_cache()",
+    )
+    .build()
+});
+
+static PREDICATE_CACHE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_TABLE,
+        "Inspect the predicate cache snapshot.",
+        "predicate_cache()",
+    )
+    .build()
+});
+
+static STATISTICS_CACHE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_TABLE,
+        "Inspect the file statistics cache snapshot.",
+        "statistics_cache()",
+    )
     .build()
 });
 
@@ -351,6 +414,10 @@ pub fn stable_hash64_doc() -> &'static Documentation {
 
 pub fn stable_hash128_doc() -> &'static Documentation {
     &STABLE_HASH128_DOC
+}
+
+pub fn sha256_doc() -> &'static Documentation {
+    &SHA256_DOC
 }
 
 pub fn prefixed_hash64_doc() -> &'static Documentation {
@@ -397,8 +464,24 @@ pub fn range_table_doc() -> &'static Documentation {
     &RANGE_TABLE_DOC
 }
 
+pub fn list_files_cache_doc() -> &'static Documentation {
+    &LIST_FILES_CACHE_DOC
+}
+
+pub fn metadata_cache_doc() -> &'static Documentation {
+    &METADATA_CACHE_DOC
+}
+
+pub fn predicate_cache_doc() -> &'static Documentation {
+    &PREDICATE_CACHE_DOC
+}
+
+pub fn statistics_cache_doc() -> &'static Documentation {
+    &STATISTICS_CACHE_DOC
+}
+
 pub fn docs_snapshot() -> Vec<(&'static str, &'static Documentation)> {
-    vec![
+    let mut docs = vec![
         ("map_entries", &MAP_ENTRIES_DOC),
         ("map_keys", &MAP_KEYS_DOC),
         ("map_values", &MAP_VALUES_DOC),
@@ -417,6 +500,7 @@ pub fn docs_snapshot() -> Vec<(&'static str, &'static Documentation)> {
         ("arrow_metadata", arrow_metadata_doc()),
         ("stable_hash64", stable_hash64_doc()),
         ("stable_hash128", stable_hash128_doc()),
+        ("sha256", sha256_doc()),
         ("prefixed_hash64", prefixed_hash64_doc()),
         ("stable_id", stable_id_doc()),
         ("col_to_byte", col_to_byte_doc()),
@@ -427,6 +511,14 @@ pub fn docs_snapshot() -> Vec<(&'static str, &'static Documentation)> {
         ("read_csv", read_csv_doc()),
         ("read_parquet", read_parquet_doc()),
         ("range_table", range_table_doc()),
-        ("async_echo", async_echo_doc()),
-    ]
+        ("list_files_cache", list_files_cache_doc()),
+        ("metadata_cache", metadata_cache_doc()),
+        ("predicate_cache", predicate_cache_doc()),
+        ("statistics_cache", statistics_cache_doc()),
+    ];
+    #[cfg(feature = "async-udf")]
+    {
+        docs.push(("async_echo", async_echo_doc()));
+    }
+    docs
 }

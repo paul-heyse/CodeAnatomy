@@ -4,7 +4,12 @@ use std::path::Path;
 use abi_stable::library::RootModule;
 use datafusion::error::{DataFusionError, Result};
 
-use df_plugin_api::{DfPluginManifestV1, DfPluginMod_Ref, DF_PLUGIN_ABI_MAJOR};
+use df_plugin_api::{
+    DfPluginManifestV1,
+    DfPluginMod_Ref,
+    DF_PLUGIN_ABI_MAJOR,
+    DF_PLUGIN_ABI_MINOR,
+};
 
 pub struct PluginHandle {
     module: DfPluginMod_Ref,
@@ -38,6 +43,13 @@ fn validate_manifest(manifest: &DfPluginManifestV1) -> Result<()> {
             "Plugin ABI mismatch: expected {expected} got {actual}",
             expected = DF_PLUGIN_ABI_MAJOR,
             actual = manifest.plugin_abi_major,
+        )));
+    }
+    if manifest.plugin_abi_minor > DF_PLUGIN_ABI_MINOR {
+        return Err(DataFusionError::Plan(format!(
+            "Plugin ABI minor version too new: expected <= {expected} got {actual}",
+            expected = DF_PLUGIN_ABI_MINOR,
+            actual = manifest.plugin_abi_minor,
         )));
     }
     let expected_size = size_of::<DfPluginManifestV1>() as u32;

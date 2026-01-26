@@ -1,6 +1,7 @@
 //! DataFusion extension for native function registration.
 
 mod udf_builtin;
+#[cfg(feature = "async-udf")]
 mod udf_async;
 mod udf_custom;
 mod udf_docs;

@@ -1,9 +1,12 @@
 use std::fmt;
 use std::future::Future;
+use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use arrow::datatypes::{DataType, SchemaRef};
+use arrow::ipc::reader::StreamReader;
 use datafusion::catalog::{Session, TableFunctionImpl, TableProvider};
 use datafusion::execution::context::SessionContext;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
@@ -20,7 +23,7 @@ use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
 use tokio::runtime::{Handle, Runtime};
 use tokio::task::block_in_place;
-use arrow::datatypes::DataType;
+use hex;
 
 pub fn register_external_udtfs(ctx: &SessionContext) -> Result<()> {
     let read_parquet: Arc<dyn TableFunctionImpl> =
@@ -51,10 +54,12 @@ impl fmt::Debug for ReadParquetTableFunction {
 
 impl TableFunctionImpl for ReadParquetTableFunction {
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        ensure_arg_count(args, "read_parquet", 3)?;
         let path = extract_required_path(args, "read_parquet")?;
-        let limit = extract_optional_limit(args, "read_parquet")?;
+        let limit = extract_optional_usize(args, "read_parquet", 1, "limit")?;
+        let schema = extract_optional_schema(args, "read_parquet", 2)?;
         let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat::default());
-        let provider = listing_table_provider(&self.ctx, format, &path)?;
+        let provider = listing_table_provider(&self.ctx, format, &path, schema, None)?;
         Ok(wrap_with_limit(provider, limit))
     }
 }
@@ -78,10 +83,34 @@ impl fmt::Debug for ReadCsvTableFunction {
 
 impl TableFunctionImpl for ReadCsvTableFunction {
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        ensure_arg_count(args, "read_csv", 6)?;
         let path = extract_required_path(args, "read_csv")?;
-        let limit = extract_optional_limit(args, "read_csv")?;
-        let format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
-        let provider = listing_table_provider(&self.ctx, format, &path)?;
+        let limit = extract_optional_usize(args, "read_csv", 1, "limit")?;
+        let schema = extract_optional_schema(args, "read_csv", 2)?;
+        let has_header = extract_optional_bool(args, "read_csv", 3, "has_header")?;
+        let delimiter = extract_optional_delimiter(args, "read_csv", 4)?;
+        let compression = extract_optional_string(args, "read_csv", 5, "compression")?;
+        let mut format = CsvFormat::default();
+        if let Some(has_header) = has_header {
+            format = format.with_has_header(has_header);
+        }
+        if let Some(delimiter) = delimiter {
+            format = format.with_delimiter(delimiter);
+        }
+        let mut file_extension_override = None;
+        if let Some(compression) = compression {
+            let compression_type = FileCompressionType::from_str(&compression)?;
+            format = format.with_file_compression_type(compression_type);
+            file_extension_override =
+                Some(format.get_ext_with_compression(&compression_type));
+        }
+        let provider = listing_table_provider(
+            &self.ctx,
+            Arc::new(format),
+            &path,
+            schema,
+            file_extension_override,
+        )?;
         Ok(wrap_with_limit(provider, limit))
     }
 }
@@ -99,22 +128,133 @@ fn extract_required_path(args: &[Expr], func_name: &str) -> Result<String> {
     Ok(path)
 }
 
-fn extract_optional_limit(args: &[Expr], func_name: &str) -> Result<Option<usize>> {
-    if args.len() <= 1 {
-        return Ok(None);
-    }
-    if args.len() > 2 {
+fn ensure_arg_count(args: &[Expr], func_name: &str, max_args: usize) -> Result<()> {
+    if args.len() > max_args {
         return Err(DataFusionError::Plan(format!(
-            "{func_name} expects at most two arguments"
+            "{func_name} expects at most {max_args} arguments"
         )));
     }
-    let simplified = simplify_expr(args[1].clone())?;
-    let limit = extract_literal_usize(&simplified).ok_or_else(|| {
+    Ok(())
+}
+
+fn extract_optional_usize(
+    args: &[Expr],
+    func_name: &str,
+    index: usize,
+    label: &str,
+) -> Result<Option<usize>> {
+    let expr = extract_optional_expr(args, index)?;
+    let Some(expr) = expr else {
+        return Ok(None);
+    };
+    let value = extract_literal_usize(&expr).ok_or_else(|| {
         DataFusionError::Plan(format!(
-            "{func_name} expects an integer literal limit as the second argument"
+            "{func_name} expects {label} to be an integer literal"
         ))
     })?;
-    Ok(Some(limit))
+    Ok(Some(value))
+}
+
+fn extract_optional_bool(
+    args: &[Expr],
+    func_name: &str,
+    index: usize,
+    label: &str,
+) -> Result<Option<bool>> {
+    let expr = extract_optional_expr(args, index)?;
+    let Some(expr) = expr else {
+        return Ok(None);
+    };
+    match expr {
+        Expr::Literal(ScalarValue::Boolean(value), _) => Ok(value),
+        _ => Err(DataFusionError::Plan(format!(
+            "{func_name} expects {label} to be a boolean literal"
+        ))),
+    }
+}
+
+fn extract_optional_string(
+    args: &[Expr],
+    func_name: &str,
+    index: usize,
+    label: &str,
+) -> Result<Option<String>> {
+    let expr = extract_optional_expr(args, index)?;
+    let Some(expr) = expr else {
+        return Ok(None);
+    };
+    let value = extract_literal_string(&expr).ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "{func_name} expects {label} to be a string literal"
+        ))
+    })?;
+    Ok(Some(value))
+}
+
+fn extract_optional_delimiter(
+    args: &[Expr],
+    func_name: &str,
+    index: usize,
+) -> Result<Option<u8>> {
+    let value = extract_optional_string(args, func_name, index, "delimiter")?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let mut chars = value.chars();
+    let Some(ch) = chars.next() else {
+        return Err(DataFusionError::Plan(format!(
+            "{func_name} expects delimiter to be a single character"
+        )));
+    };
+    if chars.next().is_some() {
+        return Err(DataFusionError::Plan(format!(
+            "{func_name} expects delimiter to be a single character"
+        )));
+    }
+    Ok(Some(ch as u8))
+}
+
+fn extract_optional_schema(
+    args: &[Expr],
+    func_name: &str,
+    index: usize,
+) -> Result<Option<SchemaRef>> {
+    let expr = extract_optional_expr(args, index)?;
+    let Some(expr) = expr else {
+        return Ok(None);
+    };
+    let schema_bytes = match expr {
+        Expr::Literal(ScalarValue::Binary(Some(value)), _) => value,
+        Expr::Literal(ScalarValue::LargeBinary(Some(value)), _) => value,
+        Expr::Literal(ScalarValue::FixedSizeBinary(_, Some(value)), _) => value,
+        Expr::Literal(ScalarValue::Utf8(Some(value)), _)
+        | Expr::Literal(ScalarValue::LargeUtf8(Some(value)), _)
+        | Expr::Literal(ScalarValue::Utf8View(Some(value)), _) => hex::decode(value).map_err(
+            |err| {
+                DataFusionError::Plan(format!(
+                    "{func_name} expects schema to be hex-encoded IPC bytes: {err}"
+                ))
+            },
+        )?,
+        _ => {
+            return Err(DataFusionError::Plan(format!(
+                "{func_name} expects schema to be an IPC binary literal"
+            )));
+        }
+    };
+    Ok(Some(schema_from_ipc(schema_bytes)?))
+}
+
+fn extract_optional_expr(args: &[Expr], index: usize) -> Result<Option<Expr>> {
+    let expr = args.get(index);
+    let Some(expr) = expr else {
+        return Ok(None);
+    };
+    let simplified = simplify_expr(expr.clone())?;
+    match simplified {
+        Expr::Literal(value, _) if value.is_null() => Ok(None),
+        _ => Ok(Some(simplified)),
+    }
 }
 
 fn simplify_expr(expr: Expr) -> Result<Expr> {
@@ -149,6 +289,8 @@ fn listing_table_provider(
     ctx: &SessionContext,
     format: Arc<dyn FileFormat>,
     path: &str,
+    schema_override: Option<SchemaRef>,
+    file_extension_override: Option<String>,
 ) -> Result<Arc<dyn TableProvider>> {
     let state = ctx.state();
     let mut options =
@@ -156,8 +298,12 @@ fn listing_table_provider(
     let table_path = ListingTableUrl::parse(path).or_else(|_| {
         ListingTableUrl::parse(format!("file://{path}").as_str())
     })?;
-    let inferred_extension = infer_file_extension(&table_path, &options, path)?;
-    options = options.with_file_extension(inferred_extension);
+    let extension = if let Some(extension) = file_extension_override {
+        extension
+    } else {
+        infer_file_extension(&table_path, &options, path)?
+    };
+    options = options.with_file_extension(extension);
 
     if state
         .config_options()
@@ -181,7 +327,11 @@ fn listing_table_provider(
     }
 
     block_on(options.validate_partitions(&state, &table_path))?;
-    let schema = block_on(options.infer_schema(&state, &table_path))?;
+    let schema = if let Some(schema) = schema_override {
+        schema
+    } else {
+        block_on(options.infer_schema(&state, &table_path))?
+    };
 
     let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
@@ -189,6 +339,15 @@ fn listing_table_provider(
     let provider = ListingTable::try_new(config)?
         .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
     Ok(Arc::new(provider))
+}
+
+fn schema_from_ipc(payload: Vec<u8>) -> Result<SchemaRef> {
+    let mut reader = StreamReader::try_new(Cursor::new(payload), None).map_err(|err| {
+        DataFusionError::Plan(format!("Failed to open schema IPC stream: {err}"))
+    })?;
+    reader.schema().map_err(|err| {
+        DataFusionError::Plan(format!("Failed to decode schema IPC: {err}"))
+    })
 }
 
 fn block_on<F, T>(future: F) -> Result<T>

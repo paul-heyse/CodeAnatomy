@@ -7,6 +7,8 @@ use datafusion::catalog::TableFunctionImpl;
 use datafusion_common::Result;
 
 use crate::{udaf_builtin, udtf_builtin, udtf_external, udwf_builtin, udf_custom};
+#[cfg(feature = "async-udf")]
+use crate::udf_async;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -129,6 +131,8 @@ pub fn register_all(ctx: &SessionContext) -> Result<()> {
     }
     udtf_builtin::register_builtin_udtfs(ctx)?;
     udtf_external::register_external_udtfs(ctx)?;
+    #[cfg(feature = "async-udf")]
+    udf_async::register_async_udfs(ctx)?;
     Ok(())
 }
 

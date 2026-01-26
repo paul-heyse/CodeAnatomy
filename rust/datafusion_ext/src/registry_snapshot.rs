@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion::execution::session_state::SessionState;
-use datafusion_expr::{Signature, TypeSignature, Volatility, WindowUDF};
+use datafusion_expr::{Documentation, Signature, TypeSignature, Volatility, WindowUDF};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
-use crate::{udaf_builtin, udf_registry, udwf_builtin};
+use crate::{udaf_builtin, udf_docs, udf_registry, udwf_builtin};
 
 pub struct RegistrySnapshot {
     pub scalar: Vec<String>,
@@ -45,11 +45,12 @@ pub fn registry_snapshot(state: &SessionState) -> RegistrySnapshot {
     let custom_names = custom_udf_names(&table_signatures);
     let mut snapshot = RegistrySnapshot::new();
     snapshot.custom_udfs = custom_names.iter().cloned().collect();
-    record_scalar_udfs(state, &mut snapshot, &custom_names);
-    record_aggregate_udfs(state, &mut snapshot, &custom_names);
-    record_window_udfs(state, &mut snapshot, &custom_names);
+    record_scalar_udfs(state, &mut snapshot);
+    record_aggregate_udfs(state, &mut snapshot);
+    record_window_udfs(state, &mut snapshot);
     record_table_functions(state, &mut snapshot);
     apply_table_signatures(&mut snapshot, &table_signatures);
+    apply_docs_parameter_names(state, &mut snapshot);
     snapshot.scalar.sort();
     snapshot.aggregate.sort();
     snapshot.window.sort();
@@ -58,29 +59,19 @@ pub fn registry_snapshot(state: &SessionState) -> RegistrySnapshot {
     snapshot
 }
 
-fn record_scalar_udfs(
-    state: &SessionState,
-    snapshot: &mut RegistrySnapshot,
-    custom_names: &BTreeSet<String>,
-) {
+fn record_scalar_udfs(state: &SessionState, snapshot: &mut RegistrySnapshot) {
     for (name, udf) in state.scalar_functions() {
         snapshot.scalar.push(name.clone());
         record_aliases(name, udf.aliases(), &mut snapshot.aliases);
         record_signature(name, udf.signature(), &mut snapshot.parameter_names, &mut snapshot.volatility);
         record_rewrite_tags(name, snapshot);
-        if custom_names.contains(name) {
-            record_signature_details(name, udf.signature(), snapshot, |arg_types| {
-                udf.return_type(arg_types).ok()
-            });
-        }
+        record_signature_details(name, udf.signature(), snapshot, |arg_types| {
+            udf.return_type(arg_types).ok()
+        });
     }
 }
 
-fn record_aggregate_udfs(
-    state: &SessionState,
-    snapshot: &mut RegistrySnapshot,
-    custom_names: &BTreeSet<String>,
-) {
+fn record_aggregate_udfs(state: &SessionState, snapshot: &mut RegistrySnapshot) {
     for (name, udaf) in state.aggregate_functions() {
         snapshot.aggregate.push(name.clone());
         record_aliases(name, udaf.aliases(), &mut snapshot.aliases);
@@ -91,19 +82,13 @@ fn record_aggregate_udfs(
             &mut snapshot.volatility,
         );
         record_rewrite_tags(name, snapshot);
-        if custom_names.contains(name) {
-            record_signature_details(name, udaf.signature(), snapshot, |arg_types| {
-                udaf.return_type(arg_types).ok()
-            });
-        }
+        record_signature_details(name, udaf.signature(), snapshot, |arg_types| {
+            udaf.return_type(arg_types).ok()
+        });
     }
 }
 
-fn record_window_udfs(
-    state: &SessionState,
-    snapshot: &mut RegistrySnapshot,
-    custom_names: &BTreeSet<String>,
-) {
+fn record_window_udfs(state: &SessionState, snapshot: &mut RegistrySnapshot) {
     for (name, udwf) in state.window_functions() {
         snapshot.window.push(name.clone());
         record_aliases(name, udwf.aliases(), &mut snapshot.aliases);
@@ -114,11 +99,9 @@ fn record_window_udfs(
             &mut snapshot.volatility,
         );
         record_rewrite_tags(name, snapshot);
-        if custom_names.contains(name) {
-            record_signature_details(name, udwf.signature(), snapshot, |arg_types| {
-                window_return_type(udwf, arg_types, name).ok()
-            });
-        }
+        record_signature_details(name, udwf.signature(), snapshot, |arg_types| {
+            window_return_type(udwf, arg_types, name).ok()
+        });
     }
 }
 
@@ -171,6 +154,16 @@ struct TableSignature {
 
 fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
     let mut signatures = BTreeMap::new();
+    let cache_schema = DataType::Struct(Fields::from(vec![
+        Field::new("cache_name", DataType::Utf8, false),
+        Field::new("event_time_unix_ms", DataType::Int64, false),
+        Field::new("entry_count", DataType::Int64, true),
+        Field::new("hit_count", DataType::Int64, true),
+        Field::new("miss_count", DataType::Int64, true),
+        Field::new("eviction_count", DataType::Int64, true),
+        Field::new("config_ttl", DataType::Utf8, true),
+        Field::new("config_limit", DataType::Utf8, true),
+    ]));
     signatures.insert(
         "range_table".to_string(),
         TableSignature {
@@ -188,6 +181,8 @@ fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
             inputs: vec![
                 vec![DataType::Utf8],
                 vec![DataType::Utf8, DataType::Int64],
+                vec![DataType::Utf8, DataType::Int64, DataType::Binary],
+                vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
             ],
             return_type: DataType::Struct(Fields::from(Vec::<Field>::new())),
         },
@@ -198,10 +193,68 @@ fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
             inputs: vec![
                 vec![DataType::Utf8],
                 vec![DataType::Utf8, DataType::Int64],
+                vec![DataType::Utf8, DataType::Int64, DataType::Binary],
+                vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
+                vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Binary,
+                    DataType::Boolean,
+                ],
+                vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Utf8,
+                    DataType::Boolean,
+                ],
+                vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Binary,
+                    DataType::Boolean,
+                    DataType::Utf8,
+                ],
+                vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Utf8,
+                    DataType::Boolean,
+                    DataType::Utf8,
+                ],
+                vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Binary,
+                    DataType::Boolean,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                ],
+                vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Utf8,
+                    DataType::Boolean,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                ],
             ],
             return_type: DataType::Struct(Fields::from(Vec::<Field>::new())),
         },
     );
+    for name in [
+        "list_files_cache",
+        "metadata_cache",
+        "predicate_cache",
+        "statistics_cache",
+    ] {
+        signatures.insert(
+            name.to_string(),
+            TableSignature {
+                inputs: vec![vec![]],
+                return_type: cache_schema.clone(),
+            },
+        );
+    }
     signatures.insert(
         "udf_registry".to_string(),
         TableSignature {
@@ -317,6 +370,46 @@ fn apply_table_signatures(
             snapshot.return_types.insert(name.clone(), returns);
         }
     }
+}
+
+fn apply_docs_parameter_names(state: &SessionState, snapshot: &mut RegistrySnapshot) {
+    let mut docs = documentation_snapshot(state);
+    for (name, doc) in udf_docs::docs_snapshot() {
+        docs.insert(name.to_string(), doc);
+    }
+    for (name, doc) in docs {
+        if snapshot.parameter_names.contains_key(&name) {
+            continue;
+        }
+        let Some(args) = doc.arguments.as_ref() else {
+            continue;
+        };
+        if args.is_empty() {
+            continue;
+        }
+        let names = args.iter().map(|(arg, _)| arg.clone()).collect();
+        snapshot.parameter_names.insert(name, names);
+    }
+}
+
+fn documentation_snapshot(state: &SessionState) -> BTreeMap<String, &Documentation> {
+    let mut docs: BTreeMap<String, &Documentation> = BTreeMap::new();
+    for (name, udf) in state.scalar_functions() {
+        if let Some(doc) = udf.documentation() {
+            docs.entry(name.clone()).or_insert(doc);
+        }
+    }
+    for (name, udaf) in state.aggregate_functions() {
+        if let Some(doc) = udaf.documentation() {
+            docs.entry(name.clone()).or_insert(doc);
+        }
+    }
+    for (name, udwf) in state.window_functions() {
+        if let Some(doc) = udwf.documentation() {
+            docs.entry(name.clone()).or_insert(doc);
+        }
+    }
+    docs
 }
 
 fn record_signature_details<F>(

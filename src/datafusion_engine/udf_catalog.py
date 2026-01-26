@@ -910,6 +910,35 @@ def _apply_registry_metadata(
     return tuple(enriched)
 
 
+def _table_schema_overrides_from_registry(
+    *,
+    registry_snapshot: Mapping[str, object] | None,
+) -> dict[str, pa.Schema]:
+    if registry_snapshot is None:
+        return {}
+    try:
+        from datafusion_engine.schema_registry import (
+            nested_schema_for,
+            nested_schema_names,
+            schema_registry,
+        )
+    except ImportError:
+        return {}
+    registry = dict(schema_registry())
+    for name in nested_schema_names():
+        registry.setdefault(name, nested_schema_for(name, allow_derived=True))
+    if not registry:
+        return {}
+    table_names = {
+        name
+        for name, kind in _snapshot_kind_map(registry_snapshot).items()
+        if kind == "table"
+    }
+    if not table_names:
+        return {}
+    return {name: schema for name, schema in registry.items() if name in table_names}
+
+
 def datafusion_udf_specs(
     *,
     registry_snapshot: Mapping[str, object] | None = None,
@@ -1045,9 +1074,15 @@ def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
         Default catalog with standard tier policy.
     """
     registry_snapshot = _rust_udf_snapshot(introspector.ctx)
+    table_schema_overrides = _table_schema_overrides_from_registry(
+        registry_snapshot=registry_snapshot,
+    )
     specs = {
         spec.func_id: spec
-        for spec in datafusion_udf_specs(registry_snapshot=registry_snapshot)
+        for spec in datafusion_udf_specs(
+            registry_snapshot=registry_snapshot,
+            table_schema_overrides=table_schema_overrides or None,
+        )
     }
     catalog = create_default_catalog(udf_specs=specs)
     catalog.refresh_from_session(introspector)
@@ -1063,9 +1098,15 @@ def get_strict_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
         Catalog with strict builtin-only policy.
     """
     registry_snapshot = _rust_udf_snapshot(introspector.ctx)
+    table_schema_overrides = _table_schema_overrides_from_registry(
+        registry_snapshot=registry_snapshot,
+    )
     specs = {
         spec.func_id: spec
-        for spec in datafusion_udf_specs(registry_snapshot=registry_snapshot)
+        for spec in datafusion_udf_specs(
+            registry_snapshot=registry_snapshot,
+            table_schema_overrides=table_schema_overrides or None,
+        )
     }
     catalog = create_strict_catalog(udf_specs=specs)
     catalog.refresh_from_session(introspector)

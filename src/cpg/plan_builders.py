@@ -142,9 +142,6 @@ def _preload_sources(
         if catalog.resolve_plan(name, ctx=ctx, label=name) is not None:
             continue
         schema = _schema_for(name)
-        if schema is None:
-            msg = f"Missing schema for CPG input {name!r}."
-            raise KeyError(msg)
         empty = empty_table(schema)
         plan = register_ibis_table(
             empty,
@@ -162,9 +159,6 @@ def _resolve_table(catalog: IbisPlanCatalog, *, ctx: ExecutionContext, name: str
     if plan is not None:
         return plan.expr
     schema = _schema_for(name)
-    if schema is None:
-        msg = f"Missing schema for CPG input {name!r}."
-        raise KeyError(msg)
     empty = empty_table(schema)
     plan = register_ibis_table(
         empty,
@@ -178,15 +172,10 @@ def _resolve_table(catalog: IbisPlanCatalog, *, ctx: ExecutionContext, name: str
     return plan.expr
 
 
-def _schema_for(name: str) -> pa.Schema | None:
-    try:
-        from datafusion_engine.schema_registry import schema_for
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None
-    try:
-        return schema_for(name)
-    except KeyError:
-        return None
+def _schema_for(name: str) -> pa.Schema:
+    from datafusion_engine.schema_registry import schema_for
+
+    return schema_for(name)
 
 
 def _union_plans(plans: Iterable[IbisPlan], *, schema: pa.Schema, backend: BaseBackend) -> IbisPlan:

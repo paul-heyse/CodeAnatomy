@@ -648,10 +648,15 @@ def _record_udf_parity(
     if profile is None:
         return
     from datafusion_engine.udf_parity import udf_parity_report
+    from datafusion_engine.udf_runtime import register_rust_udfs
     from ibis_engine.builtin_udfs import ibis_udf_specs
 
     session = profile.session_context()
-    report = udf_parity_report(session, ibis_specs=ibis_udf_specs())
+    registry_snapshot = register_rust_udfs(session)
+    report = udf_parity_report(
+        session,
+        ibis_specs=ibis_udf_specs(registry_snapshot=registry_snapshot),
+    )
     payload = report.payload()
     payload["output"] = output
     payload["builder_name"] = builder_name

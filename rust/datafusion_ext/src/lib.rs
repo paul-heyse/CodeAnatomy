@@ -276,24 +276,9 @@ fn udf_docs_snapshot(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<P
     };
 
     let state = ctx.ctx.state();
-    for (name, udf) in state.scalar_functions() {
-        if let Some(doc) = udf.documentation() {
-            add_doc(name, doc)?;
-        }
-    }
-    for (name, udaf) in state.aggregate_functions() {
-        if let Some(doc) = udaf.documentation() {
-            add_doc(name, doc)?;
-        }
-    }
-    for (name, udwf) in state.window_functions() {
-        if let Some(doc) = udwf.documentation() {
-            add_doc(name, doc)?;
-        }
-    }
-
-    for (name, doc) in udf_docs::docs_snapshot() {
-        add_doc(name, doc)?;
+    let docs = udf_docs::registry_docs(&state);
+    for (name, doc) in docs {
+        add_doc(name.as_str(), doc)?;
     }
     Ok(payload.into())
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion::execution::session_state::SessionState;
-use datafusion_expr::{Documentation, Signature, TypeSignature, Volatility, WindowUDF};
+use datafusion_expr::{Signature, TypeSignature, Volatility, WindowUDF};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 use crate::{udaf_builtin, udf_docs, udf_registry, udwf_builtin};
@@ -373,10 +373,7 @@ fn apply_table_signatures(
 }
 
 fn apply_docs_parameter_names(state: &SessionState, snapshot: &mut RegistrySnapshot) {
-    let mut docs = documentation_snapshot(state);
-    for (name, doc) in udf_docs::docs_snapshot() {
-        docs.insert(name.to_string(), doc);
-    }
+    let docs = udf_docs::registry_docs(state);
     for (name, doc) in docs {
         if snapshot.parameter_names.contains_key(&name) {
             continue;
@@ -390,26 +387,6 @@ fn apply_docs_parameter_names(state: &SessionState, snapshot: &mut RegistrySnaps
         let names = args.iter().map(|(arg, _)| arg.clone()).collect();
         snapshot.parameter_names.insert(name, names);
     }
-}
-
-fn documentation_snapshot(state: &SessionState) -> BTreeMap<String, &Documentation> {
-    let mut docs: BTreeMap<String, &Documentation> = BTreeMap::new();
-    for (name, udf) in state.scalar_functions() {
-        if let Some(doc) = udf.documentation() {
-            docs.entry(name.clone()).or_insert(doc);
-        }
-    }
-    for (name, udaf) in state.aggregate_functions() {
-        if let Some(doc) = udaf.documentation() {
-            docs.entry(name.clone()).or_insert(doc);
-        }
-    }
-    for (name, udwf) in state.window_functions() {
-        if let Some(doc) = udwf.documentation() {
-            docs.entry(name.clone()).or_insert(doc);
-        }
-    }
-    docs
 }
 
 fn record_signature_details<F>(

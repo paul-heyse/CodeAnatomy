@@ -12,7 +12,7 @@ from ibis.expr.types import BooleanValue, Table, Value
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import empty_table
 from datafusion_engine.nested_tables import ViewReference
-from ibis_engine.ids import masked_stable_id_expr
+from ibis_engine.hash_exprs import HashExprSpec, masked_stable_id_expr_from_spec
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
 from normalize.schemas import SPAN_ERROR_SCHEMA
 from normalize.span_logic import (
@@ -92,12 +92,24 @@ def add_ast_span_struct_ibis(
         end_exclusive=base.end_exclusive,
     )
     span = span_struct_expr(span_inputs)
-    span_id = masked_stable_id_expr(
-        "span",
-        parts=(ast.path, offsets.bstart, offsets.bend),
-        required=(ast.path, offsets.bstart, offsets.bend),
+    with_offsets = joined.mutate(
+        __span_bstart=offsets.bstart,
+        __span_bend=offsets.bend,
     )
-    return joined.mutate(span=span, span_ok=offsets.span_ok, span_id=span_id)
+    span_id = masked_stable_id_expr_from_spec(
+        with_offsets,
+        spec=HashExprSpec(
+            prefix="span",
+            cols=("path", "__span_bstart", "__span_bend"),
+            null_sentinel="None",
+        ),
+        required=("path", "__span_bstart", "__span_bend"),
+    )
+    return with_offsets.mutate(
+        span=span,
+        span_ok=offsets.span_ok,
+        span_id=span_id,
+    ).drop("__span_bstart", "__span_bend")
 
 
 def anchor_instructions_span_struct_ibis(
@@ -417,11 +429,6 @@ def _scip_occurrence_span_exprs(joined: Table) -> tuple[Table, Table]:
         end_exclusive=joined.end_exclusive_norm,
     )
     span = span_struct_expr(span_inputs)
-    span_id = masked_stable_id_expr(
-        "span",
-        parts=(joined.resolved_path, bstart, bend),
-        required=(joined.resolved_path, bstart, bend),
-    )
     occ_expr = joined.mutate(
         bstart=bstart,
         bend=bend,
@@ -429,8 +436,17 @@ def _scip_occurrence_span_exprs(joined: Table) -> tuple[Table, Table]:
         enc_bend=enc_bend,
         span=span,
         span_ok=span_ok,
-        span_id=span_id,
     )
+    span_id = masked_stable_id_expr_from_spec(
+        occ_expr,
+        spec=HashExprSpec(
+            prefix="span",
+            cols=("resolved_path", "bstart", "bend"),
+            null_sentinel="None",
+        ),
+        required=("resolved_path", "bstart", "bend"),
+    )
+    occ_expr = occ_expr.mutate(span_id=span_id)
     errors_expr = _scip_span_errors_expr(
         joined,
         span_ok=span_ok,

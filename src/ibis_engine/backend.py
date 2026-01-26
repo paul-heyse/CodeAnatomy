@@ -115,16 +115,9 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
     backend = ibis_datafusion.connect(ctx)
     try:
         introspector = SchemaIntrospector(ctx)
-        registry_snapshot = None
-        try:
-            from datafusion_engine.udf_runtime import rust_udf_snapshot
-        except ImportError:
-            registry_snapshot = None
-        else:
-            try:
-                registry_snapshot = rust_udf_snapshot(ctx)
-            except (RuntimeError, TypeError, ValueError):
-                registry_snapshot = None
+        from datafusion_engine.udf_runtime import register_rust_udfs
+
+        registry_snapshot = register_rust_udfs(ctx)
         unified_registry = build_unified_function_registry(
             datafusion_function_catalog=introspector.function_catalog_snapshot(
                 include_parameters=True

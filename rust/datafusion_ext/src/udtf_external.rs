@@ -102,7 +102,7 @@ impl TableFunctionImpl for ReadCsvTableFunction {
             let compression_type = FileCompressionType::from_str(&compression)?;
             format = format.with_file_compression_type(compression_type);
             file_extension_override =
-                Some(format.get_ext_with_compression(&compression_type));
+                Some(format.get_ext_with_compression(&compression_type)?);
         }
         let provider = listing_table_provider(
             &self.ctx,
@@ -345,9 +345,7 @@ fn schema_from_ipc(payload: Vec<u8>) -> Result<SchemaRef> {
     let mut reader = StreamReader::try_new(Cursor::new(payload), None).map_err(|err| {
         DataFusionError::Plan(format!("Failed to open schema IPC stream: {err}"))
     })?;
-    reader.schema().map_err(|err| {
-        DataFusionError::Plan(format!("Failed to decode schema IPC: {err}"))
-    })
+    Ok(Arc::clone(&reader.schema()))
 }
 
 fn block_on<F, T>(future: F) -> Result<T>

@@ -38,13 +38,13 @@ use datafusion_expr::{
     lit,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_macros::user_doc;
 use datafusion_python::context::PySessionContext;
 use datafusion_python::expr::PyExpr;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyBytesMethods};
 
-use crate::udf_docs;
 #[cfg(feature = "async-udf")]
 use crate::udf_async;
 
@@ -548,6 +548,12 @@ impl std::hash::Hash for SignatureEqHash {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = "Pass-through CPG score function for compatibility.",
+    syntax_example = "cpg_score(value)",
+    argument(name = "value", description = "Score value to pass through.")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct CpgScoreUdf {
     signature: SignatureEqHash,
@@ -563,7 +569,7 @@ impl ScalarUDFImpl for CpgScoreUdf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::cpg_score_doc())
+        self.doc()
     }
 
     fn signature(&self) -> &Signature {
@@ -596,6 +602,13 @@ impl ScalarUDFImpl for CpgScoreUdf {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = "Extract Arrow field metadata. When a key is provided, returns a single metadata value; otherwise returns a map of all metadata entries.",
+    syntax_example = "arrow_metadata(expr [, key])",
+    argument(name = "expr", description = "Expression whose field metadata should be inspected."),
+    argument(name = "key", description = "Optional metadata key to extract.")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ArrowMetadataUdf {
     signature: SignatureEqHash,
@@ -632,7 +645,7 @@ impl ScalarUDFImpl for ArrowMetadataUdf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::arrow_metadata_doc())
+        self.doc()
     }
 
     fn signature(&self) -> &Signature {
@@ -821,6 +834,12 @@ pub fn col_to_byte(line_text: PyExpr, col_index: PyExpr, col_unit: PyExpr) -> Py
         .into()
 }
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Compute a stable 64-bit hash of a string using Blake2b.",
+    syntax_example = "stable_hash64(value)",
+    standard_argument(name = "value", prefix = "String")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct StableHash64Udf {
     signature: SignatureEqHash,
@@ -836,7 +855,7 @@ impl ScalarUDFImpl for StableHash64Udf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::stable_hash64_doc())
+        self.doc()
     }
 
     fn signature(&self) -> &Signature {
@@ -896,6 +915,12 @@ impl ScalarUDFImpl for StableHash64Udf {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Compute a stable 128-bit hash of a string using Blake2b.",
+    syntax_example = "stable_hash128(value)",
+    standard_argument(name = "value", prefix = "String")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct StableHash128Udf {
     signature: SignatureEqHash,
@@ -911,7 +936,7 @@ impl ScalarUDFImpl for StableHash128Udf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::stable_hash128_doc())
+        self.doc()
     }
 
     fn signature(&self) -> &Signature {
@@ -971,6 +996,13 @@ impl ScalarUDFImpl for StableHash128Udf {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Compute a stable 64-bit hash of a string and prefix the result with a namespace.",
+    syntax_example = "prefixed_hash64(prefix, value)",
+    argument(name = "prefix", description = "Namespace prefix to prepend to the hash."),
+    standard_argument(name = "value", prefix = "String")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct PrefixedHash64Udf {
     signature: SignatureEqHash,
@@ -986,7 +1018,7 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::prefixed_hash64_doc())
+        self.doc()
     }
 
     fn signature(&self) -> &Signature {
@@ -1116,6 +1148,13 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Compute a stable identifier by prefixing a 128-bit hash of a string.",
+    syntax_example = "stable_id(prefix, value)",
+    argument(name = "prefix", description = "Namespace prefix to prepend to the hash."),
+    standard_argument(name = "value", prefix = "String")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct StableIdUdf {
     signature: SignatureEqHash,
@@ -1131,7 +1170,7 @@ impl ScalarUDFImpl for StableIdUdf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::stable_id_doc())
+        self.doc()
     }
 
     fn signature(&self) -> &Signature {
@@ -1354,6 +1393,12 @@ fn byte_offset_from_py_index(line: &str, py_index: usize) -> usize {
     prefix.as_bytes().len()
 }
 
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = "Normalize a position encoding name to its numeric code.",
+    syntax_example = "position_encoding_norm(value)",
+    standard_argument(name = "value", prefix = "String")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct PositionEncodingUdf {
     signature: SignatureEqHash,
@@ -1369,7 +1414,7 @@ impl ScalarUDFImpl for PositionEncodingUdf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::position_encoding_doc())
+        self.doc()
     }
 
     fn signature(&self) -> &Signature {
@@ -1419,6 +1464,14 @@ impl ScalarUDFImpl for PositionEncodingUdf {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = "Convert a column offset to a byte offset for a line and encoding.",
+    syntax_example = "col_to_byte(line_text, col, col_unit)",
+    argument(name = "line_text", description = "Line text to compute offsets within."),
+    argument(name = "col", description = "Column offset within the line."),
+    argument(name = "col_unit", description = "Encoding unit (BYTE, UTF8, UTF16, UTF32).")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ColToByteUdf {
     signature: SignatureEqHash,
@@ -1434,7 +1487,7 @@ impl ScalarUDFImpl for ColToByteUdf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::col_to_byte_doc())
+        self.doc()
     }
 
     fn signature(&self) -> &Signature {

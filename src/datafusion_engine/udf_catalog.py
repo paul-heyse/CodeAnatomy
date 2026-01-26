@@ -941,7 +941,7 @@ def _table_schema_overrides_from_registry(
 
 def datafusion_udf_specs(
     *,
-    registry_snapshot: Mapping[str, object] | None = None,
+    registry_snapshot: Mapping[str, object],
     table_schema_overrides: Mapping[str, pa.Schema | pa.DataType] | None = None,
 ) -> tuple[DataFusionUdfSpec, ...]:
     """Return the canonical DataFusion UDF specs.
@@ -951,19 +951,18 @@ def datafusion_udf_specs(
     tuple[DataFusionUdfSpec, ...]
         Canonical DataFusion UDF specifications.
     """
-    snapshot = _resolve_registry_snapshot(registry_snapshot)
-    names = custom_udf_names(snapshot)
-    kinds = _snapshot_kind_map(snapshot)
-    param_names = _registry_parameter_names(snapshot)
-    volatilities = _registry_volatility(snapshot)
-    rewrite_tags = _registry_rewrite_tags(snapshot)
+    names = custom_udf_names(registry_snapshot)
+    kinds = _snapshot_kind_map(registry_snapshot)
+    param_names = _registry_parameter_names(registry_snapshot)
+    volatilities = _registry_volatility(registry_snapshot)
+    rewrite_tags = _registry_rewrite_tags(registry_snapshot)
     specs: list[DataFusionUdfSpec] = []
     for name in sorted(set(names)):
         kind = kinds.get(name)
         if kind is None:
             continue
-        input_sets = signature_inputs(snapshot, name)
-        return_sets = signature_returns(snapshot, name)
+        input_sets = signature_inputs(registry_snapshot, name)
+        return_sets = signature_returns(registry_snapshot, name)
         input_types, return_type = _select_signature(input_sets, return_sets)
         if kind == "table":
             return_type = _resolve_table_return_type(
@@ -1041,28 +1040,10 @@ def _normalize_table_return_type(return_type: pa.DataType) -> pa.DataType:
     return return_type
 
 
-def _resolve_registry_snapshot(
-    registry_snapshot: Mapping[str, object] | None,
-) -> Mapping[str, object]:
-    if registry_snapshot is not None:
-        return registry_snapshot
+def _rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     from datafusion_engine.udf_runtime import register_rust_udfs
 
-    ctx = SessionContext()
     return register_rust_udfs(ctx)
-
-
-
-def _rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:
-    try:
-        from datafusion_engine.udf_runtime import rust_udf_snapshot
-    except ImportError:
-        return None
-    try:
-        snapshot = rust_udf_snapshot(ctx)
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    return snapshot
 
 
 def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:

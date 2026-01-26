@@ -29,7 +29,7 @@ from datafusion_engine.sql_options import sql_options_for_profile
 from datafusion_engine.table_provider_metadata import TableProviderMetadata, table_provider_metadata
 from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.specs import TableSchemaSpec
-from schema_spec.system import ContractSpec, DatasetSpec, dataset_spec_from_schema
+from schema_spec.system import ContractSpec, DatasetSpec
 
 NORMALIZE_STAGE_META = "normalize_stage"
 NORMALIZE_ALIAS_META = "normalize_alias"
@@ -224,18 +224,12 @@ def dataset_schema(name: str, *, ctx: SessionContext | None = None) -> SchemaLik
         Raised when the dataset is not registered.
     """
     session = _resolve_session_context(ctx)
-    with contextlib.suppress(KeyError):
-        schema = static_dataset_specs.dataset_schema(name)
-        metadata = _metadata_for_table(session, name)
-        return _schema_with_table_metadata(schema, metadata=metadata)
     try:
-        schema = session.table(name).schema()
-    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        schema = static_dataset_specs.dataset_schema(name)
+    except KeyError as exc:
         msg = f"Unknown DataFusion schema: {name!r}."
         raise KeyError(msg) from exc
     metadata = _metadata_for_table(session, name)
-    if not metadata:
-        return schema
     return _schema_with_table_metadata(schema, metadata=metadata)
 
 
@@ -254,9 +248,9 @@ def dataset_spec(name: str, *, ctx: SessionContext | None = None) -> DatasetSpec
     DatasetSpec
         Dataset specification for the given name.
     """
-    with contextlib.suppress(KeyError):
-        return static_dataset_specs.dataset_spec(name)
-    return dataset_spec_from_schema(name, dataset_schema(name, ctx=ctx))
+    if ctx is not None:
+        _resolve_session_context(ctx)
+    return static_dataset_specs.dataset_spec(name)
 
 
 def dataset_contract(name: str, *, ctx: SessionContext | None = None) -> ContractSpec:

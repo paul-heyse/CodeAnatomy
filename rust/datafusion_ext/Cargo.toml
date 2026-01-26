@@ -30,6 +30,7 @@ datafusion-functions-window = "51.0.0"
 datafusion-functions-window-common = "51.0.0"
 datafusion-physical-expr-adapter = "51.0.0"
 datafusion-physical-expr-common = "51.0.0"
+datafusion-macros = "51.0.0"
 datafusion-python = "51.0.0"
 df_plugin_host = { path = "../df_plugin_host" }
 deltalake = { version = "0.30.1", features = ["datafusion"] }

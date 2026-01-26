@@ -11,7 +11,7 @@ from ibis.expr.types import Table, Value
 from arrowdsl.core.ordering import Ordering
 from cpg.schemas import CPG_NODES_SCHEMA
 from cpg.specs import NodeEmitSpec
-from ibis_engine.ids import masked_stable_id_expr
+from ibis_engine.hash_exprs import HashExprSpec, masked_stable_id_expr_from_spec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
     bind_expr_schema,
@@ -37,10 +37,15 @@ def emit_nodes_ibis(
         Ibis plan emitting node rows.
     """
     expr = rel.expr if isinstance(rel, IbisPlan) else rel
-    id_values, required = _id_values(expr, spec.id_cols)
-    node_id = masked_stable_id_expr(
-        "node",
-        parts=(str(spec.node_kind), *id_values),
+    expr, id_cols, required = _prepare_id_columns(expr, spec.id_cols)
+    node_id = masked_stable_id_expr_from_spec(
+        expr,
+        spec=HashExprSpec(
+            prefix="node",
+            cols=id_cols,
+            extra_literals=(str(spec.node_kind),),
+            null_sentinel="None",
+        ),
         required=required,
     )
     node_kind = ibis.literal(str(spec.node_kind))
@@ -73,17 +78,21 @@ def emit_nodes_ibis(
     return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 
-def _id_values(expr: Table, columns: Sequence[str]) -> tuple[tuple[Value, ...], tuple[Value, ...]]:
-    values: list[Value] = []
-    required: list[Value] = []
-    for column in columns:
-        if column in expr.columns:
-            value = expr[column]
-            values.append(value)
-            required.append(value)
-        else:
-            values.append(ibis_null_literal(pa.string()))
-    return tuple(values), tuple(required)
+def _prepare_id_columns(
+    expr: Table,
+    columns: Sequence[str],
+) -> tuple[Table, tuple[str, ...], tuple[str, ...]]:
+    required = tuple(column for column in columns if column in expr.columns)
+    missing = [column for column in columns if column not in expr.columns]
+    updates: dict[str, Value] = {}
+    for column in missing:
+        updates[column] = ibis_null_literal(pa.string())
+    if not columns:
+        updates["__id_null"] = ibis_null_literal(pa.string())
+        return expr.mutate(**updates), ("__id_null",), ()
+    if updates:
+        expr = expr.mutate(**updates)
+    return expr, tuple(columns), required
 
 
 def _coalesced(expr: Table, columns: Sequence[str], dtype: pa.DataType) -> Value:

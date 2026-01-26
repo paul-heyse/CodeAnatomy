@@ -27,7 +27,12 @@ from datafusion_engine.normalize_ids import (
 from datafusion_engine.schema_registry import DIAG_DETAILS_TYPE
 from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.expr_compiler import OperationSupportBackend, preflight_portability
-from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_hash_expr
+from ibis_engine.hash_exprs import (
+    HashExprSpec,
+    masked_stable_id_expr_from_spec,
+    stable_id_expr_from_spec,
+    stable_key_hash_expr_from_spec,
+)
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
     bind_expr_schema,
@@ -88,16 +93,24 @@ def type_exprs_plan_ibis(
     trimmed = expr_text.strip()
     non_empty = trimmed.notnull() & (trimmed.length() > ibis.literal(0))
     filtered = table.filter(non_empty)
-    type_expr_id = masked_stable_id_expr(
-        TYPE_EXPR_ID_SPEC.prefix,
-        parts=(filtered.path, filtered.bstart, filtered.bend),
-        required=(filtered.path, filtered.bstart, filtered.bend),
-        null_sentinel=TYPE_EXPR_ID_SPEC.null_sentinel,
+    trimmed = filtered.expr_text.cast("string").strip()
+    filtered = filtered.mutate(type_repr=trimmed)
+    type_expr_id = masked_stable_id_expr_from_spec(
+        filtered,
+        spec=HashExprSpec(
+            prefix=TYPE_EXPR_ID_SPEC.prefix,
+            cols=("path", "bstart", "bend"),
+            null_sentinel=TYPE_EXPR_ID_SPEC.null_sentinel,
+        ),
+        required=("path", "bstart", "bend"),
     )
-    type_id = stable_id_expr(
-        TYPE_ID_SPEC.prefix,
-        trimmed,
-        null_sentinel=TYPE_ID_SPEC.null_sentinel,
+    type_id = stable_id_expr_from_spec(
+        filtered,
+        spec=HashExprSpec(
+            prefix=TYPE_ID_SPEC.prefix,
+            cols=("type_repr",),
+            null_sentinel=TYPE_ID_SPEC.null_sentinel,
+        ),
     )
     span = span_struct_expr(
         SpanStructInputs(
@@ -108,23 +121,30 @@ def type_exprs_plan_ibis(
         )
     )
     updates: dict[str, Value] = {
-        "type_repr": trimmed,
         "type_expr_id": type_expr_id,
         "type_id": type_id,
         "span": span,
     }
     if ctx.debug:
-        updates["type_expr_key"] = stable_key_hash_expr(
-            TYPE_EXPR_ID_SPEC.prefix,
-            filtered.path,
-            filtered.bstart,
-            filtered.bend,
-            null_sentinel=TYPE_EXPR_ID_SPEC.null_sentinel,
+        updates["type_expr_key"] = stable_key_hash_expr_from_spec(
+            filtered,
+            spec=HashExprSpec(
+                prefix=TYPE_EXPR_ID_SPEC.prefix,
+                cols=("path", "bstart", "bend"),
+                null_sentinel=TYPE_EXPR_ID_SPEC.null_sentinel,
+                as_string=True,
+            ),
+            use_128=False,
         )
-        updates["type_id_key"] = stable_key_hash_expr(
-            TYPE_ID_SPEC.prefix,
-            trimmed,
-            null_sentinel=TYPE_ID_SPEC.null_sentinel,
+        updates["type_id_key"] = stable_key_hash_expr_from_spec(
+            filtered,
+            spec=HashExprSpec(
+                prefix=TYPE_ID_SPEC.prefix,
+                cols=("type_repr",),
+                null_sentinel=TYPE_ID_SPEC.null_sentinel,
+                as_string=True,
+            ),
+            use_128=False,
         )
     enriched = filtered.mutate(**updates)
     enriched = _drop_columns(
@@ -235,10 +255,15 @@ def _expr_type_rows(
     )
     if ctx.debug:
         expr_rows = expr_rows.mutate(
-            type_id_key=stable_key_hash_expr(
-                TYPE_ID_SPEC.prefix,
-                expr_trimmed,
-                null_sentinel=TYPE_ID_SPEC.null_sentinel,
+            type_id_key=stable_key_hash_expr_from_spec(
+                expr_rows,
+                spec=HashExprSpec(
+                    prefix=TYPE_ID_SPEC.prefix,
+                    cols=("type_repr",),
+                    null_sentinel=TYPE_ID_SPEC.null_sentinel,
+                    as_string=True,
+                ),
+                use_128=False,
             )
         )
     return expr_rows.select([expr_rows[col] for col in type_node_columns])
@@ -257,16 +282,30 @@ def _scip_type_rows(
     scip_non_empty = scip_trimmed.notnull() & (scip_trimmed.length() > ibis.literal(0))
     scip_rows = scip.filter(scip_non_empty).mutate(
         type_repr=scip_trimmed,
-        type_id=stable_id_expr(TYPE_ID_SPEC.prefix, scip_trimmed),
         type_form=ibis.literal("scip"),
         origin=ibis.literal("inferred"),
     )
+    scip_rows = scip_rows.mutate(
+        type_id=stable_id_expr_from_spec(
+            scip_rows,
+            spec=HashExprSpec(
+                prefix=TYPE_ID_SPEC.prefix,
+                cols=("type_repr",),
+                null_sentinel=TYPE_ID_SPEC.null_sentinel,
+            ),
+        )
+    )
     if ctx.debug:
         scip_rows = scip_rows.mutate(
-            type_id_key=stable_key_hash_expr(
-                TYPE_ID_SPEC.prefix,
-                scip_trimmed,
-                null_sentinel=TYPE_ID_SPEC.null_sentinel,
+            type_id_key=stable_key_hash_expr_from_spec(
+                scip_rows,
+                spec=HashExprSpec(
+                    prefix=TYPE_ID_SPEC.prefix,
+                    cols=("type_repr",),
+                    null_sentinel=TYPE_ID_SPEC.null_sentinel,
+                    as_string=True,
+                ),
+                use_128=False,
             )
         )
     return scip_rows.select([scip_rows[col] for col in type_node_columns])
@@ -413,13 +452,14 @@ def def_use_events_plan_ibis(
     validate_expr_schema(table, expected=input_schema, allow_extra_columns=ctx.debug)
     symbol = coalesce_columns(table, ("argval_str", "argrepr"))
     kind = _def_use_kind_expr(table.opname)
-    event_id = stable_id_expr(
-        DEF_USE_EVENT_ID_SPEC.prefix,
-        table.code_unit_id,
-        table.instr_id,
-        kind,
-        symbol,
-        null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
+    base = table.mutate(symbol=symbol, kind=kind)
+    event_id = stable_id_expr_from_spec(
+        base,
+        spec=HashExprSpec(
+            prefix=DEF_USE_EVENT_ID_SPEC.prefix,
+            cols=("code_unit_id", "instr_id", "kind", "symbol"),
+            null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
+        ),
     )
     bstart = table.offset.cast("int64")
     span = span_struct_expr(
@@ -430,23 +470,23 @@ def def_use_events_plan_ibis(
             end_exclusive=ibis.literal(value=True),
         )
     )
-    valid = symbol.notnull() & kind.notnull()
+    valid = base.symbol.notnull() & base.kind.notnull()
     updates: dict[str, Value] = {
-        "symbol": symbol,
-        "kind": kind,
         "event_id": event_id,
         "span": span,
     }
     if ctx.debug:
-        updates["event_key"] = stable_key_hash_expr(
-            DEF_USE_EVENT_ID_SPEC.prefix,
-            table.code_unit_id,
-            table.instr_id,
-            kind,
-            symbol,
-            null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
+        updates["event_key"] = stable_key_hash_expr_from_spec(
+            base,
+            spec=HashExprSpec(
+                prefix=DEF_USE_EVENT_ID_SPEC.prefix,
+                cols=("code_unit_id", "instr_id", "kind", "symbol"),
+                null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
+                as_string=True,
+            ),
+            use_128=False,
         )
-    enriched = table.filter(valid).mutate(**updates)
+    enriched = base.filter(valid).mutate(**updates)
     validate_expr_schema(
         enriched,
         expected=dataset_schema(DEF_USE_NAME),
@@ -502,19 +542,25 @@ def reaching_defs_plan_ibis(
         predicates=[defs.code_unit_id == uses.code_unit_id, defs.symbol == uses.symbol],
         how="inner",
     )
-    edge_id = stable_id_expr(
-        REACH_EDGE_ID_SPEC.prefix,
-        joined.def_event_id,
-        joined.use_event_id,
-        null_sentinel=REACH_EDGE_ID_SPEC.null_sentinel,
+    edge_id = stable_id_expr_from_spec(
+        joined,
+        spec=HashExprSpec(
+            prefix=REACH_EDGE_ID_SPEC.prefix,
+            cols=("def_event_id", "use_event_id"),
+            null_sentinel=REACH_EDGE_ID_SPEC.null_sentinel,
+        ),
     )
     updates: dict[str, Value] = {"edge_id": edge_id}
     if ctx.debug:
-        updates["edge_key"] = stable_key_hash_expr(
-            REACH_EDGE_ID_SPEC.prefix,
-            joined.def_event_id,
-            joined.use_event_id,
-            null_sentinel=REACH_EDGE_ID_SPEC.null_sentinel,
+        updates["edge_key"] = stable_key_hash_expr_from_spec(
+            joined,
+            spec=HashExprSpec(
+                prefix=REACH_EDGE_ID_SPEC.prefix,
+                cols=("def_event_id", "use_event_id"),
+                null_sentinel=REACH_EDGE_ID_SPEC.null_sentinel,
+                as_string=True,
+            ),
+            use_128=False,
         )
     enriched = joined.mutate(**updates)
     validate_expr_schema(
@@ -994,25 +1040,25 @@ def diagnostics_plan_ibis(
     for expr in exprs[1:]:
         combined = combined.union(expr, distinct=False)
 
-    diag_id = stable_id_expr(
-        DIAG_ID_SPEC.prefix,
-        combined.path,
-        combined.bstart,
-        combined.bend,
-        combined.diag_source,
-        combined.message,
-        null_sentinel=DIAG_ID_SPEC.null_sentinel,
+    diag_id = stable_id_expr_from_spec(
+        combined,
+        spec=HashExprSpec(
+            prefix=DIAG_ID_SPEC.prefix,
+            cols=("path", "bstart", "bend", "diag_source", "message"),
+            null_sentinel=DIAG_ID_SPEC.null_sentinel,
+        ),
     )
     updates: dict[str, Value] = {"diag_id": diag_id}
     if ctx.debug:
-        updates["diag_key"] = stable_key_hash_expr(
-            DIAG_ID_SPEC.prefix,
-            combined.path,
-            combined.bstart,
-            combined.bend,
-            combined.diag_source,
-            combined.message,
-            null_sentinel=DIAG_ID_SPEC.null_sentinel,
+        updates["diag_key"] = stable_key_hash_expr_from_spec(
+            combined,
+            spec=HashExprSpec(
+                prefix=DIAG_ID_SPEC.prefix,
+                cols=("path", "bstart", "bend", "diag_source", "message"),
+                null_sentinel=DIAG_ID_SPEC.null_sentinel,
+                as_string=True,
+            ),
+            use_128=False,
         )
     enriched = combined.mutate(**updates)
     enriched = _drop_columns(

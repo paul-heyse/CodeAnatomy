@@ -1773,6 +1773,7 @@ dependencies = [
  "datafusion-functions-table",
  "datafusion-functions-window",
  "datafusion-functions-window-common",
+ "datafusion-macros",
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
  "datafusion-python",

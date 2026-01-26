@@ -22,7 +22,7 @@ from cpg.specs import (
     filter_fields,
     resolve_prop_transform,
 )
-from ibis_engine.ids import masked_stable_id_expr
+from ibis_engine.hash_exprs import HashExprSpec, masked_stable_id_expr_from_spec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
     bind_expr_schema,
@@ -109,7 +109,7 @@ def _prop_row_expr(
         expr = expr.filter(value_expr.notnull())
     schema = CPG_PROPS_SCHEMA
     schema_names = set(schema.names)
-    entity_id = _entity_id_expr(expr, spec)
+    expr, entity_id = _entity_id_expr(expr, spec)
     columns: dict[str, Value] = {}
     if "entity_kind" in schema_names:
         columns["entity_kind"] = ibis.literal(spec.entity_kind.value)
@@ -150,28 +150,44 @@ def _field_value_expr(expr: Table, field: PropFieldSpec) -> Value | None:
     return transform.expr_fn(value)
 
 
-def _entity_id_expr(expr: Table, spec: PropTableSpec) -> Value:
+def _entity_id_expr(expr: Table, spec: PropTableSpec) -> tuple[Table, Value]:
     id_cols = spec.id_cols
     if spec.entity_kind == EntityKind.EDGE and len(id_cols) == 1 and id_cols[0] in expr.columns:
-        return expr[id_cols[0]]
-    id_values = _id_values(expr, id_cols)
-    required = tuple(expr[col] for col in id_cols if col in expr.columns)
+        return expr, expr[id_cols[0]]
+    expr, id_cols, required = _prepare_id_columns(expr, id_cols)
     prefix = "node" if spec.entity_kind == EntityKind.NODE else "edge"
     if spec.entity_kind == EntityKind.NODE and spec.node_kind is not None:
-        id_values = (ibis.literal(str(spec.node_kind)), *id_values)
-    return masked_stable_id_expr(prefix, parts=id_values, required=required)
+        extra_literals = (str(spec.node_kind),)
+    else:
+        extra_literals = ()
+    entity_id = masked_stable_id_expr_from_spec(
+        expr,
+        spec=HashExprSpec(
+            prefix=prefix,
+            cols=id_cols,
+            extra_literals=extra_literals,
+            null_sentinel="None",
+        ),
+        required=required,
+    )
+    return expr, entity_id
 
 
-def _id_values(expr: Table, columns: Sequence[str]) -> tuple[Value, ...]:
-    values: list[Value] = []
-    for column in columns:
-        if column in expr.columns:
-            values.append(expr[column])
-        else:
-            values.append(ibis_null_literal(pa.string()))
-    if not values:
-        return (ibis_null_literal(pa.string()),)
-    return tuple(values)
+def _prepare_id_columns(
+    expr: Table,
+    columns: Sequence[str],
+) -> tuple[Table, tuple[str, ...], tuple[str, ...]]:
+    required = tuple(column for column in columns if column in expr.columns)
+    missing = [column for column in columns if column not in expr.columns]
+    updates: dict[str, Value] = {}
+    for column in missing:
+        updates[column] = ibis_null_literal(pa.string())
+    if not columns:
+        updates["__id_null"] = ibis_null_literal(pa.string())
+        return expr.mutate(**updates), ("__id_null",), ()
+    if updates:
+        expr = expr.mutate(**updates)
+    return expr, tuple(columns), required
 
 
 def _value_columns(schema: pa.Schema, value_expr: Value, *, value_type: str) -> dict[str, Value]:

@@ -9,7 +9,11 @@ from ibis.expr.types import Table, Value
 from arrowdsl.core.ordering import Ordering
 from cpg.schemas import CPG_EDGES_SCHEMA
 from cpg.specs import EdgeEmitSpec
-from ibis_engine.ids import stable_id_expr, stable_key_hash_expr
+from ibis_engine.hash_exprs import (
+    HashExprSpec,
+    stable_id_expr_from_spec,
+    stable_key_hash_expr_from_spec,
+)
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
     bind_expr_schema,
@@ -82,8 +86,9 @@ def emit_edges_from_relation_output(rel: IbisPlan | Table) -> IbisPlan:
     """
     expr = rel.expr if isinstance(rel, IbisPlan) else rel
     edge_kind = _optional_column(expr, "kind", pa.string())
-    edge_id = _edge_id_expr_from_relation(expr, edge_kind=edge_kind)
-    output = expr.mutate(edge_id=edge_id, edge_kind=edge_kind)
+    with_kind = expr.mutate(edge_kind=edge_kind)
+    edge_id = _edge_id_expr_from_relation(with_kind, edge_kind_col="edge_kind")
+    output = with_kind.mutate(edge_id=edge_id)
     output = output.select(
         edge_id=output.edge_id,
         edge_kind=output.edge_kind,
@@ -109,31 +114,45 @@ def emit_edges_from_relation_output(rel: IbisPlan | Table) -> IbisPlan:
 
 def _edge_id_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
     edge_kind = str(spec.edge_kind)
-    base_id = stable_id_expr("edge", edge_kind, rel.src, rel.dst)
-    span_id = stable_id_expr(
-        "edge",
-        edge_kind,
-        rel.src,
-        rel.dst,
-        rel.path,
-        rel.bstart,
-        rel.bend,
+    base_id = stable_id_expr_from_spec(
+        rel,
+        spec=HashExprSpec(
+            prefix="edge",
+            cols=("src", "dst"),
+            extra_literals=(edge_kind,),
+            null_sentinel="None",
+        ),
+    )
+    span_id = stable_id_expr_from_spec(
+        rel,
+        spec=HashExprSpec(
+            prefix="edge",
+            cols=("src", "dst", "path", "bstart", "bend"),
+            extra_literals=(edge_kind,),
+            null_sentinel="None",
+        ),
     )
     has_span = rel.path.notnull() & rel.bstart.notnull() & rel.bend.notnull()
     valid_nodes = rel.src.notnull() & rel.dst.notnull()
     return ibis.ifelse(valid_nodes, ibis.ifelse(has_span, span_id, base_id), ibis.null())
 
 
-def _edge_id_expr_from_relation(rel: Table, *, edge_kind: Value) -> Value:
-    base_id = stable_id_expr("edge", edge_kind, rel.src, rel.dst)
-    span_id = stable_id_expr(
-        "edge",
-        edge_kind,
-        rel.src,
-        rel.dst,
-        rel.path,
-        rel.bstart,
-        rel.bend,
+def _edge_id_expr_from_relation(rel: Table, *, edge_kind_col: str) -> Value:
+    base_id = stable_id_expr_from_spec(
+        rel,
+        spec=HashExprSpec(
+            prefix="edge",
+            cols=(edge_kind_col, "src", "dst"),
+            null_sentinel="None",
+        ),
+    )
+    span_id = stable_id_expr_from_spec(
+        rel,
+        spec=HashExprSpec(
+            prefix="edge",
+            cols=(edge_kind_col, "src", "dst", "path", "bstart", "bend"),
+            null_sentinel="None",
+        ),
     )
     has_span = rel.path.notnull() & rel.bstart.notnull() & rel.bend.notnull()
     valid_nodes = rel.src.notnull() & rel.dst.notnull()
@@ -142,20 +161,27 @@ def _edge_id_expr_from_relation(rel: Table, *, edge_kind: Value) -> Value:
 
 def _edge_key_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
     edge_kind = str(spec.edge_kind)
-    base_key = stable_key_hash_expr(
-        "edge",
-        edge_kind,
-        rel.src,
-        rel.dst,
+    base_key = stable_key_hash_expr_from_spec(
+        rel,
+        spec=HashExprSpec(
+            prefix="edge",
+            cols=("src", "dst"),
+            extra_literals=(edge_kind,),
+            null_sentinel="None",
+            as_string=True,
+        ),
+        use_128=False,
     )
-    span_key = stable_key_hash_expr(
-        "edge",
-        edge_kind,
-        rel.src,
-        rel.dst,
-        rel.path,
-        rel.bstart,
-        rel.bend,
+    span_key = stable_key_hash_expr_from_spec(
+        rel,
+        spec=HashExprSpec(
+            prefix="edge",
+            cols=("src", "dst", "path", "bstart", "bend"),
+            extra_literals=(edge_kind,),
+            null_sentinel="None",
+            as_string=True,
+        ),
+        use_128=False,
     )
     has_span = rel.path.notnull() & rel.bstart.notnull() & rel.bend.notnull()
     valid_nodes = rel.src.notnull() & rel.dst.notnull()

@@ -182,10 +182,15 @@ def evidence_catalog(
     if df_profile is not None:
         from datafusion_engine.diagnostics import record_artifact
         from datafusion_engine.udf_parity import udf_parity_report
+        from datafusion_engine.udf_runtime import register_rust_udfs
         from ibis_engine.builtin_udfs import ibis_udf_specs
 
         session = df_profile.session_context()
-        report = udf_parity_report(session, ibis_specs=ibis_udf_specs())
+        registry_snapshot = register_rust_udfs(session)
+        report = udf_parity_report(
+            session,
+            ibis_specs=ibis_udf_specs(registry_snapshot=registry_snapshot),
+        )
         record_artifact(df_profile, "udf_parity_v1", report.payload())
     return evidence
 

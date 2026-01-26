@@ -16,11 +16,16 @@ use datafusion_expr::{
     Signature,
     Volatility,
 };
-
-use crate::udf_docs;
+use datafusion_macros::user_doc;
 
 pub const ASYNC_ECHO_NAME: &str = "async_echo";
 
+#[user_doc(
+    doc_section(label = "Async Functions"),
+    description = "Echo a string value using the async UDF execution path. Requires allow_async policy.",
+    syntax_example = "async_echo(value)",
+    standard_argument(name = "value", prefix = "String")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct AsyncEchoUdf {
     signature: Signature,
@@ -47,7 +52,7 @@ impl ScalarUDFImpl for AsyncEchoUdf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::async_echo_doc())
+        self.doc()
     }
 
     fn signature(&self) -> &Signature {

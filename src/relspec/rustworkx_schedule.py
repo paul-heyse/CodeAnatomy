@@ -15,7 +15,8 @@ from relspec.rustworkx_graph import EvidenceNode, TaskGraph, TaskNode
 from relspec.schedule_events import TaskScheduleMetadata
 
 if TYPE_CHECKING:
-    from arrowdsl.core.interop import SchemaLike
+    from datafusion_engine.schema_contracts import SchemaContract
+    from schema_spec.system import ContractSpec, DatasetSpec
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,10 @@ def schedule_tasks(
     graph: TaskGraph,
     *,
     evidence: EvidenceCatalog,
-    output_schema_for: Callable[[str], SchemaLike | None] | None = None,
+    output_schema_for: Callable[
+        [str], SchemaContract | DatasetSpec | ContractSpec | None
+    ]
+    | None = None,
     allow_partial: bool = False,
 ) -> TaskSchedule:
     """Return a deterministic task schedule driven by a task graph.
@@ -224,7 +228,10 @@ def _register_ready_evidence(
     ready: Iterable[int],
     *,
     evidence: EvidenceCatalog,
-    output_schema_for: Callable[[str], SchemaLike | None] | None,
+    output_schema_for: Callable[
+        [str], SchemaContract | DatasetSpec | ContractSpec | None
+    ]
+    | None,
 ) -> None:
     for idx in ready:
         node = graph.graph[idx]
@@ -239,11 +246,22 @@ def _register_ready_evidence(
             continue
         if not _has_task_predecessor(graph, idx):
             continue
-        schema = output_schema_for(name) if output_schema_for is not None else None
-        if schema is None:
+        contract = output_schema_for(name) if output_schema_for is not None else None
+        if contract is None:
             evidence.sources.add(name)
             continue
-        evidence.register(name, schema)
+        from datafusion_engine.schema_contracts import SchemaContract
+        from schema_spec.system import ContractSpec, DatasetSpec
+
+        if isinstance(contract, SchemaContract):
+            evidence.register_contract(name, contract)
+        elif isinstance(contract, DatasetSpec):
+            evidence.register_from_dataset_spec(name, contract)
+        elif isinstance(contract, ContractSpec):
+            evidence.register_from_contract_spec(name, contract)
+        else:
+            msg = f"Unsupported output contract type for {name!r}: {type(contract).__name__}."
+            raise TypeError(msg)
 
 
 def _has_task_predecessor(graph: TaskGraph, node_idx: int) -> bool:

@@ -2968,18 +2968,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             Raised when builtin Ibis UDFs are missing from DataFusion.
         """
         missing: list[str] = []
+        from datafusion_engine.udf_runtime import register_rust_udfs
         from engine.unified_registry import build_unified_function_registry
 
-        registry_snapshot = None
-        try:
-            from datafusion_engine.udf_runtime import rust_udf_snapshot
-        except ImportError:
-            registry_snapshot = None
-        else:
-            try:
-                registry_snapshot = rust_udf_snapshot(introspector.ctx)
-            except (RuntimeError, TypeError, ValueError):
-                registry_snapshot = None
+        registry_snapshot = register_rust_udfs(introspector.ctx)
 
         unified_registry = build_unified_function_registry(
             datafusion_function_catalog=introspector.function_catalog_snapshot(

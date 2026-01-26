@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
-
-import pyarrow as pa
-from ibis.expr.types import Table as IbisTable
+from typing import TYPE_CHECKING
 
 from datafusion_engine.introspection import introspection_cache_for_ctx
 from datafusion_engine.schema_contracts import (
@@ -16,13 +13,10 @@ from datafusion_engine.schema_contracts import (
     schema_contract_from_contract_spec,
     schema_contract_from_dataset_spec,
 )
-from ibis_engine.plan import IbisPlan
-from ibis_engine.sources import DatasetSource
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from arrowdsl.core.interop import SchemaLike
     from datafusion_engine.introspection import IntrospectionSnapshot
     from relspec.plan_catalog import PlanCatalog
     from schema_spec.system import ContractSpec, DatasetSpec
@@ -40,35 +34,6 @@ class EvidenceCatalog:
     contract_violations_by_dataset: dict[str, tuple[SchemaViolation, ...]] = field(
         default_factory=dict
     )
-
-    @classmethod
-    def from_sources(
-        cls,
-        sources: Mapping[str, object],
-    ) -> EvidenceCatalog:
-        """Build an evidence catalog from schema-bearing sources.
-
-        Returns
-        -------
-        EvidenceCatalog
-            Evidence catalog populated from the sources mapping.
-        """
-        evidence = cls(sources=set(sources))
-        for name, source in sources.items():
-            schema = _schema_from_source(source)
-            if schema is None:
-                continue
-            evidence.columns_by_dataset[name] = set(_schema_names(schema))
-            evidence.types_by_dataset[name] = _schema_types(schema)
-            evidence.metadata_by_dataset[name] = _schema_metadata(schema)
-        return evidence
-
-    def register(self, name: str, schema: SchemaLike) -> None:
-        """Register an evidence dataset and its schema."""
-        self.sources.add(name)
-        self.columns_by_dataset[name] = set(_schema_names(schema))
-        self.types_by_dataset[name] = _schema_types(schema)
-        self.metadata_by_dataset[name] = _schema_metadata(schema)
 
     def register_contract(
         self,
@@ -285,37 +250,6 @@ def _seed_evidence_from_requirements(
         evidence.metadata_by_dataset[source] = dict(metadata)
 
 
-def _schema_from_source(source: object) -> SchemaLike | None:
-    """Extract a schema from a dataset source.
-
-    Parameters
-    ----------
-    source : object
-        Dataset source, Ibis plan, or schema-bearing object.
-
-    Returns
-    -------
-    SchemaLike | None
-        Schema when available.
-    """
-    schema: SchemaLike | None = None
-    if isinstance(source, DatasetSource):
-        dataset_schema = getattr(source.dataset, "schema", None)
-        if callable(dataset_schema):
-            dataset_schema = dataset_schema()
-        if dataset_schema is not None and hasattr(dataset_schema, "names"):
-            schema = cast("SchemaLike", dataset_schema)
-    elif isinstance(source, IbisPlan):
-        schema = pa.schema(source.expr.schema().to_pyarrow())
-    elif isinstance(source, IbisTable):
-        schema = pa.schema(source.schema().to_pyarrow())
-    else:
-        candidate = getattr(source, "schema", None)
-        if candidate is not None and hasattr(candidate, "names"):
-            schema = cast("SchemaLike", candidate)
-    return schema
-
-
 def _snapshot_from_ctx(ctx: SessionContext | None) -> IntrospectionSnapshot | None:
     if ctx is None:
         return None
@@ -400,9 +334,6 @@ def _register_evidence_source(
         evidence.register_from_contract_spec(source, contract_spec, snapshot=context.snapshot)
         _merge_provider_metadata(evidence, source, ctx_id=context.ctx_id)
         return True
-    if _register_from_introspection(evidence, source, snapshot=context.snapshot):
-        _merge_provider_metadata(evidence, source, ctx_id=context.ctx_id)
-        return True
     return False
 
 
@@ -417,25 +348,6 @@ def _merge_provider_metadata(
     provider_metadata = _provider_metadata(ctx_id, source)
     if provider_metadata:
         evidence.metadata_by_dataset.setdefault(source, {}).update(provider_metadata)
-
-
-def _register_from_introspection(
-    evidence: EvidenceCatalog,
-    name: str,
-    *,
-    snapshot: IntrospectionSnapshot | None,
-) -> bool:
-    if snapshot is None:
-        return False
-    if not snapshot.table_exists(name):
-        return False
-    columns = snapshot.get_table_columns(name)
-    if not columns:
-        return False
-    evidence.sources.add(name)
-    evidence.columns_by_dataset[name] = {col for col, _ in columns}
-    evidence.types_by_dataset[name] = {col: str(dtype) for col, dtype in columns}
-    return True
 
 
 def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:
@@ -468,13 +380,6 @@ def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:
     }
 
 
-def _schema_names(schema: SchemaLike) -> tuple[str, ...]:
-    names = getattr(schema, "names", None)
-    if names is not None:
-        return tuple(names)
-    return tuple(field.name for field in schema)
-
-
 def _bool_from_metadata(value: object | None) -> bool | None:
     if value is None:
         return None
@@ -488,45 +393,6 @@ def _bool_from_metadata(value: object | None) -> bool | None:
     if lowered in {"false", "0", "no"}:
         return False
     return None
-
-
-def _schema_types(schema: SchemaLike) -> dict[str, str]:
-    """Return a mapping of column names to type strings.
-
-    Parameters
-    ----------
-    schema : SchemaLike
-        Schema to inspect.
-
-    Returns
-    -------
-    dict[str, str]
-        Column type mapping.
-    """
-    names = _schema_names(schema)
-    types = getattr(schema, "types", None)
-    if types is None:
-        return {field.name: str(field.type) for field in schema}
-    return {name: str(dtype) for name, dtype in zip(names, types, strict=True)}
-
-
-def _schema_metadata(schema: SchemaLike) -> dict[bytes, bytes]:
-    """Return schema metadata as a concrete mapping.
-
-    Parameters
-    ----------
-    schema : SchemaLike
-        Schema to inspect.
-
-    Returns
-    -------
-    dict[bytes, bytes]
-        Metadata mapping.
-    """
-    metadata = getattr(schema, "metadata", None)
-    if metadata is None:
-        return {}
-    return dict(metadata)
 
 
 __all__ = [

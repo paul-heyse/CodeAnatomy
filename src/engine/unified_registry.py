@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 from datafusion_engine.introspection import IntrospectionSnapshot
 from datafusion_engine.udf_catalog import DataFusionUdfSpec, datafusion_udf_specs
 from engine.function_registry import (
     DEFAULT_LANE_PRECEDENCE,
     DEFAULT_RULE_PRIMITIVES,
+    FunctionRegistryOptions,
     build_function_registry,
 )
 from engine.function_registry import (
@@ -52,20 +54,33 @@ def build_unified_function_registry(
     -------
     UnifiedFunctionRegistry
         Unified registry composed of function and UDF specs.
+
+    Raises
+    ------
+    ValueError
+        Raised when required registry metadata is missing.
     """
+    if datafusion_specs is None and registry_snapshot is None:
+        msg = "registry_snapshot is required when datafusion_specs is not provided."
+        raise ValueError(msg)
+    if ibis_specs is None and registry_snapshot is None:
+        msg = "registry_snapshot is required when ibis_specs is not provided."
+        raise ValueError(msg)
     resolved_datafusion = datafusion_specs or datafusion_udf_specs(
-        registry_snapshot=registry_snapshot
+        registry_snapshot=cast("Mapping[str, object]", registry_snapshot)
     )
     resolved_ibis = ibis_specs or ibis_udf_specs(
-        registry_snapshot=registry_snapshot
+        registry_snapshot=cast("Mapping[str, object]", registry_snapshot)
     )
-    function_registry = build_function_registry(
+    options = FunctionRegistryOptions(
         primitives=DEFAULT_RULE_PRIMITIVES,
         datafusion_specs=resolved_datafusion,
         ibis_specs=resolved_ibis,
         datafusion_function_catalog=datafusion_function_catalog,
+        registry_snapshot=registry_snapshot,
         lane_precedence=DEFAULT_LANE_PRECEDENCE,
     )
+    function_registry = build_function_registry(options=options)
     udf_registry = UdfLaneRegistry()
     required_builtins: set[str] = set()
     for spec in resolved_ibis:

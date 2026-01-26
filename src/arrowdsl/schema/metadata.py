@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
@@ -15,7 +16,11 @@ from arrowdsl.core.interop import ArrayLike, DataTypeLike, FieldLike, SchemaLike
 from arrowdsl.core.ordering import Ordering, OrderingKey, OrderingLevel
 from arrowdsl.core.schema_constants import (
     KEY_FIELDS_META,
+    OPTIONAL_FUNCTIONS_META,
     PROVENANCE_COLS,
+    REQUIRED_FUNCTION_SIGNATURE_TYPES_META,
+    REQUIRED_FUNCTION_SIGNATURES_META,
+    REQUIRED_FUNCTIONS_META,
     REQUIRED_NON_NULL_META,
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
@@ -638,6 +643,166 @@ def merge_metadata_specs(*specs: SchemaMetadataSpec | None) -> SchemaMetadataSpe
     return SchemaMetadataSpec(schema_metadata=schema_metadata, field_metadata=field_metadata)
 
 
+def function_requirements_metadata_spec(
+    *,
+    required: Sequence[str],
+    optional: Sequence[str] = (),
+    signature_counts: Mapping[str, int] | None = None,
+    signature_types: Mapping[str, Sequence[Sequence[str] | None]] | None = None,
+) -> SchemaMetadataSpec:
+    """Return schema metadata describing required functions and signatures.
+
+    Parameters
+    ----------
+    required:
+        Required function names.
+    optional:
+        Optional function names gated by runtime features.
+    signature_counts:
+        Optional mapping of function names to required arity.
+    signature_types:
+        Optional mapping of function names to per-argument type token lists.
+
+    Returns
+    -------
+    SchemaMetadataSpec
+        Metadata spec encoding function requirements.
+    """
+    meta: dict[bytes, bytes] = {}
+    if required:
+        meta[REQUIRED_FUNCTIONS_META] = metadata_list_bytes(required)
+    if optional:
+        meta[OPTIONAL_FUNCTIONS_META] = metadata_list_bytes(optional)
+    if signature_counts:
+        meta[REQUIRED_FUNCTION_SIGNATURES_META] = metadata_scalar_map_bytes(
+            {name: int(count) for name, count in signature_counts.items()}
+        )
+    if signature_types:
+        meta[REQUIRED_FUNCTION_SIGNATURE_TYPES_META] = _function_signature_types_bytes(
+            signature_types
+        )
+    return SchemaMetadataSpec(schema_metadata=meta)
+
+
+def required_functions_from_metadata(
+    metadata: Mapping[bytes, bytes] | None,
+) -> tuple[str, ...]:
+    """Return required function names from schema metadata.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Required function names encoded in the metadata.
+    """
+    if not metadata:
+        return ()
+    payload = metadata.get(REQUIRED_FUNCTIONS_META)
+    if payload is None:
+        return ()
+    return tuple(name for name in decode_metadata_list(payload) if name)
+
+
+def optional_functions_from_metadata(
+    metadata: Mapping[bytes, bytes] | None,
+) -> tuple[str, ...]:
+    """Return optional function names from schema metadata.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Optional function names encoded in the metadata.
+    """
+    if not metadata:
+        return ()
+    payload = metadata.get(OPTIONAL_FUNCTIONS_META)
+    if payload is None:
+        return ()
+    return tuple(name for name in decode_metadata_list(payload) if name)
+
+
+def required_function_signatures_from_metadata(
+    metadata: Mapping[bytes, bytes] | None,
+) -> dict[str, int]:
+    """Return required function arity counts from schema metadata.
+
+    Returns
+    -------
+    dict[str, int]
+        Mapping of function names to required arity counts.
+    """
+    if not metadata:
+        return {}
+    payload = metadata.get(REQUIRED_FUNCTION_SIGNATURES_META)
+    if payload is None:
+        return {}
+    decoded = decode_metadata_scalar_map(payload)
+    return {
+        name: value for name, value in decoded.items() if isinstance(value, int)
+    }
+
+
+def required_function_signature_types_from_metadata(
+    metadata: Mapping[bytes, bytes] | None,
+) -> dict[str, tuple[frozenset[str] | None, ...]]:
+    """Return required function signature type tokens from schema metadata.
+
+    Returns
+    -------
+    dict[str, tuple[frozenset[str] | None, ...]]
+        Mapping of function names to signature type token sets.
+    """
+    if not metadata:
+        return {}
+    payload = metadata.get(REQUIRED_FUNCTION_SIGNATURE_TYPES_META)
+    if payload is None:
+        return {}
+    decoded = decode_metadata_map(payload)
+    output: dict[str, tuple[frozenset[str] | None, ...]] = {}
+    for name, value in decoded.items():
+        if not value:
+            continue
+        output[name] = _decode_signature_tokens(value)
+    return output
+
+
+def _function_signature_types_bytes(
+    signature_types: Mapping[str, Sequence[Sequence[str] | None]],
+) -> bytes:
+    encoded = {
+        name: json.dumps(_normalize_signature_tokens(tokens), separators=(",", ":"))
+        for name, tokens in signature_types.items()
+    }
+    return metadata_map_bytes(encoded)
+
+
+def _normalize_signature_tokens(
+    tokens: Sequence[Sequence[str] | None],
+) -> list[list[str] | None]:
+    normalized: list[list[str] | None] = []
+    for entry in tokens:
+        if entry is None:
+            normalized.append(None)
+            continue
+        normalized.append([str(token) for token in entry])
+    return normalized
+
+
+def _decode_signature_tokens(value: str) -> tuple[frozenset[str] | None, ...]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    output: list[frozenset[str] | None] = []
+    for entry in parsed:
+        if entry is None:
+            output.append(None)
+        elif isinstance(entry, list):
+            output.append(frozenset(str(token) for token in entry if token))
+    return tuple(output)
+
+
 def infer_ordering_keys(names: Sequence[str]) -> tuple[OrderingKey, ...]:
     """Infer ordering keys from a list of column names.
 
@@ -1146,6 +1311,10 @@ __all__ = [
     "ENCODING_META",
     "EXTRACTOR_DEFAULTS_META",
     "KEY_FIELDS_META",
+    "OPTIONAL_FUNCTIONS_META",
+    "REQUIRED_FUNCTIONS_META",
+    "REQUIRED_FUNCTION_SIGNATURES_META",
+    "REQUIRED_FUNCTION_SIGNATURE_TYPES_META",
     "REQUIRED_NON_NULL_META",
     "SCHEMA_META_NAME",
     "SCHEMA_META_VERSION",
@@ -1166,6 +1335,7 @@ __all__ = [
     "extractor_metadata_spec",
     "extractor_option_defaults_from_metadata",
     "extractor_option_defaults_spec",
+    "function_requirements_metadata_spec",
     "infer_ordering_keys",
     "merge_metadata_specs",
     "metadata_list_bytes",
@@ -1173,10 +1343,14 @@ __all__ = [
     "metadata_scalar_map_bytes",
     "metadata_spec_from_schema",
     "normalize_dictionaries",
+    "optional_functions_from_metadata",
     "options_hash",
     "options_metadata_spec",
     "ordering_from_schema",
     "ordering_metadata_spec",
+    "required_function_signature_types_from_metadata",
+    "required_function_signatures_from_metadata",
+    "required_functions_from_metadata",
     "schema_constraints_from_metadata",
     "schema_identity_from_metadata",
     "schema_metadata_for_spec",

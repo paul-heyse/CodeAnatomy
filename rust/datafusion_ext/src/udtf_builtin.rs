@@ -8,7 +8,7 @@ use datafusion::catalog::{TableFunctionImpl, TableProvider};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Documentation, Expr};
+use datafusion_expr::Expr;
 use datafusion_functions_table::all_default_table_functions;
 
 use crate::registry_snapshot;
@@ -106,7 +106,7 @@ fn docs_table_provider(ctx: &SessionContext) -> Result<Arc<dyn TableProvider>> {
     let state = ctx.state();
     let snapshot = registry_snapshot::registry_snapshot(&state);
     let kind_map = registry_kind_map(&snapshot);
-    let docs = registry_docs(&state);
+    let docs = crate::udf_docs::registry_docs(&state);
 
     let mut name_builder = StringBuilder::new();
     let mut kind_builder = StringBuilder::new();
@@ -210,29 +210,6 @@ fn registry_kind_map(snapshot: &registry_snapshot::RegistrySnapshot) -> BTreeMap
         }
     }
     kinds
-}
-
-fn registry_docs(state: &datafusion::execution::session_state::SessionState) -> BTreeMap<String, &Documentation> {
-    let mut docs: BTreeMap<String, &Documentation> = BTreeMap::new();
-    for (name, udf) in state.scalar_functions() {
-        if let Some(doc) = udf.documentation() {
-            docs.entry(name.clone()).or_insert(doc);
-        }
-    }
-    for (name, udaf) in state.aggregate_functions() {
-        if let Some(doc) = udaf.documentation() {
-            docs.entry(name.clone()).or_insert(doc);
-        }
-    }
-    for (name, udwf) in state.window_functions() {
-        if let Some(doc) = udwf.documentation() {
-            docs.entry(name.clone()).or_insert(doc);
-        }
-    }
-    for (name, doc) in crate::udf_docs::docs_snapshot() {
-        docs.insert(name.to_string(), doc);
-    }
-    docs
 }
 
 fn append_list(

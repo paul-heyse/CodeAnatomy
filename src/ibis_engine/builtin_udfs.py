@@ -42,7 +42,7 @@ class _IbisUdfCallable(Protocol):
 
 
 def _mark_ibis_udf(func: Callable[..., Value]) -> Callable[..., Value]:
-    tagged = cast(_IbisUdfCallable, func)
+    tagged = cast("_IbisUdfCallable", func)
     tagged.__codex_ibis_udf__ = True
     return func
 
@@ -184,19 +184,6 @@ def _registry_rewrite_tags(snapshot: Mapping[str, object]) -> dict[str, tuple[st
     return resolved
 
 
-def _resolve_registry_snapshot(
-    registry_snapshot: Mapping[str, object] | None,
-) -> Mapping[str, object]:
-    if registry_snapshot is not None:
-        return registry_snapshot
-    from datafusion import SessionContext
-
-    from datafusion_engine.udf_runtime import register_rust_udfs
-
-    ctx = SessionContext()
-    return register_rust_udfs(ctx)
-
-
 def _select_signature(
     input_sets: tuple[tuple[pa.DataType, ...], ...],
     return_sets: tuple[pa.DataType, ...],
@@ -224,7 +211,7 @@ def _snapshot_kind_map(snapshot: Mapping[str, object]) -> dict[str, IbisUdfKind]
 
 def ibis_udf_specs(
     *,
-    registry_snapshot: Mapping[str, object] | None = None,
+    registry_snapshot: Mapping[str, object],
 ) -> tuple[IbisUdfSpec, ...]:
     """Return the canonical Ibis UDF specs.
 
@@ -238,19 +225,18 @@ def ibis_udf_specs(
     ValueError
         Raised when the Rust UDF registry is missing required metadata.
     """
-    snapshot = _resolve_registry_snapshot(registry_snapshot)
-    param_names = _registry_parameter_names(snapshot)
-    volatilities = _registry_volatility(snapshot)
-    rewrite_tags = _registry_rewrite_tags(snapshot)
-    kinds = _snapshot_kind_map(snapshot)
+    param_names = _registry_parameter_names(registry_snapshot)
+    volatilities = _registry_volatility(registry_snapshot)
+    rewrite_tags = _registry_rewrite_tags(registry_snapshot)
+    kinds = _snapshot_kind_map(registry_snapshot)
     specs: list[IbisUdfSpec] = []
     for name in _ibis_builtin_udf_names():
         kind = kinds.get(name)
         if kind is None:
             msg = f"Rust UDF registry missing {name!r} for Ibis builtins."
             raise ValueError(msg)
-        input_sets = signature_inputs(snapshot, name)
-        return_sets = signature_returns(snapshot, name)
+        input_sets = signature_inputs(registry_snapshot, name)
+        return_sets = signature_returns(registry_snapshot, name)
         input_types, return_type = _select_signature(input_sets, return_sets)
         if not input_types or pa.types.is_null(return_type):
             msg = f"Rust UDF registry missing signature metadata for {name!r}."

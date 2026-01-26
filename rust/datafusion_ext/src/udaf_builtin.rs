@@ -31,10 +31,9 @@ use datafusion_expr::{
     TypeSignature,
     Volatility,
 };
+use datafusion_macros::user_doc;
 use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
-
-use crate::udf_docs;
 
 const LIST_UNIQUE_NAME: &str = "list_unique";
 const COUNT_DISTINCT_NAME: &str = "count_distinct_agg";
@@ -63,6 +62,12 @@ fn count_distinct_udaf() -> AggregateUDF {
     AggregateUDF::new_from_shared_impl(Arc::new(CountDistinctUdaf::new()))
 }
 
+#[user_doc(
+    doc_section(label = "Built-in Functions"),
+    description = "Aggregate values into a list and remove duplicates.",
+    syntax_example = "list_unique(value)",
+    standard_argument(name = "value", prefix = "String")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ListUniqueUdaf {
     signature: Signature,
@@ -87,7 +92,7 @@ impl AggregateUDFImpl for ListUniqueUdaf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::list_unique_doc())
+        self.doc()
     }
 
     fn supports_null_handling_clause(&self) -> bool {
@@ -143,6 +148,12 @@ impl AggregateUDFImpl for ListUniqueUdaf {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Built-in Functions"),
+    description = "Count distinct values in the aggregate window.",
+    syntax_example = "count_distinct_agg(value)",
+    standard_argument(name = "value", prefix = "String")
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct CountDistinctUdaf {
     signature: Signature,
@@ -176,7 +187,7 @@ impl AggregateUDFImpl for CountDistinctUdaf {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(udf_docs::count_distinct_agg_doc())
+        self.doc()
     }
 
     fn supports_null_handling_clause(&self) -> bool {

@@ -284,29 +284,62 @@ class FunctionRegistry:
             ],
         }
         return payload_hash(payload, _FUNCTION_REGISTRY_SCHEMA)
+@dataclass(frozen=True)
+class FunctionRegistryOptions:
+    """Configuration for building a function registry."""
+
+    primitives: tuple[RulePrimitive, ...] = DEFAULT_RULE_PRIMITIVES
+    datafusion_specs: tuple[DataFusionUdfSpec, ...] | None = None
+    ibis_specs: tuple[IbisUdfSpec, ...] | None = None
+    datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None
+    registry_snapshot: Mapping[str, object] | None = None
+    lane_precedence: tuple[ExecutionLane, ...] = DEFAULT_LANE_PRECEDENCE
 
 
 def build_function_registry(
     *,
-    primitives: tuple[RulePrimitive, ...] = DEFAULT_RULE_PRIMITIVES,
-    datafusion_specs: tuple[DataFusionUdfSpec, ...] | None = None,
-    ibis_specs: tuple[IbisUdfSpec, ...] | None = None,
-    datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None,
-    lane_precedence: tuple[ExecutionLane, ...] = DEFAULT_LANE_PRECEDENCE,
+    options: FunctionRegistryOptions | None = None,
 ) -> FunctionRegistry:
     """Build the default function registry.
+
+    Parameters
+    ----------
+    options
+        Configuration for registry construction.
 
     Returns
     -------
     FunctionRegistry
         Registry configured from the provided primitives.
+
+    Raises
+    ------
+    ValueError
+        Raised when required registry metadata is missing.
     """
+    resolved = options or FunctionRegistryOptions()
+    primitives = resolved.primitives
+    datafusion_specs = resolved.datafusion_specs
+    ibis_specs = resolved.ibis_specs
+    datafusion_function_catalog = resolved.datafusion_function_catalog
+    registry_snapshot = resolved.registry_snapshot
+    lane_precedence = resolved.lane_precedence
     specs: dict[str, FunctionSpec] = {}
     for spec in datafusion_sql_expression_specs():
         _merge_spec(specs, _spec_from_sql_expression(spec, lane_precedence=lane_precedence))
-    for spec in datafusion_specs or datafusion_udf_specs():
+    if datafusion_specs is None and registry_snapshot is None:
+        msg = "registry_snapshot is required when datafusion_specs is not provided."
+        raise ValueError(msg)
+    if ibis_specs is None and registry_snapshot is None:
+        msg = "registry_snapshot is required when ibis_specs is not provided."
+        raise ValueError(msg)
+    for spec in datafusion_specs or datafusion_udf_specs(
+        registry_snapshot=cast("Mapping[str, object]", registry_snapshot),
+    ):
         _merge_spec(specs, _spec_from_datafusion(spec, lane_precedence=lane_precedence))
-    for spec in ibis_specs or ibis_udf_specs():
+    for spec in ibis_specs or ibis_udf_specs(
+        registry_snapshot=cast("Mapping[str, object]", registry_snapshot),
+    ):
         _merge_spec(specs, _spec_from_ibis(spec, lane_precedence=lane_precedence))
     for primitive in primitives:
         _merge_spec(specs, _spec_from_primitive(primitive, lane_precedence=lane_precedence))
@@ -340,15 +373,18 @@ def default_function_registry(
     ValueError
         Raised when the DataFusion function catalog cannot be loaded.
     """
+    registry_snapshot: Mapping[str, object] | None = None
     if datafusion_function_catalog is None:
         try:
             from datafusion_engine.runtime import (
                 DataFusionRuntimeProfile,
                 function_catalog_snapshot_for_profile,
             )
+            from datafusion_engine.udf_runtime import register_rust_udfs
 
             profile = DataFusionRuntimeProfile()
             session = profile.session_context()
+            registry_snapshot = register_rust_udfs(session)
             datafusion_function_catalog = function_catalog_snapshot_for_profile(
                 profile,
                 session,
@@ -357,7 +393,11 @@ def default_function_registry(
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = "Failed to build DataFusion function catalog from information_schema."
             raise ValueError(msg) from exc
-    return build_function_registry(datafusion_function_catalog=datafusion_function_catalog)
+    options = FunctionRegistryOptions(
+        datafusion_function_catalog=datafusion_function_catalog,
+        registry_snapshot=registry_snapshot,
+    )
+    return build_function_registry(options=options)
 
 
 def _pycapsule_ids(specs: Mapping[str, FunctionSpec]) -> tuple[str, ...]:
@@ -864,6 +904,7 @@ __all__ = [
     "ExecutionLane",
     "FunctionKind",
     "FunctionRegistry",
+    "FunctionRegistryOptions",
     "FunctionSpec",
     "arrow_kernel_registry_snapshot",
     "build_function_registry",

@@ -21,7 +21,7 @@ from cpg.kind_catalog import (
 )
 from datafusion_engine.schema_registry import schema_for
 from ibis_engine.catalog import IbisPlanCatalog
-from ibis_engine.ids import stable_id_expr
+from ibis_engine.hash_exprs import HashExprSpec, stable_id_expr_from_spec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
     bind_expr_schema,
@@ -220,8 +220,10 @@ def build_rel_callsite_qname_plan(
         Relation plan for callsite-to-qname edges.
     """
     candidates = _resolve_table(catalog, ctx=ctx, name="callsite_qname_candidates_v1")
-    qname = _col(candidates, "qname", pa.string())
-    qname_id = stable_id_expr("qname", qname)
+    qname_id = stable_id_expr_from_spec(
+        candidates,
+        spec=HashExprSpec(prefix="qname", cols=("qname",), null_sentinel="None"),
+    )
     output = candidates.mutate(
         call_id=_col(candidates, "call_id", pa.string()),
         qname_id=qname_id,

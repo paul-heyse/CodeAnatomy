@@ -800,10 +800,15 @@ def _record_extract_udf_parity(
         return
     from datafusion_engine.diagnostics import record_artifact
     from datafusion_engine.udf_parity import udf_parity_report
+    from datafusion_engine.udf_runtime import register_rust_udfs
     from ibis_engine.builtin_udfs import ibis_udf_specs
 
     session = profile.session_context()
-    report = udf_parity_report(session, ibis_specs=ibis_udf_specs())
+    registry_snapshot = register_rust_udfs(session)
+    report = udf_parity_report(
+        session,
+        ibis_specs=ibis_udf_specs(registry_snapshot=registry_snapshot),
+    )
     payload = report.payload()
     payload["dataset"] = name
     record_artifact(profile, "extract_udf_parity_v1", payload)

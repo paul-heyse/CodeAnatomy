@@ -227,15 +227,9 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         introspection_snapshot = introspection_cache_for_ctx(session).snapshot
     registry_snapshot = None
     if session is not None:
-        try:
-            from datafusion_engine.udf_runtime import rust_udf_snapshot
-        except ImportError:
-            registry_snapshot = None
-        else:
-            try:
-                registry_snapshot = rust_udf_snapshot(session)
-            except (RuntimeError, TypeError, ValueError):
-                registry_snapshot = None
+        from datafusion_engine.udf_runtime import register_rust_udfs
+
+        registry_snapshot = register_rust_udfs(session)
     unified_registry = build_unified_function_registry(
         datafusion_function_catalog=function_catalog,
         snapshot=introspection_snapshot,
@@ -331,15 +325,9 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
     )
     registry_snapshot = None
     if session is not None:
-        try:
-            from datafusion_engine.udf_runtime import rust_udf_snapshot
-        except ImportError:
-            registry_snapshot = None
-        else:
-            try:
-                registry_snapshot = rust_udf_snapshot(session)
-            except (RuntimeError, TypeError, ValueError):
-                registry_snapshot = None
+        from datafusion_engine.udf_runtime import register_rust_udfs
+
+        registry_snapshot = register_rust_udfs(session)
     unified_registry = build_unified_function_registry(
         datafusion_function_catalog=function_catalog or [],
         snapshot=introspection_snapshot,

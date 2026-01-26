@@ -21,7 +21,15 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_VERSION,
 )
 from arrowdsl.schema.build import list_view_type, struct_type
-from arrowdsl.schema.metadata import metadata_list_bytes, ordering_metadata_spec
+from arrowdsl.schema.metadata import (
+    function_requirements_metadata_spec,
+    metadata_list_bytes,
+    optional_functions_from_metadata,
+    ordering_metadata_spec,
+    required_function_signature_types_from_metadata,
+    required_function_signatures_from_metadata,
+    required_functions_from_metadata,
+)
 from arrowdsl.schema.semantic_types import (
     SEMANTIC_TYPE_META,
     SPAN_TYPE_INFO,
@@ -61,6 +69,11 @@ DIAG_DETAIL_STRUCT = struct_type(
     }
 )
 DIAG_DETAILS_TYPE = list_view_type(DIAG_DETAIL_STRUCT, large=True)
+
+_STRING_TYPE_TOKENS = frozenset({"char", "string", "text", "utf8", "varchar"})
+_INT_TYPE_TOKENS = frozenset({"int", "integer", "bigint", "smallint", "tinyint", "uint"})
+_LIST_TYPE_TOKENS = frozenset({"array", "list"})
+_MAP_TYPE_TOKENS = frozenset({"map"})
 
 SQLGLOT_PARSE_ERROR_DETAIL_STRUCT = struct_type(
     {
@@ -2348,157 +2361,256 @@ BYTECODE_VIEW_NAMES: tuple[str, ...] = (
     "bytecode_errors",
 )
 
-AST_REQUIRED_FUNCTIONS: tuple[str, ...] = (
-    "arrow_cast",
-    "arrow_metadata",
-    "arrow_typeof",
-    "get_field",
-    "list_extract",
-    "map_entries",
-    "map_extract",
-    "named_struct",
-    "unnest",
-)
+def _sorted_tokens(tokens: frozenset[str]) -> tuple[str, ...]:
+    return tuple(sorted(tokens))
 
-TREE_SITTER_REQUIRED_FUNCTIONS: tuple[str, ...] = (
-    "arrow_cast",
-    "arrow_metadata",
-    "arrow_typeof",
-    "get_field",
-)
 
-AST_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
-    "arrow_cast": 2,
-    "arrow_metadata": 1,
-    "arrow_typeof": 1,
-    "get_field": 2,
-    "list_extract": 2,
-    "map_entries": 1,
-    "map_extract": 2,
-    "named_struct": 2,
-    "unnest": 1,
-}
+_AST_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
+    required=(
+        "arrow_cast",
+        "arrow_typeof",
+        "get_field",
+        "list_extract",
+        "map_extract",
+        "named_struct",
+        "unnest",
+    ),
+    optional=("map_entries", "arrow_metadata"),
+    signature_counts={
+        "arrow_cast": 2,
+        "arrow_metadata": 1,
+        "arrow_typeof": 1,
+        "get_field": 2,
+        "list_extract": 2,
+        "map_entries": 1,
+        "map_extract": 2,
+        "named_struct": 2,
+        "unnest": 1,
+    },
+    signature_types={
+        "arrow_cast": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "arrow_metadata": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "get_field": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "list_extract": (
+            _sorted_tokens(_LIST_TYPE_TOKENS),
+            _sorted_tokens(_INT_TYPE_TOKENS),
+        ),
+        "map_entries": (_sorted_tokens(_MAP_TYPE_TOKENS),),
+        "map_extract": (
+            _sorted_tokens(_MAP_TYPE_TOKENS),
+            _sorted_tokens(_STRING_TYPE_TOKENS),
+        ),
+    },
+).schema_metadata
 
-TREE_SITTER_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
-    "arrow_cast": 2,
-    "arrow_metadata": 1,
-    "arrow_typeof": 1,
-    "get_field": 2,
-}
+_TREE_SITTER_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
+    required=("arrow_cast", "arrow_metadata", "arrow_typeof", "get_field"),
+    signature_counts={
+        "arrow_cast": 2,
+        "arrow_metadata": 1,
+        "arrow_typeof": 1,
+        "get_field": 2,
+    },
+    signature_types={
+        "arrow_cast": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "arrow_metadata": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "get_field": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+    },
+).schema_metadata
 
-BYTECODE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
-    "arrow_cast",
-    "arrow_metadata",
-    "arrow_typeof",
-    "concat_ws",
-    "get_field",
-    "map_entries",
-    "map_extract",
-    "map_keys",
-    "map_values",
-    "list_extract",
-    "named_struct",
-    "prefixed_hash64",
-    "stable_id",
-    "union_extract",
-    "union_tag",
-    "unnest",
-)
+_BYTECODE_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
+    required=(
+        "arrow_cast",
+        "arrow_metadata",
+        "arrow_typeof",
+        "concat_ws",
+        "get_field",
+        "map_entries",
+        "map_extract",
+        "map_keys",
+        "map_values",
+        "list_extract",
+        "named_struct",
+        "prefixed_hash64",
+        "stable_id",
+        "union_extract",
+        "union_tag",
+        "unnest",
+    ),
+    signature_counts={
+        "arrow_cast": 2,
+        "arrow_metadata": 1,
+        "arrow_typeof": 1,
+        "get_field": 2,
+        "list_extract": 2,
+        "map_entries": 1,
+        "map_extract": 2,
+        "map_keys": 1,
+        "map_values": 1,
+        "named_struct": 2,
+        "prefixed_hash64": 2,
+        "stable_id": 2,
+        "union_extract": 2,
+        "union_tag": 1,
+        "unnest": 1,
+    },
+    signature_types={
+        "arrow_cast": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "arrow_metadata": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "get_field": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "list_extract": (
+            _sorted_tokens(_LIST_TYPE_TOKENS),
+            _sorted_tokens(_INT_TYPE_TOKENS),
+        ),
+        "map_entries": (_sorted_tokens(_MAP_TYPE_TOKENS),),
+        "map_extract": (
+            _sorted_tokens(_MAP_TYPE_TOKENS),
+            _sorted_tokens(_STRING_TYPE_TOKENS),
+        ),
+        "map_keys": (_sorted_tokens(_MAP_TYPE_TOKENS),),
+        "map_values": (_sorted_tokens(_MAP_TYPE_TOKENS),),
+        "stable_id": (
+            _sorted_tokens(_STRING_TYPE_TOKENS),
+            _sorted_tokens(_STRING_TYPE_TOKENS),
+        ),
+        "union_extract": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "union_tag": (None,),
+    },
+).schema_metadata
 
-BYTECODE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
-    "arrow_cast": 2,
-    "arrow_metadata": 1,
-    "arrow_typeof": 1,
-    "get_field": 2,
-    "list_extract": 2,
-    "map_entries": 1,
-    "map_extract": 2,
-    "map_keys": 1,
-    "map_values": 1,
-    "named_struct": 2,
-    "prefixed_hash64": 2,
-    "stable_id": 2,
-    "union_extract": 2,
-    "union_tag": 1,
-    "unnest": 1,
-}
+_CST_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
+    required=(
+        "arrow_cast",
+        "arrow_metadata",
+        "arrow_typeof",
+        "concat_ws",
+        "get_field",
+        "map_entries",
+        "map_extract",
+        "named_struct",
+        "prefixed_hash64",
+        "stable_id",
+        "unnest",
+    ),
+    signature_counts={
+        "arrow_cast": 2,
+        "arrow_metadata": 1,
+        "arrow_typeof": 1,
+        "get_field": 2,
+        "map_entries": 1,
+        "map_extract": 2,
+        "named_struct": 2,
+        "prefixed_hash64": 2,
+        "stable_id": 2,
+        "unnest": 1,
+    },
+    signature_types={
+        "arrow_cast": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "arrow_metadata": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "get_field": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "map_entries": (_sorted_tokens(_MAP_TYPE_TOKENS),),
+        "map_extract": (
+            _sorted_tokens(_MAP_TYPE_TOKENS),
+            _sorted_tokens(_STRING_TYPE_TOKENS),
+        ),
+        "stable_id": (
+            _sorted_tokens(_STRING_TYPE_TOKENS),
+            _sorted_tokens(_STRING_TYPE_TOKENS),
+        ),
+    },
+).schema_metadata
 
-CST_REQUIRED_FUNCTIONS: tuple[str, ...] = (
-    "arrow_cast",
-    "arrow_metadata",
-    "arrow_typeof",
-    "concat_ws",
-    "get_field",
-    "map_entries",
-    "map_extract",
-    "named_struct",
-    "prefixed_hash64",
-    "stable_id",
-    "unnest",
-)
+_SYMTABLE_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
+    required=(
+        "arrow_metadata",
+        "arrow_typeof",
+        "concat_ws",
+        "get_field",
+        "map_entries",
+        "prefixed_hash64",
+        "unnest",
+    ),
+    signature_counts={
+        "arrow_metadata": 1,
+        "arrow_typeof": 1,
+        "get_field": 2,
+        "map_entries": 1,
+        "prefixed_hash64": 2,
+        "unnest": 1,
+    },
+    signature_types={
+        "arrow_metadata": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "get_field": (None, _sorted_tokens(_STRING_TYPE_TOKENS)),
+        "map_entries": (_sorted_tokens(_MAP_TYPE_TOKENS),),
+    },
+).schema_metadata
 
-CST_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
-    "arrow_cast": 2,
-    "arrow_metadata": 1,
-    "arrow_typeof": 1,
-    "get_field": 2,
-    "map_entries": 1,
-    "map_extract": 2,
-    "named_struct": 2,
-    "prefixed_hash64": 2,
-    "stable_id": 2,
-    "unnest": 1,
-}
+_ENGINE_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
+    required=(
+        "array_agg",
+        "array_distinct",
+        "array_sort",
+        "array_to_string",
+        "bool_or",
+        "coalesce",
+        "col_to_byte",
+        "concat_ws",
+        "prefixed_hash64",
+        "row_number",
+        "sha256",
+        "stable_hash64",
+        "stable_hash128",
+        "stable_id",
+    ),
+).schema_metadata
 
-SYMTABLE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
-    "arrow_metadata",
-    "arrow_typeof",
-    "concat_ws",
-    "get_field",
-    "map_entries",
-    "prefixed_hash64",
-    "unnest",
-)
+_SCIP_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
+    required=("concat_ws", "stable_id"),
+).schema_metadata
 
-SYMTABLE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
-    "arrow_metadata": 1,
-    "arrow_typeof": 1,
-    "get_field": 2,
-    "map_entries": 1,
-    "prefixed_hash64": 2,
-    "unnest": 1,
-}
 
-ENGINE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
-    "array_agg",
-    "array_distinct",
-    "array_sort",
-    "array_to_string",
-    "bool_or",
-    "coalesce",
-    "col_to_byte",
-    "concat_ws",
-    "prefixed_hash64",
-    "row_number",
-    "sha256",
-    "stable_hash64",
-    "stable_hash128",
-    "stable_id",
-)
+@dataclass(frozen=True)
+class FunctionRequirements:
+    """Decoded function requirement metadata."""
 
-_STRING_TYPE_TOKENS = frozenset({"char", "string", "text", "utf8", "varchar"})
-_INT_TYPE_TOKENS = frozenset({"int", "integer", "bigint", "smallint", "tinyint", "uint"})
-_LIST_TYPE_TOKENS = frozenset({"array", "list"})
-_MAP_TYPE_TOKENS = frozenset({"map"})
+    required: tuple[str, ...]
+    optional: tuple[str, ...]
+    signature_counts: Mapping[str, int]
+    signature_types: Mapping[str, tuple[frozenset[str] | None, ...]]
 
-AST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
-    "arrow_cast": (None, _STRING_TYPE_TOKENS),
-    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
-    "get_field": (None, _STRING_TYPE_TOKENS),
-    "list_extract": (_LIST_TYPE_TOKENS, _INT_TYPE_TOKENS),
-    "map_entries": (_MAP_TYPE_TOKENS,),
-    "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
-}
+
+def _function_requirements(schema: pa.Schema) -> FunctionRequirements:
+    meta = schema.metadata
+    return FunctionRequirements(
+        required=required_functions_from_metadata(meta),
+        optional=optional_functions_from_metadata(meta),
+        signature_counts=required_function_signatures_from_metadata(meta),
+        signature_types=required_function_signature_types_from_metadata(meta),
+    )
+
+
+def _apply_optional_requirements(
+    requirements: FunctionRequirements,
+    *,
+    include_optional: Sequence[str] = (),
+) -> FunctionRequirements:
+    required = tuple(dict.fromkeys((*requirements.required, *include_optional)))
+    signature_counts = {
+        name: count
+        for name, count in requirements.signature_counts.items()
+        if name in required
+    }
+    signature_types = {
+        name: types
+        for name, types in requirements.signature_types.items()
+        if name in required
+    }
+    return FunctionRequirements(
+        required=required,
+        optional=requirements.optional,
+        signature_counts=signature_counts,
+        signature_types=signature_types,
+    )
 
 
 def _ast_optional_functions(view_names: Sequence[str]) -> set[str]:
@@ -2510,80 +2622,60 @@ def _ast_optional_functions(view_names: Sequence[str]) -> set[str]:
     return optional
 
 
-def _ast_required_functions(view_names: Sequence[str]) -> tuple[str, ...]:
+
+def _ast_function_requirements(view_names: Sequence[str]) -> FunctionRequirements:
+    requirements = _function_requirements(AST_FILES_SCHEMA)
     optional = _ast_optional_functions(view_names)
-    required: list[str] = []
-    for name in AST_REQUIRED_FUNCTIONS:
-        if name in {"map_entries", "arrow_metadata"} and name not in optional:
-            continue
-        required.append(name)
-    return tuple(required)
+    included = tuple(name for name in optional if name in requirements.optional)
+    return _apply_optional_requirements(requirements, include_optional=included)
 
 
-def _ast_required_function_signatures(view_names: Sequence[str]) -> dict[str, int]:
-    optional = _ast_optional_functions(view_names)
-    required = dict(AST_REQUIRED_FUNCTION_SIGNATURES)
-    if "map_entries" not in optional:
-        required.pop("map_entries", None)
-    if "arrow_metadata" not in optional:
-        required.pop("arrow_metadata", None)
-    return required
+AST_FILES_SCHEMA = _schema_with_metadata(
+    "ast_files_v1",
+    AST_FILES_SCHEMA,
+    extra_metadata=_AST_FUNCTION_REQUIREMENTS,
+)
+TREE_SITTER_FILES_SCHEMA = _schema_with_metadata(
+    "tree_sitter_files_v1",
+    TREE_SITTER_FILES_SCHEMA,
+    extra_metadata=_TREE_SITTER_FUNCTION_REQUIREMENTS,
+)
+SYMTABLE_FILES_SCHEMA = _schema_with_metadata(
+    "symtable_files_v1",
+    SYMTABLE_FILES_SCHEMA,
+    extra_metadata=_SYMTABLE_FUNCTION_REQUIREMENTS,
+)
+BYTECODE_FILES_SCHEMA = _schema_with_metadata(
+    "bytecode_files_v1",
+    BYTECODE_FILES_SCHEMA,
+    extra_metadata=_BYTECODE_FUNCTION_REQUIREMENTS,
+)
+LIBCST_FILES_SCHEMA = _schema_with_metadata(
+    "libcst_files_v1",
+    LIBCST_FILES_SCHEMA,
+    extra_metadata=_CST_FUNCTION_REQUIREMENTS,
+)
+SCIP_METADATA_SCHEMA = _schema_with_metadata(
+    "scip_metadata_v1",
+    SCIP_METADATA_SCHEMA,
+    extra_metadata=_SCIP_FUNCTION_REQUIREMENTS,
+)
+ENGINE_RUNTIME_SCHEMA = _schema_with_metadata(
+    "engine_runtime_v1",
+    ENGINE_RUNTIME_SCHEMA,
+    extra_metadata=_ENGINE_FUNCTION_REQUIREMENTS,
+)
+SCHEMA_REGISTRY["ast_files_v1"] = AST_FILES_SCHEMA
+SCHEMA_REGISTRY["tree_sitter_files_v1"] = TREE_SITTER_FILES_SCHEMA
+SCHEMA_REGISTRY["symtable_files_v1"] = SYMTABLE_FILES_SCHEMA
+SCHEMA_REGISTRY["bytecode_files_v1"] = BYTECODE_FILES_SCHEMA
+SCHEMA_REGISTRY["libcst_files_v1"] = LIBCST_FILES_SCHEMA
+SCHEMA_REGISTRY["scip_metadata_v1"] = SCIP_METADATA_SCHEMA
+SCHEMA_REGISTRY["engine_runtime_v1"] = ENGINE_RUNTIME_SCHEMA
 
-
-def _ast_required_function_signature_types(
-    view_names: Sequence[str],
-) -> dict[str, tuple[frozenset[str] | None, ...]]:
-    optional = _ast_optional_functions(view_names)
-    required = dict(AST_REQUIRED_FUNCTION_SIGNATURE_TYPES)
-    if "map_entries" not in optional:
-        required.pop("map_entries", None)
-    if "arrow_metadata" not in optional:
-        required.pop("arrow_metadata", None)
-    return required
-
-
-TREE_SITTER_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
-    "arrow_cast": (None, _STRING_TYPE_TOKENS),
-    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
-    "get_field": (None, _STRING_TYPE_TOKENS),
-}
-
-CST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
-    "arrow_cast": (None, _STRING_TYPE_TOKENS),
-    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
-    "get_field": (None, _STRING_TYPE_TOKENS),
-    "map_entries": (_MAP_TYPE_TOKENS,),
-    "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
-    "stable_id": (_STRING_TYPE_TOKENS, _STRING_TYPE_TOKENS),
-}
-
-SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
-    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
-    "get_field": (None, _STRING_TYPE_TOKENS),
-    "map_entries": (_MAP_TYPE_TOKENS,),
-}
-
-BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
-    "arrow_cast": (None, _STRING_TYPE_TOKENS),
-    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
-    "get_field": (None, _STRING_TYPE_TOKENS),
-    "list_extract": (_LIST_TYPE_TOKENS, _INT_TYPE_TOKENS),
-    "map_entries": (_MAP_TYPE_TOKENS,),
-    "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
-    "map_keys": (_MAP_TYPE_TOKENS,),
-    "map_values": (_MAP_TYPE_TOKENS,),
-    "stable_id": (_STRING_TYPE_TOKENS, _STRING_TYPE_TOKENS),
-    "union_extract": (None, _STRING_TYPE_TOKENS),
-    "union_tag": (None,),
-}
 
 AST_VIEW_REQUIRED_NON_NULL_FIELDS: tuple[str, ...] = ("file_id", "path")
 CST_VIEW_REQUIRED_NON_NULL_FIELDS: tuple[str, ...] = ("file_id", "path")
-
-SCIP_REQUIRED_FUNCTIONS: tuple[str, ...] = (
-    "concat_ws",
-    "stable_id",
-)
 
 CST_VIEW_NAMES: tuple[str, ...] = (
     "cst_parse_manifest",
@@ -3167,82 +3259,94 @@ def validate_ast_views(
     ValueError
         Raised when view schemas fail validation.
     """
-    resolved_views = tuple(dict.fromkeys(view_names)) if view_names is not None else AST_VIEW_NAMES
-    sql_options = sql_options_for_profile(None)
     errors: dict[str, str] = {}
-    function_catalog = _function_catalog(ctx)
-    _validate_required_functions(
-        ctx,
-        required=_ast_required_functions(resolved_views),
-        errors=errors,
-        catalog=function_catalog,
-    )
-    _validate_function_signatures(
-        ctx,
-        required=_ast_required_function_signatures(resolved_views),
-        errors=errors,
-        catalog=function_catalog,
-    )
-    _validate_function_signature_types(
-        ctx,
-        required=_ast_required_function_signature_types(resolved_views),
-        errors=errors,
-        catalog=function_catalog,
-    )
-    introspector = SchemaIntrospector(ctx, sql_options=sql_options)
-    for name in resolved_views:
-        _validate_ast_view_outputs(ctx, introspector=introspector, name=name, errors=errors)
-    for name in resolved_views:
-        expected = AST_VIEW_COLUMN_MAP.get(name)
-        if not expected:
-            continue
-        try:
-            actual = introspector.table_column_names(name)
-            missing = sorted(set(expected) - actual)
-            if missing:
-                errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
-        except (RuntimeError, TypeError, ValueError, KeyError) as exc:
-            errors[f"{name}_information_schema"] = str(exc)
-    try:
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(nodes) AS nodes_type FROM ast_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(edges) AS edges_type FROM ast_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(errors) AS errors_type FROM ast_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(docstrings) AS docstrings_type FROM ast_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(imports) AS imports_type FROM ast_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(defs) AS defs_type FROM ast_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(calls) AS calls_type FROM ast_files_v1 LIMIT 1",
-        ).collect()
-        _sql_with_options(
-            ctx,
-            "SELECT arrow_typeof(type_ignores) AS type_ignores_type FROM ast_files_v1 LIMIT 1",
-        ).collect()
-    except (RuntimeError, TypeError, ValueError) as exc:
-        errors["ast_files_v1"] = str(exc)
+    resolved_views = tuple(dict.fromkeys(view_names)) if view_names is not None else AST_VIEW_NAMES
+    introspector = SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None))
+    _validate_ast_function_requirements(ctx, resolved_views, errors)
+    _validate_ast_view_outputs_all(ctx, introspector, resolved_views, errors)
+    _validate_ast_information_schema(introspector, resolved_views, errors)
+    _validate_ast_file_types(ctx, errors)
     if "ast_span_metadata" in resolved_views:
         _validate_ast_span_metadata(ctx, errors)
     if errors:
         msg = f"AST view validation failed: {errors}."
         raise ValueError(msg)
+
+
+def _validate_ast_function_requirements(
+    ctx: SessionContext,
+    view_names: Sequence[str],
+    errors: dict[str, str],
+) -> None:
+    requirements = _ast_function_requirements(view_names)
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=requirements.required,
+        errors=errors,
+        catalog=function_catalog,
+    )
+    if requirements.signature_counts:
+        _validate_function_signatures(
+            ctx,
+            required=requirements.signature_counts,
+            errors=errors,
+            catalog=function_catalog,
+        )
+    if requirements.signature_types:
+        _validate_function_signature_types(
+            ctx,
+            required=requirements.signature_types,
+            errors=errors,
+            catalog=function_catalog,
+        )
+
+
+def _validate_ast_view_outputs_all(
+    ctx: SessionContext,
+    introspector: SchemaIntrospector,
+    view_names: Sequence[str],
+    errors: dict[str, str],
+) -> None:
+    for name in view_names:
+        _validate_ast_view_outputs(ctx, introspector=introspector, name=name, errors=errors)
+
+
+def _validate_ast_information_schema(
+    introspector: SchemaIntrospector,
+    view_names: Sequence[str],
+    errors: dict[str, str],
+) -> None:
+    for name in view_names:
+        expected = AST_VIEW_COLUMN_MAP.get(name)
+        if not expected:
+            continue
+        try:
+            actual = introspector.table_column_names(name)
+        except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+            errors[f"{name}_information_schema"] = str(exc)
+            continue
+        missing = sorted(set(expected) - actual)
+        if missing:
+            errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
+
+
+def _validate_ast_file_types(ctx: SessionContext, errors: dict[str, str]) -> None:
+    queries = (
+        "SELECT arrow_typeof(nodes) AS nodes_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(edges) AS edges_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(errors) AS errors_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(docstrings) AS docstrings_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(imports) AS imports_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(defs) AS defs_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(calls) AS calls_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(type_ignores) AS type_ignores_type FROM ast_files_v1 LIMIT 1",
+    )
+    try:
+        for query in queries:
+            _sql_with_options(ctx, query).collect()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["ast_files_v1"] = str(exc)
 
 
 def validate_ts_views(ctx: SessionContext) -> None:
@@ -3256,24 +3360,27 @@ def validate_ts_views(ctx: SessionContext) -> None:
     errors: dict[str, str] = {}
     sql_options = sql_options_for_profile(None)
     function_catalog = _function_catalog(ctx)
+    requirements = _function_requirements(TREE_SITTER_FILES_SCHEMA)
     _validate_required_functions(
         ctx,
-        required=TREE_SITTER_REQUIRED_FUNCTIONS,
+        required=requirements.required,
         errors=errors,
         catalog=function_catalog,
     )
-    _validate_function_signatures(
-        ctx,
-        required=TREE_SITTER_REQUIRED_FUNCTION_SIGNATURES,
-        errors=errors,
-        catalog=function_catalog,
-    )
-    _validate_function_signature_types(
-        ctx,
-        required=TREE_SITTER_REQUIRED_FUNCTION_SIGNATURE_TYPES,
-        errors=errors,
-        catalog=function_catalog,
-    )
+    if requirements.signature_counts:
+        _validate_function_signatures(
+            ctx,
+            required=requirements.signature_counts,
+            errors=errors,
+            catalog=function_catalog,
+        )
+    if requirements.signature_types:
+        _validate_function_signature_types(
+            ctx,
+            required=requirements.signature_types,
+            errors=errors,
+            catalog=function_catalog,
+        )
     introspector = SchemaIntrospector(ctx, sql_options=sql_options)
     for name in TREE_SITTER_VIEW_NAMES:
         _validate_ts_view_outputs(ctx, introspector=introspector, name=name, errors=errors)
@@ -3356,24 +3463,27 @@ def validate_symtable_views(ctx: SessionContext) -> None:
     errors: dict[str, str] = {}
     sql_options = sql_options_for_profile(None)
     function_catalog = _function_catalog(ctx)
+    requirements = _function_requirements(SYMTABLE_FILES_SCHEMA)
     _validate_required_functions(
         ctx,
-        required=SYMTABLE_REQUIRED_FUNCTIONS,
+        required=requirements.required,
         errors=errors,
         catalog=function_catalog,
     )
-    _validate_function_signatures(
-        ctx,
-        required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURES,
-        errors=errors,
-        catalog=function_catalog,
-    )
-    _validate_function_signature_types(
-        ctx,
-        required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
-        errors=errors,
-        catalog=function_catalog,
-    )
+    if requirements.signature_counts:
+        _validate_function_signatures(
+            ctx,
+            required=requirements.signature_counts,
+            errors=errors,
+            catalog=function_catalog,
+        )
+    if requirements.signature_types:
+        _validate_function_signature_types(
+            ctx,
+            required=requirements.signature_types,
+            errors=errors,
+            catalog=function_catalog,
+        )
     introspector = SchemaIntrospector(ctx, sql_options=sql_options)
     for name in SYMTABLE_VIEW_NAMES:
         try:
@@ -3431,9 +3541,10 @@ def validate_scip_views(ctx: SessionContext) -> None:
     errors: dict[str, str] = {}
     sql_options = sql_options_for_profile(None)
     function_catalog = _function_catalog(ctx)
+    requirements = _function_requirements(SCIP_METADATA_SCHEMA)
     _validate_required_functions(
         ctx,
-        required=SCIP_REQUIRED_FUNCTIONS,
+        required=requirements.required,
         errors=errors,
         catalog=function_catalog,
     )
@@ -3969,24 +4080,27 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
     """
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
+    requirements = _function_requirements(BYTECODE_FILES_SCHEMA)
     _validate_required_functions(
         ctx,
-        required=BYTECODE_REQUIRED_FUNCTIONS,
+        required=requirements.required,
         errors=errors,
         catalog=function_catalog,
     )
-    _validate_function_signatures(
-        ctx,
-        required=BYTECODE_REQUIRED_FUNCTION_SIGNATURES,
-        errors=errors,
-        catalog=function_catalog,
-    )
-    _validate_function_signature_types(
-        ctx,
-        required=BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
-        errors=errors,
-        catalog=function_catalog,
-    )
+    if requirements.signature_counts:
+        _validate_function_signatures(
+            ctx,
+            required=requirements.signature_counts,
+            errors=errors,
+            catalog=function_catalog,
+        )
+    if requirements.signature_types:
+        _validate_function_signature_types(
+            ctx,
+            required=requirements.signature_types,
+            errors=errors,
+            catalog=function_catalog,
+        )
     for name in BYTECODE_VIEW_NAMES:
         try:
             _sql_with_options(ctx, f"DESCRIBE SELECT * FROM {name}").collect()
@@ -4137,24 +4251,27 @@ def validate_cst_views(ctx: SessionContext) -> None:
     errors: dict[str, str] = {}
     sql_options = sql_options_for_profile(None)
     function_catalog = _function_catalog(ctx)
+    requirements = _function_requirements(LIBCST_FILES_SCHEMA)
     _validate_required_functions(
         ctx,
-        required=CST_REQUIRED_FUNCTIONS,
+        required=requirements.required,
         errors=errors,
         catalog=function_catalog,
     )
-    _validate_function_signatures(
-        ctx,
-        required=CST_REQUIRED_FUNCTION_SIGNATURES,
-        errors=errors,
-        catalog=function_catalog,
-    )
-    _validate_function_signature_types(
-        ctx,
-        required=CST_REQUIRED_FUNCTION_SIGNATURE_TYPES,
-        errors=errors,
-        catalog=function_catalog,
-    )
+    if requirements.signature_counts:
+        _validate_function_signatures(
+            ctx,
+            required=requirements.signature_counts,
+            errors=errors,
+            catalog=function_catalog,
+        )
+    if requirements.signature_types:
+        _validate_function_signature_types(
+            ctx,
+            required=requirements.signature_types,
+            errors=errors,
+            catalog=function_catalog,
+        )
     introspector = SchemaIntrospector(ctx, sql_options=sql_options)
     for name in CST_VIEW_NAMES:
         _validate_cst_view_outputs(
@@ -4182,18 +4299,20 @@ def validate_required_cst_functions(ctx: SessionContext) -> None:
     """
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
+    requirements = _function_requirements(LIBCST_FILES_SCHEMA)
     _validate_required_functions(
         ctx,
-        required=CST_REQUIRED_FUNCTIONS,
+        required=requirements.required,
         errors=errors,
         catalog=function_catalog,
     )
-    _validate_function_signatures(
-        ctx,
-        required=CST_REQUIRED_FUNCTION_SIGNATURES,
-        errors=errors,
-        catalog=function_catalog,
-    )
+    if requirements.signature_counts:
+        _validate_function_signatures(
+            ctx,
+            required=requirements.signature_counts,
+            errors=errors,
+            catalog=function_catalog,
+        )
     if errors:
         msg = f"Required CST functions validation failed: {errors}."
         raise ValueError(msg)
@@ -4209,24 +4328,27 @@ def validate_required_symtable_functions(ctx: SessionContext) -> None:
     """
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
+    requirements = _function_requirements(SYMTABLE_FILES_SCHEMA)
     _validate_required_functions(
         ctx,
-        required=SYMTABLE_REQUIRED_FUNCTIONS,
+        required=requirements.required,
         errors=errors,
         catalog=function_catalog,
     )
-    _validate_function_signatures(
-        ctx,
-        required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURES,
-        errors=errors,
-        catalog=function_catalog,
-    )
-    _validate_function_signature_types(
-        ctx,
-        required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
-        errors=errors,
-        catalog=function_catalog,
-    )
+    if requirements.signature_counts:
+        _validate_function_signatures(
+            ctx,
+            required=requirements.signature_counts,
+            errors=errors,
+            catalog=function_catalog,
+        )
+    if requirements.signature_types:
+        _validate_function_signature_types(
+            ctx,
+            required=requirements.signature_types,
+            errors=errors,
+            catalog=function_catalog,
+        )
     if errors:
         msg = f"Required symtable functions validation failed: {errors}."
         raise ValueError(msg)
@@ -4242,24 +4364,27 @@ def validate_required_bytecode_functions(ctx: SessionContext) -> None:
     """
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
+    requirements = _function_requirements(BYTECODE_FILES_SCHEMA)
     _validate_required_functions(
         ctx,
-        required=BYTECODE_REQUIRED_FUNCTIONS,
+        required=requirements.required,
         errors=errors,
         catalog=function_catalog,
     )
-    _validate_function_signatures(
-        ctx,
-        required=BYTECODE_REQUIRED_FUNCTION_SIGNATURES,
-        errors=errors,
-        catalog=function_catalog,
-    )
-    _validate_function_signature_types(
-        ctx,
-        required=BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
-        errors=errors,
-        catalog=function_catalog,
-    )
+    if requirements.signature_counts:
+        _validate_function_signatures(
+            ctx,
+            required=requirements.signature_counts,
+            errors=errors,
+            catalog=function_catalog,
+        )
+    if requirements.signature_types:
+        _validate_function_signature_types(
+            ctx,
+            required=requirements.signature_types,
+            errors=errors,
+            catalog=function_catalog,
+        )
     if errors:
         msg = f"Required bytecode functions validation failed: {errors}."
         raise ValueError(msg)
@@ -4275,9 +4400,10 @@ def validate_required_engine_functions(ctx: SessionContext) -> None:
     """
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
+    requirements = _function_requirements(ENGINE_RUNTIME_SCHEMA)
     _validate_required_functions(
         ctx,
-        required=ENGINE_REQUIRED_FUNCTIONS,
+        required=requirements.required,
         errors=errors,
         catalog=function_catalog,
     )
@@ -4407,7 +4533,6 @@ __all__ = [
     "DIAG_DETAILS_TYPE",
     "DIAG_DETAIL_STRUCT",
     "DIAG_TAGS_TYPE",
-    "ENGINE_REQUIRED_FUNCTIONS",
     "IBIS_SQL_INGEST_SCHEMA",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",

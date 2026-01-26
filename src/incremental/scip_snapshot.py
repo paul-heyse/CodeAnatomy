@@ -10,7 +10,7 @@ import ibis
 import pyarrow as pa
 
 from arrowdsl.core.interop import coerce_table_like
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.abi import schema_fingerprint
 from ibis_engine.builtin_udfs import ibis_udf_call
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,

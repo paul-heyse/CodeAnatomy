@@ -16,7 +16,7 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
 from arrowdsl.core.interop import pc
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from ibis_engine.registry import datafusion_context
 from ibis_engine.schema_utils import ibis_schema_from_arrow

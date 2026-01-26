@@ -7,14 +7,17 @@ row-multiplying) to enable fine-grained incremental rebuild decisions.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import sqlglot.diff as sqlglot_diff
 import sqlglot.expressions as exp
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlglot.diff import Edit
 
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
@@ -189,7 +192,8 @@ class SemanticDiff:
         SemanticDiff
             Diff result with categorized changes.
         """
-        edits = sqlglot_diff.diff(old_ast, new_ast, matchings=matchings)
+        seeded = matchings or _seed_matchings(old_ast, new_ast)
+        edits = sqlglot_diff.diff(old_ast, new_ast, matchings=seeded)
         changes = [SemanticChange.from_edit(edit) for edit in edits]
 
         return cls(edits=edits, changes=changes)
@@ -219,7 +223,7 @@ class SemanticDiff:
 
         return ChangeCategory.METADATA_ONLY
 
-    def is_breaking(self) -> bool:
+    def is_breaking(self: SemanticDiff) -> bool:
         """Check if diff contains breaking changes.
 
         Returns
@@ -232,13 +236,15 @@ class SemanticDiff:
             ChangeCategory.ROW_MULTIPLYING,
         }
 
-    def requires_rebuild(self, policy: RebuildPolicy) -> bool:
+    def requires_rebuild(self: SemanticDiff, policy: RebuildPolicy) -> bool:
         """Check if diff requires downstream rebuild.
 
         Policy determines what counts as "requiring rebuild".
 
         Parameters
         ----------
+        self
+            Semantic diff instance.
         policy
             Rebuild decision policy.
 
@@ -249,20 +255,16 @@ class SemanticDiff:
         """
         if policy == RebuildPolicy.ALWAYS:
             return self.overall_category != ChangeCategory.NONE
-
         if policy == RebuildPolicy.BREAKING_ONLY:
             return self.is_breaking()
-
         if policy == RebuildPolicy.CONSERVATIVE:
-            # Rebuild for anything except metadata changes
             return self.overall_category not in {
                 ChangeCategory.NONE,
                 ChangeCategory.METADATA_ONLY,
             }
-
         return False
 
-    def summary(self) -> str:
+    def summary(self: SemanticDiff) -> str:
         """Generate human-readable summary of changes.
 
         Returns
@@ -272,15 +274,89 @@ class SemanticDiff:
         """
         if self.overall_category == ChangeCategory.NONE:
             return "No semantic changes"
-
-        by_type = {}
+        by_type: dict[str, int] = {}
         for change in self.changes:
             if change.category != ChangeCategory.NONE:
-                key = change.edit_type
-                by_type[key] = by_type.get(key, 0) + 1
-
+                by_type[change.edit_type] = by_type.get(change.edit_type, 0) + 1
         parts = [f"{count} {typ}" for typ, count in by_type.items()]
         return f"Changes: {', '.join(parts)} ({self.overall_category.name})"
+
+
+def _seed_matchings(
+    old_ast: exp.Expression,
+    new_ast: exp.Expression,
+) -> list[tuple[exp.Expression, exp.Expression]]:
+    """Seed diff matchings using stable identifiers for common nodes.
+
+    Returns
+    -------
+    list[tuple[sqlglot.expressions.Expression, sqlglot.expressions.Expression]]
+        Seeded node matchings for diff stabilization.
+    """
+    old_index = _match_index(old_ast)
+    new_index = _match_index(new_ast)
+    matchings: list[tuple[exp.Expression, exp.Expression]] = []
+    for key, old_nodes in old_index.items():
+        new_nodes = new_index.get(key)
+        if new_nodes is None or len(old_nodes) != 1 or len(new_nodes) != 1:
+            continue
+        matchings.append((old_nodes[0], new_nodes[0]))
+    return matchings
+
+
+def _match_index(ast: exp.Expression) -> dict[tuple[str, str], list[exp.Expression]]:
+    """Return matchable node indices keyed by stable identifiers.
+
+    Returns
+    -------
+    dict[tuple[str, str], list[sqlglot.expressions.Expression]]
+        Matchable nodes grouped by stable identifiers.
+    """
+    index: dict[tuple[str, str], list[exp.Expression]] = {}
+    for node in ast.walk():
+        key = _match_key(node)
+        if key is None:
+            continue
+        index.setdefault(key, []).append(node)
+    return index
+
+
+def _match_key(node: exp.Expression) -> tuple[str, str] | None:
+    def _column_key(col: exp.Column) -> tuple[str, str] | None:
+        name = col.name
+        if not name:
+            return None
+        table = col.table or ""
+        return ("column", f"{table}.{name}" if table else name)
+
+    matchers: list[
+        tuple[type[exp.Expression], Callable[[exp.Expression], tuple[str, str] | None]]
+    ] = [
+        (
+            exp.Table,
+            lambda n: ("table", n.name) if n.name else None,
+        ),
+        (
+            exp.Column,
+            lambda n: _column_key(cast("exp.Column", n)),
+        ),
+        (
+            exp.Alias,
+            lambda n: ("alias", n.alias_or_name) if n.alias_or_name else None,
+        ),
+        (
+            exp.CTE,
+            lambda n: ("cte", n.alias_or_name) if n.alias_or_name else None,
+        ),
+        (
+            exp.Subquery,
+            lambda n: ("subquery", n.alias_or_name) if n.alias_or_name else None,
+        ),
+    ]
+    for node_type, matcher in matchers:
+        if isinstance(node, node_type):
+            return matcher(node)
+    return None
 
 
 class RebuildPolicy(Enum):
@@ -328,8 +404,9 @@ def compute_rebuild_needed(
         error_level=profile.error_level,
         unsupported_level=profile.unsupported_level,
     )
-    old_ast = parse_sql_strict(old_sql, dialect=profile.read_dialect, options=options)
-    new_ast = parse_sql_strict(new_sql, dialect=profile.read_dialect, options=options)
+    dialect = profile.read_dialect or "datafusion"
+    old_ast = parse_sql_strict(old_sql, dialect=dialect, options=options)
+    new_ast = parse_sql_strict(new_sql, dialect=dialect, options=options)
 
     old_canonical, _ = compile_sql_policy(old_ast, schema=schema, profile=profile)
     new_canonical, _ = compile_sql_policy(new_ast, schema=schema, profile=profile)

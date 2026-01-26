@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.abi import schema_fingerprint
 from cache.diskcache_factory import (
     DiskCacheProfile,
     bulk_cache_set,

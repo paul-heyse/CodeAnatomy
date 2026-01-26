@@ -85,6 +85,7 @@ from sqlglot_tools.optimizer import (
     PreflightOptions,
     SchemaMapping,
     SqlGlotPolicy,
+    ast_policy_fingerprint,
     ast_to_artifact,
     bind_params,
     build_select,
@@ -96,6 +97,7 @@ from sqlglot_tools.optimizer import (
     rewrite_expr,
     serialize_ast_artifact,
     sqlglot_emit,
+    sqlglot_policy_snapshot_for,
     sqlglot_sql,
 )
 
@@ -222,6 +224,24 @@ def _resolve_cache_policy(
     return options, None
 
 
+def _policy_hash_for_options(options: DataFusionCompileOptions) -> str:
+    if options.sqlglot_policy_hash is not None:
+        return options.sqlglot_policy_hash
+    if options.sqlglot_policy is not None:
+        policy = options.sqlglot_policy
+    elif options.sql_policy_profile is not None:
+        policy = options.sql_policy_profile.to_sqlglot_policy()
+    else:
+        policy = resolve_sqlglot_policy(name="datafusion_compile")
+    return sqlglot_policy_snapshot_for(policy).policy_hash
+
+
+def _plan_hash_for_expr(expr: Expression, *, options: DataFusionCompileOptions) -> str:
+    ast_fingerprint = canonical_ast_fingerprint(expr)
+    policy_hash = _policy_hash_for_options(options)
+    return ast_policy_fingerprint(ast_fingerprint=ast_fingerprint, policy_hash=policy_hash)
+
+
 def _plan_cache_key(
     expr: Expression,
     *,
@@ -234,7 +254,7 @@ def _plan_cache_key(
         return None
     if not options.diagnostics_allow_sql:
         return None
-    plan_hash = options.plan_hash or canonical_ast_fingerprint(expr)
+    plan_hash = options.plan_hash or _plan_hash_for_expr(expr, options=options)
     _ensure_dialect(options.dialect)
     try:
         sql = _emit_sql(expr, options=options)
@@ -389,15 +409,7 @@ def _sql_policy_profile_from_options(
     if options.sql_policy_profile is not None:
         return options.sql_policy_profile
     if options.sqlglot_policy is not None:
-        base = SQLPolicyProfile(
-            read_dialect=options.sqlglot_policy.read_dialect,
-            write_dialect=options.sqlglot_policy.write_dialect,
-            optimizer_rules=tuple(options.sqlglot_policy.rules),
-            normalize_distance_limit=options.sqlglot_policy.normalization_distance,
-            expand_stars=options.sqlglot_policy.expand_stars,
-            validate_qualify_columns=options.sqlglot_policy.validate_qualify_columns,
-            identify_mode=options.sqlglot_policy.identify,
-        )
+        base = SQLPolicyProfile(policy=options.sqlglot_policy)
     else:
         base = SQLPolicyProfile(
             read_dialect=options.dialect,
@@ -1059,8 +1071,7 @@ def _maybe_collect_plan_artifacts(
 
 
 def _semantic_plan_hash(expr: Expression, *, options: DataFusionCompileOptions) -> str:
-    _ = options
-    return canonical_ast_fingerprint(expr)
+    return _plan_hash_for_expr(expr, options=options)
 
 
 def _semantic_diff_base_expr(
@@ -1412,7 +1423,7 @@ def _collect_plan_artifact_inputs(
         df=df,
         substrait_plan_override=options.substrait_plan_override,
     )
-    plan_hash = options.plan_hash or canonical_ast_fingerprint(resolved_expr)
+    plan_hash = options.plan_hash or _plan_hash_for_expr(resolved_expr, options=options)
     return _PlanArtifactInputs(
         resolved_expr=resolved_expr,
         sql=sql,
@@ -1475,7 +1486,7 @@ def _collect_ibis_artifacts(
 
     if not isinstance(ibis_expr, (Table, Value)):
         return None
-    from ibis_engine.sql_bridge import ibis_plan_artifacts
+    from ibis_engine.plan_artifacts import ibis_plan_artifacts
 
     return ibis_plan_artifacts(
         ibis_expr,

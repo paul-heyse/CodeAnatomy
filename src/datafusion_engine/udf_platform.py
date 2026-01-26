@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import cast
 from weakref import WeakSet
 
 from datafusion import SessionContext
@@ -165,7 +166,10 @@ def install_rust_udf_platform(
             async_udf_batch_size=resolved.async_udf_batch_size,
         )
         validate_rust_udf_snapshot(snapshot)
-        docs = rust_udf_docs(ctx)
+        docs_value = snapshot.get("documentation") if isinstance(snapshot, Mapping) else None
+        docs = cast("Mapping[str, object] | None", docs_value)
+        if docs is None:
+            docs = rust_udf_docs(ctx)
     planner_names = tuple(resolved.expr_planner_names)
     if resolved.enable_expr_planners and resolved.expr_planner_hook is None:
         derived = domain_planner_names_from_snapshot(snapshot)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -46,6 +46,7 @@ class DataFusionUdfSpec:
     state_type: pa.DataType | None = None
     volatility: str = "stable"
     arg_names: tuple[str, ...] | None = None
+    description: str | None = None
     catalog: str | None = None
     database: str | None = None
     capsule_id: str | None = None
@@ -705,6 +706,20 @@ def _registry_rewrite_tags(snapshot: Mapping[str, object]) -> dict[str, tuple[st
     return resolved
 
 
+def _registry_docs(snapshot: Mapping[str, object]) -> dict[str, str]:
+    raw = snapshot.get("documentation")
+    if not isinstance(raw, Mapping):
+        return {}
+    if "functions" in raw and isinstance(raw.get("functions"), Mapping):
+        raw = cast("Mapping[str, object]", raw.get("functions"))
+    resolved: dict[str, str] = {}
+    for name, doc in raw.items():
+        if name is None or doc is None:
+            continue
+        resolved[str(name)] = str(doc)
+    return resolved
+
+
 def rewrite_tag_index(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
     """Return a tag-to-function index for registry rewrite tags.
 
@@ -785,6 +800,7 @@ def datafusion_udf_specs(
     param_names = _registry_parameter_names(registry_snapshot)
     volatilities = _registry_volatility(registry_snapshot)
     rewrite_tags = _registry_rewrite_tags(registry_snapshot)
+    docs = _registry_docs(registry_snapshot)
     specs: list[DataFusionUdfSpec] = []
     for name in sorted(set(names)):
         kind = kinds.get(name)
@@ -808,6 +824,7 @@ def datafusion_udf_specs(
                 return_type=return_type,
                 arg_names=param_names.get(name),
                 volatility=volatilities.get(name, "stable"),
+                description=docs.get(name),
                 rewrite_tags=rewrite_tags.get(name, ()),
                 udf_tier="builtin",
             )

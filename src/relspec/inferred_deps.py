@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from sqlglot_tools.lineage import referenced_tables
-from sqlglot_tools.optimizer import plan_fingerprint
+from sqlglot_tools.optimizer import (
+    ast_policy_fingerprint,
+    canonical_ast_fingerprint,
+    resolve_sqlglot_policy,
+    sqlglot_policy_snapshot_for,
+)
 
 if TYPE_CHECKING:
     from datafusion_engine.schema_contracts import SchemaContract
@@ -88,6 +93,7 @@ def infer_deps_from_sqlglot_expr(
     if not isinstance(expr, Expression):
         msg = f"Expected SQLGlot Expression, got {type(expr).__name__}"
         raise TypeError(msg)
+    _ = dialect
 
     # Extract table references
     tables = referenced_tables(expr)
@@ -97,7 +103,12 @@ def infer_deps_from_sqlglot_expr(
     required_metadata = _required_metadata_for_tables(columns_by_table)
 
     # Compute plan fingerprint
-    fingerprint = plan_fingerprint(expr, dialect=dialect)
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
+    policy_hash = sqlglot_policy_snapshot_for(policy).policy_hash
+    fingerprint = ast_policy_fingerprint(
+        ast_fingerprint=canonical_ast_fingerprint(expr),
+        policy_hash=policy_hash,
+    )
 
     return InferredDeps(
         task_name=task_name,

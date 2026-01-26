@@ -20,6 +20,7 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
+from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict
 from arrowdsl.schema.build import (
     const_array,
     empty_table,
@@ -29,7 +30,6 @@ from arrowdsl.schema.build import (
 )
 from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.normalize import NormalizePolicy
-from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 
 type RowValue = str | int

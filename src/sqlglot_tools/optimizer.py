@@ -175,6 +175,13 @@ _PLAN_HASH_SCHEMA = pa.schema(
         pa.field("schema_map_hash", pa.string()),
     ]
 )
+_AST_POLICY_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("ast_fingerprint", pa.string()),
+        pa.field("policy_hash", pa.string()),
+    ]
+)
 _STEP_HASH_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32()),
@@ -1478,19 +1485,24 @@ def normalize_expr_with_stats(
     compile_options = _compile_options_from_normalize(options)
     policy = compile_options.policy or default_sqlglot_policy()
     prepared = _prepare_for_qualification(expr, options=compile_options, policy=policy)
-    distance = normalization_distance(prepared, max_=policy.normalization_distance)
-    optimized = optimize_expr(
+    identify = policy.identify or _schema_requires_quoting(options.schema)
+    qualified = _qualify_expression(
         prepared,
-        schema=compile_options.schema,
+        options=options,
         policy=policy,
-        sql=compile_options.sql,
+        identify=identify,
     )
-    stats = NormalizationStats(
-        distance=distance,
-        max_distance=policy.normalization_distance,
-        applied=distance <= policy.normalization_distance,
+    annotated = _annotate_expression(
+        qualified,
+        policy=policy,
+        identify=identify,
+        schema_map=_ensure_mapping_schema(options.schema, dialect=policy.read_dialect),
     )
-    return NormalizeExprResult(expr=optimized, stats=stats)
+    simplified = _simplify_expression(annotated, policy=policy)
+    normalized, stats = _normalize_predicates_with_stats(
+        simplified, max_distance=policy.normalization_distance
+    )
+    return NormalizeExprResult(expr=normalized, stats=stats)
 
 
 def compile_expr(
@@ -1506,13 +1518,33 @@ def compile_expr(
         Optimized expression tree.
     """
     policy = options.policy or default_sqlglot_policy()
-    prepared = _prepare_for_qualification(expr, options=options, policy=policy)
-    return optimize_expr(
-        prepared,
+    normalize_options = NormalizeExprOptions(
         schema=options.schema,
+        rules=options.rules,
+        rewrite_hook=options.rewrite_hook,
+        enable_rewrites=options.enable_rewrites,
         policy=policy,
         sql=options.sql,
     )
+    prepared = _prepare_for_qualification(expr, options=options, policy=policy)
+    identify = policy.identify or _schema_requires_quoting(options.schema)
+    qualified = _qualify_expression(
+        prepared,
+        options=normalize_options,
+        policy=policy,
+        identify=identify,
+    )
+    annotated = _annotate_expression(
+        qualified,
+        policy=policy,
+        identify=identify,
+        schema_map=_ensure_mapping_schema(options.schema, dialect=policy.read_dialect),
+    )
+    simplified = _simplify_expression(annotated, policy=policy)
+    normalized, _stats = _normalize_predicates_with_stats(
+        simplified, max_distance=policy.normalization_distance
+    )
+    return normalized
 
 
 def _compile_options_from_normalize(options: NormalizeExprOptions) -> SqlGlotCompileOptions:
@@ -2159,6 +2191,22 @@ def plan_fingerprint(
     return payload_hash(payload, _PLAN_HASH_SCHEMA)
 
 
+def ast_policy_fingerprint(*, ast_fingerprint: str, policy_hash: str) -> str:
+    """Return a stable fingerprint combining AST and policy hashes.
+
+    Returns
+    -------
+    str
+        Stable fingerprint for AST/policy pairs.
+    """
+    payload = {
+        "version": HASH_PAYLOAD_VERSION,
+        "ast_fingerprint": ast_fingerprint,
+        "policy_hash": policy_hash,
+    }
+    return payload_hash(payload, _AST_POLICY_HASH_SCHEMA)
+
+
 def planner_dag_snapshot(
     expr: Expression,
     *,
@@ -2315,6 +2363,7 @@ __all__ = [
     "StrictParseOptions",
     "apply_transforms",
     "artifact_to_ast",
+    "ast_policy_fingerprint",
     "ast_to_artifact",
     "bind_params",
     "build_insert",

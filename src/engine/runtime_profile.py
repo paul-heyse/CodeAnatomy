@@ -13,7 +13,7 @@ import pyarrow as pa
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
-from arrowdsl.schema.serialization import schema_to_msgpack
+from arrowdsl.schema.abi import schema_to_msgpack
 from serde_msgspec import dumps_msgpack, to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 from storage.ipc import payload_hash

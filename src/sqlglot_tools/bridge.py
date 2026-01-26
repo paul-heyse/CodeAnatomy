@@ -24,10 +24,10 @@ from sqlglot_tools.optimizer import (
     SchemaMapping,
     SqlGlotPolicy,
     _flatten_schema_mapping,
+    ast_policy_fingerprint,
     ast_to_artifact,
     canonical_ast_fingerprint,
     normalize_expr_with_stats,
-    plan_fingerprint,
     resolve_sqlglot_policy,
     serialize_ast_artifact,
     sqlglot_policy_snapshot_for,
@@ -238,22 +238,17 @@ def collect_sqlglot_plan_artifacts(
             sql=diagnostics_options.sql,
         ),
     )
-    plan_hash = plan_fingerprint(
-        diagnostics.optimized,
-        dialect=resolved_policy.write_dialect,
+    ast_fingerprint = canonical_ast_fingerprint(diagnostics.optimized)
+    plan_hash = ast_policy_fingerprint(
+        ast_fingerprint=ast_fingerprint,
         policy_hash=snapshot.policy_hash,
-        schema_map_hash=resolved_options.schema_map_hash,
     )
     lineage = _lineage_payload(
         diagnostics.optimized,
         schema_map=resolved_options.schema_map,
         policy=resolved_policy,
     )
-    canonical = (
-        lineage.canonical_fingerprint
-        if lineage is not None
-        else canonical_ast_fingerprint(diagnostics.optimized)
-    )
+    canonical = lineage.canonical_fingerprint if lineage is not None else ast_fingerprint
     sqlglot_ast = _ast_payload(
         diagnostics.optimized,
         sql=diagnostics.sql_text_optimized,

@@ -23,8 +23,8 @@ from sqlglot.errors import ParseError
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
+from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict
 from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
-from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import ensure_path
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.introspection import (
@@ -1535,14 +1535,7 @@ def _apply_projection_exprs(
 ) -> DataFrame:
     if not projection_exprs:
         return ctx.table(table_name)
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
-    base_name = f"{table_name}__raw"
-    adapter.register_view(
-        base_name,
-        ctx.table(table_name),
-        overwrite=True,
-        temporary=True,
-    )
+    _ = sql_options
     policy = resolve_sqlglot_policy(name="datafusion_compile")
     parsed_exprs: list[exp.Expression] = []
     for projection in projection_exprs:
@@ -1563,33 +1556,35 @@ def _apply_projection_exprs(
     if not parsed_exprs:
         msg = "Projection expressions are required for dynamic projection."
         raise ValueError(msg)
-    view_expr = build_select(parsed_exprs, from_=base_name)
+    view_expr = build_select(parsed_exprs, from_=table_name)
     view_sql = sqlglot_emit(view_expr, policy=policy)
-    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    import ibis
 
-    options = DataFusionCompileOptions(
-        sql_options=sql_options,
-        sql_policy=DataFusionSqlPolicy(),
-        runtime_profile=runtime_profile,
-    )
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    plan = facade.compile(view_expr, options=options)
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "Projection SQL execution did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    projected = result.dataframe
-    adapter.register_view(
-        table_name,
-        projected,
-        overwrite=True,
-        temporary=False,
-    )
+    backend = ibis.datafusion.connect(ctx)
+    expr = backend.sql(view_sql, dialect=policy.write_dialect)
+    backend.create_view(table_name, expr, overwrite=True)
     if runtime_profile is not None:
         from datafusion_engine.runtime import record_view_definition
+        from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
 
-        record_view_definition(runtime_profile, name=table_name, sql=view_sql)
+        schema = ctx.table(table_name).schema()
+        if not isinstance(schema, pa.Schema):
+            to_arrow = getattr(schema, "to_arrow", None)
+            if callable(to_arrow):
+                schema = to_arrow()
+        if not isinstance(schema, pa.Schema):
+            msg = f"Failed to resolve schema for {table_name!r}."
+            raise TypeError(msg)
+        artifact = build_view_artifact(
+            ViewArtifactInputs(
+                ctx=ctx,
+                name=table_name,
+                ast=view_expr,
+                schema=schema,
+                sql=view_sql,
+            )
+        )
+        record_view_definition(runtime_profile, artifact=artifact)
         _invalidate_information_schema_cache(runtime_profile, ctx)
     return ctx.table(table_name)
 

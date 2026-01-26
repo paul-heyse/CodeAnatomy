@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
@@ -10,7 +11,7 @@ from typing import TYPE_CHECKING, cast
 from sqlglot.errors import SqlglotError
 from sqlglot.lineage import Node, lineage
 from sqlglot.optimizer.qualify import qualify
-from sqlglot.optimizer.scope import build_scope
+from sqlglot.optimizer.scope import Scope, build_scope
 
 from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import (
@@ -21,6 +22,7 @@ from sqlglot_tools.optimizer import (
     canonical_ast_fingerprint,
     default_sqlglot_policy,
     normalize_expr,
+    schema_map_fingerprint_from_mapping,
 )
 
 if TYPE_CHECKING:
@@ -159,6 +161,62 @@ class LineageExtractionOptions:
     include_qualified_sql: bool = False
 
 
+_SCOPE_CACHE_MAX: int = 256
+_SCOPE_CACHE: OrderedDict[tuple[str, str | None], Scope] = OrderedDict()
+
+
+def _serde_fingerprint(expr: Expression) -> str:
+    """Return a stable serde-based fingerprint for the AST.
+
+    Returns
+    -------
+    str
+        Stable fingerprint for the AST.
+    """
+    return canonical_ast_fingerprint(expr)
+
+
+def _schema_hash(schema_map: SchemaMapping | None) -> str | None:
+    if schema_map is None:
+        return None
+    return schema_map_fingerprint_from_mapping(schema_map)
+
+
+def _cached_scope(
+    expr: Expression,
+    *,
+    schema_map: SchemaMapping | None,
+) -> Scope | None:
+    key = (_serde_fingerprint(expr), _schema_hash(schema_map))
+    cached = _SCOPE_CACHE.get(key)
+    if cached is not None:
+        _SCOPE_CACHE.move_to_end(key)
+        return cached
+    try:
+        scope = cast("Scope", build_scope(expr))
+    except (SqlglotError, TypeError, ValueError):
+        return None
+    _SCOPE_CACHE[key] = scope
+    if len(_SCOPE_CACHE) > _SCOPE_CACHE_MAX:
+        _SCOPE_CACHE.popitem(last=False)
+    return scope
+
+
+def build_scope_cached(
+    expr: Expression,
+    *,
+    schema_map: SchemaMapping | None = None,
+) -> Scope | None:
+    """Return a cached SQLGlot scope for an expression.
+
+    Returns
+    -------
+    sqlglot.optimizer.scope.Scope | None
+        Cached scope instance when available.
+    """
+    return _cached_scope(expr, schema_map=schema_map)
+
+
 def extract_lineage_payload(
     expr: Expression,
     *,
@@ -205,10 +263,7 @@ def extract_lineage_payload(
 
     # Build scope info
     scopes: list[str] = []
-    try:
-        root_scope = build_scope(qualified)
-    except (SqlglotError, TypeError, ValueError):
-        root_scope = None
+    root_scope = _cached_scope(qualified, schema_map=resolved.schema)
     if root_scope is not None:
         for scope in root_scope.traverse():
             scope_type = type(scope).__name__
@@ -262,7 +317,9 @@ def required_columns_by_table(
             policy=policy,
         ),
     )
-    scoped = build_scope(normalized)
+    scoped = _cached_scope(normalized, schema_map=schema)
+    if scoped is None:
+        return {}
     required: dict[str, set[str]] = {}
     _collect_expression_columns(normalized, required)
     output_columns = tuple(cast("tuple[str, ...]", expr.schema().names))
@@ -310,7 +367,9 @@ def lineage_graph_by_output(
             policy=policy,
         ),
     )
-    scoped = build_scope(normalized)
+    scoped = _cached_scope(normalized, schema_map=schema)
+    if scoped is None:
+        return {}
     lineage_map: dict[str, tuple[str, ...]] = {}
     lineage_schema = _schema_for_lineage(schema)
     for column in tuple(cast("tuple[str, ...]", expr.schema().names)):
@@ -402,6 +461,7 @@ __all__ = [
     "LineageExtractionOptions",
     "LineagePayload",
     "TableRef",
+    "build_scope_cached",
     "canonical_ast_fingerprint",
     "extract_lineage_payload",
     "extract_table_refs",

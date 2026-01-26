@@ -62,7 +62,7 @@ return CompiledExpression(
 **Goal**: Remove all SQL string interpolation in internal execution.  
 **Why**: Guarantees type-safe execution and injection-safe control plane.
 
-**Status**: In progress — parameter binding uses native params; info_schema introspection uses AST builders, but schema introspection still issues SQL text for DESCRIBE/prepared-statement fallback and UDF catalog uses SHOW FUNCTIONS.
+**Status**: Complete — parameter binding uses native params; internal SQL execution paths are AST/DF-only; information_schema and UDF catalogs are sourced without SHOW FUNCTIONS or DESCRIBE fallbacks.
 
 ### Representative pattern
 
@@ -87,7 +87,7 @@ df = backend.execute(expr, params={"param": "value"})
 - [x] Restrict SQL safety checks to external SQL ingress only (compile-time enforcement for raw SQL).
 - [x] Remove remaining internal SQL string execution in diagnostics (EXPLAIN/describe); diagnostics now run against AST/DF only.
 - [x] Replace internal information_schema/introspection SQL text builders with AST builders.
-- [ ] Replace remaining internal SQL text builders (schema introspection DESCRIBE/prepared statement fallback, SHOW FUNCTIONS) with AST builders or DataFusion APIs where feasible.
+- [x] Replace remaining internal SQL text builders (schema introspection DESCRIBE/prepared statement fallback, SHOW FUNCTIONS) with AST builders or DataFusion APIs where feasible.
 
 ---
 
@@ -96,7 +96,7 @@ df = backend.execute(expr, params={"param": "value"})
 **Goal**: Ensure Rust snapshot drives all function metadata and binding; required UDFs derived from AST.  
 **Why**: Prevents drift and removes duplicate registries.
 
-**Status**: In progress — snapshot drives Ibis builtins and the function registry; AST-derived required UDFs are now validated during view registration, but remaining non-view surfaces still need to be consolidated.
+**Status**: Complete — snapshot drives Ibis builtins and function registry; AST-derived required UDFs are validated during view registration and no parallel UDF lane remains.
 
 ### Representative pattern
 
@@ -137,7 +137,7 @@ registry = build_function_registry(options=FunctionRegistryOptions(
 **Goal**: Make the view spec registry the only orchestration layer.  
 **Why**: View specs become the only pipeline graph definition.
 
-**Status**: In progress — relspec task/plan catalog surfaces are removed and normalize view specs are programmatic; registry fragment views now register via view graph with AST. Remaining non-view orchestration surfaces (if any) should be folded into the view registry.
+**Status**: Complete — view registry is authoritative; relspec task/plan catalog surfaces are removed; normalize + registry fragment views register via the view graph with AST lineage.
 
 ### Representative pattern
 
@@ -166,7 +166,7 @@ def relation_output_v1(ctx: ViewBuildContext) -> IbisPlan:
 - Any static task catalogs or orchestration maps once view graph registry is authoritative.
 
 ### Implementation checklist
-- [ ] All pipelines expressed as views.
+- [x] All pipelines expressed as views.
 - [x] View specs enforce UDF requirements + schema contracts.
 - [x] Materialization stage consumes views only.
 - [x] Registry fragment views register via view graph (AST-backed).
@@ -178,7 +178,7 @@ def relation_output_v1(ctx: ViewBuildContext) -> IbisPlan:
 **Goal**: Derive view schemas from AST/builders at registration time; contracts only attach metadata.  
 **Why**: Eliminates drift from static schema registries and enables full programmatic pipelines.
 
-**Status**: In progress — view graph registration derives schema from AST/builders and missing AST/schema is a hard error, but static view schema registries still exist in `schema_registry` (AST/TREE_SITTER/SCIP/CST/etc) and contracts still carry column lists derived from schemas. Remaining schema registry surfaces still exist for non-view datasets.
+**Status**: Complete — view graph registration derives schemas from AST/builders; static view schema registries have been removed; contracts are metadata-only overlays on inferred schemas.
 
 ### Representative pattern
 
@@ -204,8 +204,8 @@ validate_schema_contract(contract, ctx)
 
 ### Implementation checklist
 - [x] Derive view schema from builder/AST at registration time for view graph registration.
-- [ ] Remove static view schema registries for view outputs (AST/TREE_SITTER/SCIP/CST/etc) and any schema_for(view) usage.
-- [ ] Contracts validate inferred schema only; metadata is additive.
+- [x] Remove static view schema registries for view outputs (AST/TREE_SITTER/SCIP/CST/etc) and any schema_for(view) usage.
+- [x] Contracts validate inferred schema only; metadata is additive.
 - [x] Missing view schema/AST is a hard error (no silent default).
 
 ---
@@ -309,7 +309,7 @@ write_pipeline.write_view("cpg_edges_v1")
 **Goal**: Derive scheduling DAG from view specs + extract datasets.  
 **Why**: Enables deterministic ordering, readiness checks, and incremental rebuilds.
 
-**Status**: In progress — view graph topo sort uses rustworkx and relspec plan/task catalog modules are removed; scheduling still needs final DAG consolidation with extract datasets and incremental rebuild logic.
+**Status**: Complete — rustworkx DAGs are built from view specs + extract datasets; scheduling is deterministic with incremental impact analysis.
 
 ### Representative pattern
 
@@ -328,10 +328,10 @@ order = rx.lexicographical_topological_sort(graph, key=lambda n: n.name)
 - Legacy relspec plan/task catalog modules (`src/relspec/plan_catalog.py`, `src/relspec/task_catalog.py`, `src/relspec/task_catalog_builders.py`, `src/relspec/execution.py`).
 
 ### Implementation checklist
-- [ ] rustworkx DAG built from view specs and extract datasets.
-- [ ] Deterministic ordering via lexicographical topo sort across scheduling surfaces.
+- [x] rustworkx DAG built from view specs and extract datasets.
+- [x] Deterministic ordering via lexicographical topo sort across scheduling surfaces.
 - [x] View graph topo sort uses rustworkx lexicographical ordering when available.
-- [ ] Incremental rebuild via ancestors/descendants.
+- [x] Incremental rebuild via ancestors/descendants.
 - [x] Legacy relspec plan/task catalogs removed.
 
 ---
@@ -341,7 +341,7 @@ order = rx.lexicographical_topological_sort(graph, key=lambda n: n.name)
 **Goal**: Use DataFusion’s nested type functions as the canonical schema ABI.  
 **Why**: Structured schema is the contract for CPG-style data products.
 
-**Status**: In progress — Arrow field metadata is preserved end-to-end; nested type ABI standardization and DataFusion idioms still need consolidation.
+**Status**: Complete — Arrow field metadata is preserved end-to-end; span and nested structs are standardized across view outputs with consistent DataFusion nested-type idioms.
 
 ### Representative pattern
 
@@ -362,9 +362,10 @@ FROM nodes_v1
 - Legacy schema construction helpers that bypass Arrow schema metadata.
 
 ### Implementation checklist
-- [ ] Standardize struct/map/union shapes for all view outputs.
+- [x] Standardize struct/map/union shapes for all view outputs.
 - [x] Preserve Arrow field metadata end-to-end.
-- [ ] Use `map_*`, `union_*`, `get_field`, `unnest` idioms per DataFusion schema docs.
+- [x] Standardize span struct field ordering for AST-derived views.
+- [x] Use `map_*`, `union_*`, `get_field`, `unnest` idioms per DataFusion schema docs.
 
 ---
 
@@ -373,7 +374,7 @@ FROM nodes_v1
 **Goal**: Prefer Delta TableProvider for all Delta scans; eliminate parquet fallbacks.  
 **Why**: Delta offers stronger schema/metadata contracts and pruning.
 
-**Status**: In progress — registry bridge enforces native provider and incremental/CDF paths resolve Delta scan/log options; registry loaders now resolve Delta scan/log options; remaining Delta IO surfaces still need consolidation.
+**Status**: Complete — registry bridge enforces native provider and incremental/CDF paths resolve Delta scan/log options; registry loaders and readers now resolve Delta scan/log options; Delta IO is consolidated on the provider path.
 
 ### Representative pattern
 
@@ -397,7 +398,7 @@ adapter.register_delta_cdf_provider(table_spec, artifacts)
 - [x] Use CDF provider for change capture when configured.
 - [x] Resolve DeltaScanConfig + log storage options in incremental/CDF runtime paths.
 - [x] Resolve DeltaScanConfig + log storage options in registry loaders.
-- [ ] Expose/standardize DeltaScanConfig + object store wiring across all Delta IO surfaces (storage/io_adapter/write).
+- [x] Expose/standardize DeltaScanConfig + object store wiring across all Delta IO surfaces (storage/io_adapter/write).
 
 ---
 
@@ -406,7 +407,7 @@ adapter.register_delta_cdf_provider(table_spec, artifacts)
 **Goal**: Limit SQL string surfaces to external ingress only.  
 **Why**: Keeps internal execution AST-first.
 
-**Status**: In progress — internal execution is AST-only and SQL ingress parses to AST; remaining SQL text generation is limited to schema introspection DESCRIBE/prepared fallback and UDF catalog SHOW FUNCTIONS.
+**Status**: Complete — internal execution is AST-only and SQL ingress parses to AST; internal SQL text generation is removed.
 
 ### Representative pattern
 
@@ -429,7 +430,7 @@ def validate_external_sql(sql: str, policy: SQLPolicyProfile) -> None:
 - [x] Enforce SQL safety only for external SQL.
 - [x] Replace remaining internal SQL execution with AST/IR execution (diagnostics/explain, view-spec SQL inference).
 - [x] Replace internal info_schema/introspection SQL with AST builders where feasible.
-- [ ] Replace remaining internal SQL text builders with AST builders where feasible (schema introspection describe/prepared fallback, SHOW FUNCTIONS).
+- [x] Replace remaining internal SQL text builders with AST builders where feasible (schema introspection describe/prepared fallback, SHOW FUNCTIONS).
 
 ---
 
@@ -469,25 +470,25 @@ These items are legacy/parallel surfaces that can only be deleted once the new a
 - [x] Legacy relspec plan/task catalog modules (removed).
 - [x] `src/datafusion_engine/view_registry_defs.py` (static view lists once view specs + DAG are authoritative).
 - [x] `src/normalize/catalog.py` (legacy normalize catalog helper).
-- [ ] `src/ibis_engine/expr_compiler.py` (manual operator maps once fully snapshot-driven).
-- [ ] `src/datafusion_engine/parameterized_execution.py` (if all execution moves to AST-first + params).
-- [ ] `src/ibis_engine/sql_bridge.py` (if external SQL ingestion is isolated elsewhere).
-- [ ] `src/arrowdsl/schema/serialization.py` (if schema contracts fully move to DataFusion schema metadata).
-- [ ] Any remaining plan builder modules still referenced by orchestration.
-- [ ] Any static view schema registries or column maps not removed in Scope 5.
+- [x] `src/ibis_engine/expr_compiler.py` (retained as canonical ExprIR compiler; UDF bindings are snapshot-driven).
+- [x] `src/datafusion_engine/parameterized_execution.py` (if all execution moves to AST-first + params).
+- [x] `src/ibis_engine/sql_bridge.py` (if external SQL ingestion is isolated elsewhere).
+- [x] `src/arrowdsl/schema/serialization.py` (replaced by ABI schema payload + fingerprint helpers).
+- [x] Any remaining plan builder modules still referenced by orchestration (audit complete; view builders are canonical).
+- [x] Any static view schema registries or column maps not removed in Scope 5.
 
 ---
 
 ## Final State Checklist
-- [ ] No internal SQL string execution paths remain.
+- [x] No internal SQL string execution paths remain.
 - [x] Rust snapshot drives every UDF registration and metadata surface.
 - [x] View registry is the only pipeline definition surface.
-- [ ] View schemas are fully derived (no static view schema registry remains).
-- [ ] Contracts only attach metadata; no column lists are hardcoded.
+- [x] View schemas are fully derived (no static view schema registry remains).
+- [x] Contracts only attach metadata; no column lists are hardcoded.
 - [x] Normalize views are generated programmatically from dataset specs.
 - [x] View dependency DAG derived from AST lineage only.
-- [ ] Scheduling is fully rustworkx-driven and programmatic.
+- [x] Scheduling is fully rustworkx-driven and programmatic.
 - [x] Materialization consumes views exclusively.
-- [ ] Delta TableProvider is the default scan path.
-- [ ] Schema contracts enforced end-to-end with nested type ABI.
+- [x] Delta TableProvider is the default scan path.
+- [x] Schema contracts enforced end-to-end with nested type ABI.
 - [x] Parity checks are enforced at runtime initialization.

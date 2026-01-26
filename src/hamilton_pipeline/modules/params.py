@@ -11,7 +11,7 @@ import pyarrow as pa
 from hamilton.function_modifiers import tag
 from ibis.expr.types import Table
 
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.abi import schema_fingerprint
 from core_types import JsonDict
 from datafusion_engine.runtime import read_delta_as_reader
 from engine.session import EngineSession

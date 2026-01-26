@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 from collections.abc import Mapping, Sequence
 from weakref import WeakKeyDictionary, WeakSet
@@ -199,6 +200,12 @@ def rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     if cached is not None:
         return cached
     snapshot = _build_registry_snapshot(ctx)
+    docs = None
+    with contextlib.suppress(ImportError, RuntimeError, TypeError, ValueError):
+        docs = _build_docs_snapshot(ctx)
+    if docs:
+        snapshot = dict(snapshot)
+        snapshot["documentation"] = docs
     _notify_ibis_snapshot(snapshot)
     _RUST_UDF_SNAPSHOTS[ctx] = snapshot
     return snapshot

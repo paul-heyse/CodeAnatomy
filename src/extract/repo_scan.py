@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal, overload
 from diskcache import memoize_stampede, throttle
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.abi import schema_fingerprint
 from core_types import PathLike, ensure_path
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
 from extract.cache_utils import (

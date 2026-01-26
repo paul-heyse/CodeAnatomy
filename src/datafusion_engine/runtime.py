@@ -24,8 +24,8 @@ from sqlglot.errors import ParseError
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
 from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
+from arrowdsl.schema.abi import schema_fingerprint
 from arrowdsl.schema.metadata import schema_constraints_from_metadata
-from arrowdsl.schema.serialization import schema_fingerprint
 from cache.diskcache_factory import (
     DiskCacheKind,
     DiskCacheProfile,
@@ -92,6 +92,7 @@ if TYPE_CHECKING:
         DataFusionPluginSpec,
     )
     from datafusion_engine.udf_catalog import UdfCatalog
+    from datafusion_engine.view_artifacts import ViewArtifact
     from ibis_engine.registry import DatasetCatalog, DatasetLocation
     from obs.datafusion_runs import DataFusionRun
     from storage.deltalake.delta import IdempotentWriteOptions
@@ -236,6 +237,7 @@ _TELEMETRY_SCHEMA = pa.schema(
         pa.field("version", pa.int32()),
         pa.field("profile_name", pa.string()),
         pa.field("datafusion_version", pa.string()),
+        pa.field("architecture_version", pa.string()),
         pa.field("sql_policy_name", pa.string()),
         pa.field("session_config", pa.list_(_MAP_ENTRY_SCHEMA)),
         pa.field("settings_hash", pa.string()),
@@ -594,25 +596,25 @@ class DataFusionPlanCollector:
 
 @dataclass
 class DataFusionViewRegistry:
-    """Record DataFusion view definitions for reproducibility."""
+    """Record DataFusion view artifacts for reproducibility."""
 
-    entries: dict[str, str | None] = field(default_factory=dict)
+    entries: dict[str, ViewArtifact] = field(default_factory=dict)
 
-    def record(self, *, name: str, sql: str | None) -> None:
-        """Record a view definition by name."""
-        self.entries[name] = sql
+    def record(self, *, name: str, artifact: ViewArtifact) -> None:
+        """Record a view artifact by name."""
+        self.entries[name] = artifact
 
     def snapshot(self) -> list[dict[str, object]]:
-        """Return a stable snapshot of registered views.
+        """Return a stable snapshot of registered view artifacts.
 
         Returns
         -------
         list[dict[str, object]]
-            Ordered view definitions with name and SQL entries.
+            Snapshot payloads for registered view artifacts.
         """
         return [
-            {"name": name, "sql": sql}
-            for name, sql in sorted(self.entries.items(), key=lambda item: item[0])
+            artifact.payload()
+            for _, artifact in sorted(self.entries.items(), key=lambda item: item[0])
         ]
 
 
@@ -1030,9 +1032,22 @@ def register_view_specs(
     if runtime_profile is not None:
         profile = runtime_profile
         sql_options = statement_sql_options_for_profile(profile)
+        from datafusion_engine.view_artifacts import (
+            DataFrameArtifactInputs,
+            build_view_artifact_from_dataframe,
+        )
 
         def _record_view(name: str, sql: str | None) -> None:
-            record_view_definition(profile, name=name, sql=sql)
+            df = ctx.table(name)
+            artifact = build_view_artifact_from_dataframe(
+                DataFrameArtifactInputs(
+                    ctx=ctx,
+                    name=name,
+                    df=df,
+                    sql=sql,
+                )
+            )
+            record_view_definition(profile, artifact=artifact)
 
         record_view = _record_view
     for view in views:
@@ -1452,13 +1467,12 @@ def function_catalog_snapshot_for_profile(
 def record_view_definition(
     profile: DataFusionRuntimeProfile,
     *,
-    name: str,
-    sql: str | None,
+    artifact: ViewArtifact,
 ) -> None:
-    """Record a view definition for diagnostics snapshots."""
+    """Record a view artifact for diagnostics snapshots."""
     if profile.view_registry is None:
         return
-    profile.view_registry.record(name=name, sql=sql)
+    profile.view_registry.record(name=artifact.name, artifact=artifact)
 
 
 def _datafusion_version(ctx: SessionContext) -> str | None:
@@ -1957,6 +1971,7 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         "version": TELEMETRY_PAYLOAD_VERSION,
         "profile_name": profile.config_policy_name,
         "datafusion_version": datafusion.__version__,
+        "architecture_version": profile.architecture_version,
         "sql_policy_name": profile.sql_policy_name,
         "session_config": _map_entries(settings),
         "settings_hash": profile.settings_hash(),
@@ -2429,6 +2444,7 @@ class _RuntimeDiagnosticsMixin:
 class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     """DataFusion runtime configuration."""
 
+    architecture_version: str = "v2"
     target_partitions: int | None = None
     batch_size: int | None = None
     repartition_aggregations: bool | None = None
@@ -3892,18 +3908,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         errors: dict[str, str] = {}
         for name in TREE_SITTER_CHECK_VIEWS:
             try:
-                summary_expr = (
-                    exp.select(
-                        exp.func("count", exp.Star()).as_("row_count"),
-                        exp.func(
-                            "sum",
-                            exp.Case()
-                            .when(exp.column("mismatch"), exp.Literal.number(1))
-                            .else_(exp.Literal.number(0)),
-                        ).as_("mismatch_count"),
-                    )
-                    .from_(name)
-                )
+                summary_expr = exp.select(
+                    exp.func("count", exp.Star()).as_("row_count"),
+                    exp.func(
+                        "sum",
+                        exp.Case()
+                        .when(exp.column("mismatch"), exp.Literal.number(1))
+                        .else_(exp.Literal.number(0)),
+                    ).as_("mismatch_count"),
+                ).from_(name)
                 summary_rows = (
                     _sql_with_options(
                         ctx,
@@ -3931,10 +3944,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 }
                 if mismatch_count:
                     sample_expr = (
-                        exp.select("*")
-                        .from_(name)
-                        .where(exp.column("mismatch"))
-                        .limit(25)
+                        exp.select("*").from_(name).where(exp.column("mismatch")).limit(25)
                     )
                     sample_rows = (
                         _sql_with_options(
@@ -4871,19 +4881,17 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return None
         return profile.ttl_for(kind)
 
-    def _record_view_definition(self, *, name: str, sql: str | None) -> None:
-        """Record a view definition for diagnostics snapshots.
+    def _record_view_definition(self, *, artifact: ViewArtifact) -> None:
+        """Record a view artifact for diagnostics snapshots.
 
         Parameters
         ----------
-        name:
-            Name of the view.
-        sql:
-            SQL definition for the view, when available.
+        artifact:
+            View artifact payload for diagnostics.
         """
         if self.view_registry is None:
             return
-        self.view_registry.record(name=name, sql=sql)
+        self.view_registry.record(name=artifact.name, artifact=artifact)
 
     def _schema_introspector(self, ctx: SessionContext) -> SchemaIntrospector:
         """Return a schema introspector for the session.
@@ -5382,9 +5390,7 @@ def _datafusion_type_name(dtype: pa.DataType) -> str:
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_table_provider("t", ctx.from_arrow(table))
     expr = (
-        exp.select(exp.func("arrow_typeof", exp.column("value")).as_("dtype"))
-        .from_("t")
-        .limit(1)
+        exp.select(exp.func("arrow_typeof", exp.column("value")).as_("dtype")).from_("t").limit(1)
     )
     result = _sql_with_options(ctx, expr).to_arrow_table()
     value = result["dtype"][0].as_py()

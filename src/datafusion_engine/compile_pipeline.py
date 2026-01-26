@@ -55,6 +55,7 @@ class CompiledExpression:
     rendered_sql: str
     artifacts: CompilationArtifacts
     source: Literal["ibis", "sql", "ast"]
+    policy_hash: str
 
     @property
     def fingerprint(self) -> str:
@@ -65,7 +66,12 @@ class CompiledExpression:
         str
             AST fingerprint for cache keying.
         """
-        return self.artifacts.ast_fingerprint
+        from sqlglot_tools.optimizer import ast_policy_fingerprint
+
+        return ast_policy_fingerprint(
+            ast_fingerprint=self.artifacts.ast_fingerprint,
+            policy_hash=self.policy_hash,
+        )
 
     @property
     def lineage(self) -> dict[str, set[tuple[str, str]]]:
@@ -193,6 +199,9 @@ class CompilationPipeline:
         if profile is None:
             msg = "SQL policy profile is required for compilation."
             raise ValueError(msg)
+        from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
+
+        policy_hash = sqlglot_policy_snapshot_for(profile.to_sqlglot_policy()).policy_hash
         canonical_ast, artifacts = compile_sql_policy(
             raw_ast,
             schema=schema,
@@ -208,6 +217,7 @@ class CompilationPipeline:
             rendered_sql=rendered,
             artifacts=artifacts,
             source="ibis",
+            policy_hash=policy_hash,
         )
 
     @staticmethod
@@ -265,6 +275,9 @@ class CompilationPipeline:
         if profile is None:
             msg = "SQL policy profile is required for compilation."
             raise ValueError(msg)
+        from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
+
+        policy_hash = sqlglot_policy_snapshot_for(profile.to_sqlglot_policy()).policy_hash
 
         raw_ast = expr
         if self.options.enable_rewrites and self.options.rewrite_hook is not None:
@@ -284,6 +297,7 @@ class CompilationPipeline:
             rendered_sql=rendered,
             artifacts=artifacts,
             source="ast",
+            policy_hash=policy_hash,
         )
 
     def execute(
@@ -467,7 +481,7 @@ def _validate_sql_execution(
     violations = validate_sql_safety(
         compiled.rendered_sql,
         policy,
-        dialect=profile.write_dialect,
+        dialect=profile.write_dialect or "datafusion",
     )
     if violations:
         msg = f"SQL policy violations: {'; '.join(violations)}"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.abi import schema_fingerprint
 
 
 def test_schema_fingerprint_changes_on_metadata() -> None:

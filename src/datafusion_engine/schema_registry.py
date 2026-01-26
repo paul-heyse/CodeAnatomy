@@ -2539,6 +2539,7 @@ def validate_ast_views(
     """No-op: AST view schemas are derived dynamically at registration time."""
     _ = (ctx, view_names)
 
+
 def _validate_ast_view_outputs_all(
     ctx: SessionContext,
     introspector: SchemaIntrospector,

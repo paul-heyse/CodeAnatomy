@@ -715,7 +715,7 @@ def schema_fingerprint(schema: SchemaLike) -> str:
     str
         Schema fingerprint hash.
     """
-    module = importlib.import_module("arrowdsl.schema.serialization")
+    module = importlib.import_module("arrowdsl.schema.abi")
     return cast("str", module.schema_fingerprint(schema))
 
 
@@ -727,7 +727,7 @@ def schema_to_dict(schema: SchemaLike) -> dict[str, object]:
     dict[str, object]
         Schema payload dictionary.
     """
-    module = importlib.import_module("arrowdsl.schema.serialization")
+    module = importlib.import_module("arrowdsl.schema.abi")
     return cast("dict[str, object]", module.schema_to_dict(schema))
 
 

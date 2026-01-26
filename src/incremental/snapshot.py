@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
+from arrowdsl.schema.abi import schema_fingerprint
 from arrowdsl.schema.build import column_or_null, table_from_arrays
-from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.runtime import dataset_schema_from_context
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,

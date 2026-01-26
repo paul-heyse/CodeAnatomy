@@ -342,7 +342,7 @@ class WritePipeline:
 
         return parse_sql_strict(
             request.source,
-            dialect=self.profile.read_dialect,
+            dialect=self.profile.read_dialect or "datafusion",
             options=StrictParseOptions(
                 error_level=self.profile.error_level,
                 unsupported_level=self.profile.unsupported_level,
@@ -385,7 +385,7 @@ class WritePipeline:
                 continue
             constraint_expr = parse_sql_strict(
                 constraint,
-                dialect=self.profile.read_dialect,
+                dialect=self.profile.read_dialect or "datafusion",
                 options=StrictParseOptions(
                     error_level=self.profile.error_level,
                     unsupported_level=self.profile.unsupported_level,

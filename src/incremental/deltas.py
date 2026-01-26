@@ -10,6 +10,7 @@ import pyarrow as pa
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
+from ibis_engine.sources import read_delta_ibis
 from incremental.ibis_exec import ibis_expr_to_table
 from incremental.ibis_utils import ibis_table_from_arrow
 from incremental.registry_specs import dataset_schema
@@ -53,7 +54,7 @@ def _load_prev_exports(backend: BaseBackend, prev_exports: str | None) -> ibis.T
     if prev_exports is None:
         empty = table_from_arrays(dataset_schema("dim_exported_defs_v1"), columns={}, num_rows=0)
         return ibis_table_from_arrow(backend, empty)
-    return backend.read_delta(prev_exports)
+    return read_delta_ibis(backend, prev_exports)
 
 
 def _export_delta_expr(

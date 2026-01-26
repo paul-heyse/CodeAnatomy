@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Final
 
@@ -40,6 +41,107 @@ if TYPE_CHECKING:
 
 def _arrow_cast(expr: Expr, data_type: str) -> Expr:
     return f.arrow_cast(expr, lit(data_type))
+
+
+def _null_expr(data_type: str) -> Expr:
+    return _arrow_cast(lit(None), data_type)
+
+
+@dataclass(frozen=True)
+class SpanComponents:
+    """Span component expressions for nested span structs."""
+
+    start_line: Expr | None = None
+    start_col: Expr | None = None
+    end_line: Expr | None = None
+    end_col: Expr | None = None
+    col_unit: Expr | None = None
+    end_exclusive: Expr | None = None
+    byte_start: Expr | None = None
+    byte_len: Expr | None = None
+
+
+def _span_struct_from_components(components: SpanComponents) -> Expr:
+    null_i32 = _null_expr("Int32")
+    null_bool = _null_expr("Boolean")
+    null_str = _null_expr("Utf8")
+    start_line_expr = (
+        _arrow_cast(components.start_line, "Int32")
+        if components.start_line is not None
+        else null_i32
+    )
+    start_col_expr = (
+        _arrow_cast(components.start_col, "Int32") if components.start_col is not None else null_i32
+    )
+    end_line_expr = (
+        _arrow_cast(components.end_line, "Int32") if components.end_line is not None else null_i32
+    )
+    end_col_expr = (
+        _arrow_cast(components.end_col, "Int32") if components.end_col is not None else null_i32
+    )
+    col_unit_expr = (
+        _arrow_cast(components.col_unit, "Utf8") if components.col_unit is not None else null_str
+    )
+    end_exclusive_expr = (
+        _arrow_cast(components.end_exclusive, "Boolean")
+        if components.end_exclusive is not None
+        else null_bool
+    )
+    byte_start_expr = (
+        _arrow_cast(components.byte_start, "Int32")
+        if components.byte_start is not None
+        else null_i32
+    )
+    byte_len_expr = (
+        _arrow_cast(components.byte_len, "Int32") if components.byte_len is not None else null_i32
+    )
+    return f.named_struct(
+        [
+            ("start", f.named_struct([("line0", start_line_expr), ("col", start_col_expr)])),
+            ("end", f.named_struct([("line0", end_line_expr), ("col", end_col_expr)])),
+            ("end_exclusive", end_exclusive_expr),
+            ("col_unit", col_unit_expr),
+            (
+                "byte_span",
+                f.named_struct([("byte_start", byte_start_expr), ("byte_len", byte_len_expr)]),
+            ),
+        ]
+    )
+
+
+def _byte_span_struct(
+    bstart: Expr,
+    bend: Expr,
+    *,
+    col_unit: Expr | None = None,
+    end_exclusive: Expr | None = None,
+) -> Expr:
+    null_i32 = _null_expr("Int32")
+    ok = bstart.is_not_null() & bend.is_not_null()
+    byte_start = f.when(ok, _arrow_cast(bstart, "Int32")).otherwise(null_i32)
+    byte_len_value = bend - bstart
+    byte_len = f.when(ok, _arrow_cast(byte_len_value, "Int32")).otherwise(null_i32)
+    unit = col_unit if col_unit is not None else lit("byte")
+    return _span_struct_from_components(
+        SpanComponents(
+            col_unit=unit,
+            end_exclusive=end_exclusive,
+            byte_start=byte_start,
+            byte_len=byte_len,
+        )
+    )
+
+
+def _span_byte_start(span: Expr) -> Expr:
+    return (span["byte_span"])["byte_start"]
+
+
+def _span_byte_end(span: Expr) -> Expr:
+    byte_start = _span_byte_start(span)
+    byte_len = (span["byte_span"])["byte_len"]
+    null_i32 = _null_expr("Int32")
+    ok = byte_start.is_not_null() & byte_len.is_not_null()
+    return f.when(ok, byte_start + byte_len).otherwise(null_i32)
 
 
 def _span_struct(span: Expr) -> Expr:
@@ -378,8 +480,8 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("call_id").alias("call_id"),
-        (col("span"))["bstart"].alias("bstart"),
-        (col("span"))["bend"].alias("bend"),
+        _arrow_cast(_span_byte_start(col("span")), "Int64").alias("bstart"),
+        _arrow_cast(_span_byte_end(col("span")), "Int64").alias("bend"),
     ),
     "cst_callsite_spans": (
         col("file_id").alias("file_id"),
@@ -387,7 +489,7 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("call_id").alias("call_id"),
         col("call_bstart").alias("bstart"),
         col("call_bend").alias("bend"),
-        f.named_struct([("bstart", col("call_bstart")), ("bend", col("call_bend"))]).alias("span"),
+        _byte_span_struct(col("call_bstart"), col("call_bend")).alias("span"),
     ),
     "cst_callsites": (
         col("file_id").alias("file_id"),
@@ -463,8 +565,8 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("def_id").alias("def_id"),
-        (col("span"))["bstart"].alias("bstart"),
-        (col("span"))["bend"].alias("bend"),
+        _arrow_cast(_span_byte_start(col("span")), "Int64").alias("bstart"),
+        _arrow_cast(_span_byte_end(col("span")), "Int64").alias("bend"),
     ),
     "cst_def_spans": (
         col("file_id").alias("file_id"),
@@ -472,7 +574,7 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("def_id").alias("def_id"),
         col("def_bstart").alias("bstart"),
         col("def_bend").alias("bend"),
-        f.named_struct([("bstart", col("def_bstart")), ("bend", col("def_bend"))]).alias("span"),
+        _byte_span_struct(col("def_bstart"), col("def_bend")).alias("span"),
     ),
     "cst_defs": (
         col("file_id").alias("file_id"),
@@ -666,8 +768,8 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("ref_id").alias("ref_id"),
-        (col("span"))["bstart"].alias("bstart"),
-        (col("span"))["bend"].alias("bend"),
+        _arrow_cast(_span_byte_start(col("span")), "Int64").alias("bstart"),
+        _arrow_cast(_span_byte_end(col("span")), "Int64").alias("bend"),
     ),
     "cst_ref_spans": (
         col("file_id").alias("file_id"),
@@ -675,7 +777,7 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("ref_id").alias("ref_id"),
         col("bstart").alias("bstart"),
         col("bend").alias("bend"),
-        f.named_struct([("bstart", col("bstart")), ("bend", col("bend"))]).alias("span"),
+        _byte_span_struct(col("bstart"), col("bend")).alias("span"),
     ),
     "cst_refs": (
         col("file_id").alias("file_id"),
@@ -1377,21 +1479,15 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("instr_id").alias("instr_id"),
         col("instr_index").alias("instr_index"),
         col("offset").alias("offset"),
-        f.named_struct(
-            [
-                (
-                    "start",
-                    f.named_struct(
-                        [("line0", col("pos_start_line")), ("col", col("pos_start_col"))]
-                    ),
-                ),
-                (
-                    "end",
-                    f.named_struct([("line0", col("pos_end_line")), ("col", col("pos_end_col"))]),
-                ),
-                ("col_unit", col("col_unit")),
-                ("end_exclusive", col("end_exclusive")),
-            ]
+        _span_struct_from_components(
+            SpanComponents(
+                start_line=col("pos_start_line"),
+                start_col=col("pos_start_col"),
+                end_line=col("pos_end_line"),
+                end_col=col("pos_end_col"),
+                col_unit=col("col_unit"),
+                end_exclusive=col("end_exclusive"),
+            )
         ).alias("span"),
     ),
     "py_bc_instructions": (
@@ -2692,20 +2788,42 @@ def register_all_views(
     """Register registry + pipeline views in dependency order."""
     _ = runtime_profile
     if include_registry_views:
-        from datafusion_engine.view_graph_registry import register_view_graph
+        from datafusion_engine.view_graph_registry import (
+            ViewGraphRuntimeOptions,
+            register_view_graph,
+        )
 
         registry_nodes = registry_view_nodes(ctx)
         if registry_nodes:
-            register_view_graph(ctx, nodes=registry_nodes, snapshot=snapshot)
+            register_view_graph(
+                ctx,
+                nodes=registry_nodes,
+                snapshot=snapshot,
+                runtime_options=ViewGraphRuntimeOptions(runtime_profile=runtime_profile),
+            )
     from datafusion_engine.view_graph_registry import register_view_graph
     from datafusion_engine.view_registry_specs import view_graph_nodes
 
     pre_nodes = view_graph_nodes(ctx, snapshot=snapshot, stage="pre_cpg")
     if pre_nodes:
-        register_view_graph(ctx, nodes=pre_nodes, snapshot=snapshot)
+        from datafusion_engine.view_graph_registry import ViewGraphRuntimeOptions
+
+        register_view_graph(
+            ctx,
+            nodes=pre_nodes,
+            snapshot=snapshot,
+            runtime_options=ViewGraphRuntimeOptions(runtime_profile=runtime_profile),
+        )
     cpg_nodes = view_graph_nodes(ctx, snapshot=snapshot, stage="cpg")
     if cpg_nodes:
-        register_view_graph(ctx, nodes=cpg_nodes, snapshot=snapshot)
+        from datafusion_engine.view_graph_registry import ViewGraphRuntimeOptions
+
+        register_view_graph(
+            ctx,
+            nodes=cpg_nodes,
+            snapshot=snapshot,
+            runtime_options=ViewGraphRuntimeOptions(runtime_profile=runtime_profile),
+        )
 
 
 def registry_view_nodes(

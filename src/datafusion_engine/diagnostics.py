@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     from datafusion_engine.view_graph_registry import ViewNode
 
 
@@ -838,6 +839,7 @@ def view_udf_parity_payload(
 def view_fingerprint_payload(
     *,
     view_nodes: Sequence[ViewNode],
+    policy_profile: SQLPolicyProfile | None = None,
 ) -> dict[str, object]:
     """Return a diagnostics payload describing view fingerprints.
 
@@ -845,16 +847,22 @@ def view_fingerprint_payload(
     ----------
     view_nodes
         View nodes to fingerprint.
+    policy_profile
+        Optional SQL policy profile for fingerprinting.
 
     Returns
     -------
     dict[str, object]
         Diagnostics payload containing per-view fingerprints.
     """
+    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     from sqlglot_tools.lineage import canonical_ast_fingerprint
+    from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
 
     rows: list[dict[str, object]] = []
     views_with_fingerprint = 0
+    profile = policy_profile or SQLPolicyProfile()
+    policy_hash = sqlglot_policy_snapshot_for(profile.to_sqlglot_policy()).policy_hash
     for node in view_nodes:
         fingerprint: str | None = None
         if node.sqlglot_ast is not None:
@@ -863,7 +871,8 @@ def view_fingerprint_payload(
         rows.append(
             {
                 "view": node.name,
-                "fingerprint": fingerprint,
+                "ast_fingerprint": fingerprint,
+                "policy_hash": policy_hash,
             }
         )
     return {

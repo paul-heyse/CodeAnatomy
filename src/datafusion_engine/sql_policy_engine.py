@@ -1,9 +1,8 @@
 """SQL policy engine for deterministic canonicalization and optimization.
 
-This module implements SQLGlot-based SQL canonicalization with pinned
-optimizer rules for reproducible query compilation. The policy profile
-defines how SQL is normalized and must be included in cache keys to
-ensure deterministic builds.
+This module provides a unified, policy-driven SQLGlot pipeline and defers
+heavy lifting to ``sqlglot_tools.optimizer`` so there is exactly one
+canonical policy lane across the codebase.
 """
 
 from __future__ import annotations
@@ -11,25 +10,31 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import sqlglot.expressions as exp
-from sqlglot.optimizer import RULES, optimize
-from sqlglot.optimizer.annotate_types import annotate_types
-from sqlglot.optimizer.canonicalize import canonicalize
-from sqlglot.optimizer.normalize import normalization_distance, normalize
-from sqlglot.optimizer.pushdown_predicates import pushdown_predicates
-from sqlglot.optimizer.pushdown_projections import pushdown_projections
-from sqlglot.optimizer.qualify_columns import validate_qualify_columns
-from sqlglot.optimizer.simplify import simplify
 from sqlglot.schema import MappingSchema
 
-from sqlglot_tools.compat import ErrorLevel
+from sqlglot_tools.compat import ErrorLevel, Expression
+from sqlglot_tools.optimizer import (
+    NormalizeExprOptions,
+    SqlGlotPolicy,
+    _annotate_expression,
+    _compile_options_from_normalize,
+    _normalize_predicates_with_stats,
+    _prepare_for_qualification,
+    _qualify_expression,
+    _simplify_expression,
+    pushdown_predicates_transform,
+    pushdown_projections_transform,
+    resolve_sqlglot_policy,
+    sqlglot_emit,
+)
 
 if TYPE_CHECKING:
-    from sqlglot_tools.optimizer import SchemaMapping
+    from sqlglot_tools.optimizer import GeneratorInitKwargs, SchemaMapping
 
 
 class _SqlglotSerde(Protocol):
@@ -43,55 +48,75 @@ def _serde() -> _SqlglotSerde:
     return cast("_SqlglotSerde", module)
 
 
+def _merge_generator_kwargs(
+    base: GeneratorInitKwargs | None,
+    override: GeneratorInitKwargs | None,
+) -> GeneratorInitKwargs:
+    generator: GeneratorInitKwargs = {}
+    if base:
+        generator.update(base)
+    if override:
+        generator.update(override)
+    return generator
+
+
 @dataclass(frozen=True)
 class SQLPolicyProfile:
     """Compiler policy contract pinned for determinism.
 
-    This profile defines how SQL is canonicalized and must be
-    included in cache keys to ensure reproducibility.
-
-    Parameters
-    ----------
-    read_dialect
-        SQLGlot dialect for parsing input SQL.
-    write_dialect
-        SQLGlot dialect for rendering output SQL.
-    optimizer_rules
-        Ordered sequence of optimizer rules to apply.
-    normalize_distance_limit
-        Maximum complexity threshold for predicate normalization.
-    pushdown_projections
-        Enable projection pushdown optimization.
-    pushdown_predicates
-        Enable predicate pushdown optimization.
-    expand_stars
-        Expand SELECT * during qualification.
-    validate_qualify_columns
-        Make column ambiguity errors fatal.
-    identify_mode
-        Quote mode: False (no quotes), True (quote all), "safe" (quote when needed).
-    pretty_output
-        Enable pretty-printing for rendered SQL.
-    error_level
-        Strictness for SQL parsing/compilation errors.
-    unsupported_level
-        Strictness for unsupported SQL constructs.
+    This profile is a thin adapter over ``SqlGlotPolicy`` so that all
+    compilation paths share the same canonical policy lane.
     """
 
-    read_dialect: str = "postgres"
-    write_dialect: str = "postgres"
-    optimizer_rules: tuple[Callable[..., object], ...] = field(
-        default_factory=lambda: cast("tuple[Callable[..., object], ...]", RULES),
-    )
-    normalize_distance_limit: int = 128
-    pushdown_projections: bool = True
-    pushdown_predicates: bool = True
-    expand_stars: bool = True
-    validate_qualify_columns: bool = True
-    identify_mode: bool | str = False
+    policy: SqlGlotPolicy | None = None
+    read_dialect: str | None = None
+    write_dialect: str | None = None
+    optimizer_rules: Sequence[Callable[[Expression], Expression]] | None = None
+    normalize_distance_limit: int | None = None
+    pushdown_projections: bool | None = None
+    pushdown_predicates: bool | None = None
+    expand_stars: bool | None = None
+    validate_qualify_columns: bool | None = None
+    identify_mode: bool | None = None
     pretty_output: bool = False
-    error_level: ErrorLevel = ErrorLevel.IMMEDIATE
-    unsupported_level: ErrorLevel = ErrorLevel.RAISE
+    error_level: ErrorLevel | None = None
+    unsupported_level: ErrorLevel | None = None
+    transforms: Sequence[Callable[[Expression], Expression]] | None = None
+    generator: GeneratorInitKwargs | None = None
+
+    def to_sqlglot_policy(self) -> SqlGlotPolicy:
+        """Resolve the effective SqlGlotPolicy for this profile.
+
+        Returns
+        -------
+        SqlGlotPolicy
+            Resolved SQLGlot policy for compilation.
+        """
+        base = resolve_sqlglot_policy(name="datafusion_compile", policy=self.policy)
+        transforms = list(self.transforms or base.transforms)
+        if self.pushdown_projections is False:
+            transforms = [t for t in transforms if t is not pushdown_projections_transform]
+        if self.pushdown_predicates is False:
+            transforms = [t for t in transforms if t is not pushdown_predicates_transform]
+        generator = _merge_generator_kwargs(base.generator, self.generator)
+        rules = tuple(self.optimizer_rules) if self.optimizer_rules is not None else base.rules
+        return SqlGlotPolicy(
+            read_dialect=self.read_dialect or base.read_dialect,
+            write_dialect=self.write_dialect or base.write_dialect,
+            rules=rules,
+            generator=generator,
+            normalization_distance=self.normalize_distance_limit or base.normalization_distance,
+            error_level=self.error_level or base.error_level,
+            unsupported_level=self.unsupported_level or base.unsupported_level,
+            transforms=tuple(transforms),
+            expand_stars=base.expand_stars if self.expand_stars is None else self.expand_stars,
+            validate_qualify_columns=(
+                base.validate_qualify_columns
+                if self.validate_qualify_columns is None
+                else self.validate_qualify_columns
+            ),
+            identify=base.identify if self.identify_mode is None else self.identify_mode,
+        )
 
     def policy_fingerprint(self) -> str:
         """Generate hash of policy settings for cache keys.
@@ -99,19 +124,20 @@ class SQLPolicyProfile:
         Returns
         -------
         str
-            16-character hex digest of policy configuration.
+            Stable fingerprint for policy settings.
         """
+        policy = self.to_sqlglot_policy()
         policy_dict = {
-            "read_dialect": self.read_dialect,
-            "write_dialect": self.write_dialect,
-            "rules": [r.__name__ for r in self.optimizer_rules],
-            "normalize_limit": self.normalize_distance_limit,
-            "pushdown_proj": self.pushdown_projections,
-            "pushdown_pred": self.pushdown_predicates,
-            "expand_stars": self.expand_stars,
-            "identify": self.identify_mode,
-            "error_level": self.error_level.name,
-            "unsupported_level": self.unsupported_level.name,
+            "read_dialect": policy.read_dialect,
+            "write_dialect": policy.write_dialect,
+            "rules": [rule.__name__ for rule in policy.rules],
+            "normalization_distance": policy.normalization_distance,
+            "expand_stars": policy.expand_stars,
+            "validate_qualify_columns": policy.validate_qualify_columns,
+            "identify": policy.identify,
+            "error_level": policy.error_level.name,
+            "unsupported_level": policy.unsupported_level.name,
+            "transforms": [transform.__name__ for transform in policy.transforms],
         }
         return hashlib.sha256(json.dumps(policy_dict, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -185,73 +211,49 @@ def compile_sql_policy(
     profile: SQLPolicyProfile,
     original_sql: str | None = None,
 ) -> tuple[exp.Expression, CompilationArtifacts]:
-    """Execute full policy-aware SQL canonicalization pipeline.
-
-    This function applies the complete SQLGlot optimizer stack with
-    controlled normalization and policy-driven optimizations.
-
-    Parameters
-    ----------
-    expr
-        Parsed SQLGlot expression.
-    schema
-        Schema for qualification and type inference.
-    profile
-        Compiler policy settings controlling optimization behavior.
-    original_sql
-        Original SQL string for error highlighting and diagnostics.
+    """Execute the unified policy-aware SQLGlot canonicalization pipeline.
 
     Returns
     -------
-    tuple[exp.Expression, CompilationArtifacts]
-        Canonicalized AST and compilation artifacts including fingerprint and lineage.
+    tuple[sqlglot.expressions.Expression, CompilationArtifacts]
+        Canonicalized expression and compilation artifacts.
     """
-    # Ensure schema is MappingSchema
-    if not isinstance(schema, MappingSchema):
-        schema = MappingSchema(dict(schema))
-
-    # 1. Run optimizer with pinned rules
-    qualified = optimize(
-        expr,
-        schema=schema,
-        dialect=profile.read_dialect,
-        rules=profile.optimizer_rules,
+    schema_map: SchemaMapping = schema.mapping if isinstance(schema, MappingSchema) else schema
+    policy = profile.to_sqlglot_policy()
+    options = NormalizeExprOptions(
+        schema=schema_map,
+        policy=policy,
+        sql=original_sql,
+        enable_rewrites=True,
     )
-
-    # 2. Validate qualification (makes ambiguity fatal)
-    if profile.validate_qualify_columns:
-        validate_qualify_columns(qualified, sql=original_sql)
-
-    # 3. Type-driven canonicalization
-    typed = annotate_types(qualified, schema=schema, dialect=profile.read_dialect)
-    canonical = canonicalize(typed, dialect=profile.read_dialect)
-
-    # 4. Controlled predicate normalization
-    artifacts = CompilationArtifacts.from_ast(canonical, schema)
-
-    # Check normalization cost before applying
-    where_clause = canonical.find(exp.Where)
-    if where_clause:
-        distance = normalization_distance(where_clause.this)
-        artifacts.normalization_distance = distance
-        if distance <= profile.normalize_distance_limit:
-            canonical = normalize(canonical, max_distance=profile.normalize_distance_limit)
-        else:
-            artifacts.normalization_skipped = True
-
-    # 5. Simplification (respects FINAL markers)
-    simplified = simplify(canonical, dialect=profile.read_dialect)
-
-    # 6. Optional pushdowns
-    if profile.pushdown_predicates:
-        simplified = pushdown_predicates(simplified)
-    if profile.pushdown_projections:
-        simplified = pushdown_projections(simplified, schema=schema)
-
-    # Rebuild artifacts with final AST
-    artifacts = CompilationArtifacts.from_ast(simplified, schema)
-
-    return simplified, artifacts
+    compile_options = _compile_options_from_normalize(options)
+    prepared = _prepare_for_qualification(expr, options=compile_options, policy=policy)
+    qualified = _qualify_expression(
+        prepared,
+        options=options,
+        policy=policy,
+        identify=policy.identify,
+    )
+    mapping = (
+        MappingSchema.from_mapping_schema(schema)
+        if isinstance(schema, MappingSchema)
+        else MappingSchema(dict(schema_map))
+    )
+    annotated = _annotate_expression(
+        qualified,
+        policy=policy,
+        identify=policy.identify,
+        schema_map=mapping,
+    )
+    simplified = _simplify_expression(annotated, policy=policy)
+    normalized, stats = _normalize_predicates_with_stats(
+        simplified,
+        max_distance=policy.normalization_distance,
+    )
+    artifacts = CompilationArtifacts.from_ast(normalized, mapping)
+    artifacts.normalization_distance = stats.distance
+    artifacts.normalization_skipped = not stats.applied
+    return normalized, artifacts
 
 
 def extract_column_lineage(
@@ -276,7 +278,8 @@ def extract_column_lineage(
         Mapping of output_column -> {(source_table, source_column)}.
     """
     from sqlglot.lineage import lineage
-    from sqlglot.optimizer.scope import build_scope
+
+    from sqlglot_tools.lineage import build_scope_cached
 
     result: dict[str, set[tuple[str, str]]] = {}
 
@@ -286,10 +289,8 @@ def extract_column_lineage(
         return result
 
     # Build scope once for efficiency
-    try:
-        scope = build_scope(ast)
-    except (ValueError, TypeError, AttributeError):
-        # Scope building may fail for complex or malformed queries
+    scope = build_scope_cached(ast)
+    if scope is None:
         return result
 
     # Extract lineage for each output column
@@ -345,8 +346,5 @@ def render_for_execution(
     str
         SQL string ready for execution.
     """
-    return ast.sql(
-        dialect=profile.write_dialect,
-        pretty=profile.pretty_output,
-        identify=profile.identify_mode,
-    )
+    policy = profile.to_sqlglot_policy()
+    return sqlglot_emit(ast, policy=policy, pretty=profile.pretty_output)

@@ -1,4 +1,4 @@
-"""Schema serialization helpers."""
+"""Schema ABI fingerprinting and payload helpers."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from core_types import JsonDict
 from serde_msgspec import dumps_msgpack, loads_msgpack
 from storage.ipc import payload_hash
 
+SCHEMA_ABI_VERSION = 1
 DATASET_FINGERPRINT_VERSION = 1
 
 
@@ -48,16 +49,17 @@ def _resolve_schema(schema: SchemaLike) -> pa.Schema:
     raise TypeError(msg)
 
 
-def schema_to_dict(schema: SchemaLike) -> JsonDict:
-    """Serialize an Arrow schema to a plain dictionary.
+def schema_abi_payload(schema: SchemaLike) -> JsonDict:
+    """Return a canonical ABI payload for a schema.
 
     Returns
     -------
     dict[str, object]
-        JSON-serializable schema representation.
+        Deterministic schema ABI payload.
     """
     resolved = _resolve_schema(schema)
     return {
+        "abi_version": SCHEMA_ABI_VERSION,
         "fields": [_field_to_dict(field) for field in resolved],
         "metadata": _decode_metadata(resolved.metadata),
     }
@@ -91,9 +93,10 @@ def _flattened_fields(field: object, *, dtype: DataTypeLike | None) -> list[Json
 def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> JsonDict:
     if not metadata:
         return {}
+    items = sorted(metadata.items(), key=lambda item: item[0])
     return {
         key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
-        for key, value in metadata.items()
+        for key, value in items
     }
 
 
@@ -111,16 +114,16 @@ def _extension_info(dtype: DataTypeLike | None) -> JsonDict | None:
 
 
 def schema_fingerprint(schema: SchemaLike) -> str:
-    """Compute a stable schema fingerprint hash.
+    """Compute a stable schema ABI fingerprint hash.
 
     Returns
     -------
     str
-        SHA-256 fingerprint of the schema.
+        SHA-256 fingerprint of the ABI payload.
     """
-    resolved = _resolve_schema(schema)
-    payload = resolved.serialize()
-    return hashlib.sha256(payload.to_pybytes()).hexdigest()
+    payload = schema_abi_payload(schema)
+    encoded = dumps_msgpack(payload)
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def dataset_fingerprint(
@@ -149,16 +152,26 @@ def dataset_fingerprint(
     return payload_hash(payload, _dataset_fingerprint_schema())
 
 
+def schema_to_dict(schema: SchemaLike) -> JsonDict:
+    """Return a JSON-ready ABI payload for a schema.
+
+    Returns
+    -------
+    JsonDict
+        JSON-ready ABI payload.
+    """
+    return schema_abi_payload(schema)
+
+
 def schema_to_msgpack(schema: SchemaLike) -> bytes:
-    """Serialize an Arrow schema to MessagePack bytes.
+    """Serialize a schema ABI payload to MessagePack bytes.
 
     Returns
     -------
     bytes
-        MessagePack payload (using extension types where available).
+        MessagePack-encoded schema payload.
     """
-    resolved = _resolve_schema(schema)
-    return dumps_msgpack(resolved)
+    return dumps_msgpack(schema_abi_payload(schema))
 
 
 def schema_from_msgpack(payload: bytes) -> pa.Schema:
@@ -167,7 +180,7 @@ def schema_from_msgpack(payload: bytes) -> pa.Schema:
     Returns
     -------
     pyarrow.Schema
-        Decoded schema instance.
+        Decoded schema payload.
 
     Raises
     ------
@@ -183,6 +196,7 @@ def schema_from_msgpack(payload: bytes) -> pa.Schema:
 
 __all__ = [
     "dataset_fingerprint",
+    "schema_abi_payload",
     "schema_fingerprint",
     "schema_from_msgpack",
     "schema_to_dict",

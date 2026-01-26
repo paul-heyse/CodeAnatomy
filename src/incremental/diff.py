@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.abi import schema_fingerprint
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
     IbisDeltaWriteOptions,

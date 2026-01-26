@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import inspect
 import re
 import uuid
@@ -32,6 +33,7 @@ from ibis_engine.schema_utils import bind_expr_schema, ibis_schema_from_arrow, r
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from schema_spec.system import DeltaScanOptions
 
 DatabaseHint = tuple[str, str] | str | None
 _QUALIFIED_PARTS_SINGLE = 1
@@ -130,6 +132,8 @@ class IbisDeltaReadOptions:
 
     table_name: str | None = None
     storage_options: Mapping[str, str] | None = None
+    log_storage_options: Mapping[str, str] | None = None
+    delta_scan: DeltaScanOptions | None = None
     version: int | None = None
     timestamp: str | None = None
     options: Mapping[str, object] | None = None
@@ -473,13 +477,18 @@ def _as_pyarrow_table(value: TableLike) -> pa.Table:
     return pa.table(value)
 
 
+def _delta_table_alias(path: str) -> str:
+    digest = hashlib.blake2b(path.encode("utf-8"), digest_size=8).hexdigest()
+    return f"delta_{digest}"
+
+
 def read_delta_ibis(
     backend: BaseBackend,
     path: str,
     *,
     options: IbisDeltaReadOptions | None = None,
 ) -> IbisTable:
-    """Read a Delta table via the backend read_delta method.
+    """Read a Delta table via the DataFusion registry provider.
 
     Parameters
     ----------
@@ -498,24 +507,47 @@ def read_delta_ibis(
     Raises
     ------
     TypeError
-        Raised when the backend does not support read_delta.
+        Raised when the backend does not expose a DataFusion session.
     """
-    read_delta = getattr(backend, "read_delta", None)
-    if not callable(read_delta):
-        msg = f"Backend {type(backend).__name__} does not support read_delta."
-        raise TypeError(msg)
     resolved = options or IbisDeltaReadOptions()
-    kwargs: dict[str, object] = dict(resolved.options or {})
-    if resolved.table_name is not None:
-        kwargs.setdefault("table_name", resolved.table_name)
-    if resolved.storage_options:
-        kwargs.setdefault("storage_options", dict(resolved.storage_options))
-    if resolved.version is not None:
-        kwargs["version"] = resolved.version
-    if resolved.timestamp is not None:
-        kwargs["timestamp"] = resolved.timestamp
-    result = read_delta(path, **_filter_kwargs(read_delta, kwargs))
-    return cast("IbisTable", result)
+    from datafusion import SessionContext
+
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+    from ibis_engine.registry import (
+        DatasetLocation,
+        resolve_delta_log_storage_options,
+        resolve_delta_scan_options,
+    )
+
+    ctx = datafusion_context(backend)
+    if not isinstance(ctx, SessionContext):
+        msg = f"Backend {type(backend).__name__} does not expose a DataFusion context."
+        raise TypeError(msg)
+    name = resolved.table_name or _delta_table_alias(path)
+    location = DatasetLocation(
+        path=path,
+        format="delta",
+        storage_options=dict(resolved.storage_options or {}),
+        delta_log_storage_options=dict(resolved.log_storage_options or {}),
+        delta_version=resolved.version,
+        delta_timestamp=resolved.timestamp,
+        delta_scan=resolved.delta_scan,
+    )
+    resolved_log_storage = resolve_delta_log_storage_options(location)
+    resolved_delta_scan = resolve_delta_scan_options(location)
+    if resolved_log_storage is not None or resolved_delta_scan is not None:
+        location = replace(
+            location,
+            delta_log_storage_options=dict(resolved_log_storage or {}),
+            delta_scan=resolved_delta_scan,
+        )
+    if ctx.table_exist(name):
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        adapter.deregister_table(name)
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+    facade.register_dataset(name=name, location=location)
+    return backend.table(name)
 
 
 def write_delta_ibis(

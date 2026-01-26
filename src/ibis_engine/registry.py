@@ -15,7 +15,7 @@ from ibis.expr.types import Table, Value
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
+from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
     DataFusionScanOptions,
@@ -343,11 +343,47 @@ def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | 
     DeltaScanOptions | None
         Delta scan options derived from the dataset location, when present.
     """
-    if location.delta_scan is not None:
-        return location.delta_scan
-    if location.dataset_spec is not None:
-        return location.dataset_spec.delta_scan
-    return None
+    if location.format != "delta":
+        return None
+    base = DeltaScanOptions(
+        file_column_name="__delta_rs_path",
+        enable_parquet_pushdown=True,
+        schema_force_view_types=None,
+        wrap_partition_values=True,
+        schema=None,
+    )
+    resolved = location.dataset_spec.delta_scan if location.dataset_spec is not None else None
+    return _merge_delta_scan_options(
+        _merge_delta_scan_options(base, resolved),
+        location.delta_scan,
+    )
+
+
+def _merge_delta_scan_options(
+    base: DeltaScanOptions,
+    override: DeltaScanOptions | None,
+) -> DeltaScanOptions:
+    if override is None:
+        return base
+    return DeltaScanOptions(
+        file_column_name=override.file_column_name or base.file_column_name,
+        enable_parquet_pushdown=(
+            override.enable_parquet_pushdown
+            if override.enable_parquet_pushdown is not None
+            else base.enable_parquet_pushdown
+        ),
+        schema_force_view_types=(
+            override.schema_force_view_types
+            if override.schema_force_view_types is not None
+            else base.schema_force_view_types
+        ),
+        wrap_partition_values=(
+            override.wrap_partition_values
+            if override.wrap_partition_values is not None
+            else base.wrap_partition_values
+        ),
+        schema=override.schema or base.schema,
+    )
 
 
 def resolve_delta_log_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
@@ -456,6 +492,11 @@ def read_dataset(
     -------
     ibis.expr.types.Table
         Ibis table expression for the dataset.
+
+    Raises
+    ------
+    ValueError
+        Raised when Delta datasets cannot be registered via DataFusion.
     """
     if params.filesystem is not None and hasattr(backend, "register_filesystem"):
         backend_fs = cast("FilesystemBackend", backend)
@@ -491,13 +532,10 @@ def _read_via_datafusion_registry(
     params: ReadDatasetParams,
     force: bool = False,
 ) -> Table | None:
-    if (
-        not force
-        and (
+    if not force and (
         params.datafusion_scan is None
         and params.datafusion_provider is None
         and params.dataset_spec is None
-        )
     ):
         return None
     try:

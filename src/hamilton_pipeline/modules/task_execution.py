@@ -10,8 +10,8 @@ from hamilton.function_modifiers import pipe_input, source, step, tag
 from hamilton.htypes import Collect, Parallelizable
 
 from arrowdsl.core.interop import TableLike as ArrowTableLike
+from arrowdsl.schema.abi import schema_fingerprint
 from arrowdsl.schema.build import empty_table
-from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict
 from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.finalize import Contract, normalize_only

@@ -8,13 +8,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from schema_spec.dataset_handle import DatasetHandle
     from schema_spec.registration import DatasetRegistration, register_dataset
-    from schema_spec.serialization import (
-        dataset_spec_from_json,
-        dataset_spec_from_msgpack,
-        dataset_spec_payload,
-        dataset_spec_to_json,
-        dataset_spec_to_msgpack,
-    )
     from schema_spec.specs import (
         DICT_STRING,
         ENCODING_DICTIONARY,
@@ -121,11 +114,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "dataset_table_logical_plan": ("schema_spec.system", "dataset_table_logical_plan"),
     "ddl_fingerprint_from_definition": ("schema_spec.system", "ddl_fingerprint_from_definition"),
     "dict_field": ("schema_spec.specs", "dict_field"),
-    "dataset_spec_from_json": ("schema_spec.serialization", "dataset_spec_from_json"),
-    "dataset_spec_from_msgpack": ("schema_spec.serialization", "dataset_spec_from_msgpack"),
-    "dataset_spec_payload": ("schema_spec.serialization", "dataset_spec_payload"),
-    "dataset_spec_to_json": ("schema_spec.serialization", "dataset_spec_to_json"),
-    "dataset_spec_to_msgpack": ("schema_spec.serialization", "dataset_spec_to_msgpack"),
     "file_identity_bundle": ("schema_spec.specs", "file_identity_bundle"),
     "list_view_type": ("schema_spec.specs", "list_view_type"),
     "make_contract_spec": ("schema_spec.system", "make_contract_spec"),
@@ -195,13 +183,8 @@ __all__ = [
     "call_span_bundle",
     "dataset_spec_from_contract",
     "dataset_spec_from_dataset",
-    "dataset_spec_from_json",
-    "dataset_spec_from_msgpack",
     "dataset_spec_from_path",
     "dataset_spec_from_schema",
-    "dataset_spec_payload",
-    "dataset_spec_to_json",
-    "dataset_spec_to_msgpack",
     "dataset_table_column_defaults",
     "dataset_table_constraints",
     "dataset_table_ddl_fingerprint",

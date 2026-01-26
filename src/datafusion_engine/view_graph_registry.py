@@ -23,8 +23,11 @@ from datafusion_engine.udf_runtime import (
     validate_required_udfs,
     validate_rust_udf_snapshot,
 )
+from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
 
 if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     from sqlglot_tools.compat import Expression
 
 
@@ -68,35 +71,83 @@ class ViewGraphOptions:
     validate_schema: bool = True
 
 
+@dataclass(frozen=True)
+class ViewGraphRuntimeOptions:
+    """Runtime options for view graph registration."""
+
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    policy_profile: SQLPolicyProfile | None = None
+
+
 def register_view_graph(
     ctx: SessionContext,
     *,
     nodes: Sequence[ViewNode],
     snapshot: Mapping[str, object],
+    runtime_options: ViewGraphRuntimeOptions | None = None,
     options: ViewGraphOptions | None = None,
 ) -> None:
-    """Register a dependency-sorted view graph on a SessionContext."""
+    """Register a dependency-sorted view graph on a SessionContext.
+
+    Raises
+    ------
+    ValueError
+        Raised when a view node is missing a SQLGlot AST.
+    """
     resolved = options or ViewGraphOptions()
+    runtime = runtime_options or ViewGraphRuntimeOptions()
     validate_rust_udf_snapshot(snapshot)
     materialized = _materialize_nodes(nodes, snapshot=snapshot)
     ordered = _topo_sort_nodes(materialized)
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime.runtime_profile)
+    import ibis
+
+    from datafusion_engine.sql_policy_engine import SQLPolicyProfile, render_for_execution
+    from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
+
+    backend = ibis.datafusion.connect(ctx)
+    register_ibis_udf_snapshot(snapshot)
+    policy_profile = runtime.policy_profile or SQLPolicyProfile()
+    policy = policy_profile.to_sqlglot_policy()
     for node in ordered:
         _validate_deps(ctx, node, materialized)
         _validate_udf_calls(snapshot, node)
         validate_required_udfs(snapshot, required=node.required_udfs)
         _validate_required_functions(ctx, node.required_udfs)
-        df = node.builder(ctx)
-        adapter.register_view(
-            node.name,
-            df,
-            overwrite=resolved.overwrite,
-            temporary=resolved.temporary,
-        )
-        if resolved.validate_schema and node.contract_builder is not None:
+        if node.sqlglot_ast is None:
+            msg = f"View {node.name!r} missing SQLGlot AST."
+            raise ValueError(msg)
+        if resolved.temporary:
+            df = node.builder(ctx)
+            adapter.register_view(
+                node.name,
+                df,
+                overwrite=resolved.overwrite,
+                temporary=True,
+            )
             schema = _schema_from_df(df)
+        else:
+            sql_text = render_for_execution(node.sqlglot_ast, policy_profile)
+            expr = backend.sql(sql_text, dialect=policy.write_dialect)
+            backend.create_view(node.name, expr, overwrite=resolved.overwrite)
+            schema = _schema_from_table(ctx, node.name)
+        if resolved.validate_schema and node.contract_builder is not None:
             contract = node.contract_builder(schema)
             _validate_schema_contract(ctx, contract, schema=schema)
+        if runtime.runtime_profile is not None:
+            from datafusion_engine.runtime import record_view_definition
+
+            artifact = build_view_artifact(
+                ViewArtifactInputs(
+                    ctx=ctx,
+                    name=node.name,
+                    ast=node.sqlglot_ast,
+                    schema=schema,
+                    required_udfs=node.required_udfs,
+                    policy_profile=policy_profile,
+                )
+            )
+            record_view_definition(runtime.runtime_profile, artifact=artifact)
 
 
 def _validate_deps(
@@ -262,6 +313,23 @@ def _schema_from_df(df: DataFrame) -> pa.Schema:
         if isinstance(resolved, pa.Schema):
             return resolved
     msg = "Failed to resolve DataFusion schema."
+    raise TypeError(msg)
+
+
+def _schema_from_table(ctx: SessionContext, name: str) -> pa.Schema:
+    try:
+        schema = ctx.table(name).schema()
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Failed to resolve schema for {name!r}."
+        raise ValueError(msg) from exc
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = f"Failed to resolve DataFusion schema for {name!r}."
     raise TypeError(msg)
 
 

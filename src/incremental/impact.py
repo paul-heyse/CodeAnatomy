@@ -13,6 +13,7 @@ from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table, empty_table
+from ibis_engine.sources import read_delta_ibis
 from incremental.ibis_exec import ibis_expr_to_table
 from incremental.ibis_utils import ibis_table_from_arrow
 from incremental.registry_specs import dataset_schema
@@ -51,7 +52,7 @@ def impacted_callers_from_changed_exports(
     pieces: list[ibis.Table] = []
     changed_table = ibis_table_from_arrow(backend, changed)
     if prev_rel_callsite_qname is not None:
-        rel_qname = backend.read_delta(prev_rel_callsite_qname)
+        rel_qname = read_delta_ibis(backend, prev_rel_callsite_qname)
         changed_qname = changed_table.filter(changed_table.qname_id.notnull())
         qname_hits = rel_qname.inner_join(
             changed_qname,
@@ -66,7 +67,7 @@ def impacted_callers_from_changed_exports(
         pieces.append(qname_hits)
 
     if prev_rel_callsite_symbol is not None:
-        rel_symbol = backend.read_delta(prev_rel_callsite_symbol)
+        rel_symbol = read_delta_ibis(backend, prev_rel_callsite_symbol)
         changed_symbol = changed_table.filter(changed_table.symbol.notnull())
         symbol_hits = rel_symbol.inner_join(
             changed_symbol,
@@ -115,7 +116,7 @@ def impacted_importers_from_changed_exports(
     if exports.num_rows == 0:
         return empty_table(schema)
 
-    imports_resolved = backend.read_delta(prev_imports_resolved)
+    imports_resolved = read_delta_ibis(backend, prev_imports_resolved)
     exports_table = ibis_table_from_arrow(backend, exports)
     by_name = imports_resolved.inner_join(
         exports_table,
@@ -176,7 +177,7 @@ def import_closure_only_from_changed_exports(
     if exports.num_rows == 0:
         return empty_table(schema)
 
-    imports_resolved = backend.read_delta(prev_imports_resolved)
+    imports_resolved = read_delta_ibis(backend, prev_imports_resolved)
     exports_table = ibis_table_from_arrow(backend, exports)
     module_imports = imports_resolved.filter(
         imports_resolved.imported_name.isnull()

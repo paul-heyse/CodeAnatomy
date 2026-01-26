@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from extract.cache_utils import (
     CacheSetOptions,

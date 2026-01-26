@@ -338,7 +338,8 @@ class ViewBuildContext:
 
     def register_schema(self, name: str, schema: pa.Schema) -> None:
         """Register an empty-schema placeholder for a derived view."""
-        empty = empty_table(schema)
+        contract = SchemaContract.from_arrow_schema(name, schema)
+        empty = empty_table(contract.to_arrow_schema())
         plan = register_ibis_table(
             empty,
             options=SourceToIbisOptions(

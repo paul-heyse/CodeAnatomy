@@ -57,19 +57,7 @@ _BUNDLE_ORDER_OVERRIDES: dict[str, tuple[str, ...]] = {
     "ast_bundle": ("ast_files",),
     "bytecode_bundle": ("bytecode_files",),
     "cst_bundle": ("libcst_files",),
-    "scip_bundle": (
-        "scip_metadata",
-        "scip_index_stats",
-        "scip_documents",
-        "scip_document_texts",
-        "scip_occurrences",
-        "scip_symbol_information",
-        "scip_document_symbols",
-        "scip_external_symbol_information",
-        "scip_symbol_relationships",
-        "scip_signature_occurrences",
-        "scip_diagnostics",
-    ),
+    "scip_bundle": ("scip_index",),
     "tree_sitter_bundle": ("tree_sitter_files",),
 }
 

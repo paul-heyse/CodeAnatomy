@@ -37,6 +37,10 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema with string-typed columns for metadata fields.
     """
+    if name == "scip_index_v1":
+        from datafusion_engine.schema_registry import SCIP_INDEX_SCHEMA
+
+        return SCIP_INDEX_SCHEMA
     row = extract_metadata(name)
     fields = [
         pa.field(column, pa.string()) for column in (*row.fields, *row.row_fields, *row.row_extras)

@@ -17,6 +17,7 @@ import pyarrow as pa
 
 from arrowdsl.schema.abi import schema_fingerprint
 from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
+from sqlglot_tools.compat import exp
 
 SCHEMA_ABI_FINGERPRINT_META: bytes = b"schema_abi_fingerprint"
 
@@ -331,7 +332,7 @@ class SchemaContract:
 
         return violations
 
-    def to_sqlglot_ddl(self, dialect: str = "postgres") -> str:
+    def to_sqlglot_ddl(self, dialect: str = "postgres") -> exp.Expression:
         """
         Generate CREATE TABLE DDL via SQLGlot.
 
@@ -345,11 +346,10 @@ class SchemaContract:
 
         Returns
         -------
-        str
-            CREATE TABLE DDL statement
+        sqlglot.expressions.Expression
+            CREATE TABLE DDL expression
         """
         import ibis
-        import sqlglot.expressions as exp
 
         # Build Ibis schema
         ibis_schema = ibis.schema(
@@ -360,13 +360,11 @@ class SchemaContract:
         column_defs = ibis_schema.to_sqlglot_column_defs(dialect)
 
         # Build CREATE TABLE
-        create = exp.Create(
+        return exp.Create(
             this=exp.Table(this=exp.to_identifier(self.table_name)),
             kind="TABLE",
             expression=exp.Schema(expressions=column_defs),
         )
-
-        return create.sql(dialect=dialect)
 
     @staticmethod
     def _arrow_type_to_sql(arrow_type: pa.DataType) -> str:

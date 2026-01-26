@@ -294,6 +294,47 @@ SCIP_DIAGNOSTICS_SCHEMA = pa.schema(
     ]
 )
 
+SCIP_METADATA_T = pa.struct(
+    [field for field in SCIP_METADATA_SCHEMA if field.name not in {"index_id", "index_path"}]
+)
+SCIP_INDEX_STATS_T = pa.struct(
+    [field for field in SCIP_INDEX_STATS_SCHEMA if field.name not in {"index_id", "index_path"}]
+)
+SCIP_SYMBOL_INFO_T = pa.struct(SCIP_SYMBOL_INFO_FIELDS)
+SCIP_OCCURRENCE_T = pa.struct(
+    [field for field in SCIP_OCCURRENCES_SCHEMA if field.name not in {"document_id", "path"}]
+)
+SCIP_DIAGNOSTIC_T = pa.struct(
+    [field for field in SCIP_DIAGNOSTICS_SCHEMA if field.name not in {"document_id", "path"}]
+)
+SCIP_SYMBOL_RELATIONSHIP_T = pa.struct(list(SCIP_SYMBOL_RELATIONSHIPS_SCHEMA))
+SCIP_SIGNATURE_OCCURRENCE_T = pa.struct(list(SCIP_SIGNATURE_OCCURRENCES_SCHEMA))
+SCIP_DOCUMENT_T = pa.struct(
+    [
+        pa.field("document_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("language", pa.string()),
+        pa.field("position_encoding", pa.int32()),
+        pa.field("text", pa.string()),
+        pa.field("symbols", pa.list_(SCIP_SYMBOL_INFO_T)),
+        pa.field("occurrences", pa.list_(SCIP_OCCURRENCE_T)),
+        pa.field("diagnostics", pa.list_(SCIP_DIAGNOSTIC_T)),
+    ]
+)
+SCIP_INDEX_SCHEMA = pa.schema(
+    [
+        pa.field("index_id", pa.string()),
+        pa.field("index_path", pa.string()),
+        pa.field("metadata", SCIP_METADATA_T),
+        pa.field("index_stats", SCIP_INDEX_STATS_T),
+        pa.field("documents", pa.list_(SCIP_DOCUMENT_T)),
+        pa.field("symbol_information", pa.list_(SCIP_SYMBOL_INFO_T)),
+        pa.field("external_symbol_information", pa.list_(SCIP_SYMBOL_INFO_T)),
+        pa.field("symbol_relationships", pa.list_(SCIP_SYMBOL_RELATIONSHIP_T)),
+        pa.field("signature_occurrences", pa.list_(SCIP_SIGNATURE_OCCURRENCE_T)),
+    ]
+)
+
 CST_NODE_T = pa.struct(
     [
         pa.field("cst_id", pa.int64(), nullable=False),
@@ -1174,6 +1215,22 @@ SCIP_SIGNATURE_OCCURRENCES_SCHEMA = _schema_with_metadata(
     SCIP_SIGNATURE_OCCURRENCES_SCHEMA,
 )
 SCIP_DIAGNOSTICS_SCHEMA = _schema_with_metadata("scip_diagnostics_v1", SCIP_DIAGNOSTICS_SCHEMA)
+_SCIP_INDEX_IDENTITY_FIELDS = ("index_id", "index_path")
+_SCIP_INDEX_ORDERING_META = ordering_metadata_spec(
+    OrderingLevel.EXPLICIT,
+    keys=(("index_path", "ascending"), ("index_id", "ascending")),
+)
+_SCIP_INDEX_CONSTRAINT_META = {
+    REQUIRED_NON_NULL_META: metadata_list_bytes(("index_path",)),
+    KEY_FIELDS_META: metadata_list_bytes(_SCIP_INDEX_IDENTITY_FIELDS),
+}
+_SCIP_INDEX_SCHEMA_META = dict(_SCIP_INDEX_ORDERING_META.schema_metadata)
+_SCIP_INDEX_SCHEMA_META.update(_SCIP_INDEX_CONSTRAINT_META)
+SCIP_INDEX_SCHEMA = _schema_with_metadata(
+    "scip_index_v1",
+    SCIP_INDEX_SCHEMA,
+    extra_metadata=_SCIP_INDEX_SCHEMA_META,
+)
 _SYMTABLE_IDENTITY_FIELDS = ("file_id", "path")
 _SYMTABLE_ORDERING_META = ordering_metadata_spec(
     OrderingLevel.EXPLICIT,
@@ -1547,7 +1604,14 @@ PARAM_FILE_IDS_SCHEMA = _schema_with_metadata(
     ),
 )
 
-SCHEMA_REGISTRY: dict[str, pa.Schema] = {}
+_BASE_EXTRACT_SCHEMA_BY_NAME: dict[str, pa.Schema] = {
+    "libcst_files_v1": LIBCST_FILES_SCHEMA,
+    "ast_files_v1": AST_FILES_SCHEMA,
+    "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
+    "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
+    "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
+    "scip_index_v1": SCIP_INDEX_SCHEMA,
+}
 
 NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
     "cst_nodes": {
@@ -1842,6 +1906,81 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "role": "derived",
         "context": {},
     },
+    "scip_metadata": {
+        "root": "scip_index_v1",
+        "path": "metadata",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "scip_index_stats": {
+        "root": "scip_index_v1",
+        "path": "index_stats",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "scip_documents": {
+        "root": "scip_index_v1",
+        "path": "documents",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "scip_document_texts": {
+        "root": "scip_index_v1",
+        "path": "documents",
+        "role": "derived",
+        "context": {},
+    },
+    "scip_document_symbols": {
+        "root": "scip_index_v1",
+        "path": "documents.symbols",
+        "role": "derived",
+        "context": {
+            "document_id": "documents.document_id",
+            "path": "documents.path",
+        },
+    },
+    "scip_occurrences": {
+        "root": "scip_index_v1",
+        "path": "documents.occurrences",
+        "role": "derived",
+        "context": {
+            "document_id": "documents.document_id",
+            "path": "documents.path",
+        },
+    },
+    "scip_diagnostics": {
+        "root": "scip_index_v1",
+        "path": "documents.diagnostics",
+        "role": "derived",
+        "context": {
+            "document_id": "documents.document_id",
+            "path": "documents.path",
+        },
+    },
+    "scip_symbol_information": {
+        "root": "scip_index_v1",
+        "path": "symbol_information",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "scip_external_symbol_information": {
+        "root": "scip_index_v1",
+        "path": "external_symbol_information",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "scip_symbol_relationships": {
+        "root": "scip_index_v1",
+        "path": "symbol_relationships",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "scip_signature_occurrences": {
+        "root": "scip_index_v1",
+        "path": "signature_occurrences",
+        "role": "intrinsic",
+        "context": {},
+    },
 }
 
 ROOT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
@@ -1850,6 +1989,7 @@ ROOT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "libcst_files_v1": _LIBCST_IDENTITY_FIELDS,
     "symtable_files_v1": _SYMTABLE_IDENTITY_FIELDS,
     "tree_sitter_files_v1": _TREE_SITTER_IDENTITY_FIELDS,
+    "scip_index_v1": _SCIP_INDEX_IDENTITY_FIELDS,
 }
 
 AST_CORE_VIEW_NAMES: tuple[str, ...] = (
@@ -2243,6 +2383,9 @@ def identity_fields_for(
 
 
 def _resolve_root_schema(ctx: SessionContext, root: str) -> pa.Schema:
+    static_schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(root)
+    if static_schema is not None:
+        return static_schema
     try:
         df = ctx.table(root)
     except (KeyError, RuntimeError, TypeError, ValueError) as exc:
@@ -3427,6 +3570,7 @@ __all__ = [
     "SCIP_DOCUMENT_SYMBOLS_SCHEMA",
     "SCIP_DOCUMENT_TEXTS_SCHEMA",
     "SCIP_EXTERNAL_SYMBOL_INFORMATION_SCHEMA",
+    "SCIP_INDEX_SCHEMA",
     "SCIP_INDEX_STATS_SCHEMA",
     "SCIP_METADATA_SCHEMA",
     "SCIP_OCCURRENCES_SCHEMA",

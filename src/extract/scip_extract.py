@@ -18,7 +18,7 @@ import pyarrow as pa
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import align_table, encode_table
-from datafusion_engine.extract_registry import extract_metadata, normalize_options
+from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.span_utils import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from extract.helpers import (
     ExtractMaterializeOptions,
@@ -28,7 +28,6 @@ from extract.helpers import (
 )
 from extract.schema_ops import ExtractNormalizeOptions, schema_policy_for_dataset
 from extract.session import ExtractSession, build_extract_session
-from extract.spec_helpers import plan_requires_row
 from extract.string_utils import normalize_string_items
 from ibis_engine.plan import IbisPlan
 
@@ -59,19 +58,7 @@ LOGGER = logging.getLogger(__name__)
 
 type Row = dict[str, object]
 
-SCIP_OUTPUT_DATASETS: tuple[tuple[str, str], ...] = (
-    ("scip_metadata", "scip_metadata_v1"),
-    ("scip_index_stats", "scip_index_stats_v1"),
-    ("scip_documents", "scip_documents_v1"),
-    ("scip_document_texts", "scip_document_texts_v1"),
-    ("scip_occurrences", "scip_occurrences_v1"),
-    ("scip_symbol_information", "scip_symbol_information_v1"),
-    ("scip_document_symbols", "scip_document_symbols_v1"),
-    ("scip_external_symbol_information", "scip_external_symbol_information_v1"),
-    ("scip_symbol_relationships", "scip_symbol_relationships_v1"),
-    ("scip_signature_occurrences", "scip_signature_occurrences_v1"),
-    ("scip_diagnostics", "scip_diagnostics_v1"),
-)
+SCIP_OUTPUT_DATASETS: tuple[tuple[str, str], ...] = (("scip_index", "scip_index_v1"),)
 
 
 @dataclass(frozen=True)
@@ -204,6 +191,16 @@ class _ResolvedScipExtraction:
     parse_opts: SCIPParseOptions
     exec_ctx: ExecutionContext
     normalize: ExtractNormalizeOptions
+
+
+@dataclass(frozen=True)
+class _ScipDocumentContext:
+    """Document context fields extracted from a SCIP index."""
+
+    document_id: str | None
+    path: str | None
+    position_encoding: int | None
+    col_unit: str
 
 
 def _scip_index_command(
@@ -348,7 +345,7 @@ def _range_fields(
             fields[f"{normalized}range_len"] = None
         return fields
     start_line, start_char, end_line, end_char, range_len = norm
-    fields: dict[str, int | None] = {
+    fields = {
         f"{normalized}start_line": start_line,
         f"{normalized}start_char": start_char,
         f"{normalized}end_line": end_line,
@@ -603,6 +600,162 @@ def _metadata_row(index: object, *, index_id: str | None, index_path: Path) -> R
         "project_name": _string_value(getattr(index, "project_name", None)),
         "project_version": _string_value(getattr(index, "project_version", None)),
         "project_namespace": _string_value(getattr(index, "project_namespace", None)),
+    }
+
+
+def _strip_keys(row: Row, *, keys: Sequence[str]) -> Row:
+    """Return a row mapping without the specified keys.
+
+    Returns
+    -------
+    Row
+        Row mapping with requested keys removed.
+    """
+    return {key: value for key, value in row.items() if key not in keys}
+
+
+@dataclass(frozen=True)
+class _ScipDocumentInputs:
+    doc: object
+    document_id: str | None
+    path: str | None
+    position_encoding: int | None
+    col_unit: str
+    include_document_text: bool
+    include_document_symbols: bool
+    scip_pb2: ModuleType | None
+
+
+def _scip_document_row(inputs: _ScipDocumentInputs) -> Row:
+    """Build a nested document payload for the SCIP index row.
+
+    Returns
+    -------
+    Row
+        Nested document payload for the SCIP index row.
+    """
+    text = (
+        _string_value(getattr(inputs.doc, "text", None))
+        if inputs.include_document_text
+        else None
+    )
+    symbols: list[Row] = []
+    if inputs.include_document_symbols:
+        for symbol_entry in getattr(inputs.doc, "symbols", []) or []:
+            base, _sig_doc = _symbol_info_base(symbol_entry, scip_pb2=inputs.scip_pb2)
+            symbols.append(base)
+    occurrences: list[Row] = []
+    diagnostics: list[Row] = []
+    for occurrence in getattr(inputs.doc, "occurrences", []) or []:
+        occurrences.append(
+            _strip_keys(
+                _occurrence_row(
+                    occurrence,
+                    document_id=inputs.document_id,
+                    path=inputs.path,
+                    col_unit=inputs.col_unit,
+                    scip_pb2=inputs.scip_pb2,
+                ),
+                keys=("document_id", "path"),
+            )
+        )
+        diagnostics.extend(
+            _strip_keys(row, keys=("document_id", "path"))
+            for row in _diagnostic_rows(
+                occurrence,
+                document_id=inputs.document_id,
+                path=inputs.path,
+                col_unit=inputs.col_unit,
+            )
+        )
+    return {
+        "document_id": inputs.document_id,
+        "path": inputs.path,
+        "language": _string_value(getattr(inputs.doc, "language", None)),
+        "position_encoding": inputs.position_encoding,
+        "text": text,
+        "symbols": symbols,
+        "occurrences": occurrences,
+        "diagnostics": diagnostics,
+    }
+
+
+def _scip_index_row(
+    resolved: _ResolvedScipExtraction,
+    *,
+    counts: Mapping[str, int],
+    has_index_symbols: bool,
+    options: ScipExtractOptions,
+) -> Row:
+    metadata = _strip_keys(
+        _metadata_row(
+            resolved.index,
+            index_id=resolved.index_id,
+            index_path=resolved.index_path,
+        ),
+        keys=("index_id", "index_path"),
+    )
+    index_stats = _strip_keys(
+        _index_stats_row(
+            counts,
+            index_id=resolved.index_id,
+            index_path=resolved.index_path,
+        ),
+        keys=("index_id", "index_path"),
+    )
+    documents = [
+        _scip_document_row(
+            _ScipDocumentInputs(
+                doc=doc,
+                document_id=document_id,
+                path=rel_path,
+                position_encoding=position_encoding,
+                col_unit=col_unit,
+                include_document_text=options.include_document_text,
+                include_document_symbols=options.include_document_symbols,
+                scip_pb2=resolved.scip_pb2,
+            )
+        )
+        for doc, document_id, rel_path, position_encoding, col_unit in _iter_document_contexts(
+            resolved.index
+        )
+    ]
+    symbol_information = list(
+        _iter_scip_symbol_information(
+            resolved.index,
+            has_index_symbols=has_index_symbols,
+            scip_pb2=resolved.scip_pb2,
+        )
+    )
+    external_symbol_information = list(
+        _iter_scip_external_symbols(resolved.index, scip_pb2=resolved.scip_pb2)
+    )
+    symbol_relationships = list(
+        _iter_scip_symbol_relationships(
+            resolved.index,
+            has_index_symbols=has_index_symbols,
+        )
+    )
+    signature_occurrences = []
+    if options.include_signature_occurrences:
+        signature_occurrences = list(
+            _iter_scip_signature_occurrences(
+                resolved.index,
+                include_signature_occurrences=options.include_signature_occurrences,
+                has_index_symbols=has_index_symbols,
+                scip_pb2=resolved.scip_pb2,
+            )
+        )
+    return {
+        "index_id": resolved.index_id,
+        "index_path": str(resolved.index_path),
+        "metadata": metadata,
+        "index_stats": index_stats,
+        "documents": documents,
+        "symbol_information": symbol_information,
+        "external_symbol_information": external_symbol_information,
+        "symbol_relationships": symbol_relationships,
+        "signature_occurrences": signature_occurrences,
     }
 
 
@@ -1009,13 +1162,6 @@ def _streaming_batch_size(options: ScipExtractOptions) -> int:
     return resolved if resolved is not None else 5000
 
 
-def _dataset_required(name: str, plan: EvidencePlan | None) -> bool:
-    if plan is None:
-        return True
-    row = extract_metadata(name)
-    return plan_requires_row(plan, row)
-
-
 def _normalize_batch(
     table: pa.Table,
     *,
@@ -1120,92 +1266,21 @@ def _extract_scip_tables_streaming(
         index_path=resolved.index_path,
         counts=counts,
     )
-    evidence_plan = options.evidence_plan
-    rows_by_dataset: dict[str, Iterable[Row]] = {
-        "scip_metadata_v1": (
-            _metadata_row(
-                resolved.index,
-                index_id=resolved.index_id,
-                index_path=resolved.index_path,
-            ),
-        )
-        if _dataset_required("scip_metadata_v1", evidence_plan)
-        else (),
-        "scip_index_stats_v1": (
-            _index_stats_row(
-                counts,
-                index_id=resolved.index_id,
-                index_path=resolved.index_path,
-            ),
-        )
-        if _dataset_required("scip_index_stats_v1", evidence_plan)
-        else (),
-        "scip_documents_v1": _iter_scip_documents(
-            resolved.index,
-            index_id=resolved.index_id,
-            index_path=resolved.index_path,
-        )
-        if _dataset_required("scip_documents_v1", evidence_plan)
-        else (),
-        "scip_document_texts_v1": _iter_scip_document_texts(
-            resolved.index,
-            include_document_text=options.include_document_text,
-        )
-        if _dataset_required("scip_document_texts_v1", evidence_plan)
-        else (),
-        "scip_occurrences_v1": _iter_scip_occurrences(resolved.index, scip_pb2=resolved.scip_pb2)
-        if _dataset_required("scip_occurrences_v1", evidence_plan)
-        else (),
-        "scip_symbol_information_v1": _iter_scip_symbol_information(
-            resolved.index,
-            has_index_symbols=has_index_symbols,
-            scip_pb2=resolved.scip_pb2,
-        )
-        if _dataset_required("scip_symbol_information_v1", evidence_plan)
-        else (),
-        "scip_document_symbols_v1": _iter_scip_document_symbols(
-            resolved.index,
-            include_document_symbols=options.include_document_symbols,
-            scip_pb2=resolved.scip_pb2,
-        )
-        if _dataset_required("scip_document_symbols_v1", evidence_plan)
-        else (),
-        "scip_external_symbol_information_v1": _iter_scip_external_symbols(
-            resolved.index,
-            scip_pb2=resolved.scip_pb2,
-        )
-        if _dataset_required("scip_external_symbol_information_v1", evidence_plan)
-        else (),
-        "scip_symbol_relationships_v1": _iter_scip_symbol_relationships(
-            resolved.index,
-            has_index_symbols=has_index_symbols,
-        )
-        if _dataset_required("scip_symbol_relationships_v1", evidence_plan)
-        else (),
-        "scip_signature_occurrences_v1": _iter_scip_signature_occurrences(
-            resolved.index,
-            include_signature_occurrences=options.include_signature_occurrences,
-            has_index_symbols=has_index_symbols,
-            scip_pb2=resolved.scip_pb2,
-        )
-        if _dataset_required("scip_signature_occurrences_v1", evidence_plan)
-        else (),
-        "scip_diagnostics_v1": _iter_scip_diagnostics(resolved.index)
-        if _dataset_required("scip_diagnostics_v1", evidence_plan)
-        else (),
-    }
+    row = _scip_index_row(
+        resolved,
+        counts=counts,
+        has_index_symbols=has_index_symbols,
+        options=options,
+    )
     batch_size = _streaming_batch_size(options)
-    readers = {
-        dataset: _reader_from_rows(
-            dataset,
-            rows,
-            ctx=resolved.exec_ctx,
-            normalize=resolved.normalize,
-            batch_size=batch_size,
-        )
-        for dataset, rows in rows_by_dataset.items()
-    }
-    return {output: readers[dataset] for output, dataset in SCIP_OUTPUT_DATASETS}
+    reader = _reader_from_rows(
+        "scip_index_v1",
+        (row,),
+        ctx=resolved.exec_ctx,
+        normalize=resolved.normalize,
+        batch_size=batch_size,
+    )
+    return {output: reader for output, _dataset in SCIP_OUTPUT_DATASETS}
 
 
 def _extract_scip_tables_in_memory(
@@ -1216,123 +1291,40 @@ def _extract_scip_tables_in_memory(
     session: ExtractSession,
     prefer_reader: bool,
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
-    dataset_names = tuple(dataset for _, dataset in SCIP_OUTPUT_DATASETS)
-    batcher = _RowBatcher.for_datasets(dataset_names, _resolve_batch_size(options))
     counts, has_index_symbols = _index_counts(resolved.index)
     _log_scip_counts(counts, resolved.parse_opts)
     _ensure_scip_health(counts, resolved.parse_opts)
-
-    batcher.append(
-        "scip_metadata_v1",
-        _metadata_row(
-            resolved.index,
-            index_id=resolved.index_id,
-            index_path=resolved.index_path,
-        ),
-    )
-    _append_rows(
-        batcher,
-        "scip_documents_v1",
-        _iter_scip_documents(
-            resolved.index,
-            index_id=resolved.index_id,
-            index_path=resolved.index_path,
-        ),
-    )
-    _append_rows(
-        batcher,
-        "scip_document_texts_v1",
-        _iter_scip_document_texts(
-            resolved.index,
-            include_document_text=options.include_document_text,
-        ),
-    )
-    _append_rows(
-        batcher,
-        "scip_document_symbols_v1",
-        _iter_scip_document_symbols(
-            resolved.index,
-            include_document_symbols=options.include_document_symbols,
-            scip_pb2=resolved.scip_pb2,
-        ),
-    )
-    _append_rows(
-        batcher,
-        "scip_occurrences_v1",
-        _iter_scip_occurrences(resolved.index, scip_pb2=resolved.scip_pb2),
-    )
-    _append_rows(batcher, "scip_diagnostics_v1", _iter_scip_diagnostics(resolved.index))
-    _append_rows(
-        batcher,
-        "scip_symbol_information_v1",
-        _iter_scip_symbol_information(
-            resolved.index,
-            has_index_symbols=has_index_symbols,
-            scip_pb2=resolved.scip_pb2,
-        ),
-    )
-    _append_rows(
-        batcher,
-        "scip_signature_occurrences_v1",
-        _iter_scip_signature_occurrences(
-            resolved.index,
-            include_signature_occurrences=options.include_signature_occurrences,
-            has_index_symbols=has_index_symbols,
-            scip_pb2=resolved.scip_pb2,
-        ),
-    )
-    _append_rows(
-        batcher,
-        "scip_symbol_relationships_v1",
-        _iter_scip_symbol_relationships(
-            resolved.index,
-            has_index_symbols=has_index_symbols,
-        ),
-    )
-    _append_rows(
-        batcher,
-        "scip_external_symbol_information_v1",
-        _iter_scip_external_symbols(resolved.index, scip_pb2=resolved.scip_pb2),
-    )
     _record_scip_index_stats(
         resolved.exec_ctx,
         index_id=resolved.index_id,
         index_path=resolved.index_path,
         counts=counts,
     )
-    batcher.append(
-        "scip_index_stats_v1",
-        _index_stats_row(
-            counts,
-            index_id=resolved.index_id,
-            index_path=resolved.index_path,
+    row = _scip_index_row(
+        resolved,
+        counts=counts,
+        has_index_symbols=has_index_symbols,
+        options=options,
+    )
+    plan = _build_scip_plan(
+        "scip_index_v1",
+        ([row],),
+        normalize=resolved.normalize,
+        evidence_plan=evidence_plan,
+        session=session,
+    )
+    output, dataset = SCIP_OUTPUT_DATASETS[0]
+    table = materialize_extract_plan(
+        dataset,
+        plan,
+        ctx=resolved.exec_ctx,
+        options=ExtractMaterializeOptions(
+            normalize=resolved.normalize,
+            prefer_reader=prefer_reader,
+            apply_post_kernels=False,
         ),
     )
-
-    batches = batcher.finalize()
-    plans = {
-        dataset: _build_scip_plan(
-            dataset,
-            batches.get(dataset, []),
-            normalize=resolved.normalize,
-            evidence_plan=evidence_plan,
-            session=session,
-        )
-        for dataset in dataset_names
-    }
-    return {
-        output: materialize_extract_plan(
-            dataset,
-            plans[dataset],
-            ctx=resolved.exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=resolved.normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=False,
-            ),
-        )
-        for output, dataset in SCIP_OUTPUT_DATASETS
-    }
+    return {output: table}
 
 
 @overload

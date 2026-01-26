@@ -9,7 +9,9 @@ from typing import Protocol
 import msgspec
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value
+from sqlglot.schema import MappingSchema
 
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile, compile_sql_policy
 from sqlglot_tools.compat import Expression, diff
 from sqlglot_tools.lineage import (
     LineageExtractionOptions,
@@ -19,14 +21,12 @@ from sqlglot_tools.lineage import (
 from sqlglot_tools.optimizer import (
     DEFAULT_WRITE_DIALECT,
     CanonicalizationRules,
-    NormalizeExprOptions,
     SchemaMapping,
     SqlGlotPolicy,
     _flatten_schema_mapping,
     ast_policy_fingerprint,
     ast_to_artifact,
     canonical_ast_fingerprint,
-    normalize_expr_with_stats,
     resolve_sqlglot_policy,
     serialize_ast_artifact,
     sqlglot_policy_snapshot_for,
@@ -165,20 +165,27 @@ def sqlglot_diagnostics(
 
     options = options or SqlGlotDiagnosticsOptions()
     compiled = ibis_to_sqlglot(expr, backend=backend, params=options.params)
-    dialect = _resolved_dialect(options.policy)
+    resolved_policy = resolve_sqlglot_policy(name="datafusion_compile", policy=options.policy)
+    dialect = _resolved_dialect(resolved_policy)
     stats = None
     if options.normalize:
-        normalize_result = normalize_expr_with_stats(
-            compiled,
-            options=NormalizeExprOptions(
-                schema=options.schema_map,
-                rules=options.rules,
-                policy=options.policy,
-                sql=options.sql,
-            ),
+        compile_schema: SchemaMapping | MappingSchema
+        compile_schema = (
+            MappingSchema({}) if options.schema_map is None else options.schema_map
         )
-        optimized = normalize_result.expr
-        stats = normalize_result.stats
+        profile = SQLPolicyProfile(
+            policy=resolved_policy,
+            read_dialect=resolved_policy.read_dialect,
+            write_dialect=resolved_policy.write_dialect,
+            optimizer_rules=options.rules,
+        )
+        optimized, artifacts = compile_sql_policy(
+            compiled,
+            schema=compile_schema,
+            profile=profile,
+            original_sql=options.sql,
+        )
+        stats = artifacts
     else:
         optimized = compiled
     return SqlGlotDiagnostics(
@@ -191,9 +198,11 @@ def sqlglot_diagnostics(
         sql_dialect=dialect,
         sql_text_raw=_sql_text(compiled, dialect=dialect),
         sql_text_optimized=_sql_text(optimized, dialect=dialect),
-        normalization_distance=stats.distance if stats is not None else None,
-        normalization_max_distance=stats.max_distance if stats is not None else None,
-        normalization_applied=stats.applied if stats is not None else None,
+        normalization_distance=stats.normalization_distance if stats is not None else None,
+        normalization_max_distance=(
+            resolved_policy.normalization_distance if stats is not None else None
+        ),
+        normalization_applied=None if stats is None else not stats.normalization_skipped,
     )
 
 

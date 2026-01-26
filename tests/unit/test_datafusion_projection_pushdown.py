@@ -5,8 +5,8 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.bridge import collect_plan_artifacts, df_from_sqlglot_or_sql
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.execution_helpers import collect_plan_artifacts, df_from_sqlglot_or_sql
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from sqlglot_tools.optimizer import parse_sql_strict
 

@@ -1,7 +1,8 @@
 """SQL execution safety gates using DataFusion SQLOptions.
 
-This module provides defense-in-depth for SQL execution by enforcing
-execution policies that control DDL, DML, and statement execution.
+This module is intended for external SQL ingress paths. Internal execution
+should flow through Ibis → SQLGlot AST compilation with policy enforcement,
+and only use SQL strings as diagnostics artifacts.
 """
 
 from __future__ import annotations

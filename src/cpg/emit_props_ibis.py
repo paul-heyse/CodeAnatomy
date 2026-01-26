@@ -22,7 +22,8 @@ from cpg.specs import (
     filter_fields,
     resolve_prop_transform,
 )
-from ibis_engine.hash_exprs import HashExprSpec, masked_stable_id_expr_from_spec
+from ibis_engine.expr_compiler import expr_ir_to_ibis
+from ibis_engine.hashing import HashExprSpec, masked_stable_id_expr_ir
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
     bind_expr_schema,
@@ -32,6 +33,28 @@ from ibis_engine.schema_utils import (
     ibis_schema_from_arrow,
     validate_expr_schema,
 )
+from sqlglot_tools.expr_spec import SqlExprSpec
+
+
+def _expr_from_spec(table: Table, spec: SqlExprSpec) -> Value:
+    expr_ir = spec.expr_ir
+    if expr_ir is None:
+        msg = "SqlExprSpec missing expr_ir; ExprIR-backed specs are required."
+        raise ValueError(msg)
+    return expr_ir_to_ibis(expr_ir, table)
+
+
+def masked_stable_id_expr_from_spec(
+    table: Table,
+    *,
+    spec: HashExprSpec,
+    required: Sequence[str],
+    use_128: bool | None = None,
+) -> Value:
+    return _expr_from_spec(
+        table,
+        masked_stable_id_expr_ir(spec=spec, required=tuple(required), use_128=use_128),
+    )
 
 SQLGLOT_UNION_THRESHOLD = 96
 

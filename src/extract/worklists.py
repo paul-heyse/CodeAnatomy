@@ -12,7 +12,7 @@ from datafusion import SessionContext
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from cache.diskcache_factory import build_deque, build_index
-from datafusion_engine.bridge import datafusion_from_arrow
+from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
 from extract.helpers import FileContext

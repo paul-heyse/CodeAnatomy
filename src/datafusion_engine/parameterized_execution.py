@@ -32,6 +32,8 @@ if TYPE_CHECKING:
     from ibis.backends.datafusion import Backend
     from ibis.expr.types import Table as IbisTable
 
+    from sqlglot_tools.bridge import IbisCompilerBackend
+
 
 @dataclass(frozen=True)
 class ParameterSpec:
@@ -311,7 +313,7 @@ class ParameterizedRulepack:
         backend: Backend,
         values: dict[str, Any] | None = None,
     ) -> str:
-        """Compile to SQL, optionally with specific values.
+        """Compile to SQL for diagnostics, optionally with specific values.
 
         If values not provided, returns parameterized SQL with placeholders.
 
@@ -328,13 +330,17 @@ class ParameterizedRulepack:
             Compiled SQL string.
         """
         self._validate_backend(backend)
-        if values:
-            resolved_values = self._resolve_values(values, validate=False)
-            param_mapping: dict[Scalar, object] = {
-                self._params[name]: value for name, value in resolved_values.items()
-            }
-            return str(ibis.to_sql(self.expr, params=param_mapping))
-        return str(ibis.to_sql(self.expr))
+        from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
+        from ibis_engine.registry import datafusion_context
+
+        ctx = datafusion_context(backend)
+        pipeline = CompilationPipeline(ctx, CompileOptions())
+        _ = values
+        compiled = pipeline.compile_ibis(
+            self.expr,
+            backend=cast("IbisCompilerBackend", backend),
+        )
+        return compiled.rendered_sql
 
     @staticmethod
     def _validate_backend(backend: Backend) -> None:

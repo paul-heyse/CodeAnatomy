@@ -14,12 +14,11 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pyarrow.dataset as ds
-from datafusion import SessionContext, SQLOptions
+from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.diagnostics import record_artifact, recorder_for_profile
 from datafusion_engine.introspection import invalidate_introspection_cache
-from datafusion_engine.sql_safety import execution_policy_for_profile, validate_sql_safety
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -444,27 +443,6 @@ class DataFusionIOAdapter:
             {"name": spec.name, "location": spec.location},
         )
 
-    def execute_statement(self, sql: str, *, allow_statements: bool = True) -> DataFrame:
-        """Execute a SQL statement with safety validation.
-
-        Parameters
-        ----------
-        sql
-            SQL statement to execute.
-        allow_statements
-            Whether statement execution should be allowed by policy.
-
-        Returns
-        -------
-        datafusion.dataframe.DataFrame
-            DataFrame returned by the DataFusion execution.
-        """
-        self._validate_sql(sql, allow_statements=allow_statements)
-        df = self.ctx.sql_with_options(sql, self._statement_options())
-        _ = df.collect()
-        invalidate_introspection_cache(self.ctx)
-        return df
-
     def deregister_table(self, name: str) -> None:
         """Deregister a table from the DataFusion catalog.
 
@@ -493,47 +471,6 @@ class DataFusionIOAdapter:
         schema = catalog.schema()
         schema.deregister_table(name)
         invalidate_introspection_cache(self.ctx)
-
-    def _statement_options(self) -> SQLOptions:
-        """Build SQL options from runtime profile.
-
-        Constructs DataFusion SQLOptions based on the execution policy
-        specified in the runtime profile.
-
-        Returns
-        -------
-        SQLOptions
-            DataFusion SQLOptions configured with policy settings.
-
-        Notes
-        -----
-        Uses the `statement_sql_options_for_profile` function from
-        `datafusion_engine.sql_safety` to generate SQL options.
-        """
-        from datafusion_engine.sql_options import statement_sql_options_for_profile
-
-        return statement_sql_options_for_profile(self.profile)
-
-    def _validate_sql(self, sql: str, *, allow_statements: bool = False) -> None:
-        """Validate SQL against the runtime execution policy.
-
-        Parameters
-        ----------
-        sql
-            SQL text to validate.
-        allow_statements
-            Whether to allow statement execution in the policy.
-
-        Raises
-        ------
-        ValueError
-            Raised when SQL violates the execution policy.
-        """
-        policy = execution_policy_for_profile(self.profile, allow_statements=allow_statements)
-        violations = validate_sql_safety(sql, policy, dialect="datafusion")
-        if violations:
-            msg = f"SQL policy violations: {', '.join(violations)}."
-            raise ValueError(msg)
 
     def _record_registration(
         self,

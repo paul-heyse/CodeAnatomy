@@ -1,22 +1,29 @@
 """Unified write pipeline for all DataFusion output paths.
 
 This module provides a single writing surface with explicit format policy,
-partitioning, and schema constraints, while avoiding inconsistent Ibis vs
-DataFusion write behavior. Supports both COPY-based and streaming writes
-with consistent semantics.
+partitioning, and schema constraints while using AST-first compilation and
+DataFusion-native writers (streaming + DataFrame writes).
 """
 
 from __future__ import annotations
 
+import shutil
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from datafusion import SQLOptions
+import pyarrow as pa
+from datafusion import (
+    DataFrameWriteOptions,
+    InsertOp,
+    ParquetColumnOptions,
+    ParquetWriterOptions,
+    SQLOptions,
+)
 
-from datafusion_engine.compile_options import DataFusionSqlPolicy
 from schema_spec.policies import DataFusionWritePolicy, ParquetColumnPolicy
 from sqlglot_tools.compat import exp
 
@@ -25,7 +32,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.diagnostics import DiagnosticsRecorder
-    from sqlglot_tools.optimizer import SqlGlotPolicy
+    from datafusion_engine.streaming_executor import StreamingExecutionResult
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 
@@ -213,63 +220,6 @@ class WriteRequest:
     table_name: str | None = None
     constraints: tuple[str, ...] = ()
 
-    def to_copy_ast(
-        self,
-        profile: SQLPolicyProfile,
-    ) -> exp.Copy:
-        """Build COPY statement as SQLGlot AST.
-
-        Converts this write request into a COPY TO expression using
-        SQLGlot AST construction. The resulting expression can be
-        rendered to dialect-specific SQL.
-
-        Parameters
-        ----------
-        profile
-            SQL policy profile for dialect selection.
-
-        Returns
-        -------
-        exp.Copy
-            SQLGlot COPY expression ready for execution.
-
-        Notes
-        -----
-        This method uses `sqlglot_tools.ddl_builders.build_copy_to_ast`
-        to construct the AST with proper option encoding.
-        """
-        from sqlglot_tools.ddl_builders import build_copy_to_ast
-        from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
-
-        # Parse source if string
-        if isinstance(self.source, str):
-            query = parse_sql_strict(
-                self.source,
-                dialect=profile.read_dialect,
-                options=StrictParseOptions(
-                    error_level=profile.error_level,
-                    unsupported_level=profile.unsupported_level,
-                ),
-            )
-        else:
-            query = self.source
-
-        # Build options
-        options: dict[str, object] = {"format": self.format.name}
-        if self.format_options:
-            options.update(self.format_options)
-
-        if self.parquet_policy:
-            options.update(self.parquet_policy.to_copy_options())
-
-        return build_copy_to_ast(
-            query=query,
-            path=self.destination,
-            file_format=self.format.name,
-            options=options,
-            partition_by=self.partition_by,
-        )
-
 
 @dataclass(frozen=True)
 class WriteViewRequest:
@@ -324,16 +274,15 @@ class WriteResult:
 class WritePipeline:
     """Unified write pipeline for all output paths.
 
-    Provides consistent write semantics across COPY, INSERT,
-    and streaming Arrow writers. Chooses the most efficient
-    write path based on format and request characteristics.
+    Provides consistent write semantics across DataFusion-native writers
+    (streaming dataset writes and DataFrame writer APIs).
 
     Parameters
     ----------
     ctx
         DataFusion session context.
     profile
-        SQL policy profile for SQL generation.
+        SQL policy profile for parsing external SQL sources.
 
     Examples
     --------
@@ -379,44 +328,49 @@ class WritePipeline:
     def _resolved_sql_options(self) -> SQLOptions:
         if self.sql_options is not None:
             return self.sql_options
-        return DataFusionSqlPolicy(allow_dml=True, allow_statements=True).to_sql_options()
-
-    def _execute_sql(
-        self,
-        sql: str,
-        *,
-        sql_policy: DataFusionSqlPolicy,
-        sql_options: SQLOptions | None = None,
-    ) -> DataFrame:
-        from datafusion_engine.compile_options import DataFusionCompileOptions
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-        resolved_sql_options = sql_options or sql_policy.to_sql_options()
-        options = DataFusionCompileOptions(
-            sql_options=resolved_sql_options,
-            sql_policy=sql_policy,
-            sql_policy_profile=self.profile,
-            cache=False,
-        )
-        facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
-        plan = facade.compile(sql, options=options)
-        result = facade.execute(plan)
-        if result.dataframe is None:
-            msg = "SQL execution did not return a DataFusion DataFrame."
-            raise ValueError(msg)
-        return result.dataframe
+        return SQLOptions()
 
     @staticmethod
     def _df_has_rows(df: DataFrame) -> bool:
         batches = df.collect()
         return any(batch.num_rows > 0 for batch in batches)
 
-    def _validate_insert_constraints(
+    def _source_expr(self, request: WriteRequest) -> exp.Expression:
+        if isinstance(request.source, exp.Expression):
+            return request.source
+        from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
+
+        return parse_sql_strict(
+            request.source,
+            dialect=self.profile.read_dialect,
+            options=StrictParseOptions(
+                error_level=self.profile.error_level,
+                unsupported_level=self.profile.unsupported_level,
+            ),
+        )
+
+    def _execute_expr(self, expr: exp.Expression) -> DataFrame:
+        from datafusion_engine.compile_options import DataFusionCompileOptions
+        from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+        options = DataFusionCompileOptions(
+            sql_options=self._resolved_sql_options(),
+            sql_policy_profile=self.profile,
+            cache=False,
+        )
+        facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
+        plan = facade.compile(expr, options=options)
+        result = facade.execute(plan)
+        if result.dataframe is None:
+            msg = "AST execution did not return a DataFusion DataFrame."
+            raise ValueError(msg)
+        return result.dataframe
+
+    def _validate_constraints(
         self,
         *,
         source_expr: exp.Expression,
         constraints: tuple[str, ...],
-        policy: SqlGlotPolicy,
     ) -> None:
         if not constraints:
             return
@@ -424,7 +378,6 @@ class WritePipeline:
             StrictParseOptions,
             build_select,
             parse_sql_strict,
-            sqlglot_emit,
         )
 
         for constraint in constraints:
@@ -432,10 +385,10 @@ class WritePipeline:
                 continue
             constraint_expr = parse_sql_strict(
                 constraint,
-                dialect=policy.read_dialect,
+                dialect=self.profile.read_dialect,
                 options=StrictParseOptions(
-                    error_level=policy.error_level,
-                    unsupported_level=policy.unsupported_level,
+                    error_level=self.profile.error_level,
+                    unsupported_level=self.profile.unsupported_level,
                 ),
             )
             subquery = exp.Subquery(
@@ -448,85 +401,19 @@ class WritePipeline:
                 where=exp.not_(constraint_expr),
                 limit=1,
             )
-            query_sql = sqlglot_emit(query_expr, policy=policy)
-            df = self._execute_sql(query_sql, sql_policy=DataFusionSqlPolicy())
+            df = self._execute_expr(query_expr)
             if self._df_has_rows(df):
                 msg = f"Delta constraint violated: {constraint}"
                 raise ValueError(msg)
-
-    def write_via_copy(
-        self,
-        request: WriteRequest,
-    ) -> WriteResult:
-        """Write using SQL COPY statement.
-
-        Executes a COPY TO statement to write query results to disk.
-        This is the simplest and most robust write path for DataFusion,
-        but offers less control over partitioning and streaming behavior.
-
-        Parameters
-        ----------
-        request
-            Write request specification.
-
-        Notes
-        -----
-        COPY statements are executed synchronously and fully materialize
-        the result before writing. For large datasets with custom
-        partitioning needs, consider `write_via_streaming`.
-
-        Returns
-        -------
-        WriteResult
-            Write result metadata for the COPY operation.
-        """
-        start = time.perf_counter()
-        sql, df = self.copy_dataframe(request)
-        df.collect()
-        duration_ms = (time.perf_counter() - start) * 1000.0
-        result = WriteResult(
-            request=request,
-            method=WriteMethod.COPY,
-            sql=sql,
-            duration_ms=duration_ms,
-        )
-        self._record_write_artifact(result)
-        return result
-
-    def copy_dataframe(
-        self,
-        request: WriteRequest,
-    ) -> tuple[str, DataFrame]:
-        """Return the COPY statement SQL and DataFrame without collecting.
-
-        Parameters
-        ----------
-        request
-            Write request specification.
-
-        Returns
-        -------
-        tuple[str, DataFrame]
-            COPY statement SQL text and DataFusion DataFrame.
-        """
-        copy_ast = request.to_copy_ast(self.profile)
-        sql = copy_ast.sql(dialect=self.profile.write_dialect)
-        df = self._execute_sql(
-            sql,
-            sql_policy=DataFusionSqlPolicy(allow_dml=True, allow_statements=True),
-            sql_options=self._resolved_sql_options(),
-        )
-        return sql, df
 
     def write_via_streaming(
         self,
         request: WriteRequest,
     ) -> WriteResult:
-        """Write using streaming Arrow writer.
+        """Write using DataFusion-native writers.
 
-        Uses Arrow streaming execution to write results without full
-        materialization. Supports advanced partitioning and fine-grained
-        control over output file structure.
+        Uses Arrow streaming execution for partitioned parquet datasets and
+        DataFusion DataFrame writers for non-partitioned file outputs.
 
         Parameters
         ----------
@@ -537,8 +424,6 @@ class WritePipeline:
         ------
         NotImplementedError
             If format is not PARQUET or streaming is not supported.
-        ValueError
-            Raised when the streaming execution does not yield a DataFrame.
 
         Notes
         -----
@@ -551,53 +436,37 @@ class WritePipeline:
         WriteResult
             Write result metadata for the streaming operation.
         """
-        from datafusion_engine.compile_options import DataFusionCompileOptions
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
         from datafusion_engine.streaming_executor import StreamingExecutionResult
 
         start = time.perf_counter()
-        sql = self._source_sql(request)
-        facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
-        options = DataFusionCompileOptions(
-            sql_options=self._resolved_sql_options(),
-            cache=False,
-        )
-        plan = facade.compile(sql, options=options)
-        exec_result = facade.execute(plan)
-        if exec_result.dataframe is None:
-            msg = "Streaming write requires a DataFusion DataFrame."
-            raise ValueError(msg)
-        result = StreamingExecutionResult(df=exec_result.dataframe)
+        source_expr = self._source_expr(request)
+        if request.constraints:
+            self._validate_constraints(source_expr=source_expr, constraints=request.constraints)
+        df = self._execute_expr(source_expr)
+        result = StreamingExecutionResult(df=df)
+
+        table_target = self._table_target(request)
+        if table_target is not None:
+            self._write_table(df, request=request, table_name=table_target)
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            write_result = WriteResult(
+                request=request,
+                method=WriteMethod.INSERT,
+                sql=None,
+                duration_ms=duration_ms,
+            )
+            self._record_write_artifact(write_result)
+            return write_result
 
         # Write based on format
         if request.format == WriteFormat.PARQUET:
-            if request.partition_by:
-                policy = request.parquet_policy or ParquetWritePolicy()
-                # pipe_to_dataset accepts **format_options, but these need to be
-                # passed separately from the copy options which are string-based
-                dataset_options: dict[str, Any] = dict(policy.to_dataset_options())
-                if request.format_options:
-                    dataset_options.update(request.format_options)
-                from datafusion_engine.streaming_executor import PipeToDatasetOptions
-
-                result.pipe_to_dataset(
-                    request.destination,
-                    options=PipeToDatasetOptions(
-                        file_format="parquet",
-                        partitioning=list(request.partition_by),
-                        existing_data_behavior=self._mode_to_behavior(request.mode),
-                        max_rows_per_group=policy.row_group_size,
-                        format_options=dataset_options,
-                    ),
-                )
-            else:
-                policy = request.parquet_policy or ParquetWritePolicy()
-                result.pipe_to_parquet(
-                    request.destination,
-                    compression=policy.compression,
-                    compression_level=policy.compression_level,
-                    row_group_size=policy.row_group_size,
-                )
+            self._write_parquet(result, request=request)
+        elif request.format == WriteFormat.CSV:
+            self._write_csv(df, request=request)
+        elif request.format == WriteFormat.JSON:
+            self._write_json(df, request=request)
+        elif request.format == WriteFormat.ARROW:
+            self._write_arrow(result, request=request)
         else:
             msg = f"Streaming write for {request.format}"
             raise NotImplementedError(msg)
@@ -606,85 +475,7 @@ class WritePipeline:
         write_result = WriteResult(
             request=request,
             method=WriteMethod.STREAMING,
-            sql=sql,
-            duration_ms=duration_ms,
-        )
-        self._record_write_artifact(write_result)
-        return write_result
-
-    def write_via_insert(
-        self,
-        request: WriteRequest,
-        *,
-        table_name: str,
-    ) -> WriteResult:
-        """Write using INSERT INTO against a registered table provider.
-
-        Parameters
-        ----------
-        request
-            Write request specification.
-        table_name
-            Registered table provider name to insert into.
-
-        Returns
-        -------
-        WriteResult
-            Write result metadata for the INSERT operation.
-
-        Raises
-        ------
-        ValueError
-            Raised when INSERT is incompatible with the request options.
-        """
-        if request.partition_by:
-            msg = "INSERT writes do not support partition_by."
-            raise ValueError(msg)
-        if request.mode == WriteMode.ERROR:
-            msg = "INSERT requires APPEND or OVERWRITE mode."
-            raise ValueError(msg)
-        from sqlglot_tools.optimizer import (
-            StrictParseOptions,
-            build_insert,
-            parse_sql_strict,
-            resolve_sqlglot_policy,
-            sqlglot_emit,
-        )
-
-        start = time.perf_counter()
-        mode = "overwrite" if request.mode == WriteMode.OVERWRITE else "append"
-        source_sql = self._source_sql(request)
-        policy = resolve_sqlglot_policy(name="datafusion_dml")
-        source_expr = parse_sql_strict(
-            source_sql,
-            dialect=policy.read_dialect,
-            options=StrictParseOptions(
-                error_level=policy.error_level,
-                unsupported_level=policy.unsupported_level,
-            ),
-        )
-        insert_expr = build_insert(
-            source_expr.copy(),
-            table_name=table_name,
-            overwrite=mode == "overwrite",
-        )
-        insert_sql = sqlglot_emit(insert_expr, policy=policy)
-        self._validate_insert_constraints(
-            source_expr=source_expr,
-            constraints=request.constraints,
-            policy=policy,
-        )
-        df = self._execute_sql(
-            insert_sql,
-            sql_policy=DataFusionSqlPolicy(allow_dml=True, allow_statements=True),
-            sql_options=self._resolved_sql_options(),
-        )
-        df.collect()
-        duration_ms = (time.perf_counter() - start) * 1000.0
-        write_result = WriteResult(
-            request=request,
-            method=WriteMethod.INSERT,
-            sql=insert_sql,
+            sql=None,
             duration_ms=duration_ms,
         )
         self._record_write_artifact(write_result)
@@ -715,20 +506,12 @@ class WritePipeline:
 
         Notes
         -----
-        The decision logic is:
-        - Partitioned PARQUET: always use streaming
-        - PARQUET with prefer_streaming: use streaming
-        - All other cases: use COPY
+        The unified writer always compiles from AST and executes a
+        DataFusion DataFrame. Partitioned parquet uses streaming
+        dataset writes; other formats use DataFusion-native writers.
         """
-        insert_target = self._insert_target(request)
-        if insert_target is not None:
-            return self.write_via_insert(request, table_name=insert_target)
-        if request.format == WriteFormat.PARQUET:
-            if request.partition_by:
-                return self.write_via_streaming(request)
-            if prefer_streaming and request.single_file_output is not False:
-                return self.write_via_streaming(request)
-        return self.write_via_copy(request)
+        _ = prefer_streaming
+        return self.write_via_streaming(request)
 
     def write_view(
         self,
@@ -812,21 +595,201 @@ class WritePipeline:
             )
         )
 
-    def _source_sql(self, request: WriteRequest) -> str:
-        if isinstance(request.source, str):
-            return request.source
-        return request.source.sql(dialect=self.profile.write_dialect)
+    @staticmethod
+    def _prepare_destination(request: WriteRequest) -> Path:
+        path = Path(request.destination)
+        if request.mode == WriteMode.ERROR and path.exists():
+            msg = f"Destination already exists: {path}"
+            raise ValueError(msg)
+        if request.mode == WriteMode.APPEND and path.exists() and request.format != WriteFormat.PARQUET:
+            msg = f"Append mode is only supported for parquet datasets: {path}"
+            raise ValueError(msg)
+        if request.mode == WriteMode.OVERWRITE and path.exists():
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
-    def _insert_target(self, request: WriteRequest) -> str | None:
+    @staticmethod
+    def _write_table(df: DataFrame, *, request: WriteRequest, table_name: str) -> None:
+        if request.partition_by:
+            msg = "Table writes do not support partition_by."
+            raise ValueError(msg)
+        if request.mode == WriteMode.ERROR:
+            msg = "Table writes require APPEND or OVERWRITE mode."
+            raise ValueError(msg)
+        insert_op = InsertOp.APPEND if request.mode == WriteMode.APPEND else InsertOp.OVERWRITE
+        df.write_table(
+            table_name,
+            write_options=DataFrameWriteOptions(insert_operation=insert_op),
+        )
+
+    def _write_parquet(
+        self,
+        result: StreamingExecutionResult,
+        *,
+        request: WriteRequest,
+    ) -> None:
+        if request.partition_by:
+            policy = request.parquet_policy or ParquetWritePolicy()
+            dataset_options: dict[str, Any] = dict(policy.to_dataset_options())
+            if request.format_options:
+                dataset_options.update(request.format_options)
+            from datafusion_engine.streaming_executor import PipeToDatasetOptions
+
+            result.pipe_to_dataset(
+                request.destination,
+                options=PipeToDatasetOptions(
+                    file_format="parquet",
+                    partitioning=list(request.partition_by),
+                    existing_data_behavior=self._mode_to_behavior(request.mode),
+                    max_rows_per_group=policy.row_group_size,
+                    format_options=dataset_options,
+                ),
+            )
+            return
+        path = self._prepare_destination(request)
+        policy = request.parquet_policy or ParquetWritePolicy()
+        parquet_options = _parquet_writer_options(policy)
+        write_options = DataFrameWriteOptions(
+            single_file_output=bool(request.single_file_output)
+            if request.single_file_output is not None
+            else False,
+        )
+        result.df.write_parquet_with_options(
+            path,
+            options=parquet_options,
+            write_options=write_options,
+        )
+
+    def _write_csv(self, df: DataFrame, *, request: WriteRequest) -> None:
+        if request.partition_by:
+            msg = "CSV writes do not support partition_by."
+            raise ValueError(msg)
+        path = self._prepare_destination(request)
+        with_header = False
+        if request.format_options and "with_header" in request.format_options:
+            with_header = bool(request.format_options["with_header"])
+        write_options = DataFrameWriteOptions(
+            single_file_output=bool(request.single_file_output)
+            if request.single_file_output is not None
+            else False,
+        )
+        df.write_csv(path, with_header=with_header, write_options=write_options)
+
+    def _write_json(self, df: DataFrame, *, request: WriteRequest) -> None:
+        if request.partition_by:
+            msg = "JSON writes do not support partition_by."
+            raise ValueError(msg)
+        path = self._prepare_destination(request)
+        write_options = DataFrameWriteOptions(
+            single_file_output=bool(request.single_file_output)
+            if request.single_file_output is not None
+            else False,
+        )
+        df.write_json(path, write_options=write_options)
+
+    def _write_arrow(self, result: StreamingExecutionResult, *, request: WriteRequest) -> None:
+        if request.partition_by:
+            msg = "Arrow writes do not support partition_by."
+            raise ValueError(msg)
+        path = self._prepare_destination(request)
+        table = result.to_table()
+        with pa.OSFile(path, "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+
+    def _table_target(self, request: WriteRequest) -> str | None:
         target = request.table_name or request.destination
         metadata = table_provider_metadata(id(self.ctx), table_name=target)
         if metadata is None:
             return None
-        if metadata.file_format != "delta":
-            return None
         if metadata.supports_insert is False:
             return None
         return target
+
+
+def _parquet_writer_options(policy: ParquetWritePolicy) -> ParquetWriterOptions:
+    column_options = _parquet_column_options(policy.column_overrides)
+    return ParquetWriterOptions(
+        compression=policy.compression,
+        compression_level=policy.compression_level,
+        dictionary_enabled=policy.dictionary_enabled,
+        statistics_enabled=policy.statistics_enabled,
+        max_row_group_size=policy.row_group_size,
+        data_pagesize_limit=policy.data_page_size,
+        bloom_filter_on_write=policy.bloom_filter_enabled,
+        bloom_filter_fpp=policy.bloom_filter_fpp,
+        column_specific_options=column_options or None,
+    )
+
+
+def _parquet_column_options(
+    overrides: Mapping[str, Mapping[str, str]] | None,
+) -> dict[str, ParquetColumnOptions]:
+    if not overrides:
+        return {}
+    resolved: dict[str, ParquetColumnOptions] = {}
+    for name, options in overrides.items():
+        resolved[name] = ParquetColumnOptions(
+            encoding=_option_str(options.get("encoding")),
+            dictionary_enabled=_option_bool(options.get("dictionary_enabled"), label="dictionary_enabled"),
+            compression=_option_str(options.get("compression")),
+            statistics_enabled=_option_str(options.get("statistics_enabled")),
+            bloom_filter_enabled=_option_bool(
+                options.get("bloom_filter_enabled"),
+                label="bloom_filter_enabled",
+            ),
+            bloom_filter_fpp=_option_float(options.get("bloom_filter_fpp"), label="bloom_filter_fpp"),
+            bloom_filter_ndv=_option_int(options.get("bloom_filter_ndv"), label="bloom_filter_ndv"),
+        )
+    return resolved
+
+
+def _option_str(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _option_bool(value: str | None, *, label: str) -> bool | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"true", "false"}:
+        return normalized == "true"
+    msg = f"Invalid boolean override for {label}: {value}"
+    raise ValueError(msg)
+
+
+def _option_int(value: str | None, *, label: str) -> int | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except ValueError as exc:
+        msg = f"Invalid integer override for {label}: {value}"
+        raise ValueError(msg) from exc
+
+
+def _option_float(value: str | None, *, label: str) -> float | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        return float(normalized)
+    except ValueError as exc:
+        msg = f"Invalid float override for {label}: {value}"
+        raise ValueError(msg) from exc
 
 
 def parquet_policy_from_datafusion(

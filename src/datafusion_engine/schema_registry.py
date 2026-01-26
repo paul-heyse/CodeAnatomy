@@ -38,7 +38,7 @@ from arrowdsl.schema.semantic_types import (
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
-from schema_spec.view_specs import ViewSpec, view_spec_from_builder
+from schema_spec.view_specs import ViewSpec
 
 BYTE_SPAN_T = byte_span_type()
 SPAN_T = span_type()
@@ -866,6 +866,200 @@ SYMTABLE_FILES_SCHEMA = pa.schema(
         ("file_sha256", pa.string()),
         ("blocks", pa.list_(SYM_BLOCK_T)),
         _attrs_field(),
+    ]
+)
+
+SYMTABLE_SCOPES_VIEW_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("table_id", pa.int64()),
+        ("scope_id", pa.string()),
+        ("scope_local_id", pa.int64()),
+        ("scope_type", pa.string()),
+        ("scope_type_value", pa.int32()),
+        ("scope_name", pa.string()),
+        ("qualpath", pa.string()),
+        ("function_partitions", SYM_FUNCTION_PARTITIONS_T),
+        ("class_methods", pa.list_(pa.string())),
+        ("lineno", pa.int32()),
+        ("is_meta_scope", pa.bool_()),
+        ("parent_table_id", pa.int64()),
+    ]
+)
+
+SYMTABLE_SYMBOLS_VIEW_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("table_id", pa.int64()),
+        ("scope_id", pa.string()),
+        ("symbol_name", pa.string()),
+        ("sym_symbol_id", pa.string()),
+        ("is_referenced", pa.bool_()),
+        ("is_imported", pa.bool_()),
+        ("is_parameter", pa.bool_()),
+        ("is_type_parameter", pa.bool_()),
+        ("is_global", pa.bool_()),
+        ("is_nonlocal", pa.bool_()),
+        ("is_declared_global", pa.bool_()),
+        ("is_local", pa.bool_()),
+        ("is_annotated", pa.bool_()),
+        ("is_free", pa.bool_()),
+        ("is_assigned", pa.bool_()),
+        ("is_namespace", pa.bool_()),
+        ("namespace_count", pa.int32()),
+        ("namespace_block_ids", pa.list_(pa.int64())),
+    ]
+)
+
+SYMTABLE_SCOPE_EDGES_VIEW_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("parent_table_id", pa.int64()),
+        ("child_table_id", pa.int64()),
+        ("parent_scope_id", pa.string()),
+        ("child_scope_id", pa.string()),
+    ]
+)
+
+SYMTABLE_NAMESPACE_EDGES_VIEW_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("scope_id", pa.string()),
+        ("symbol_name", pa.string()),
+        ("child_table_id", pa.int64()),
+        ("child_scope_id", pa.string()),
+        ("namespace_count", pa.int32()),
+    ]
+)
+
+SYMTABLE_FUNCTION_PARTITIONS_VIEW_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("scope_id", pa.string()),
+        ("scope_name", pa.string()),
+        ("parameters", pa.list_(pa.string())),
+        ("locals", pa.list_(pa.string())),
+        ("globals", pa.list_(pa.string())),
+        ("nonlocals", pa.list_(pa.string())),
+        ("frees", pa.list_(pa.string())),
+    ]
+)
+
+SYMTABLE_CLASS_METHODS_VIEW_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("scope_id", pa.string()),
+        ("scope_name", pa.string()),
+        ("method_name", pa.string()),
+    ]
+)
+
+SYMTABLE_SYMBOL_ATTRS_VIEW_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("scope_id", pa.string()),
+        ("symbol_name", pa.string()),
+        ("attr_key", pa.string()),
+        ("attr_value", pa.string()),
+    ]
+)
+
+SYMTABLE_BINDINGS_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("scope_id", pa.string()),
+        ("scope_type", pa.string()),
+        ("scope_name", pa.string()),
+        ("scope_lineno", pa.int32()),
+        ("name", pa.string()),
+        ("binding_id", pa.string()),
+        ("binding_kind", pa.string()),
+        ("declared_here", pa.bool_()),
+        ("referenced_here", pa.bool_()),
+        ("assigned_here", pa.bool_()),
+        ("annotated_here", pa.bool_()),
+        ("is_imported", pa.bool_()),
+        ("is_parameter", pa.bool_()),
+        ("is_free", pa.bool_()),
+        ("is_nonlocal", pa.bool_()),
+        ("is_global", pa.bool_()),
+        ("is_declared_global", pa.bool_()),
+    ]
+)
+
+SYMTABLE_DEF_SITES_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("scope_id", pa.string()),
+        ("binding_id", pa.string()),
+        ("name", pa.string()),
+        ("def_id", pa.string()),
+        ("bstart", pa.int64()),
+        ("bend", pa.int64()),
+        ("def_site_kind", pa.string()),
+        ("anchor_confidence", pa.float64()),
+        ("anchor_reason", pa.string()),
+        ("ambiguity_group_id", pa.string()),
+        ("def_site_id", pa.string()),
+    ]
+)
+
+SYMTABLE_USE_SITES_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("scope_id", pa.string()),
+        ("binding_id", pa.string()),
+        ("name", pa.string()),
+        ("ref_id", pa.string()),
+        ("bstart", pa.int64()),
+        ("bend", pa.int64()),
+        ("use_kind", pa.string()),
+        ("anchor_confidence", pa.float64()),
+        ("anchor_reason", pa.string()),
+        ("ambiguity_group_id", pa.string()),
+        ("use_site_id", pa.string()),
+    ]
+)
+
+SYMTABLE_TYPE_PARAMS_SCHEMA = pa.schema(
+    [
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("type_param_id", pa.string()),
+        ("scope_id", pa.string()),
+        ("name", pa.string()),
+        ("variance", pa.string()),
+    ]
+)
+
+SYMTABLE_TYPE_PARAM_EDGES_SCHEMA = pa.schema(
+    [
+        ("path", pa.string()),
+        ("type_param_id", pa.string()),
+        ("owner_scope_id", pa.string()),
+        ("scope_type", pa.string()),
+    ]
+)
+
+SYMTABLE_BINDING_RESOLUTIONS_SCHEMA = pa.schema(
+    [
+        ("binding_id", pa.string()),
+        ("outer_binding_id", pa.string()),
+        ("kind", pa.string()),
+        ("reason", pa.string()),
+        ("path", pa.string()),
+        ("ambiguity_group_id", pa.string()),
+        ("confidence", pa.float32()),
     ]
 )
 
@@ -1741,6 +1935,22 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "scip_diagnostics_v1": SCIP_DIAGNOSTICS_SCHEMA,
     "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
     "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
+}
+
+VIEW_SCHEMA_REGISTRY: dict[str, pa.Schema] = {
+    "symtable_scopes": SYMTABLE_SCOPES_VIEW_SCHEMA,
+    "symtable_symbols": SYMTABLE_SYMBOLS_VIEW_SCHEMA,
+    "symtable_scope_edges": SYMTABLE_SCOPE_EDGES_VIEW_SCHEMA,
+    "symtable_namespace_edges": SYMTABLE_NAMESPACE_EDGES_VIEW_SCHEMA,
+    "symtable_function_partitions": SYMTABLE_FUNCTION_PARTITIONS_VIEW_SCHEMA,
+    "symtable_class_methods": SYMTABLE_CLASS_METHODS_VIEW_SCHEMA,
+    "symtable_symbol_attrs": SYMTABLE_SYMBOL_ATTRS_VIEW_SCHEMA,
+    "symtable_bindings": SYMTABLE_BINDINGS_SCHEMA,
+    "symtable_def_sites": SYMTABLE_DEF_SITES_SCHEMA,
+    "symtable_use_sites": SYMTABLE_USE_SITES_SCHEMA,
+    "symtable_type_params": SYMTABLE_TYPE_PARAMS_SCHEMA,
+    "symtable_type_param_edges": SYMTABLE_TYPE_PARAM_EDGES_SCHEMA,
+    "symtable_binding_resolutions": SYMTABLE_BINDING_RESOLUTIONS_SCHEMA,
 }
 
 NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
@@ -3126,7 +3336,7 @@ def nested_view_specs(*, table: str | None = None) -> tuple[ViewSpec, ...]:
     return tuple(nested_view_spec(name, table=table) for name in nested_dataset_names())
 
 
-def symtable_derived_view_specs(ctx: SessionContext) -> tuple[ViewSpec, ...]:
+def symtable_derived_view_specs(_ctx: SessionContext) -> tuple[ViewSpec, ...]:
     """Return ViewSpecs for symtable-derived views.
 
     Returns
@@ -3143,40 +3353,40 @@ def symtable_derived_view_specs(ctx: SessionContext) -> tuple[ViewSpec, ...]:
     )
 
     return (
-        view_spec_from_builder(
-            ctx,
+        ViewSpec(
             name="symtable_bindings",
+            sql=None,
+            schema=schema_for("symtable_bindings"),
             builder=symtable_bindings_df,
-            sql=None,
         ),
-        view_spec_from_builder(
-            ctx,
+        ViewSpec(
             name="symtable_def_sites",
+            sql=None,
+            schema=schema_for("symtable_def_sites"),
             builder=symtable_def_sites_df,
-            sql=None,
         ),
-        view_spec_from_builder(
-            ctx,
+        ViewSpec(
             name="symtable_use_sites",
+            sql=None,
+            schema=schema_for("symtable_use_sites"),
             builder=symtable_use_sites_df,
-            sql=None,
         ),
-        view_spec_from_builder(
-            ctx,
+        ViewSpec(
             name="symtable_type_params",
+            sql=None,
+            schema=schema_for("symtable_type_params"),
             builder=symtable_type_params_df,
-            sql=None,
         ),
-        view_spec_from_builder(
-            ctx,
+        ViewSpec(
             name="symtable_type_param_edges",
-            builder=symtable_type_param_edges_df,
             sql=None,
+            schema=schema_for("symtable_type_param_edges"),
+            builder=symtable_type_param_edges_df,
         ),
     )
 
 
-def symtable_binding_resolution_view_specs(ctx: SessionContext) -> tuple[ViewSpec, ...]:
+def symtable_binding_resolution_view_specs(_ctx: SessionContext) -> tuple[ViewSpec, ...]:
     """Return ViewSpecs for symtable binding resolution views.
 
     Returns
@@ -3187,11 +3397,11 @@ def symtable_binding_resolution_view_specs(ctx: SessionContext) -> tuple[ViewSpe
     from datafusion_engine.symtable_views import symtable_binding_resolutions_df
 
     return (
-        view_spec_from_builder(
-            ctx,
+        ViewSpec(
             name="symtable_binding_resolutions",
-            builder=symtable_binding_resolutions_df,
             sql=None,
+            schema=schema_for("symtable_binding_resolutions"),
+            builder=symtable_binding_resolutions_df,
         ),
     )
 
@@ -4489,7 +4699,7 @@ def schema_names() -> tuple[str, ...]:
     tuple[str, ...]
         Sorted schema name tuple.
     """
-    return tuple(sorted({*SCHEMA_REGISTRY, *nested_schema_names()}))
+    return tuple(sorted({*SCHEMA_REGISTRY, *VIEW_SCHEMA_REGISTRY, *nested_schema_names()}))
 
 
 def has_schema(name: str) -> bool:
@@ -4500,7 +4710,11 @@ def has_schema(name: str) -> bool:
     bool
         ``True`` when the schema name is registered.
     """
-    return name in SCHEMA_REGISTRY or is_intrinsic_nested_dataset(name)
+    return (
+        name in SCHEMA_REGISTRY
+        or name in VIEW_SCHEMA_REGISTRY
+        or is_intrinsic_nested_dataset(name)
+    )
 
 
 def schema_for(name: str) -> pa.Schema:
@@ -4517,6 +4731,9 @@ def schema_for(name: str) -> pa.Schema:
         Raised when the schema name is not registered.
     """
     schema = SCHEMA_REGISTRY.get(name)
+    if schema is not None:
+        return schema
+    schema = VIEW_SCHEMA_REGISTRY.get(name)
     if schema is not None:
         return schema
     if is_intrinsic_nested_dataset(name):

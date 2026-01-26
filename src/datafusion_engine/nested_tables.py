@@ -7,13 +7,12 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 import pyarrow as pa
-from datafusion import SessionContext, SQLOptions
+from datafusion import SessionContext
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.schema_registry import has_schema, schema_for
-from datafusion_engine.sql_options import sql_options_for_profile
 from ibis_engine.registry import datafusion_context
 
 
@@ -24,14 +23,8 @@ class ViewReference:
     name: str
 
 
-class _DatafusionQuery(Protocol):
-    def collect(self) -> list[pa.RecordBatch]: ...
-
-
 class _DatafusionContext(Protocol):
     def deregister_table(self, name: str) -> None: ...
-
-    def sql_with_options(self, query: str, options: SQLOptions) -> _DatafusionQuery: ...
 
 
 def register_nested_table(
@@ -77,28 +70,18 @@ def materialize_view_reference(
     ------
     ValueError
         Raised when an Ibis or DataFusion backend is unavailable.
+    TypeError
+        Raised when the backend lacks a DataFusion session context.
     """
     if backend is None:
         msg = f"View {view.name!r} requires an Ibis backend."
         raise ValueError(msg)
     ctx = datafusion_context(backend)
-    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-    sql_options = sql_options_for_profile(None)
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    plan = facade.compile(
-        f"SELECT * FROM {view.name}",
-        options=DataFusionCompileOptions(
-            sql_options=sql_options,
-            sql_policy=DataFusionSqlPolicy(),
-        ),
-    )
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "Nested table materialization did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    batches = result.dataframe.collect()
+    if not isinstance(ctx, SessionContext):
+        msg = f"View {view.name!r} requires a DataFusion session context."
+        raise TypeError(msg)
+    df = ctx.table(view.name)
+    batches = df.collect()
     return pa.Table.from_batches(batches)
 
 

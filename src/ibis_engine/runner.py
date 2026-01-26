@@ -22,13 +22,13 @@ from ibis.expr.types import Table, Value
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.schema.metadata import ordering_metadata_spec
-from datafusion_engine.bridge import IbisCompilerBackend
 from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.schema_introspection import SchemaIntrospector, schema_map_fingerprint
 from datafusion_engine.streaming_executor import StreamingExecutionResult
 from ibis_engine.plan import IbisPlan
 from obs.datafusion_runs import tracked_run
+from sqlglot_tools.bridge import IbisCompilerBackend
 
 
 def _portable_plan(plan: IbisPlan) -> IbisPlan:

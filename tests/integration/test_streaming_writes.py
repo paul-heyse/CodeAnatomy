@@ -9,7 +9,7 @@ import ibis
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.bridge import datafusion_to_reader
+from datafusion_engine.execution_helpers import datafusion_to_reader
 from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_as_reader
 from ibis_engine.io_bridge import IbisDatasetWriteOptions, write_ibis_dataset_delta
 from ibis_engine.plan import IbisPlan

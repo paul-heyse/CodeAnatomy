@@ -9,8 +9,10 @@ from typing import TYPE_CHECKING, cast
 import sqlglot.expressions as exp
 from datafusion import DataFrame, SessionContext
 
-from datafusion_engine.bridge import (
-    DataFusionSqlPolicy,
+from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+from datafusion_engine.compile_pipeline import CompiledExpression
+from datafusion_engine.diagnostics import DiagnosticsRecorder, recorder_for_profile
+from datafusion_engine.execution_helpers import (
     _compilation_pipeline,
     _execution_policy_for_options,
     _maybe_collect_plan_artifacts,
@@ -22,9 +24,6 @@ from datafusion_engine.bridge import (
     _sql_options_for_named_params,
     _sql_options_for_options,
 )
-from datafusion_engine.compile_options import DataFusionCompileOptions
-from datafusion_engine.compile_pipeline import CompiledExpression
-from datafusion_engine.diagnostics import DiagnosticsRecorder, recorder_for_profile
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.sql_safety import validate_sql_safety
@@ -409,15 +408,16 @@ class DataFusionExecutionFacade:
             if violations:
                 msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
                 raise ValueError(msg)
-        policy = _execution_policy_for_options(resolved)
-        violations = validate_sql_safety(
-            plan.compiled.rendered_sql,
-            policy,
-            dialect=resolved.dialect,
-        )
-        if violations:
-            msg = f"SQL policy violations: {', '.join(violations)}."
-            raise ValueError(msg)
+        if plan.compiled.source == "sql":
+            policy = _execution_policy_for_options(resolved)
+            violations = validate_sql_safety(
+                plan.compiled.rendered_sql,
+                policy,
+                dialect=resolved.dialect,
+            )
+            if violations:
+                msg = f"SQL policy violations: {', '.join(violations)}."
+                raise ValueError(msg)
         df = pipeline.execute(
             plan.compiled,
             params=bindings.param_values or None,

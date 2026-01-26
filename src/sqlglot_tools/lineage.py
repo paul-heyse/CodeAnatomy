@@ -77,6 +77,22 @@ def referenced_identifiers(expr: Expression) -> tuple[str, ...]:
     return tuple(sorted(ids))
 
 
+def referenced_udf_calls(expr: Expression) -> tuple[str, ...]:
+    """Return referenced UDF-style function names in the expression.
+
+    Returns
+    -------
+    tuple[str, ...]
+        UDF-style function names referenced by the expression.
+    """
+    names: set[str] = set()
+    for node in expr.find_all(exp.Anonymous):
+        name = node.name
+        if isinstance(name, str) and name:
+            names.add(name)
+    return tuple(sorted(names))
+
+
 def referenced_relations(expr: Expression) -> dict[str, tuple[str, ...]]:
     """Return referenced tables and columns for the expression.
 
@@ -395,5 +411,6 @@ __all__ = [
     "referenced_identifiers",
     "referenced_relations",
     "referenced_tables",
+    "referenced_udf_calls",
     "required_columns_by_table",
 ]

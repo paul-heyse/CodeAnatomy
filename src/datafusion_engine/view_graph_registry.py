@@ -12,9 +12,10 @@ from datafusion.dataframe import DataFrame
 
 from arrowdsl.schema.metadata import required_functions_from_metadata
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.schema_contracts import SchemaContract
+from datafusion_engine.schema_contracts import SchemaContract, SchemaViolation
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.udf_runtime import (
+    udf_names_from_snapshot,
     validate_required_udfs,
     validate_rust_udf_snapshot,
 )
@@ -33,6 +34,25 @@ class ViewNode:
     schema_contract: SchemaContract | None
     required_udfs: tuple[str, ...] = ()
     sqlglot_ast: Expression | None = None
+
+
+class SchemaContractViolationError(ValueError):
+    """Raised when a schema contract fails validation."""
+
+    def __init__(
+        self,
+        *,
+        table_name: str,
+        violations: Sequence[SchemaViolation],
+    ) -> None:
+        self.table_name = table_name
+        self.violations = tuple(violations)
+        details = [
+            f"{violation.violation_type.value}:{violation.column_name}"
+            for violation in self.violations
+        ]
+        msg = f"Schema contract violations for {table_name!r}: {details}."
+        super().__init__(msg)
 
 
 @dataclass(frozen=True)
@@ -58,6 +78,7 @@ def register_view_graph(
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     for node in ordered:
         _validate_deps(ctx, node, nodes)
+        _validate_udf_calls(snapshot, node)
         required = _required_udfs(node)
         validate_required_udfs(snapshot, required=required)
         _validate_required_functions(ctx, required)
@@ -89,6 +110,21 @@ def _validate_deps(
         raise ValueError(msg)
 
 
+def _validate_udf_calls(snapshot: Mapping[str, object], node: ViewNode) -> None:
+    if node.sqlglot_ast is None:
+        return
+    from sqlglot_tools.lineage import referenced_udf_calls
+
+    udf_calls = referenced_udf_calls(node.sqlglot_ast)
+    if not udf_calls:
+        return
+    available = {name.lower() for name in udf_names_from_snapshot(snapshot)}
+    missing = [name for name in udf_calls if name.lower() not in available]
+    if missing:
+        msg = f"View {node.name!r} references non-Rust UDFs: {sorted(missing)}."
+        raise ValueError(msg)
+
+
 def _validate_schema_contract(ctx: SessionContext, contract: SchemaContract) -> None:
     introspector = SchemaIntrospector(ctx)
     snapshot = introspector.snapshot
@@ -97,12 +133,10 @@ def _validate_schema_contract(ctx: SessionContext, contract: SchemaContract) -> 
         raise ValueError(msg)
     violations = contract.validate_against_introspection(snapshot)
     if violations:
-        details = [
-            f"{violation.violation_type.value}:{violation.column_name}"
-            for violation in violations
-        ]
-        msg = f"Schema contract violations for {contract.table_name!r}: {details}."
-        raise ValueError(msg)
+        raise SchemaContractViolationError(
+            table_name=contract.table_name,
+            violations=violations,
+        )
 
 
 def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -> None:
@@ -157,4 +191,9 @@ def _topo_sort_nodes(nodes: Sequence[ViewNode]) -> tuple[ViewNode, ...]:
     return tuple(ordered)
 
 
-__all__ = ["ViewGraphOptions", "ViewNode", "register_view_graph"]
+__all__ = [
+    "SchemaContractViolationError",
+    "ViewGraphOptions",
+    "ViewNode",
+    "register_view_graph",
+]

@@ -3138,6 +3138,19 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 )
             msg = f"Ibis builtin UDFs missing in DataFusion: {sorted(missing)}."
             raise ValueError(msg)
+        from datafusion_engine.udf_parity import udf_info_schema_parity_report
+
+        parity = udf_info_schema_parity_report(introspector.ctx)
+        if parity.error is not None:
+            msg = f"UDF information_schema parity failed: {parity.error}"
+            raise ValueError(msg)
+        if parity.missing_in_information_schema or parity.param_name_mismatches:
+            msg = (
+                "UDF information_schema parity failed: "
+                f"missing={list(parity.missing_in_information_schema)}, "
+                f"param_mismatches={len(parity.param_name_mismatches)}"
+            )
+            raise ValueError(msg)
 
     def udf_catalog(self, ctx: SessionContext) -> UdfCatalog:
         """Return the cached UDF catalog for a session context.

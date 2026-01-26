@@ -9,7 +9,7 @@ import pyarrow as pa
 import pytest
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.bridge import datafusion_to_async_batches
+from datafusion_engine.execution_helpers import datafusion_to_async_batches
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 

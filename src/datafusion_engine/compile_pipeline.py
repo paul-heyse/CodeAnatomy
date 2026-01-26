@@ -2,18 +2,17 @@
 
 This module provides a centralized compilation orchestration layer that
 routes all expression types through a single deterministic pipeline:
-Ibis → SQLGlot AST → Canonicalization → Rendered SQL → Execution.
+Ibis → SQLGlot AST → Canonicalization → Execution.
 
-The compilation pipeline produces checkpointed artifacts (AST fingerprint,
-lineage metadata, rendered SQL) that enable caching, incremental compilation,
-and diagnostic tracing.
+Rendered SQL is treated as a diagnostics artifact only; execution is derived
+from the canonical AST to keep policy enforcement and caching stable.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import sqlglot.expressions as exp
 from datafusion import DataFrame, SessionContext, SQLOptions
@@ -56,6 +55,7 @@ class CompiledExpression:
     sqlglot_ast: exp.Expression
     rendered_sql: str
     artifacts: CompilationArtifacts
+    source: Literal["ibis", "sql", "ast"]
 
     @property
     def fingerprint(self) -> str:
@@ -200,6 +200,7 @@ class CompilationPipeline:
             sqlglot_ast=canonical_ast,
             rendered_sql=rendered,
             artifacts=artifacts,
+            source="ibis",
         )
 
     def compile_sql(
@@ -258,6 +259,7 @@ class CompilationPipeline:
             sqlglot_ast=canonical_ast,
             rendered_sql=rendered,
             artifacts=artifacts,
+            source="sql",
         )
 
     def compile_ast(
@@ -305,6 +307,7 @@ class CompilationPipeline:
             sqlglot_ast=canonical_ast,
             rendered_sql=rendered,
             artifacts=artifacts,
+            source="ast",
         )
 
     def execute(
@@ -369,22 +372,27 @@ class CompilationPipeline:
             validate_sql_safety,
         )
 
+        if compiled.source == "sql":
+            profile = self.options.profile
+            assert profile is not None
+            policy = ExecutionPolicy.for_context(ExecutionContext.QUERY_ONLY)
+            violations = validate_sql_safety(
+                compiled.rendered_sql,
+                policy,
+                dialect=profile.write_dialect,
+            )
+            if violations:
+                msg = f"SQL policy violations: {'; '.join(violations)}"
+                raise ValueError(msg)
         profile = self.options.profile
         assert profile is not None
+        from datafusion_engine.sql_policy_engine import render_for_execution
 
-        policy = ExecutionPolicy.for_context(ExecutionContext.QUERY_ONLY)
-        violations = validate_sql_safety(
-            compiled.rendered_sql,
-            policy,
-            dialect=profile.write_dialect,
-        )
-        if violations:
-            msg = f"SQL policy violations: {'; '.join(violations)}"
-            raise ValueError(msg)
+        execution_sql = render_for_execution(compiled.sqlglot_ast, profile)
         param_values = dict(bindings.param_values) if bindings.param_values else None
         with register_table_params(self.ctx, bindings):
             return self.ctx.sql_with_options(
-                compiled.rendered_sql,
+                execution_sql,
                 resolved_options,
                 param_values=param_values,
             )

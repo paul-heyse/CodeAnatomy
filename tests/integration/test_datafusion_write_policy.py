@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from datafusion_engine.bridge import datafusion_write_options
+from datafusion_engine.execution_helpers import datafusion_write_options
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.write_pipeline import (

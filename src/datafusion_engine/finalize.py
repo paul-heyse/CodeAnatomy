@@ -549,7 +549,7 @@ def _raise_on_errors_if_strict(
 
 
 def _error_code_counts_table(errors: TableLike) -> pa.Table:
-    from datafusion_engine.bridge import datafusion_from_arrow
+    from datafusion_engine.arrow_ingest import datafusion_from_arrow
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     ctx = DataFusionRuntimeProfile().ephemeral_context()

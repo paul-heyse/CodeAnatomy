@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -30,12 +29,12 @@ from datafusion_engine.schema_registry import (
     schema_for,
 )
 from ibis_engine.catalog import IbisPlanCatalog
-from ibis_engine.expr_compiler import OperationSupportBackend, preflight_portability
-from ibis_engine.hash_exprs import (
+from ibis_engine.expr_compiler import expr_ir_to_ibis
+from ibis_engine.hashing import (
     HashExprSpec,
-    masked_stable_id_expr_from_spec,
-    stable_id_expr_from_spec,
-    stable_key_hash_expr_from_spec,
+    hash_expr_ir,
+    masked_stable_id_expr_ir,
+    stable_id_expr_ir,
 )
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
@@ -59,6 +58,7 @@ from normalize.span_logic import (
     span_struct_expr,
     zero_based_line,
 )
+from sqlglot_tools.expr_spec import SqlExprSpec
 
 TYPE_EXPRS_NAME = "type_exprs_norm_v1"
 TYPE_NODES_NAME = "type_nodes_v1"
@@ -71,6 +71,66 @@ DIAG_NAME = "diagnostics_norm_v1"
 _DEF_USE_OPS: tuple[str, ...] = ("IMPORT_NAME", "IMPORT_FROM")
 _DEF_USE_PREFIXES: tuple[str, ...] = ("STORE_", "DELETE_")
 _USE_PREFIXES: tuple[str, ...] = ("LOAD_",)
+
+
+def _expr_from_spec(table: Table, spec: SqlExprSpec) -> Value:
+    expr_ir = spec.expr_ir
+    if expr_ir is None:
+        msg = "SqlExprSpec missing expr_ir; ExprIR-backed specs are required."
+        raise ValueError(msg)
+    return expr_ir_to_ibis(expr_ir, table)
+
+
+def stable_id_expr_from_spec(
+    table: Table,
+    *,
+    spec: HashExprSpec,
+    use_128: bool | None = None,
+) -> Value:
+    """Return a stable_id Ibis expression for a HashExprSpec.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Stable_id expression derived from the spec.
+    """
+    return _expr_from_spec(table, stable_id_expr_ir(spec=spec, use_128=use_128))
+
+
+def masked_stable_id_expr_from_spec(
+    table: Table,
+    *,
+    spec: HashExprSpec,
+    required: Sequence[str],
+    use_128: bool | None = None,
+) -> Value:
+    """Return a masked stable_id Ibis expression for a HashExprSpec.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Masked stable_id expression derived from the spec.
+    """
+    return _expr_from_spec(
+        table,
+        masked_stable_id_expr_ir(spec=spec, required=required, use_128=use_128),
+    )
+
+
+def stable_key_hash_expr_from_spec(
+    table: Table,
+    *,
+    spec: HashExprSpec,
+    use_128: bool | None = False,
+) -> Value:
+    """Return a prefixed hash key expression for a HashExprSpec.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Prefixed hash expression derived from the spec.
+    """
+    return _expr_from_spec(table, hash_expr_ir(spec=spec, use_128=use_128))
 
 
 def _drop_columns(table: Table, names: Sequence[str]) -> Table:
@@ -1139,156 +1199,103 @@ def _def_use_kind_expr(opname: Value) -> Value:
     )
 
 
-def _backend_dialect(backend: BaseBackend) -> str | None:
-    dialect = getattr(backend, "dialect", None)
-    if isinstance(dialect, str):
-        return dialect
-    return None
-
-
-@dataclass(frozen=True)
-class OpFallbackPayload:
-    builder_name: str
-    missing_ops: tuple[str, ...]
-    fallback_reason: str | None
-    error: str | None = None
-
-
-def _record_op_fallback(
-    ctx: ExecutionContext,
-    *,
-    backend: BaseBackend,
-    payload: OpFallbackPayload,
-) -> None:
-    profile = ctx.runtime.datafusion
-    if profile is None:
-        return
-    record = {
-        "event_time_unix_ms": int(time.time() * 1000),
-        "stage": "normalize",
-        "builder": payload.builder_name,
-        "backend": type(backend).__name__,
-        "missing_ops": list(payload.missing_ops),
-        "fallback_reason": payload.fallback_reason,
-        "error": payload.error,
-    }
-    from datafusion_engine.diagnostics import record_artifact
-
-    record_artifact(profile, "ibis_op_fallback_v1", record)
-
-
-def _apply_portability_fallback(
-    plan: IbisPlan,
-    *,
-    ctx: ExecutionContext,
-    backend: BaseBackend,
-    builder_name: str,
-) -> IbisPlan:
-    dialect = _backend_dialect(backend)
-    try:
-        result = preflight_portability(
-            plan.expr,
-            backend=cast("OperationSupportBackend", backend),
-            dialect=dialect,
-        )
-    except ValueError as exc:
-        _record_op_fallback(
-            ctx,
-            backend=backend,
-            payload=OpFallbackPayload(
-                builder_name=builder_name,
-                missing_ops=(),
-                fallback_reason="fallback_failed",
-                error=str(exc),
-            ),
-        )
-        raise
-    if result.missing_ops:
-        _record_op_fallback(
-            ctx,
-            backend=backend,
-            payload=OpFallbackPayload(
-                builder_name=builder_name,
-                missing_ops=result.missing_ops,
-                fallback_reason=result.fallback_reason,
-            ),
-        )
-    if result.expr is plan.expr:
-        return plan
-    return IbisPlan(expr=result.expr, ordering=plan.ordering)
-
-
 IbisPlanDeriver = Callable[[IbisPlanCatalog, ExecutionContext, BaseBackend], IbisPlan | None]
 
 
-def plan_builders_ibis() -> Mapping[str, IbisPlanDeriver]:
-    """Return registered Ibis plan builders.
+@dataclass(frozen=True)
+class NormalizeViewSpec:
+    """Specification for a normalize view builder."""
 
-    Returns
-    -------
-    Mapping[str, IbisPlanDeriver]
-        Registered Ibis plan builder mapping.
-    """
-    return {
-        "type_exprs": type_exprs_plan_ibis,
-        "type_nodes": type_nodes_plan_ibis,
-        "cfg_blocks": cfg_blocks_plan_ibis,
-        "cfg_edges": cfg_edges_plan_ibis,
-        "def_use_events": def_use_events_plan_ibis,
-        "reaching_defs": reaching_defs_plan_ibis,
-        "diagnostics": diagnostics_plan_ibis,
-        "span_errors": span_errors_plan_ibis,
-    }
+    name: str
+    builder: IbisPlanDeriver
+    label: str
 
 
-def resolve_plan_builder_ibis(name: str) -> IbisPlanDeriver:
-    """Return a registered Ibis plan builder by name.
-
-    Returns
-    -------
-    IbisPlanDeriver
-        Plan builder for the requested name.
+def normalize_view_specs() -> tuple[NormalizeViewSpec, ...]:
+    """Return normalize view specs for view registration.
 
     Raises
     ------
     KeyError
-        Raised when the plan builder name is unknown.
+        Raised when normalize view specs are missing for registered datasets.
+
+    Returns
+    -------
+    tuple[NormalizeViewSpec, ...]
+        Normalize view specifications in registration order.
     """
-    builders = plan_builders_ibis()
-    try:
-        resolved_builder = builders[name]
-    except KeyError as exc:
-        msg = f"Unknown normalize Ibis plan builder: {name!r}."
-        raise KeyError(msg) from exc
+    from normalize.registry_runtime import dataset_specs
 
-    def _wrapped(
-        catalog: IbisPlanCatalog,
-        ctx: ExecutionContext,
-        backend: BaseBackend,
-    ) -> IbisPlan | None:
-        plan = resolved_builder(catalog, ctx, backend)
-        if plan is None:
-            return None
-        return _apply_portability_fallback(
-            plan,
-            ctx=ctx,
-            backend=backend,
-            builder_name=name,
-        )
+    specs = _NORMALIZE_VIEW_SPEC_MAP
+    ordered: list[NormalizeViewSpec] = []
+    seen: set[str] = set()
+    for dataset in dataset_specs():
+        spec = specs.get(dataset.name)
+        if spec is None:
+            continue
+        ordered.append(spec)
+        seen.add(dataset.name)
+    missing = [name for name in specs if name not in seen]
+    if missing:
+        msg = f"Normalize view specs missing dataset registration: {sorted(missing)}."
+        raise KeyError(msg)
+    return tuple(ordered)
 
-    return _wrapped
+
+_NORMALIZE_VIEW_SPEC_MAP: dict[str, NormalizeViewSpec] = {
+    TYPE_EXPRS_NAME: NormalizeViewSpec(
+        name=TYPE_EXPRS_NAME,
+        builder=type_exprs_plan_ibis,
+        label="type_exprs",
+    ),
+    TYPE_NODES_NAME: NormalizeViewSpec(
+        name=TYPE_NODES_NAME,
+        builder=type_nodes_plan_ibis,
+        label="type_nodes",
+    ),
+    CFG_BLOCKS_NAME: NormalizeViewSpec(
+        name=CFG_BLOCKS_NAME,
+        builder=cfg_blocks_plan_ibis,
+        label="cfg_blocks",
+    ),
+    CFG_EDGES_NAME: NormalizeViewSpec(
+        name=CFG_EDGES_NAME,
+        builder=cfg_edges_plan_ibis,
+        label="cfg_edges",
+    ),
+    DEF_USE_NAME: NormalizeViewSpec(
+        name=DEF_USE_NAME,
+        builder=def_use_events_plan_ibis,
+        label="def_use_events",
+    ),
+    REACHES_NAME: NormalizeViewSpec(
+        name=REACHES_NAME,
+        builder=reaching_defs_plan_ibis,
+        label="reaching_defs",
+    ),
+    DIAG_NAME: NormalizeViewSpec(
+        name=DIAG_NAME,
+        builder=diagnostics_plan_ibis,
+        label="diagnostics",
+    ),
+    "span_errors_v1": NormalizeViewSpec(
+        name="span_errors_v1",
+        builder=span_errors_plan_ibis,
+        label="span_errors",
+    ),
+}
 
 
 __all__ = [
     "IbisPlanCatalog",
     "IbisPlanDeriver",
+    "NormalizeViewSpec",
     "cfg_blocks_plan_ibis",
     "cfg_edges_plan_ibis",
     "def_use_events_plan_ibis",
     "diagnostics_plan_ibis",
-    "plan_builders_ibis",
+    "normalize_view_specs",
     "reaching_defs_plan_ibis",
-    "resolve_plan_builder_ibis",
     "span_errors_plan_ibis",
     "type_exprs_plan_ibis",
     "type_nodes_plan_ibis",

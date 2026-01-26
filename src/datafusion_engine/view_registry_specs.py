@@ -4,17 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import ibis
 import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
-from arrowdsl.schema.metadata import (
-    function_requirements_metadata_spec,
-    merge_metadata_specs,
-)
+from arrowdsl.schema.metadata import function_requirements_metadata_spec, merge_metadata_specs
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from cpg.schemas import (
     CPG_EDGES_SCHEMA_CONTRACT,
@@ -25,11 +22,13 @@ from cpg.specs import TaskIdentity
 from datafusion_engine.nested_tables import ViewReference
 from datafusion_engine.schema_contracts import SchemaContract, schema_contract_from_dataset_spec
 from datafusion_engine.schema_introspection import table_names_snapshot
-from datafusion_engine.udf_runtime import validate_rust_udf_snapshot
+from datafusion_engine.schema_registry import schema_for
+from datafusion_engine.udf_runtime import udf_names_from_snapshot, validate_rust_udf_snapshot
 from datafusion_engine.view_graph_registry import ViewNode
 from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.plan import IbisPlan
 from sqlglot_tools.compat import Expression
+from sqlglot_tools.lineage import referenced_tables, referenced_udf_calls
 from sqlglot_tools.view_builders import sqlglot_view_builder
 
 if TYPE_CHECKING:
@@ -41,14 +40,6 @@ if TYPE_CHECKING:
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from ibis_engine.catalog import IbisPlanSource
     from sqlglot_tools.bridge import IbisCompilerBackend
-
-
-_HASH_UDFS: tuple[str, ...] = (
-    "prefixed_hash64",
-    "stable_hash64",
-    "stable_hash128",
-    "stable_id",
-)
 
 
 def _apply_required_udfs(
@@ -63,6 +54,25 @@ def _apply_required_udfs(
         requirements,
     )
     return replace(contract, schema_metadata=merged.schema_metadata)
+
+
+def _required_udfs_from_ast(
+    expr: Expression,
+    snapshot: Mapping[str, object],
+) -> tuple[str, ...]:
+    udf_calls = referenced_udf_calls(expr)
+    if not udf_calls:
+        return ()
+    snapshot_names = udf_names_from_snapshot(snapshot)
+    lookup = {name.lower(): name for name in snapshot_names}
+    required = {
+        lookup[name.lower()] for name in udf_calls if isinstance(name, str) and name.lower() in lookup
+    }
+    return tuple(sorted(required))
+
+
+def _deps_from_ast(expr: Expression) -> tuple[str, ...]:
+    return tuple(referenced_tables(expr))
 
 
 @dataclass(frozen=True)
@@ -109,6 +119,71 @@ class ViewBuildContext:
         )
         return cls(ctx=ctx, snapshot=snapshot, backend=backend, exec_ctx=exec_ctx, facade=facade)
 
+    def plan_and_ast(
+        self,
+        plan_builder: Callable[..., IbisPlan | Table | None],
+        *,
+        builder_kwargs: Mapping[str, object] | None = None,
+        label: str | None = None,
+    ) -> tuple[IbisPlan | Table, Expression]:
+        """Build a plan and SQLGlot AST from a plan builder.
+
+        Parameters
+        ----------
+        plan_builder
+            Callable returning an Ibis plan for the view.
+        builder_kwargs
+            Optional keyword arguments passed into the plan builder.
+        label
+            Optional label for diagnostics/errors.
+
+        Returns
+        -------
+        tuple[IbisPlan | Table, Expression]
+            The built plan and compiled SQLGlot AST.
+
+        Raises
+        ------
+        ValueError
+            Raised when the plan builder returns None.
+        """
+        kwargs = dict(builder_kwargs or {})
+        catalog = _catalog_for_ctx(self.ctx, self.backend)
+        plan = plan_builder(catalog, self.exec_ctx, self.backend, **kwargs)
+        if plan is None:
+            msg = f"View builder {label or plan_builder.__name__} returned None."
+            raise ValueError(msg)
+        expr = plan.expr if isinstance(plan, IbisPlan) else plan
+        compiled = self.facade.compile(expr)
+        return plan, compiled.compiled.sqlglot_ast
+
+    def builder_from_plan(
+        self,
+        plan: IbisPlan | Table,
+        *,
+        label: str | None = None,
+    ) -> Callable[[SessionContext], DataFrame]:
+        """Wrap a pre-built plan into a DataFusion view builder.
+
+        Parameters
+        ----------
+        plan
+            Ibis plan or table expression for the view.
+        label
+            Optional label for diagnostics/errors.
+
+        Returns
+        -------
+        Callable[[SessionContext], DataFrame]
+            View builder that returns a DataFusion DataFrame.
+        """
+
+        def _build(actual_ctx: SessionContext) -> DataFrame:
+            _ensure_ctx(actual_ctx, self.ctx, label=label)
+            return _plan_to_dataframe(actual_ctx, plan, self.facade)
+
+        return _build
+
     def builder(
         self,
         plan_builder: Callable[..., IbisPlan | Table | None],
@@ -132,151 +207,93 @@ class ViewBuildContext:
         Callable[[SessionContext], DataFrame]
             View builder function that returns a DataFusion DataFrame.
         """
-        kwargs = dict(builder_kwargs or {})
-
-        def _build(actual_ctx: SessionContext) -> DataFrame:
-            _ensure_ctx(actual_ctx, self.ctx, label=label)
-            catalog = _catalog_for_ctx(actual_ctx, self.backend)
-            plan = plan_builder(catalog, self.exec_ctx, self.backend, **kwargs)
-            if plan is None:
-                msg = f"View builder {label or plan_builder.__name__} returned None."
-                raise ValueError(msg)
-            return _plan_to_dataframe(actual_ctx, plan, self.facade)
-
-        return _build
+        plan, _ = self.plan_and_ast(
+            plan_builder,
+            builder_kwargs=builder_kwargs,
+            label=label,
+        )
+        return self.builder_from_plan(plan, label=label)
 
 
 def view_graph_nodes(
     ctx: SessionContext,
     *,
     snapshot: Mapping[str, object],
+    stage: Literal["all", "pre_cpg", "cpg"] = "all",
 ) -> tuple[ViewNode, ...]:
     """Return view graph nodes for normalize + relspec + CPG outputs.
+
+    Raises
+    ------
+    ValueError
+        Raised when an unsupported view graph stage is requested.
 
     Returns
     -------
     tuple[ViewNode, ...]
         View nodes for the view-driven pipeline.
     """
+    if stage not in {"all", "pre_cpg", "cpg"}:
+        msg = f"Unsupported view graph stage: {stage!r}."
+        raise ValueError(msg)
     build_ctx = ViewBuildContext.from_session(ctx, snapshot=snapshot)
     nodes: list[ViewNode] = []
-    nodes.extend(_normalize_view_nodes(build_ctx))
-    nodes.extend(_relspec_view_nodes(build_ctx))
-    nodes.extend(_cpg_view_nodes(build_ctx))
+    if stage in {"all", "pre_cpg"}:
+        nodes.extend(_normalize_view_nodes(build_ctx))
+        nodes.extend(_relspec_view_nodes(build_ctx))
+        nodes.extend(_symtable_view_nodes(build_ctx))
+    if stage in {"all", "cpg"}:
+        nodes.extend(_cpg_view_nodes(build_ctx))
     nodes.extend(_alias_nodes(nodes))
     return tuple(nodes)
 
 
 def _normalize_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
     from normalize.dataset_specs import dataset_spec
-    from normalize.view_builders import (
-        CFG_BLOCKS_NAME,
-        CFG_EDGES_NAME,
-        DEF_USE_NAME,
-        DIAG_NAME,
-        REACHES_NAME,
-        TYPE_EXPRS_NAME,
-        TYPE_NODES_NAME,
-        cfg_blocks_plan_ibis,
-        cfg_edges_plan_ibis,
-        def_use_events_plan_ibis,
-        diagnostics_plan_ibis,
-        reaching_defs_plan_ibis,
-        span_errors_plan_ibis,
-        type_exprs_plan_ibis,
-        type_nodes_plan_ibis,
-    )
+    from normalize.view_builders import normalize_view_specs
 
-    return [
-        ViewNode(
-            name=TYPE_EXPRS_NAME,
-            deps=(),
-            builder=build_ctx.builder(type_exprs_plan_ibis, label=TYPE_EXPRS_NAME),
-            schema_contract=_apply_required_udfs(
-                schema_contract_from_dataset_spec(
-                    name=TYPE_EXPRS_NAME, spec=dataset_spec(TYPE_EXPRS_NAME)
-                ),
-                _HASH_UDFS,
-            ),
-        ),
-        ViewNode(
-            name=TYPE_NODES_NAME,
-            deps=(TYPE_EXPRS_NAME,),
-            builder=build_ctx.builder(type_nodes_plan_ibis, label=TYPE_NODES_NAME),
-            schema_contract=_apply_required_udfs(
-                schema_contract_from_dataset_spec(
-                    name=TYPE_NODES_NAME, spec=dataset_spec(TYPE_NODES_NAME)
-                ),
-                _HASH_UDFS,
-            ),
-        ),
-        ViewNode(
-            name=CFG_BLOCKS_NAME,
-            deps=(),
-            builder=build_ctx.builder(cfg_blocks_plan_ibis, label=CFG_BLOCKS_NAME),
-            schema_contract=_apply_required_udfs(
-                schema_contract_from_dataset_spec(
-                    name=CFG_BLOCKS_NAME, spec=dataset_spec(CFG_BLOCKS_NAME)
-                ),
-                _HASH_UDFS,
-            ),
-        ),
-        ViewNode(
-            name=CFG_EDGES_NAME,
-            deps=(),
-            builder=build_ctx.builder(cfg_edges_plan_ibis, label=CFG_EDGES_NAME),
-            schema_contract=_apply_required_udfs(
-                schema_contract_from_dataset_spec(
-                    name=CFG_EDGES_NAME, spec=dataset_spec(CFG_EDGES_NAME)
-                ),
-                _HASH_UDFS,
-            ),
-        ),
-        ViewNode(
-            name=DEF_USE_NAME,
-            deps=(),
-            builder=build_ctx.builder(def_use_events_plan_ibis, label=DEF_USE_NAME),
-            schema_contract=_apply_required_udfs(
-                schema_contract_from_dataset_spec(
-                    name=DEF_USE_NAME, spec=dataset_spec(DEF_USE_NAME)
-                ),
-                _HASH_UDFS,
-            ),
-        ),
-        ViewNode(
-            name=REACHES_NAME,
-            deps=(DEF_USE_NAME,),
-            builder=build_ctx.builder(reaching_defs_plan_ibis, label=REACHES_NAME),
-            schema_contract=_apply_required_udfs(
-                schema_contract_from_dataset_spec(
-                    name=REACHES_NAME, spec=dataset_spec(REACHES_NAME)
-                ),
-                _HASH_UDFS,
-            ),
-        ),
-        ViewNode(
-            name=DIAG_NAME,
-            deps=(),
-            builder=build_ctx.builder(diagnostics_plan_ibis, label=DIAG_NAME),
-            schema_contract=_apply_required_udfs(
-                schema_contract_from_dataset_spec(
-                    name=DIAG_NAME, spec=dataset_spec(DIAG_NAME)
-                ),
-                _HASH_UDFS,
-            ),
-        ),
-        ViewNode(
-            name="span_errors_v1",
-            deps=(),
-            builder=build_ctx.builder(span_errors_plan_ibis, label="span_errors_v1"),
-            schema_contract=_apply_required_udfs(
-                schema_contract_from_dataset_spec(
-                    name="span_errors_v1", spec=dataset_spec("span_errors_v1")
-                ),
-                (),
-            ),
-        ),
-    ]
+    nodes: list[ViewNode] = []
+    for spec in normalize_view_specs():
+        plan, ast = build_ctx.plan_and_ast(spec.builder, label=spec.label)
+        required = _required_udfs_from_ast(ast, build_ctx.snapshot)
+        contract = _apply_required_udfs(
+            schema_contract_from_dataset_spec(name=spec.name, spec=dataset_spec(spec.name)),
+            required,
+        )
+        nodes.append(
+            ViewNode(
+                name=spec.name,
+                deps=_deps_from_ast(ast),
+                builder=build_ctx.builder_from_plan(plan, label=spec.label),
+                schema_contract=contract,
+                sqlglot_ast=ast,
+            )
+        )
+    return nodes
+
+
+def _view_node_from_sqlglot(
+    build_ctx: ViewBuildContext,
+    *,
+    name: str,
+    expr: Expression,
+    schema_contract: SchemaContract,
+) -> ViewNode:
+    builder = sqlglot_view_builder(expr)
+
+    def _build(actual_ctx: SessionContext) -> DataFrame:
+        _ensure_ctx(actual_ctx, build_ctx.ctx, label=name)
+        return builder(actual_ctx)
+
+    required = _required_udfs_from_ast(expr, build_ctx.snapshot)
+    contract = _apply_required_udfs(schema_contract, required)
+    return ViewNode(
+        name=name,
+        deps=_deps_from_ast(expr),
+        builder=_build,
+        schema_contract=contract,
+        sqlglot_ast=expr,
+    )
 
 
 def _relspec_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
@@ -308,19 +325,6 @@ def _relspec_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
 
     priority = DEFAULT_REL_TASK_PRIORITY
 
-    def _sql_builder(
-        expr: Expression,
-        *,
-        label: str,
-    ) -> Callable[[SessionContext], DataFrame]:
-        builder = sqlglot_view_builder(expr)
-
-        def _build(actual_ctx: SessionContext) -> DataFrame:
-            _ensure_ctx(actual_ctx, build_ctx.ctx, label=label)
-            return builder(actual_ctx)
-
-        return _build
-
     rel_name_expr = build_rel_name_symbol_sql(
         task_name="rel.name_symbol",
         task_priority=priority,
@@ -344,117 +348,150 @@ def _relspec_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
     relation_output_expr = build_relation_output_sql()
 
     return [
-        ViewNode(
+        _view_node_from_sqlglot(
+            build_ctx,
             name=REL_NAME_SYMBOL_OUTPUT,
-            deps=("cst_refs",),
-            builder=_sql_builder(rel_name_expr, label=REL_NAME_SYMBOL_OUTPUT),
-            schema_contract=_apply_required_udfs(rel_name_symbol_schema_contract(), _HASH_UDFS),
-            sqlglot_ast=rel_name_expr,
+            expr=rel_name_expr,
+            schema_contract=rel_name_symbol_schema_contract(),
         ),
-        ViewNode(
+        _view_node_from_sqlglot(
+            build_ctx,
             name=REL_IMPORT_SYMBOL_OUTPUT,
-            deps=("cst_imports",),
-            builder=_sql_builder(rel_import_expr, label=REL_IMPORT_SYMBOL_OUTPUT),
-            schema_contract=_apply_required_udfs(rel_import_symbol_schema_contract(), _HASH_UDFS),
-            sqlglot_ast=rel_import_expr,
+            expr=rel_import_expr,
+            schema_contract=rel_import_symbol_schema_contract(),
         ),
-        ViewNode(
+        _view_node_from_sqlglot(
+            build_ctx,
             name=REL_DEF_SYMBOL_OUTPUT,
-            deps=("cst_defs",),
-            builder=_sql_builder(rel_def_expr, label=REL_DEF_SYMBOL_OUTPUT),
-            schema_contract=_apply_required_udfs(rel_def_symbol_schema_contract(), _HASH_UDFS),
-            sqlglot_ast=rel_def_expr,
+            expr=rel_def_expr,
+            schema_contract=rel_def_symbol_schema_contract(),
         ),
-        ViewNode(
+        _view_node_from_sqlglot(
+            build_ctx,
             name=REL_CALLSITE_SYMBOL_OUTPUT,
-            deps=("cst_callsites",),
-            builder=_sql_builder(rel_callsite_expr, label=REL_CALLSITE_SYMBOL_OUTPUT),
-            schema_contract=_apply_required_udfs(rel_callsite_symbol_schema_contract(), _HASH_UDFS),
-            sqlglot_ast=rel_callsite_expr,
+            expr=rel_callsite_expr,
+            schema_contract=rel_callsite_symbol_schema_contract(),
         ),
-        ViewNode(
+        _view_node_from_sqlglot(
+            build_ctx,
             name=REL_CALLSITE_QNAME_OUTPUT,
-            deps=("callsite_qname_candidates_v1",),
-            builder=_sql_builder(rel_callsite_qname_expr, label=REL_CALLSITE_QNAME_OUTPUT),
-            schema_contract=_apply_required_udfs(rel_callsite_qname_schema_contract(), _HASH_UDFS),
-            sqlglot_ast=rel_callsite_qname_expr,
+            expr=rel_callsite_qname_expr,
+            schema_contract=rel_callsite_qname_schema_contract(),
+        ),
+        _view_node_from_sqlglot(
+            build_ctx,
+            name=RELATION_OUTPUT_NAME,
+            expr=relation_output_expr,
+            schema_contract=relation_output_schema_contract(),
+        ),
+    ]
+
+
+def _symtable_view_nodes(_build_ctx: ViewBuildContext) -> list[ViewNode]:
+    from datafusion_engine.symtable_views import (
+        symtable_binding_resolutions_df,
+        symtable_bindings_df,
+        symtable_def_sites_df,
+        symtable_type_param_edges_df,
+        symtable_type_params_df,
+        symtable_use_sites_df,
+    )
+
+    def _contract(name: str, *, required_udfs: Sequence[str] = ()) -> SchemaContract:
+        base = SchemaContract.from_arrow_schema(name, schema_for(name))
+        return _apply_required_udfs(base, required_udfs)
+
+    prefixed_hash = ("prefixed_hash64",)
+
+    return [
+        ViewNode(
+            name="symtable_bindings",
+            deps=("symtable_scopes", "symtable_symbols"),
+            builder=symtable_bindings_df,
+            schema_contract=_contract("symtable_bindings"),
         ),
         ViewNode(
-            name=RELATION_OUTPUT_NAME,
-            deps=(
-                REL_NAME_SYMBOL_OUTPUT,
-                REL_IMPORT_SYMBOL_OUTPUT,
-                REL_DEF_SYMBOL_OUTPUT,
-                REL_CALLSITE_SYMBOL_OUTPUT,
-                REL_CALLSITE_QNAME_OUTPUT,
-            ),
-            builder=_sql_builder(relation_output_expr, label=RELATION_OUTPUT_NAME),
-            schema_contract=_apply_required_udfs(relation_output_schema_contract(), _HASH_UDFS),
-            sqlglot_ast=relation_output_expr,
+            name="symtable_def_sites",
+            deps=("symtable_bindings", "cst_defs"),
+            builder=symtable_def_sites_df,
+            schema_contract=_contract("symtable_def_sites", required_udfs=prefixed_hash),
+            required_udfs=prefixed_hash,
+        ),
+        ViewNode(
+            name="symtable_use_sites",
+            deps=("symtable_bindings", "cst_refs"),
+            builder=symtable_use_sites_df,
+            schema_contract=_contract("symtable_use_sites", required_udfs=prefixed_hash),
+            required_udfs=prefixed_hash,
+        ),
+        ViewNode(
+            name="symtable_type_params",
+            deps=("symtable_scopes",),
+            builder=symtable_type_params_df,
+            schema_contract=_contract("symtable_type_params"),
+        ),
+        ViewNode(
+            name="symtable_type_param_edges",
+            deps=("symtable_scope_edges", "symtable_scopes"),
+            builder=symtable_type_param_edges_df,
+            schema_contract=_contract("symtable_type_param_edges"),
+        ),
+        ViewNode(
+            name="symtable_binding_resolutions",
+            deps=("symtable_bindings", "symtable_scope_edges", "symtable_scopes"),
+            builder=symtable_binding_resolutions_df,
+            schema_contract=_contract("symtable_binding_resolutions"),
         ),
     ]
 
 
 def _cpg_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
-    from cpg.spec_registry import node_plan_specs, prop_table_specs
     from cpg.view_builders import build_cpg_edges_expr, build_cpg_nodes_expr, build_cpg_props_expr
-    from normalize.dataset_specs import dataset_alias
-    from relspec.view_defs import RELATION_OUTPUT_NAME
 
     priority = 100
     node_identity = TaskIdentity(name="cpg.nodes", priority=priority)
     prop_identity = TaskIdentity(name="cpg.props", priority=priority)
-    node_tables = {spec.table_ref for spec in node_plan_specs()}
-    prop_tables = {spec.table_ref for spec in prop_table_specs(source_columns_lookup=None)}
-    deps: set[str] = set()
-    for table in (*node_tables, *prop_tables):
-        try:
-            deps.add(dataset_alias(table))
-        except KeyError:
-            continue
-    normalized_deps = tuple(sorted(deps))
 
-    def _build_nodes(actual_ctx: SessionContext) -> DataFrame:
-        _ensure_ctx(actual_ctx, build_ctx.ctx, label="cpg_nodes_v1")
-        plan = build_cpg_nodes_expr(
-            actual_ctx,
-            build_ctx.backend,
-            task_identity=node_identity,
-        )
-        return _plan_to_dataframe(actual_ctx, plan, build_ctx.facade)
+    nodes_plan, nodes_ast = build_ctx.plan_and_ast(
+        build_cpg_nodes_expr,
+        builder_kwargs={"task_identity": node_identity},
+        label="cpg_nodes_v1",
+    )
+    edges_plan, edges_ast = build_ctx.plan_and_ast(
+        build_cpg_edges_expr,
+        label="cpg_edges_v1",
+    )
+    props_plan, props_ast = build_ctx.plan_and_ast(
+        build_cpg_props_expr,
+        builder_kwargs={"task_identity": prop_identity},
+        label="cpg_props_v1",
+    )
 
-    def _build_edges(actual_ctx: SessionContext) -> DataFrame:
-        _ensure_ctx(actual_ctx, build_ctx.ctx, label="cpg_edges_v1")
-        plan = build_cpg_edges_expr(actual_ctx, build_ctx.backend)
-        return _plan_to_dataframe(actual_ctx, plan, build_ctx.facade)
-
-    def _build_props(actual_ctx: SessionContext) -> DataFrame:
-        _ensure_ctx(actual_ctx, build_ctx.ctx, label="cpg_props_v1")
-        plan = build_cpg_props_expr(
-            actual_ctx,
-            build_ctx.backend,
-            task_identity=prop_identity,
-        )
-        return _plan_to_dataframe(actual_ctx, plan, build_ctx.facade)
+    nodes_required = _required_udfs_from_ast(nodes_ast, build_ctx.snapshot)
+    edges_required = _required_udfs_from_ast(edges_ast, build_ctx.snapshot)
+    props_required = _required_udfs_from_ast(props_ast, build_ctx.snapshot)
 
     return [
         ViewNode(
             name="cpg_nodes_v1",
-            deps=normalized_deps,
-            builder=_build_nodes,
-            schema_contract=_apply_required_udfs(CPG_NODES_SCHEMA_CONTRACT, _HASH_UDFS),
+            deps=_deps_from_ast(nodes_ast),
+            builder=build_ctx.builder_from_plan(nodes_plan, label="cpg_nodes_v1"),
+            schema_contract=_apply_required_udfs(CPG_NODES_SCHEMA_CONTRACT, nodes_required),
+            sqlglot_ast=nodes_ast,
         ),
         ViewNode(
             name="cpg_edges_v1",
-            deps=(RELATION_OUTPUT_NAME,),
-            builder=_build_edges,
-            schema_contract=_apply_required_udfs(CPG_EDGES_SCHEMA_CONTRACT, _HASH_UDFS),
+            deps=_deps_from_ast(edges_ast),
+            builder=build_ctx.builder_from_plan(edges_plan, label="cpg_edges_v1"),
+            schema_contract=_apply_required_udfs(CPG_EDGES_SCHEMA_CONTRACT, edges_required),
+            sqlglot_ast=edges_ast,
         ),
         ViewNode(
             name="cpg_props_v1",
-            deps=normalized_deps,
-            builder=_build_props,
-            schema_contract=_apply_required_udfs(CPG_PROPS_SCHEMA_CONTRACT, _HASH_UDFS),
+            deps=_deps_from_ast(props_ast),
+            builder=build_ctx.builder_from_plan(props_plan, label="cpg_props_v1"),
+            schema_contract=_apply_required_udfs(CPG_PROPS_SCHEMA_CONTRACT, props_required),
+            sqlglot_ast=props_ast,
         ),
     ]
 
@@ -564,4 +601,35 @@ def _resolve_schema(schema: object) -> pa.Schema:
     raise TypeError(msg)
 
 
-__all__ = ["ViewBuildContext", "view_graph_nodes"]
+def view_graph_output_names() -> tuple[str, ...]:
+    """Return ordered view names for view-driven outputs.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Ordered view names for normalize/relspec/CPG outputs.
+    """
+    from normalize.view_builders import normalize_view_specs
+    from relspec.view_defs import (
+        REL_CALLSITE_QNAME_OUTPUT,
+        REL_CALLSITE_SYMBOL_OUTPUT,
+        REL_DEF_SYMBOL_OUTPUT,
+        REL_IMPORT_SYMBOL_OUTPUT,
+        REL_NAME_SYMBOL_OUTPUT,
+        RELATION_OUTPUT_NAME,
+    )
+
+    normalize_names = [spec.name for spec in normalize_view_specs()]
+    relspec_names = [
+        REL_NAME_SYMBOL_OUTPUT,
+        REL_IMPORT_SYMBOL_OUTPUT,
+        REL_DEF_SYMBOL_OUTPUT,
+        REL_CALLSITE_SYMBOL_OUTPUT,
+        REL_CALLSITE_QNAME_OUTPUT,
+        RELATION_OUTPUT_NAME,
+    ]
+    cpg_names = ["cpg_nodes_v1", "cpg_edges_v1", "cpg_props_v1"]
+    return (*normalize_names, *relspec_names, *cpg_names)
+
+
+__all__ = ["ViewBuildContext", "view_graph_nodes", "view_graph_output_names"]

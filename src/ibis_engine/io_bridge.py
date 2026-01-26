@@ -167,7 +167,7 @@ class IbisParquetWriteOptions:
 
 @dataclass(frozen=True)
 class IbisCopyWriteOptions:
-    """Options for writing Ibis expressions via DataFusion COPY."""
+    """Options for writing Ibis expressions via DataFusion writers."""
 
     execution: IbisExecutionContext
     file_format: str
@@ -179,10 +179,10 @@ class IbisCopyWriteOptions:
 
 @dataclass(frozen=True)
 class IbisCopyWriteResult:
-    """Summary of a DataFusion COPY write."""
+    """Summary of a DataFusion write."""
 
     path: str
-    sql: str
+    sql: str | None
     file_format: str
     partition_by: tuple[str, ...]
     statement_overrides: Mapping[str, object] | None
@@ -1529,10 +1529,7 @@ def _write_named_dataset_copy(
                 else None
             ),
         )
-        result = context.pipeline.write_via_copy(request)
-        if result.sql is None:
-            msg = "COPY writer failed to produce a SQL statement."
-            raise ValueError(msg)
+        result = context.pipeline.write(request)
         if context.options.record_hook is not None:
             context.options.record_hook(
                 {

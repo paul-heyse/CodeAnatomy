@@ -8,8 +8,8 @@ import ibis
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.bridge import collect_plan_artifacts
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.execution_helpers import collect_plan_artifacts
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.param_tables import scalar_param_signature
 from sqlglot_tools.optimizer import parse_sql_strict

@@ -22,6 +22,7 @@ from cpg.spec_registry import (
 )
 from cpg.specs import TaskIdentity
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
+from datafusion_engine.schema_registry import has_schema, schema_for
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import ensure_columns
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
@@ -48,14 +49,13 @@ def build_cpg_nodes_expr(
         Plan for CPG nodes.
     """
     specs = node_plan_specs()
-    available = _available_tables(ctx)
     task_name = task_identity.name if task_identity is not None else None
     task_priority = task_identity.priority if task_identity is not None else None
     plans: list[IbisPlan] = []
     for spec in specs:
-        if spec.table_ref not in available:
+        table = _resolve_table_expr(ctx, backend=backend, name=spec.table_ref)
+        if table is None:
             continue
-        table = backend.table(spec.table_ref)
         plan = emit_nodes_ibis(
             table,
             spec=spec.emit,
@@ -102,12 +102,11 @@ def build_cpg_props_expr(
     prop_specs = list(prop_table_specs(source_columns_lookup=source_columns_lookup))
     prop_specs.append(scip_role_flag_prop_spec())
     prop_specs.append(edge_prop_spec())
-    available = _available_tables(ctx)
     plans: list[IbisPlan] = []
     for spec in prop_specs:
-        if spec.table_ref not in available:
+        table = _resolve_table_expr(ctx, backend=backend, name=spec.table_ref)
+        if table is None:
             continue
-        table = backend.table(spec.table_ref)
         plan = emit_props_ibis(
             table,
             spec=spec,
@@ -119,8 +118,27 @@ def build_cpg_props_expr(
     return _union_plans(plans, schema=CPG_PROPS_SCHEMA, backend=backend)
 
 
-def _available_tables(ctx: SessionContext) -> set[str]:
-    return set(table_names_snapshot(ctx))
+def _resolve_table_expr(
+    ctx: SessionContext,
+    *,
+    backend: BaseBackend,
+    name: str,
+) -> Table | None:
+    if ctx.table_exist(name):
+        return backend.table(name)
+    if not has_schema(name):
+        return None
+    empty = empty_table(schema_for(name))
+    plan = register_ibis_table(
+        empty,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=name,
+            ordering=Ordering.unordered(),
+            runtime_profile=None,
+        ),
+    )
+    return plan.expr
 
 
 def _source_columns_lookup(
@@ -130,10 +148,13 @@ def _source_columns_lookup(
     introspector = SchemaIntrospector(ctx)
 
     def _lookup(table_name: str) -> Sequence[str] | None:
-        if table_name not in names:
-            return None
-        columns = introspector.table_column_names(table_name)
-        return tuple(sorted(columns))
+        if table_name in names:
+            columns = introspector.table_column_names(table_name)
+            return tuple(sorted(columns))
+        if has_schema(table_name):
+            schema = schema_for(table_name)
+            return tuple(sorted(schema.names))
+        return None
 
     return _lookup
 

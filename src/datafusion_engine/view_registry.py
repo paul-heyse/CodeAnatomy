@@ -11,7 +11,12 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_engine.schema_registry import nested_base_df, nested_dataset_names
+from datafusion_engine.schema_registry import (
+    has_schema,
+    nested_base_df,
+    nested_dataset_names,
+    schema_for,
+)
 from datafusion_engine.view_registry_defs import VIEW_BASE_TABLE, VIEW_SELECT_EXPRS
 from datafusion_ext import map_entries, map_keys, map_values, union_extract, union_tag
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
@@ -441,7 +446,10 @@ def registry_view_specs(
         if name in excluded:
             continue
         builder = partial(_view_df, name=name)
-        specs.append(view_spec_from_builder(ctx, name=name, builder=builder, sql=None))
+        if has_schema(name):
+            specs.append(ViewSpec(name=name, sql=None, schema=schema_for(name), builder=builder))
+        else:
+            specs.append(view_spec_from_builder(ctx, name=name, builder=builder, sql=None))
     return tuple(specs)
 
 
@@ -467,8 +475,12 @@ def register_all_views(
     from datafusion_engine.view_graph_registry import register_view_graph
     from datafusion_engine.view_registry_specs import view_graph_nodes
 
-    nodes = view_graph_nodes(ctx, snapshot=snapshot)
-    register_view_graph(ctx, nodes=nodes, snapshot=snapshot)
+    pre_nodes = view_graph_nodes(ctx, snapshot=snapshot, stage="pre_cpg")
+    if pre_nodes:
+        register_view_graph(ctx, nodes=pre_nodes, snapshot=snapshot)
+    cpg_nodes = view_graph_nodes(ctx, snapshot=snapshot, stage="cpg")
+    if cpg_nodes:
+        register_view_graph(ctx, nodes=cpg_nodes, snapshot=snapshot)
 
 
 def ensure_view_graph(
@@ -490,12 +502,33 @@ def ensure_view_graph(
     options = _platform_options(runtime_profile)
     platform = install_rust_udf_platform(ctx, options=options)
     snapshot = platform.snapshot or rust_udf_snapshot(ctx)
-    register_all_views(
-        ctx,
-        snapshot=snapshot,
-        runtime_profile=runtime_profile,
-        include_registry_views=include_registry_views,
-    )
+    try:
+        register_all_views(
+            ctx,
+            snapshot=snapshot,
+            runtime_profile=runtime_profile,
+            include_registry_views=include_registry_views,
+        )
+    except Exception as exc:
+        from datafusion_engine.view_graph_registry import SchemaContractViolationError
+
+        if isinstance(exc, SchemaContractViolationError) and runtime_profile is not None:
+            from datafusion_engine.diagnostics import record_artifact
+
+            payload = {
+                "view": exc.table_name,
+                "violations": [
+                    {
+                        "violation_type": violation.violation_type.value,
+                        "column_name": violation.column_name,
+                        "expected": violation.expected,
+                        "actual": violation.actual,
+                    }
+                    for violation in exc.violations
+                ],
+            }
+            record_artifact(runtime_profile, "view_contract_violations_v1", payload)
+        raise
     if runtime_profile is not None:
         from datafusion_engine.diagnostics import (
             record_artifact,

@@ -59,7 +59,6 @@ from ibis_engine.registry import (
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
-from schema_spec.specs import ExternalTableConfigOverrides
 from schema_spec.system import (
     DataFusionScanOptions,
     DatasetSpec,
@@ -67,7 +66,6 @@ from schema_spec.system import (
     ParquetColumnOptions,
     TableSchemaContract,
     dataset_spec_from_schema,
-    ddl_fingerprint_from_definition,
     make_dataset_spec,
 )
 from sqlglot_tools.compat import exp
@@ -1167,8 +1165,6 @@ def _register_listing_table(
         DataFrame for the registered listing table.
     """
     scan = context.options.scan
-    if scan is not None and scan.unbounded:
-        return _register_unbounded_external_table(context)
     file_extension = _file_extension_for_location(context.location, scan=scan)
     table_schema_contract = _resolve_table_schema_contract(
         schema=context.options.schema,
@@ -1215,68 +1211,6 @@ def _register_listing_table(
             overwrite=bool(scan.listing_mutable) if scan is not None else False,
         )
     )
-    df = context.ctx.table(context.name)
-    inputs = _RegistrationInputs(
-        scan=scan,
-        file_extension=file_extension,
-        table_partition_cols=table_partition_cols_payload,
-        skip_metadata=skip_metadata,
-        table_schema_contract=table_schema_contract,
-    )
-    return _finalize_registered_df(
-        context,
-        df,
-        inputs=inputs,
-    )
-
-
-def _register_unbounded_external_table(
-    context: DataFusionRegistrationContext,
-) -> DataFrame:
-    scan = context.options.scan
-    file_extension = _file_extension_for_location(context.location, scan=scan)
-    table_schema_contract = _resolve_table_schema_contract(
-        schema=context.options.schema,
-        scan=scan,
-        partition_cols=scan.partition_cols if scan is not None else None,
-    )
-    _validate_table_schema_contract(table_schema_contract)
-    _validate_ordering_contract(context, scan=scan)
-    table_partition_cols_payload = (
-        [(col, str(dtype)) for col, dtype in scan.partition_cols]
-        if scan and scan.partition_cols
-        else None
-    )
-    file_sort_order = None
-    if scan is not None and scan.file_sort_order:
-        file_sort_order = [
-            (str(column), str(direction)) for column, direction in scan.file_sort_order
-        ]
-    skip_metadata = None
-    if scan is not None:
-        skip_metadata = _effective_skip_metadata(context.location, scan)
-    dataset_spec = _resolve_dataset_spec(context.name, context.location)
-    if dataset_spec is None:
-        msg = "Unbounded external table registration requires a dataset spec or schema."
-        raise ValueError(msg)
-    overrides = ExternalTableConfigOverrides(
-        table_name=context.name,
-        options=context.location.read_options or None,
-        partitioned_by=tuple(col for col, _ in scan.partition_cols)
-        if scan and scan.partition_cols
-        else None,
-        file_sort_order=tuple(file_sort_order) if file_sort_order else None,
-        unbounded=True,
-    )
-    config = dataset_spec.external_table_config_with_streaming(
-        location=str(context.location.path),
-        file_format=str(context.location.format or "parquet"),
-        overrides=overrides,
-    )
-    ddl = dataset_spec.external_table_sql(config)
-    adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
-    adapter.execute_statement(ddl, allow_statements=True)
-    _record_table_provider_ddl(context, ddl=ddl)
     df = context.ctx.table(context.name)
     inputs = _RegistrationInputs(
         scan=scan,
@@ -1478,19 +1412,6 @@ def _update_table_provider_capabilities(
     record_table_provider_metadata(id(ctx), metadata=updated)
 
 
-def _record_table_provider_ddl(
-    context: DataFusionRegistrationContext,
-    *,
-    ddl: str,
-) -> None:
-    metadata = table_provider_metadata(id(context.ctx), table_name=context.name)
-    if metadata is None:
-        return
-    fingerprint = ddl_fingerprint_from_definition(ddl)
-    updated = replace(metadata, ddl=ddl, ddl_fingerprint=fingerprint)
-    record_table_provider_metadata(id(context.ctx), metadata=updated)
-
-
 def _record_listing_table_artifact(
     context: DataFusionRegistrationContext,
     *,
@@ -1636,15 +1557,14 @@ def _apply_projection_exprs(
                     ),
                 )
             )
-        except (ParseError, TypeError, ValueError):
-            parsed_exprs = []
-            break
-    if parsed_exprs:
-        view_expr = build_select(parsed_exprs, from_=base_name)
-        view_sql = sqlglot_emit(view_expr, policy=policy)
-    else:
-        selection = ", ".join(projection_exprs)
-        view_sql = f"SELECT {selection} FROM {base_name}"
+        except (ParseError, TypeError, ValueError) as exc:
+            msg = f"Projection expression parse failed: {projection}"
+            raise ValueError(msg) from exc
+    if not parsed_exprs:
+        msg = "Projection expressions are required for dynamic projection."
+        raise ValueError(msg)
+    view_expr = build_select(parsed_exprs, from_=base_name)
+    view_sql = sqlglot_emit(view_expr, policy=policy)
     from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
@@ -1654,7 +1574,7 @@ def _apply_projection_exprs(
         runtime_profile=runtime_profile,
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    plan = facade.compile(view_sql, options=options)
+    plan = facade.compile(view_expr, options=options)
     result = facade.execute(plan)
     if result.dataframe is None:
         msg = "Projection SQL execution did not return a DataFusion DataFrame."

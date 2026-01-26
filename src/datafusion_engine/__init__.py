@@ -6,9 +6,6 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datafusion_engine.bridge import (
-        replay_substrait_bytes,
-    )
     from datafusion_engine.catalog_provider import (
         RegistryCatalogProvider,
         RegistrySchemaProvider,
@@ -187,7 +184,6 @@ __all__ = [
     "registry_delta_table_paths",
     "registry_output_dir",
     "render_for_execution",
-    "replay_substrait_bytes",
     "resolve_param_bindings",
     "schema_for",
     "schema_names",
@@ -245,7 +241,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "schema_registry": ("datafusion_engine.schema_registry", "schema_registry"),
     "SchemaIntrospector": ("datafusion_engine.schema_introspection", "SchemaIntrospector"),
     # Bridge and execution
-    "replay_substrait_bytes": ("datafusion_engine.bridge", "replay_substrait_bytes"),
     "CompilationArtifacts": ("datafusion_engine.sql_policy_engine", "CompilationArtifacts"),
     "SQLPolicyProfile": ("datafusion_engine.sql_policy_engine", "SQLPolicyProfile"),
     "compile_sql_policy": ("datafusion_engine.sql_policy_engine", "compile_sql_policy"),

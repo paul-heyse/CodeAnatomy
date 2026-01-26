@@ -2,62 +2,41 @@
 
 from __future__ import annotations
 
-from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-from datafusion_engine.write_pipeline import (
-    ParquetWritePolicy,
-    WriteFormat,
-    WriteMode,
-    WriteRequest,
-)
-from sqlglot_tools.compat import exp
+from datafusion_engine.write_pipeline import ParquetWritePolicy, _parquet_column_options
+
+COMPRESSION_LEVEL = 5
+DATA_PAGE_SIZE = 8192
+BLOOM_FILTER_NDV = 12
 
 
-def _copy_options_map(request: WriteRequest) -> dict[str, str]:
-    profile = SQLPolicyProfile(read_dialect="datafusion", write_dialect="datafusion")
-    copy_ast = request.to_copy_ast(profile)
-    options = copy_ast.args.get("options") or []
-    resolved: dict[str, str] = {}
-    for option in options:
-        if not isinstance(option, exp.Property):
-            continue
-        key = option.args.get("this")
-        value = option.args.get("value")
-        if not isinstance(key, exp.Var) or not isinstance(value, exp.Literal):
-            continue
-        resolved[str(key.this)] = str(value.this)
-    return resolved
-
-
-def test_write_request_partitioned_copy_ast() -> None:
-    """Emit partitioned COPY AST with partition columns."""
-    request = WriteRequest(
-        source="SELECT 1 AS id",
-        destination="/tmp/out.parquet",
-        format=WriteFormat.PARQUET,
-        mode=WriteMode.OVERWRITE,
-        partition_by=("id", "bucket"),
-    )
-    profile = SQLPolicyProfile(read_dialect="datafusion", write_dialect="datafusion")
-    copy_ast = request.to_copy_ast(profile)
-    partitions = copy_ast.args.get("partition") or []
-    names = [entry.name for entry in partitions]
-    assert names == ["id", "bucket"]
-
-
-def test_write_request_copy_options_include_column_overrides() -> None:
-    """Encode per-column compression overrides in COPY options."""
+def test_parquet_policy_dataset_options() -> None:
+    """Emit dataset options for parquet policies."""
     policy = ParquetWritePolicy(
         compression="zstd",
-        compression_level=5,
-        column_overrides={"id": {"compression": "snappy"}},
+        compression_level=COMPRESSION_LEVEL,
+        data_page_size=DATA_PAGE_SIZE,
+        dictionary_enabled=False,
+        statistics_enabled="page",
     )
-    request = WriteRequest(
-        source="SELECT id FROM events",
-        destination="/tmp/events.parquet",
-        format=WriteFormat.PARQUET,
-        mode=WriteMode.OVERWRITE,
-        parquet_policy=policy,
-    )
-    options = _copy_options_map(request)
-    assert options["COMPRESSION"] == "zstd(5)"
-    assert options["COMPRESSION::ID"] == "snappy"
+    options = policy.to_dataset_options()
+    assert options["compression"] == "zstd"
+    assert options["compression_level"] == COMPRESSION_LEVEL
+    assert options["data_page_size"] == DATA_PAGE_SIZE
+    assert options["use_dictionary"] is False
+    assert options["write_statistics"] is True
+
+
+def test_parquet_column_options_include_overrides() -> None:
+    """Encode per-column overrides for parquet writers."""
+    overrides = {
+        "id": {
+            "compression": "snappy",
+            "dictionary_enabled": "true",
+            "bloom_filter_ndv": str(BLOOM_FILTER_NDV),
+        }
+    }
+    resolved = _parquet_column_options(overrides)
+    options = resolved["id"]
+    assert options.compression == "snappy"
+    assert options.dictionary_enabled is True
+    assert options.bloom_filter_ndv == BLOOM_FILTER_NDV

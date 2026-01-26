@@ -1,4 +1,4 @@
-"""Bridge helpers for Ibis/SQLGlot execution in DataFusion."""
+"""Execution helper utilities for DataFusion compilation and diagnostics."""
 
 from __future__ import annotations
 
@@ -58,7 +58,6 @@ from datafusion_engine.compile_options import (
     resolve_sql_policy,
 )
 from datafusion_engine.compile_pipeline import CompilationPipeline, CompileOptions
-from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.param_binding import resolve_param_bindings
@@ -1162,6 +1161,8 @@ def _semantic_diff_base_expr(
 ) -> Expression | None:
     if options.semantic_diff_base_expr is None and options.semantic_diff_base_sql is None:
         return None
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
     base_options = replace(options, dynamic_projection=False)
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=base_options.runtime_profile)
     if options.semantic_diff_base_expr is not None:

@@ -108,7 +108,7 @@ def symtable_def_sites_df(ctx: SessionContext) -> DataFrame:
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of definition site records.
     """
-    bindings = symtable_bindings_df(ctx)
+    bindings = ctx.table("symtable_bindings")
     defs = ctx.table("cst_defs").select(
         col("def_id"),
         col("path"),
@@ -165,7 +165,7 @@ def symtable_use_sites_df(ctx: SessionContext) -> DataFrame:
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of use site records.
     """
-    bindings = symtable_bindings_df(ctx)
+    bindings = ctx.table("symtable_bindings")
     refs = ctx.table("cst_refs").select(
         col("ref_id"),
         col("path"),

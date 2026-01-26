@@ -70,7 +70,7 @@ def _df_from_table(
     batch_size: int | None = None,
     ingest_hook: Callable[[Mapping[str, object]], None] | None = None,
 ) -> DataFrame:
-    from datafusion_engine.bridge import datafusion_from_arrow
+    from datafusion_engine.arrow_ingest import datafusion_from_arrow
 
     existing = _existing_table_names(ctx)
     table_name = _temp_name(name, existing) if name in existing else name

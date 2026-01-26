@@ -16,7 +16,7 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
-from datafusion_engine.bridge import datafusion_from_arrow
+from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.dataset_locations import resolve_dataset_location
 from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
 from datafusion_engine.execution_facade import ExecutionResult

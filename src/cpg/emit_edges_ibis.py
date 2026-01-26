@@ -9,11 +9,8 @@ from ibis.expr.types import Table, Value
 from arrowdsl.core.ordering import Ordering
 from cpg.schemas import CPG_EDGES_SCHEMA
 from cpg.specs import EdgeEmitSpec
-from ibis_engine.hash_exprs import (
-    HashExprSpec,
-    stable_id_expr_from_spec,
-    stable_key_hash_expr_from_spec,
-)
+from ibis_engine.expr_compiler import expr_ir_to_ibis
+from ibis_engine.hashing import HashExprSpec, hash_expr_ir, stable_id_expr_ir
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
     bind_expr_schema,
@@ -22,6 +19,33 @@ from ibis_engine.schema_utils import (
     ibis_null_literal,
     validate_expr_schema,
 )
+from sqlglot_tools.expr_spec import SqlExprSpec
+
+
+def _expr_from_spec(table: Table, spec: SqlExprSpec) -> Value:
+    expr_ir = spec.expr_ir
+    if expr_ir is None:
+        msg = "SqlExprSpec missing expr_ir; ExprIR-backed specs are required."
+        raise ValueError(msg)
+    return expr_ir_to_ibis(expr_ir, table)
+
+
+def stable_id_expr_from_spec(
+    table: Table,
+    *,
+    spec: HashExprSpec,
+    use_128: bool | None = None,
+) -> Value:
+    return _expr_from_spec(table, stable_id_expr_ir(spec=spec, use_128=use_128))
+
+
+def stable_key_hash_expr_from_spec(
+    table: Table,
+    *,
+    spec: HashExprSpec,
+    use_128: bool | None = False,
+) -> Value:
+    return _expr_from_spec(table, hash_expr_ir(spec=spec, use_128=use_128))
 
 
 def emit_edges_ibis(

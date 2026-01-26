@@ -12,7 +12,8 @@ from ibis.expr.types import BooleanValue, Table, Value
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import empty_table
 from datafusion_engine.nested_tables import ViewReference
-from ibis_engine.hash_exprs import HashExprSpec, masked_stable_id_expr_from_spec
+from ibis_engine.expr_compiler import expr_ir_to_ibis
+from ibis_engine.hashing import HashExprSpec, masked_stable_id_expr_ir
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
 from normalize.schemas import SPAN_ERROR_SCHEMA
 from normalize.span_logic import (
@@ -25,8 +26,37 @@ from normalize.span_logic import (
     span_struct_expr,
     zero_based_line,
 )
+from sqlglot_tools.expr_spec import SqlExprSpec
 
 SpanSource = TableLike | Table | ViewReference
+
+
+def _expr_from_spec(table: Table, spec: SqlExprSpec) -> Value:
+    expr_ir = spec.expr_ir
+    if expr_ir is None:
+        msg = "SqlExprSpec missing expr_ir; ExprIR-backed specs are required."
+        raise ValueError(msg)
+    return expr_ir_to_ibis(expr_ir, table)
+
+
+def masked_stable_id_expr_from_spec(
+    table: Table,
+    *,
+    spec: HashExprSpec,
+    required: tuple[str, ...] | list[str],
+    use_128: bool | None = None,
+) -> Value:
+    """Return a masked stable_id Ibis expression for a HashExprSpec.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Masked stable_id expression derived from the spec.
+    """
+    return _expr_from_spec(
+        table,
+        masked_stable_id_expr_ir(spec=spec, required=tuple(required), use_128=use_128),
+    )
 
 
 def _empty_span_errors_table() -> TableLike:

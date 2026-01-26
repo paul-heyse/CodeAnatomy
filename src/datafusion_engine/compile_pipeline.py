@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from sqlglot_tools.optimizer import SchemaMapping
 
 
-
 @dataclass(frozen=True)
 class CompiledExpression:
     """Triple checkpoint: Ibis IR + SQLGlot AST + rendered SQL.

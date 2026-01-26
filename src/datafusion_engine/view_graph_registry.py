@@ -167,7 +167,9 @@ def _required_udfs_from_ast(
     snapshot_names = udf_names_from_snapshot(snapshot)
     lookup = {name.lower(): name for name in snapshot_names}
     required = {
-        lookup[name.lower()] for name in udf_calls if isinstance(name, str) and name.lower() in lookup
+        lookup[name.lower()]
+        for name in udf_calls
+        if isinstance(name, str) and name.lower() in lookup
     }
     return tuple(sorted(required))
 

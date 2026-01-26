@@ -10,9 +10,7 @@ from datafusion import SessionContext
 import datafusion_ext
 
 _RUST_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
-_RUST_UDF_SNAPSHOTS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = (
-    WeakKeyDictionary()
-)
+_RUST_UDF_SNAPSHOTS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
 _RUST_UDF_DOCS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
 _RUST_UDF_POLICIES: WeakKeyDictionary[
     SessionContext,
@@ -244,9 +242,7 @@ def register_rust_udfs(
     ValueError
         Raised when async UDF policy configuration is invalid.
     """
-    if not enable_async and (
-        async_udf_timeout_ms is not None or async_udf_batch_size is not None
-    ):
+    if not enable_async and (async_udf_timeout_ms is not None or async_udf_batch_size is not None):
         msg = "Async UDF policy provided but enable_async is False."
         raise ValueError(msg)
     if enable_async:
@@ -263,9 +259,7 @@ def register_rust_udfs(
             existing is not None
             and existing != policy
             and not (
-                not enable_async
-                and async_udf_timeout_ms is None
-                and async_udf_batch_size is None
+                not enable_async and async_udf_timeout_ms is None and async_udf_batch_size is None
             )
         ):
             msg = "Rust UDFs already registered with a different async policy."

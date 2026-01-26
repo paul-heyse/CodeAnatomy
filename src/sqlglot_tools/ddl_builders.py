@@ -129,9 +129,7 @@ def build_create_function_ast(*, config: CreateFunctionConfig) -> exp.Create:
     if config.language:
         properties.append(exp.LanguageProperty(this=exp.Var(this=config.language.upper())))
     if config.volatility:
-        properties.append(
-            exp.StabilityProperty(this=exp.Literal.string(config.volatility.upper()))
-        )
+        properties.append(exp.StabilityProperty(this=exp.Literal.string(config.volatility.upper())))
     return exp.Create(
         this=udf,
         kind="FUNCTION",
@@ -294,9 +292,7 @@ def build_external_table_ddl(
         properties.append(
             exp.PartitionedByProperty(
                 this=exp.Tuple(
-                    expressions=[
-                        exp.Identifier(this=name) for name in ddl_config.partitioned_by
-                    ]
+                    expressions=[exp.Identifier(this=name) for name in ddl_config.partitioned_by]
                 )
             )
         )
@@ -309,9 +305,7 @@ def build_external_table_ddl(
             else:
                 column_name, direction = item
             desc = str(direction).lower() in {"desc", "descending"}
-            order_exprs.append(
-                exp.Ordered(this=exp.Identifier(this=column_name), desc=desc)
-            )
+            order_exprs.append(exp.Ordered(this=exp.Identifier(this=column_name), desc=desc))
         properties.append(ExternalTableOrderProperty(expressions=order_exprs))
     options_property = _external_table_options_property(ddl_config.options)
     if options_property is not None:

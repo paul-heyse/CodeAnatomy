@@ -143,7 +143,9 @@ def _constraint_rows_from_snapshot(
         return []
     constraints = _normalized_rows(snapshot.table_constraints)
     usage_rows = _normalized_rows(snapshot.key_column_usage)
-    usage_map: dict[tuple[str | None, str | None, str | None, str | None], list[dict[str, object]]] = {}
+    usage_map: dict[
+        tuple[str | None, str | None, str | None, str | None], list[dict[str, object]]
+    ] = {}
     for row in usage_rows:
         key = (
             str(row.get("table_catalog")) if row.get("table_catalog") is not None else None,
@@ -155,10 +157,14 @@ def _constraint_rows_from_snapshot(
     rows: list[dict[str, object]] = []
     for constraint in constraints:
         table_catalog = (
-            str(constraint.get("table_catalog")) if constraint.get("table_catalog") is not None else None
+            str(constraint.get("table_catalog"))
+            if constraint.get("table_catalog") is not None
+            else None
         )
         table_schema = (
-            str(constraint.get("table_schema")) if constraint.get("table_schema") is not None else None
+            str(constraint.get("table_schema"))
+            if constraint.get("table_schema") is not None
+            else None
         )
         table_value = (
             str(constraint.get("table_name")) if constraint.get("table_name") is not None else None
@@ -530,6 +536,7 @@ def _merge_registry_parameters(ctx: SessionContext, base: pa.Table | None) -> pa
         return base_table
     return pa.Table.from_pylist(_aligned_rows(routines, schema_names), schema=base_table.schema)
 
+
 def routines_snapshot_table(
     ctx: SessionContext,
     *,
@@ -799,6 +806,7 @@ class SchemaIntrospector:
                     "column_default": row.get("column_default"),
                 }
             )
+
         def _ordinal_value(item: Mapping[str, object]) -> int:
             value = item.get("ordinal_position")
             if isinstance(value, int):

@@ -202,9 +202,7 @@ def initial_evidence_from_views(
     EvidenceCatalog
         Evidence catalog with known sources registered.
     """
-    outputs = {
-        node.name for node in nodes if task_names is None or node.name in task_names
-    }
+    outputs = {node.name for node in nodes if task_names is None or node.name in task_names}
     requirements = evidence_requirements_from_views(nodes, task_names=task_names)
     if ctx is not None:
         _validate_udf_info_schema_parity(ctx)
@@ -226,7 +224,6 @@ def initial_evidence_from_views(
         if not registered:
             _seed_evidence_from_requirements(evidence, source, requirements)
     return evidence
-
 
 
 def _merge_required_columns(
@@ -399,10 +396,7 @@ def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:
         metadata.setdefault("supports_cdf", provider.supports_cdf)
     if provider.supports_insert is not None:
         metadata.setdefault("supports_insert", provider.supports_insert)
-    return {
-        key.encode("utf-8"): str(value).encode("utf-8")
-        for key, value in metadata.items()
-    }
+    return {key.encode("utf-8"): str(value).encode("utf-8") for key, value in metadata.items()}
 
 
 def _bool_from_metadata(value: object | None) -> bool | None:

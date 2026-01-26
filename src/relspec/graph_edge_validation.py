@@ -251,10 +251,7 @@ def _edge_validation_result(
     violations = catalog.contract_violations_by_dataset.get(edge.name)
     violation_messages = tuple(str(item) for item in violations) if violations else ()
     is_valid = (
-        not missing_cols
-        and not missing_types
-        and not missing_metadata
-        and not violation_messages
+        not missing_cols and not missing_types and not missing_metadata and not violation_messages
     )
     return (
         EdgeValidationResult(

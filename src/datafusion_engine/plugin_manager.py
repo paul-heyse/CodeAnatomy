@@ -19,9 +19,7 @@ class _PluginExtension(Protocol):
 
     def register_df_plugin_udfs(self, ctx: SessionContext, handle: object) -> None: ...
 
-    def register_df_plugin_table_functions(
-        self, ctx: SessionContext, handle: object
-    ) -> None: ...
+    def register_df_plugin_table_functions(self, ctx: SessionContext, handle: object) -> None: ...
 
     def register_df_plugin_table_providers(
         self,

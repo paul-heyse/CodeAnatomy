@@ -237,7 +237,16 @@ class DatasetHandle:
         validate:
             Whether to validate the view schemas after registration.
         """
-        for view in self.spec.resolved_view_specs():
+        views = self.spec.resolved_view_specs()
+        if not views:
+            from datafusion_engine.schema_registry import (
+                is_nested_dataset,
+                nested_view_spec,
+            )
+
+            if is_nested_dataset(self.spec.name):
+                views = (nested_view_spec(ctx, self.spec.name),)
+        for view in views:
             view.register(ctx, record_view=record_view, validate=validate)
 
     def view_specs(self) -> tuple[ViewSpec, ...]:

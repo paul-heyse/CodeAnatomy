@@ -601,7 +601,11 @@ class WritePipeline:
         if request.mode == WriteMode.ERROR and path.exists():
             msg = f"Destination already exists: {path}"
             raise ValueError(msg)
-        if request.mode == WriteMode.APPEND and path.exists() and request.format != WriteFormat.PARQUET:
+        if (
+            request.mode == WriteMode.APPEND
+            and path.exists()
+            and request.format != WriteFormat.PARQUET
+        ):
             msg = f"Append mode is only supported for parquet datasets: {path}"
             raise ValueError(msg)
         if request.mode == WriteMode.OVERWRITE and path.exists():
@@ -734,14 +738,18 @@ def _parquet_column_options(
     for name, options in overrides.items():
         resolved[name] = ParquetColumnOptions(
             encoding=_option_str(options.get("encoding")),
-            dictionary_enabled=_option_bool(options.get("dictionary_enabled"), label="dictionary_enabled"),
+            dictionary_enabled=_option_bool(
+                options.get("dictionary_enabled"), label="dictionary_enabled"
+            ),
             compression=_option_str(options.get("compression")),
             statistics_enabled=_option_str(options.get("statistics_enabled")),
             bloom_filter_enabled=_option_bool(
                 options.get("bloom_filter_enabled"),
                 label="bloom_filter_enabled",
             ),
-            bloom_filter_fpp=_option_float(options.get("bloom_filter_fpp"), label="bloom_filter_fpp"),
+            bloom_filter_fpp=_option_float(
+                options.get("bloom_filter_fpp"), label="bloom_filter_fpp"
+            ),
             bloom_filter_ndv=_option_int(options.get("bloom_filter_ndv"), label="bloom_filter_ndv"),
         )
     return resolved
@@ -832,9 +840,7 @@ def _column_overrides_from_policy(
         payload = option.payload()
         converted = {
             key: value
-            for key, value in (
-                (key, _option_value_to_str(value)) for key, value in payload.items()
-            )
+            for key, value in ((key, _option_value_to_str(value)) for key, value in payload.items())
             if value is not None
         }
         if converted:

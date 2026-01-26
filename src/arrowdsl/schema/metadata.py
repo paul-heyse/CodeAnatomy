@@ -736,9 +736,7 @@ def required_function_signatures_from_metadata(
     if payload is None:
         return {}
     decoded = decode_metadata_scalar_map(payload)
-    return {
-        name: value for name, value in decoded.items() if isinstance(value, int)
-    }
+    return {name: value for name, value in decoded.items() if isinstance(value, int)}
 
 
 def required_function_signature_types_from_metadata(

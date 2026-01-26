@@ -183,9 +183,7 @@ def _is_pydict_input(value: object) -> bool:
         return False
     try:
         return all(
-            isinstance(key, str)
-            and isinstance(col, Sequence)
-            and not isinstance(col, (str, bytes))
+            isinstance(key, str) and isinstance(col, Sequence) and not isinstance(col, (str, bytes))
             for key, col in value.items()
         )
     except (AttributeError, TypeError):

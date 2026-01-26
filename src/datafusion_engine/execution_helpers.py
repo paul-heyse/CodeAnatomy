@@ -134,8 +134,6 @@ class CopyToOptions:
     allow_file_output: bool = False
 
 
-
-
 try:
     from datafusion.substrait import Consumer as SubstraitConsumer
     from datafusion.substrait import Serde as SubstraitSerde
@@ -335,7 +333,6 @@ def validate_substrait_plan(plan_bytes: bytes, *, df: DataFrame) -> Mapping[str,
         Validation payload containing hashes, row counts, and status fields.
     """
     return _substrait_validation_payload(plan_bytes, df=df)
-
 
 
 def _default_sql_policy() -> DataFusionSqlPolicy:
@@ -846,7 +843,6 @@ def _sql_options_for_named_params(options: DataFusionCompileOptions) -> SQLOptio
     )
 
 
-
 @dataclass(frozen=True)
 class DataFusionPlanArtifacts:
     """Captured DataFusion plan artifacts for diagnostics."""
@@ -1053,7 +1049,9 @@ def _maybe_collect_plan_artifacts(
     if substrait_plan_override is not None:
         resolved = replace(options, substrait_plan_override=substrait_plan_override)
     try:
-        artifacts = collect_plan_artifacts(ctx, expr, options=resolved, df=df, run_id=options.run_id)
+        artifacts = collect_plan_artifacts(
+            ctx, expr, options=resolved, df=df, run_id=options.run_id
+        )
     except (RuntimeError, TypeError, ValueError):
         return
     if options.plan_artifacts_hook is not None:
@@ -1114,7 +1112,9 @@ def _maybe_collect_semantic_diff(
     base_hash = _semantic_plan_hash(base_expr, options=options)
     row_multiplying = diff.overall_category == ChangeCategory.ROW_MULTIPLYING
     breaking = diff.overall_category in {ChangeCategory.BREAKING, ChangeCategory.ROW_MULTIPLYING}
-    change_count = len([change for change in diff.changes if change.category != ChangeCategory.NONE])
+    change_count = len(
+        [change for change in diff.changes if change.category != ChangeCategory.NONE]
+    )
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "run_id": options.run_id,
@@ -1394,9 +1394,7 @@ def _collect_plan_artifact_inputs(
         allowlist=options.param_identifier_allowlist,
     )
     param_signature = (
-        scalar_param_signature(bindings.param_values)
-        if bindings.param_values
-        else None
+        scalar_param_signature(bindings.param_values) if bindings.param_values else None
     )
     projection_map = _projection_map_payload(expr, options=options)
     policy = _sqlglot_emit_policy(options)
@@ -1646,8 +1644,6 @@ def _parquet_column_options_payload(options: ParquetColumnOptions) -> dict[str, 
         "bloom_filter_ndv": getattr(options, "bloom_filter_ndv", None),
         "encoding": getattr(options, "encoding", None),
     }
-
-
 
 
 def replay_substrait_bytes(ctx: SessionContext, plan_bytes: bytes) -> DataFrame:

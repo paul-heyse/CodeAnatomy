@@ -32,9 +32,7 @@ def schedule_tasks(
     graph: TaskGraph,
     *,
     evidence: EvidenceCatalog,
-    output_schema_for: Callable[
-        [str], SchemaContract | DatasetSpec | ContractSpec | None
-    ]
+    output_schema_for: Callable[[str], SchemaContract | DatasetSpec | ContractSpec | None]
     | None = None,
     allow_partial: bool = False,
 ) -> TaskSchedule:
@@ -228,10 +226,7 @@ def _register_ready_evidence(
     ready: Iterable[int],
     *,
     evidence: EvidenceCatalog,
-    output_schema_for: Callable[
-        [str], SchemaContract | DatasetSpec | ContractSpec | None
-    ]
-    | None,
+    output_schema_for: Callable[[str], SchemaContract | DatasetSpec | ContractSpec | None] | None,
 ) -> None:
     for idx in ready:
         node = graph.graph[idx]

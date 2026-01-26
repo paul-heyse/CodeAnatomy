@@ -70,7 +70,6 @@ from datafusion_engine.schema_registry import (
     is_nested_dataset,
     missing_schema_names,
     nested_schema_for,
-    nested_schema_names,
     nested_view_specs,
     register_all_schemas,
     schema_for,
@@ -78,7 +77,6 @@ from datafusion_engine.schema_registry import (
     validate_ast_views,
     validate_bytecode_views,
     validate_cst_views,
-    validate_nested_types,
     validate_required_engine_functions,
     validate_scip_views,
     validate_symtable_views,
@@ -3300,11 +3298,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         expected_names = set(schema_names())
         missing = missing_schema_names(ctx, expected=tuple(sorted(expected_names)))
         type_errors: dict[str, str] = {}
-        for name in nested_schema_names():
-            try:
-                validate_nested_types(ctx, name)
-            except (RuntimeError, TypeError, ValueError) as exc:
-                type_errors[name] = str(exc)
         introspector = self._schema_introspector(ctx)
         constraint_drift = _constraint_drift_entries(
             introspector,
@@ -4172,7 +4165,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 validate=True,
             )
         nested_views = tuple(
-            view for view in nested_view_specs() if view.name not in fragment_names
+            view for view in nested_view_specs(ctx) if view.name not in fragment_names
         )
         if nested_views:
             register_view_specs(
@@ -4805,9 +4798,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             or capture_explain
             or substrait_validation
         )
-        capture_semantic_diff = (
-            resolved.capture_semantic_diff or self.capture_semantic_diff
-        )
+        capture_semantic_diff = resolved.capture_semantic_diff or self.capture_semantic_diff
         resolution = _CompileOptionResolution(
             cache=resolved.cache if resolved.cache is not None else self.cache_enabled,
             cache_max_columns=(

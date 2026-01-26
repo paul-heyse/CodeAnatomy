@@ -92,9 +92,9 @@ def _install_function_factory(
         error = str(exc)
     except (RuntimeError, TypeError, ValueError) as exc:
         error = str(exc)
-    return ExtensionInstallStatus(available=available, installed=installed, error=error), function_factory_payloads(
-        policy
-    )
+    return ExtensionInstallStatus(
+        available=available, installed=installed, error=error
+    ), function_factory_payloads(policy)
 
 
 def _install_expr_planners(
@@ -125,9 +125,9 @@ def _install_expr_planners(
         error = str(exc)
     except (RuntimeError, TypeError, ValueError) as exc:
         error = str(exc)
-    return ExtensionInstallStatus(available=available, installed=installed, error=error), expr_planner_payloads(
-        planner_names
-    )
+    return ExtensionInstallStatus(
+        available=available, installed=installed, error=error
+    ), expr_planner_payloads(planner_names)
 
 
 def install_rust_udf_platform(

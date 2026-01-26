@@ -267,7 +267,10 @@ def _ts_ast_check_df(ctx: SessionContext, *, ts_view: str, ast_view: str, label:
     )
     ast_joined = ast_base.join(
         start_idx,
-        join_keys=(["file_id", "path", "start_line_no"], ["start_file_id", "start_path", "start_line_no"]),
+        join_keys=(
+            ["file_id", "path", "start_line_no"],
+            ["start_file_id", "start_path", "start_line_no"],
+        ),
         how="left",
         coalesce_duplicate_keys=True,
     )
@@ -289,7 +292,10 @@ def _ts_ast_check_df(ctx: SessionContext, *, ts_view: str, ast_view: str, label:
     )
     joined = ts.join(
         ast,
-        join_keys=(["file_id", "path", "ts_start_byte", "ts_end_byte"], ["file_id", "path", "ast_start_byte", "ast_end_byte"]),
+        join_keys=(
+            ["file_id", "path", "ts_start_byte", "ts_end_byte"],
+            ["file_id", "path", "ast_start_byte", "ast_end_byte"],
+        ),
         how="full",
         coalesce_duplicate_keys=True,
     )
@@ -325,7 +331,10 @@ def _ts_cst_docstrings_check_df(ctx: SessionContext) -> DataFrame:
     )
     joined = ts.join(
         cst,
-        join_keys=(["file_id", "path", "ts_start_byte", "ts_end_byte"], ["file_id", "path", "cst_start_byte", "cst_end_byte"]),
+        join_keys=(
+            ["file_id", "path", "ts_start_byte", "ts_end_byte"],
+            ["file_id", "path", "cst_start_byte", "cst_end_byte"],
+        ),
         how="full",
         coalesce_duplicate_keys=True,
     )

@@ -33,6 +33,7 @@ BuiltinCategory = Literal[
 ]
 UdfKind = Literal["scalar", "aggregate", "window", "table"]
 
+
 @dataclass(frozen=True)
 class DataFusionUdfSpec:
     """Specification for a DataFusion UDF entry."""
@@ -60,10 +61,7 @@ class DataFusionUdfSpec:
             Raised when the tier is not supported.
         """
         if self.udf_tier != "builtin":
-            msg = (
-                "Only Rust builtin UDFs are supported. "
-                f"Received tier {self.udf_tier!r}."
-            )
+            msg = f"Only Rust builtin UDFs are supported. Received tier {self.udf_tier!r}."
             raise ValueError(msg)
 
 
@@ -793,22 +791,14 @@ def _table_schema_overrides_from_registry(
     if registry_snapshot is None:
         return {}
     try:
-        from datafusion_engine.schema_registry import (
-            nested_schema_for,
-            nested_schema_names,
-            schema_registry,
-        )
+        from datafusion_engine.schema_registry import schema_registry
     except ImportError:
         return {}
     registry = dict(schema_registry())
-    for name in nested_schema_names():
-        registry.setdefault(name, nested_schema_for(name, allow_derived=True))
     if not registry:
         return {}
     table_names = {
-        name
-        for name, kind in _snapshot_kind_map(registry_snapshot).items()
-        if kind == "table"
+        name for name, kind in _snapshot_kind_map(registry_snapshot).items() if kind == "table"
     }
     if not table_names:
         return {}
@@ -901,9 +891,7 @@ def _resolve_table_return_type(
         return pa.struct(override)
     if isinstance(override, pa.DataType):
         if not pa.types.is_struct(override):
-            msg = (
-                f"Table UDF schema override for {name!r} must be a struct DataType."
-            )
+            msg = f"Table UDF schema override for {name!r} must be a struct DataType."
             raise TypeError(msg)
         return override
     msg = f"Table UDF schema override for {name!r} must be a PyArrow Schema or DataType."

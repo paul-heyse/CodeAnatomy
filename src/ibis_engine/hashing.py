@@ -333,9 +333,7 @@ def _prefixed_hash_expr(hashed: ExprIR, *, prefix: str) -> ExprIR:
 def _required_mask_expr(required: Sequence[str]) -> ExprIR:
     if not required:
         return _literal_expr(value=True)
-    exprs = [
-        _call_expr("invert", _call_expr("is_null", _field_expr(name))) for name in required
-    ]
+    exprs = [_call_expr("invert", _call_expr("is_null", _field_expr(name))) for name in required]
     mask = exprs[0]
     for expr in exprs[1:]:
         mask = _call_expr("bit_wise_and", mask, expr)

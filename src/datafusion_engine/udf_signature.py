@@ -88,9 +88,7 @@ def signature_inputs(
     return tuple(parsed)
 
 
-def signature_returns(
-    snapshot: Mapping[str, object], name: str
-) -> tuple[pa.DataType, ...]:
+def signature_returns(snapshot: Mapping[str, object], name: str) -> tuple[pa.DataType, ...]:
     """Return parsed return types for a function name.
 
     Returns

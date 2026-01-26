@@ -23,6 +23,7 @@ from datafusion_ext import (
 def _arrow_cast(expr: Expr, data_type: str) -> Expr:
     return f.arrow_cast(expr, lit(data_type))
 
+
 VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "ast_call_attrs": (
         col("file_id").alias("file_id"),
@@ -41,20 +42,52 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("parent_ast_id").alias("parent_ast_id"),
         col("func_kind").alias("func_kind"),
         col("func_name").alias("func_name"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "arg_count"), 1), "Int32").alias("arg_count"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "keyword_count"), 1), "Int32").alias("keyword_count"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "starred_count"), 1), "Int32").alias("starred_count"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "kw_star_count"), 1), "Int32").alias("kw_star_count"),
-        _arrow_cast(((((col("span"))["start"])["line0"] + lit(1))), "Int64").alias("lineno"),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "arg_count"), 1), "Int32").alias(
+            "arg_count"
+        ),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "keyword_count"), 1), "Int32").alias(
+            "keyword_count"
+        ),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "starred_count"), 1), "Int32").alias(
+            "starred_count"
+        ),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "kw_star_count"), 1), "Int32").alias(
+            "kw_star_count"
+        ),
+        _arrow_cast((((col("span"))["start"])["line0"] + lit(1)), "Int64").alias("lineno"),
         _arrow_cast(((col("span"))["start"])["col"], "Int64").alias("col_offset"),
-        _arrow_cast(((((col("span"))["end"])["line0"] + lit(1))), "Int64").alias("end_lineno"),
+        _arrow_cast((((col("span"))["end"])["line0"] + lit(1)), "Int64").alias("end_lineno"),
         _arrow_cast(((col("span"))["end"])["col"], "Int64").alias("end_col_offset"),
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])]).alias("span"),
+        f.named_struct(
+            [
+                ("start", (col("span"))["start"]),
+                ("end", (col("span"))["end"]),
+                ("byte_span", (col("span"))["byte_span"]),
+                ("col_unit", (col("span"))["col_unit"]),
+                ("end_exclusive", (col("span"))["end_exclusive"]),
+            ]
+        ).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct([("span", f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])])), ("attrs", col("attrs"))]).alias("ast_record"),
+        f.named_struct(
+            [
+                (
+                    "span",
+                    f.named_struct(
+                        [
+                            ("start", (col("span"))["start"]),
+                            ("end", (col("span"))["end"]),
+                            ("byte_span", (col("span"))["byte_span"]),
+                            ("col_unit", (col("span"))["col_unit"]),
+                            ("end_exclusive", (col("span"))["end_exclusive"]),
+                        ]
+                    ),
+                ),
+                ("attrs", col("attrs")),
+            ]
+        ).alias("ast_record"),
     ),
     "ast_def_attrs": (
         col("file_id").alias("file_id"),
@@ -73,23 +106,61 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("parent_ast_id").alias("parent_ast_id"),
         col("kind").alias("kind"),
         col("name").alias("name"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "decorator_count"), 1), "Int32").alias("decorator_count"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "arg_count"), 1), "Int32").alias("arg_count"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "posonly_count"), 1), "Int32").alias("posonly_count"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "kwonly_count"), 1), "Int32").alias("kwonly_count"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "type_params_count"), 1), "Int32").alias("type_params_count"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "base_count"), 1), "Int32").alias("base_count"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "keyword_count"), 1), "Int32").alias("keyword_count"),
-        _arrow_cast(((((col("span"))["start"])["line0"] + lit(1))), "Int64").alias("lineno"),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "decorator_count"), 1), "Int32").alias(
+            "decorator_count"
+        ),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "arg_count"), 1), "Int32").alias(
+            "arg_count"
+        ),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "posonly_count"), 1), "Int32").alias(
+            "posonly_count"
+        ),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "kwonly_count"), 1), "Int32").alias(
+            "kwonly_count"
+        ),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "type_params_count"), 1), "Int32").alias(
+            "type_params_count"
+        ),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "base_count"), 1), "Int32").alias(
+            "base_count"
+        ),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "keyword_count"), 1), "Int32").alias(
+            "keyword_count"
+        ),
+        _arrow_cast((((col("span"))["start"])["line0"] + lit(1)), "Int64").alias("lineno"),
         _arrow_cast(((col("span"))["start"])["col"], "Int64").alias("col_offset"),
-        _arrow_cast(((((col("span"))["end"])["line0"] + lit(1))), "Int64").alias("end_lineno"),
+        _arrow_cast((((col("span"))["end"])["line0"] + lit(1)), "Int64").alias("end_lineno"),
         _arrow_cast(((col("span"))["end"])["col"], "Int64").alias("end_col_offset"),
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])]).alias("span"),
+        f.named_struct(
+            [
+                ("start", (col("span"))["start"]),
+                ("end", (col("span"))["end"]),
+                ("byte_span", (col("span"))["byte_span"]),
+                ("col_unit", (col("span"))["col_unit"]),
+                ("end_exclusive", (col("span"))["end_exclusive"]),
+            ]
+        ).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct([("span", f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])])), ("attrs", col("attrs"))]).alias("ast_record"),
+        f.named_struct(
+            [
+                (
+                    "span",
+                    f.named_struct(
+                        [
+                            ("start", (col("span"))["start"]),
+                            ("end", (col("span"))["end"]),
+                            ("byte_span", (col("span"))["byte_span"]),
+                            ("col_unit", (col("span"))["col_unit"]),
+                            ("end_exclusive", (col("span"))["end_exclusive"]),
+                        ]
+                    ),
+                ),
+                ("attrs", col("attrs")),
+            ]
+        ).alias("ast_record"),
     ),
     "ast_docstrings": (
         col("file_id").alias("file_id"),
@@ -99,16 +170,40 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("owner_name").alias("owner_name"),
         col("docstring").alias("docstring"),
         col("source").alias("source"),
-        _arrow_cast(((((col("span"))["start"])["line0"] + lit(1))), "Int64").alias("lineno"),
+        _arrow_cast((((col("span"))["start"])["line0"] + lit(1)), "Int64").alias("lineno"),
         _arrow_cast(((col("span"))["start"])["col"], "Int64").alias("col_offset"),
-        _arrow_cast(((((col("span"))["end"])["line0"] + lit(1))), "Int64").alias("end_lineno"),
+        _arrow_cast((((col("span"))["end"])["line0"] + lit(1)), "Int64").alias("end_lineno"),
         _arrow_cast(((col("span"))["end"])["col"], "Int64").alias("end_col_offset"),
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])]).alias("span"),
+        f.named_struct(
+            [
+                ("start", (col("span"))["start"]),
+                ("end", (col("span"))["end"]),
+                ("byte_span", (col("span"))["byte_span"]),
+                ("col_unit", (col("span"))["col_unit"]),
+                ("end_exclusive", (col("span"))["end_exclusive"]),
+            ]
+        ).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct([("span", f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])])), ("attrs", col("attrs"))]).alias("ast_record"),
+        f.named_struct(
+            [
+                (
+                    "span",
+                    f.named_struct(
+                        [
+                            ("start", (col("span"))["start"]),
+                            ("end", (col("span"))["end"]),
+                            ("byte_span", (col("span"))["byte_span"]),
+                            ("col_unit", (col("span"))["col_unit"]),
+                            ("end_exclusive", (col("span"))["end_exclusive"]),
+                        ]
+                    ),
+                ),
+                ("attrs", col("attrs")),
+            ]
+        ).alias("ast_record"),
     ),
     "ast_edge_attrs": (
         col("file_id").alias("file_id"),
@@ -136,16 +231,40 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("path").alias("path"),
         col("error_type").alias("error_type"),
         col("message").alias("message"),
-        _arrow_cast(((((col("span"))["start"])["line0"] + lit(1))), "Int64").alias("lineno"),
+        _arrow_cast((((col("span"))["start"])["line0"] + lit(1)), "Int64").alias("lineno"),
         _arrow_cast(((col("span"))["start"])["col"], "Int64").alias("col_offset"),
-        _arrow_cast(((((col("span"))["end"])["line0"] + lit(1))), "Int64").alias("end_lineno"),
+        _arrow_cast((((col("span"))["end"])["line0"] + lit(1)), "Int64").alias("end_lineno"),
         _arrow_cast(((col("span"))["end"])["col"], "Int64").alias("end_col_offset"),
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])]).alias("span"),
+        f.named_struct(
+            [
+                ("start", (col("span"))["start"]),
+                ("end", (col("span"))["end"]),
+                ("byte_span", (col("span"))["byte_span"]),
+                ("col_unit", (col("span"))["col_unit"]),
+                ("end_exclusive", (col("span"))["end_exclusive"]),
+            ]
+        ).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct([("span", f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])])), ("attrs", col("attrs"))]).alias("ast_record"),
+        f.named_struct(
+            [
+                (
+                    "span",
+                    f.named_struct(
+                        [
+                            ("start", (col("span"))["start"]),
+                            ("end", (col("span"))["end"]),
+                            ("byte_span", (col("span"))["byte_span"]),
+                            ("col_unit", (col("span"))["col_unit"]),
+                            ("end_exclusive", (col("span"))["end_exclusive"]),
+                        ]
+                    ),
+                ),
+                ("attrs", col("attrs")),
+            ]
+        ).alias("ast_record"),
     ),
     "ast_imports": (
         col("file_id").alias("file_id"),
@@ -158,16 +277,40 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("asname").alias("asname"),
         col("alias_index").alias("alias_index"),
         col("level").alias("level"),
-        _arrow_cast(((((col("span"))["start"])["line0"] + lit(1))), "Int64").alias("lineno"),
+        _arrow_cast((((col("span"))["start"])["line0"] + lit(1)), "Int64").alias("lineno"),
         _arrow_cast(((col("span"))["start"])["col"], "Int64").alias("col_offset"),
-        _arrow_cast(((((col("span"))["end"])["line0"] + lit(1))), "Int64").alias("end_lineno"),
+        _arrow_cast((((col("span"))["end"])["line0"] + lit(1)), "Int64").alias("end_lineno"),
         _arrow_cast(((col("span"))["end"])["col"], "Int64").alias("end_col_offset"),
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])]).alias("span"),
+        f.named_struct(
+            [
+                ("start", (col("span"))["start"]),
+                ("end", (col("span"))["end"]),
+                ("byte_span", (col("span"))["byte_span"]),
+                ("col_unit", (col("span"))["col_unit"]),
+                ("end_exclusive", (col("span"))["end_exclusive"]),
+            ]
+        ).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct([("span", f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])])), ("attrs", col("attrs"))]).alias("ast_record"),
+        f.named_struct(
+            [
+                (
+                    "span",
+                    f.named_struct(
+                        [
+                            ("start", (col("span"))["start"]),
+                            ("end", (col("span"))["end"]),
+                            ("byte_span", (col("span"))["byte_span"]),
+                            ("col_unit", (col("span"))["col_unit"]),
+                            ("end_exclusive", (col("span"))["end_exclusive"]),
+                        ]
+                    ),
+                ),
+                ("attrs", col("attrs")),
+            ]
+        ).alias("ast_record"),
     ),
     "ast_node_attrs": (
         col("file_id").alias("file_id"),
@@ -187,18 +330,45 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("kind").alias("kind"),
         col("name").alias("name"),
         col("value").alias("value_repr"),
-        _arrow_cast(((((col("span"))["start"])["line0"] + lit(1))), "Int64").alias("lineno"),
+        _arrow_cast((((col("span"))["start"])["line0"] + lit(1)), "Int64").alias("lineno"),
         _arrow_cast(((col("span"))["start"])["col"], "Int64").alias("col_offset"),
-        _arrow_cast(((((col("span"))["end"])["line0"] + lit(1))), "Int64").alias("end_lineno"),
+        _arrow_cast((((col("span"))["end"])["line0"] + lit(1)), "Int64").alias("end_lineno"),
         _arrow_cast(((col("span"))["end"])["col"], "Int64").alias("end_col_offset"),
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
         _arrow_cast(((col("span"))["byte_span"])["byte_start"], "Int64").alias("bstart"),
-        _arrow_cast(((((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"])), "Int64").alias("bend"),
-        f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])]).alias("span"),
+        _arrow_cast(
+            (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]),
+            "Int64",
+        ).alias("bend"),
+        f.named_struct(
+            [
+                ("start", (col("span"))["start"]),
+                ("end", (col("span"))["end"]),
+                ("byte_span", (col("span"))["byte_span"]),
+                ("col_unit", (col("span"))["col_unit"]),
+                ("end_exclusive", (col("span"))["end_exclusive"]),
+            ]
+        ).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct([("span", f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])])), ("attrs", col("attrs"))]).alias("ast_record"),
+        f.named_struct(
+            [
+                (
+                    "span",
+                    f.named_struct(
+                        [
+                            ("start", (col("span"))["start"]),
+                            ("end", (col("span"))["end"]),
+                            ("byte_span", (col("span"))["byte_span"]),
+                            ("col_unit", (col("span"))["col_unit"]),
+                            ("end_exclusive", (col("span"))["end_exclusive"]),
+                        ]
+                    ),
+                ),
+                ("attrs", col("attrs")),
+            ]
+        ).alias("ast_record"),
     ),
     "ast_span_metadata": (
         arrow_metadata(col("nodes")["span"], "line_base").alias("nodes_line_base"),
@@ -209,7 +379,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         arrow_metadata(col("errors")["span"], "end_exclusive").alias("errors_end_exclusive"),
         arrow_metadata(col("docstrings")["span"], "line_base").alias("docstrings_line_base"),
         arrow_metadata(col("docstrings")["span"], "col_unit").alias("docstrings_col_unit"),
-        arrow_metadata(col("docstrings")["span"], "end_exclusive").alias("docstrings_end_exclusive"),
+        arrow_metadata(col("docstrings")["span"], "end_exclusive").alias(
+            "docstrings_end_exclusive"
+        ),
         arrow_metadata(col("imports")["span"], "line_base").alias("imports_line_base"),
         arrow_metadata(col("imports")["span"], "col_unit").alias("imports_col_unit"),
         arrow_metadata(col("imports")["span"], "end_exclusive").alias("imports_end_exclusive"),
@@ -221,23 +393,49 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         arrow_metadata(col("calls")["span"], "end_exclusive").alias("calls_end_exclusive"),
         arrow_metadata(col("type_ignores")["span"], "line_base").alias("type_ignores_line_base"),
         arrow_metadata(col("type_ignores")["span"], "col_unit").alias("type_ignores_col_unit"),
-        arrow_metadata(col("type_ignores")["span"], "end_exclusive").alias("type_ignores_end_exclusive"),
+        arrow_metadata(col("type_ignores")["span"], "end_exclusive").alias(
+            "type_ignores_end_exclusive"
+        ),
     ),
     "ast_type_ignores": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("ast_id").alias("ast_id"),
         col("tag").alias("tag"),
-        _arrow_cast(((((col("span"))["start"])["line0"] + lit(1))), "Int64").alias("lineno"),
+        _arrow_cast((((col("span"))["start"])["line0"] + lit(1)), "Int64").alias("lineno"),
         _arrow_cast(((col("span"))["start"])["col"], "Int64").alias("col_offset"),
-        _arrow_cast(((((col("span"))["end"])["line0"] + lit(1))), "Int64").alias("end_lineno"),
+        _arrow_cast((((col("span"))["end"])["line0"] + lit(1)), "Int64").alias("end_lineno"),
         _arrow_cast(((col("span"))["end"])["col"], "Int64").alias("end_col_offset"),
         _arrow_cast(lit(1), "Int32").alias("line_base"),
         _arrow_cast((col("span"))["col_unit"], "Utf8").alias("col_unit"),
         _arrow_cast((col("span"))["end_exclusive"], "Boolean").alias("end_exclusive"),
-        f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])]).alias("span"),
+        f.named_struct(
+            [
+                ("start", (col("span"))["start"]),
+                ("end", (col("span"))["end"]),
+                ("byte_span", (col("span"))["byte_span"]),
+                ("col_unit", (col("span"))["col_unit"]),
+                ("end_exclusive", (col("span"))["end_exclusive"]),
+            ]
+        ).alias("span"),
         col("attrs").alias("attrs"),
-        f.named_struct([("span", f.named_struct([("start", (col("span"))["start"]), ("end", (col("span"))["end"]), ("byte_span", (col("span"))["byte_span"]), ("col_unit", (col("span"))["col_unit"]), ("end_exclusive", (col("span"))["end_exclusive"])])), ("attrs", col("attrs"))]).alias("ast_record"),
+        f.named_struct(
+            [
+                (
+                    "span",
+                    f.named_struct(
+                        [
+                            ("start", (col("span"))["start"]),
+                            ("end", (col("span"))["end"]),
+                            ("byte_span", (col("span"))["byte_span"]),
+                            ("col_unit", (col("span"))["col_unit"]),
+                            ("end_exclusive", (col("span"))["end_exclusive"]),
+                        ]
+                    ),
+                ),
+                ("attrs", col("attrs")),
+            ]
+        ).alias("ast_record"),
     ),
     "bytecode_errors": (
         col("file_id").alias("file_id"),
@@ -250,20 +448,57 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "bytecode_exception_table": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("exc_index").alias("exc_index"),
         col("start_offset").alias("start_offset"),
         col("end_offset").alias("end_offset"),
         col("target_offset").alias("target_offset"),
         col("depth").alias("depth"),
         col("lasti").alias("lasti"),
-        prefixed_hash64("bc_exc", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("exc_index"), col("start_offset"), col("end_offset"), col("target_offset"))).alias("exc_entry_id"),
+        prefixed_hash64(
+            "bc_exc",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("exc_index"),
+                col("start_offset"),
+                col("end_offset"),
+                col("target_offset"),
+            ),
+        ).alias("exc_entry_id"),
     ),
     "cst_call_args": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("file_sha256").alias("file_sha256"),
-        stable_id("cst_call", f.concat_ws("\u001f", lit("cst_call"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("call_id"),
+        stable_id(
+            "cst_call",
+            f.concat_ws(
+                "\u001f",
+                lit("cst_call"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("call_id"),
         col("call_bstart").alias("call_bstart"),
         col("call_bend").alias("call_bend"),
         col("arg_index").alias("arg_index"),
@@ -292,7 +527,16 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("file_sha256").alias("file_sha256"),
-        stable_id("cst_call", f.concat_ws("\u001f", lit("cst_call"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("call_id"),
+        stable_id(
+            "cst_call",
+            f.concat_ws(
+                "\u001f",
+                lit("cst_call"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("call_id"),
         col("call_bstart").alias("call_bstart"),
         col("call_bend").alias("call_bend"),
         col("callee_bstart").alias("callee_bstart"),
@@ -305,7 +549,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("callee_fqns").alias("callee_fqns"),
         col("inferred_type").alias("inferred_type"),
         col("attrs").alias("attrs"),
-        prefixed_hash64("span", f.concat_ws(":", col("file_id"), col("call_bstart"), col("call_bend"))).alias("span_id"),
+        prefixed_hash64(
+            "span", f.concat_ws(":", col("file_id"), col("call_bstart"), col("call_bend"))
+        ).alias("span_id"),
     ),
     "cst_callsites_attr_origin": (
         col("file_id").alias("file_id"),
@@ -324,7 +570,21 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("file_sha256").alias("file_sha256"),
-        f.when((col("owner_def_bstart").is_null() | col("owner_def_bend").is_null()), lit(None)).otherwise(stable_id("cst_def", f.concat_ws("\u001f", lit("cst_def"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None"))))).alias("owner_def_id"),
+        f.when((col("owner_def_bstart").is_null() | col("owner_def_bend").is_null()), lit(None))
+        .otherwise(
+            stable_id(
+                "cst_def",
+                f.concat_ws(
+                    "\u001f",
+                    lit("cst_def"),
+                    f.coalesce(lit("None")),
+                    f.coalesce(lit("None")),
+                    f.coalesce(lit("None")),
+                    f.coalesce(lit("None")),
+                ),
+            )
+        )
+        .alias("owner_def_id"),
         col("owner_kind").alias("owner_kind"),
         col("owner_def_bstart").alias("owner_def_bstart"),
         col("owner_def_bend").alias("owner_def_bend"),
@@ -352,7 +612,17 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("file_sha256").alias("file_sha256"),
-        stable_id("cst_def", f.concat_ws("\u001f", lit("cst_def"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("def_id"),
+        stable_id(
+            "cst_def",
+            f.concat_ws(
+                "\u001f",
+                lit("cst_def"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("def_id"),
         col("container_def_kind").alias("container_def_kind"),
         col("container_def_bstart").alias("container_def_bstart"),
         col("container_def_bend").alias("container_def_bend"),
@@ -367,8 +637,24 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("docstring").alias("docstring"),
         col("decorator_count").alias("decorator_count"),
         col("attrs").alias("attrs"),
-        f.when(col("container_def_kind").is_null(), lit(None)).otherwise(stable_id("cst_def", f.concat_ws("\u001f", lit("cst_def"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None"))))).alias("container_def_id"),
-        prefixed_hash64("span", f.concat_ws(":", col("file_id"), col("def_bstart"), col("def_bend"))).alias("span_id"),
+        f.when(col("container_def_kind").is_null(), lit(None))
+        .otherwise(
+            stable_id(
+                "cst_def",
+                f.concat_ws(
+                    "\u001f",
+                    lit("cst_def"),
+                    f.coalesce(lit("None")),
+                    f.coalesce(lit("None")),
+                    f.coalesce(lit("None")),
+                    f.coalesce(lit("None")),
+                ),
+            )
+        )
+        .alias("container_def_id"),
+        prefixed_hash64(
+            "span", f.concat_ws(":", col("file_id"), col("def_bstart"), col("def_bend"))
+        ).alias("span_id"),
     ),
     "cst_defs_attr_origin": (
         col("file_id").alias("file_id"),
@@ -387,7 +673,21 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("file_sha256").alias("file_sha256"),
-        f.when((col("owner_def_bstart").is_null() | col("owner_def_bend").is_null()), lit(None)).otherwise(stable_id("cst_def", f.concat_ws("\u001f", lit("cst_def"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None"))))).alias("owner_def_id"),
+        f.when((col("owner_def_bstart").is_null() | col("owner_def_bend").is_null()), lit(None))
+        .otherwise(
+            stable_id(
+                "cst_def",
+                f.concat_ws(
+                    "\u001f",
+                    lit("cst_def"),
+                    f.coalesce(lit("None")),
+                    f.coalesce(lit("None")),
+                    f.coalesce(lit("None")),
+                    f.coalesce(lit("None")),
+                ),
+            )
+        )
+        .alias("owner_def_id"),
         col("owner_kind").alias("owner_kind"),
         col("owner_def_bstart").alias("owner_def_bstart"),
         col("owner_def_bend").alias("owner_def_bend"),
@@ -431,8 +731,13 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("alias_bstart").alias("alias_bstart"),
         col("alias_bend").alias("alias_bend"),
         col("attrs").alias("attrs"),
-        prefixed_hash64("cst_import", f.concat_ws(":", col("file_id"), col("kind"), col("alias_bstart"), col("alias_bend"))).alias("import_id"),
-        prefixed_hash64("span", f.concat_ws(":", col("file_id"), col("alias_bstart"), col("alias_bend"))).alias("span_id"),
+        prefixed_hash64(
+            "cst_import",
+            f.concat_ws(":", col("file_id"), col("kind"), col("alias_bstart"), col("alias_bend")),
+        ).alias("import_id"),
+        prefixed_hash64(
+            "span", f.concat_ws(":", col("file_id"), col("alias_bstart"), col("alias_bend"))
+        ).alias("span_id"),
     ),
     "cst_imports_attr_origin": (
         col("file_id").alias("file_id"),
@@ -510,7 +815,16 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("file_id").alias("file_id"),
         col("path").alias("path"),
         col("file_sha256").alias("file_sha256"),
-        stable_id("cst_ref", f.concat_ws("\u001f", lit("cst_ref"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("ref_id"),
+        stable_id(
+            "cst_ref",
+            f.concat_ws(
+                "\u001f",
+                lit("cst_ref"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("ref_id"),
         col("ref_kind").alias("ref_kind"),
         col("ref_text").alias("ref_text"),
         col("expr_ctx").alias("expr_ctx"),
@@ -538,53 +852,173 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     ),
     "cst_schema_diagnostics": (
         f.arrow_typeof(col("nodes")).alias("nodes_type"),
-        f.arrow_typeof(_arrow_cast(col("nodes"), "list<item: struct<cst_id: int64\nnot null, kind: string, span:\nextension<codeintel.span<_SemanticExtensionType>>, span_ws:\nextension<codeintel.span<_SemanticExtensionType>>, attrs: map<string,\nstring>>>")).alias("nodes_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("nodes"),
+                "list<item: struct<cst_id: int64\nnot null, kind: string, span:\nextension<codeintel.span<_SemanticExtensionType>>, span_ws:\nextension<codeintel.span<_SemanticExtensionType>>, attrs: map<string,\nstring>>>",
+            )
+        ).alias("nodes_cast_type"),
         arrow_metadata(col("nodes")).alias("nodes_meta"),
-        arrow_metadata(_arrow_cast(col("nodes"), "list<item: struct<cst_id: int64\nnot null, kind: string, span:\nextension<codeintel.span<_SemanticExtensionType>>, span_ws:\nextension<codeintel.span<_SemanticExtensionType>>, attrs: map<string,\nstring>>>")).alias("nodes_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("nodes"),
+                "list<item: struct<cst_id: int64\nnot null, kind: string, span:\nextension<codeintel.span<_SemanticExtensionType>>, span_ws:\nextension<codeintel.span<_SemanticExtensionType>>, attrs: map<string,\nstring>>>",
+            )
+        ).alias("nodes_cast_meta"),
         f.arrow_typeof(col("edges")).alias("edges_type"),
-        f.arrow_typeof(_arrow_cast(col("edges"), "list<item: struct<src: int64 not\nnull, dst: int64 not null, kind: string, slot: string, idx: int32, attrs:\nmap<string, string>>>")).alias("edges_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("edges"),
+                "list<item: struct<src: int64 not\nnull, dst: int64 not null, kind: string, slot: string, idx: int32, attrs:\nmap<string, string>>>",
+            )
+        ).alias("edges_cast_type"),
         arrow_metadata(col("edges")).alias("edges_meta"),
-        arrow_metadata(_arrow_cast(col("edges"), "list<item: struct<src: int64\nnot null, dst: int64 not null, kind: string, slot: string, idx: int32,\nattrs: map<string, string>>>")).alias("edges_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("edges"),
+                "list<item: struct<src: int64\nnot null, dst: int64 not null, kind: string, slot: string, idx: int32,\nattrs: map<string, string>>>",
+            )
+        ).alias("edges_cast_meta"),
         f.arrow_typeof(col("parse_manifest")).alias("parse_manifest_type"),
-        f.arrow_typeof(_arrow_cast(col("parse_manifest"), "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nencoding: string, default_indent: string, default_newline: string,\nhas_trailing_newline: bool, future_imports: list<item: string>, module_name:\nstring, package_name: string, libcst_version: string, parser_backend:\nstring, parsed_python_version: string, schema_fingerprint: string>>")).alias("parse_manifest_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("parse_manifest"),
+                "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nencoding: string, default_indent: string, default_newline: string,\nhas_trailing_newline: bool, future_imports: list<item: string>, module_name:\nstring, package_name: string, libcst_version: string, parser_backend:\nstring, parsed_python_version: string, schema_fingerprint: string>>",
+            )
+        ).alias("parse_manifest_cast_type"),
         arrow_metadata(col("parse_manifest")).alias("parse_manifest_meta"),
-        arrow_metadata(_arrow_cast(col("parse_manifest"), "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nencoding: string, default_indent: string, default_newline: string,\nhas_trailing_newline: bool, future_imports: list<item: string>, module_name:\nstring, package_name: string, libcst_version: string, parser_backend:\nstring, parsed_python_version: string, schema_fingerprint: string>>")).alias("parse_manifest_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("parse_manifest"),
+                "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nencoding: string, default_indent: string, default_newline: string,\nhas_trailing_newline: bool, future_imports: list<item: string>, module_name:\nstring, package_name: string, libcst_version: string, parser_backend:\nstring, parsed_python_version: string, schema_fingerprint: string>>",
+            )
+        ).alias("parse_manifest_cast_meta"),
         f.arrow_typeof(col("parse_errors")).alias("parse_errors_type"),
-        f.arrow_typeof(_arrow_cast(col("parse_errors"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, error_type:\nstring, message: string, raw_line: int64, raw_column: int64, editor_line:\nint64, editor_column: int64, context: string, line_base: int32, col_unit:\nstring, end_exclusive: bool, meta: map<string, string>>>")).alias("parse_errors_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("parse_errors"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, error_type:\nstring, message: string, raw_line: int64, raw_column: int64, editor_line:\nint64, editor_column: int64, context: string, line_base: int32, col_unit:\nstring, end_exclusive: bool, meta: map<string, string>>>",
+            )
+        ).alias("parse_errors_cast_type"),
         arrow_metadata(col("parse_errors")).alias("parse_errors_meta"),
-        arrow_metadata(_arrow_cast(col("parse_errors"), "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nerror_type: string, message: string, raw_line: int64, raw_column: int64,\neditor_line: int64, editor_column: int64, context: string, line_base: int32,\ncol_unit: string, end_exclusive: bool, meta: map<string, string>>>")).alias("parse_errors_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("parse_errors"),
+                "list<item:\nstruct<file_id: string not null, path: string not null, file_sha256: string,\nerror_type: string, message: string, raw_line: int64, raw_column: int64,\neditor_line: int64, editor_column: int64, context: string, line_base: int32,\ncol_unit: string, end_exclusive: bool, meta: map<string, string>>>",
+            )
+        ).alias("parse_errors_cast_meta"),
         f.arrow_typeof(col("refs")).alias("refs_type"),
-        f.arrow_typeof(_arrow_cast(col("refs"), "list<item: struct<file_id: string\nnot null, path: string not null, file_sha256: string, ref_id: string,\nref_kind: string, ref_text: string, expr_ctx: string, scope_type: string,\nscope_name: string, scope_role: string, parent_kind: string, inferred_type:\nstring, bstart: int64, bend: int64, attrs: map<string, string>>>")).alias("refs_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("refs"),
+                "list<item: struct<file_id: string\nnot null, path: string not null, file_sha256: string, ref_id: string,\nref_kind: string, ref_text: string, expr_ctx: string, scope_type: string,\nscope_name: string, scope_role: string, parent_kind: string, inferred_type:\nstring, bstart: int64, bend: int64, attrs: map<string, string>>>",
+            )
+        ).alias("refs_cast_type"),
         arrow_metadata(col("refs")).alias("refs_meta"),
-        arrow_metadata(_arrow_cast(col("refs"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, ref_id: string,\nref_kind: string, ref_text: string, expr_ctx: string, scope_type: string,\nscope_name: string, scope_role: string, parent_kind: string, inferred_type:\nstring, bstart: int64, bend: int64, attrs: map<string, string>>>")).alias("refs_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("refs"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, ref_id: string,\nref_kind: string, ref_text: string, expr_ctx: string, scope_type: string,\nscope_name: string, scope_role: string, parent_kind: string, inferred_type:\nstring, bstart: int64, bend: int64, attrs: map<string, string>>>",
+            )
+        ).alias("refs_cast_meta"),
         f.arrow_typeof(col("imports")).alias("imports_type"),
-        f.arrow_typeof(_arrow_cast(col("imports"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, kind: string,\nmodule: string, relative_level: int32, name: string, asname: string,\nis_star: bool, stmt_bstart: int64, stmt_bend: int64, alias_bstart: int64,\nalias_bend: int64, attrs: map<string, string>>>")).alias("imports_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("imports"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, kind: string,\nmodule: string, relative_level: int32, name: string, asname: string,\nis_star: bool, stmt_bstart: int64, stmt_bend: int64, alias_bstart: int64,\nalias_bend: int64, attrs: map<string, string>>>",
+            )
+        ).alias("imports_cast_type"),
         arrow_metadata(col("imports")).alias("imports_meta"),
-        arrow_metadata(_arrow_cast(col("imports"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, kind: string,\nmodule: string, relative_level: int32, name: string, asname: string,\nis_star: bool, stmt_bstart: int64, stmt_bend: int64, alias_bstart: int64,\nalias_bend: int64, attrs: map<string, string>>>")).alias("imports_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("imports"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, kind: string,\nmodule: string, relative_level: int32, name: string, asname: string,\nis_star: bool, stmt_bstart: int64, stmt_bend: int64, alias_bstart: int64,\nalias_bend: int64, attrs: map<string, string>>>",
+            )
+        ).alias("imports_cast_meta"),
         f.arrow_typeof(col("callsites")).alias("callsites_type"),
-        f.arrow_typeof(_arrow_cast(col("callsites"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, call_id:\nstring, call_bstart: int64, call_bend: int64, callee_bstart: int64,\ncallee_bend: int64, callee_shape: string, callee_text: string, arg_count:\nint32, callee_dotted: string, callee_qnames: list<item: struct<name: string,\nsource: string>>, callee_fqns: list<item: string>, inferred_type: string,\nattrs: map<string, string>>>")).alias("callsites_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("callsites"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, call_id:\nstring, call_bstart: int64, call_bend: int64, callee_bstart: int64,\ncallee_bend: int64, callee_shape: string, callee_text: string, arg_count:\nint32, callee_dotted: string, callee_qnames: list<item: struct<name: string,\nsource: string>>, callee_fqns: list<item: string>, inferred_type: string,\nattrs: map<string, string>>>",
+            )
+        ).alias("callsites_cast_type"),
         arrow_metadata(col("callsites")).alias("callsites_meta"),
-        arrow_metadata(_arrow_cast(col("callsites"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, call_id:\nstring, call_bstart: int64, call_bend: int64, callee_bstart: int64,\ncallee_bend: int64, callee_shape: string, callee_text: string, arg_count:\nint32, callee_dotted: string, callee_qnames: list<item: struct<name: string,\nsource: string>>, callee_fqns: list<item: string>, inferred_type: string,\nattrs: map<string, string>>>")).alias("callsites_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("callsites"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, call_id:\nstring, call_bstart: int64, call_bend: int64, callee_bstart: int64,\ncallee_bend: int64, callee_shape: string, callee_text: string, arg_count:\nint32, callee_dotted: string, callee_qnames: list<item: struct<name: string,\nsource: string>>, callee_fqns: list<item: string>, inferred_type: string,\nattrs: map<string, string>>>",
+            )
+        ).alias("callsites_cast_meta"),
         f.arrow_typeof(col("defs")).alias("defs_type"),
-        f.arrow_typeof(_arrow_cast(col("defs"), "list<item: struct<file_id: string\nnot null, path: string not null, file_sha256: string, def_id: string,\ncontainer_def_kind: string, container_def_bstart: int64, container_def_bend:\nint64, kind: string, name: string, def_bstart: int64, def_bend: int64,\nname_bstart: int64, name_bend: int64, qnames: list<item: struct<name:\nstring, source: string>>, def_fqns: list<item: string>, docstring: string,\ndecorator_count: int32, attrs: map<string, string>>>")).alias("defs_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("defs"),
+                "list<item: struct<file_id: string\nnot null, path: string not null, file_sha256: string, def_id: string,\ncontainer_def_kind: string, container_def_bstart: int64, container_def_bend:\nint64, kind: string, name: string, def_bstart: int64, def_bend: int64,\nname_bstart: int64, name_bend: int64, qnames: list<item: struct<name:\nstring, source: string>>, def_fqns: list<item: string>, docstring: string,\ndecorator_count: int32, attrs: map<string, string>>>",
+            )
+        ).alias("defs_cast_type"),
         arrow_metadata(col("defs")).alias("defs_meta"),
-        arrow_metadata(_arrow_cast(col("defs"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, def_id: string,\ncontainer_def_kind: string, container_def_bstart: int64, container_def_bend:\nint64, kind: string, name: string, def_bstart: int64, def_bend: int64,\nname_bstart: int64, name_bend: int64, qnames: list<item: struct<name:\nstring, source: string>>, def_fqns: list<item: string>, docstring: string,\ndecorator_count: int32, attrs: map<string, string>>>")).alias("defs_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("defs"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, def_id: string,\ncontainer_def_kind: string, container_def_bstart: int64, container_def_bend:\nint64, kind: string, name: string, def_bstart: int64, def_bend: int64,\nname_bstart: int64, name_bend: int64, qnames: list<item: struct<name:\nstring, source: string>>, def_fqns: list<item: string>, docstring: string,\ndecorator_count: int32, attrs: map<string, string>>>",
+            )
+        ).alias("defs_cast_meta"),
         f.arrow_typeof(col("type_exprs")).alias("type_exprs_type"),
-        f.arrow_typeof(_arrow_cast(col("type_exprs"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_kind:\nstring, owner_def_bstart: int64, owner_def_bend: int64, param_name: string,\nexpr_kind: string, expr_role: string, bstart: int64, bend: int64, expr_text:\nstring>>")).alias("type_exprs_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("type_exprs"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_kind:\nstring, owner_def_bstart: int64, owner_def_bend: int64, param_name: string,\nexpr_kind: string, expr_role: string, bstart: int64, bend: int64, expr_text:\nstring>>",
+            )
+        ).alias("type_exprs_cast_type"),
         arrow_metadata(col("type_exprs")).alias("type_exprs_meta"),
-        arrow_metadata(_arrow_cast(col("type_exprs"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_kind:\nstring, owner_def_bstart: int64, owner_def_bend: int64, param_name: string,\nexpr_kind: string, expr_role: string, bstart: int64, bend: int64, expr_text:\nstring>>")).alias("type_exprs_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("type_exprs"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_kind:\nstring, owner_def_bstart: int64, owner_def_bend: int64, param_name: string,\nexpr_kind: string, expr_role: string, bstart: int64, bend: int64, expr_text:\nstring>>",
+            )
+        ).alias("type_exprs_cast_meta"),
         f.arrow_typeof(col("docstrings")).alias("docstrings_type"),
-        f.arrow_typeof(_arrow_cast(col("docstrings"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_id:\nstring, owner_kind: string, owner_def_bstart: int64, owner_def_bend: int64,\ndocstring: string, bstart: int64, bend: int64>>")).alias("docstrings_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("docstrings"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_id:\nstring, owner_kind: string, owner_def_bstart: int64, owner_def_bend: int64,\ndocstring: string, bstart: int64, bend: int64>>",
+            )
+        ).alias("docstrings_cast_type"),
         arrow_metadata(col("docstrings")).alias("docstrings_meta"),
-        arrow_metadata(_arrow_cast(col("docstrings"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_id:\nstring, owner_kind: string, owner_def_bstart: int64, owner_def_bend: int64,\ndocstring: string, bstart: int64, bend: int64>>")).alias("docstrings_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("docstrings"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_id:\nstring, owner_kind: string, owner_def_bstart: int64, owner_def_bend: int64,\ndocstring: string, bstart: int64, bend: int64>>",
+            )
+        ).alias("docstrings_cast_meta"),
         f.arrow_typeof(col("decorators")).alias("decorators_type"),
-        f.arrow_typeof(_arrow_cast(col("decorators"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_id:\nstring, owner_kind: string, owner_def_bstart: int64, owner_def_bend: int64,\ndecorator_text: string, decorator_index: int32, bstart: int64, bend:\nint64>>")).alias("decorators_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("decorators"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_id:\nstring, owner_kind: string, owner_def_bstart: int64, owner_def_bend: int64,\ndecorator_text: string, decorator_index: int32, bstart: int64, bend:\nint64>>",
+            )
+        ).alias("decorators_cast_type"),
         arrow_metadata(col("decorators")).alias("decorators_meta"),
-        arrow_metadata(_arrow_cast(col("decorators"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_id:\nstring, owner_kind: string, owner_def_bstart: int64, owner_def_bend: int64,\ndecorator_text: string, decorator_index: int32, bstart: int64, bend:\nint64>>")).alias("decorators_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("decorators"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, owner_def_id:\nstring, owner_kind: string, owner_def_bstart: int64, owner_def_bend: int64,\ndecorator_text: string, decorator_index: int32, bstart: int64, bend:\nint64>>",
+            )
+        ).alias("decorators_cast_meta"),
         f.arrow_typeof(col("call_args")).alias("call_args_type"),
-        f.arrow_typeof(_arrow_cast(col("call_args"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, call_id:\nstring, call_bstart: int64, call_bend: int64, arg_index: int32, keyword:\nstring, star: string, arg_text: string, bstart: int64, bend: int64>>")).alias("call_args_cast_type"),
+        f.arrow_typeof(
+            _arrow_cast(
+                col("call_args"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, call_id:\nstring, call_bstart: int64, call_bend: int64, arg_index: int32, keyword:\nstring, star: string, arg_text: string, bstart: int64, bend: int64>>",
+            )
+        ).alias("call_args_cast_type"),
         arrow_metadata(col("call_args")).alias("call_args_meta"),
-        arrow_metadata(_arrow_cast(col("call_args"), "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, call_id:\nstring, call_bstart: int64, call_bend: int64, arg_index: int32, keyword:\nstring, star: string, arg_text: string, bstart: int64, bend: int64>>")).alias("call_args_cast_meta"),
+        arrow_metadata(
+            _arrow_cast(
+                col("call_args"),
+                "list<item: struct<file_id:\nstring not null, path: string not null, file_sha256: string, call_id:\nstring, call_bstart: int64, call_bend: int64, arg_index: int32, keyword:\nstring, star: string, arg_text: string, bstart: int64, bend: int64>>",
+            )
+        ).alias("call_args_cast_meta"),
         f.arrow_typeof(col("attrs")).alias("attrs_type"),
         arrow_metadata(col("attrs")).alias("attrs_meta"),
     ),
@@ -601,34 +1035,126 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("bstart").alias("bstart"),
         col("bend").alias("bend"),
         col("expr_text").alias("expr_text"),
-        prefixed_hash64("cst_type_expr", f.concat_ws(":", col("path"), col("bstart"), col("bend"))).alias("type_expr_id"),
-        prefixed_hash64("cst_def", f.concat_ws(":", col("file_id"), col("owner_def_kind"), col("owner_def_bstart"), col("owner_def_bend"))).alias("owner_def_id"),
+        prefixed_hash64(
+            "cst_type_expr", f.concat_ws(":", col("path"), col("bstart"), col("bend"))
+        ).alias("type_expr_id"),
+        prefixed_hash64(
+            "cst_def",
+            f.concat_ws(
+                ":",
+                col("file_id"),
+                col("owner_def_kind"),
+                col("owner_def_bstart"),
+                col("owner_def_bend"),
+            ),
+        ).alias("owner_def_id"),
     ),
     "py_bc_blocks": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("start_offset").alias("start_offset"),
         col("end_offset").alias("end_offset"),
         col("kind").alias("kind"),
-        prefixed_hash64("bc_block", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("start_offset"), col("end_offset"))).alias("block_id"),
+        prefixed_hash64(
+            "bc_block",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("start_offset"),
+                col("end_offset"),
+            ),
+        ).alias("block_id"),
     ),
     "py_bc_cache_entries": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("instr_index").alias("instr_index"),
         col("offset").alias("offset"),
         col("name").alias("name"),
         col("size").alias("size"),
         col("data_hex").alias("data_hex"),
-        prefixed_hash64("bc_instr", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("instr_index"), col("offset"))).alias("instr_id"),
-        prefixed_hash64("bc_cache", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("instr_index"), col("offset"), col("name"), col("size"), col("data_hex"))).alias("cache_entry_id"),
+        prefixed_hash64(
+            "bc_instr",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("instr_index"),
+                col("offset"),
+            ),
+        ).alias("instr_id"),
+        prefixed_hash64(
+            "bc_cache",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("instr_index"),
+                col("offset"),
+                col("name"),
+                col("size"),
+                col("data_hex"),
+            ),
+        ).alias("cache_entry_id"),
     ),
     "py_bc_cfg_edge_attrs": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("edge_key").alias("edge_key"),
         col("kind").alias("kind"),
         (col("kv"))["key"].alias("attr_key"),
@@ -641,7 +1167,16 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "py_bc_cfg_edges": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("src_block_start").alias("src_block_start"),
         col("src_block_end").alias("src_block_end"),
         col("dst_block_start").alias("dst_block_start"),
@@ -649,19 +1184,135 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("kind").alias("kind"),
         col("edge_key").alias("edge_key"),
         list_extract(map_extract(col("attrs"), "jump_kind"), 1).alias("jump_kind"),
-        _arrow_cast(list_extract(map_extract(col("attrs"), "jump_label"), 1), "Int32").alias("jump_label"),
+        _arrow_cast(list_extract(map_extract(col("attrs"), "jump_label"), 1), "Int32").alias(
+            "jump_label"
+        ),
         col("cond_instr_index").alias("cond_instr_index"),
         col("cond_instr_offset").alias("cond_instr_offset"),
         col("exc_index").alias("exc_index"),
-        prefixed_hash64("bc_block", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("src_block_start"), col("src_block_end"))).alias("src_block_id"),
-        prefixed_hash64("bc_block", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("dst_block_start"), col("dst_block_end"))).alias("dst_block_id"),
-        prefixed_hash64("bc_instr", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("cond_instr_index"), col("cond_instr_offset"))).alias("cond_instr_id"),
-        prefixed_hash64("bc_edge", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), prefixed_hash64("bc_block", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("src_block_start"), col("src_block_end"))), prefixed_hash64("bc_block", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("dst_block_start"), col("dst_block_end"))), col("kind"), col("edge_key"), col("exc_index"))).alias("edge_id"),
+        prefixed_hash64(
+            "bc_block",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("src_block_start"),
+                col("src_block_end"),
+            ),
+        ).alias("src_block_id"),
+        prefixed_hash64(
+            "bc_block",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("dst_block_start"),
+                col("dst_block_end"),
+            ),
+        ).alias("dst_block_id"),
+        prefixed_hash64(
+            "bc_instr",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("cond_instr_index"),
+                col("cond_instr_offset"),
+            ),
+        ).alias("cond_instr_id"),
+        prefixed_hash64(
+            "bc_edge",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                prefixed_hash64(
+                    "bc_block",
+                    f.concat_ws(
+                        ":",
+                        stable_id(
+                            "code",
+                            f.concat_ws(
+                                "\u001f",
+                                lit("code"),
+                                f.coalesce(lit("None")),
+                                f.coalesce(lit("None")),
+                                f.coalesce(lit("None")),
+                            ),
+                        ),
+                        col("src_block_start"),
+                        col("src_block_end"),
+                    ),
+                ),
+                prefixed_hash64(
+                    "bc_block",
+                    f.concat_ws(
+                        ":",
+                        stable_id(
+                            "code",
+                            f.concat_ws(
+                                "\u001f",
+                                lit("code"),
+                                f.coalesce(lit("None")),
+                                f.coalesce(lit("None")),
+                                f.coalesce(lit("None")),
+                            ),
+                        ),
+                        col("dst_block_start"),
+                        col("dst_block_end"),
+                    ),
+                ),
+                col("kind"),
+                col("edge_key"),
+                col("exc_index"),
+            ),
+        ).alias("edge_id"),
     ),
     "py_bc_code_units": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("qualname").alias("qualpath"),
         col("co_qualname").alias("co_qualname"),
         col("co_filename").alias("co_filename"),
@@ -685,19 +1336,72 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "py_bc_consts": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("const_index").alias("const_index"),
         col("const_repr").alias("const_repr"),
-        prefixed_hash64("bc_const", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("const_index"), col("const_repr"))).alias("const_id"),
+        prefixed_hash64(
+            "bc_const",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("const_index"),
+                col("const_repr"),
+            ),
+        ).alias("const_id"),
     ),
     "py_bc_dfg_edges": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("src_instr_index").alias("src_instr_index"),
         col("dst_instr_index").alias("dst_instr_index"),
         col("kind").alias("kind"),
-        prefixed_hash64("bc_dfg", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("src_instr_index"), col("dst_instr_index"), col("kind"))).alias("edge_id"),
+        prefixed_hash64(
+            "bc_dfg",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("src_instr_index"),
+                col("dst_instr_index"),
+                col("kind"),
+            ),
+        ).alias("edge_id"),
     ),
     "py_bc_error_attrs": (
         col("file_id").alias("file_id"),
@@ -714,7 +1418,16 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "py_bc_flags_detail": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         (col("flags_detail"))["is_optimized"].alias("is_optimized"),
         (col("flags_detail"))["is_newlocals"].alias("is_newlocals"),
         (col("flags_detail"))["has_varargs"].alias("has_varargs"),
@@ -729,7 +1442,16 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "py_bc_instruction_attr_keys": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("instr_index").alias("instr_index"),
         col("offset").alias("offset"),
         map_keys(col("attrs")).alias("attr_key"),
@@ -749,7 +1471,16 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "py_bc_instruction_attrs": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("instr_index").alias("instr_index"),
         col("offset").alias("offset"),
         (col("kv"))["key"].alias("attr_key"),
@@ -780,12 +1511,36 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("instr_id").alias("instr_id"),
         col("instr_index").alias("instr_index"),
         col("offset").alias("offset"),
-        f.named_struct([("start", f.named_struct([("line0", col("pos_start_line")), ("col", col("pos_start_col"))])), ("end", f.named_struct([("line0", col("pos_end_line")), ("col", col("pos_end_col"))])), ("col_unit", col("col_unit")), ("end_exclusive", col("end_exclusive"))]).alias("span"),
+        f.named_struct(
+            [
+                (
+                    "start",
+                    f.named_struct(
+                        [("line0", col("pos_start_line")), ("col", col("pos_start_col"))]
+                    ),
+                ),
+                (
+                    "end",
+                    f.named_struct([("line0", col("pos_end_line")), ("col", col("pos_end_col"))]),
+                ),
+                ("col_unit", col("col_unit")),
+                ("end_exclusive", col("end_exclusive")),
+            ]
+        ).alias("span"),
     ),
     "py_bc_instructions": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("instr_index").alias("instr_index"),
         col("offset").alias("offset"),
         col("start_offset").alias("start_offset"),
@@ -822,14 +1577,44 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         )
         .otherwise(lit(None))
         .alias("end_exclusive"),
-        union_extract(list_extract(map_extract(col("attrs"), "stack_depth_before"), 1), "int_value").alias("stack_depth_before"),
-        union_extract(list_extract(map_extract(col("attrs"), "stack_depth_after"), 1), "int_value").alias("stack_depth_after"),
-        prefixed_hash64("bc_instr", f.concat_ws(":", stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))), col("instr_index"), col("offset"))).alias("instr_id"),
+        union_extract(
+            list_extract(map_extract(col("attrs"), "stack_depth_before"), 1), "int_value"
+        ).alias("stack_depth_before"),
+        union_extract(
+            list_extract(map_extract(col("attrs"), "stack_depth_after"), 1), "int_value"
+        ).alias("stack_depth_after"),
+        prefixed_hash64(
+            "bc_instr",
+            f.concat_ws(
+                ":",
+                stable_id(
+                    "code",
+                    f.concat_ws(
+                        "\u001f",
+                        lit("code"),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                        f.coalesce(lit("None")),
+                    ),
+                ),
+                col("instr_index"),
+                col("offset"),
+            ),
+        ).alias("instr_id"),
     ),
     "py_bc_line_table": (
         col("file_id").alias("file_id"),
         col("path").alias("path"),
-        stable_id("code", f.concat_ws("\u001f", lit("code"), f.coalesce(lit("None")), f.coalesce(lit("None")), f.coalesce(lit("None")))).alias("code_unit_id"),
+        stable_id(
+            "code",
+            f.concat_ws(
+                "\u001f",
+                lit("code"),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+                f.coalesce(lit("None")),
+            ),
+        ).alias("code_unit_id"),
         col("offset").alias("offset"),
         col("line1").alias("line1"),
         col("line0").alias("line0"),
@@ -840,7 +1625,11 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         arrow_metadata(col("code_objects")["line_table"]).alias("line_table_metadata"),
     ),
     "scip_diagnostics": (
-        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None)).otherwise(stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))).alias("document_id"),
+        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None))
+        .otherwise(
+            stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))
+        )
+        .alias("document_id"),
         col("path").alias("path"),
         col("severity").alias("severity"),
         col("message").alias("message"),
@@ -854,7 +1643,11 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("end_exclusive").alias("end_exclusive"),
     ),
     "scip_document_symbols": (
-        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None)).otherwise(stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))).alias("document_id"),
+        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None))
+        .otherwise(
+            stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))
+        )
+        .alias("document_id"),
         col("path").alias("path"),
         col("symbol").alias("symbol"),
         col("display_name").alias("display_name"),
@@ -866,20 +1659,40 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("signature_language").alias("signature_language"),
     ),
     "scip_document_texts": (
-        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None)).otherwise(stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))).alias("document_id"),
+        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None))
+        .otherwise(
+            stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))
+        )
+        .alias("document_id"),
         col("path").alias("path"),
         col("text").alias("text"),
     ),
     "scip_documents": (
-        f.when((col("index_path").is_null() | (col("index_path") == lit(""))), lit(None)).otherwise(stable_id("scip_index", f.concat_ws("\u001f", lit("scip_index"), f.coalesce(lit("None"))))).alias("index_id"),
-        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None)).otherwise(stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))).alias("document_id"),
+        f.when((col("index_path").is_null() | (col("index_path") == lit(""))), lit(None))
+        .otherwise(
+            stable_id(
+                "scip_index", f.concat_ws("\u001f", lit("scip_index"), f.coalesce(lit("None")))
+            )
+        )
+        .alias("index_id"),
+        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None))
+        .otherwise(
+            stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))
+        )
+        .alias("document_id"),
         col("path").alias("path"),
         col("language").alias("language"),
         col("position_encoding").alias("position_encoding"),
     ),
     "scip_external_symbol_information": (),
     "scip_index_stats": (
-        f.when((col("index_path").is_null() | (col("index_path") == lit(""))), lit(None)).otherwise(stable_id("scip_index", f.concat_ws("\u001f", lit("scip_index"), f.coalesce(lit("None"))))).alias("index_id"),
+        f.when((col("index_path").is_null() | (col("index_path") == lit(""))), lit(None))
+        .otherwise(
+            stable_id(
+                "scip_index", f.concat_ws("\u001f", lit("scip_index"), f.coalesce(lit("None")))
+            )
+        )
+        .alias("index_id"),
         col("document_count").alias("document_count"),
         col("occurrence_count").alias("occurrence_count"),
         col("diagnostic_count").alias("diagnostic_count"),
@@ -890,7 +1703,13 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("document_text_bytes").alias("document_text_bytes"),
     ),
     "scip_metadata": (
-        f.when((col("index_path").is_null() | (col("index_path") == lit(""))), lit(None)).otherwise(stable_id("scip_index", f.concat_ws("\u001f", lit("scip_index"), f.coalesce(lit("None"))))).alias("index_id"),
+        f.when((col("index_path").is_null() | (col("index_path") == lit(""))), lit(None))
+        .otherwise(
+            stable_id(
+                "scip_index", f.concat_ws("\u001f", lit("scip_index"), f.coalesce(lit("None")))
+            )
+        )
+        .alias("index_id"),
         col("protocol_version").alias("protocol_version"),
         col("tool_name").alias("tool_name"),
         col("tool_version").alias("tool_version"),
@@ -902,7 +1721,11 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("project_namespace").alias("project_namespace"),
     ),
     "scip_occurrences": (
-        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None)).otherwise(stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))).alias("document_id"),
+        f.when((col("path").is_null() | (col("path") == lit(""))), lit(None))
+        .otherwise(
+            stable_id("scip_doc", f.concat_ws("\u001f", lit("scip_doc"), f.coalesce(lit("None"))))
+        )
+        .alias("document_id"),
         col("path").alias("path"),
         col("symbol").alias("symbol"),
         col("symbol_roles").alias("symbol_roles"),
@@ -1000,7 +1823,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         col("block_id").alias("table_id"),
         col("scope_id").alias("scope_id"),
         col("name").alias("symbol_name"),
-        f.when((col("scope_id").is_null() | col("name").is_null()), lit(None)).otherwise(prefixed_hash64("sym_symbol", f.concat_ws(":", col("scope_id"), col("name")))).alias("sym_symbol_id"),
+        f.when((col("scope_id").is_null() | col("name").is_null()), lit(None))
+        .otherwise(prefixed_hash64("sym_symbol", f.concat_ws(":", col("scope_id"), col("name"))))
+        .alias("sym_symbol_id"),
         (col("flags"))["is_referenced"].alias("is_referenced"),
         (col("flags"))["is_imported"].alias("is_imported"),
         (col("flags"))["is_parameter"].alias("is_parameter"),
@@ -1019,32 +1844,147 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
     "ts_ast_calls_check": (
         col("file_id"),
         col("path"),
-        f.sum(f.when(~(col("ts_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ts_calls"),
-        f.sum(f.when(~(col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ast_calls"),
-        f.sum(f.when((~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ts_only"),
-        f.sum(f.when((col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)).otherwise(lit(0))).alias("ast_only"),
-        (f.sum(f.when((~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))) + f.sum(f.when((col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)).otherwise(lit(0)))).alias("mismatch_count"),
-        (((f.sum(f.when((~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))) + f.sum(f.when((col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)).otherwise(lit(0))))) > lit(0)).alias("mismatch"),
+        f.sum(f.when(~(col("ts_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias(
+            "ts_calls"
+        ),
+        f.sum(f.when(~(col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias(
+            "ast_calls"
+        ),
+        f.sum(
+            f.when(
+                (~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)
+            ).otherwise(lit(0))
+        ).alias("ts_only"),
+        f.sum(
+            f.when(
+                (col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)
+            ).otherwise(lit(0))
+        ).alias("ast_only"),
+        (
+            f.sum(
+                f.when(
+                    (~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)
+                ).otherwise(lit(0))
+            )
+            + f.sum(
+                f.when(
+                    (col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)
+                ).otherwise(lit(0))
+            )
+        ).alias("mismatch_count"),
+        (
+            (
+                f.sum(
+                    f.when(
+                        (~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()),
+                        lit(1),
+                    ).otherwise(lit(0))
+                )
+                + f.sum(
+                    f.when(
+                        (col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())),
+                        lit(1),
+                    ).otherwise(lit(0))
+                )
+            )
+            > lit(0)
+        ).alias("mismatch"),
     ),
     "ts_ast_defs_check": (
         col("file_id"),
         col("path"),
         f.sum(f.when(~(col("ts_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ts_defs"),
-        f.sum(f.when(~(col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ast_defs"),
-        f.sum(f.when((~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ts_only"),
-        f.sum(f.when((col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)).otherwise(lit(0))).alias("ast_only"),
-        (f.sum(f.when((~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))) + f.sum(f.when((col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)).otherwise(lit(0)))).alias("mismatch_count"),
-        (((f.sum(f.when((~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))) + f.sum(f.when((col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)).otherwise(lit(0))))) > lit(0)).alias("mismatch"),
+        f.sum(f.when(~(col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias(
+            "ast_defs"
+        ),
+        f.sum(
+            f.when(
+                (~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)
+            ).otherwise(lit(0))
+        ).alias("ts_only"),
+        f.sum(
+            f.when(
+                (col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)
+            ).otherwise(lit(0))
+        ).alias("ast_only"),
+        (
+            f.sum(
+                f.when(
+                    (~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)
+                ).otherwise(lit(0))
+            )
+            + f.sum(
+                f.when(
+                    (col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)
+                ).otherwise(lit(0))
+            )
+        ).alias("mismatch_count"),
+        (
+            (
+                f.sum(
+                    f.when(
+                        (~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()),
+                        lit(1),
+                    ).otherwise(lit(0))
+                )
+                + f.sum(
+                    f.when(
+                        (col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())),
+                        lit(1),
+                    ).otherwise(lit(0))
+                )
+            )
+            > lit(0)
+        ).alias("mismatch"),
     ),
     "ts_ast_imports_check": (
         col("file_id"),
         col("path"),
-        f.sum(f.when(~(col("ts_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ts_imports"),
-        f.sum(f.when(~(col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ast_imports"),
-        f.sum(f.when((~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ts_only"),
-        f.sum(f.when((col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)).otherwise(lit(0))).alias("ast_only"),
-        (f.sum(f.when((~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))) + f.sum(f.when((col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)).otherwise(lit(0)))).alias("mismatch_count"),
-        (((f.sum(f.when((~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))) + f.sum(f.when((col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)).otherwise(lit(0))))) > lit(0)).alias("mismatch"),
+        f.sum(f.when(~(col("ts_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias(
+            "ts_imports"
+        ),
+        f.sum(f.when(~(col("ast_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias(
+            "ast_imports"
+        ),
+        f.sum(
+            f.when(
+                (~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)
+            ).otherwise(lit(0))
+        ).alias("ts_only"),
+        f.sum(
+            f.when(
+                (col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)
+            ).otherwise(lit(0))
+        ).alias("ast_only"),
+        (
+            f.sum(
+                f.when(
+                    (~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()), lit(1)
+                ).otherwise(lit(0))
+            )
+            + f.sum(
+                f.when(
+                    (col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())), lit(1)
+                ).otherwise(lit(0))
+            )
+        ).alias("mismatch_count"),
+        (
+            (
+                f.sum(
+                    f.when(
+                        (~(col("ts_start_byte").is_null()) & col("ast_start_byte").is_null()),
+                        lit(1),
+                    ).otherwise(lit(0))
+                )
+                + f.sum(
+                    f.when(
+                        (col("ts_start_byte").is_null() & ~(col("ast_start_byte").is_null())),
+                        lit(1),
+                    ).otherwise(lit(0))
+                )
+            )
+            > lit(0)
+        ).alias("mismatch"),
     ),
     "ts_calls": (
         col("file_id").alias("file_id"),
@@ -1062,7 +2002,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         (col("span"))["col_unit"].alias("col_unit"),
         (col("span"))["end_exclusive"].alias("end_exclusive"),
         ((col("span"))["byte_span"])["byte_start"].alias("start_byte"),
-        (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]).alias("end_byte"),
+        (
+            ((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]
+        ).alias("end_byte"),
         _arrow_cast(col("attrs"), "Map(Utf8, Utf8)").alias("attrs"),
     ),
     "ts_captures": (
@@ -1082,18 +2024,59 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         (col("span"))["col_unit"].alias("col_unit"),
         (col("span"))["end_exclusive"].alias("end_exclusive"),
         ((col("span"))["byte_span"])["byte_start"].alias("start_byte"),
-        (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]).alias("end_byte"),
+        (
+            ((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]
+        ).alias("end_byte"),
         _arrow_cast(col("attrs"), "Map(Utf8, Utf8)").alias("attrs"),
     ),
     "ts_cst_docstrings_check": (
         col("file_id"),
         col("path"),
-        f.sum(f.when(~(col("ts_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ts_docstrings"),
-        f.sum(f.when(~(col("cst_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("cst_docstrings"),
-        f.sum(f.when((~(col("ts_start_byte").is_null()) & col("cst_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias("ts_only"),
-        f.sum(f.when((col("ts_start_byte").is_null() & ~(col("cst_start_byte").is_null())), lit(1)).otherwise(lit(0))).alias("cst_only"),
-        (f.sum(f.when((~(col("ts_start_byte").is_null()) & col("cst_start_byte").is_null()), lit(1)).otherwise(lit(0))) + f.sum(f.when((col("ts_start_byte").is_null() & ~(col("cst_start_byte").is_null())), lit(1)).otherwise(lit(0)))).alias("mismatch_count"),
-        (((f.sum(f.when((~(col("ts_start_byte").is_null()) & col("cst_start_byte").is_null()), lit(1)).otherwise(lit(0))) + f.sum(f.when((col("ts_start_byte").is_null() & ~(col("cst_start_byte").is_null())), lit(1)).otherwise(lit(0))))) > lit(0)).alias("mismatch"),
+        f.sum(f.when(~(col("ts_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias(
+            "ts_docstrings"
+        ),
+        f.sum(f.when(~(col("cst_start_byte").is_null()), lit(1)).otherwise(lit(0))).alias(
+            "cst_docstrings"
+        ),
+        f.sum(
+            f.when(
+                (~(col("ts_start_byte").is_null()) & col("cst_start_byte").is_null()), lit(1)
+            ).otherwise(lit(0))
+        ).alias("ts_only"),
+        f.sum(
+            f.when(
+                (col("ts_start_byte").is_null() & ~(col("cst_start_byte").is_null())), lit(1)
+            ).otherwise(lit(0))
+        ).alias("cst_only"),
+        (
+            f.sum(
+                f.when(
+                    (~(col("ts_start_byte").is_null()) & col("cst_start_byte").is_null()), lit(1)
+                ).otherwise(lit(0))
+            )
+            + f.sum(
+                f.when(
+                    (col("ts_start_byte").is_null() & ~(col("cst_start_byte").is_null())), lit(1)
+                ).otherwise(lit(0))
+            )
+        ).alias("mismatch_count"),
+        (
+            (
+                f.sum(
+                    f.when(
+                        (~(col("ts_start_byte").is_null()) & col("cst_start_byte").is_null()),
+                        lit(1),
+                    ).otherwise(lit(0))
+                )
+                + f.sum(
+                    f.when(
+                        (col("ts_start_byte").is_null() & ~(col("cst_start_byte").is_null())),
+                        lit(1),
+                    ).otherwise(lit(0))
+                )
+            )
+            > lit(0)
+        ).alias("mismatch"),
     ),
     "ts_defs": (
         col("file_id").alias("file_id"),
@@ -1110,7 +2093,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         (col("span"))["col_unit"].alias("col_unit"),
         (col("span"))["end_exclusive"].alias("end_exclusive"),
         ((col("span"))["byte_span"])["byte_start"].alias("start_byte"),
-        (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]).alias("end_byte"),
+        (
+            ((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]
+        ).alias("end_byte"),
         _arrow_cast(col("attrs"), "Map(Utf8, Utf8)").alias("attrs"),
     ),
     "ts_docstrings": (
@@ -1130,7 +2115,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         (col("span"))["col_unit"].alias("col_unit"),
         (col("span"))["end_exclusive"].alias("end_exclusive"),
         ((col("span"))["byte_span"])["byte_start"].alias("start_byte"),
-        (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]).alias("end_byte"),
+        (
+            ((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]
+        ).alias("end_byte"),
         _arrow_cast(col("attrs"), "Map(Utf8, Utf8)").alias("attrs"),
     ),
     "ts_edges": (
@@ -1155,7 +2142,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         (col("span"))["col_unit"].alias("col_unit"),
         (col("span"))["end_exclusive"].alias("end_exclusive"),
         ((col("span"))["byte_span"])["byte_start"].alias("start_byte"),
-        (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]).alias("end_byte"),
+        (
+            ((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]
+        ).alias("end_byte"),
         _arrow_cast(lit(value=True), "Boolean").alias("is_error"),
         _arrow_cast(col("attrs"), "Map(Utf8, Utf8)").alias("attrs"),
     ),
@@ -1178,7 +2167,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         (col("span"))["col_unit"].alias("col_unit"),
         (col("span"))["end_exclusive"].alias("end_exclusive"),
         ((col("span"))["byte_span"])["byte_start"].alias("start_byte"),
-        (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]).alias("end_byte"),
+        (
+            ((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]
+        ).alias("end_byte"),
         _arrow_cast(col("attrs"), "Map(Utf8, Utf8)").alias("attrs"),
     ),
     "ts_missing": (
@@ -1194,7 +2185,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         (col("span"))["col_unit"].alias("col_unit"),
         (col("span"))["end_exclusive"].alias("end_exclusive"),
         ((col("span"))["byte_span"])["byte_start"].alias("start_byte"),
-        (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]).alias("end_byte"),
+        (
+            ((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]
+        ).alias("end_byte"),
         _arrow_cast(lit(value=True), "Boolean").alias("is_missing"),
         _arrow_cast(col("attrs"), "Map(Utf8, Utf8)").alias("attrs"),
     ),
@@ -1216,7 +2209,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         (col("span"))["col_unit"].alias("col_unit"),
         (col("span"))["end_exclusive"].alias("end_exclusive"),
         ((col("span"))["byte_span"])["byte_start"].alias("start_byte"),
-        (((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]).alias("end_byte"),
+        (
+            ((col("span"))["byte_span"])["byte_start"] + ((col("span"))["byte_span"])["byte_len"]
+        ).alias("end_byte"),
         (col("flags"))["is_named"].alias("is_named"),
         (col("flags"))["has_error"].alias("has_error"),
         (col("flags"))["is_error"].alias("is_error"),
@@ -1249,7 +2244,9 @@ VIEW_SELECT_EXPRS: Final[dict[str, tuple[Expr, ...]]] = {
         arrow_metadata(col("imports")["span"], "end_exclusive").alias("imports_end_exclusive"),
         arrow_metadata(col("docstrings")["span"], "line_base").alias("docstrings_line_base"),
         arrow_metadata(col("docstrings")["span"], "col_unit").alias("docstrings_col_unit"),
-        arrow_metadata(col("docstrings")["span"], "end_exclusive").alias("docstrings_end_exclusive"),
+        arrow_metadata(col("docstrings")["span"], "end_exclusive").alias(
+            "docstrings_end_exclusive"
+        ),
     ),
     "ts_stats": (
         col("file_id").alias("file_id"),

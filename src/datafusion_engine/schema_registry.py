@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal, TypedDict, cast
 
 import pyarrow as pa
@@ -38,7 +39,7 @@ from arrowdsl.schema.semantic_types import (
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
-from schema_spec.view_specs import ViewSpec
+from schema_spec.view_specs import ViewSpec, view_spec_from_builder
 
 BYTE_SPAN_T = byte_span_type()
 SPAN_T = span_type()
@@ -1959,6 +1960,7 @@ BYTECODE_VIEW_NAMES: tuple[str, ...] = (
     "bytecode_errors",
 )
 
+
 def _sorted_tokens(tokens: frozenset[str]) -> tuple[str, ...]:
     return tuple(sorted(tokens))
 
@@ -2194,14 +2196,10 @@ def _apply_optional_requirements(
 ) -> FunctionRequirements:
     required = tuple(dict.fromkeys((*requirements.required, *include_optional)))
     signature_counts = {
-        name: count
-        for name, count in requirements.signature_counts.items()
-        if name in required
+        name: count for name, count in requirements.signature_counts.items() if name in required
     }
     signature_types = {
-        name: types
-        for name, types in requirements.signature_types.items()
-        if name in required
+        name: types for name, types in requirements.signature_types.items() if name in required
     }
     return FunctionRequirements(
         required=required,
@@ -2218,7 +2216,6 @@ def _ast_optional_functions(view_names: Sequence[str]) -> set[str]:
     if "ast_span_metadata" in view_names:
         optional.add("arrow_metadata")
     return optional
-
 
 
 def _ast_function_requirements(view_names: Sequence[str]) -> FunctionRequirements:
@@ -2486,9 +2483,7 @@ def _context_fields_for(name: str, root_schema: pa.Schema) -> tuple[pa.Field, ..
         else:
             struct_type = struct_for_path(root_schema, prefix)
             field = struct_type.field(field_name)
-        fields.append(
-            pa.field(alias, field.type, field.nullable, metadata=field.metadata)
-        )
+        fields.append(pa.field(alias, field.type, field.nullable, metadata=field.metadata))
     return tuple(fields)
 
 
@@ -2541,23 +2536,17 @@ def nested_schema_for(name: str, *, allow_derived: bool = False) -> pa.Schema:
     seen: set[str] = set()
     for field_name in identity_fields:
         field = root_schema.field(field_name)
-        fields.append(
-            pa.field(field.name, field.type, field.nullable, metadata=field.metadata)
-        )
+        fields.append(pa.field(field.name, field.type, field.nullable, metadata=field.metadata))
         seen.add(field.name)
     for field in context_fields:
         if field.name in seen:
             continue
-        fields.append(
-            pa.field(field.name, field.type, field.nullable, metadata=field.metadata)
-        )
+        fields.append(pa.field(field.name, field.type, field.nullable, metadata=field.metadata))
         seen.add(field.name)
     for field in row_struct:
         if field.name in seen:
             continue
-        fields.append(
-            pa.field(field.name, field.type, field.nullable, metadata=field.metadata)
-        )
+        fields.append(pa.field(field.name, field.type, field.nullable, metadata=field.metadata))
         seen.add(field.name)
     return pa.schema(fields)
 
@@ -2704,24 +2693,28 @@ def nested_base_df(
     return df.select(*selections)
 
 
-def nested_view_spec(name: str, *, table: str | None = None) -> ViewSpec:
+def nested_view_spec(
+    ctx: SessionContext,
+    name: str,
+    *,
+    table: str | None = None,
+) -> ViewSpec:
     """Return a ViewSpec for a nested dataset.
 
     Returns
     -------
     ViewSpec
-        View specification with schema and base SQL.
+        View specification derived from the registered base table.
     """
-    schema = nested_schema_for(name, allow_derived=True)
-    return ViewSpec(
-        name=name,
-        sql=None,
-        schema=schema,
-        builder=lambda ctx: nested_base_df(ctx, name=name, table=table),
-    )
+    builder = partial(nested_base_df, name=name, table=table)
+    return view_spec_from_builder(ctx, name=name, builder=builder, sql=None)
 
 
-def nested_view_specs(*, table: str | None = None) -> tuple[ViewSpec, ...]:
+def nested_view_specs(
+    ctx: SessionContext,
+    *,
+    table: str | None = None,
+) -> tuple[ViewSpec, ...]:
     """Return ViewSpecs for all nested datasets.
 
     Returns
@@ -2729,7 +2722,7 @@ def nested_view_specs(*, table: str | None = None) -> tuple[ViewSpec, ...]:
     tuple[ViewSpec, ...]
         View specifications for nested datasets.
     """
-    return tuple(nested_view_spec(name, table=table) for name in nested_dataset_names())
+    return tuple(nested_view_spec(ctx, name, table=table) for name in nested_dataset_names())
 
 
 def validate_schema_metadata(schema: pa.Schema) -> None:
@@ -2845,7 +2838,6 @@ def _validate_ast_view_outputs_all(
 ) -> None:
     for name in view_names:
         _validate_ast_view_outputs(ctx, introspector=introspector, name=name, errors=errors)
-
 
 
 def _validate_ast_file_types(ctx: SessionContext, errors: dict[str, str]) -> None:
@@ -3986,7 +3978,7 @@ def schema_names() -> tuple[str, ...]:
     tuple[str, ...]
         Sorted schema name tuple.
     """
-    return tuple(sorted({*SCHEMA_REGISTRY, *nested_schema_names()}))
+    return tuple(sorted(SCHEMA_REGISTRY))
 
 
 def has_schema(name: str) -> bool:
@@ -3997,10 +3989,7 @@ def has_schema(name: str) -> bool:
     bool
         ``True`` when the schema name is registered.
     """
-    return (
-        name in SCHEMA_REGISTRY
-        or is_intrinsic_nested_dataset(name)
-    )
+    return name in SCHEMA_REGISTRY
 
 
 def schema_for(name: str) -> pa.Schema:
@@ -4019,8 +4008,6 @@ def schema_for(name: str) -> pa.Schema:
     schema = SCHEMA_REGISTRY.get(name)
     if schema is not None:
         return schema
-    if is_intrinsic_nested_dataset(name):
-        return nested_schema_for(name)
     msg = f"Unknown DataFusion schema: {name!r}."
     raise KeyError(msg)
 
@@ -4046,8 +4033,6 @@ def register_all_schemas(ctx: SessionContext) -> None:
         if name in existing:
             continue
         register_schema(ctx, name, schema)
-    for name in nested_schema_names():
-        register_schema(ctx, name, nested_schema_for(name))
 
 
 __all__ = [

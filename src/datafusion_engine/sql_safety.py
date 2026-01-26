@@ -141,7 +141,9 @@ def execution_policy_for_profile(
             ExecutionPolicy(
                 allow_ddl=base.allow_ddl,
                 allow_dml=base.allow_dml,
-                allow_statements=allow_statements if allow_statements is not None else base.allow_statements,
+                allow_statements=allow_statements
+                if allow_statements is not None
+                else base.allow_statements,
             )
             if allow_statements is not None
             else base
@@ -152,7 +154,9 @@ def execution_policy_for_profile(
     return ExecutionPolicy(
         allow_ddl=policy.allow_ddl,
         allow_dml=policy.allow_dml,
-        allow_statements=allow_statements if allow_statements is not None else policy.allow_statements,
+        allow_statements=allow_statements
+        if allow_statements is not None
+        else policy.allow_statements,
     )
 
 

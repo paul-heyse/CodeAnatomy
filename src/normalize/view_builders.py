@@ -1114,7 +1114,6 @@ def _resolve_view_builder(row: DatasetRow) -> tuple[IbisPlanDeriver, str]:
     return cast("IbisPlanDeriver", builder), row.view_builder
 
 
-
 def normalize_view_specs() -> tuple[NormalizeViewSpec, ...]:
     """Return normalize view specs for view registration.
 
@@ -1143,6 +1142,7 @@ def normalize_view_specs() -> tuple[NormalizeViewSpec, ...]:
         msg = f"Normalize view builders configured for non-view datasets: {sorted(unexpected)}."
         raise KeyError(msg)
     return tuple(ordered)
+
 
 __all__ = [
     "IbisPlanCatalog",

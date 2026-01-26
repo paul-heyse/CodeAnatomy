@@ -46,6 +46,7 @@ def masked_stable_id_expr_from_spec(
         masked_stable_id_expr_ir(spec=spec, required=tuple(required), use_128=use_128),
     )
 
+
 SQLGLOT_UNION_THRESHOLD = 96
 _PROP_OUTPUT_COLUMNS: tuple[str, ...] = (
     "entity_kind",

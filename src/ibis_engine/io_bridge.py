@@ -1559,6 +1559,7 @@ def _prepare_copy_dir(path: Path, *, overwrite: bool) -> None:
         shutil.rmtree(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+
 def _write_pipeline_profile() -> SQLPolicyProfile:
     from sqlglot_tools.optimizer import register_datafusion_dialect, resolve_sqlglot_policy
 

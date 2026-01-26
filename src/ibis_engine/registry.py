@@ -34,7 +34,6 @@ type DatasetFormat = str
 type DataFusionProvider = Literal["listing", "parquet", "delta_cdf"]
 
 
-
 class FilesystemBackend(Protocol):
     """Protocol for backends supporting filesystem registration."""
 
@@ -178,9 +177,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "partition_cols": [
                     (col, str(dtype)) for col, dtype in loc.datafusion_scan.partition_cols
                 ],
-                "file_sort_order": [
-                    list(key) for key in loc.datafusion_scan.file_sort_order
-                ],
+                "file_sort_order": [list(key) for key in loc.datafusion_scan.file_sort_order],
                 "parquet_pruning": loc.datafusion_scan.parquet_pruning,
                 "skip_metadata": loc.datafusion_scan.skip_metadata,
                 "skip_arrow_metadata": loc.datafusion_scan.skip_arrow_metadata,

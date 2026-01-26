@@ -122,9 +122,7 @@ def _external_table_properties(
         )
     if config.file_sort_order:
         properties.append(
-            ExternalTableOrderProperty(
-                expressions=_file_sort_order_exprs(config.file_sort_order)
-            )
+            ExternalTableOrderProperty(expressions=_file_sort_order_exprs(config.file_sort_order))
         )
     options_property = _external_table_options_property(config.options)
     if options_property is not None:

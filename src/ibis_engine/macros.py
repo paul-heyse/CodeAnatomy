@@ -21,7 +21,6 @@ class IbisMacroRewrite:
 IbisMacroSpec = IbisMacro | IbisMacroRewrite
 
 
-
 def apply_macros(table: Table, *, macros: Sequence[IbisMacroSpec]) -> Table:
     """Apply a sequence of macros to an Ibis table.
 

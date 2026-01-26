@@ -84,6 +84,7 @@ class IntrospectionSnapshot:
         IntrospectionSnapshot
             Snapshot containing all available catalog metadata
         """
+
         def _table(sql: str) -> pa.Table:
             from sqlglot.errors import ParseError
 

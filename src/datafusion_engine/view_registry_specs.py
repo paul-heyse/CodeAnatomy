@@ -127,7 +127,9 @@ def _required_udfs_from_ast(
     snapshot_names = udf_names_from_snapshot(snapshot)
     lookup = {name.lower(): name for name in snapshot_names}
     required = {
-        lookup[name.lower()] for name in udf_calls if isinstance(name, str) and name.lower() in lookup
+        lookup[name.lower()]
+        for name in udf_calls
+        if isinstance(name, str) and name.lower() in lookup
     }
     return tuple(sorted(required))
 
@@ -657,7 +659,6 @@ def _cpg_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
 
 
 def _alias_nodes(nodes: Sequence[ViewNode]) -> list[ViewNode]:
-
     registered = {node.name for node in nodes}
     alias_nodes: list[ViewNode] = []
     for name in registered:

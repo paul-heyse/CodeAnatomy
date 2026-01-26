@@ -264,9 +264,7 @@ class DataFusionExecutionFacade:
         """
         return DataFusionIOAdapter(ctx=self.ctx, profile=self.runtime_profile)
 
-    def diagnostics_recorder(
-        self, *, operation_id: str
-    ) -> DiagnosticsRecorder | None:
+    def diagnostics_recorder(self, *, operation_id: str) -> DiagnosticsRecorder | None:
         """Return a diagnostics recorder when configured.
 
         Parameters
@@ -306,7 +304,9 @@ class DataFusionExecutionFacade:
         return WritePipeline(
             ctx=self.ctx,
             profile=profile,
-            sql_options=self.runtime_profile.sql_options() if self.runtime_profile is not None else None,
+            sql_options=self.runtime_profile.sql_options()
+            if self.runtime_profile is not None
+            else None,
             recorder=recorder,
         )
 
@@ -606,7 +606,9 @@ class DataFusionExecutionFacade:
         """
         from datafusion_engine.schema_introspection import SchemaIntrospector
 
-        sql_options = self.runtime_profile.sql_options() if self.runtime_profile is not None else None
+        sql_options = (
+            self.runtime_profile.sql_options() if self.runtime_profile is not None else None
+        )
         return SchemaIntrospector(self.ctx, sql_options=sql_options)
 
     def _resolve_ibis_backend(self) -> IbisCompilerBackend:

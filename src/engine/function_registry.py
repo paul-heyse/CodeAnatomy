@@ -16,9 +16,7 @@ from storage.ipc import payload_hash
 ExecutionLane = Literal["df_rust"]
 FunctionKind = Literal["scalar", "aggregate", "window", "table"]
 
-DEFAULT_LANE_PRECEDENCE: tuple[ExecutionLane, ...] = (
-    "df_rust",
-)
+DEFAULT_LANE_PRECEDENCE: tuple[ExecutionLane, ...] = ("df_rust",)
 LaneTupleT = TypeVar("LaneTupleT", bound=str)
 
 REGISTRY_PAYLOAD_VERSION: int = 1

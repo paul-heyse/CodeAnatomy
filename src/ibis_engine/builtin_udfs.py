@@ -167,8 +167,7 @@ def _build_ibis_builtin(spec: IbisUdfSpec) -> Callable[..., Value]:
         catalog=spec.catalog,
         database=spec.database,
     )
-    def _builtin(*args: Value) -> Value:
-        ...
+    def _builtin(*args: Value) -> Value: ...
 
     return _builtin
 

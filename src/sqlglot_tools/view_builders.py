@@ -59,6 +59,7 @@ def relation_output_sql() -> Expression:
 
     return build_relation_output_sql()
 
+
 def sqlglot_view_builder(
     expr: Expression,
     *,

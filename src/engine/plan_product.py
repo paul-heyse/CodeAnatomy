@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from engine.plan_policy import WriterStrategy
+
+if TYPE_CHECKING:
+    from datafusion_engine.execution_facade import ExecutionResult
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,7 @@ class PlanProduct:
     writer_strategy: WriterStrategy
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
+    execution_result: ExecutionResult | None = None
 
     def value(self) -> TableLike | RecordBatchReaderLike:
         """Return the underlying table or stream value.

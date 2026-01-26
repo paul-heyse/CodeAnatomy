@@ -22,6 +22,7 @@ from arrowdsl.schema.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
 from arrowdsl.schema.policy import SchemaPolicy
+from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.extract_extractors import (
     ExtractorSpec,
     extractor_specs,
@@ -40,6 +41,8 @@ from extract.schema_ops import (
 )
 from extract.session import ExtractSession, build_extract_session
 from extract.spec_helpers import ExtractExecutionOptions, plan_requires_row, rule_execution_options
+from ibis_engine.execution import execute_ibis_plan
+from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
 from serde_msgspec import to_builtins
@@ -617,6 +620,23 @@ def extract_dataset_location_or_raise(
     return location
 
 
+def _streaming_supported_for_extract(
+    name: str,
+    *,
+    ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions | None,
+) -> bool:
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None or runtime_profile.dataset_location(name) is None:
+        return False
+    policy = normalized_schema_policy_for_dataset(
+        name,
+        ctx=ctx,
+        normalize=normalize,
+    )
+    return not policy.keep_extra_columns
+
+
 def materialize_extract_plan(
     name: str,
     plan: IbisPlan,
@@ -633,18 +653,11 @@ def materialize_extract_plan(
     """
     resolved = options or ExtractMaterializeOptions()
     normalize = resolved.normalize
-    runtime_profile = ctx.runtime.datafusion
-    streaming_supported = True
-    if runtime_profile is None or runtime_profile.dataset_location(name) is None:
-        streaming_supported = False
-    else:
-        policy = normalized_schema_policy_for_dataset(
-            name,
-            ctx=ctx,
-            normalize=normalize,
-        )
-        if policy.keep_extra_columns:
-            streaming_supported = False
+    streaming_supported = _streaming_supported_for_extract(
+        name,
+        ctx=ctx,
+        normalize=normalize,
+    )
     finalize_ctx = finalize_context_for_dataset(name, ctx=ctx, normalize=normalize)
     normalization_ctx = _NormalizationContext(
         name=name,
@@ -652,25 +665,36 @@ def materialize_extract_plan(
         finalize_ctx=finalize_ctx,
         apply_post_kernels=resolved.apply_post_kernels,
     )
+    execution = ibis_execution_from_ctx(ctx)
     wrote_streaming = False
     if streaming_supported:
-        reader_for_write = _normalize_reader(normalization_ctx, plan.to_reader())
+        reader_result = execute_ibis_plan(plan, execution=execution, streaming=True)
+        reader_for_write = _normalize_reader(normalization_ctx, reader_result.require_reader())
         write_extract_outputs(name, reader_for_write, ctx=ctx)
         wrote_streaming = True
         if resolved.prefer_reader:
-            return _normalize_reader(normalization_ctx, plan.to_reader())
-    table = plan.to_table()
-    normalized = _normalize_table(normalization_ctx, table)
+            reader_result = execute_ibis_plan(plan, execution=execution, streaming=True)
+            normalized_reader = _normalize_reader(
+                normalization_ctx,
+                reader_result.require_reader(),
+            )
+            _record_extract_execution(name, reader_result, ctx=ctx)
+            return normalized_reader
+    table_result = execute_ibis_plan(plan, execution=execution, streaming=False)
+    normalized = _normalize_table(normalization_ctx, table_result.require_table())
     if not wrote_streaming:
         write_extract_outputs(name, normalized, ctx=ctx)
     if resolved.prefer_reader:
         if isinstance(normalized, pa.Table):
             resolved_table = cast("pa.Table", normalized)
+            _record_extract_execution(name, table_result, ctx=ctx)
             return pa.RecordBatchReader.from_batches(
                 resolved_table.schema,
                 resolved_table.to_batches(),
             )
+        _record_extract_execution(name, table_result, ctx=ctx)
         return normalized
+    _record_extract_execution(name, table_result, ctx=ctx)
     return normalized
 
 
@@ -711,6 +735,29 @@ def materialize_extract_reader(
         ctx=session.exec_ctx,
         options=resolved_materialize,
     )
+
+
+def _record_extract_execution(
+    name: str,
+    result: ExecutionResult,
+    *,
+    ctx: ExecutionContext,
+) -> None:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return
+    row_count: int | None = None
+    table = result.table
+    if table is not None:
+        row_count = table.num_rows
+    from datafusion_engine.diagnostics import record_artifact
+
+    payload = {
+        "dataset": name,
+        "result_kind": result.kind.value,
+        "rows": row_count,
+    }
+    record_artifact(profile, "extract_plan_execute_v1", payload)
 
 
 def ast_def_nodes(nodes: TableLike) -> TableLike:

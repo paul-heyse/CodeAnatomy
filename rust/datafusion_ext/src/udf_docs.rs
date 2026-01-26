@@ -15,10 +15,22 @@ const DOC_SECTION_OTHER: DocSection = DocSection {
     description: None,
 };
 
+const DOC_SECTION_TABLE: DocSection = DocSection {
+    include: true,
+    label: "Table Functions",
+    description: None,
+};
+
 const DOC_SECTION_BUILTIN: DocSection = DocSection {
     include: true,
     label: "Built-in Functions",
     description: None,
+};
+
+const DOC_SECTION_ASYNC: DocSection = DocSection {
+    include: true,
+    label: "Async Functions",
+    description: Some("Async-capable UDFs registered when allow_async is enabled."),
 };
 
 static MAP_ENTRIES_DOC: LazyLock<Documentation> = LazyLock::new(|| {
@@ -240,6 +252,16 @@ static COL_TO_BYTE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     .build()
 });
 
+static ASYNC_ECHO_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_ASYNC,
+        "Echo a string value using the async UDF execution path. Requires allow_async policy.",
+        "async_echo(value)",
+    )
+    .with_standard_argument("value", Some("String"))
+    .build()
+});
+
 static POSITION_ENCODING_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_OTHER,
@@ -278,6 +300,39 @@ static UDF_DOCS_DOC: LazyLock<Documentation> = LazyLock::new(|| {
     .build()
 });
 
+static READ_CSV_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_TABLE,
+        "Read CSV files into a table provider.",
+        "read_csv(path [, limit])",
+    )
+    .with_argument("path", "Path or URL to CSV files.")
+    .with_argument("limit", "Optional maximum rows to return.")
+    .build()
+});
+
+static READ_PARQUET_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_TABLE,
+        "Read Parquet files into a table provider.",
+        "read_parquet(path [, limit])",
+    )
+    .with_argument("path", "Path or URL to Parquet files.")
+    .with_argument("limit", "Optional maximum rows to return.")
+    .build()
+});
+
+static RANGE_TABLE_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_TABLE,
+        "Return a range of integers as a table.",
+        "range_table(start, end)",
+    )
+    .with_argument("start", "Start of the range (inclusive).")
+    .with_argument("end", "End of the range (exclusive).")
+    .build()
+});
+
 pub fn arrow_metadata_doc() -> &'static Documentation {
     &ARROW_METADATA_DOC
 }
@@ -310,6 +365,10 @@ pub fn col_to_byte_doc() -> &'static Documentation {
     &COL_TO_BYTE_DOC
 }
 
+pub fn async_echo_doc() -> &'static Documentation {
+    &ASYNC_ECHO_DOC
+}
+
 pub fn position_encoding_doc() -> &'static Documentation {
     &POSITION_ENCODING_DOC
 }
@@ -324,6 +383,18 @@ pub fn udf_registry_doc() -> &'static Documentation {
 
 pub fn udf_docs_doc() -> &'static Documentation {
     &UDF_DOCS_DOC
+}
+
+pub fn read_csv_doc() -> &'static Documentation {
+    &READ_CSV_DOC
+}
+
+pub fn read_parquet_doc() -> &'static Documentation {
+    &READ_PARQUET_DOC
+}
+
+pub fn range_table_doc() -> &'static Documentation {
+    &RANGE_TABLE_DOC
 }
 
 pub fn docs_snapshot() -> Vec<(&'static str, &'static Documentation)> {
@@ -353,5 +424,9 @@ pub fn docs_snapshot() -> Vec<(&'static str, &'static Documentation)> {
         ("cpg_score", cpg_score_doc()),
         ("udf_registry", udf_registry_doc()),
         ("udf_docs", udf_docs_doc()),
+        ("read_csv", read_csv_doc()),
+        ("read_parquet", read_parquet_doc()),
+        ("range_table", range_table_doc()),
+        ("async_echo", async_echo_doc()),
     ]
 }

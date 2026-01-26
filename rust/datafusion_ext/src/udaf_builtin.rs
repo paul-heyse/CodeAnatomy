@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -28,6 +28,7 @@ use datafusion_expr::{
     EmitTo,
     GroupsAccumulator,
     Signature,
+    TypeSignature,
     Volatility,
 };
 use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
@@ -69,9 +70,9 @@ struct ListUniqueUdaf {
 
 impl ListUniqueUdaf {
     fn new() -> Self {
-        let signature = Signature::string(1, Volatility::Immutable)
+        let signature = string_signature(Volatility::Immutable)
             .with_parameter_names(vec!["value".to_string()])
-            .unwrap_or_else(|_| Signature::string(1, Volatility::Immutable));
+            .unwrap_or_else(|_| string_signature(Volatility::Immutable));
         Self { signature }
     }
 }
@@ -87,6 +88,10 @@ impl AggregateUDFImpl for ListUniqueUdaf {
 
     fn documentation(&self) -> Option<&Documentation> {
         Some(udf_docs::list_unique_doc())
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {
@@ -109,8 +114,10 @@ impl AggregateUDFImpl for ListUniqueUdaf {
         .into()])
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(ListUniqueAccumulator::default()))
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(ListUniqueAccumulator::new(
+            acc_args.ignore_nulls,
+        )))
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -119,9 +126,20 @@ impl AggregateUDFImpl for ListUniqueUdaf {
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        Ok(Box::new(ListUniqueGroupsAccumulator::default()))
+        Ok(Box::new(ListUniqueGroupsAccumulator::new(
+            args.ignore_nulls,
+        )))
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(ListUniqueSlidingAccumulator::new(
+            args.ignore_nulls,
+        )))
     }
 }
 
@@ -132,11 +150,20 @@ struct CountDistinctUdaf {
 
 impl CountDistinctUdaf {
     fn new() -> Self {
-        let signature = Signature::string(1, Volatility::Immutable)
+        let signature = string_signature(Volatility::Immutable)
             .with_parameter_names(vec!["value".to_string()])
-            .unwrap_or_else(|_| Signature::string(1, Volatility::Immutable));
+            .unwrap_or_else(|_| string_signature(Volatility::Immutable));
         Self { signature }
     }
+}
+
+fn string_signature(volatility: Volatility) -> Signature {
+    let signatures = vec![
+        TypeSignature::Exact(vec![DataType::Utf8]),
+        TypeSignature::Exact(vec![DataType::LargeUtf8]),
+        TypeSignature::Exact(vec![DataType::Utf8View]),
+    ];
+    Signature::one_of(signatures, volatility)
 }
 
 impl AggregateUDFImpl for CountDistinctUdaf {
@@ -150,6 +177,10 @@ impl AggregateUDFImpl for CountDistinctUdaf {
 
     fn documentation(&self) -> Option<&Documentation> {
         Some(udf_docs::count_distinct_agg_doc())
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {
@@ -169,8 +200,10 @@ impl AggregateUDFImpl for CountDistinctUdaf {
         .into()])
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(CountDistinctAccumulator::default()))
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(CountDistinctAccumulator::new(
+            acc_args.ignore_nulls,
+        )))
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -179,9 +212,24 @@ impl AggregateUDFImpl for CountDistinctUdaf {
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        Ok(Box::new(CountDistinctGroupsAccumulator::default()))
+        Ok(Box::new(CountDistinctGroupsAccumulator::new(
+            args.ignore_nulls,
+        )))
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(CountDistinctSlidingAccumulator::new(
+            args.ignore_nulls,
+        )))
+    }
+
+    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(0)))
     }
 }
 
@@ -229,11 +277,11 @@ impl DistinctStringSet {
 
     fn build_list_array(&self, include_null: bool) -> ListArray {
         let mut builder = ListBuilder::new(StringBuilder::new());
-        if include_null && self.has_null {
-            builder.values().append_null();
-        }
         for value in &self.values {
             builder.values().append_value(value);
+        }
+        if include_null && self.has_null {
+            builder.values().append_null();
         }
         builder.append(true);
         builder.finish()
@@ -307,28 +355,42 @@ fn update_groups_from_list_array(
 fn build_group_list_array(groups: &[DistinctStringSet], include_null: bool) -> ListArray {
     let mut builder = ListBuilder::new(StringBuilder::new());
     for group in groups {
-        if include_null && group.has_null {
-            builder.values().append_null();
-        }
         for value in &group.values {
             builder.values().append_value(value);
+        }
+        if include_null && group.has_null {
+            builder.values().append_null();
         }
         builder.append(true);
     }
     builder.finish()
 }
 
-fn build_group_count_array(groups: &[DistinctStringSet]) -> Int64Array {
+fn build_group_count_array(groups: &[DistinctStringSet], include_null: bool) -> Int64Array {
     let mut builder = Int64Builder::with_capacity(groups.len());
     for group in groups {
-        builder.append_value(group.values.len() as i64);
+        let mut count = group.values.len() as i64;
+        if include_null && group.has_null {
+            count += 1;
+        }
+        builder.append_value(count);
     }
     builder.finish()
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ListUniqueAccumulator {
     state: DistinctStringSet,
+    include_null: bool,
+}
+
+impl ListUniqueAccumulator {
+    fn new(ignore_nulls: bool) -> Self {
+        Self {
+            state: DistinctStringSet::default(),
+            include_null: !ignore_nulls,
+        }
+    }
 }
 
 impl Accumulator for ListUniqueAccumulator {
@@ -339,11 +401,11 @@ impl Accumulator for ListUniqueAccumulator {
             ));
         };
         self.state
-            .update_from_array(values, "list_unique expects string input", true)
+            .update_from_array(values, "list_unique expects string input", self.include_null)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let list_array = self.state.build_list_array(true);
+        let list_array = self.state.build_list_array(self.include_null);
         Ok(ScalarValue::List(Arc::new(list_array)))
     }
 
@@ -352,7 +414,7 @@ impl Accumulator for ListUniqueAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let list_array = self.state.build_list_array(true);
+        let list_array = self.state.build_list_array(self.include_null);
         Ok(vec![ScalarValue::List(Arc::new(list_array))])
     }
 
@@ -368,13 +430,27 @@ impl Accumulator for ListUniqueAccumulator {
             .ok_or_else(|| {
                 DataFusionError::Plan("list_unique expects list state".into())
             })?;
-        self.state.merge_from_list_array(list_array, "list_unique expects string state", true)
+        self.state.merge_from_list_array(
+            list_array,
+            "list_unique expects string state",
+            self.include_null,
+        )
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ListUniqueGroupsAccumulator {
     groups: Vec<DistinctStringSet>,
+    include_null: bool,
+}
+
+impl ListUniqueGroupsAccumulator {
+    fn new(ignore_nulls: bool) -> Self {
+        Self {
+            groups: Vec::new(),
+            include_null: !ignore_nulls,
+        }
+    }
 }
 
 impl GroupsAccumulator for ListUniqueGroupsAccumulator {
@@ -397,7 +473,7 @@ impl GroupsAccumulator for ListUniqueGroupsAccumulator {
             &values,
             group_indices,
             opt_filter,
-            true,
+            self.include_null,
         )
     }
 
@@ -407,7 +483,7 @@ impl GroupsAccumulator for ListUniqueGroupsAccumulator {
             EmitTo::All => (total_groups, false),
             EmitTo::First(count) => (count.min(total_groups), true),
         };
-        let array = build_group_list_array(&self.groups[..emit_count], true);
+        let array = build_group_list_array(&self.groups[..emit_count], self.include_null);
         if retain {
             self.groups.drain(0..emit_count);
         } else {
@@ -446,8 +522,27 @@ impl GroupsAccumulator for ListUniqueGroupsAccumulator {
             group_indices,
             opt_filter,
             "list_unique expects string state",
-            true,
+            self.include_null,
         )
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let [values] = values else {
+            return Err(DataFusionError::Plan(
+                "list_unique expects a single input value".into(),
+            ));
+        };
+        let values = string_array_any(values, "list_unique expects string input")?;
+        let state = list_state_from_values(&values, opt_filter, self.include_null);
+        Ok(vec![Arc::new(state)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
@@ -455,9 +550,19 @@ impl GroupsAccumulator for ListUniqueGroupsAccumulator {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct CountDistinctAccumulator {
     state: DistinctStringSet,
+    include_null: bool,
+}
+
+impl CountDistinctAccumulator {
+    fn new(ignore_nulls: bool) -> Self {
+        Self {
+            state: DistinctStringSet::default(),
+            include_null: !ignore_nulls,
+        }
+    }
 }
 
 impl Accumulator for CountDistinctAccumulator {
@@ -470,12 +575,16 @@ impl Accumulator for CountDistinctAccumulator {
         self.state.update_from_array(
             values,
             "count_distinct_agg expects string input",
-            false,
+            self.include_null,
         )
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.state.values.len() as i64)))
+        let mut count = self.state.values.len() as i64;
+        if self.include_null && self.state.has_null {
+            count += 1;
+        }
+        Ok(ScalarValue::Int64(Some(count)))
     }
 
     fn size(&self) -> usize {
@@ -483,7 +592,7 @@ impl Accumulator for CountDistinctAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let list_array = self.state.build_list_array(false);
+        let list_array = self.state.build_list_array(self.include_null);
         Ok(vec![ScalarValue::List(Arc::new(list_array))])
     }
 
@@ -502,14 +611,24 @@ impl Accumulator for CountDistinctAccumulator {
         self.state.merge_from_list_array(
             list_array,
             "count_distinct_agg expects string state",
-            false,
+            self.include_null,
         )
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct CountDistinctGroupsAccumulator {
     groups: Vec<DistinctStringSet>,
+    include_null: bool,
+}
+
+impl CountDistinctGroupsAccumulator {
+    fn new(ignore_nulls: bool) -> Self {
+        Self {
+            groups: Vec::new(),
+            include_null: !ignore_nulls,
+        }
+    }
 }
 
 impl GroupsAccumulator for CountDistinctGroupsAccumulator {
@@ -532,7 +651,7 @@ impl GroupsAccumulator for CountDistinctGroupsAccumulator {
             &values,
             group_indices,
             opt_filter,
-            false,
+            self.include_null,
         )
     }
 
@@ -542,7 +661,7 @@ impl GroupsAccumulator for CountDistinctGroupsAccumulator {
             EmitTo::All => (total_groups, false),
             EmitTo::First(count) => (count.min(total_groups), true),
         };
-        let array = build_group_count_array(&self.groups[..emit_count]);
+        let array = build_group_count_array(&self.groups[..emit_count], self.include_null);
         if retain {
             self.groups.drain(0..emit_count);
         } else {
@@ -557,7 +676,7 @@ impl GroupsAccumulator for CountDistinctGroupsAccumulator {
             EmitTo::All => (total_groups, false),
             EmitTo::First(count) => (count.min(total_groups), true),
         };
-        let array = build_group_list_array(&self.groups[..emit_count], false);
+        let array = build_group_list_array(&self.groups[..emit_count], self.include_null);
         if retain {
             self.groups.drain(0..emit_count);
         } else {
@@ -591,13 +710,334 @@ impl GroupsAccumulator for CountDistinctGroupsAccumulator {
             group_indices,
             opt_filter,
             "count_distinct_agg expects string state",
-            false,
+            self.include_null,
         )
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let [values] = values else {
+            return Err(DataFusionError::Plan(
+                "count_distinct_agg expects a single input value".into(),
+            ));
+        };
+        let values = string_array_any(values, "count_distinct_agg expects string input")?;
+        let state = list_state_from_values(&values, opt_filter, self.include_null);
+        Ok(vec![Arc::new(state)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
         self.groups.iter().map(DistinctStringSet::size).sum()
     }
+}
+
+#[derive(Debug, Default)]
+struct DistinctStringCounts {
+    values: BTreeMap<String, usize>,
+    null_count: usize,
+}
+
+impl DistinctStringCounts {
+    fn update_from_array(
+        &mut self,
+        array: &ArrayRef,
+        message: &str,
+        track_null: bool,
+    ) -> Result<()> {
+        let values = string_array_any(array, message)?;
+        for index in 0..values.len() {
+            if values.is_null(index) {
+                if track_null {
+                    self.null_count = self.null_count.saturating_add(1);
+                }
+                continue;
+            }
+            let entry = self.values.entry(values.value(index).to_string()).or_insert(0);
+            *entry += 1;
+        }
+        Ok(())
+    }
+
+    fn retract_from_array(
+        &mut self,
+        array: &ArrayRef,
+        message: &str,
+        track_null: bool,
+    ) -> Result<()> {
+        let values = string_array_any(array, message)?;
+        for index in 0..values.len() {
+            if values.is_null(index) {
+                if track_null {
+                    if self.null_count == 0 {
+                        return Err(DataFusionError::Plan(
+                            "distinct string null count underflow".into(),
+                        ));
+                    }
+                    self.null_count -= 1;
+                }
+                continue;
+            }
+            let key = values.value(index);
+            let Some(entry) = self.values.get_mut(key) else {
+                return Err(DataFusionError::Plan(
+                    "distinct string count underflow".into(),
+                ));
+            };
+            if *entry == 0 {
+                return Err(DataFusionError::Plan(
+                    "distinct string count underflow".into(),
+                ));
+            }
+            *entry -= 1;
+            if *entry == 0 {
+                self.values.remove(key);
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_from_list_array(
+        &mut self,
+        array: &ListArray,
+        message: &str,
+        track_null: bool,
+    ) -> Result<()> {
+        for index in 0..array.len() {
+            if array.is_null(index) {
+                continue;
+            }
+            let values = array.value(index);
+            self.update_from_array(&values, message, track_null)?;
+        }
+        Ok(())
+    }
+
+    fn build_list_array(&self, include_null: bool, include_duplicates: bool) -> ListArray {
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for (value, count) in &self.values {
+            let repeat = if include_duplicates { *count } else { 1 };
+            for _ in 0..repeat {
+                builder.values().append_value(value);
+            }
+        }
+        if include_null && self.null_count > 0 {
+            for _ in 0..self.null_count {
+                if include_duplicates {
+                    builder.values().append_null();
+                }
+            }
+            if !include_duplicates {
+                builder.values().append_null();
+            }
+        }
+        builder.append(true);
+        builder.finish()
+    }
+
+    fn size(&self) -> usize {
+        let values_len: usize = self.values.keys().map(|value| value.len()).sum();
+        size_of_val(self) + values_len
+    }
+}
+
+#[derive(Debug)]
+struct ListUniqueSlidingAccumulator {
+    state: DistinctStringCounts,
+    include_null: bool,
+}
+
+impl ListUniqueSlidingAccumulator {
+    fn new(ignore_nulls: bool) -> Self {
+        Self {
+            state: DistinctStringCounts::default(),
+            include_null: !ignore_nulls,
+        }
+    }
+}
+
+impl Accumulator for ListUniqueSlidingAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let [values] = values else {
+            return Err(DataFusionError::Plan(
+                "list_unique expects a single input value".into(),
+            ));
+        };
+        self.state.update_from_array(
+            values,
+            "list_unique expects string input",
+            self.include_null,
+        )
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let list_array = self.state.build_list_array(self.include_null, false);
+        Ok(ScalarValue::List(Arc::new(list_array)))
+    }
+
+    fn size(&self) -> usize {
+        self.state.size()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let list_array = self.state.build_list_array(self.include_null, true);
+        Ok(vec![ScalarValue::List(Arc::new(list_array))])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let [state] = states else {
+            return Err(DataFusionError::Plan(
+                "list_unique expects a single state value".into(),
+            ));
+        };
+        let list_array = state
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Plan("list_unique expects list state".into())
+            })?;
+        self.state.merge_from_list_array(
+            list_array,
+            "list_unique expects string state",
+            self.include_null,
+        )
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let [values] = values else {
+            return Err(DataFusionError::Plan(
+                "list_unique expects a single input value".into(),
+            ));
+        };
+        self.state.retract_from_array(
+            values,
+            "list_unique expects string input",
+            self.include_null,
+        )
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug)]
+struct CountDistinctSlidingAccumulator {
+    state: DistinctStringCounts,
+    include_null: bool,
+}
+
+impl CountDistinctSlidingAccumulator {
+    fn new(ignore_nulls: bool) -> Self {
+        Self {
+            state: DistinctStringCounts::default(),
+            include_null: !ignore_nulls,
+        }
+    }
+}
+
+impl Accumulator for CountDistinctSlidingAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let [values] = values else {
+            return Err(DataFusionError::Plan(
+                "count_distinct_agg expects a single input value".into(),
+            ));
+        };
+        self.state.update_from_array(
+            values,
+            "count_distinct_agg expects string input",
+            self.include_null,
+        )
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let mut count = self.state.values.len() as i64;
+        if self.include_null && self.state.null_count > 0 {
+            count += 1;
+        }
+        Ok(ScalarValue::Int64(Some(count)))
+    }
+
+    fn size(&self) -> usize {
+        self.state.size()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let list_array = self.state.build_list_array(self.include_null, true);
+        Ok(vec![ScalarValue::List(Arc::new(list_array))])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let [state] = states else {
+            return Err(DataFusionError::Plan(
+                "count_distinct_agg expects a single state value".into(),
+            ));
+        };
+        let list_array = state
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Plan("count_distinct_agg expects list state".into())
+            })?;
+        self.state.merge_from_list_array(
+            list_array,
+            "count_distinct_agg expects string state",
+            self.include_null,
+        )
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let [values] = values else {
+            return Err(DataFusionError::Plan(
+                "count_distinct_agg expects a single input value".into(),
+            ));
+        };
+        self.state.retract_from_array(
+            values,
+            "count_distinct_agg expects string input",
+            self.include_null,
+        )
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
+fn list_state_from_values(
+    values: &StringArray,
+    opt_filter: Option<&BooleanArray>,
+    include_null: bool,
+) -> ListArray {
+    let mut builder = ListBuilder::new(StringBuilder::new());
+    for index in 0..values.len() {
+        let mut include = true;
+        if let Some(filter) = opt_filter {
+            if filter.is_null(index) || !filter.value(index) {
+                include = false;
+            }
+        }
+        if !include {
+            builder.append(true);
+            continue;
+        }
+        if values.is_null(index) {
+            if include_null {
+                builder.values().append_null();
+            }
+            builder.append(true);
+            continue;
+        }
+        builder.values().append_value(values.value(index));
+        builder.append(true);
+    }
+    builder.finish()
 }
 
 fn string_array_any<'a>(array: &'a ArrayRef, message: &str) -> Result<Cow<'a, StringArray>> {

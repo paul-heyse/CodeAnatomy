@@ -27,6 +27,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue,
     Documentation,
+    Expr,
     ReturnFieldArgs,
     ScalarFunctionArgs,
     ScalarUDF,
@@ -36,13 +37,14 @@ use datafusion_expr::{
     Volatility,
     lit,
 };
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_python::context::PySessionContext;
 use datafusion_python::expr::PyExpr;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyBytesMethods};
 
-use crate::udf_docs;
+use crate::{udf_async, udf_docs};
 
 const ENC_UTF8: i32 = 1;
 const ENC_UTF16: i32 = 2;
@@ -314,6 +316,9 @@ fn register_primitives(ctx: &SessionContext, policy: &FunctionFactoryPolicy) -> 
         let udf = build_udf(primitive, policy.prefer_named_arguments)?;
         ctx.register_udf(udf);
     }
+    if policy.allow_async {
+        udf_async::register_async_udfs(ctx)?;
+    }
     Ok(())
 }
 
@@ -444,6 +449,22 @@ fn scalar_str<'a>(value: &'a ScalarValue, message: &str) -> Result<Option<&'a st
         .ok_or_else(|| DataFusionError::Plan(message.to_string()))
 }
 
+fn literal_string_value(value: &ScalarValue) -> Option<Option<String>> {
+    match value {
+        ScalarValue::Utf8(value) | ScalarValue::LargeUtf8(value) | ScalarValue::Utf8View(value) => {
+            Some(value.clone())
+        }
+        _ => None,
+    }
+}
+
+fn literal_string(expr: &Expr) -> Option<Option<String>> {
+    let Expr::Literal(value, _) = expr else {
+        return None;
+    };
+    literal_string_value(value)
+}
+
 fn string_array_any<'a>(array: &'a ArrayRef, message: &str) -> Result<Cow<'a, StringArray>> {
     if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
         return Ok(Cow::Borrowed(values));
@@ -538,6 +559,15 @@ impl ScalarUDFImpl for CpgScoreUdf {
         self.signature.signature()
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Float64, nullable)))
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
@@ -558,11 +588,15 @@ struct ArrowMetadataUdf {
 
 impl ArrowMetadataUdf {
     fn new() -> Self {
-        Self {
-            signature: SignatureEqHash::new(Signature::one_of(
+        let signature = signature_with_names(
+            Signature::one_of(
                 vec![TypeSignature::Any(1), TypeSignature::Any(2)],
                 Volatility::Immutable,
-            )),
+            ),
+            &["expr", "key"],
+        );
+        Self {
+            signature: SignatureEqHash::new(signature),
         }
     }
 }
@@ -794,8 +828,29 @@ impl ScalarUDFImpl for StableHash64Udf {
         self.signature.signature()
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int64)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+        if let [expr] = args.as_slice() {
+            if let Some(value) = literal_string(expr) {
+                let hashed = value.as_deref().map(hash64_value);
+                return Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Int64(
+                    hashed,
+                ))));
+            }
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -840,8 +895,29 @@ impl ScalarUDFImpl for StableHash128Udf {
         self.signature.signature()
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+        if let [expr] = args.as_slice() {
+            if let Some(value) = literal_string(expr) {
+                let hashed = value.as_deref().map(hash128_value);
+                return Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(
+                    hashed,
+                ))));
+            }
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -886,8 +962,41 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
         self.signature.signature()
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .get(0)
+            .map(|field| field.is_nullable())
+            .unwrap_or(true)
+            || args
+                .arg_fields
+                .get(1)
+                .map(|field| field.is_nullable())
+                .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+        if let [prefix_expr, value_expr] = args.as_slice() {
+            let Some(prefix) = literal_string(prefix_expr) else {
+                return Ok(ExprSimplifyResult::Original(args));
+            };
+            let Some(value) = literal_string(value_expr) else {
+                return Ok(ExprSimplifyResult::Original(args));
+            };
+            let hashed = match (prefix.as_deref(), value.as_deref()) {
+                (Some(prefix), Some(value)) => Some(prefixed_hash64_value(prefix, value)),
+                _ => None,
+            };
+            return Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(
+                hashed,
+            ))));
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -945,8 +1054,41 @@ impl ScalarUDFImpl for StableIdUdf {
         self.signature.signature()
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .get(0)
+            .map(|field| field.is_nullable())
+            .unwrap_or(true)
+            || args
+                .arg_fields
+                .get(1)
+                .map(|field| field.is_nullable())
+                .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+        if let [prefix_expr, value_expr] = args.as_slice() {
+            let Some(prefix) = literal_string(prefix_expr) else {
+                return Ok(ExprSimplifyResult::Original(args));
+            };
+            let Some(value) = literal_string(value_expr) else {
+                return Ok(ExprSimplifyResult::Original(args));
+            };
+            let hashed = match (prefix.as_deref(), value.as_deref()) {
+                (Some(prefix), Some(value)) => Some(stable_id_value(prefix, value)),
+                _ => None,
+            };
+            return Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(
+                hashed,
+            ))));
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1102,6 +1244,10 @@ impl ScalarUDFImpl for PositionEncodingUdf {
         self.signature.signature()
     }
 
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, false)))
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int32)
     }
@@ -1153,6 +1299,20 @@ impl ScalarUDFImpl for ColToByteUdf {
 
     fn signature(&self) -> &Signature {
         self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .get(0)
+            .map(|field| field.is_nullable())
+            .unwrap_or(true)
+            || args
+                .arg_fields
+                .get(1)
+                .map(|field| field.is_nullable())
+                .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {

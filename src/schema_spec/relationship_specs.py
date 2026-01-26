@@ -81,6 +81,18 @@ def rel_callsite_qname_spec() -> DatasetSpec:
     return dataset_spec_from_context("rel_callsite_qname_v1")
 
 
+@cache
+def relation_output_spec() -> DatasetSpec:
+    """Return the dataset spec for canonical relationship outputs.
+
+    Returns
+    -------
+    DatasetSpec
+        Dataset spec for relation_output rows.
+    """
+    return dataset_spec_from_context("relation_output_v1")
+
+
 def relationship_dataset_specs() -> tuple[DatasetSpec, ...]:
     """Return relationship dataset specs.
 
@@ -95,6 +107,7 @@ def relationship_dataset_specs() -> tuple[DatasetSpec, ...]:
         rel_def_symbol_spec(),
         rel_callsite_symbol_spec(),
         rel_callsite_qname_spec(),
+        relation_output_spec(),
     )
     return tuple(sorted(specs, key=lambda spec: spec.name))
 
@@ -293,6 +306,7 @@ __all__ = [
     "rel_def_symbol_spec",
     "rel_import_symbol_spec",
     "rel_name_symbol_spec",
+    "relation_output_spec",
     "relationship_constraint_errors",
     "relationship_contract_spec",
     "relationship_dataset_specs",

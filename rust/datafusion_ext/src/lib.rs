@@ -1,6 +1,7 @@
 //! DataFusion extension for native function registration.
 
 mod udf_builtin;
+mod udf_async;
 mod udf_custom;
 mod udf_docs;
 mod expr_planner;
@@ -9,6 +10,7 @@ mod function_factory;
 mod udaf_builtin;
 mod udwf_builtin;
 mod udtf_builtin;
+mod udtf_external;
 pub mod udf_registry;
 mod registry_snapshot;
 

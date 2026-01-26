@@ -42,6 +42,7 @@ def build_unified_function_registry(
     *,
     datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None,
     snapshot: IntrospectionSnapshot | None = None,
+    registry_snapshot: Mapping[str, object] | None = None,
     datafusion_specs: tuple[DataFusionUdfSpec, ...] | None = None,
     ibis_specs: tuple[IbisUdfSpec, ...] | None = None,
 ) -> UnifiedFunctionRegistry:
@@ -52,8 +53,12 @@ def build_unified_function_registry(
     UnifiedFunctionRegistry
         Unified registry composed of function and UDF specs.
     """
-    resolved_datafusion = datafusion_specs or datafusion_udf_specs()
-    resolved_ibis = ibis_specs or ibis_udf_specs()
+    resolved_datafusion = datafusion_specs or datafusion_udf_specs(
+        registry_snapshot=registry_snapshot
+    )
+    resolved_ibis = ibis_specs or ibis_udf_specs(
+        registry_snapshot=registry_snapshot
+    )
     function_registry = build_function_registry(
         primitives=DEFAULT_RULE_PRIMITIVES,
         datafusion_specs=resolved_datafusion,

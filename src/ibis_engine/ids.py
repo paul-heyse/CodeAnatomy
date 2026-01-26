@@ -11,7 +11,7 @@ import ibis.expr.datatypes as dt
 from ibis.expr import operations as ops
 from ibis.expr.types import StringValue, Value
 
-from ibis_engine.builtin_udfs import stable_hash64, stable_hash128
+from ibis_engine.builtin_udfs import stable_hash64, stable_hash128, stable_id
 
 HASH_SEPARATOR = "\x1f"
 
@@ -62,9 +62,9 @@ def stable_id_expr(
     ibis.expr.types.Value
         Stable id expression.
     """
-    hashed = stable_hash64_expr(*parts, prefix=prefix, null_sentinel=null_sentinel)
-    prefix_expr = cast("StringValue", ibis.literal(f"{prefix}:"))
-    return _concat_values([prefix_expr, hashed.cast("string")])
+    key = stable_key_expr(*parts, prefix=None, null_sentinel=null_sentinel)
+    prefix_expr = cast("StringValue", ibis.literal(prefix))
+    return stable_id(prefix_expr, key)
 
 
 def stable_key_expr(

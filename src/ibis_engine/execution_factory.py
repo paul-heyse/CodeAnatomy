@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value as IbisValue
@@ -14,6 +14,7 @@ from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext
 
 if TYPE_CHECKING:
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 
 
@@ -44,6 +45,32 @@ def ibis_backend_from_ctx(ctx: ExecutionContext) -> BaseBackend:
         Configured backend instance.
     """
     return build_backend(backend_config_from_ctx(ctx))
+
+
+def datafusion_facade_from_ctx(
+    ctx: ExecutionContext,
+    *,
+    backend: BaseBackend | None = None,
+) -> DataFusionExecutionFacade | None:
+    """Return a DataFusionExecutionFacade for the provided context.
+
+    Returns
+    -------
+    DataFusionExecutionFacade | None
+        Facade bound to the DataFusion session when configured.
+    """
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        return None
+    backend = ibis_backend_from_ctx(ctx) if backend is None else backend
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from sqlglot_tools.bridge import IbisCompilerBackend
+
+    return DataFusionExecutionFacade(
+        ctx=runtime_profile.session_context(),
+        runtime_profile=runtime_profile,
+        ibis_backend=cast("IbisCompilerBackend", backend),
+    )
 
 
 def ibis_execution_from_ctx(
@@ -124,6 +151,7 @@ def ibis_backend_from_profile(profile: object) -> BaseBackend:
 
 __all__ = [
     "backend_config_from_ctx",
+    "datafusion_facade_from_ctx",
     "ibis_backend_from_ctx",
     "ibis_backend_from_profile",
     "ibis_execution_from_ctx",

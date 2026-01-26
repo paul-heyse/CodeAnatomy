@@ -225,20 +225,23 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     introspection_snapshot = None
     if session is not None and runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
         introspection_snapshot = introspection_cache_for_ctx(session).snapshot
+    registry_snapshot = None
+    if session is not None:
+        try:
+            from datafusion_engine.udf_runtime import rust_udf_snapshot
+        except ImportError:
+            registry_snapshot = None
+        else:
+            try:
+                registry_snapshot = rust_udf_snapshot(session)
+            except (RuntimeError, TypeError, ValueError):
+                registry_snapshot = None
     unified_registry = build_unified_function_registry(
         datafusion_function_catalog=function_catalog,
         snapshot=introspection_snapshot,
+        registry_snapshot=registry_snapshot,
     )
     function_registry_hash = unified_registry.fingerprint()
-    datafusion_payload = (
-        runtime.datafusion.telemetry_payload_v1() if runtime.datafusion is not None else None
-    )
-    datafusion_hash = (
-        runtime.datafusion.telemetry_payload_hash() if runtime.datafusion is not None else None
-    )
-    scan_profile_schema_msgpack = schema_to_msgpack(
-        pa.schema([pa.field("scan_profile", _SCAN_PROFILE_SCHEMA)])
-    )
     snapshot_payload = {
         "name": runtime.name,
         "determinism_tier": runtime.determinism.value,
@@ -247,7 +250,9 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         "ibis_options": ibis_payload,
         "arrow_resources": arrow_payload,
         "sqlglot_policy": sqlglot_snapshot.payload() if sqlglot_snapshot is not None else None,
-        "datafusion": datafusion_payload,
+        "datafusion": runtime.datafusion.telemetry_payload_v1()
+        if runtime.datafusion is not None
+        else None,
         "function_registry_hash": function_registry_hash,
     }
     hash_payload = {
@@ -261,7 +266,9 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         "sqlglot_policy_hash": sqlglot_snapshot.policy_hash
         if sqlglot_snapshot is not None
         else None,
-        "datafusion_hash": datafusion_hash,
+        "datafusion_hash": runtime.datafusion.telemetry_payload_hash()
+        if runtime.datafusion is not None
+        else None,
         "function_registry_hash": function_registry_hash,
     }
     profile_hash = payload_hash(hash_payload, _PROFILE_HASH_SCHEMA)
@@ -274,10 +281,12 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         ibis_options=ibis_payload,
         arrow_resources=arrow_payload,
         sqlglot_policy=snapshot_payload["sqlglot_policy"],
-        datafusion=datafusion_payload,
+        datafusion=snapshot_payload["datafusion"],
         function_registry_hash=function_registry_hash,
         profile_hash=profile_hash,
-        scan_profile_schema_msgpack=scan_profile_schema_msgpack,
+        scan_profile_schema_msgpack=schema_to_msgpack(
+            pa.schema([pa.field("scan_profile", _SCAN_PROFILE_SCHEMA)])
+        ),
     )
 
 
@@ -320,9 +329,21 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
     introspection_snapshot = (
         introspection_cache_for_ctx(session).snapshot if session is not None else None
     )
+    registry_snapshot = None
+    if session is not None:
+        try:
+            from datafusion_engine.udf_runtime import rust_udf_snapshot
+        except ImportError:
+            registry_snapshot = None
+        else:
+            try:
+                registry_snapshot = rust_udf_snapshot(session)
+            except (RuntimeError, TypeError, ValueError):
+                registry_snapshot = None
     unified_registry = build_unified_function_registry(
         datafusion_function_catalog=function_catalog or [],
         snapshot=introspection_snapshot,
+        registry_snapshot=registry_snapshot,
     )
     datafusion_settings = (
         runtime.datafusion.settings_payload() if runtime.datafusion is not None else None

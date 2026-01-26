@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import hashlib
@@ -9,7 +10,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, TypedDict, cast
 
@@ -32,7 +33,9 @@ try:
 except ImportError:
     DataFusionLogicalPlan = None
 from datafusion import (
+    DataFrameWriteOptions,
     ParquetColumnOptions,
+    ParquetWriterOptions,
     SessionContext,
     SQLOptions,
 )
@@ -68,6 +71,7 @@ from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.sql_safety import ExecutionPolicy
 from engine.plan_cache import PlanCacheKey
 from ibis_engine.param_tables import scalar_param_signature
+from schema_spec.policies import DataFusionWritePolicy
 from serde_msgspec import dumps_msgpack
 from sqlglot_tools.bridge import (
     AstExecutionResult,
@@ -1242,6 +1246,133 @@ def _collect_reader(df: DataFrame) -> pa.RecordBatchReader:
     return StreamingExecutionResult(df=df).to_arrow_stream()
 
 
+def datafusion_to_reader(df: DataFrame) -> pa.RecordBatchReader:
+    """Return a RecordBatchReader for a DataFusion DataFrame.
+
+    Parameters
+    ----------
+    df : datafusion.dataframe.DataFrame
+        DataFusion DataFrame to stream.
+
+    Returns
+    -------
+    pyarrow.RecordBatchReader
+        Arrow stream for the DataFusion result.
+    """
+    return _collect_reader(df)
+
+
+async def datafusion_to_async_batches(df: DataFrame) -> AsyncIterator[pa.RecordBatch]:
+    """Yield DataFusion record batches asynchronously.
+
+    Parameters
+    ----------
+    df : datafusion.dataframe.DataFrame
+        DataFusion DataFrame to stream.
+
+    Yields
+    ------
+    pyarrow.RecordBatch
+        Record batches from the DataFusion result.
+    """
+    reader = datafusion_to_reader(df)
+    for batch in reader:
+        yield batch
+        await asyncio.sleep(0)
+
+
+def df_from_sqlglot_or_sql(
+    ctx: SessionContext,
+    expr: Expression | str,
+    *,
+    options: DataFusionCompileOptions | None = None,
+) -> DataFrame:
+    """Compile SQL/SQLGlot input and return a DataFusion DataFrame.
+
+    Parameters
+    ----------
+    ctx : datafusion.SessionContext
+        DataFusion session context used for compilation and execution.
+    expr : sqlglot.Expression | str
+        SQLGlot expression or SQL string to compile.
+    options : DataFusionCompileOptions | None
+        Optional compile options to override defaults.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        DataFusion DataFrame for the compiled expression.
+
+    Raises
+    ------
+    TypeError
+        Raised when expr is not a SQL string or SQLGlot expression.
+    """
+    resolved = options or DataFusionCompileOptions()
+    pipeline = _compilation_pipeline(ctx, options=resolved)
+    if isinstance(expr, str):
+        compiled = pipeline.compile_sql(expr)
+    elif isinstance(expr, exp.Expression):
+        compiled = pipeline.compile_ast(expr)
+    else:
+        msg = "Expected SQL string or SQLGlot expression."
+        raise TypeError(msg)
+    return pipeline.execute(
+        compiled,
+        params=resolved.params,
+        named_params=resolved.named_params,
+        sql_options=resolved.sql_options,
+    )
+
+
+def datafusion_write_options(
+    policy: DataFusionWritePolicy | None,
+) -> tuple[DataFrameWriteOptions, ParquetWriterOptions]:
+    """Build DataFusion write option objects from a policy.
+
+    Parameters
+    ----------
+    policy : DataFusionWritePolicy | None
+        DataFusion write policy to convert.
+
+    Returns
+    -------
+    tuple[DataFrameWriteOptions, ParquetWriterOptions]
+        DataFusion write options and Parquet writer options.
+    """
+    resolved = policy or DataFusionWritePolicy()
+    write_options = DataFrameWriteOptions(
+        partition_by=list(resolved.partition_by),
+        sort_by=None,
+        single_file_output=resolved.single_file_output,
+    )
+    column_options: dict[str, ParquetColumnOptions] = {}
+    if resolved.parquet_column_options:
+        for name, option in resolved.parquet_column_options.items():
+            column_options[name] = ParquetColumnOptions(
+                compression=option.compression,
+                dictionary_enabled=option.dictionary_enabled,
+                statistics_enabled=option.statistics_enabled,
+                bloom_filter_enabled=option.bloom_filter_enabled,
+                bloom_filter_fpp=option.bloom_filter_fpp,
+                bloom_filter_ndv=option.bloom_filter_ndv,
+                encoding=option.encoding,
+            )
+    parquet_options = ParquetWriterOptions(
+        compression=resolved.parquet_compression or "zstd",
+        statistics_enabled=resolved.parquet_statistics_enabled or "page",
+        max_row_group_size=resolved.parquet_row_group_size or 1_000_000,
+        bloom_filter_on_write=resolved.parquet_bloom_filter_on_write or False,
+        dictionary_enabled=resolved.parquet_dictionary_enabled
+        if resolved.parquet_dictionary_enabled is not None
+        else True,
+        encoding=resolved.parquet_encoding,
+        skip_arrow_metadata=resolved.parquet_skip_arrow_metadata or False,
+        column_specific_options=column_options or None,
+    )
+    return write_options, parquet_options
+
+
 def _df_plan_details(df: DataFrame) -> dict[str, object]:
     logical = _plan_display(_df_plan(df, "logical_plan"), display_method="display_indent_schema")
     optimized = _plan_display(
@@ -1871,6 +2002,10 @@ __all__ = [
     "MaterializationPolicy",
     "collect_plan_artifacts",
     "datafusion_from_arrow",
+    "datafusion_to_async_batches",
+    "datafusion_to_reader",
+    "datafusion_write_options",
+    "df_from_sqlglot_or_sql",
     "execute_sqlglot_ast",
     "ibis_to_datafusion_ast_path",
     "rehydrate_plan_artifacts",

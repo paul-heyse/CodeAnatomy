@@ -6,7 +6,7 @@ use datafusion_functions_table::generate_series::RangeFunc;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion_common::Result;
 
-use crate::{udaf_builtin, udtf_builtin, udwf_builtin, udf_custom};
+use crate::{udaf_builtin, udtf_builtin, udtf_external, udwf_builtin, udf_custom};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -128,6 +128,7 @@ pub fn register_all(ctx: &SessionContext) -> Result<()> {
         ctx.register_udwf(udwf);
     }
     udtf_builtin::register_builtin_udtfs(ctx)?;
+    udtf_external::register_external_udtfs(ctx)?;
     Ok(())
 }
 

@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from arrowdsl.core.interop import TableLike
+from datafusion_engine.diagnostics import record_artifact
+from datafusion_engine.execution_facade import ExecutionResult
 from ibis_engine.execution import execute_ibis_plan
 from relspec.plan_catalog import PlanArtifact
-from relspec.runtime_artifacts import RuntimeArtifacts
+from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts
 
 
 @dataclass(frozen=True)
@@ -42,11 +44,55 @@ def execute_plan_artifact(request: TaskExecutionRequest) -> TableLike:
         raise ValueError(msg)
     param_mapping = request.runtime.param_mapping_for_task(request.artifact)
     execution = replace(exec_ctx, params=param_mapping) if param_mapping is not None else exec_ctx
-    return execute_ibis_plan(
+    result = execute_ibis_plan(
         request.artifact.plan,
         execution=execution,
         streaming=False,
-    ).require_table()
+    )
+    _register_execution_result(request, result)
+    return result.require_table()
+
+
+def _register_execution_result(
+    request: TaskExecutionRequest,
+    result: ExecutionResult,
+) -> None:
+    runtime = request.runtime
+    artifact = request.artifact
+    runtime.register_execution(
+        artifact.task.output,
+        result,
+        spec=ExecutionArtifactSpec(
+            source_task=artifact.task.name,
+            plan_fingerprint=artifact.plan_fingerprint,
+        ),
+    )
+    exec_ctx = runtime.execution
+    if exec_ctx is None:
+        return
+    profile = exec_ctx.ctx.runtime.datafusion
+    if profile is None:
+        return
+    row_count = None
+    if result.table is not None:
+        to_pyarrow = getattr(result.table, "to_pyarrow", None)
+        if callable(to_pyarrow):
+            try:
+                arrow_table = to_pyarrow()
+            except (AttributeError, TypeError, ValueError):
+                arrow_table = None
+            if hasattr(arrow_table, "num_rows"):
+                num_rows = getattr(arrow_table, "num_rows", None)
+                if isinstance(num_rows, int):
+                    row_count = num_rows
+    payload = {
+        "task_name": artifact.task.name,
+        "output": artifact.task.output,
+        "plan_fingerprint": artifact.plan_fingerprint,
+        "result_kind": result.kind.value,
+        "rows": row_count,
+    }
+    record_artifact(profile, "relspec_plan_execute_v1", payload)
 
 
 __all__ = ["TaskExecutionRequest", "execute_plan_artifact"]

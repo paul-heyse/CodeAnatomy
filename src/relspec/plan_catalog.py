@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
 from ibis.expr.types import Scalar
 
 from arrowdsl.core.ordering import Ordering
+from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.parameterized_execution import ParameterizedRulepack, ParameterSpec
 from ibis_engine.compiler_checkpoint import compile_checkpoint
+from ibis_engine.execution_factory import datafusion_facade_from_ctx
 from ibis_engine.plan import IbisPlan
+from relspec.context import ensure_task_build_context
 from relspec.inferred_deps import InferredDeps, infer_deps_from_sqlglot_expr
 from relspec.task_catalog import TaskBuildContext, TaskCatalog, TaskSpec
 
@@ -19,6 +22,7 @@ if TYPE_CHECKING:
     from ibis.backends import BaseBackend
 
     from arrowdsl.core.execution_context import ExecutionContext
+    from datafusion_engine.diagnostics import DiagnosticsRecorder
     from sqlglot_tools.bridge import IbisCompilerBackend
     from sqlglot_tools.compat import Expression
 
@@ -157,7 +161,17 @@ def compile_task_plan(
     TypeError
         Raised when the task builder returns an unsupported plan type.
     """
-    resolved_context = build_context or TaskBuildContext(ctx=ctx, backend=backend)
+    resolved_context = ensure_task_build_context(
+        ctx,
+        backend,
+        build_context=build_context,
+    )
+    if resolved_context.diagnostics is None and resolved_context.facade is not None:
+        recorder = resolved_context.facade.diagnostics_recorder(
+            operation_id=f"relspec.build.{task.name}"
+        )
+        if recorder is not None:
+            resolved_context = replace(resolved_context, diagnostics=recorder)
     built = task.build(resolved_context)
     parameterization: PlanParameterization | None = None
     if isinstance(built, ParameterizedRulepack):
@@ -171,6 +185,37 @@ def compile_task_plan(
             msg = f"Task builder must return IbisPlan or ParameterizedRulepack, got {type(built)}."
             raise TypeError(msg)
         plan = built
+    compile_recorder = resolved_context.diagnostics
+    facade = resolved_context.facade or datafusion_facade_from_ctx(ctx, backend=backend)
+    if compile_recorder is None and facade is not None:
+        compile_recorder = facade.diagnostics_recorder(
+            operation_id=f"relspec.compile.{task.name}"
+        )
+    if facade is not None:
+        compiled = facade.compile(plan.expr)
+        sqlglot_ast = compiled.compiled.sqlglot_ast
+        deps = infer_deps_from_sqlglot_expr(
+            sqlglot_ast,
+            task_name=task.name,
+            output=task.output,
+            dialect="datafusion",
+        )
+        fingerprint = compiled.compiled.fingerprint
+        _record_compile_artifact(
+            ctx,
+            recorder=compile_recorder,
+            task=task,
+            sqlglot_ast=sqlglot_ast,
+            plan_fingerprint=fingerprint,
+        )
+        return PlanArtifact(
+            task=task,
+            plan=plan,
+            sqlglot_ast=sqlglot_ast,
+            deps=deps,
+            plan_fingerprint=fingerprint,
+            parameterization=parameterization,
+        )
     compiler_backend = cast("IbisCompilerBackend", backend)
     checkpoint = compile_checkpoint(
         plan.expr,
@@ -185,6 +230,13 @@ def compile_task_plan(
         dialect="datafusion",
     )
     fingerprint = checkpoint.plan_hash
+    _record_compile_artifact(
+        ctx,
+        recorder=compile_recorder,
+        task=task,
+        sqlglot_ast=checkpoint.normalized,
+        plan_fingerprint=fingerprint,
+    )
     return PlanArtifact(
         task=task,
         plan=plan,
@@ -220,16 +272,41 @@ def compile_task_catalog(
     PlanCatalog
         Catalog of compiled plans.
     """
+    resolved_context = ensure_task_build_context(
+        ctx,
+        backend,
+        build_context=build_context,
+    )
     artifacts = tuple(
         compile_task_plan(
             task,
             backend=backend,
             ctx=ctx,
-            build_context=build_context,
+            build_context=resolved_context,
         )
         for task in catalog.tasks
     )
     return PlanCatalog(artifacts=artifacts)
+
+
+def _record_compile_artifact(
+    ctx: ExecutionContext,
+    *,
+    recorder: DiagnosticsRecorder | None,
+    task: TaskSpec,
+    sqlglot_ast: Expression,
+    plan_fingerprint: str,
+) -> None:
+    payload = {
+        "task_name": task.name,
+        "output": task.output,
+        "plan_fingerprint": plan_fingerprint,
+        "ast_type": sqlglot_ast.__class__.__name__,
+    }
+    if recorder is not None:
+        recorder.record_artifact("relspec_plan_compile_v1", payload)
+        return
+    record_artifact(ctx.runtime.datafusion, "relspec_plan_compile_v1", payload)
 
 
 __all__ = [

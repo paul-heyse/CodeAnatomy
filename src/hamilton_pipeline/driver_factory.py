@@ -33,6 +33,7 @@ from hamilton_pipeline.task_module_builder import (
 from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.execution_factory import ibis_backend_from_ctx
 from obs.diagnostics import DiagnosticsCollector
+from relspec.context import ensure_task_build_context
 from relspec.evidence import initial_evidence_from_plan
 from relspec.plan_catalog import compile_task_catalog
 from relspec.rustworkx_graph import (
@@ -146,6 +147,11 @@ def _build_dependency_map(
         ctx=ctx,
         backend=backend,
         ibis_catalog=IbisPlanCatalog(backend=backend),
+    )
+    build_context = ensure_task_build_context(
+        ctx,
+        backend,
+        build_context=build_context,
     )
     plan_catalog = compile_task_catalog(
         task_catalog,

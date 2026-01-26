@@ -85,7 +85,7 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use datafusion_expr::expr::BinaryExpr;
     use datafusion_expr::expr_fn::col;
-    use datafusion_expr::ScalarValue;
+    use datafusion_common::ScalarValue;
 
     #[test]
     fn rewrite_arrow_to_get_field() -> Result<()> {
@@ -98,7 +98,10 @@ mod tests {
         let expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(col("payload")),
             Operator::Arrow,
-            Box::new(Expr::Literal(ScalarValue::Utf8(Some("name".to_string())))),
+            Box::new(Expr::Literal(
+                ScalarValue::Utf8(Some("name".to_string())),
+                None,
+            )),
         ));
         let rewrite = CodeAnatomyOperatorRewrite::default();
         let transformed = rewrite.rewrite(expr, &df_schema, &ConfigOptions::new())?;

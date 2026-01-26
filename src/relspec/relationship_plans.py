@@ -11,6 +11,7 @@ import pyarrow as pa
 
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import empty_table
+from arrowdsl.schema.metadata import ordering_from_schema
 from cpg.kind_catalog import (
     EDGE_KIND_PY_CALLS_QNAME,
     EDGE_KIND_PY_CALLS_SYMBOL,
@@ -18,25 +19,26 @@ from cpg.kind_catalog import (
     EDGE_KIND_PY_IMPORTS_SYMBOL,
     EDGE_KIND_PY_REFERENCES_SYMBOL,
 )
-from datafusion_engine.schema_registry import (
-    REL_CALLSITE_QNAME_SCHEMA,
-    REL_CALLSITE_SYMBOL_SCHEMA,
-    REL_DEF_SYMBOL_SCHEMA,
-    REL_IMPORT_SYMBOL_SCHEMA,
-    REL_NAME_SYMBOL_SCHEMA,
-    RELATION_OUTPUT_SCHEMA,
-    schema_for,
-)
+from datafusion_engine.schema_registry import schema_for
 from ibis_engine.catalog import IbisPlanCatalog
 from ibis_engine.ids import stable_id_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import (
+    bind_expr_schema,
     coalesce_columns,
     ensure_columns,
     ibis_dtype_from_arrow,
     ibis_null_literal,
 )
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
+from relspec.contracts import (
+    rel_callsite_qname_schema,
+    rel_callsite_symbol_schema,
+    rel_def_symbol_schema,
+    rel_import_symbol_schema,
+    rel_name_symbol_schema,
+    relation_output_schema,
+)
 
 if TYPE_CHECKING:
     from ibis.backends import BaseBackend
@@ -82,7 +84,7 @@ def build_rel_name_symbol_plan(
         task_name=ibis.literal(task_name),
         task_priority=ibis.literal(task_priority),
     )
-    return _select_plan(output, schema=REL_NAME_SYMBOL_SCHEMA)
+    return _select_plan(output, schema=rel_name_symbol_schema(), allow_extra_columns=ctx.debug)
 
 
 def build_rel_import_symbol_plan(
@@ -122,7 +124,7 @@ def build_rel_import_symbol_plan(
         task_name=ibis.literal(task_name),
         task_priority=ibis.literal(task_priority),
     )
-    return _select_plan(output, schema=REL_IMPORT_SYMBOL_SCHEMA)
+    return _select_plan(output, schema=rel_import_symbol_schema(), allow_extra_columns=ctx.debug)
 
 
 def build_rel_def_symbol_plan(
@@ -157,7 +159,7 @@ def build_rel_def_symbol_plan(
         task_name=ibis.literal(task_name),
         task_priority=ibis.literal(task_priority),
     )
-    return _select_plan(output, schema=REL_DEF_SYMBOL_SCHEMA)
+    return _select_plan(output, schema=rel_def_symbol_schema(), allow_extra_columns=ctx.debug)
 
 
 def build_rel_callsite_symbol_plan(
@@ -195,7 +197,11 @@ def build_rel_callsite_symbol_plan(
         task_name=ibis.literal(task_name),
         task_priority=ibis.literal(task_priority),
     )
-    return _select_plan(output, schema=REL_CALLSITE_SYMBOL_SCHEMA)
+    return _select_plan(
+        output,
+        schema=rel_callsite_symbol_schema(),
+        allow_extra_columns=ctx.debug,
+    )
 
 
 def build_rel_callsite_qname_plan(
@@ -230,7 +236,11 @@ def build_rel_callsite_qname_plan(
         task_name=ibis.literal(task_name),
         task_priority=ibis.literal(task_priority),
     )
-    return _select_plan(output, schema=REL_CALLSITE_QNAME_SCHEMA)
+    return _select_plan(
+        output,
+        schema=rel_callsite_qname_schema(),
+        allow_extra_columns=ctx.debug,
+    )
 
 
 def build_relation_output_plan(
@@ -258,9 +268,11 @@ def build_relation_output_plan(
         _relation_output_from_call_qname(rel_call_qname),
     ]
     combined = _union_exprs(parts)
-    combined = ensure_columns(combined, schema=RELATION_OUTPUT_SCHEMA, only_missing=True)
-    combined = combined.select(*RELATION_OUTPUT_SCHEMA.names)
-    return IbisPlan(expr=combined, ordering=Ordering.unordered())
+    output_schema = relation_output_schema()
+    combined = ensure_columns(combined, schema=output_schema, only_missing=True)
+    combined = combined.select(*output_schema.names)
+    combined = bind_expr_schema(combined, schema=output_schema, allow_extra_columns=ctx.debug)
+    return IbisPlan(expr=combined, ordering=ordering_from_schema(output_schema))
 
 
 @dataclass(frozen=True)
@@ -392,16 +404,23 @@ def _resolve_table(catalog: IbisPlanCatalog, *, ctx: ExecutionContext, name: str
             backend=catalog.backend,
             name=name,
             ordering=Ordering.unordered(),
+            schema=schema,
         ),
     )
     catalog.add(name, plan)
     return plan.expr
 
 
-def _select_plan(expr: Table, *, schema: pa.Schema) -> IbisPlan:
+def _select_plan(
+    expr: Table,
+    *,
+    schema: pa.Schema,
+    allow_extra_columns: bool,
+) -> IbisPlan:
     expr = ensure_columns(expr, schema=schema, only_missing=True)
     expr = expr.select(*schema.names)
-    return IbisPlan(expr=expr, ordering=Ordering.unordered())
+    expr = bind_expr_schema(expr, schema=schema, allow_extra_columns=allow_extra_columns)
+    return IbisPlan(expr=expr, ordering=ordering_from_schema(schema))
 
 
 def _union_exprs(exprs: Iterable[Table]) -> Table:

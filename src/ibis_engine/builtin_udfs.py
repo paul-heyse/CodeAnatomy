@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
+from typing import Literal, cast
 
 import ibis
 import ibis.expr.datatypes as dt
@@ -168,7 +169,84 @@ IBIS_UDF_SPECS: tuple[IbisUdfSpec, ...] = (
 )
 
 
-def ibis_udf_specs() -> tuple[IbisUdfSpec, ...]:
+def _registry_names(snapshot: Mapping[str, object]) -> set[str]:
+    names: set[str] = set()
+    for key in ("scalar", "aggregate", "window", "table"):
+        value = snapshot.get(key, [])
+        if isinstance(value, str):
+            continue
+        if isinstance(value, Iterable):
+            names.update(str(name) for name in value if name is not None)
+    return names
+
+
+def _registry_parameter_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
+    value = snapshot.get("parameter_names")
+    if not isinstance(value, Mapping):
+        return {}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for name, params in value.items():
+        if params is None or isinstance(params, str):
+            continue
+        if not isinstance(params, Iterable):
+            continue
+        resolved[str(name)] = tuple(str(param) for param in params if param is not None)
+    return resolved
+
+
+def _normalize_volatility(value: object | None) -> UdfVolatility | None:
+    if value is None:
+        return None
+    text = str(value)
+    if text in {"immutable", "stable", "volatile"}:
+        return cast("UdfVolatility", text)
+    return None
+
+
+def _registry_volatility(snapshot: Mapping[str, object]) -> dict[str, UdfVolatility]:
+    value = snapshot.get("volatility")
+    if not isinstance(value, Mapping):
+        return {}
+    resolved: dict[str, UdfVolatility] = {}
+    for name, vol in value.items():
+        normalized = _normalize_volatility(vol)
+        if normalized is None:
+            continue
+        resolved[str(name)] = normalized
+    return resolved
+
+
+def _apply_registry_metadata(
+    specs: tuple[IbisUdfSpec, ...],
+    snapshot: Mapping[str, object],
+) -> tuple[IbisUdfSpec, ...]:
+    names = _registry_names(snapshot)
+    if not names:
+        return specs
+    missing = sorted(spec.engine_name for spec in specs if spec.engine_name not in names)
+    if missing:
+        msg = f"Rust UDF registry missing expected functions: {missing}"
+        raise ValueError(msg)
+    param_names = _registry_parameter_names(snapshot)
+    volatilities = _registry_volatility(snapshot)
+    enriched: list[IbisUdfSpec] = []
+    for spec in specs:
+        arg_names = param_names.get(spec.engine_name, spec.arg_names)
+        volatility = volatilities.get(spec.engine_name, spec.volatility)
+        enriched.append(
+            replace(
+                spec,
+                arg_names=arg_names if arg_names else spec.arg_names,
+                volatility=volatility,
+            )
+        )
+    return tuple(enriched)
+
+
+def ibis_udf_specs(
+    *,
+    registry_snapshot: Mapping[str, object] | None = None,
+) -> tuple[IbisUdfSpec, ...]:
     """Return the canonical Ibis UDF specs.
 
     Returns
@@ -176,7 +254,9 @@ def ibis_udf_specs() -> tuple[IbisUdfSpec, ...]:
     tuple[IbisUdfSpec, ...]
         Canonical Ibis UDF specifications.
     """
-    return IBIS_UDF_SPECS
+    if registry_snapshot is None:
+        return IBIS_UDF_SPECS
+    return _apply_registry_metadata(IBIS_UDF_SPECS, registry_snapshot)
 
 
 __all__ = [

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.registry_bridge import DataFusionCachePolicy
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.schema_introspection import SchemaIntrospector
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     from ibis_engine.registry import DatasetLocation
     from sqlglot_tools.bridge import IbisCompilerBackend
@@ -476,6 +477,19 @@ class DataFusionExecutionFacade:
             cache_policy=cache_policy,
             runtime_profile=self.runtime_profile,
         )
+
+    def schema_introspector(self) -> SchemaIntrospector:
+        """Return a SchemaIntrospector bound to the facade context.
+
+        Returns
+        -------
+        SchemaIntrospector
+            Introspector for information_schema queries.
+        """
+        from datafusion_engine.schema_introspection import SchemaIntrospector
+
+        sql_options = self.runtime_profile.sql_options() if self.runtime_profile is not None else None
+        return SchemaIntrospector(self.ctx, sql_options=sql_options)
 
     def _resolve_ibis_backend(self) -> IbisCompilerBackend:
         if self.ibis_backend is None:

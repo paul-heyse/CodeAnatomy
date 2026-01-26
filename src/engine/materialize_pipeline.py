@@ -219,22 +219,19 @@ def build_plan_product(
     execution = replace(execution, cache_policy=cache_policy)
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
+    result = execute_ibis_plan(
+        plan,
+        execution=execution,
+        streaming=prefer_reader,
+    )
     if prefer_reader:
-        stream = execute_ibis_plan(
-            plan,
-            execution=execution,
-            streaming=True,
-        ).require_reader()
+        stream = result.require_reader()
         if not isinstance(stream, pa.RecordBatchReader):
             msg = "Expected RecordBatchReader for reader materialization."
             raise ValueError(msg)
         schema = stream.schema
     else:
-        table = execute_ibis_plan(
-            plan,
-            execution=execution,
-            streaming=False,
-        ).require_table()
+        table = result.require_table()
         schema = table.schema
     return PlanProduct(
         plan_id=plan_id or _default_plan_id(plan),
@@ -243,6 +240,7 @@ def build_plan_product(
         writer_strategy=policy.writer_strategy,
         stream=stream,
         table=table,
+        execution_result=result,
     )
 
 

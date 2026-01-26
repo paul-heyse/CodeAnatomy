@@ -9,6 +9,7 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
 from ibis_engine.catalog import IbisPlanCatalog, IbisPlanSource
+from relspec.context import ensure_task_build_context
 from relspec.task_catalog import TaskBuildContext, TaskCatalog
 from relspec.task_catalog_builders import build_task_catalog
 
@@ -39,7 +40,11 @@ def task_build_context(
         Build context for task plan compilation.
     """
     ibis_catalog = IbisPlanCatalog(backend=ibis_backend, tables=dict(source_catalog_inputs))
-    return TaskBuildContext(ctx=ctx, backend=ibis_backend, ibis_catalog=ibis_catalog)
+    return ensure_task_build_context(
+        ctx,
+        ibis_backend,
+        ibis_catalog=ibis_catalog,
+    )
 
 
 __all__ = ["task_build_context", "task_catalog"]

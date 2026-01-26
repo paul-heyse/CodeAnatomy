@@ -2970,11 +2970,23 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         missing: list[str] = []
         from engine.unified_registry import build_unified_function_registry
 
+        registry_snapshot = None
+        try:
+            from datafusion_engine.udf_runtime import rust_udf_snapshot
+        except ImportError:
+            registry_snapshot = None
+        else:
+            try:
+                registry_snapshot = rust_udf_snapshot(introspector.ctx)
+            except (RuntimeError, TypeError, ValueError):
+                registry_snapshot = None
+
         unified_registry = build_unified_function_registry(
             datafusion_function_catalog=introspector.function_catalog_snapshot(
                 include_parameters=True
             ),
             snapshot=introspector.snapshot,
+            registry_snapshot=registry_snapshot,
         )
         for name in sorted(unified_registry.required_builtins):
             try:

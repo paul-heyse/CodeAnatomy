@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
@@ -110,15 +110,23 @@ class EvidenceCatalog:
         contract = schema_contract_from_contract_spec(name=name, spec=spec)
         self.register_contract(name, contract, snapshot=snapshot)
 
-    def register_from_registry(self, name: str, *, ctx_id: int | None = None) -> bool:
-        """Register an evidence dataset using the schema registry.
+    def register_from_registry(
+        self,
+        name: str,
+        *,
+        ctx: SessionContext | None = None,
+        ctx_id: int | None = None,
+    ) -> bool:
+        """Register an evidence dataset using DataFusion or schema registry.
 
         Returns
         -------
         bool
             ``True`` when a schema was found and registered.
         """
-        schema = _schema_from_registry(name)
+        schema = _schema_from_context(name, ctx=ctx) if ctx is not None else None
+        if schema is None:
+            schema = _schema_from_registry(name)
         if schema is None:
             return False
         self.register(name, schema)
@@ -171,6 +179,16 @@ class EvidenceRequirements:
     metadata: dict[str, dict[bytes, bytes]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class EvidenceRegistrationContext:
+    """Shared context for evidence registration helpers."""
+
+    ctx: SessionContext | None
+    ctx_id: int | None
+    snapshot: IntrospectionSnapshot | None
+    allow_registry_fallback: bool
+
+
 def evidence_requirements_from_plan(
     catalog: PlanCatalog,
     *,
@@ -219,36 +237,20 @@ def initial_evidence_from_plan(
     evidence = EvidenceCatalog(sources=set(seed_sources))
     ctx_id = id(ctx) if ctx is not None else None
     resolved_snapshot = snapshot or _snapshot_from_ctx(ctx)
+    registration_ctx = EvidenceRegistrationContext(
+        ctx=ctx,
+        ctx_id=ctx_id,
+        snapshot=resolved_snapshot,
+        allow_registry_fallback=allow_registry_fallback,
+    )
     for source in seed_sources:
-        spec = _dataset_spec_from_known_registries(source, ctx=ctx)
-        if spec is not None:
-            evidence.register_from_dataset_spec(
-                source,
-                spec,
-                snapshot=resolved_snapshot,
-            )
-            if ctx_id is not None:
-                provider_metadata = _provider_metadata(ctx_id, source)
-                if provider_metadata:
-                    evidence.metadata_by_dataset.setdefault(source, {}).update(provider_metadata)
-            continue
-        contract_spec = _contract_spec_from_known_registries(source, ctx=ctx)
-        if contract_spec is not None:
-            evidence.register_from_contract_spec(
-                source,
-                contract_spec,
-                snapshot=resolved_snapshot,
-            )
-            if ctx_id is not None:
-                provider_metadata = _provider_metadata(ctx_id, source)
-                if provider_metadata:
-                    evidence.metadata_by_dataset.setdefault(source, {}).update(provider_metadata)
-            continue
-        if allow_registry_fallback and evidence.register_from_registry(
-            source, ctx_id=ctx_id
-        ):
-            continue
-        _seed_evidence_from_requirements(evidence, source, requirements)
+        registered = _register_evidence_source(
+            evidence,
+            source,
+            context=registration_ctx,
+        )
+        if not registered:
+            _seed_evidence_from_requirements(evidence, source, requirements)
     return evidence
 
 
@@ -348,12 +350,33 @@ def _dataset_spec_from_known_registries(
         except KeyError:
             pass
     try:
-        from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_spec
+        from relspec.contracts import (
+            REL_CALLSITE_QNAME_NAME,
+            REL_CALLSITE_SYMBOL_NAME,
+            REL_DEF_SYMBOL_NAME,
+            REL_IMPORT_SYMBOL_NAME,
+            REL_NAME_SYMBOL_NAME,
+            RELATION_OUTPUT_NAME,
+            rel_callsite_qname_spec,
+            rel_callsite_symbol_spec,
+            rel_def_symbol_spec,
+            rel_import_symbol_spec,
+            rel_name_symbol_spec,
+            relation_output_spec,
+        )
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
-    relation_output_name = RELATION_OUTPUT_NAME
-    if name == relation_output_name:
-        return relation_output_spec()
+    relspec_specs: dict[str, Callable[[], DatasetSpec]] = {
+        REL_NAME_SYMBOL_NAME: rel_name_symbol_spec,
+        REL_IMPORT_SYMBOL_NAME: rel_import_symbol_spec,
+        REL_DEF_SYMBOL_NAME: rel_def_symbol_spec,
+        REL_CALLSITE_SYMBOL_NAME: rel_callsite_symbol_spec,
+        REL_CALLSITE_QNAME_NAME: rel_callsite_qname_spec,
+        RELATION_OUTPUT_NAME: relation_output_spec,
+    }
+    spec_factory = relspec_specs.get(name)
+    if spec_factory is not None:
+        return spec_factory()
     return None
 
 
@@ -383,6 +406,78 @@ def _schema_from_registry(name: str) -> SchemaLike | None:
         return schema_for(name)
     except KeyError:
         return None
+
+
+def _register_evidence_source(
+    evidence: EvidenceCatalog,
+    source: str,
+    *,
+    context: EvidenceRegistrationContext,
+) -> bool:
+    spec = _dataset_spec_from_known_registries(source, ctx=context.ctx)
+    if spec is not None:
+        evidence.register_from_dataset_spec(source, spec, snapshot=context.snapshot)
+        _merge_provider_metadata(evidence, source, ctx_id=context.ctx_id)
+        return True
+    contract_spec = _contract_spec_from_known_registries(source, ctx=context.ctx)
+    if contract_spec is not None:
+        evidence.register_from_contract_spec(source, contract_spec, snapshot=context.snapshot)
+        _merge_provider_metadata(evidence, source, ctx_id=context.ctx_id)
+        return True
+    if _register_from_introspection(evidence, source, snapshot=context.snapshot):
+        _merge_provider_metadata(evidence, source, ctx_id=context.ctx_id)
+        return True
+    return context.allow_registry_fallback and evidence.register_from_registry(
+        source,
+        ctx=context.ctx,
+        ctx_id=context.ctx_id,
+    )
+
+
+def _merge_provider_metadata(
+    evidence: EvidenceCatalog,
+    source: str,
+    *,
+    ctx_id: int | None,
+) -> None:
+    if ctx_id is None:
+        return
+    provider_metadata = _provider_metadata(ctx_id, source)
+    if provider_metadata:
+        evidence.metadata_by_dataset.setdefault(source, {}).update(provider_metadata)
+
+
+def _register_from_introspection(
+    evidence: EvidenceCatalog,
+    name: str,
+    *,
+    snapshot: IntrospectionSnapshot | None,
+) -> bool:
+    if snapshot is None:
+        return False
+    if not snapshot.table_exists(name):
+        return False
+    columns = snapshot.get_table_columns(name)
+    if not columns:
+        return False
+    evidence.sources.add(name)
+    evidence.columns_by_dataset[name] = {col for col, _ in columns}
+    evidence.types_by_dataset[name] = {col: str(dtype) for col, dtype in columns}
+    return True
+
+
+def _schema_from_context(name: str, *, ctx: SessionContext) -> SchemaLike | None:
+    try:
+        df = ctx.table(name)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        return None
+    schema_attr = getattr(df, "schema", None)
+    if callable(schema_attr):
+        try:
+            return cast("SchemaLike", schema_attr())
+        except (RuntimeError, TypeError, ValueError):
+            return None
+    return None
 
 
 def _provider_metadata(ctx_id: int, name: str) -> dict[bytes, bytes]:

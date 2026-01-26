@@ -6,12 +6,12 @@ DataFusion builtins and disallows Python/PyArrow/Pandas UDF execution.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
-from datafusion import SQLOptions
+from datafusion import SessionContext, SQLOptions
 
 from datafusion_engine.schema_introspection import routines_snapshot_table
 
@@ -831,7 +831,69 @@ def create_strict_catalog(
     return UdfCatalog(tier_policy=policy, udf_specs=udf_specs)
 
 
-def datafusion_udf_specs() -> tuple[DataFusionUdfSpec, ...]:
+def _registry_names(snapshot: Mapping[str, object]) -> set[str]:
+    names: set[str] = set()
+    for key in ("scalar", "aggregate", "window", "table"):
+        value = snapshot.get(key, [])
+        if isinstance(value, str):
+            continue
+        if isinstance(value, Iterable):
+            names.update(str(name) for name in value if name is not None)
+    return names
+
+
+def _registry_parameter_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
+    value = snapshot.get("parameter_names")
+    if not isinstance(value, Mapping):
+        return {}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for name, params in value.items():
+        if params is None or isinstance(params, str):
+            continue
+        if not isinstance(params, Iterable):
+            continue
+        resolved[str(name)] = tuple(str(param) for param in params if param is not None)
+    return resolved
+
+
+def _registry_volatility(snapshot: Mapping[str, object]) -> dict[str, str]:
+    value = snapshot.get("volatility")
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(name): str(vol) for name, vol in value.items() if vol is not None}
+
+
+def _apply_registry_metadata(
+    specs: tuple[DataFusionUdfSpec, ...],
+    snapshot: Mapping[str, object],
+) -> tuple[DataFusionUdfSpec, ...]:
+    names = _registry_names(snapshot)
+    if not names:
+        return specs
+    missing = sorted(spec.engine_name for spec in specs if spec.engine_name not in names)
+    if missing:
+        msg = f"Rust UDF registry missing expected functions: {missing}"
+        raise ValueError(msg)
+    param_names = _registry_parameter_names(snapshot)
+    volatilities = _registry_volatility(snapshot)
+    enriched: list[DataFusionUdfSpec] = []
+    for spec in specs:
+        arg_names = param_names.get(spec.engine_name, spec.arg_names)
+        volatility = volatilities.get(spec.engine_name, spec.volatility)
+        enriched.append(
+            replace(
+                spec,
+                arg_names=arg_names if arg_names else spec.arg_names,
+                volatility=volatility,
+            )
+        )
+    return tuple(enriched)
+
+
+def datafusion_udf_specs(
+    *,
+    registry_snapshot: Mapping[str, object] | None = None,
+) -> tuple[DataFusionUdfSpec, ...]:
     """Return the canonical DataFusion UDF specs.
 
     Returns
@@ -839,7 +901,7 @@ def datafusion_udf_specs() -> tuple[DataFusionUdfSpec, ...]:
     tuple[DataFusionUdfSpec, ...]
         Canonical DataFusion UDF specifications.
     """
-    return (
+    specs = (
         DataFusionUdfSpec(
             func_id="stable_hash64",
             engine_name="stable_hash64",
@@ -986,6 +1048,21 @@ def datafusion_udf_specs() -> tuple[DataFusionUdfSpec, ...]:
             udf_tier="builtin",
         ),
     )
+    if registry_snapshot is None:
+        return specs
+    return _apply_registry_metadata(specs, registry_snapshot)
+
+
+def _rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:
+    try:
+        from datafusion_engine.udf_runtime import rust_udf_snapshot
+    except ImportError:
+        return None
+    try:
+        snapshot = rust_udf_snapshot(ctx)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    return snapshot
 
 
 def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
@@ -996,7 +1073,11 @@ def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
     UdfCatalog
         Default catalog with standard tier policy.
     """
-    specs = {spec.func_id: spec for spec in datafusion_udf_specs()}
+    registry_snapshot = _rust_udf_snapshot(introspector.ctx)
+    specs = {
+        spec.func_id: spec
+        for spec in datafusion_udf_specs(registry_snapshot=registry_snapshot)
+    }
     catalog = create_default_catalog(udf_specs=specs)
     catalog.refresh_from_session(introspector)
     return catalog
@@ -1010,7 +1091,11 @@ def get_strict_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
     UdfCatalog
         Catalog with strict builtin-only policy.
     """
-    specs = {spec.func_id: spec for spec in datafusion_udf_specs()}
+    registry_snapshot = _rust_udf_snapshot(introspector.ctx)
+    specs = {
+        spec.func_id: spec
+        for spec in datafusion_udf_specs(registry_snapshot=registry_snapshot)
+    }
     catalog = create_strict_catalog(udf_specs=specs)
     catalog.refresh_from_session(introspector)
     return catalog

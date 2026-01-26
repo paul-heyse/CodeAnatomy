@@ -99,15 +99,16 @@ def _record_output(
     outputs[artifact.task.output] = table
     schema = table.schema
     evidence.register(artifact.task.output, schema)
-    runtime.register_materialized(
-        artifact.task.output,
-        table,
-        spec=MaterializedTableSpec(
-            source_task=artifact.task.name,
-            schema_fingerprint=schema_fingerprint(schema),
-            plan_fingerprint=artifact.plan_fingerprint,
-        ),
-    )
+    if artifact.task.output not in runtime.execution_artifacts:
+        runtime.register_materialized(
+            artifact.task.output,
+            table,
+            spec=MaterializedTableSpec(
+                source_task=artifact.task.name,
+                schema_fingerprint=schema_fingerprint(schema),
+                plan_fingerprint=artifact.plan_fingerprint,
+            ),
+        )
 
 
 @tag(layer="execution", artifact="runtime_artifacts", kind="context")
@@ -178,6 +179,14 @@ def evidence_catalog(
             "evidence_contract_violations_v1",
             {"violations": payload},
         )
+    if df_profile is not None:
+        from datafusion_engine.diagnostics import record_artifact
+        from datafusion_engine.udf_parity import udf_parity_report
+        from ibis_engine.builtin_udfs import ibis_udf_specs
+
+        session = df_profile.session_context()
+        report = udf_parity_report(session, ibis_specs=ibis_udf_specs())
+        record_artifact(df_profile, "udf_parity_v1", report.payload())
     return evidence
 
 
@@ -223,7 +232,11 @@ def execute_task_from_catalog(
     plan_catalog = inputs.plan_catalog
     runtime = inputs.runtime
     evidence = inputs.evidence
-    existing = runtime.materialized_tables.get(task_output)
+    existing_artifact = runtime.execution_artifacts.get(task_output)
+    if existing_artifact is not None and existing_artifact.result.table is not None:
+        existing = existing_artifact.result.table
+    else:
+        existing = runtime.materialized_tables.get(task_output)
     if existing is not None:
         if task_output not in evidence.sources:
             evidence.register(task_output, existing.schema)

@@ -19,6 +19,7 @@ from cache.diskcache_factory import (
     cache_for_kind,
     evict_cache_tag,
 )
+from datafusion_engine.execution_facade import ExecutionResult, ExecutionResultKind
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -95,6 +96,28 @@ class MaterializedTableSpec:
     storage_path: str | None = None
 
 
+@dataclass(frozen=True)
+class ExecutionArtifactSpec:
+    """Metadata for registering an execution artifact."""
+
+    source_task: str
+    plan_fingerprint: str | None = None
+    schema_fingerprint: str | None = None
+    storage_path: str | None = None
+
+
+@dataclass(frozen=True)
+class ExecutionArtifact:
+    """Execution result artifact with metadata."""
+
+    name: str
+    source_task: str
+    result: ExecutionResult
+    schema_fingerprint: str | None = None
+    plan_fingerprint: str | None = None
+    storage_path: str | None = None
+
+
 @dataclass
 class RuntimeArtifacts:
     """Container for runtime artifacts during task execution.
@@ -106,8 +129,6 @@ class RuntimeArtifacts:
     ----------
     execution : IbisExecutionContext | None
         Ibis execution context for materialization.
-    datafusion_ctx : object | None
-        DataFusion SessionContext handle.
     materialized_tables : dict[str, TableLike]
         Materialized PyArrow tables keyed by dataset name.
     view_references : dict[str, ViewReference]
@@ -116,6 +137,8 @@ class RuntimeArtifacts:
         Cached schemas keyed by dataset name.
     table_metadata : dict[str, MaterializedTable]
         Metadata for materialized tables.
+    execution_artifacts : dict[str, ExecutionArtifact]
+        Execution results keyed by dataset name.
     execution_order : list[str]
         Order in which tasks were executed.
     rulepack_param_values : Mapping[str, object]
@@ -123,11 +146,11 @@ class RuntimeArtifacts:
     """
 
     execution: IbisExecutionContext | None = None
-    datafusion_ctx: object | None = None
     materialized_tables: dict[str, TableLike] = field(default_factory=dict)
     view_references: dict[str, ViewReference] = field(default_factory=dict)
     schema_cache: dict[str, SchemaLike] = field(default_factory=dict)
     table_metadata: dict[str, MaterializedTable] = field(default_factory=dict)
+    execution_artifacts: dict[str, ExecutionArtifact] = field(default_factory=dict)
     execution_order: list[str] = field(default_factory=list)
     rulepack_param_values: Mapping[str, object] = field(default_factory=dict)
     diskcache_profile: DiskCacheProfile | None = None
@@ -247,6 +270,55 @@ class RuntimeArtifacts:
             )
         return metadata
 
+    def register_execution(
+        self,
+        name: str,
+        result: ExecutionResult,
+        *,
+        spec: ExecutionArtifactSpec,
+    ) -> ExecutionArtifact:
+        """Register an execution result for a task output.
+
+        Parameters
+        ----------
+        name : str
+            Dataset name for the output.
+        result : ExecutionResult
+            Execution result to register.
+        spec : ExecutionArtifactSpec
+            Metadata for the execution artifact.
+
+        Returns
+        -------
+        ExecutionArtifact
+            Execution artifact metadata for the output.
+        """
+        schema = _schema_for_execution_result(result)
+        schema_fp = spec.schema_fingerprint
+        if schema_fp is None and schema is not None:
+            schema_fp = schema_fingerprint(schema)
+        artifact = ExecutionArtifact(
+            name=name,
+            source_task=spec.source_task,
+            result=result,
+            schema_fingerprint=schema_fp,
+            plan_fingerprint=spec.plan_fingerprint,
+            storage_path=spec.storage_path,
+        )
+        self.execution_artifacts[name] = artifact
+        if result.table is not None:
+            self.register_materialized(
+                name,
+                result.table,
+                spec=MaterializedTableSpec(
+                    source_task=spec.source_task,
+                    schema_fingerprint=schema_fp,
+                    plan_fingerprint=spec.plan_fingerprint,
+                    storage_path=spec.storage_path,
+                ),
+            )
+        return artifact
+
     def cache_schema(self, name: str, schema: SchemaLike) -> None:
         """Cache a schema for later retrieval.
 
@@ -347,7 +419,11 @@ class RuntimeArtifacts:
         bool
             True if artifact exists.
         """
-        return name in self.view_references or name in self.materialized_tables
+        return (
+            name in self.view_references
+            or name in self.materialized_tables
+            or name in self.execution_artifacts
+        )
 
     def artifact_source(self, name: str) -> str | None:
         """Get the source task for an artifact.
@@ -366,6 +442,8 @@ class RuntimeArtifacts:
             return self.view_references[name].source_task
         if name in self.table_metadata:
             return self.table_metadata[name].source_task
+        if name in self.execution_artifacts:
+            return self.execution_artifacts[name].source_task
         return None
 
     def param_mapping_for_task(
@@ -417,11 +495,11 @@ class RuntimeArtifacts:
             Shallow copy of this container.
         """
         return RuntimeArtifacts(
-            datafusion_ctx=self.datafusion_ctx,
             materialized_tables=dict(self.materialized_tables),
             view_references=dict(self.view_references),
             schema_cache=dict(self.schema_cache),
             table_metadata=dict(self.table_metadata),
+            execution_artifacts=dict(self.execution_artifacts),
             execution_order=list(self.execution_order),
             rulepack_param_values=dict(self.rulepack_param_values),
             diskcache_profile=self.diskcache_profile,
@@ -440,6 +518,10 @@ class RuntimeArtifactsSummary:
         Number of materialized tables.
     total_rows : int
         Total rows across all materialized tables.
+    total_executions : int
+        Total execution artifacts recorded.
+    execution_kinds : tuple[tuple[str, int], ...]
+        Counts by execution result kind.
     execution_order : tuple[str, ...]
         Order of task execution.
     view_names : tuple[str, ...]
@@ -451,6 +533,8 @@ class RuntimeArtifactsSummary:
     total_views: int
     total_materialized: int
     total_rows: int
+    total_executions: int
+    execution_kinds: tuple[tuple[str, int], ...]
     execution_order: tuple[str, ...]
     view_names: tuple[str, ...] = ()
     materialized_names: tuple[str, ...] = ()
@@ -472,6 +556,18 @@ def _looks_like_schema(value: object) -> bool:
     has_index = callable(getattr(value, "get_field_index", None))
     has_iter = callable(getattr(value, "__iter__", None))
     return has_names and has_metadata and has_with_metadata and has_field and has_index and has_iter
+
+
+def _schema_for_execution_result(result: ExecutionResult) -> SchemaLike | None:
+    if result.kind == ExecutionResultKind.TABLE and result.table is not None:
+        return result.table.schema
+    if result.kind == ExecutionResultKind.READER and result.reader is not None:
+        return result.reader.schema
+    if result.kind == ExecutionResultKind.DATAFRAME and result.dataframe is not None:
+        schema = getattr(result.dataframe, "schema", None)
+        if callable(schema):
+            return cast("SchemaLike", schema())
+    return None
 
 
 def _lookup_rulepack_value(
@@ -514,11 +610,17 @@ def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:
         Summary for observability.
     """
     total_rows = sum(meta.row_count for meta in artifacts.table_metadata.values())
+    execution_kinds: dict[str, int] = {}
+    for artifact in artifacts.execution_artifacts.values():
+        kind = artifact.result.kind.value
+        execution_kinds[kind] = execution_kinds.get(kind, 0) + 1
 
     return RuntimeArtifactsSummary(
         total_views=len(artifacts.view_references),
         total_materialized=len(artifacts.materialized_tables),
         total_rows=total_rows,
+        total_executions=len(artifacts.execution_artifacts),
+        execution_kinds=tuple(sorted(execution_kinds.items())),
         execution_order=tuple(artifacts.execution_order),
         view_names=tuple(sorted(artifacts.view_references.keys())),
         materialized_names=tuple(sorted(artifacts.materialized_tables.keys())),
@@ -526,6 +628,8 @@ def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:
 
 
 __all__ = [
+    "ExecutionArtifact",
+    "ExecutionArtifactSpec",
     "MaterializedTable",
     "MaterializedTableSpec",
     "RuntimeArtifacts",

@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from ibis.backends import BaseBackend
 
     from arrowdsl.core.execution_context import ExecutionContext
+    from datafusion_engine.diagnostics import DiagnosticsRecorder
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from datafusion_engine.parameterized_execution import ParameterizedRulepack
     from ibis_engine.catalog import IbisPlanCatalog
     from ibis_engine.plan import IbisPlan
@@ -31,6 +33,8 @@ class TaskBuildContext:
     backend: BaseBackend
     ibis_catalog: IbisPlanCatalog | None = None
     runtime: NormalizeRuntime | None = None
+    facade: DataFusionExecutionFacade | None = None
+    diagnostics: DiagnosticsRecorder | None = None
 
 
 PlanBuilder = Callable[[TaskBuildContext], PlanBuildResult]

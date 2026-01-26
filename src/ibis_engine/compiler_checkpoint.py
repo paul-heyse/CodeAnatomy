@@ -11,17 +11,18 @@ from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     schema_map_fingerprint_from_mapping,
 )
+from datafusion_engine.sql_policy_engine import (
+    SQLPolicyProfile,
+    compile_sql_policy,
+    render_for_execution,
+)
 from ibis_engine.registry import datafusion_context
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import (
-    NormalizeExprOptions,
     SchemaMapping,
-    normalize_expr,
-    plan_fingerprint,
+    SqlGlotPolicy,
     resolve_sqlglot_policy,
-    sqlglot_policy_snapshot_for,
-    sqlglot_sql,
 )
 
 
@@ -36,6 +37,20 @@ class CompilerCheckpoint:
     sql: str
     policy_hash: str
     schema_map_hash: str | None
+
+
+def _policy_profile_from_sqlglot(policy: SqlGlotPolicy) -> SQLPolicyProfile:
+    return SQLPolicyProfile(
+        read_dialect=policy.read_dialect,
+        write_dialect=policy.write_dialect,
+        optimizer_rules=tuple(policy.rules),
+        normalize_distance_limit=policy.normalization_distance,
+        expand_stars=policy.expand_stars,
+        validate_qualify_columns=policy.validate_qualify_columns,
+        identify_mode=policy.identify,
+        error_level=policy.error_level,
+        unsupported_level=policy.unsupported_level,
+    )
 
 
 def compile_checkpoint(
@@ -56,27 +71,23 @@ def compile_checkpoint(
     compiled = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = schema_map or _schema_map_from_backend(backend)
     schema_map_hash = schema_map_fingerprint_from_mapping(schema) if schema is not None else None
+    schema_for_policy = schema if schema is not None else {}
     policy = resolve_sqlglot_policy(name="datafusion_compile")
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
     if normalization_budget is not None:
         policy = replace(policy, normalization_distance=normalization_budget)
-    qualified = normalize_expr(
+    profile = _policy_profile_from_sqlglot(policy)
+    canonical, artifacts = compile_sql_policy(
         compiled,
-        options=NormalizeExprOptions(
-            schema=schema,
-            policy=policy,
-        ),
+        schema=schema_for_policy,
+        profile=profile,
     )
-    normalized = qualified
-    sql = sqlglot_sql(normalized, policy=policy)
-    policy_hash = sqlglot_policy_snapshot_for(policy).policy_hash
-    plan_hash = plan_fingerprint(
-        normalized,
-        dialect=policy.write_dialect,
-        policy_hash=policy_hash,
-        schema_map_hash=schema_map_hash,
-    )
+    qualified = canonical
+    normalized = canonical
+    sql = render_for_execution(canonical, profile)
+    policy_hash = profile.policy_fingerprint()
+    plan_hash = artifacts.ast_fingerprint
     return CompilerCheckpoint(
         expression=compiled,
         qualified=qualified,

@@ -185,25 +185,28 @@ def materialize_plan(
     TableLike
         Arrow table with ordering metadata applied when available.
 
+    Raises
+    ------
+    ValueError
+        Raised when DataFusion execution options are missing.
     """
-    if execution is not None:
-        cache_policy = execution.cache_policy
-        if cache_policy is not None:
-            _record_cache_event(cache_policy, mode="materialize")
-        if cache_policy is not None and cache_policy.enabled:
-            with plan.cache() as cached:
-                cached_execution = replace(execution, cache_policy=None)
-                return materialize_plan(cached, execution=cached_execution)
-        if execution.datafusion is not None:
-            portable_plan = _portable_plan(plan)
-            df = _datafusion_dataframe_for_plan(
-                portable_plan,
-                execution=execution.datafusion,
-                params=execution.params,
-            )
-            return _datafusion_table_from_dataframe(df, ordering=portable_plan.ordering)
-    params = _validate_plan_params(execution.params) if execution is not None else None
-    return plan.to_table(params=params)
+    if execution is None or execution.datafusion is None:
+        msg = "DataFusion execution options are required for plan materialization."
+        raise ValueError(msg)
+    cache_policy = execution.cache_policy
+    if cache_policy is not None:
+        _record_cache_event(cache_policy, mode="materialize")
+    if cache_policy is not None and cache_policy.enabled:
+        with plan.cache() as cached:
+            cached_execution = replace(execution, cache_policy=None)
+            return materialize_plan(cached, execution=cached_execution)
+    portable_plan = _portable_plan(plan)
+    df = _datafusion_dataframe_for_plan(
+        portable_plan,
+        execution=execution.datafusion,
+        params=execution.params,
+    )
+    return _datafusion_table_from_dataframe(df, ordering=portable_plan.ordering)
 
 
 def stream_plan(
@@ -219,33 +222,37 @@ def stream_plan(
     -------
     RecordBatchReaderLike
         RecordBatchReader with ordering metadata applied when available.
+
+    Raises
+    ------
+    ValueError
+        Raised when DataFusion execution options are missing.
     """
+    if execution is None or execution.datafusion is None:
+        msg = "DataFusion execution options are required for plan streaming."
+        raise ValueError(msg)
     effective_params = params
-    if execution is not None and execution.params is not None:
+    if execution.params is not None:
         effective_params = execution.params
-    if execution is not None:
-        cache_policy = execution.cache_policy
-        if cache_policy is not None:
-            _record_cache_event(cache_policy, mode="stream")
-        if cache_policy is not None and cache_policy.enabled:
-            with plan.cache() as cached:
-                cached_execution = replace(execution, cache_policy=None)
-                return stream_plan(
-                    cached,
-                    batch_size=batch_size,
-                    params=effective_params,
-                    execution=cached_execution,
-                )
-    if execution is not None and execution.datafusion is not None:
-        portable_plan = _portable_plan(plan)
-        df = _datafusion_dataframe_for_plan(
-            portable_plan,
-            execution=execution.datafusion,
-            params=effective_params,
-        )
-        return _datafusion_reader_from_dataframe(df, ordering=portable_plan.ordering)
-    validated_params = _validate_plan_params(effective_params)
-    return plan.to_reader(batch_size=batch_size, params=validated_params)
+    cache_policy = execution.cache_policy
+    if cache_policy is not None:
+        _record_cache_event(cache_policy, mode="stream")
+    if cache_policy is not None and cache_policy.enabled:
+        with plan.cache() as cached:
+            cached_execution = replace(execution, cache_policy=None)
+            return stream_plan(
+                cached,
+                batch_size=batch_size,
+                params=effective_params,
+                execution=cached_execution,
+            )
+    portable_plan = _portable_plan(plan)
+    df = _datafusion_dataframe_for_plan(
+        portable_plan,
+        execution=execution.datafusion,
+        params=effective_params,
+    )
+    return _datafusion_reader_from_dataframe(df, ordering=portable_plan.ordering)
 
 
 def _validate_plan_params(

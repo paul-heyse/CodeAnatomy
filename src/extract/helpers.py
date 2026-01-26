@@ -772,7 +772,13 @@ def _record_extract_compile(
     *,
     ctx: ExecutionContext,
 ) -> None:
-    """Record a compile fingerprint artifact for extract plans."""
+    """Record a compile fingerprint artifact for extract plans.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is unavailable.
+    """
     facade = datafusion_facade_from_ctx(ctx)
     try:
         compiled = facade.compile(plan.expr)
@@ -797,7 +803,13 @@ def _record_extract_udf_parity(
     *,
     ctx: ExecutionContext,
 ) -> None:
-    """Record extract-scoped UDF parity diagnostics."""
+    """Record extract-scoped UDF parity diagnostics.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is unavailable.
+    """
     profile = ctx.runtime.datafusion
     if profile is None:
         msg = "DataFusion runtime profile is required for UDF parity checks."

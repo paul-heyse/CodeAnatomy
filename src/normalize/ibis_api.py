@@ -623,7 +623,13 @@ def _record_plan_compile(
     output: str,
     builder_name: str,
 ) -> None:
-    """Record a compile fingerprint artifact for a normalize plan."""
+    """Record a compile fingerprint artifact for a normalize plan.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is unavailable.
+    """
     facade = datafusion_facade_from_ctx(ctx, backend=backend)
     profile = ctx.runtime.datafusion
     if profile is None:
@@ -645,7 +651,13 @@ def _record_udf_parity(
     output: str,
     builder_name: str,
 ) -> None:
-    """Record normalize-scoped UDF parity diagnostics."""
+    """Record normalize-scoped UDF parity diagnostics.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is unavailable.
+    """
     profile = ctx.runtime.datafusion
     if profile is None:
         msg = "DataFusion runtime profile is required for UDF parity checks."

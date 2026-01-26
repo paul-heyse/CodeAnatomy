@@ -14,15 +14,14 @@ import pyarrow as pa
 from ibis.expr.types import Expr, Table, Value
 from sqlglot.errors import ParseError
 
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile, compile_sql_policy
 from ibis_engine.schema_utils import bind_expr_schema, ibis_schema_from_arrow, validate_expr_schema
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot, sqlglot_ast_payload
 from sqlglot_tools.compat import Expression
 from sqlglot_tools.optimizer import (
-    NormalizeExprOptions,
     SchemaMapping,
     SqlGlotPolicy,
     StrictParseOptions,
-    normalize_expr,
     parse_error_payload,
     parse_sql_strict,
     resolve_sqlglot_policy,
@@ -347,6 +346,20 @@ def _catalog_schemas(
     raise TypeError(msg)
 
 
+def _policy_profile_from_sqlglot(policy: SqlGlotPolicy) -> SQLPolicyProfile:
+    return SQLPolicyProfile(
+        read_dialect=policy.read_dialect,
+        write_dialect=policy.write_dialect,
+        optimizer_rules=tuple(policy.rules),
+        normalize_distance_limit=policy.normalization_distance,
+        expand_stars=policy.expand_stars,
+        validate_qualify_columns=policy.validate_qualify_columns,
+        identify_mode=policy.identify,
+        error_level=policy.error_level,
+        unsupported_level=policy.unsupported_level,
+    )
+
+
 def _normalize_ingest_expr(
     sql: str,
     *,
@@ -359,14 +372,14 @@ def _normalize_ingest_expr(
         dialect=policy.write_dialect,
         options=StrictParseOptions(error_level=policy.error_level),
     )
-    return normalize_expr(
+    profile = _policy_profile_from_sqlglot(policy)
+    canonical, _ = compile_sql_policy(
         expr,
-        options=NormalizeExprOptions(
-            schema=schema_map,
-            policy=policy,
-            sql=transpiled_sql,
-        ),
+        schema=schema_map,
+        profile=profile,
+        original_sql=transpiled_sql,
     )
+    return canonical
 
 
 def _normalize_ingest_expr_from_expr(
@@ -375,13 +388,13 @@ def _normalize_ingest_expr_from_expr(
     schema_map: SchemaMapping,
     policy: SqlGlotPolicy,
 ) -> Expression:
-    return normalize_expr(
+    profile = _policy_profile_from_sqlglot(policy)
+    canonical, _ = compile_sql_policy(
         expr.copy(),
-        options=NormalizeExprOptions(
-            schema=schema_map,
-            policy=policy,
-        ),
+        schema=schema_map,
+        profile=profile,
     )
+    return canonical
 
 
 def _sql_for_normalization(spec: SqlIngestSpec, *, source_name: str | None) -> str:

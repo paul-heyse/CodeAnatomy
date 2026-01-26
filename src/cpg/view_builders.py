@@ -1,4 +1,4 @@
-"""Plan builders for CPG node/edge/property tasks."""
+"""View builders for CPG node/edge/property outputs."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import empty_table
 from cpg.emit_edges_ibis import emit_edges_from_relation_output
@@ -22,25 +21,26 @@ from cpg.spec_registry import (
     scip_role_flag_prop_spec,
 )
 from cpg.specs import TaskIdentity
-from ibis_engine.catalog import IbisPlanCatalog
+from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import ensure_columns
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
-from relspec.relationship_plans import RELATION_OUTPUT_NAME
+from relspec.view_defs import RELATION_OUTPUT_NAME
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
     from ibis.expr.types import Table
 
     from cpg.specs import PropOptions
 
 
-def build_cpg_nodes_plan(
-    catalog: IbisPlanCatalog,
-    ctx: ExecutionContext,
+def build_cpg_nodes_expr(
+    ctx: SessionContext,
     backend: BaseBackend,
+    *,
     task_identity: TaskIdentity | None = None,
 ) -> IbisPlan:
-    """Return the CPG nodes plan compiled from node specs.
+    """Return an Ibis plan for CPG nodes derived from view specs.
 
     Returns
     -------
@@ -48,12 +48,14 @@ def build_cpg_nodes_plan(
         Plan for CPG nodes.
     """
     specs = node_plan_specs()
-    _preload_sources(catalog, ctx=ctx, names={spec.table_ref for spec in specs})
+    available = _available_tables(ctx)
     task_name = task_identity.name if task_identity is not None else None
     task_priority = task_identity.priority if task_identity is not None else None
     plans: list[IbisPlan] = []
     for spec in specs:
-        table = _resolve_table(catalog, ctx=ctx, name=spec.table_ref)
+        if spec.table_ref not in available:
+            continue
+        table = backend.table(spec.table_ref)
         plan = emit_nodes_ibis(
             table,
             spec=spec.emit,
@@ -64,33 +66,31 @@ def build_cpg_nodes_plan(
     return _union_plans(plans, schema=CPG_NODES_SCHEMA, backend=backend)
 
 
-def build_cpg_edges_plan(
-    catalog: IbisPlanCatalog,
-    ctx: ExecutionContext,
+def build_cpg_edges_expr(
+    ctx: SessionContext,
     backend: BaseBackend,
 ) -> IbisPlan:
-    """Return the CPG edges plan compiled from relation outputs.
+    """Return an Ibis plan for CPG edges from relation outputs.
 
     Returns
     -------
     IbisPlan
         Plan for CPG edges.
     """
-    _ = backend
-    _preload_sources(catalog, ctx=ctx, names={RELATION_OUTPUT_NAME})
-    relation_expr = _resolve_table(catalog, ctx=ctx, name=RELATION_OUTPUT_NAME)
+    _ = ctx
+    relation_expr = backend.table(RELATION_OUTPUT_NAME)
     plan = emit_edges_from_relation_output(relation_expr)
     return _ensure_plan_schema(plan, schema=CPG_EDGES_SCHEMA)
 
 
-def build_cpg_props_plan(
-    catalog: IbisPlanCatalog,
-    ctx: ExecutionContext,
+def build_cpg_props_expr(
+    ctx: SessionContext,
     backend: BaseBackend,
+    *,
     options: PropOptions | None = None,
     task_identity: TaskIdentity | None = None,
 ) -> IbisPlan:
-    """Return the CPG props plan compiled from prop specs.
+    """Return an Ibis plan for CPG properties from prop specs.
 
     Returns
     -------
@@ -98,14 +98,16 @@ def build_cpg_props_plan(
         Plan for CPG properties.
     """
     resolved_options = options or CpgPropOptions()
-    source_columns_lookup = _source_columns_lookup(catalog, ctx=ctx)
+    source_columns_lookup = _source_columns_lookup(ctx)
     prop_specs = list(prop_table_specs(source_columns_lookup=source_columns_lookup))
     prop_specs.append(scip_role_flag_prop_spec())
     prop_specs.append(edge_prop_spec())
-    _preload_sources(catalog, ctx=ctx, names={spec.table_ref for spec in prop_specs})
+    available = _available_tables(ctx)
     plans: list[IbisPlan] = []
     for spec in prop_specs:
-        table = _resolve_table(catalog, ctx=ctx, name=spec.table_ref)
+        if spec.table_ref not in available:
+            continue
+        table = backend.table(spec.table_ref)
         plan = emit_props_ibis(
             table,
             spec=spec,
@@ -117,65 +119,23 @@ def build_cpg_props_plan(
     return _union_plans(plans, schema=CPG_PROPS_SCHEMA, backend=backend)
 
 
+def _available_tables(ctx: SessionContext) -> set[str]:
+    return set(table_names_snapshot(ctx))
+
+
 def _source_columns_lookup(
-    catalog: IbisPlanCatalog,
-    *,
-    ctx: ExecutionContext,
+    ctx: SessionContext,
 ) -> Callable[[str], Sequence[str] | None]:
+    names = set(table_names_snapshot(ctx))
+    introspector = SchemaIntrospector(ctx)
+
     def _lookup(table_name: str) -> Sequence[str] | None:
-        try:
-            table = _resolve_table(catalog, ctx=ctx, name=table_name)
-        except KeyError:
+        if table_name not in names:
             return None
-        return tuple(table.columns)
+        columns = introspector.table_column_names(table_name)
+        return tuple(sorted(columns))
 
     return _lookup
-
-
-def _preload_sources(
-    catalog: IbisPlanCatalog,
-    *,
-    ctx: ExecutionContext,
-    names: set[str],
-) -> None:
-    for name in sorted(names):
-        if catalog.resolve_plan(name, ctx=ctx, label=name) is not None:
-            continue
-        schema = _schema_for(name)
-        empty = empty_table(schema)
-        plan = register_ibis_table(
-            empty,
-            options=SourceToIbisOptions(
-                backend=catalog.backend,
-                name=name,
-                ordering=Ordering.unordered(),
-            ),
-        )
-        catalog.add(name, plan)
-
-
-def _resolve_table(catalog: IbisPlanCatalog, *, ctx: ExecutionContext, name: str) -> Table:
-    plan = catalog.resolve_plan(name, ctx=ctx, label=name)
-    if plan is not None:
-        return plan.expr
-    schema = _schema_for(name)
-    empty = empty_table(schema)
-    plan = register_ibis_table(
-        empty,
-        options=SourceToIbisOptions(
-            backend=catalog.backend,
-            name=name,
-            ordering=Ordering.unordered(),
-        ),
-    )
-    catalog.add(name, plan)
-    return plan.expr
-
-
-def _schema_for(name: str) -> pa.Schema:
-    from datafusion_engine.schema_registry import schema_for
-
-    return schema_for(name)
 
 
 def _union_plans(plans: Iterable[IbisPlan], *, schema: pa.Schema, backend: BaseBackend) -> IbisPlan:
@@ -215,7 +175,7 @@ def _ensure_plan_schema(plan: IbisPlan, *, schema: pa.Schema) -> IbisPlan:
 
 
 __all__ = [
-    "build_cpg_edges_plan",
-    "build_cpg_nodes_plan",
-    "build_cpg_props_plan",
+    "build_cpg_edges_expr",
+    "build_cpg_nodes_expr",
+    "build_cpg_props_expr",
 ]

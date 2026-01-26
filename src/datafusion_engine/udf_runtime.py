@@ -154,6 +154,18 @@ def validate_required_udfs(
         raise ValueError(msg)
 
 
+def udf_names_from_snapshot(snapshot: Mapping[str, object]) -> frozenset[str]:
+    """Return all UDF names derived from a registry snapshot.
+
+    Returns
+    -------
+    frozenset[str]
+        Canonical UDF names present in the snapshot.
+    """
+    validate_rust_udf_snapshot(snapshot)
+    return _snapshot_names(snapshot)
+
+
 def _notify_ibis_snapshot(snapshot: Mapping[str, object]) -> None:
     try:
         from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
@@ -274,6 +286,7 @@ __all__ = [
     "register_rust_udfs",
     "rust_udf_docs",
     "rust_udf_snapshot",
+    "udf_names_from_snapshot",
     "validate_required_udfs",
     "validate_rust_udf_snapshot",
 ]

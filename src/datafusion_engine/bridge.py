@@ -87,7 +87,6 @@ from sqlglot_tools.lineage import (
     extract_lineage_payload,
 )
 from sqlglot_tools.optimizer import (
-    NormalizeExprOptions,
     PreflightOptions,
     SchemaMapping,
     SqlGlotPolicy,
@@ -95,16 +94,13 @@ from sqlglot_tools.optimizer import (
     bind_params,
     build_select,
     emit_preflight_diagnostics,
-    normalize_expr,
     parse_sql_strict,
-    plan_fingerprint,
     preflight_sql,
     register_datafusion_dialect,
     resolve_sqlglot_policy,
     rewrite_expr,
     serialize_ast_artifact,
     sqlglot_emit,
-    sqlglot_policy_snapshot_for,
     sqlglot_sql,
 )
 
@@ -253,13 +249,7 @@ def _plan_cache_key(
         return None
     if options.params is not None or options.named_params is not None:
         return None
-    policy_hash = _sqlglot_policy_hash(options)
-    plan_hash = options.plan_hash or plan_fingerprint(
-        expr,
-        dialect=options.dialect,
-        policy_hash=policy_hash,
-        schema_map_hash=options.schema_map_hash,
-    )
+    plan_hash = options.plan_hash or canonical_ast_fingerprint(expr)
     _ensure_dialect(options.dialect)
     try:
         sql = _emit_sql(expr, options=options)
@@ -509,17 +499,6 @@ def _sqlglot_emit_policy(options: DataFusionCompileOptions) -> SqlGlotPolicy:
         write_dialect=options.dialect,
         unsupported_level=ErrorLevel.RAISE,
     )
-
-
-def _sqlglot_policy_hash(
-    options: DataFusionCompileOptions,
-    *,
-    policy: SqlGlotPolicy | None = None,
-) -> str | None:
-    if options.sqlglot_policy_hash is not None:
-        return options.sqlglot_policy_hash
-    resolved_policy = policy or _sqlglot_emit_policy(options)
-    return sqlglot_policy_snapshot_for(resolved_policy).policy_hash
 
 
 def _emit_sql(expr: Expression, *, options: DataFusionCompileOptions) -> str:
@@ -1172,14 +1151,8 @@ def _maybe_collect_plan_artifacts(
 
 
 def _semantic_plan_hash(expr: Expression, *, options: DataFusionCompileOptions) -> str:
-    policy = _sqlglot_emit_policy(options)
-    policy_hash = _sqlglot_policy_hash(options, policy=policy)
-    return plan_fingerprint(
-        expr,
-        dialect=options.dialect,
-        policy_hash=policy_hash,
-        schema_map_hash=options.schema_map_hash,
-    )
+    _ = options
+    return canonical_ast_fingerprint(expr)
 
 
 def _semantic_diff_base_expr(
@@ -1521,13 +1494,7 @@ def _collect_plan_artifact_inputs(
         df=df,
         substrait_plan_override=options.substrait_plan_override,
     )
-    policy_hash = _sqlglot_policy_hash(options, policy=policy)
-    plan_hash = options.plan_hash or plan_fingerprint(
-        resolved_expr,
-        dialect=options.dialect,
-        policy_hash=policy_hash,
-        schema_map_hash=options.schema_map_hash,
-    )
+    plan_hash = options.plan_hash or canonical_ast_fingerprint(resolved_expr)
     return _PlanArtifactInputs(
         resolved_expr=resolved_expr,
         sql=sql,
@@ -1572,20 +1539,10 @@ def _collect_lineage_payload(
 def _collect_normalized_sql(
     resolved_expr: Expression,
     *,
-    sql: str,
-    options: DataFusionCompileOptions,
     policy: SqlGlotPolicy,
 ) -> str | None:
     try:
-        normalize_options = NormalizeExprOptions(
-            schema=options.schema_map,
-            policy=policy,
-            enable_rewrites=options.enable_rewrites,
-            rewrite_hook=options.rewrite_hook,
-            sql=sql,
-        )
-        normalized_expr = normalize_expr(resolved_expr, options=normalize_options)
-        return sqlglot_sql(normalized_expr, policy=policy)
+        return sqlglot_sql(resolved_expr, policy=policy)
     except (RuntimeError, TypeError, ValueError):
         return None
 
@@ -1680,8 +1637,6 @@ def collect_plan_artifacts(
     )
     normalized_sql = _collect_normalized_sql(
         inputs.resolved_expr,
-        sql=inputs.sql,
-        options=options,
         policy=inputs.policy,
     )
     ibis_payload = _collect_ibis_artifacts(options)

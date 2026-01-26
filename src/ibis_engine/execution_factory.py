@@ -25,8 +25,16 @@ def backend_config_from_ctx(ctx: ExecutionContext) -> IbisBackendConfig:
     -------
     IbisBackendConfig
         Backend config derived from the execution context runtime.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is missing.
     """
     runtime = ctx.runtime
+    if runtime.datafusion is None:
+        msg = "Ibis backend requires a DataFusion runtime profile."
+        raise ValueError(msg)
     return IbisBackendConfig(
         datafusion_profile=runtime.datafusion,
         fuse_selects=runtime.ibis_fuse_selects,
@@ -93,7 +101,15 @@ def ibis_execution_from_ctx(
     -------
     IbisExecutionContext
         Execution context bound to a configured backend.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is missing.
     """
+    if ctx.runtime.datafusion is None:
+        msg = "Ibis execution requires a DataFusion runtime profile."
+        raise ValueError(msg)
     backend = ibis_backend_from_ctx(ctx) if backend is None else backend
     return IbisExecutionContext(
         ctx=ctx,

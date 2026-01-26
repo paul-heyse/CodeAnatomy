@@ -32,9 +32,9 @@ class TaskBuildContext:
 
     ctx: ExecutionContext
     backend: BaseBackend
+    facade: DataFusionExecutionFacade
     ibis_catalog: IbisPlanCatalog | None = None
     runtime: NormalizeRuntime | None = None
-    facade: DataFusionExecutionFacade
     diagnostics: DiagnosticsRecorder | None = None
 
 

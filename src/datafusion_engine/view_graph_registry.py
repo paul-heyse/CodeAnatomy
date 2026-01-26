@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
+from arrowdsl.schema.metadata import required_functions_from_metadata
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.schema_contracts import SchemaContract
 from datafusion_engine.schema_introspection import SchemaIntrospector
@@ -52,7 +53,9 @@ def register_view_graph(
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     for node in ordered:
         _validate_deps(ctx, node, nodes)
-        validate_required_udfs(snapshot, required=node.required_udfs)
+        required = _required_udfs(node)
+        validate_required_udfs(snapshot, required=required)
+        _validate_required_functions(ctx, required)
         df = node.builder(ctx)
         adapter.register_view(
             node.name,
@@ -95,6 +98,32 @@ def _validate_schema_contract(ctx: SessionContext, contract: SchemaContract) -> 
         ]
         msg = f"Schema contract violations for {contract.table_name!r}: {details}."
         raise ValueError(msg)
+
+
+def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -> None:
+    if not required:
+        return
+    introspector = SchemaIntrospector(ctx)
+    catalog = introspector.function_catalog_snapshot(include_parameters=False)
+    available: set[str] = set()
+    for row in catalog:
+        name = row.get("function_name") or row.get("routine_name") or row.get("name")
+        if isinstance(name, str):
+            available.add(name.lower())
+    missing = [name for name in required if name.lower() not in available]
+    if missing:
+        msg = f"information_schema missing required functions: {sorted(missing)}."
+        raise ValueError(msg)
+
+
+def _required_udfs(node: ViewNode) -> tuple[str, ...]:
+    required = list(node.required_udfs)
+    if node.schema_contract is not None:
+        metadata_required = required_functions_from_metadata(node.schema_contract.schema_metadata)
+        for name in metadata_required:
+            if name not in required:
+                required.append(name)
+    return tuple(required)
 
 
 def _topo_sort_nodes(nodes: Sequence[ViewNode]) -> tuple[ViewNode, ...]:

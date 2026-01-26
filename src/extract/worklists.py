@@ -17,7 +17,6 @@ from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
 from extract.helpers import FileContext
 from sqlglot_tools.compat import Expression, exp
-from sqlglot_tools.optimizer import NormalizeExprOptions, normalize_expr, resolve_sqlglot_policy
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -168,7 +167,6 @@ def _worklist_stream(
         repo_table=repo_name,
         output_table_name=output_name,
     )
-    expr = _normalize_worklist_expr(expr)
     with (
         _registered_table(df_ctx, name=repo_name, table=repo_files),
         _registered_output_table(
@@ -196,12 +194,6 @@ def _table_exists(ctx: SessionContext, name: str) -> bool:
     except (KeyError, RuntimeError, TypeError, ValueError):
         return False
     return True
-
-
-def _normalize_worklist_expr(expr: Expression) -> Expression:
-    policy = resolve_sqlglot_policy(name="datafusion_compile")
-    options = NormalizeExprOptions(policy=policy)
-    return normalize_expr(expr, options=options)
 
 
 def _execute_expr_stream(

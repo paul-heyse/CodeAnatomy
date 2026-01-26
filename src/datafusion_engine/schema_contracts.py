@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 
@@ -175,6 +175,7 @@ class SchemaContract:
     partition_cols: tuple[str, ...] = ()
     ordering: tuple[str, ...] = ()
     evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT
+    schema_metadata: dict[bytes, bytes] = field(default_factory=dict)
 
     @classmethod
     def from_arrow_schema(
@@ -201,7 +202,16 @@ class SchemaContract:
             Contract derived from schema
         """
         columns = tuple(ColumnContract.from_arrow_field(field) for field in schema)
-        return cls(table_name=table_name, columns=columns, **kwargs)
+        metadata_override = kwargs.pop("schema_metadata", None)
+        metadata = dict(schema.metadata or {})
+        if metadata_override:
+            metadata.update(metadata_override)
+        return cls(
+            table_name=table_name,
+            columns=columns,
+            schema_metadata=metadata,
+            **kwargs,
+        )
 
     def to_arrow_schema(self) -> pa.Schema:
         """
@@ -212,7 +222,8 @@ class SchemaContract:
         pa.Schema
             PyArrow schema representation
         """
-        return pa.schema([col.to_arrow_field() for col in self.columns])
+        metadata = self.schema_metadata or None
+        return pa.schema([col.to_arrow_field() for col in self.columns], metadata=metadata)
 
     def validate_against_introspection(
         self,
@@ -513,11 +524,13 @@ def schema_contract_from_table_schema_contract(
             for name, dtype in contract.partition_cols
         )
         columns = (*columns, *partition_fields)
+    schema_metadata = dict(contract.file_schema.metadata or {})
     return SchemaContract(
         table_name=table_name,
         columns=columns,
         partition_cols=partition_cols,
         evolution_policy=evolution_policy,
+        schema_metadata=schema_metadata,
     )
 
 
@@ -543,7 +556,7 @@ def schema_contract_from_dataset_spec(
     SchemaContract
         Schema contract derived from the dataset specification.
     """
-    table_schema = spec.table_spec.to_arrow_schema()
+    table_schema = cast("pa.Schema", spec.schema())
     partition_cols = ()
     if spec.datafusion_scan is not None:
         partition_cols = spec.datafusion_scan.partition_cols

@@ -291,18 +291,22 @@ def ibis_plan_to_reader(
     -------
     RecordBatchReaderLike
         Reader yielding batches from the plan.
+
+    Raises
+    ------
+    ValueError
+        Raised when the execution context is missing.
     """
-    if execution is not None:
-        if batch_size is not None and execution.batch_size != batch_size:
-            execution = replace(execution, batch_size=batch_size)
-        return execute_ibis_plan(
-            plan,
-            execution=execution,
-            streaming=True,
-        ).require_reader()
-    if batch_size is None:
-        return to_reader(plan)
-    return plan.to_reader(batch_size=batch_size)
+    if execution is None:
+        msg = "Ibis plan execution requires an execution context."
+        raise ValueError(msg)
+    if batch_size is not None and execution.batch_size != batch_size:
+        execution = replace(execution, batch_size=batch_size)
+    return execute_ibis_plan(
+        plan,
+        execution=execution,
+        streaming=True,
+    ).require_reader()
 
 
 def ibis_table_to_reader(
@@ -333,15 +337,21 @@ def ibis_to_table(
     -------
     TableLike
         Materialized Arrow table.
+
+    Raises
+    ------
+    ValueError
+        Raised when the execution context is missing for a plan.
     """
     if isinstance(value, IbisPlan):
-        if execution is not None:
-            return execute_ibis_plan(
-                value,
-                execution=execution,
-                streaming=False,
-            ).require_table()
-        return value.to_table()
+        if execution is None:
+            msg = "Ibis plan execution requires an execution context."
+            raise ValueError(msg)
+        return execute_ibis_plan(
+            value,
+            execution=execution,
+            streaming=False,
+        ).require_table()
     return value.to_pyarrow()
 
 
@@ -423,7 +433,10 @@ async def _collect_async_batches(
     batch_size: int | None,
     execution: IbisExecutionContext | None,
 ) -> list[pa.RecordBatch]:
-    execution_options = execution.plan_options() if execution is not None else None
+    if execution is None:
+        msg = "Async streaming requires an Ibis execution context."
+        raise ValueError(msg)
+    execution_options = execution.plan_options()
     return [
         batch
         async for batch in async_stream_plan(
@@ -463,6 +476,9 @@ def _coerce_write_input(
     if isinstance(value, PlanProduct):
         result = value.value()
     elif isinstance(value, IbisPlan):
+        if execution is None:
+            msg = "Ibis plan execution requires an execution context."
+            raise ValueError(msg)
         if prefer_reader:
             if use_async_streaming:
                 result = _async_reader_from_plan(

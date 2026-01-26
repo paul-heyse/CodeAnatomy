@@ -57,12 +57,10 @@ def _apply_ibis_options(cfg: IbisBackendConfig) -> None:
 
 
 def _resolve_datafusion_profile(cfg: IbisBackendConfig) -> DataFusionRuntimeProfile:
-    if cfg.datafusion_profile is not None:
-        profile = cfg.datafusion_profile
-    else:
-        from datafusion_engine.runtime import DataFusionRuntimeProfile
-
-        profile = DataFusionRuntimeProfile()
+    if cfg.datafusion_profile is None:
+        msg = "Ibis backend requires a DataFusion runtime profile."
+        raise ValueError(msg)
+    profile = cfg.datafusion_profile
     if profile.default_catalog != "datafusion":
         return replace(profile, default_catalog="datafusion")
     return profile

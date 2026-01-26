@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.view_graph_registry import ViewNode
 
 
 class DiagnosticsSink(Protocol):
@@ -779,3 +780,40 @@ def recorder_for_profile(
     context = DiagnosticsContext(session_id=resolved_session, operation_id=operation_id)
     sink = profile.diagnostics_sink
     return DiagnosticsRecorder(sink, context)
+
+
+def view_udf_parity_payload(
+    *,
+    snapshot: Mapping[str, object],
+    view_nodes: Sequence[ViewNode],
+) -> dict[str, object]:
+    """Return a diagnostics payload describing view/UDF parity.
+
+    Returns
+    -------
+    dict[str, object]
+        Diagnostics payload describing required/missing UDFs per view.
+    """
+    from datafusion_engine.udf_runtime import udf_names_from_snapshot
+
+    available = udf_names_from_snapshot(snapshot)
+    rows: list[dict[str, object]] = []
+    missing_views = 0
+    for node in view_nodes:
+        required = tuple(node.required_udfs)
+        missing = [name for name in required if name not in available]
+        if missing:
+            missing_views += 1
+        rows.append(
+            {
+                "view": node.name,
+                "required_udfs": list(required) or None,
+                "missing_udfs": missing or None,
+            }
+        )
+    return {
+        "total_views": len(view_nodes),
+        "views_with_requirements": sum(1 for node in view_nodes if node.required_udfs),
+        "views_missing_udfs": missing_views,
+        "rows": rows,
+    }

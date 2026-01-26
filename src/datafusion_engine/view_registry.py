@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from datafusion import SessionContext, col, lit
 from datafusion import functions as f
@@ -15,6 +15,10 @@ from datafusion_engine.schema_registry import nested_base_df, nested_dataset_nam
 from datafusion_engine.view_registry_defs import VIEW_BASE_TABLE, VIEW_SELECT_EXPRS
 from datafusion_ext import map_entries, map_keys, map_values, union_extract, union_tag
 from schema_spec.view_specs import ViewSpec, view_spec_from_builder
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.udf_platform import RustUdfPlatformOptions
 
 NESTED_VIEW_NAMES: Final[frozenset[str]] = frozenset(nested_dataset_names())
 
@@ -445,7 +449,7 @@ def register_all_views(
     ctx: SessionContext,
     *,
     snapshot: Mapping[str, object],
-    runtime_profile: object | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
     include_registry_views: bool = True,
 ) -> None:
     """Register registry + pipeline views in dependency order."""
@@ -467,4 +471,69 @@ def register_all_views(
     register_view_graph(ctx, nodes=nodes, snapshot=snapshot)
 
 
-__all__ = ["register_all_views", "registry_view_specs"]
+def ensure_view_graph(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+    include_registry_views: bool = True,
+) -> Mapping[str, object]:
+    """Install the UDF platform (if needed) and register all views.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Rust UDF snapshot used for view registration.
+    """
+    from datafusion_engine.udf_platform import install_rust_udf_platform
+    from datafusion_engine.udf_runtime import rust_udf_snapshot
+
+    options = _platform_options(runtime_profile)
+    platform = install_rust_udf_platform(ctx, options=options)
+    snapshot = platform.snapshot or rust_udf_snapshot(ctx)
+    register_all_views(
+        ctx,
+        snapshot=snapshot,
+        runtime_profile=runtime_profile,
+        include_registry_views=include_registry_views,
+    )
+    if runtime_profile is not None:
+        from datafusion_engine.diagnostics import record_artifact, view_udf_parity_payload
+        from datafusion_engine.view_registry_specs import view_graph_nodes
+
+        payload = view_udf_parity_payload(
+            snapshot=snapshot,
+            view_nodes=view_graph_nodes(ctx, snapshot=snapshot),
+        )
+        record_artifact(runtime_profile, "view_udf_parity_v1", payload)
+    return snapshot
+
+
+def _platform_options(
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> RustUdfPlatformOptions:
+    from datafusion_engine.udf_platform import RustUdfPlatformOptions
+
+    profile = runtime_profile
+    if profile is None:
+        return RustUdfPlatformOptions(
+            enable_udfs=True,
+            enable_function_factory=True,
+            enable_expr_planners=True,
+            expr_planner_names=("codeanatomy_domain",),
+            strict=True,
+        )
+    return RustUdfPlatformOptions(
+        enable_udfs=getattr(profile, "enable_udfs", True),
+        enable_async_udfs=getattr(profile, "enable_async_udfs", False),
+        async_udf_timeout_ms=getattr(profile, "async_udf_timeout_ms", None),
+        async_udf_batch_size=getattr(profile, "async_udf_batch_size", None),
+        enable_function_factory=getattr(profile, "enable_function_factory", True),
+        enable_expr_planners=getattr(profile, "enable_expr_planners", True),
+        function_factory_hook=getattr(profile, "function_factory_hook", None),
+        expr_planner_hook=getattr(profile, "expr_planner_hook", None),
+        expr_planner_names=getattr(profile, "expr_planner_names", ()),
+        strict=True,
+    )
+
+
+__all__ = ["ensure_view_graph", "register_all_views", "registry_view_specs"]

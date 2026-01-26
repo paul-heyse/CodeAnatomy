@@ -29,6 +29,11 @@ def ensure_task_build_context(
     -------
     TaskBuildContext
         Build context with a DataFusion execution facade attached.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion execution facade cannot be created.
     """
     facade = datafusion_facade_from_ctx(ctx, backend=backend)
     resolved = build_context or TaskBuildContext(

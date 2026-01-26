@@ -65,10 +65,19 @@ class IbisExecutionContext:
         Returns
         -------
         IbisPlanExecutionOptions
-            Execution options including DataFusion overrides when available.
+            Execution options including required DataFusion overrides.
+
+        Raises
+        ------
+        ValueError
+            Raised when the DataFusion runtime or backend is missing.
         """
-        if self.ibis_backend is None or self.ctx.runtime.datafusion is None:
-            return IbisPlanExecutionOptions(params=self.params)
+        if self.ibis_backend is None:
+            msg = "Ibis execution requires a configured backend."
+            raise ValueError(msg)
+        if self.ctx.runtime.datafusion is None:
+            msg = "Ibis execution requires a DataFusion runtime profile."
+            raise ValueError(msg)
         runtime_profile = self.ctx.runtime.datafusion
         runtime_snapshot = runtime_profile_snapshot(self.ctx.runtime)
         datafusion = DataFusionExecutionOptions(
@@ -176,7 +185,8 @@ def _record_ibis_execution(
 ) -> None:
     profile = execution.ctx.runtime.datafusion
     if profile is None:
-        return
+        msg = "DataFusion runtime profile is required for Ibis diagnostics."
+        raise ValueError(msg)
     label = execution.execution_label
     rows: int | None = None
     if result.table is not None:

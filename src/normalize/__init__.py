@@ -14,12 +14,6 @@ if TYPE_CHECKING:
         TYPE_ID_SPEC,
         hash_spec,
     )
-    from normalize.contracts import (
-        NORMALIZE_EVIDENCE_NAME,
-        normalize_evidence_contract,
-        normalize_evidence_schema,
-        normalize_evidence_spec,
-    )
     from normalize.dataset_builders import field, field_name, fields
     from normalize.dataset_specs import dataset_contract_schema
     from normalize.diagnostic_types import (
@@ -58,7 +52,6 @@ if TYPE_CHECKING:
         dataset_specs,
         dataset_table_spec,
     )
-    from normalize.utils import add_span_id_column, span_id
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DEF_USE_EVENT_ID_SPEC": ("datafusion_engine.normalize_ids", "DEF_USE_EVENT_ID_SPEC"),
@@ -66,7 +59,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DIAG_DETAIL_STRUCT": ("normalize.diagnostic_types", "DIAG_DETAIL_STRUCT"),
     "DIAG_ID_SPEC": ("datafusion_engine.normalize_ids", "DIAG_ID_SPEC"),
     "DIAG_TAGS_TYPE": ("normalize.diagnostic_types", "DIAG_TAGS_TYPE"),
-    "NORMALIZE_EVIDENCE_NAME": ("normalize.contracts", "NORMALIZE_EVIDENCE_NAME"),
     "REACH_EDGE_ID_SPEC": ("datafusion_engine.normalize_ids", "REACH_EDGE_ID_SPEC"),
     "TYPE_EXPR_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_EXPR_ID_SPEC"),
     "TYPE_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_ID_SPEC"),
@@ -74,7 +66,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "ensure_execution_context": ("normalize.ibis_api", "ensure_execution_context"),
     "add_ast_byte_spans": ("normalize.ibis_api", "add_ast_byte_spans"),
     "add_scip_occurrence_byte_spans": ("normalize.ibis_api", "add_scip_occurrence_byte_spans"),
-    "add_span_id_column": ("normalize.utils", "add_span_id_column"),
     "anchor_instructions": ("normalize.ibis_api", "anchor_instructions"),
     "build_cfg_blocks": ("normalize.ibis_api", "build_cfg_blocks"),
     "build_cfg_edges": ("normalize.ibis_api", "build_cfg_edges"),
@@ -106,13 +97,9 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
         "normalize.ibis_api",
         "normalize_cst_imports_spans",
     ),
-    "normalize_evidence_contract": ("normalize.contracts", "normalize_evidence_contract"),
-    "normalize_evidence_schema": ("normalize.contracts", "normalize_evidence_schema"),
-    "normalize_evidence_spec": ("normalize.contracts", "normalize_evidence_spec"),
     "normalize_type_exprs": ("normalize.ibis_api", "normalize_type_exprs"),
     "normalize_types": ("normalize.ibis_api", "normalize_types"),
     "run_reaching_defs": ("normalize.ibis_api", "run_reaching_defs"),
-    "span_id": ("normalize.utils", "span_id"),
 }
 
 
@@ -136,14 +123,12 @@ __all__ = [
     "DIAG_DETAIL_STRUCT",
     "DIAG_ID_SPEC",
     "DIAG_TAGS_TYPE",
-    "NORMALIZE_EVIDENCE_NAME",
     "REACH_EDGE_ID_SPEC",
     "TYPE_EXPR_ID_SPEC",
     "TYPE_ID_SPEC",
     "DiagnosticsSources",
     "add_ast_byte_spans",
     "add_scip_occurrence_byte_spans",
-    "add_span_id_column",
     "anchor_instructions",
     "build_cfg_blocks",
     "build_cfg_edges",
@@ -170,11 +155,7 @@ __all__ = [
     "normalize_cst_callsites_spans",
     "normalize_cst_defs_spans",
     "normalize_cst_imports_spans",
-    "normalize_evidence_contract",
-    "normalize_evidence_schema",
-    "normalize_evidence_spec",
     "normalize_type_exprs",
     "normalize_types",
     "run_reaching_defs",
-    "span_id",
 ]

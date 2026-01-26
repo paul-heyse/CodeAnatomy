@@ -191,7 +191,6 @@ class DatasetSourceOptions:
     partitioning: str | ds.Partitioning | None = "hive"
     filename_partitioning_schema: SchemaLike | None = None
     schema: SchemaLike | None = None
-    parquet_read_options: ds.ParquetReadOptions | None = None
     storage_options: Mapping[str, str] | None = None
     delta_version: int | None = None
     delta_timestamp: str | None = None
@@ -254,6 +253,9 @@ def normalize_dataset_source(
     if resolved.dataset_format == "delta":
         msg = "Delta datasets must be registered via DataFusion TableProvider."
         raise ValueError(msg)
+    if resolved.dataset_format == "parquet":
+        msg = "Parquet dataset sources are not supported in delta-only IO."
+        raise ValueError(msg)
     dataset: DatasetLike | None = None
     if _is_dataset_sequence(source):
         datasets = list(source)
@@ -289,8 +291,6 @@ def _coerce_pathlike(source: object) -> PathLike:
 
 
 def _resolve_file_format(options: DatasetSourceOptions) -> str | ds.FileFormat:
-    if options.dataset_format == "parquet" and options.parquet_read_options is not None:
-        return ds.ParquetFileFormat(read_options=options.parquet_read_options)
     return options.dataset_format
 
 
@@ -314,43 +314,13 @@ def _dataset_from_path(
     file_format: str | ds.FileFormat,
 ) -> ds.Dataset:
     partitioning = _resolve_partitioning(options)
-    if options.discovery is None or options.dataset_format != "parquet":
-        return ds.dataset(
-            source,
-            format=file_format,
-            filesystem=options.filesystem,
-            partitioning=partitioning,
-            schema=options.schema,
-        )
-    resolved_fs, resolved_path = from_uri(source, filesystem=options.filesystem)
-    if not _is_dir(resolved_fs, resolved_path):
-        return ds.dataset(
-            resolved_path,
-            format=file_format,
-            filesystem=resolved_fs,
-            partitioning=partitioning,
-            schema=options.schema,
-        )
-    if options.discovery.use_metadata:
-        metadata_dataset = _metadata_sidecar_dataset(
-            resolved_fs,
-            resolved_path,
-            schema=options.schema,
-            partitioning=partitioning,
-            file_format=file_format if options.dataset_format == "parquet" else None,
-        )
-        if metadata_dataset is not None:
-            return metadata_dataset
-    selector = pafs.FileSelector(resolved_path, recursive=True)
-    factory_options = ds.FileSystemFactoryOptions(
-        partition_base_dir=resolved_path,
-        exclude_invalid_files=options.discovery.exclude_invalid_files,
-        selector_ignore_prefixes=list(options.discovery.selector_ignore_prefixes),
+    return ds.dataset(
+        source,
+        format=file_format,
+        filesystem=options.filesystem,
+        partitioning=partitioning,
+        schema=options.schema,
     )
-    format_obj = ds.ParquetFileFormat(read_options=options.parquet_read_options)
-    factory = ds.FileSystemDatasetFactory(resolved_fs, selector, format_obj, factory_options)
-    inspected_schema = factory.inspect(promote_options=options.discovery.promote_options())
-    return factory.finish(schema=options.schema or inspected_schema)
 
 
 def _normalize_filesystem(filesystem: object | None) -> pafs.FileSystem | None:
@@ -392,53 +362,6 @@ def from_uri(
     if resolved is not None:
         return resolved, str(source)
     return pafs.LocalFileSystem(), str(source)
-
-
-def _metadata_sidecar_dataset(
-    filesystem: pafs.FileSystem,
-    base_path: str,
-    *,
-    schema: SchemaLike | None,
-    partitioning: str | ds.Partitioning | None,
-    file_format: ds.FileFormat | None,
-) -> ds.Dataset | None:
-    if not _is_dir(filesystem, base_path):
-        return None
-    metadata_path = f"{base_path}/_metadata"
-    common_metadata_path = f"{base_path}/_common_metadata"
-    if _path_exists(filesystem, metadata_path):
-        return ds.parquet_dataset(
-            metadata_path,
-            filesystem=filesystem,
-            format=file_format,
-            partitioning=partitioning,
-            schema=schema,
-        )
-    if _path_exists(filesystem, common_metadata_path):
-        return ds.parquet_dataset(
-            common_metadata_path,
-            filesystem=filesystem,
-            format=file_format,
-            partitioning=partitioning,
-            schema=schema,
-        )
-    return None
-
-
-def _is_dir(filesystem: pafs.FileSystem, path: str) -> bool:
-    info = filesystem.get_file_info(path)
-    return info.type == pafs.FileType.Directory
-
-
-def _path_exists(filesystem: pafs.FileSystem, path: str) -> bool:
-    info = filesystem.get_file_info(path)
-    return info.type != pafs.FileType.NotFound
-
-
-def _storage_dict(storage_options: Mapping[str, str] | None) -> dict[str, str] | None:
-    if storage_options is None:
-        return None
-    return dict(storage_options)
 
 
 def _has_arrow_capsule(value: object) -> bool:

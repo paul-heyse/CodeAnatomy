@@ -5,14 +5,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from sqlglot.schema import MappingSchema
+
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.interop import ScalarLike
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile, compile_sql_policy
 from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import (
-    NormalizeExprOptions,
     SqlGlotPolicy,
     StrictParseOptions,
-    normalize_expr,
     parse_sql_strict,
     resolve_sqlglot_policy,
     sqlglot_sql,
@@ -160,9 +161,16 @@ class SqlExprSpec:
         policy = resolve_sqlglot_policy(name=self.policy_name)
         expr = self._resolve_expr(policy=policy)
         sql_text = self.sql or sqlglot_sql(expr, policy=policy)
-        normalized = normalize_expr(
+        normalized, _ = compile_sql_policy(
             expr,
-            options=NormalizeExprOptions(policy=policy, sql=sql_text),
+            schema=MappingSchema({}),
+            profile=SQLPolicyProfile(
+                policy=policy,
+                read_dialect=policy.read_dialect,
+                write_dialect=policy.write_dialect,
+                validate_qualify_columns=False,
+            ),
+            original_sql=sql_text,
         )
         return sqlglot_sql(normalized, policy=policy)
 

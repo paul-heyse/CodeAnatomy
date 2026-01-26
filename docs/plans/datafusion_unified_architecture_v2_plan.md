@@ -67,7 +67,7 @@ def compile_policy(expr: Expression, *, schema: SchemaMapping, profile: SQLPolic
 
 **Intent**: Persist a stable AST artifact bundle at view registration time for **cache keys, invalidations, lineage, and diffs**.
 
-Status: Partial (view artifacts recorded for ViewGraph registrations; ViewSpec registration still records DataFrame-derived artifacts and needs AST-only artifacts everywhere).
+Status: Completed (view artifacts recorded during registration; AST-only artifacts enforced for ViewSpecs and ViewGraph registrations).
 
 ### Representative pattern
 
@@ -99,8 +99,8 @@ class ViewArtifact:
 - [x] Create `ViewArtifact` and store it during view registration.  
 - [x] Update incremental invalidations to use artifact payloads.  
 - [x] Derive cache keys from `{ast_fingerprint + policy_hash}` only.  
-- [~] Expose artifact bundles as diagnostics payloads (consistent schema).  
-- [ ] Eliminate `build_view_artifact_from_dataframe` for ViewSpec registration; require AST-only artifacts.  
+- [x] Expose artifact bundles as diagnostics payloads (consistent schema).  
+- [x] Eliminate `build_view_artifact_from_dataframe` for ViewSpec registration; require AST-only artifacts.  
 
 ---
 
@@ -214,7 +214,7 @@ def build_delta_scan_config(location: DatasetLocation) -> DeltaScanConfig:
 
 **Intent**: View registration and IO must flow through Ibis to preserve IR‑first semantics and unify policy enforcement.
 
-Status: Partial (ViewGraph registration is Ibis-first; ViewSpec registration in runtime still executes via DataFusion + DataFusionIOAdapter).
+Status: Completed (ViewGraph + ViewSpec registrations are Ibis-first; registry views emit Ibis expressions).
 
 ### Representative pattern
 
@@ -236,10 +236,10 @@ backend.create_view(name, expr, overwrite=True)
 - Direct internal `ctx.sql` execution paths for view creation.
 
 ### Implementation checklist
-- [~] Use Ibis `create_view` for all view registrations.  
+- [x] Use Ibis `create_view` for all view registrations.  
 - [x] Use Ibis `read_delta` / `to_delta` for Delta IO surfaces.  
-- [~] Ensure view DAG registration uses Ibis IR and captures AST artifacts.  
-- [ ] Retire or refactor `schema_spec.ViewSpec.register` so runtime registration flows through Ibis.  
+- [x] Ensure view DAG registration uses Ibis IR and captures AST artifacts.  
+- [x] Retire or refactor `schema_spec.ViewSpec.register` so runtime registration flows through Ibis.  
 
 ---
 
@@ -247,7 +247,7 @@ backend.create_view(name, expr, overwrite=True)
 
 **Intent**: Make nested struct/map/union shapes the canonical ABI for all view outputs; enforce via schema contracts.
 
-Status: Partial (ABI enforcement exists in schema contracts; static ViewSpec schemas still drive registry/nested view validation).
+Status: Completed (ABI enforcement exists in schema contracts; static ViewSpec schemas removed from registry/nested validation).
 
 ### Representative pattern
 
@@ -269,9 +269,9 @@ validate_schema_contract(contract, ctx)
 
 ### Implementation checklist
 - [x] Standardize nested ABI shapes (map/struct/union) for all views.  
-- [~] Remove static view schema registries (view schema derived).  
-- [~] Enforce ABI in schema contracts during view registration.  
-- [ ] Replace ViewSpec schema storage with schema-contract-derived validation only.  
+- [x] Remove static view schema registries (view schema derived).  
+- [x] Enforce ABI in schema contracts during view registration.  
+- [x] Replace ViewSpec schema storage with schema-contract-derived validation only.  
 
 ---
 
@@ -379,38 +379,20 @@ These cannot be safely removed until the unified architecture is fully deployed 
 - Any remaining plan builder modules still referenced by orchestration
 
 ### Checklist
-- [~] All view registration flows through Ibis.  
+- [x] All view registration flows through Ibis.  
 - [x] All internal SQL execution removed (AST‑only).  
 - [x] Delta TableProvider + CDF enforced everywhere.  
-- [ ] Schema ABI enforcement complete (no static view schema registries remain).  
+- [x] Schema ABI enforcement complete (no static view schema registries remain).  
 - [x] UDF snapshot parity checks pass with zero drift.  
 
 ---
 
 ## Final State Acceptance Criteria
 
-- [~] **AST is the single canonical artifact**; SQL text is debug only.  
+- [x] **AST is the single canonical artifact**; SQL text is debug only.  
 - [x] **One policy lane** (no duplicated canonicalization or transform logic).  
 - [x] **Rust UDF snapshot** drives Ibis + DataFusion + docs + parity.  
 - [x] **All pipelines are view‑defined** and DAG‑scheduled programmatically.  
 - [x] **Delta TableProvider + CDF** is the default for Delta IO.  
-- [~] **Schema contracts** validate nested ABI shapes end‑to‑end.  
-- [~] **Deterministic artifacts** (serde payload + policy hash) power cache/diff.  
-
----
-
-## Remaining scope identified from code review (Jan 26, 2026)
-
-1. **Finish Ibis-only view registration for all ViewSpecs**  
-   - `schema_spec/view_specs.py` uses `DataFusionExecutionFacade` + `DataFusionIOAdapter` in `ViewSpec.register`.  
-   - `datafusion_engine/runtime.py` calls `ViewSpec.register` via `register_view_specs`.  
-   - Target: route ViewSpec-based registrations through Ibis `create_view` (or remove ViewSpec registration path entirely in favor of ViewGraph).  
-
-2. **Remove static ViewSpec schema storage from registry/nested views**  
-   - `schema_spec/view_specs.py` stores schema snapshots and validates against them.  
-   - `datafusion_engine/schema_registry.py` and `datafusion_engine/view_registry.py` still build ViewSpecs for nested/registry views.  
-   - Target: derive schemas from Arrow + schema contracts only, and validate via ABI contracts (no static schema registry).  
-
-3. **AST-only artifacts for all view registrations**  
-   - `datafusion_engine/runtime.py` uses `build_view_artifact_from_dataframe` when recording ViewSpecs.  
-   - Target: ensure every view registration supplies a SQLGlot AST and records `ViewArtifact` from AST + policy hash (no DataFrame-only fallback).  
+- [x] **Schema contracts** validate nested ABI shapes end‑to‑end.  
+- [x] **Deterministic artifacts** (serde payload + policy hash) power cache/diff.  

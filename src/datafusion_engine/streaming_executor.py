@@ -389,9 +389,13 @@ class StreamingExecutor:
 
         Examples
         --------
-        >>> from datafusion_engine.io_adapter import DataFusionIOAdapter
-        >>> adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-        >>> adapter.register_parquet("events", "/data/events.parquet")
+        >>> from datafusion_engine.execution_facade import DataFusionExecutionFacade
+        >>> from ibis_engine.registry import DatasetLocation
+        >>> facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+        >>> facade.register_dataset(
+        ...     name="events",
+        ...     location=DatasetLocation(path="/data/events", format="delta"),
+        ... )
         >>> result = executor.from_table("events")
         >>> for batch in result.to_batches():
         ...     process(batch)

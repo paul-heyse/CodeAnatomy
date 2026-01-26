@@ -11,9 +11,15 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from arrowdsl.core.ordering import Ordering
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.execution_factory import ibis_backend_from_ctx, ibis_execution_from_ctx
+from ibis_engine.sources import (
+    SourceToIbisOptions,
+    register_ibis_record_batches,
+    register_ibis_table,
+)
 from sqlglot_tools.optimizer import SqlGlotPolicy, resolve_sqlglot_policy
 
 if TYPE_CHECKING:
@@ -122,8 +128,9 @@ class IncrementalRuntime:
 class TempTableRegistry:
     """Track and cleanup temporary DataFusion tables."""
 
-    def __init__(self, ctx: SessionContext) -> None:
-        self._ctx = ctx
+    def __init__(self, runtime: IncrementalRuntime) -> None:
+        self._runtime = runtime
+        self._ctx = runtime.session_context()
         self._names: list[str] = []
 
     def register_table(self, table: pa.Table, *, prefix: str) -> str:
@@ -135,10 +142,15 @@ class TempTableRegistry:
             Registered table name.
         """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
-        from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-        adapter = DataFusionIOAdapter(ctx=self._ctx, profile=None)
-        adapter.register_record_batches(name, [list(table.to_batches())])
+        register_ibis_table(
+            table,
+            options=SourceToIbisOptions(
+                backend=self._runtime.ibis_backend(),
+                name=name,
+                ordering=Ordering.unordered(),
+                runtime_profile=self._runtime.profile,
+            ),
+        )
         self._names.append(name)
         return name
 
@@ -151,10 +163,15 @@ class TempTableRegistry:
             Registered table name.
         """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
-        from datafusion_engine.io_adapter import DataFusionIOAdapter
-
-        adapter = DataFusionIOAdapter(ctx=self._ctx, profile=None)
-        adapter.register_record_batches(name, [batches])
+        register_ibis_record_batches(
+            batches,
+            options=SourceToIbisOptions(
+                backend=self._runtime.ibis_backend(),
+                name=name,
+                ordering=Ordering.unordered(),
+                runtime_profile=self._runtime.profile,
+            ),
+        )
         self._names.append(name)
         return name
 

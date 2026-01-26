@@ -17,7 +17,7 @@ import pyarrow as pa
 import sqlglot
 from sqlglot.errors import ParseError, SqlglotError
 from sqlglot.generator import Generator as SqlGlotGenerator
-from sqlglot.optimizer import RULES, optimize
+from sqlglot.optimizer import RULES
 from sqlglot.optimizer.annotate_types import annotate_types
 from sqlglot.optimizer.canonicalize import canonicalize
 from sqlglot.optimizer.normalize import normalization_distance
@@ -1426,50 +1426,6 @@ def qualify_expr(
     return qualify(expr, schema=schema_map, dialect=dialect)
 
 
-def optimize_expr(
-    expr: Expression,
-    *,
-    schema: SchemaMapping | None = None,
-    policy: SqlGlotPolicy | None = None,
-    sql: str | None = None,
-) -> Expression:
-    """Return an optimized SQLGlot expression.
-
-    Returns
-    -------
-    sqlglot.Expression
-        Optimized expression tree.
-    """
-    policy = policy or default_sqlglot_policy()
-    schema_map = _ensure_mapping_schema(schema, dialect=policy.read_dialect)
-    return optimize(
-        expr,
-        schema=schema_map,
-        dialect=policy.read_dialect,
-        rules=policy.rules,
-        sql=sql,
-        expand_stars=policy.expand_stars,
-        validate_qualify_columns=policy.validate_qualify_columns and schema_map is not None,
-        identify=policy.identify,
-        max_distance=policy.normalization_distance,
-    )
-
-
-def normalize_expr(
-    expr: Expression,
-    *,
-    options: NormalizeExprOptions,
-) -> Expression:
-    """Return a qualified + optimized SQLGlot expression.
-
-    Returns
-    -------
-    sqlglot.Expression
-        Normalized expression tree.
-    """
-    return normalize_expr_with_stats(expr, options=options).expr
-
-
 def normalize_expr_with_stats(
     expr: Expression,
     *,
@@ -1503,48 +1459,6 @@ def normalize_expr_with_stats(
         simplified, max_distance=policy.normalization_distance
     )
     return NormalizeExprResult(expr=normalized, stats=stats)
-
-
-def compile_expr(
-    expr: Expression,
-    *,
-    options: SqlGlotCompileOptions,
-) -> Expression:
-    """Return an optimized SQLGlot expression using the canonical pipeline.
-
-    Returns
-    -------
-    sqlglot.Expression
-        Optimized expression tree.
-    """
-    policy = options.policy or default_sqlglot_policy()
-    normalize_options = NormalizeExprOptions(
-        schema=options.schema,
-        rules=options.rules,
-        rewrite_hook=options.rewrite_hook,
-        enable_rewrites=options.enable_rewrites,
-        policy=policy,
-        sql=options.sql,
-    )
-    prepared = _prepare_for_qualification(expr, options=options, policy=policy)
-    identify = policy.identify or _schema_requires_quoting(options.schema)
-    qualified = _qualify_expression(
-        prepared,
-        options=normalize_options,
-        policy=policy,
-        identify=identify,
-    )
-    annotated = _annotate_expression(
-        qualified,
-        policy=policy,
-        identify=identify,
-        schema_map=_ensure_mapping_schema(options.schema, dialect=policy.read_dialect),
-    )
-    simplified = _simplify_expression(annotated, policy=policy)
-    normalized, _stats = _normalize_predicates_with_stats(
-        simplified, max_distance=policy.normalization_distance
-    )
-    return normalized
 
 
 def _compile_options_from_normalize(options: NormalizeExprOptions) -> SqlGlotCompileOptions:
@@ -2370,14 +2284,11 @@ __all__ = [
     "build_select",
     "canonical_ast_fingerprint",
     "canonicalize_expr",
-    "compile_expr",
     "default_sqlglot_policy",
     "deserialize_ast_artifact",
     "emit_preflight_diagnostics",
     "normalize_ddl_sql",
-    "normalize_expr",
     "normalize_expr_with_stats",
-    "optimize_expr",
     "parse_error_payload",
     "parse_sql",
     "parse_sql_strict",

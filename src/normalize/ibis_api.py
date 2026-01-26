@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, cast
@@ -10,13 +11,10 @@ from ibis.expr.types import Table
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import TableLike
-from arrowdsl.core.ordering import Ordering
-from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.view_registry import ensure_view_graph
 from ibis_engine.catalog import IbisPlanSource
-from ibis_engine.execution import execute_ibis_plan
-from ibis_engine.execution_factory import ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
 from normalize.ibis_spans import (
     SpanSource,
     add_ast_span_struct_ibis,
@@ -124,14 +122,27 @@ def _view_output_table(
     return normalize_runtime.ctx.table(output).to_arrow_table()
 
 
-def _materialize_table_expr(expr: Table, *, runtime: NormalizeRuntime) -> ExecutionResult:
-    execution = ibis_execution_from_ctx(runtime.execution_ctx, backend=runtime.ibis_backend)
-    plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
-    return execute_ibis_plan(
-        plan,
-        execution=execution,
-        streaming=False,
+def _register_view_expr(
+    expr: Table,
+    *,
+    runtime: NormalizeRuntime,
+    name: str,
+) -> TableLike:
+    register_ibis_view(
+        expr,
+        options=SourceToIbisOptions(
+            backend=runtime.ibis_backend,
+            name=name,
+            overwrite=True,
+            runtime_profile=runtime.runtime_profile,
+        ),
     )
+    return runtime.ctx.table(name).to_arrow_table()
+
+
+def _temporary_view_name(prefix: str) -> str:
+    token = uuid.uuid4().hex
+    return f"{prefix}_{token}"
 
 
 def _span_source(name: str, source: NormalizeSource) -> SpanSource:
@@ -326,8 +337,16 @@ def add_scip_occurrence_byte_spans(
         _span_source("scip_occurrences", scip_occurrences),
         backend=normalize_runtime.ibis_backend,
     )
-    occ_table = _materialize_table_expr(occ_expr, runtime=normalize_runtime).require_table()
-    err_table = _materialize_table_expr(err_expr, runtime=normalize_runtime).require_table()
+    occ_table = _register_view_expr(
+        occ_expr,
+        runtime=normalize_runtime,
+        name=_temporary_view_name("scip_occurrence_spans"),
+    )
+    err_table = _register_view_expr(
+        err_expr,
+        runtime=normalize_runtime,
+        name=_temporary_view_name("scip_occurrence_span_errors"),
+    )
     return occ_table, err_table
 
 
@@ -359,7 +378,11 @@ def normalize_cst_callsites_spans(
         backend=normalize_runtime.ibis_backend,
         primary=primary,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
+    return _register_view_expr(
+        expr,
+        runtime=normalize_runtime,
+        name=_temporary_view_name("cst_callsites_spans"),
+    )
 
 
 def normalize_cst_imports_spans(
@@ -390,7 +413,11 @@ def normalize_cst_imports_spans(
         backend=normalize_runtime.ibis_backend,
         primary=primary,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
+    return _register_view_expr(
+        expr,
+        runtime=normalize_runtime,
+        name=_temporary_view_name("cst_imports_spans"),
+    )
 
 
 def normalize_cst_defs_spans(
@@ -421,7 +448,11 @@ def normalize_cst_defs_spans(
         backend=normalize_runtime.ibis_backend,
         primary=primary,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
+    return _register_view_expr(
+        expr,
+        runtime=normalize_runtime,
+        name=_temporary_view_name("cst_defs_spans"),
+    )
 
 
 def anchor_instructions(
@@ -443,7 +474,11 @@ def anchor_instructions(
         _span_source("py_bc_instructions", py_bc_instructions),
         backend=normalize_runtime.ibis_backend,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
+    return _register_view_expr(
+        expr,
+        runtime=normalize_runtime,
+        name=_temporary_view_name("bytecode_instructions_spans"),
+    )
 
 
 def add_ast_byte_spans(
@@ -465,7 +500,11 @@ def add_ast_byte_spans(
         _span_source("py_ast_nodes", py_ast_nodes),
         backend=normalize_runtime.ibis_backend,
     )
-    return _materialize_table_expr(expr, runtime=normalize_runtime).require_table()
+    return _register_view_expr(
+        expr,
+        runtime=normalize_runtime,
+        name=_temporary_view_name("ast_span_structs"),
+    )
 
 
 __all__ = [

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from typing import cast, overload
+from typing import TYPE_CHECKING, cast, overload
 
 import pyarrow as pa
 from ibis.expr.types import Scalar, Table, Value
@@ -14,6 +14,9 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from arrowdsl.schema.schema import SchemaMetadataSpec
+
+if TYPE_CHECKING:
+    from datafusion_engine.view_artifacts import ViewArtifact
 
 
 @overload
@@ -60,6 +63,7 @@ class IbisPlan:
 
     expr: Table
     ordering: Ordering = field(default_factory=Ordering.unordered)
+    artifact: ViewArtifact | None = None
 
     def to_table(self, *, params: Mapping[Value, object] | None = None) -> TableLike:
         """Materialize the plan to an Arrow table.
@@ -105,6 +109,14 @@ class IbisPlan:
         cached = self.expr.cache()
         if hasattr(cached, "__enter__") and hasattr(cached, "__exit__"):
             with cast("AbstractContextManager[Table]", cached) as cached_table:
-                yield IbisPlan(expr=cached_table, ordering=self.ordering)
+                yield IbisPlan(
+                    expr=cached_table,
+                    ordering=self.ordering,
+                    artifact=self.artifact,
+                )
         else:
-            yield IbisPlan(expr=cached, ordering=self.ordering)
+            yield IbisPlan(
+                expr=cached,
+                ordering=self.ordering,
+                artifact=self.artifact,
+            )

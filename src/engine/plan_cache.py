@@ -18,7 +18,8 @@ from cache.diskcache_factory import (
 class PlanCacheKey:
     """Cache key for Substrait plan bytes."""
 
-    plan_hash: str
+    ast_fingerprint: str
+    policy_hash: str
     profile_hash: str
     substrait_hash: str
 
@@ -30,14 +31,18 @@ class PlanCacheKey:
         str
             Stable cache key.
         """
-        return f"plan:{self.plan_hash}:{self.profile_hash}:{self.substrait_hash}"
+        return (
+            f"plan:{self.ast_fingerprint}:"
+            f"{self.policy_hash}:{self.profile_hash}:{self.substrait_hash}"
+        )
 
 
 @dataclass(frozen=True)
 class PlanCacheEntry:
-    """Cached Substrait plan bytes keyed by plan/profile hashes."""
+    """Cached Substrait plan bytes keyed by AST/policy hashes."""
 
-    plan_hash: str
+    ast_fingerprint: str
+    policy_hash: str
     profile_hash: str
     substrait_hash: str
     plan_bytes: bytes
@@ -52,7 +57,8 @@ class PlanCacheEntry:
             Cache key derived from the entry hashes.
         """
         return PlanCacheKey(
-            plan_hash=self.plan_hash,
+            ast_fingerprint=self.ast_fingerprint,
+            policy_hash=self.policy_hash,
             profile_hash=self.profile_hash,
             substrait_hash=self.substrait_hash,
         )

@@ -227,7 +227,7 @@ def build_external_table_ddl(
     name: str,
     location: DatasetLocation,
     config: ExternalTableDDLConfig | None = None,
-) -> str:
+) -> exp.Expression:
     """
     Build CREATE EXTERNAL TABLE DDL via SQLGlot AST.
 
@@ -246,8 +246,8 @@ def build_external_table_ddl(
 
     Returns
     -------
-    str
-        Rendered SQL DDL statement for the configured dialect.
+    sqlglot.expressions.Expression
+        CREATE EXTERNAL TABLE AST.
 
     Examples
     --------
@@ -258,7 +258,7 @@ def build_external_table_ddl(
     ...     file_format="PARQUET",
     ... )
     >>> ddl = build_external_table_ddl(name="events", location=location, config=config)
-    >>> print(ddl)
+    >>> print(ddl.sql(dialect="datafusion"))
     CREATE EXTERNAL TABLE events (id BIGINT, timestamp TIMESTAMP) ...
     """
     ddl_config = config or ExternalTableDDLConfig()
@@ -312,20 +312,12 @@ def build_external_table_ddl(
         properties.append(options_property)
 
     # Build CREATE EXTERNAL TABLE expression
-    create_expr = exp.Create(
+    return exp.Create(
         this=exp.Table(this=exp.to_identifier(name)),
         kind="UNBOUNDED EXTERNAL" if ddl_config.unbounded else "EXTERNAL",
         expression=columns,
         properties=exp.Properties(expressions=properties),
     )
-
-    # Render with appropriate dialect (default to datafusion)
-    dialect_name = ddl_config.dialect or "datafusion"
-    if dialect_name in {"datafusion", "datafusion_ext"}:
-        from sqlglot_tools.optimizer import register_datafusion_dialect
-
-        register_datafusion_dialect()
-    return create_expr.sql(dialect=dialect_name)
 
 
 def _external_table_options_property(

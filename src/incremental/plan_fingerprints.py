@@ -19,18 +19,19 @@ from incremental.delta_context import read_delta_table_via_facade
 from storage.deltalake import delta_table_version, enable_delta_features
 
 if TYPE_CHECKING:
+    import sqlglot.expressions as exp
+
     from ibis_engine.execution import IbisExecutionContext
     from incremental.delta_context import DeltaAccessContext
     from incremental.state_store import StateStore
     from storage.deltalake import StorageOptions
 
-PLAN_FINGERPRINTS_VERSION = 2
+PLAN_FINGERPRINTS_VERSION = 3
 _PLAN_FINGERPRINTS_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32(), nullable=False),
         pa.field("task_name", pa.string(), nullable=False),
         pa.field("plan_fingerprint", pa.string(), nullable=False),
-        pa.field("plan_sql", pa.string(), nullable=True),
     ]
 )
 _PLAN_FINGERPRINTS_DIRNAME = "plan_fingerprints"
@@ -38,10 +39,10 @@ _PLAN_FINGERPRINTS_DIRNAME = "plan_fingerprints"
 
 @dataclass(frozen=True)
 class PlanFingerprintSnapshot:
-    """Plan fingerprint snapshot with optional SQL."""
+    """Plan fingerprint snapshot."""
 
     plan_fingerprint: str
-    plan_sql: str | None = None
+    sqlglot_ast: exp.Expression | None = None
 
 
 def _plan_fingerprints_path(state_store: StateStore) -> Path:
@@ -87,11 +88,8 @@ def read_plan_snapshots(
         fingerprint = row.get("plan_fingerprint")
         if name is None or fingerprint is None:
             continue
-        plan_sql = row.get("plan_sql")
-        sql_value = str(plan_sql) if plan_sql is not None else None
         results[str(name)] = PlanFingerprintSnapshot(
             plan_fingerprint=str(fingerprint),
-            plan_sql=sql_value,
         )
     return results
 
@@ -136,14 +134,12 @@ def write_plan_snapshots(
     else:
         versions = [PLAN_FINGERPRINTS_VERSION] * len(names)
         fingerprints = [snapshots[name].plan_fingerprint for name in names]
-        sql_payload = [snapshots[name].plan_sql for name in names]
         table = table_from_arrays(
             _PLAN_FINGERPRINTS_SCHEMA,
             columns={
                 "version": pa.array(versions, type=pa.int32()),
                 "task_name": pa.array(names, type=pa.string()),
                 "plan_fingerprint": pa.array(fingerprints, type=pa.string()),
-                "plan_sql": pa.array(sql_payload, type=pa.string()),
             },
             num_rows=len(names),
         )

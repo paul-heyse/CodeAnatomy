@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pyarrow as pa
 from datafusion import SessionContext
 
 from arrowdsl.schema.build import empty_table
@@ -15,6 +16,18 @@ from datafusion_engine.schema_registry import (
 )
 
 
+def _to_arrow_schema(value: object) -> pa.Schema:
+    if isinstance(value, pa.Schema):
+        return value
+    to_arrow = getattr(value, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = f"Unsupported schema type: {type(value)}"
+    raise TypeError(msg)
+
+
 def test_nested_schema_for_cst_parse_manifest() -> None:
     """Ensure nested schema derivation for LibCST parse manifest."""
     ctx = SessionContext()
@@ -24,7 +37,9 @@ def test_nested_schema_for_cst_parse_manifest() -> None:
         empty_table(LIBCST_FILES_SCHEMA),
         overwrite=True,
     )
-    schema = nested_view_spec(ctx, "cst_parse_manifest").schema
+    view_spec = nested_view_spec(ctx, "cst_parse_manifest")
+    view_spec.register(ctx, validate=False)
+    schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert schema.names[:2] == ("file_id", "path")
     assert "module_name" in schema.names
     assert "schema_fingerprint" in schema.names
@@ -39,7 +54,9 @@ def test_nested_schema_for_cst_refs() -> None:
         empty_table(LIBCST_FILES_SCHEMA),
         overwrite=True,
     )
-    schema = nested_view_spec(ctx, "cst_refs").schema
+    view_spec = nested_view_spec(ctx, "cst_refs")
+    view_spec.register(ctx, validate=False)
+    schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert "ref_id" in schema.names
     assert "ref_kind" in schema.names
     assert "ref_text" in schema.names
@@ -54,7 +71,9 @@ def test_nested_schema_for_cst_call_args() -> None:
         empty_table(LIBCST_FILES_SCHEMA),
         overwrite=True,
     )
-    schema = nested_view_spec(ctx, "cst_call_args").schema
+    view_spec = nested_view_spec(ctx, "cst_call_args")
+    view_spec.register(ctx, validate=False)
+    schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert "call_id" in schema.names
     assert "arg_index" in schema.names
     assert "arg_text" in schema.names

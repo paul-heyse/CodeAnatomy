@@ -8,7 +8,6 @@ execution paths.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -25,19 +24,6 @@ if TYPE_CHECKING:
     from ibis_engine.registry import DatasetLocation
 
 _REGISTERED_OBJECT_STORES: dict[int, set[tuple[str, str | None]]] = {}
-
-
-@dataclass(frozen=True)
-class ListingTableRegistration:
-    """Listing table registration details."""
-
-    name: str
-    location: str
-    table_partition_cols: Sequence[tuple[str, object]] | None = None
-    file_extension: str = ".parquet"
-    schema: pa.Schema | None = None
-    file_sort_order: Sequence[tuple[str, str]] | None = None
-    overwrite: bool = False
 
 
 @dataclass(frozen=True)
@@ -338,118 +324,6 @@ class DataFusionIOAdapter:
         """
         self.ctx.register_dataset(name, dataset)
         invalidate_introspection_cache(self.ctx)
-
-    def register_parquet(
-        self,
-        name: str,
-        path: str | Sequence[str],
-        *,
-        overwrite: bool = False,
-        options: Mapping[str, object] | None = None,
-    ) -> None:
-        """Register a Parquet dataset via DataFusion registration."""
-        register = getattr(self.ctx, "register_parquet", None)
-        if not callable(register):
-            msg = "SessionContext does not support register_parquet."
-            raise NotImplementedError(msg)
-        if overwrite and self.ctx.table_exist(name):
-            self._deregister_table(name)
-        register(name, path, **dict(options or {}))
-        invalidate_introspection_cache(self.ctx)
-        self._record_registration(name=name, registration_type="table", location=str(path))
-
-    def register_csv(
-        self,
-        name: str,
-        path: str | Sequence[str],
-        *,
-        overwrite: bool = False,
-        options: Mapping[str, object] | None = None,
-    ) -> None:
-        """Register a CSV dataset via DataFusion registration."""
-        register = getattr(self.ctx, "register_csv", None)
-        if not callable(register):
-            msg = "SessionContext does not support register_csv."
-            raise NotImplementedError(msg)
-        if overwrite and self.ctx.table_exist(name):
-            self._deregister_table(name)
-        register(name, path, **dict(options or {}))
-        invalidate_introspection_cache(self.ctx)
-        self._record_registration(name=name, registration_type="table", location=str(path))
-
-    def register_json(
-        self,
-        name: str,
-        path: str | Sequence[str],
-        *,
-        overwrite: bool = False,
-        options: Mapping[str, object] | None = None,
-    ) -> None:
-        """Register a JSON dataset via DataFusion registration."""
-        register = getattr(self.ctx, "register_json", None)
-        if not callable(register):
-            msg = "SessionContext does not support register_json."
-            raise NotImplementedError(msg)
-        if overwrite and self.ctx.table_exist(name):
-            self._deregister_table(name)
-        register(name, path, **dict(options or {}))
-        invalidate_introspection_cache(self.ctx)
-        self._record_registration(name=name, registration_type="table", location=str(path))
-
-    def register_avro(
-        self,
-        name: str,
-        path: str | Sequence[str],
-        *,
-        overwrite: bool = False,
-        options: Mapping[str, object] | None = None,
-    ) -> None:
-        """Register an Avro dataset via DataFusion registration."""
-        register = getattr(self.ctx, "register_avro", None)
-        if not callable(register):
-            msg = "SessionContext does not support register_avro."
-            raise NotImplementedError(msg)
-        if overwrite and self.ctx.table_exist(name):
-            self._deregister_table(name)
-        register(name, path, **dict(options or {}))
-        invalidate_introspection_cache(self.ctx)
-        self._record_registration(name=name, registration_type="table", location=str(path))
-
-    def register_listing_table(self, spec: ListingTableRegistration) -> None:
-        """Register a listing table when supported by the backend.
-
-        Parameters
-        ----------
-        spec
-            Registration details including name, location, partition columns,
-            file extension, optional schema override, sort order, and overwrite.
-        """
-        register = getattr(self.ctx, "register_listing_table", None)
-        if not callable(register):
-            msg = "SessionContext does not support register_listing_table."
-            raise NotImplementedError(msg)
-        if spec.overwrite and self.ctx.table_exist(spec.name):
-            self._deregister_table(spec.name)
-        register(
-            name=spec.name,
-            path=spec.location,
-            table_partition_cols=(
-                list(spec.table_partition_cols) if spec.table_partition_cols else None
-            ),
-            file_extension=spec.file_extension,
-            schema=spec.schema,
-            file_sort_order=spec.file_sort_order,
-        )
-        invalidate_introspection_cache(self.ctx)
-        self._record_registration(
-            name=spec.name,
-            registration_type="table",
-            location=spec.location,
-        )
-        self._record_artifact(
-            "listing_table_registered",
-            {"name": spec.name, "location": spec.location},
-        )
 
     def deregister_table(self, name: str) -> None:
         """Deregister a table from the DataFusion catalog.

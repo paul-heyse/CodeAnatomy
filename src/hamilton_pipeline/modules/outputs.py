@@ -80,6 +80,7 @@ def _delta_write(
             delta_schema_policy=output_config.delta_schema_policy,
             storage_options=output_config.delta_storage_options,
         ),
+        table_name=dataset_name,
     )
     return {
         "path": str(target_dir),

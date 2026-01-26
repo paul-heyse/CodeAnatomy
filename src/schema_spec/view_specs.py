@@ -1,4 +1,4 @@
-"""Schema-first view specifications for DataFusion integration."""
+"""AST-first view specifications for DataFusion integration."""
 
 from __future__ import annotations
 
@@ -10,6 +10,13 @@ from datafusion import SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
 from sqlglot.schema import MappingSchema
 
+from arrowdsl.schema.abi import schema_fingerprint
+from datafusion_engine.schema_contracts import (
+    SCHEMA_ABI_FINGERPRINT_META,
+    SchemaContract,
+    SchemaViolation,
+    SchemaViolationType,
+)
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.sql_policy_engine import (
     SQLPolicyProfile,
@@ -17,96 +24,77 @@ from datafusion_engine.sql_policy_engine import (
     render_for_execution,
 )
 from sqlglot_tools.compat import Expression
-from sqlglot_tools.optimizer import register_datafusion_dialect
 
 
 class ViewSchemaMismatchError(ValueError):
     """Raised when a view schema does not match its specification."""
 
 
-def _schema_signature(schema: pa.Schema) -> tuple[tuple[str, pa.DataType, bool], ...]:
-    """Return a simplified schema signature for comparisons.
+@dataclass(frozen=True)
+class ViewSpecInputs:
+    """Inputs needed to construct a ViewSpec."""
 
-    Returns
-    -------
-    tuple[tuple[str, pyarrow.DataType, bool], ...]
-        Column name, data type, and nullability signatures.
-    """
-    return tuple((field.name, field.type, field.nullable) for field in schema)
+    ctx: SessionContext
+    name: str
+    builder: Callable[[SessionContext], DataFrame]
+    ast: Expression
+    sql: str | None = None
+    schema: pa.Schema | None = None
 
 
-def view_spec_from_builder(
-    ctx: SessionContext,
-    *,
-    name: str,
-    builder: Callable[[SessionContext], DataFrame],
-    sql: str | None = None,
-) -> ViewSpec:
+def view_spec_from_builder(inputs: ViewSpecInputs) -> ViewSpec:
     """Return a view spec derived from a DataFrame builder.
 
     Parameters
     ----------
-    ctx:
-        DataFusion session context used to infer the schema.
-    name:
-        Name to assign to the view spec.
-    builder:
-        Callable that returns a DataFusion DataFrame for the view.
-    sql:
-        Optional SQL definition for diagnostics.
+    inputs:
+        DataFusion session context used to build the view AST.
 
     Returns
     -------
     ViewSpec
-        View specification with the inferred schema.
+        View specification with a canonical SQLGlot AST.
+
+    Raises
+    ------
+    ValueError
+        Raised when the view does not expose a SQLGlot AST.
     """
-    df = builder(ctx)
-    schema = _schema_from_df(df)
-    ast = _sqlglot_ast_from_dataframe(df)
-    canonical_sql = sql
+    ast = inputs.ast
+    if ast is None:
+        msg = f"View {inputs.name!r} missing SQLGlot AST."
+        raise ValueError(msg)
+    canonical_sql = inputs.sql
     if ast is not None:
         profile = SQLPolicyProfile()
         try:
-            schema_map = SchemaIntrospector(ctx).schema_map()
+            schema_map = SchemaIntrospector(inputs.ctx).schema_map()
             canonical_ast, _artifacts = compile_sql_policy(
                 ast,
                 schema=MappingSchema(dict(schema_map)),
                 profile=profile,
-                original_sql=sql,
+                original_sql=inputs.sql,
             )
             canonical_sql = render_for_execution(canonical_ast, profile)
             ast = canonical_ast
         except (RuntimeError, TypeError, ValueError):
-            canonical_sql = sql
+            canonical_sql = inputs.sql
     return ViewSpec(
-        name=name,
+        name=inputs.name,
         sql=canonical_sql,
-        schema=schema,
-        builder=builder,
+        schema=inputs.schema,
+        builder=inputs.builder,
         sqlglot_ast=ast,
     )
 
 
-def _schema_from_df(df: DataFrame) -> pa.Schema:
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    msg = "Failed to resolve DataFusion schema."
-    raise TypeError(msg)
-
-
 @dataclass(frozen=True)
 class ViewSpec:
-    """Schema-validated view definition."""
+    """AST-first view definition."""
 
     name: str
     sql: str | None
-    schema: pa.Schema
+    schema: pa.Schema | None = None
     builder: Callable[[SessionContext], DataFrame] | None = None
     sqlglot_ast: Expression | None = None
 
@@ -132,27 +120,23 @@ class ViewSpec:
         -------
         list[dict[str, object]]
             ``DESCRIBE`` output rows for the view query.
+
+        Raises
+        ------
+        ValueError
+            Raised when the view lacks SQL and AST for describe output.
         """
         if introspector is None:
             introspector = SchemaIntrospector(ctx, sql_options=sql_options)
         if self.sqlglot_ast is not None:
             return introspector.describe_expression(self.sqlglot_ast)
-        if self.sql is None:
-            return [
-                {
-                    "column_name": field.name,
-                    "data_type": str(field.type),
-                    "nullable": field.nullable,
-                }
-                for field in self.schema
-            ]
-        return introspector.describe_query(self.sql)
+        msg = f"View {self.name!r} missing SQLGlot AST for describe."
+        raise ValueError(msg)
 
     def register(
         self,
         ctx: SessionContext,
         *,
-        record_view: Callable[[str, str | None], None] | None = None,
         validate: bool = True,
         sql_options: SQLOptions | None = None,
     ) -> None:
@@ -162,38 +146,21 @@ class ViewSpec:
         ----------
         ctx:
             DataFusion session context used for registration.
-        record_view:
-            Optional callback to record the view definition.
         validate:
             Whether to validate the resulting schema after registration.
         sql_options:
             Optional SQL options to enforce SQL execution policy.
 
-        Raises
-        ------
-        ValueError
-            Raised when SQL execution does not return a DataFrame.
         """
-        if self.sqlglot_ast is None:
-            msg = f"View {self.name!r} missing SQLGlot AST for registration."
-            raise ValueError(msg)
-        from datafusion_engine.compile_options import DataFusionCompileOptions
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
-        from datafusion_engine.io_adapter import DataFusionIOAdapter
+        from datafusion_engine.runtime import register_view_specs
 
-        policy_profile = SQLPolicyProfile()
-        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-        plan = facade.compile(
-            self.sqlglot_ast,
-            options=DataFusionCompileOptions(sql_policy_profile=policy_profile),
+        _ = sql_options
+        register_view_specs(
+            ctx,
+            views=(self,),
+            runtime_profile=None,
+            validate=validate,
         )
-        df = facade.execute(plan).require_dataframe()
-        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-        adapter.register_view(self.name, df, overwrite=False, temporary=False)
-        if record_view is not None:
-            record_view(self.name, plan.compiled.rendered_sql or self.sql)
-        if validate:
-            self.validate(ctx, sql_options=sql_options)
 
     def validate(self, ctx: SessionContext, *, sql_options: SQLOptions | None = None) -> None:
         """Validate that the view schema matches the spec.
@@ -209,10 +176,21 @@ class ViewSpec:
         ------
         ViewSchemaMismatchError
             Raised when the view schema differs from the spec.
+        ValueError
+            Raised when schema introspection is unavailable.
         """
-        expected = _schema_signature(self.schema)
-        actual = _schema_signature(self._resolve_schema(ctx, sql_options=sql_options))
-        if actual != expected:
+        if self.schema is None:
+            return
+        actual = self._resolve_schema(ctx, sql_options=sql_options)
+        contract = SchemaContract.from_arrow_schema(self.name, self.schema)
+        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+        snapshot = introspector.snapshot
+        if snapshot is None:
+            msg = "Schema introspection snapshot unavailable for view validation."
+            raise ValueError(msg)
+        violations = contract.validate_against_introspection(snapshot)
+        violations.extend(_schema_metadata_violations(actual, contract))
+        if violations:
             msg = f"View schema mismatch for {self.name!r}."
             raise ViewSchemaMismatchError(msg)
 
@@ -222,42 +200,59 @@ class ViewSpec:
             return ctx.table(self.name).schema()
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             if self.builder is not None:
-                return _schema_from_df(self.builder(ctx))
+                df = self.builder(ctx)
+                schema = df.schema()
+                if isinstance(schema, pa.Schema):
+                    return schema
+                to_arrow = getattr(schema, "to_arrow", None)
+                if callable(to_arrow):
+                    resolved = to_arrow()
+                    if isinstance(resolved, pa.Schema):
+                        return resolved
+                msg = "Failed to resolve DataFusion schema."
+                raise TypeError(msg) from exc
             msg = f"View {self.name!r} does not define a builder."
             raise ValueError(msg) from exc
 
 
-def _sqlglot_ast_from_dataframe(df: DataFrame) -> Expression | None:
-    try:
-        from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
-        from datafusion.unparser import Dialect as DataFusionDialect
-        from datafusion.unparser import Unparser as DataFusionUnparser
-    except ImportError:
-        return None
-    logical_plan = getattr(df, "logical_plan", None)
-    if not callable(logical_plan):
-        return None
-    sql = ""
-    try:
-        plan_obj = logical_plan()
-        if isinstance(plan_obj, DataFusionLogicalPlan):
-            unparser = DataFusionUnparser(DataFusionDialect.default())
-            sql = str(unparser.plan_to_sql(plan_obj))
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    if not sql:
-        return None
-    register_datafusion_dialect()
-    try:
-        from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
-
-        return parse_sql_strict(
-            sql,
-            dialect="datafusion_ext",
-            options=StrictParseOptions(error_level=None),
+def _schema_metadata_violations(
+    schema: pa.Schema,
+    contract: SchemaContract,
+) -> list[SchemaViolation]:
+    expected = contract.schema_metadata or {}
+    if not expected:
+        return []
+    actual = schema.metadata or {}
+    violations: list[SchemaViolation] = []
+    expected_abi = expected.get(SCHEMA_ABI_FINGERPRINT_META)
+    if expected_abi is not None:
+        actual_abi = schema_fingerprint(schema).encode("utf-8")
+        if actual_abi != expected_abi:
+            violations.append(
+                SchemaViolation(
+                    violation_type=SchemaViolationType.METADATA_MISMATCH,
+                    table_name=contract.table_name,
+                    column_name=SCHEMA_ABI_FINGERPRINT_META.decode("utf-8"),
+                    expected=expected_abi.decode("utf-8", errors="replace"),
+                    actual=actual_abi.decode("utf-8", errors="replace"),
+                )
+            )
+    for key, expected_value in expected.items():
+        if key == SCHEMA_ABI_FINGERPRINT_META:
+            continue
+        actual_value = actual.get(key)
+        if actual_value is None or actual_value == expected_value:
+            continue
+        violations.append(
+            SchemaViolation(
+                violation_type=SchemaViolationType.METADATA_MISMATCH,
+                table_name=contract.table_name,
+                column_name=key.decode("utf-8", errors="replace"),
+                expected=expected_value.decode("utf-8", errors="replace"),
+                actual=actual_value.decode("utf-8", errors="replace"),
+            )
         )
-    except (TypeError, ValueError):
-        return None
+    return violations
 
 
 __all__ = ["ViewSchemaMismatchError", "ViewSpec", "view_spec_from_builder"]

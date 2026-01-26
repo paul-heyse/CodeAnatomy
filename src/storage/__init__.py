@@ -1,4 +1,4 @@
-"""Storage helpers for Arrow IPC, Delta Lake, and Parquet."""
+"""Storage helpers for Arrow IPC and Delta Lake."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ __all__ = (
     "open_delta_table",
     "read_delta_cdf",
     "read_table_ipc_file",
-    "read_table_parquet",
     "vacuum_delta",
     "write_ibis_dataset_delta",
     "write_ibis_named_datasets_delta",
@@ -51,7 +50,6 @@ if TYPE_CHECKING:
     open_delta_table = _storage_io.open_delta_table
     read_delta_cdf = _storage_io.read_delta_cdf
     read_table_ipc_file = _storage_io.read_table_ipc_file
-    read_table_parquet = _storage_io.read_table_parquet
     vacuum_delta = _storage_io.vacuum_delta
     write_ibis_dataset_delta = _storage_io.write_ibis_dataset_delta
     write_ibis_named_datasets_delta = _storage_io.write_ibis_named_datasets_delta

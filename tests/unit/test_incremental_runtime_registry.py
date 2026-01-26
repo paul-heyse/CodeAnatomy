@@ -16,7 +16,7 @@ def test_temp_table_registry_registers_and_cleans() -> None:
     ctx = runtime.session_context()
     table = pa.table({"file_id": ["a", "b"], "value": [1, 2]})
 
-    with TempTableRegistry(ctx) as registry:
+    with TempTableRegistry(runtime) as registry:
         name = registry.register_table(table, prefix="temp")
         result = ctx.sql(f"SELECT COUNT(*) AS cnt FROM {name}").to_arrow_table()
         assert result["cnt"][0].as_py() == EXPECTED_ROW_COUNT

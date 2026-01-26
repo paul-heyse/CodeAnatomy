@@ -1,4 +1,4 @@
-"""Ibis diagnostics helpers for plan artifacts."""
+"""Ibis diagnostics helpers for debug-only plan artifacts."""
 
 from __future__ import annotations
 
@@ -81,12 +81,13 @@ def ibis_plan_artifacts(
     params: Mapping[Value, object] | Mapping[str, object] | None = None,
     limit: int | None = None,
 ) -> dict[str, object]:
-    """Return Ibis-level artifacts for diagnostics.
+    """Return Ibis-level debug artifacts for diagnostics.
 
     Returns
     -------
     dict[str, object]
         Ibis decompile, SQL, compile, and optional graphviz artifacts.
+        These artifacts are for debugging only and are not canonical.
     """
     decompile = _safe_decompile_expr(expr)
     sql = _safe_sql(expr, dialect=dialect, pretty=False)

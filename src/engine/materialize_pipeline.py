@@ -57,6 +57,7 @@ from storage.deltalake import DeltaWriteResult
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
+    from datafusion_engine.view_artifacts import ViewArtifact
     from ibis_engine.execution import IbisExecutionContext
     from ibis_engine.registry import DatasetLocation
 
@@ -238,9 +239,15 @@ def build_view_product(
     if not session.table_exist(view_name):
         msg = f"View {view_name!r} is not registered for materialization."
         raise ValueError(msg)
+    from datafusion_engine.schema_registry import validate_nested_types
+
+    validate_nested_types(session, view_name)
     prefer_reader = _resolve_prefer_reader(ctx=ctx, policy=policy)
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
+    view_artifact = (
+        profile.view_registry.entries.get(view_name) if profile.view_registry is not None else None
+    )
     df = session.table(view_name)
     if prefer_reader:
         stream = cast("RecordBatchReaderLike", StreamingExecutionResult(df).to_arrow_stream())
@@ -250,12 +257,18 @@ def build_view_product(
         table = cast("TableLike", df.to_arrow_table())
         schema = table.schema
         result = ExecutionResult.from_table(table)
-    _record_plan_execution(ctx, plan_id=view_id or view_name, result=result)
+    _record_plan_execution(
+        ctx,
+        plan_id=view_id or view_name,
+        result=result,
+        view_artifact=view_artifact,
+    )
     return PlanProduct(
         plan_id=view_id or view_name,
         schema=schema,
         determinism_tier=ctx.determinism,
         writer_strategy=policy.writer_strategy,
+        view_artifact=view_artifact,
         stream=stream,
         table=table,
         execution_result=result,
@@ -267,6 +280,7 @@ def _record_plan_execution(
     *,
     plan_id: str,
     result: ExecutionResult,
+    view_artifact: ViewArtifact | None = None,
 ) -> None:
     profile = ctx.runtime.datafusion
     if profile is None:
@@ -279,6 +293,14 @@ def _record_plan_execution(
         "result_kind": result.kind.value,
         "rows": rows,
     }
+    if view_artifact is not None:
+        payload.update(
+            {
+                "plan_fingerprint": view_artifact.plan_fingerprint,
+                "ast_fingerprint": view_artifact.ast_fingerprint,
+                "policy_hash": view_artifact.policy_hash,
+            }
+        )
     record_artifact(profile, "plan_execute_v1", payload)
 
 
@@ -692,6 +714,7 @@ def _write_delta(
                 log_storage_options=log_storage_options,
             ),
         ),
+        table_name=context.dataset,
     )
     _record_extract_write(
         context.runtime_profile,

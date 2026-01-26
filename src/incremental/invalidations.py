@@ -282,10 +282,6 @@ def _plan_hashes_from_artifacts(
     resolved: dict[str, str] = {}
     for payload in artifacts:
         name = payload.get("name")
-        plan_fingerprint = payload.get("plan_fingerprint") or payload.get("plan_hash")
-        if name and plan_fingerprint:
-            resolved[str(name)] = str(plan_fingerprint)
-            continue
         ast_fingerprint = payload.get("ast_fingerprint")
         policy_hash = payload.get("policy_hash")
         if not name or not ast_fingerprint or not policy_hash:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from datafusion import SessionContext, col, lit
 from datafusion import functions as f
@@ -26,14 +26,18 @@ from datafusion_ext import (
     union_extract,
     union_tag,
 )
-from schema_spec.view_specs import ViewSpec, view_spec_from_builder
+from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 from sqlglot_tools.optimizer import (
     StrictParseOptions,
     parse_sql_strict,
     register_datafusion_dialect,
+    resolve_sqlglot_policy,
+    sqlglot_sql,
 )
 
 if TYPE_CHECKING:
+    from ibis.expr.types import Table
+
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.udf_platform import RustUdfPlatformOptions
     from sqlglot_tools.compat import Expression
@@ -2399,6 +2403,28 @@ def _sqlglot_from_dataframe(df: DataFrame) -> Expression | None:
     return ast
 
 
+def _ibis_expr_from_sqlglot(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    label: str,
+) -> Table:
+    import ibis
+
+    policy = resolve_sqlglot_policy(name="datafusion_compile")
+    sql = sqlglot_sql(expr, policy=policy)
+    backend = ibis.datafusion.connect(ctx)
+    sql_func = getattr(backend, "sql", None)
+    if not callable(sql_func):
+        msg = f"Ibis backend does not support SQL compilation for view {label!r}."
+        raise TypeError(msg)
+    try:
+        return cast("Table", sql_func(sql))
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Failed to build Ibis expression for view {label!r}."
+        raise ValueError(msg) from exc
+
+
 def _base_df(ctx: SessionContext, name: str) -> DataFrame:
     if name in NESTED_VIEW_NAMES:
         return _nested_base_df(ctx, name)
@@ -2767,6 +2793,11 @@ def registry_view_specs(
     -------
     tuple[ViewSpec, ...]
         View specifications for registry views.
+
+    Raises
+    ------
+    ValueError
+        Raised when registry views are missing SQLGlot ASTs.
     """
     excluded = set(exclude or ())
     specs: list[ViewSpec] = []
@@ -2774,7 +2805,22 @@ def registry_view_specs(
         if name in excluded:
             continue
         builder = partial(_view_df, name=name)
-        specs.append(view_spec_from_builder(ctx, name=name, builder=builder, sql=None))
+        df = builder(ctx)
+        ast = _sqlglot_from_dataframe(df)
+        if ast is None:
+            msg = f"Registry view {name!r} missing SQLGlot AST."
+            raise ValueError(msg)
+        specs.append(
+            view_spec_from_builder(
+                ViewSpecInputs(
+                    ctx=ctx,
+                    name=name,
+                    builder=builder,
+                    ast=ast,
+                    sql=None,
+                )
+            )
+        )
     return tuple(specs)
 
 
@@ -2799,7 +2845,10 @@ def register_all_views(
                 ctx,
                 nodes=registry_nodes,
                 snapshot=snapshot,
-                runtime_options=ViewGraphRuntimeOptions(runtime_profile=runtime_profile),
+                runtime_options=ViewGraphRuntimeOptions(
+                    runtime_profile=runtime_profile,
+                    require_artifacts=True,
+                ),
             )
     from datafusion_engine.view_graph_registry import register_view_graph
     from datafusion_engine.view_registry_specs import view_graph_nodes
@@ -2812,7 +2861,10 @@ def register_all_views(
             ctx,
             nodes=pre_nodes,
             snapshot=snapshot,
-            runtime_options=ViewGraphRuntimeOptions(runtime_profile=runtime_profile),
+            runtime_options=ViewGraphRuntimeOptions(
+                runtime_profile=runtime_profile,
+                require_artifacts=True,
+            ),
         )
     cpg_nodes = view_graph_nodes(ctx, snapshot=snapshot, stage="cpg")
     if cpg_nodes:
@@ -2822,7 +2874,10 @@ def register_all_views(
             ctx,
             nodes=cpg_nodes,
             snapshot=snapshot,
-            runtime_options=ViewGraphRuntimeOptions(runtime_profile=runtime_profile),
+            runtime_options=ViewGraphRuntimeOptions(
+                runtime_profile=runtime_profile,
+                require_artifacts=True,
+            ),
         )
 
 
@@ -2854,7 +2909,31 @@ def registry_view_nodes(
         if ast is None:
             msg = f"Registry view {name!r} missing SQLGlot AST."
             raise ValueError(msg)
-        nodes.append(ViewNode(name=name, deps=(), builder=builder, sqlglot_ast=ast))
+        try:
+            from sqlglot.schema import MappingSchema
+
+            from datafusion_engine.schema_introspection import SchemaIntrospector
+            from datafusion_engine.sql_policy_engine import SQLPolicyProfile, compile_sql_policy
+
+            schema_map = SchemaIntrospector(ctx).schema_map()
+            canonical, _ = compile_sql_policy(
+                ast,
+                schema=MappingSchema(dict(schema_map)),
+                profile=SQLPolicyProfile(),
+            )
+            ast = canonical
+        except (RuntimeError, TypeError, ValueError):
+            pass
+        ibis_expr = _ibis_expr_from_sqlglot(ctx, ast, label=name)
+        nodes.append(
+            ViewNode(
+                name=name,
+                deps=(),
+                builder=builder,
+                sqlglot_ast=ast,
+                ibis_expr=ibis_expr,
+            )
+        )
     return tuple(nodes)
 
 

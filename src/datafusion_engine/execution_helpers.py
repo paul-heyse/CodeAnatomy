@@ -249,7 +249,8 @@ def _plan_cache_key(
         return None
     if not options.diagnostics_allow_sql:
         return None
-    plan_hash = options.plan_hash or _plan_hash_for_expr(expr, options=options)
+    ast_fingerprint = canonical_ast_fingerprint(expr)
+    policy_hash = _policy_hash_for_options(options)
     _ensure_dialect(options.dialect)
     try:
         sql = _emit_sql(expr, options=options)
@@ -260,7 +261,8 @@ def _plan_cache_key(
         return None
     substrait_hash = hashlib.sha256(plan_bytes).hexdigest()
     return PlanCacheKey(
-        plan_hash=plan_hash,
+        ast_fingerprint=ast_fingerprint,
+        policy_hash=policy_hash,
         profile_hash=options.profile_hash,
         substrait_hash=substrait_hash,
     )

@@ -10,6 +10,7 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_schema
+from datafusion_engine.view_artifacts import view_artifact_payload_table
 from engine.runtime_profile import runtime_profile_snapshot
 from ibis_engine.io_bridge import (
     IbisDatasetWriteOptions,
@@ -182,7 +183,7 @@ def write_incremental_artifacts(
     view_snapshot = runtime.profile.view_registry_snapshot()
     if view_snapshot:
         view_path = state_store.view_artifacts_path()
-        result = _write_artifact_rows(
+        result = _write_view_artifact_rows(
             name="incremental_view_artifacts_v1",
             path=view_path,
             rows=view_snapshot,
@@ -203,6 +204,39 @@ def _write_artifact_rows(
     if not rows:
         return None
     table = _artifacts_to_table(rows)
+    result = write_ibis_dataset_delta(
+        table,
+        str(path),
+        options=IbisDatasetWriteOptions(
+            execution=context.runtime.ibis_execution(),
+            writer_strategy="datafusion",
+            delta_options=IbisDeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata={"artifact_name": name},
+                storage_options=context.storage_options,
+                log_storage_options=context.log_storage_options,
+            ),
+        ),
+    )
+    enable_delta_features(
+        result.path,
+        storage_options=context.storage_options,
+        log_storage_options=context.log_storage_options,
+    )
+    return result.path
+
+
+def _write_view_artifact_rows(
+    *,
+    name: str,
+    path: Path,
+    rows: Sequence[Mapping[str, object]],
+    context: ArtifactWriteContext,
+) -> str | None:
+    if not rows:
+        return None
+    table = view_artifact_payload_table(rows)
     result = write_ibis_dataset_delta(
         table,
         str(path),

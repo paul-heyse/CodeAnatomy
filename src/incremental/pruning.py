@@ -6,9 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import ibis
 import pyarrow.dataset as ds
 
 from datafusion_engine.diagnostics import DiagnosticsSink, ensure_recorder_sink
+from datafusion_engine.runtime import DataFusionRuntimeProfile
+from ibis_engine.execution_factory import ibis_backend_from_profile
+from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
 from storage.deltalake import StorageOptions, build_delta_file_index, open_delta_table
 from storage.deltalake.file_pruning import FilePruningResult
 
@@ -96,7 +100,21 @@ def read_pruned_delta_dataset(
     )
     if not result.candidate_paths:
         return None
-    return ds.dataset(result.candidate_paths, format="parquet")
+    runtime_profile = DataFusionRuntimeProfile()
+    backend = ibis_backend_from_profile(runtime_profile)
+    expr = read_delta_ibis(
+        backend,
+        str(path),
+        options=IbisDeltaReadOptions(
+            storage_options=dict(storage_options or {}),
+            log_storage_options=dict(log_storage_options or {}),
+        ),
+    )
+    if not policy.is_empty() and policy.file_id_column in expr.columns:
+        values = [ibis.literal(value) for value in policy.file_ids]
+        expr = expr.filter(expr[policy.file_id_column].isin(values))
+    table = expr.to_pyarrow()
+    return ds.dataset(table)
 
 
 def record_pruning_metrics(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -15,18 +16,12 @@ from datafusion_engine.sql_policy_engine import CompilationArtifacts, SQLPolicyP
 from serde_msgspec import dumps_msgpack
 from sqlglot_tools.lineage import referenced_udf_calls
 from sqlglot_tools.optimizer import (
-    StrictParseOptions,
     ast_policy_fingerprint,
-    parse_sql_strict,
-    register_datafusion_dialect,
     sqlglot_policy_snapshot_for,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
     from datafusion import SessionContext
-    from datafusion.dataframe import DataFrame
 
     from datafusion_engine.schema_introspection import SchemaIntrospector
 
@@ -108,19 +103,6 @@ class ViewArtifactInputs:
     sql: str | None = None
 
 
-@dataclass(frozen=True)
-class DataFrameArtifactInputs:
-    """Inputs for building a view artifact from a DataFrame."""
-
-    ctx: SessionContext
-    name: str
-    df: DataFrame
-    ast: exp.Expression | None = None
-    required_udfs: Sequence[str] | None = None
-    policy_profile: SQLPolicyProfile | None = None
-    sql: str | None = None
-
-
 def build_view_artifact(inputs: ViewArtifactInputs) -> ViewArtifact:
     """Build a ViewArtifact from a canonical SQLGlot AST.
 
@@ -158,83 +140,10 @@ def build_view_artifact(inputs: ViewArtifactInputs) -> ViewArtifact:
     )
 
 
-def build_view_artifact_from_dataframe(inputs: DataFrameArtifactInputs) -> ViewArtifact:
-    """Build a ViewArtifact from a DataFusion DataFrame.
-
-    Returns
-    -------
-    ViewArtifact
-        View artifact bundle for diagnostics and caching.
-
-    Raises
-    ------
-    ValueError
-        Raised when the AST cannot be derived from the DataFrame.
-    """
-    resolved_ast = inputs.ast or _sqlglot_from_dataframe(inputs.df, sql=inputs.sql)
-    if resolved_ast is None:
-        msg = f"Failed to derive SQLGlot AST for view {inputs.name!r}."
-        raise ValueError(msg)
-    schema = _schema_from_df(inputs.df)
-    return build_view_artifact(
-        ViewArtifactInputs(
-            ctx=inputs.ctx,
-            name=inputs.name,
-            ast=resolved_ast,
-            schema=schema,
-            required_udfs=inputs.required_udfs,
-            policy_profile=inputs.policy_profile,
-            sql=inputs.sql,
-        )
-    )
-
-
 def _schema_introspector(ctx: SessionContext) -> SchemaIntrospector:
     from datafusion_engine.schema_introspection import SchemaIntrospector
 
     return SchemaIntrospector(ctx)
-
-
-def _schema_from_df(df: DataFrame) -> pa.Schema:
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    msg = "Failed to resolve DataFusion schema."
-    raise TypeError(msg)
-
-
-def _sqlglot_from_dataframe(df: DataFrame, *, sql: str | None) -> exp.Expression | None:
-    logical_plan = getattr(df, "logical_plan", None)
-    if callable(logical_plan):
-        try:
-            from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
-            from datafusion.unparser import Dialect as DataFusionDialect
-            from datafusion.unparser import Unparser as DataFusionUnparser
-        except ImportError:
-            return None
-        try:
-            plan_obj = logical_plan()
-            if isinstance(plan_obj, DataFusionLogicalPlan):
-                unparser = DataFusionUnparser(DataFusionDialect.default())
-                sql = str(unparser.plan_to_sql(plan_obj))
-        except (RuntimeError, TypeError, ValueError):
-            return None
-    if not sql:
-        return None
-    register_datafusion_dialect()
-    try:
-        return parse_sql_strict(
-            sql,
-            dialect="datafusion_ext",
-            options=StrictParseOptions(error_level=None),
-        )
-    except (TypeError, ValueError):
-        return None
 
 
 def _lineage_payload(
@@ -246,10 +155,93 @@ def _lineage_payload(
     return payload
 
 
+VIEW_ARTIFACT_PAYLOAD_SCHEMA = pa.schema(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("plan_fingerprint", pa.string(), nullable=False),
+        pa.field("ast_fingerprint", pa.string(), nullable=False),
+        pa.field("policy_hash", pa.string(), nullable=False),
+        pa.field("schema_msgpack", pa.binary(), nullable=False),
+        pa.field("required_udfs", pa.list_(pa.string()), nullable=True),
+        pa.field("lineage_msgpack", pa.binary(), nullable=False),
+        pa.field("sql", pa.string(), nullable=True),
+        pa.field("serde_payload_msgpack", pa.binary(), nullable=False),
+    ]
+)
+
+
+def view_artifact_payload_table(rows: Sequence[Mapping[str, object]]) -> pa.Table:
+    """Build a deterministic Arrow table for view artifact payloads.
+
+    Parameters
+    ----------
+    rows
+        View artifact payloads as dictionaries.
+
+    Returns
+    -------
+    pyarrow.Table
+        Arrow table with the canonical view artifact schema.
+
+    Raises
+    ------
+    ValueError
+        Raised when a payload is missing required fields.
+    """
+    normalized: list[dict[str, object]] = []
+    for row in rows:
+        name = row.get("name")
+        plan_fingerprint = row.get("plan_fingerprint")
+        ast_fingerprint = row.get("ast_fingerprint")
+        policy_hash = row.get("policy_hash")
+        if (
+            name is None
+            or plan_fingerprint is None
+            or ast_fingerprint is None
+            or policy_hash is None
+        ):
+            msg = "View artifact payload is missing required fields."
+            raise ValueError(msg)
+        schema_payload_raw = row.get("schema")
+        lineage_payload_raw = row.get("lineage")
+        serde_payload_raw = row.get("serde_payload")
+        schema_payload: Mapping[str, object] = {}
+        lineage_payload: Mapping[str, object] = {}
+        serde_payload: Sequence[object] = ()
+        if isinstance(schema_payload_raw, Mapping):
+            schema_payload = schema_payload_raw
+        if isinstance(lineage_payload_raw, Mapping):
+            lineage_payload = lineage_payload_raw
+        if isinstance(serde_payload_raw, Sequence) and not isinstance(
+            serde_payload_raw, (str, bytes)
+        ):
+            serde_payload = serde_payload_raw
+        required_udfs = row.get("required_udfs")
+        normalized.append(
+            {
+                "name": str(name),
+                "plan_fingerprint": str(plan_fingerprint),
+                "ast_fingerprint": str(ast_fingerprint),
+                "policy_hash": str(policy_hash),
+                "schema_msgpack": dumps_msgpack(schema_payload),
+                "required_udfs": (
+                    [str(value) for value in required_udfs]
+                    if isinstance(required_udfs, Sequence)
+                    and not isinstance(required_udfs, (str, bytes))
+                    else None
+                ),
+                "lineage_msgpack": dumps_msgpack(lineage_payload),
+                "sql": str(row["sql"]) if row.get("sql") is not None else None,
+                "serde_payload_msgpack": dumps_msgpack(serde_payload),
+            }
+        )
+    return pa.Table.from_pylist(normalized, schema=VIEW_ARTIFACT_PAYLOAD_SCHEMA)
+
+
 __all__ = [
-    "DataFrameArtifactInputs",
+    "VIEW_ARTIFACT_PAYLOAD_SCHEMA",
     "ViewArtifact",
     "ViewArtifactInputs",
     "build_view_artifact",
-    "build_view_artifact_from_dataframe",
+    "view_artifact_payload_table",
 ]

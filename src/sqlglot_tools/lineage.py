@@ -12,16 +12,16 @@ from sqlglot.errors import SqlglotError
 from sqlglot.lineage import Node, lineage
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import Scope, build_scope
+from sqlglot.schema import MappingSchema
 
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile, compile_sql_policy
 from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import (
-    NormalizeExprOptions,
     SchemaMapping,
     SchemaMappingNode,
     SqlGlotPolicy,
     canonical_ast_fingerprint,
     default_sqlglot_policy,
-    normalize_expr,
     schema_map_fingerprint_from_mapping,
 )
 
@@ -306,24 +306,27 @@ def required_columns_by_table(
     from sqlglot_tools.bridge import ibis_to_sqlglot
 
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
-    schema = schema_map or _schema_map_from_backend(backend)
+    schema_map_resolved = schema_map or _schema_map_from_backend(backend)
+    compile_schema = schema_map_resolved or MappingSchema({})
     policy = policy or default_sqlglot_policy()
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
-    normalized = normalize_expr(
+    normalized, _ = compile_sql_policy(
         sg_expr,
-        options=NormalizeExprOptions(
-            schema=schema,
+        schema=compile_schema,
+        profile=SQLPolicyProfile(
             policy=policy,
+            read_dialect=policy.read_dialect,
+            write_dialect=policy.write_dialect,
         ),
     )
-    scoped = _cached_scope(normalized, schema_map=schema)
+    scoped = _cached_scope(normalized, schema_map=schema_map_resolved)
     if scoped is None:
         return {}
     required: dict[str, set[str]] = {}
     _collect_expression_columns(normalized, required)
     output_columns = tuple(cast("tuple[str, ...]", expr.schema().names))
-    lineage_schema = _schema_for_lineage(schema)
+    lineage_schema = _schema_for_lineage(schema_map_resolved)
     for column in output_columns:
         node = lineage(
             column,
@@ -356,22 +359,25 @@ def lineage_graph_by_output(
     from sqlglot_tools.bridge import ibis_to_sqlglot
 
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
-    schema = schema_map or _schema_map_from_backend(backend)
+    schema_map_resolved = schema_map or _schema_map_from_backend(backend)
+    compile_schema = schema_map_resolved or MappingSchema({})
     policy = policy or default_sqlglot_policy()
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
-    normalized = normalize_expr(
+    normalized, _ = compile_sql_policy(
         sg_expr,
-        options=NormalizeExprOptions(
-            schema=schema,
+        schema=compile_schema,
+        profile=SQLPolicyProfile(
             policy=policy,
+            read_dialect=policy.read_dialect,
+            write_dialect=policy.write_dialect,
         ),
     )
-    scoped = _cached_scope(normalized, schema_map=schema)
+    scoped = _cached_scope(normalized, schema_map=schema_map_resolved)
     if scoped is None:
         return {}
     lineage_map: dict[str, tuple[str, ...]] = {}
-    lineage_schema = _schema_for_lineage(schema)
+    lineage_schema = _schema_for_lineage(schema_map_resolved)
     for column in tuple(cast("tuple[str, ...]", expr.schema().names)):
         node = lineage(
             column,

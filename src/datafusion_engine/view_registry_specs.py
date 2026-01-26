@@ -10,6 +10,7 @@ import ibis
 import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from arrowdsl.schema.build import empty_table
@@ -202,6 +203,35 @@ def _arrow_schema_from_df(df: DataFrame) -> pa.Schema:
     raise TypeError(msg)
 
 
+def _arrow_schema_from_contract(schema: SchemaLike) -> pa.Schema:
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Failed to resolve contract schema."
+    raise TypeError(msg)
+
+
+def _arrow_schema_from_ibis(plan: IbisPlan | Table) -> pa.Schema:
+    expr = plan.expr if isinstance(plan, IbisPlan) else plan
+    schema = expr.schema()
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Failed to resolve Ibis schema."
+    raise TypeError(msg)
+
+
 @dataclass(frozen=True)
 class ViewBuildContext:
     """Shared context for building Ibis-backed view DataFrames."""
@@ -289,7 +319,13 @@ class ViewBuildContext:
             msg = f"View builder {label or plan_builder.__name__} returned None."
             raise ValueError(msg)
         expr = plan.expr if isinstance(plan, IbisPlan) else plan
-        compiled = self.facade.compile(expr)
+        from datafusion_engine.compile_options import DataFusionCompileOptions
+        from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+
+        compiled = self.facade.compile(
+            expr,
+            options=DataFusionCompileOptions(sql_policy_profile=SQLPolicyProfile()),
+        )
         return plan, compiled.compiled.sqlglot_ast
 
     def register_plan(self, name: str, plan: IbisPlan | Table) -> None:
@@ -406,7 +442,7 @@ def view_graph_nodes(
 
 
 def _normalize_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
-    from normalize.dataset_specs import dataset_spec
+    from normalize.dataset_specs import dataset_contract_schema, dataset_spec
     from normalize.view_builders import normalize_view_specs
 
     nodes: list[ViewNode] = []
@@ -417,8 +453,7 @@ def _normalize_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
         dataset = dataset_spec(spec.name)
         metadata = _metadata_from_dataset_spec(dataset)
         metadata = _metadata_with_required_udfs(metadata, required)
-        df = _plan_to_dataframe(build_ctx.ctx, plan, build_ctx.facade)
-        expected_schema = _arrow_schema_from_df(df)
+        expected_schema = _arrow_schema_from_contract(dataset_contract_schema(spec.name))
         ibis_expr = plan.expr if isinstance(plan, IbisPlan) else plan
         nodes.append(
             ViewNode(
@@ -638,64 +673,46 @@ def _cpg_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
     from cpg.view_builders import build_cpg_edges_expr, build_cpg_nodes_expr, build_cpg_props_expr
 
     priority = 100
-    node_identity = TaskIdentity(name="cpg.nodes", priority=priority)
-    prop_identity = TaskIdentity(name="cpg.props", priority=priority)
-
-    nodes_plan, nodes_ast = build_ctx.plan_and_ast(
-        build_cpg_nodes_expr,
-        builder_kwargs={"task_identity": node_identity},
-        label="cpg_nodes_v1",
+    plan_specs = (
+        ("cpg_nodes_v1", build_cpg_nodes_expr, TaskIdentity(name="cpg.nodes", priority=priority)),
+        ("cpg_edges_v1", build_cpg_edges_expr, None),
+        ("cpg_props_v1", build_cpg_props_expr, TaskIdentity(name="cpg.props", priority=priority)),
     )
-    edges_plan, edges_ast = build_ctx.plan_and_ast(
-        build_cpg_edges_expr,
-        label="cpg_edges_v1",
-    )
-    props_plan, props_ast = build_ctx.plan_and_ast(
-        build_cpg_props_expr,
-        builder_kwargs={"task_identity": prop_identity},
-        label="cpg_props_v1",
-    )
-    build_ctx.register_plan("cpg_nodes_v1", nodes_plan)
-    build_ctx.register_plan("cpg_edges_v1", edges_plan)
-    build_ctx.register_plan("cpg_props_v1", props_plan)
-
-    nodes_required = _required_udfs_from_ast(nodes_ast, build_ctx.snapshot)
-    edges_required = _required_udfs_from_ast(edges_ast, build_ctx.snapshot)
-    props_required = _required_udfs_from_ast(props_ast, build_ctx.snapshot)
-
-    nodes_metadata = _metadata_with_required_udfs(None, nodes_required)
-    edges_metadata = _metadata_with_required_udfs(None, edges_required)
-    props_metadata = _metadata_with_required_udfs(None, props_required)
-
+    resolved: list[tuple[str, IbisPlan | Table, Expression]] = []
+    for name, builder, identity in plan_specs:
+        kwargs = {"task_identity": identity} if identity is not None else {}
+        plan, ast = build_ctx.plan_and_ast(builder, builder_kwargs=kwargs, label=name)
+        build_ctx.register_plan(name, plan)
+        resolved.append((name, plan, ast))
     return [
-        ViewNode(
-            name="cpg_nodes_v1",
-            deps=_deps_from_ast(nodes_ast),
-            builder=build_ctx.builder_from_plan(nodes_plan, label="cpg_nodes_v1"),
-            contract_builder=_contract_builder("cpg_nodes_v1", metadata_spec=nodes_metadata),
-            required_udfs=nodes_required,
-            sqlglot_ast=nodes_ast,
-            ibis_expr=nodes_plan.expr if isinstance(nodes_plan, IbisPlan) else nodes_plan,
-        ),
-        ViewNode(
-            name="cpg_edges_v1",
-            deps=_deps_from_ast(edges_ast),
-            builder=build_ctx.builder_from_plan(edges_plan, label="cpg_edges_v1"),
-            contract_builder=_contract_builder("cpg_edges_v1", metadata_spec=edges_metadata),
-            required_udfs=edges_required,
-            sqlglot_ast=edges_ast,
-            ibis_expr=edges_plan.expr if isinstance(edges_plan, IbisPlan) else edges_plan,
-        ),
-        ViewNode(
-            name="cpg_props_v1",
-            deps=_deps_from_ast(props_ast),
-            builder=build_ctx.builder_from_plan(props_plan, label="cpg_props_v1"),
-            contract_builder=_contract_builder("cpg_props_v1", metadata_spec=props_metadata),
-            required_udfs=props_required,
-            sqlglot_ast=props_ast,
-            ibis_expr=props_plan.expr if isinstance(props_plan, IbisPlan) else props_plan,
-        ),
+        _cpg_view_node(build_ctx, name=name, plan=plan, ast=ast) for name, plan, ast in resolved
     ]
+
+
+def _cpg_view_node(
+    build_ctx: ViewBuildContext,
+    *,
+    name: str,
+    plan: IbisPlan | Table,
+    ast: Expression,
+) -> ViewNode:
+    required = _required_udfs_from_ast(ast, build_ctx.snapshot)
+    metadata = _metadata_with_required_udfs(None, required)
+    schema = _arrow_schema_from_ibis(plan)
+    return ViewNode(
+        name=name,
+        deps=_deps_from_ast(ast),
+        builder=build_ctx.builder_from_plan(plan, label=name),
+        contract_builder=_contract_builder(
+            name,
+            metadata_spec=metadata,
+            expected_schema=schema,
+            enforce_columns=True,
+        ),
+        required_udfs=required,
+        sqlglot_ast=ast,
+        ibis_expr=plan.expr if isinstance(plan, IbisPlan) else plan,
+    )
 
 
 def _alias_nodes(nodes: Sequence[ViewNode], *, build_ctx: ViewBuildContext) -> list[ViewNode]:

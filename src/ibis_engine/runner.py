@@ -36,7 +36,7 @@ def _portable_plan(plan: IbisPlan) -> IbisPlan:
     if callable(unbind):
         unbound = unbind()
         if isinstance(unbound, Table):
-            return IbisPlan(expr=unbound, ordering=plan.ordering)
+            return IbisPlan(expr=unbound, ordering=plan.ordering, artifact=plan.artifact)
     return plan
 
 

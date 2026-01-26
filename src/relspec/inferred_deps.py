@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from sqlglot_tools.lineage import referenced_tables
+from sqlglot_tools.lineage import referenced_tables, referenced_udf_calls
 from sqlglot_tools.optimizer import (
     ast_policy_fingerprint,
     canonical_ast_fingerprint,
@@ -19,7 +19,6 @@ from sqlglot_tools.optimizer import (
 if TYPE_CHECKING:
     from datafusion_engine.schema_contracts import SchemaContract
     from datafusion_engine.view_graph_registry import ViewNode
-    from incremental.registry_rows import DatasetRow
     from schema_spec.system import DatasetSpec
     from sqlglot_tools.compat import Expression
 
@@ -47,6 +46,8 @@ class InferredDeps:
         Per-table required metadata entries.
     plan_fingerprint : str
         Stable hash for caching and comparison.
+    required_udfs : tuple[str, ...]
+        Required UDF names inferred from the expression.
     """
 
     task_name: str
@@ -56,14 +57,23 @@ class InferredDeps:
     required_types: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     required_metadata: Mapping[str, tuple[tuple[bytes, bytes], ...]] = field(default_factory=dict)
     plan_fingerprint: str = ""
+    required_udfs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class InferredDepsInputs:
+    """Inputs needed to infer dependencies from SQLGlot."""
+
+    expr: object
+    task_name: str
+    output: str
+    dialect: str = "datafusion"
+    snapshot: Mapping[str, object] | None = None
+    required_udfs: Sequence[str] | None = None
 
 
 def infer_deps_from_sqlglot_expr(
-    expr: object,
-    *,
-    task_name: str,
-    output: str,
-    dialect: str = "datafusion",
+    inputs: InferredDepsInputs,
 ) -> InferredDeps:
     """Infer dependencies from a raw SQLGlot expression.
 
@@ -72,14 +82,8 @@ def infer_deps_from_sqlglot_expr(
 
     Parameters
     ----------
-    expr : Expression
-        SQLGlot expression to analyze.
-    task_name : str
-        Name of the task being analyzed.
-    output : str
-        Output dataset name.
-    dialect : str
-        SQL dialect for fingerprinting.
+    inputs : InferredDepsInputs
+        Dependency inference inputs including AST and task metadata.
 
     Returns
     -------
@@ -93,10 +97,11 @@ def infer_deps_from_sqlglot_expr(
     """
     from sqlglot_tools.compat import Expression
 
+    expr = inputs.expr
     if not isinstance(expr, Expression):
         msg = f"Expected SQLGlot Expression, got {type(expr).__name__}"
         raise TypeError(msg)
-    _ = dialect
+    _ = inputs.dialect
 
     # Extract table references
     tables = referenced_tables(expr)
@@ -104,6 +109,17 @@ def infer_deps_from_sqlglot_expr(
 
     required_types = _required_types_from_registry(columns_by_table)
     required_metadata = _required_metadata_for_tables(columns_by_table)
+    resolved_udfs: tuple[str, ...] = ()
+    if inputs.required_udfs is not None:
+        resolved_udfs = tuple(inputs.required_udfs)
+    elif inputs.snapshot is not None:
+        resolved_udfs = _required_udfs_from_ast(expr, snapshot=inputs.snapshot)
+    else:
+        resolved_udfs = tuple(sorted(referenced_udf_calls(expr)))
+    if inputs.snapshot is not None and resolved_udfs:
+        from datafusion_engine.udf_runtime import validate_required_udfs
+
+        validate_required_udfs(inputs.snapshot, required=resolved_udfs)
 
     # Compute plan fingerprint
     policy = resolve_sqlglot_policy(name="datafusion_compile")
@@ -114,18 +130,21 @@ def infer_deps_from_sqlglot_expr(
     )
 
     return InferredDeps(
-        task_name=task_name,
-        output=output,
+        task_name=inputs.task_name,
+        output=inputs.output,
         inputs=tables,
         required_columns=columns_by_table,
         required_types=required_types,
         required_metadata=required_metadata,
         plan_fingerprint=fingerprint,
+        required_udfs=resolved_udfs,
     )
 
 
 def infer_deps_from_view_nodes(
     nodes: Sequence[ViewNode],
+    *,
+    snapshot: Mapping[str, object] | None = None,
 ) -> tuple[InferredDeps, ...]:
     """Infer dependencies for view nodes using their SQLGlot ASTs.
 
@@ -133,6 +152,8 @@ def infer_deps_from_view_nodes(
     ----------
     nodes : Sequence[ViewNode]
         View nodes with SQLGlot ASTs attached.
+    snapshot : Mapping[str, object] | None
+        Optional Rust UDF snapshot used for required UDF validation.
 
     Returns
     -------
@@ -151,12 +172,36 @@ def infer_deps_from_view_nodes(
             raise ValueError(msg)
         inferred.append(
             infer_deps_from_sqlglot_expr(
-                node.sqlglot_ast,
-                task_name=node.name,
-                output=node.name,
+                InferredDepsInputs(
+                    expr=node.sqlglot_ast,
+                    task_name=node.name,
+                    output=node.name,
+                    snapshot=snapshot,
+                    required_udfs=tuple(node.required_udfs) if node.required_udfs else None,
+                )
             )
         )
     return tuple(inferred)
+
+
+def _required_udfs_from_ast(
+    expr: Expression,
+    *,
+    snapshot: Mapping[str, object],
+) -> tuple[str, ...]:
+    from datafusion_engine.udf_runtime import udf_names_from_snapshot
+
+    udf_calls = referenced_udf_calls(expr)
+    if not udf_calls:
+        return ()
+    snapshot_names = udf_names_from_snapshot(snapshot)
+    lookup = {name.lower(): name for name in snapshot_names}
+    required = {
+        lookup[name.lower()]
+        for name in udf_calls
+        if isinstance(name, str) and name.lower() in lookup
+    }
+    return tuple(sorted(required))
 
 
 def _required_metadata_for_tables(
@@ -237,34 +282,18 @@ def _normalize_dataset_spec(name: str) -> DatasetSpec | None:
         return None
 
 
-def _incremental_dataset_spec_source() -> tuple[
-    Callable[[DatasetRow], DatasetSpec] | None, Sequence[DatasetRow]
-]:
-    try:
-        module = importlib.import_module("incremental.registry_builders")
-        rows_module = importlib.import_module("incremental.registry_rows")
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None, ()
-    build_dataset_spec = getattr(module, "build_dataset_spec", None)
-    dataset_rows = getattr(rows_module, "DATASET_ROWS", None)
-    if not callable(build_dataset_spec):
-        return None, ()
-    if not isinstance(dataset_rows, Sequence):
-        return None, ()
-    return (
-        cast("Callable[[DatasetRow], DatasetSpec]", build_dataset_spec),
-        cast("Sequence[DatasetRow]", dataset_rows),
-    )
-
-
 def _incremental_dataset_spec(name: str) -> DatasetSpec | None:
-    build_dataset_spec, dataset_rows = _incremental_dataset_spec_source()
-    if build_dataset_spec is None:
+    incremental_dataset_spec = _optional_module_attr(
+        "incremental.registry_specs",
+        "dataset_spec",
+    )
+    if not callable(incremental_dataset_spec):
         return None
-    for row in dataset_rows:
-        if row.name == name:
-            return build_dataset_spec(row)
-    return None
+    incremental_dataset_spec = cast("Callable[[str], DatasetSpec]", incremental_dataset_spec)
+    try:
+        return incremental_dataset_spec(name)
+    except KeyError:
+        return None
 
 
 def _relationship_dataset_spec(name: str) -> DatasetSpec | None:

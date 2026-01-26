@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -223,7 +223,6 @@ class DatasetHandle:
         self,
         ctx: SessionContext,
         *,
-        record_view: Callable[[str, str | None], None] | None = None,
         validate: bool = True,
     ) -> None:
         """Register associated view specs into DataFusion.
@@ -232,8 +231,6 @@ class DatasetHandle:
         ----------
         ctx:
             DataFusion session context used for registration.
-        record_view:
-            Optional callback to record view definitions.
         validate:
             Whether to validate the view schemas after registration.
         """
@@ -247,7 +244,7 @@ class DatasetHandle:
             if is_nested_dataset(self.spec.name):
                 views = (nested_view_spec(ctx, self.spec.name),)
         for view in views:
-            view.register(ctx, record_view=record_view, validate=validate)
+            view.register(ctx, validate=validate)
 
     def view_specs(self) -> tuple[ViewSpec, ...]:
         """Return the view specs associated with the dataset.

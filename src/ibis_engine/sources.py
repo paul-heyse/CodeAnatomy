@@ -33,8 +33,10 @@ from ibis_engine.schema_utils import bind_expr_schema, ibis_schema_from_arrow, r
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.view_artifacts import ViewArtifact
     from ibis_engine.registry import DatasetLocation
     from schema_spec.system import DeltaScanOptions
+    from sqlglot_tools.bridge import IbisCompilerBackend
 
 DatabaseHint = tuple[str, str] | str | None
 _QUALIFIED_PARTS_SINGLE = 1
@@ -330,7 +332,52 @@ def register_ibis_view(
         )
         registered = options.backend.table(view_name, database=database)
     _record_table_metadata(options, view_name)
-    return IbisPlan(expr=registered, ordering=options.ordering or Ordering.unordered())
+    artifact = _record_ibis_view_artifact(expr, view_name=view_name, options=options)
+    return IbisPlan(
+        expr=registered,
+        ordering=options.ordering or Ordering.unordered(),
+        artifact=artifact,
+    )
+
+
+def _record_ibis_view_artifact(
+    expr: IbisTable,
+    *,
+    view_name: str,
+    options: SourceToIbisOptions,
+) -> ViewArtifact | None:
+    runtime_profile = options.runtime_profile
+    if runtime_profile is None:
+        return None
+    try:
+        ctx = datafusion_context(options.backend)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from datafusion_engine.runtime import record_view_definition
+    from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
+
+    facade = DataFusionExecutionFacade(
+        ctx=ctx,
+        runtime_profile=runtime_profile,
+        ibis_backend=cast("IbisCompilerBackend", options.backend),
+    )
+    try:
+        compiled = facade.compile(expr)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    schema = expr.schema().to_pyarrow()
+    artifact = build_view_artifact(
+        ViewArtifactInputs(
+            ctx=ctx,
+            name=view_name,
+            ast=compiled.compiled.sqlglot_ast,
+            schema=schema,
+            policy_profile=compiled.options.sql_policy_profile,
+        )
+    )
+    record_view_definition(runtime_profile, artifact=artifact)
+    return artifact
 
 
 def _record_table_metadata(options: SourceToIbisOptions, table_name: str) -> None:
@@ -534,9 +581,7 @@ def _delta_read_supported(
         (location.delta_timestamp is not None, "timestamp"),
         (resolved.options is not None, "options"),
     )
-    return all(
-        not (required and param not in params) for required, param in requirements
-    )
+    return all(not (required and param not in params) for required, param in requirements)
 
 
 def _delta_read_kwargs(
@@ -615,6 +660,8 @@ def read_delta_ibis(
     ------
     TypeError
         Raised when the backend does not expose a DataFusion session.
+    ValueError
+        Raised when a non-Delta provider override is requested.
     """
     resolved = options or IbisDeltaReadOptions()
     from datafusion import SessionContext
@@ -628,6 +675,15 @@ def read_delta_ibis(
         raise TypeError(msg)
     name = resolved.table_name or _delta_table_alias(path)
     location = _delta_location_from_options(path, resolved=resolved)
+    from ibis_engine.registry import resolve_datafusion_provider
+
+    provider = resolve_datafusion_provider(location)
+    if provider is not None:
+        msg = (
+            "Delta reads require the native Delta TableProvider; "
+            f"provider override {provider!r} is not supported."
+        )
+        raise ValueError(msg)
     native = _try_read_delta_backend(
         backend,
         path,

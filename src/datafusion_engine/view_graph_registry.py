@@ -24,13 +24,13 @@ from datafusion_engine.udf_runtime import (
     validate_rust_udf_snapshot,
 )
 from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table
 
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-    from ibis_engine.sources import SourceToIbisOptions
     from sqlglot_tools.compat import Expression
 
 
@@ -81,6 +81,7 @@ class ViewGraphRuntimeOptions:
 
     runtime_profile: DataFusionRuntimeProfile | None = None
     policy_profile: SQLPolicyProfile | None = None
+    require_artifacts: bool = False
 
 
 def register_view_graph(
@@ -97,28 +98,24 @@ def register_view_graph(
     ------
     ValueError
         Raised when a view node is missing a SQLGlot AST.
-    RuntimeError
-        Raised when Ibis view registration is requested without required sources.
+        Raised when artifact recording is required without a runtime profile.
     """
     resolved = options or ViewGraphOptions()
     runtime = runtime_options or ViewGraphRuntimeOptions()
+    if runtime.require_artifacts and runtime.runtime_profile is None:
+        msg = "Runtime profile is required for view artifact recording."
+        raise ValueError(msg)
     validate_rust_udf_snapshot(snapshot)
     materialized = _materialize_nodes(nodes, snapshot=snapshot)
     ordered = _topo_sort_nodes(materialized)
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime.runtime_profile)
     ibis_backend = None
-    register_ibis_view: Callable[[Table, SourceToIbisOptions], None] | None = None
-    source_to_ibis_options: type[SourceToIbisOptions] | None = None
     if any(node.ibis_expr is not None for node in ordered):
         import ibis
 
         ibis_backend = ibis.datafusion.connect(ctx)
         from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
-        from ibis_engine.sources import SourceToIbisOptions
-        from ibis_engine.sources import register_ibis_view as register_ibis_view_func
 
-        source_to_ibis_options = SourceToIbisOptions
-        register_ibis_view = register_ibis_view_func
         register_ibis_udf_snapshot(snapshot)
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 
@@ -132,26 +129,26 @@ def register_view_graph(
             msg = f"View {node.name!r} missing SQLGlot AST."
             raise ValueError(msg)
         df = node.builder(ctx)
-        if ibis_backend is not None and node.ibis_expr is not None and not resolved.temporary:
-            if register_ibis_view is None or source_to_ibis_options is None:
-                msg = "Ibis view registration requested without ibis sources."
-                raise RuntimeError(msg)
+        if resolved.temporary:
+            adapter.register_view(
+                node.name,
+                df,
+                overwrite=resolved.overwrite,
+                temporary=resolved.temporary,
+            )
+        else:
+            if ibis_backend is None or node.ibis_expr is None:
+                msg = f"View {node.name!r} requires an Ibis expression for persistent registration."
+                raise ValueError(msg)
             register_ibis_view(
                 node.ibis_expr,
-                options=source_to_ibis_options(
+                options=SourceToIbisOptions(
                     backend=ibis_backend,
                     name=node.name,
                     ordering=None,
                     overwrite=resolved.overwrite,
                     runtime_profile=runtime.runtime_profile,
                 ),
-            )
-        else:
-            adapter.register_view(
-                node.name,
-                df,
-                overwrite=resolved.overwrite,
-                temporary=resolved.temporary,
             )
         schema = _schema_from_df(df)
         if resolved.validate_schema and node.contract_builder is not None:

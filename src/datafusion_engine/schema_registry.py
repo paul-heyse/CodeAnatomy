@@ -39,7 +39,7 @@ from arrowdsl.schema.semantic_types import (
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
-from schema_spec.view_specs import ViewSpec, view_spec_from_builder
+from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 from sqlglot_tools.compat import exp
 
 BYTE_SPAN_T = byte_span_type()
@@ -95,12 +95,9 @@ SQLGLOT_PARSE_ERROR_DETAILS_TYPE = list_view_type(
 )
 
 
-def _sql_with_options(ctx: SessionContext, expr: exp.Expression | str) -> DataFrame:
-    from sqlglot.errors import ParseError
-
+def _sql_with_options(ctx: SessionContext, expr: exp.Expression) -> DataFrame:
     from datafusion_engine.compile_options import DataFusionCompileOptions
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
-    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
     def _sql_ingest(_payload: Mapping[str, object]) -> None:
         return None
@@ -110,13 +107,6 @@ def _sql_with_options(ctx: SessionContext, expr: exp.Expression | str) -> DataFr
         sql_ingest_hook=_sql_ingest,
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    register_datafusion_dialect()
-    if isinstance(expr, str):
-        try:
-            expr = parse_sql_strict(expr, dialect=options.dialect)
-        except (ParseError, TypeError, ValueError) as exc:
-            msg = "Schema registry SQL parse failed."
-            raise ValueError(msg) from exc
     plan = facade.compile(expr, options=options)
     result = facade.execute(plan)
     if result.dataframe is None:
@@ -2424,9 +2414,27 @@ def nested_view_spec(
     -------
     ViewSpec
         View specification derived from the registered base table.
+
+    Raises
+    ------
+    ValueError
+        Raised when the nested view is missing a SQLGlot AST.
     """
     builder = partial(nested_base_df, name=name, table=table)
-    return view_spec_from_builder(ctx, name=name, builder=builder, sql=None)
+    df = builder(ctx)
+    ast = _sqlglot_from_dataframe(df)
+    if ast is None:
+        msg = f"Nested view {name!r} missing SQLGlot AST."
+        raise ValueError(msg)
+    return view_spec_from_builder(
+        ViewSpecInputs(
+            ctx=ctx,
+            name=name,
+            builder=builder,
+            ast=ast,
+            sql=None,
+        )
+    )
 
 
 def nested_view_specs(
@@ -2442,6 +2450,43 @@ def nested_view_specs(
         View specifications for nested datasets.
     """
     return tuple(nested_view_spec(ctx, name, table=table) for name in nested_dataset_names())
+
+
+def _sqlglot_from_dataframe(df: DataFrame) -> exp.Expression | None:
+    try:
+        from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
+        from datafusion.unparser import Dialect as DataFusionDialect
+        from datafusion.unparser import Unparser as DataFusionUnparser
+    except ImportError:
+        return None
+    logical_plan = getattr(df, "logical_plan", None)
+    if not callable(logical_plan):
+        return None
+    sql = ""
+    try:
+        plan_obj = logical_plan()
+        if isinstance(plan_obj, DataFusionLogicalPlan):
+            unparser = DataFusionUnparser(DataFusionDialect.default())
+            sql = str(unparser.plan_to_sql(plan_obj))
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if not sql:
+        return None
+    try:
+        from sqlglot_tools.optimizer import (
+            StrictParseOptions,
+            parse_sql_strict,
+            register_datafusion_dialect,
+        )
+
+        register_datafusion_dialect()
+        return parse_sql_strict(
+            sql,
+            dialect="datafusion_ext",
+            options=StrictParseOptions(error_level=None),
+        )
+    except (TypeError, ValueError):
+        return None
 
 
 def validate_schema_metadata(schema: pa.Schema) -> None:

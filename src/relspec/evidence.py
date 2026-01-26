@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
     from datafusion_engine.introspection import IntrospectionSnapshot
     from datafusion_engine.view_graph_registry import ViewNode
-    from incremental.registry_rows import DatasetRow
     from schema_spec.system import ContractSpec, DatasetSpec
 
 
@@ -45,6 +44,7 @@ class EvidenceCatalog:
         contract: SchemaContract,
         *,
         snapshot: IntrospectionSnapshot | None = None,
+        ctx: SessionContext | None = None,
     ) -> None:
         """Register an evidence dataset using a SchemaContract."""
         self.sources.add(name)
@@ -56,6 +56,10 @@ class EvidenceCatalog:
             }
         if contract.schema_metadata:
             self.metadata_by_dataset.setdefault(name, {}).update(contract.schema_metadata)
+        if ctx is not None:
+            from datafusion_engine.schema_registry import validate_nested_types
+
+            validate_nested_types(ctx, name)
         if snapshot is not None:
             violations = contract.validate_against_introspection(snapshot)
             self.contract_violations_by_dataset[name] = tuple(violations)
@@ -78,10 +82,11 @@ class EvidenceCatalog:
         spec: DatasetSpec,
         *,
         snapshot: IntrospectionSnapshot | None = None,
+        ctx: SessionContext | None = None,
     ) -> None:
         """Register an evidence dataset using a DatasetSpec."""
         contract = schema_contract_from_dataset_spec(name=name, spec=spec)
-        self.register_contract(name, contract, snapshot=snapshot)
+        self.register_contract(name, contract, snapshot=snapshot, ctx=ctx)
         metadata = spec.schema().metadata
         if metadata:
             self.metadata_by_dataset.setdefault(name, {}).update(metadata)
@@ -92,10 +97,11 @@ class EvidenceCatalog:
         spec: ContractSpec,
         *,
         snapshot: IntrospectionSnapshot | None = None,
+        ctx: SessionContext | None = None,
     ) -> None:
         """Register an evidence dataset using a ContractSpec."""
         contract = schema_contract_from_contract_spec(name=name, spec=spec)
-        self.register_contract(name, contract, snapshot=snapshot)
+        self.register_contract(name, contract, snapshot=snapshot, ctx=ctx)
 
     def clone(self) -> EvidenceCatalog:
         """Return a shallow copy for staged updates.
@@ -169,6 +175,7 @@ def evidence_requirements_from_views(
     nodes: Sequence[ViewNode],
     *,
     task_names: set[str] | None = None,
+    snapshot: Mapping[str, object] | IntrospectionSnapshot | None = None,
 ) -> EvidenceRequirements:
     """Return evidence requirements aggregated from view nodes.
 
@@ -180,7 +187,8 @@ def evidence_requirements_from_views(
     from relspec.inferred_deps import infer_deps_from_view_nodes
 
     requirements = EvidenceRequirements()
-    inferred = infer_deps_from_view_nodes(nodes)
+    udf_snapshot = snapshot if isinstance(snapshot, Mapping) else None
+    inferred = infer_deps_from_view_nodes(nodes, snapshot=udf_snapshot)
     for dep in inferred:
         if task_names is not None and dep.task_name not in task_names:
             continue
@@ -207,7 +215,11 @@ def initial_evidence_from_views(
         Evidence catalog with known sources registered.
     """
     outputs = {node.name for node in nodes if task_names is None or node.name in task_names}
-    requirements = evidence_requirements_from_views(nodes, task_names=task_names)
+    requirements = evidence_requirements_from_views(
+        nodes,
+        task_names=task_names,
+        snapshot=snapshot,
+    )
     spec_map = {spec.name: spec for spec in dataset_specs or ()}
     spec_sources = set(spec_map)
     if ctx is not None:
@@ -224,7 +236,12 @@ def initial_evidence_from_views(
     for source in sorted(seed_sources):
         spec = spec_map.get(source)
         if spec is not None:
-            evidence.register_from_dataset_spec(source, spec, snapshot=registration_ctx.snapshot)
+            evidence.register_from_dataset_spec(
+                source,
+                spec,
+                snapshot=registration_ctx.snapshot,
+                ctx=registration_ctx.ctx,
+            )
             _merge_provider_metadata(evidence, source, ctx_id=registration_ctx.ctx_id)
             continue
         registered = _register_evidence_source(
@@ -344,34 +361,18 @@ def _normalize_dataset_spec(name: str, ctx: SessionContext | None) -> DatasetSpe
         return None
 
 
-def _incremental_dataset_spec_source(
-    _ctx: SessionContext | None,
-) -> tuple[Callable[[DatasetRow], DatasetSpec] | None, Sequence[DatasetRow]]:
-    try:
-        module = importlib.import_module("incremental.registry_builders")
-        rows_module = importlib.import_module("incremental.registry_rows")
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        return None, ()
-    build_dataset_spec = getattr(module, "build_dataset_spec", None)
-    dataset_rows = getattr(rows_module, "DATASET_ROWS", None)
-    if not callable(build_dataset_spec):
-        return None, ()
-    if not isinstance(dataset_rows, Sequence):
-        return None, ()
-    return (
-        cast("Callable[[DatasetRow], DatasetSpec]", build_dataset_spec),
-        cast("Sequence[DatasetRow]", dataset_rows),
+def _incremental_dataset_spec(name: str, _ctx: SessionContext | None) -> DatasetSpec | None:
+    incremental_dataset_spec = _optional_module_attr(
+        "incremental.registry_specs",
+        "dataset_spec",
     )
-
-
-def _incremental_dataset_spec(name: str, ctx: SessionContext | None) -> DatasetSpec | None:
-    build_dataset_spec, dataset_rows = _incremental_dataset_spec_source(ctx)
-    if build_dataset_spec is None:
+    if not callable(incremental_dataset_spec):
         return None
-    for row in dataset_rows:
-        if row.name == name:
-            return build_dataset_spec(row)
-    return None
+    incremental_dataset_spec = cast("Callable[[str], DatasetSpec]", incremental_dataset_spec)
+    try:
+        return incremental_dataset_spec(name)
+    except KeyError:
+        return None
 
 
 def _relationship_dataset_spec(name: str, _ctx: SessionContext | None) -> DatasetSpec | None:
@@ -505,10 +506,17 @@ def _collect_normalize_specs(ctx: SessionContext | None) -> list[DatasetSpec]:
 
 
 def _collect_incremental_specs() -> list[DatasetSpec]:
-    build_dataset_spec, dataset_rows = _incremental_dataset_spec_source(None)
-    if build_dataset_spec is None:
+    incremental_specs = _optional_module_attr(
+        "incremental.schemas",
+        "incremental_dataset_specs",
+    )
+    if not callable(incremental_specs):
         return []
-    return [build_dataset_spec(row) for row in dataset_rows]
+    incremental_specs = cast("Callable[[], Sequence[DatasetSpec]]", incremental_specs)
+    try:
+        return list(incremental_specs())
+    except (RuntimeError, TypeError, ValueError):
+        return []
 
 
 def _collect_relationship_specs() -> list[DatasetSpec]:
@@ -536,12 +544,22 @@ def _register_evidence_source(
 ) -> bool:
     spec = _dataset_spec_from_known_registries(source, ctx=context.ctx)
     if spec is not None:
-        evidence.register_from_dataset_spec(source, spec, snapshot=context.snapshot)
+        evidence.register_from_dataset_spec(
+            source,
+            spec,
+            snapshot=context.snapshot,
+            ctx=context.ctx,
+        )
         _merge_provider_metadata(evidence, source, ctx_id=context.ctx_id)
         return True
     contract_spec = _contract_spec_from_known_registries(source, ctx=context.ctx)
     if contract_spec is not None:
-        evidence.register_from_contract_spec(source, contract_spec, snapshot=context.snapshot)
+        evidence.register_from_contract_spec(
+            source,
+            contract_spec,
+            snapshot=context.snapshot,
+            ctx=context.ctx,
+        )
         _merge_provider_metadata(evidence, source, ctx_id=context.ctx_id)
         return True
     return False

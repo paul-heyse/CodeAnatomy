@@ -13,6 +13,7 @@ from engine.plan_policy import WriterStrategy
 
 if TYPE_CHECKING:
     from datafusion_engine.execution_facade import ExecutionResult
+    from datafusion_engine.view_artifacts import ViewArtifact
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class PlanProduct:
     schema: pa.Schema
     determinism_tier: DeterminismTier
     writer_strategy: WriterStrategy
+    view_artifact: ViewArtifact | None = None
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
     execution_result: ExecutionResult | None = None

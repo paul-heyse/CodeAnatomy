@@ -247,7 +247,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ArrowFieldSpec(name="join_operators", dtype=pa.list_(pa.string())),
         ),
         constraints=TableSpecConstraints(
-            required_non_null=("plan_hash", "sql"),
+            required_non_null=("plan_hash",),
             key_fields=("plan_hash",),
         ),
     ),

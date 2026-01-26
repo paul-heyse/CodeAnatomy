@@ -93,7 +93,7 @@ def test_compute_changed_exports_sql_parity(tmp_path: Path) -> None:
         changed_files=changed_files,
     )
     ctx = runtime.session_context()
-    with TempTableRegistry(ctx) as registry:
+    with TempTableRegistry(runtime) as registry:
         prev_name = registry.register_table(prev_exports, prefix="prev_exports")
         curr_name = registry.register_table(curr_exports, prefix="curr_exports")
         changed_name = registry.register_table(changed_files, prefix="changed_files")

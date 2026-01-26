@@ -6,16 +6,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from sqlglot.errors import ParseError
-
 from datafusion_engine.semantic_diff import (
     ChangeCategory,
     RebuildPolicy,
     SemanticChange,
     SemanticDiff,
-    compute_rebuild_needed,
 )
-from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from ibis_engine.registry import DatasetCatalog
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
@@ -25,7 +21,6 @@ from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import EvidenceCatalog
 from relspec.rustworkx_graph import TaskGraph
 from relspec.rustworkx_schedule import impacted_tasks
-from sqlglot_tools.optimizer import register_datafusion_dialect, sqlglot_sql
 
 if TYPE_CHECKING:
     from datafusion_engine.view_graph_registry import ViewNode
@@ -204,7 +199,6 @@ def view_snapshot_map(nodes: Sequence[ViewNode]) -> dict[str, PlanFingerprintSna
     """
     from relspec.inferred_deps import infer_deps_from_view_nodes
 
-    register_datafusion_dialect()
     inferred = {dep.task_name: dep for dep in infer_deps_from_view_nodes(nodes)}
     snapshots: dict[str, PlanFingerprintSnapshot] = {}
     for node in nodes:
@@ -215,7 +209,7 @@ def view_snapshot_map(nodes: Sequence[ViewNode]) -> dict[str, PlanFingerprintSna
         fingerprint = dep.plan_fingerprint if dep is not None else ""
         snapshots[node.name] = PlanFingerprintSnapshot(
             plan_fingerprint=fingerprint,
-            plan_sql=sqlglot_sql(node.sqlglot_ast),
+            sqlglot_ast=node.sqlglot_ast,
         )
     return snapshots
 
@@ -226,31 +220,25 @@ def _semantic_diff_map(
     changed_tasks: tuple[str, ...],
 ) -> dict[str, SemanticDiff]:
     results: dict[str, SemanticDiff] = {}
-    register_datafusion_dialect()
-    profile = SQLPolicyProfile(read_dialect="datafusion_ext", write_dialect="datafusion_ext")
-    schema: dict[str, dict[str, str]] = {}
     for name in changed_tasks:
         prev_snapshot = prev.get(name)
         curr_snapshot = curr.get(name)
         if prev_snapshot is None or curr_snapshot is None:
             continue
-        if prev_snapshot.plan_sql is None or curr_snapshot.plan_sql is None:
+        if prev_snapshot.sqlglot_ast is None or curr_snapshot.sqlglot_ast is None:
             continue
         try:
-            _rebuild_needed, diff = compute_rebuild_needed(
-                prev_snapshot.plan_sql,
-                curr_snapshot.plan_sql,
-                profile=profile,
-                schema=schema,
-                policy=RebuildPolicy.CONSERVATIVE,
+            diff = SemanticDiff.compute(
+                prev_snapshot.sqlglot_ast,
+                curr_snapshot.sqlglot_ast,
             )
-        except (ParseError, TypeError, ValueError) as exc:
+        except (TypeError, ValueError) as exc:
             diff = SemanticDiff(
                 changes=[
                     SemanticChange(
-                        edit_type="parse_error",
+                        edit_type="diff_error",
                         node_type=type(exc).__name__,
-                        description=str(exc) or "SQL parse error",
+                        description=str(exc) or "AST diff error",
                         category=ChangeCategory.BREAKING,
                     )
                 ]

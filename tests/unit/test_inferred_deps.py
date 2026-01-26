@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from relspec.inferred_deps import InferredDeps, infer_deps_from_sqlglot_expr
+from relspec.inferred_deps import InferredDeps, InferredDepsInputs, infer_deps_from_sqlglot_expr
 
 
 def test_inferred_deps_creation() -> None:
@@ -29,9 +29,11 @@ def test_infer_deps_from_sqlglot_expr() -> None:
 
     expr = parse_one("SELECT a.x, b.y FROM table_a a JOIN table_b b ON a.id = b.id")
     deps = infer_deps_from_sqlglot_expr(
-        expr,
-        task_name="join_task",
-        output="joined",
+        InferredDepsInputs(
+            expr=expr,
+            task_name="join_task",
+            output="joined",
+        )
     )
     assert deps.task_name == "join_task"
     assert deps.output == "joined"
@@ -45,7 +47,9 @@ def test_infer_deps_from_sqlglot_expr_invalid_type() -> None:
 
     with pytest.raises(TypeError, match="Expected SQLGlot Expression"):
         infer_deps_from_sqlglot_expr(
-            cast("Expression", "not an expression"),
-            task_name="test",
-            output="out",
+            InferredDepsInputs(
+                expr=cast("Expression", "not an expression"),
+                task_name="test",
+                output="out",
+            )
         )

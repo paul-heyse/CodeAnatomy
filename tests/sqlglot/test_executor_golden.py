@@ -8,13 +8,9 @@ from typing import NamedTuple
 from sqlglot.errors import ExecuteError
 from sqlglot.executor import execute
 
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile, compile_sql_policy
 from sqlglot_tools.compat import Expression, exp
-from sqlglot_tools.optimizer import (
-    NormalizeExprOptions,
-    default_sqlglot_policy,
-    normalize_expr,
-    parse_sql_strict,
-)
+from sqlglot_tools.optimizer import SqlGlotPolicy, default_sqlglot_policy, parse_sql_strict
 
 
 def _execute_sql(
@@ -33,6 +29,22 @@ def _execute_expr(
 ) -> tuple[tuple[object, ...], ...]:
     result = execute(expr, tables={name: list(rows) for name, rows in tables.items()})
     return tuple(sorted(result.rows))
+
+
+def _canonical_expr(
+    expr: Expression,
+    *,
+    schema: Mapping[str, Mapping[str, str]],
+    sql: str,
+    policy: SqlGlotPolicy,
+) -> Expression:
+    profile = SQLPolicyProfile(
+        policy=policy,
+        read_dialect=policy.read_dialect,
+        write_dialect=policy.write_dialect,
+    )
+    canonical, _ = compile_sql_policy(expr, schema=schema, profile=profile, original_sql=sql)
+    return canonical
 
 
 class ExecuteOutcome(NamedTuple):
@@ -61,13 +73,8 @@ def test_pushdown_transform_semantics() -> None:
     tables = {"t": [{"a": "x", "b": 0}, {"a": "y", "b": 2}, {"a": "z", "b": 3}]}
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-    normalized = normalize_expr(
-        expr,
-        options=NormalizeExprOptions(
-            schema={"t": {"a": "string", "b": "int"}},
-            policy=policy,
-            sql=sql,
-        ),
+    normalized = _canonical_expr(
+        expr, schema={"t": {"a": "string", "b": "int"}}, sql=sql, policy=policy
     )
     assert _execute_sql(sql, tables=tables) == _execute_expr(normalized, tables=tables)
 
@@ -81,13 +88,11 @@ def test_join_normalization_semantics() -> None:
     }
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-    normalized = normalize_expr(
+    normalized = _canonical_expr(
         expr,
-        options=NormalizeExprOptions(
-            schema={"t": {"a": "string", "b": "int"}, "u": {"b": "int", "c": "int"}},
-            policy=policy,
-            sql=sql,
-        ),
+        schema={"t": {"a": "string", "b": "int"}, "u": {"b": "int", "c": "int"}},
+        sql=sql,
+        policy=policy,
     )
     assert _execute_sql(sql, tables=tables) == _execute_expr(normalized, tables=tables)
 
@@ -98,13 +103,8 @@ def test_aggregate_normalization_semantics() -> None:
     tables = {"t": [{"a": "x", "b": 1}, {"a": "x", "b": 2}, {"a": "y", "b": 1}]}
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-    normalized = normalize_expr(
-        expr,
-        options=NormalizeExprOptions(
-            schema={"t": {"a": "string", "b": "int"}},
-            policy=policy,
-            sql=sql,
-        ),
+    normalized = _canonical_expr(
+        expr, schema={"t": {"a": "string", "b": "int"}}, sql=sql, policy=policy
     )
     assert _execute_sql(sql, tables=tables) == _execute_expr(normalized, tables=tables)
 
@@ -115,13 +115,8 @@ def test_window_function_normalization_equivalence() -> None:
     tables = {"t": [{"a": "x", "b": 1}, {"a": "x", "b": 2}, {"a": "y", "b": 1}]}
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-    normalized = normalize_expr(
-        expr,
-        options=NormalizeExprOptions(
-            schema={"t": {"a": "string", "b": "int"}},
-            policy=policy,
-            sql=sql,
-        ),
+    normalized = _canonical_expr(
+        expr, schema={"t": {"a": "string", "b": "int"}}, sql=sql, policy=policy
     )
     assert _execute_outcome(sql, tables=tables) == _execute_outcome(
         normalized,
@@ -137,14 +132,7 @@ def test_recursive_cte_columns_added() -> None:
     )
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-    normalized = normalize_expr(
-        expr,
-        options=NormalizeExprOptions(
-            schema=None,
-            policy=policy,
-            sql=sql,
-        ),
-    )
+    normalized = _canonical_expr(expr, schema={}, sql=sql, policy=policy)
     cte = next(normalized.find_all(exp.CTE))
     alias = cte.args.get("alias")
     assert alias is not None
@@ -159,12 +147,5 @@ def test_recursive_cte_executor_equivalence() -> None:
     )
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-    normalized = normalize_expr(
-        expr,
-        options=NormalizeExprOptions(
-            schema=None,
-            policy=policy,
-            sql=sql,
-        ),
-    )
+    normalized = _canonical_expr(expr, schema={}, sql=sql, policy=policy)
     assert _execute_outcome(sql, tables={}) == _execute_outcome(normalized, tables={})

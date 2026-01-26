@@ -722,7 +722,6 @@ class DatasetOpenSpec:
     files: tuple[str, ...] | None = None
     partitioning: str | None = "hive"
     schema: SchemaLike | None = None
-    parquet_read_options: ds.ParquetReadOptions | None = None
     read_options: Mapping[str, object] = field(default_factory=dict)
     storage_options: Mapping[str, str] = field(default_factory=dict)
     delta_log_storage_options: Mapping[str, str] = field(default_factory=dict)
@@ -746,6 +745,9 @@ class DatasetOpenSpec:
         if self.dataset_format == "delta":
             msg = "Delta dataset discovery requires DataFusion; use read_ibis_table."
             raise ValueError(msg)
+        if self.dataset_format == "parquet":
+            msg = "Parquet dataset discovery is disabled for delta-only IO."
+            raise ValueError(msg)
         if self.schema is not None:
             register_schema_extensions(self.schema)
         return normalize_dataset_source(
@@ -756,7 +758,6 @@ class DatasetOpenSpec:
                 files=self.files,
                 partitioning=self.partitioning,
                 schema=self.schema,
-                parquet_read_options=self.parquet_read_options,
                 storage_options=self.storage_options,
                 delta_version=self.delta_version,
                 delta_timestamp=self.delta_timestamp,

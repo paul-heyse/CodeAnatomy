@@ -31,6 +31,8 @@ from datafusion_engine.extract_extractors import (
 )
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
 from datafusion_engine.finalize import FinalizeContext, FinalizeOptions, normalize_only
+from datafusion_engine.schema_contracts import SchemaContract
+from datafusion_engine.view_graph_registry import _validate_schema_contract
 from engine.materialize_pipeline import write_extract_outputs
 from extract.evidence_plan import EvidencePlan
 from extract.schema_ops import (
@@ -45,6 +47,8 @@ from ibis_engine.execution import execute_ibis_plan
 from ibis_engine.execution_factory import datafusion_facade_from_ctx, ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.registry import ReadDatasetParams, read_dataset
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
@@ -676,6 +680,18 @@ def materialize_extract_plan(
         reader_result = execute_ibis_plan(plan, execution=execution, streaming=True)
         reader_for_write = _normalize_reader(normalization_ctx, reader_result.require_reader())
         write_extract_outputs(name, reader_for_write, ctx=ctx)
+        _register_extract_view(name, ctx=ctx)
+        _record_extract_view_artifact(
+            name,
+            plan,
+            schema=_arrow_schema_from_output(reader_for_write),
+            ctx=ctx,
+        )
+        _validate_extract_schema_contract(
+            name,
+            schema=_arrow_schema_from_output(reader_for_write),
+            ctx=ctx,
+        )
         wrote_streaming = True
         if resolved.prefer_reader:
             reader_result = execute_ibis_plan(plan, execution=execution, streaming=True)
@@ -689,6 +705,18 @@ def materialize_extract_plan(
     normalized = _normalize_table(normalization_ctx, table_result.require_table())
     if not wrote_streaming:
         write_extract_outputs(name, normalized, ctx=ctx)
+        _register_extract_view(name, ctx=ctx)
+        _record_extract_view_artifact(
+            name,
+            plan,
+            schema=_arrow_schema_from_output(normalized),
+            ctx=ctx,
+        )
+        _validate_extract_schema_contract(
+            name,
+            schema=_arrow_schema_from_output(normalized),
+            ctx=ctx,
+        )
     if resolved.prefer_reader:
         if isinstance(normalized, pa.Table):
             resolved_table = cast("pa.Table", normalized)
@@ -796,6 +824,129 @@ def _record_extract_compile(
         "ast_type": compiled.compiled.sqlglot_ast.__class__.__name__,
     }
     record_artifact(profile, "extract_plan_compile_v1", payload)
+
+
+def _register_extract_view(name: str, *, ctx: ExecutionContext) -> None:
+    """Register a view for a materialized extract dataset.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is unavailable.
+    """
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        msg = "DataFusion runtime profile is required for extract view registration."
+        raise ValueError(msg)
+    location = extract_dataset_location_or_raise(name, ctx=ctx)
+    ibis_backend = ibis.datafusion.connect(runtime_profile.session_context())
+    params = ReadDatasetParams(
+        path=location.path,
+        dataset_format=location.format,
+        read_options=location.read_options or None,
+        storage_options=location.storage_options or None,
+        delta_log_storage_options=location.delta_log_storage_options or None,
+        filesystem=location.filesystem,
+        partitioning=location.partitioning,
+        table_name=None,
+        dataset_spec=location.dataset_spec,
+        datafusion_scan=location.datafusion_scan,
+        datafusion_provider=location.datafusion_provider,
+    )
+    expr = read_dataset(ibis_backend, params=params)
+    register_ibis_view(
+        expr,
+        options=SourceToIbisOptions(
+            backend=ibis_backend,
+            name=name,
+            overwrite=True,
+            runtime_profile=runtime_profile,
+        ),
+    )
+
+
+def _record_extract_view_artifact(
+    name: str,
+    plan: IbisPlan,
+    *,
+    schema: pa.Schema,
+    ctx: ExecutionContext,
+) -> None:
+    """Record a deterministic view artifact for extract outputs.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is unavailable.
+    """
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        msg = "DataFusion runtime profile is required for extract diagnostics."
+        raise ValueError(msg)
+    facade = datafusion_facade_from_ctx(ctx)
+    try:
+        compiled = facade.compile(plan.expr)
+    except (RuntimeError, TypeError, ValueError):
+        return
+    from datafusion_engine.runtime import record_view_definition
+    from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
+
+    artifact = build_view_artifact(
+        ViewArtifactInputs(
+            ctx=facade.ctx,
+            name=name,
+            ast=compiled.compiled.sqlglot_ast,
+            schema=schema,
+            policy_profile=compiled.options.sql_policy_profile,
+        )
+    )
+    record_view_definition(profile, artifact=artifact)
+
+
+def _validate_extract_schema_contract(
+    name: str,
+    *,
+    schema: pa.Schema,
+    ctx: ExecutionContext,
+) -> None:
+    """Validate extract outputs against the expected ABI schema.
+
+    Raises
+    ------
+    TypeError
+        Raised when the expected schema cannot be resolved.
+    ValueError
+        Raised when the DataFusion runtime profile is unavailable.
+    """
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        msg = "DataFusion runtime profile is required for extract validation."
+        raise ValueError(msg)
+    expected = dataset_schema(name)
+    if not isinstance(expected, pa.Schema):
+        msg = f"Expected schema unavailable for extract dataset {name!r}."
+        raise TypeError(msg)
+    contract = SchemaContract.from_arrow_schema(name, expected)
+    _validate_schema_contract(
+        runtime_profile.session_context(),
+        contract,
+        schema=schema,
+    )
+
+
+def _arrow_schema_from_output(output: TableLike | RecordBatchReaderLike) -> pa.Schema:
+    schema = getattr(output, "schema", None)
+    if callable(schema):
+        schema = schema()
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Failed to resolve schema for extract output."
+    raise TypeError(msg)
 
 
 def _record_extract_udf_parity(

@@ -7,17 +7,16 @@ from collections.abc import Mapping, Sequence
 import msgspec
 from sqlglot.executor import execute
 
+from datafusion_engine.sql_policy_engine import SQLPolicyProfile, compile_sql_policy
 from sqlglot_tools.compat import Expression, exp
 from sqlglot_tools.optimizer import (
-    NormalizeExprOptions,
     ParseSqlOptions,
+    SqlGlotPolicy,
     artifact_to_ast,
     ast_to_artifact,
     bind_params,
     default_sqlglot_policy,
     deserialize_ast_artifact,
-    normalize_expr,
-    optimize_expr,
     parse_sql,
     parse_sql_strict,
     serialize_ast_artifact,
@@ -70,6 +69,22 @@ def _execute_expr(
     return tuple(sorted(result.rows))
 
 
+def _canonical_expr(
+    expr: Expression,
+    *,
+    schema: Mapping[str, Mapping[str, str]],
+    sql: str,
+    policy: SqlGlotPolicy,
+) -> Expression:
+    profile = SQLPolicyProfile(
+        policy=policy,
+        read_dialect=policy.read_dialect,
+        write_dialect=policy.write_dialect,
+    )
+    canonical, _ = compile_sql_policy(expr, schema=schema, profile=profile, original_sql=sql)
+    return canonical
+
+
 def test_rewrite_semantics_basic() -> None:
     """Ensure basic SQL execution produces expected results."""
     tables = {"t": [{"a": "x", "b": 1}, {"a": "y", "b": 2}]}
@@ -83,17 +98,7 @@ def test_rewrite_semantics_with_normalization() -> None:
     tables = {"t": [{"a": "x", "b": 1}, {"a": "y", "b": 2}, {"a": "z", "b": 0}]}
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-    normalized = normalize_expr(
-        expr,
-        options=NormalizeExprOptions(
-            schema=None,
-            rules=None,
-            rewrite_hook=None,
-            enable_rewrites=True,
-            policy=policy,
-            sql=sql,
-        ),
-    )
+    normalized = _canonical_expr(expr, schema={}, sql=sql, policy=policy)
     original_result = _execute_sql(sql, tables=tables)
     normalized_result = _execute_expr(normalized, tables=tables)
     assert original_result == normalized_result
@@ -112,11 +117,8 @@ def test_optimize_pipeline_semantics() -> None:
             sanitize_templated=True,
         ),
     )
-    optimized = optimize_expr(
-        expr,
-        policy=policy,
-        schema={"t": {"a": "string", "b": "int"}},
-        sql=sql,
+    optimized = _canonical_expr(
+        expr, schema={"t": {"a": "string", "b": "int"}}, sql=sql, policy=policy
     )
     assert _execute_expr(optimized, tables=tables) == _execute_sql(sql, tables=tables)
 
@@ -223,17 +225,7 @@ def test_join_rewrite_semantics() -> None:
     }
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-    normalized = normalize_expr(
-        expr,
-        options=NormalizeExprOptions(
-            schema=None,
-            rules=None,
-            rewrite_hook=None,
-            enable_rewrites=True,
-            policy=policy,
-            sql=sql,
-        ),
-    )
+    normalized = _canonical_expr(expr, schema={}, sql=sql, policy=policy)
     original_result = _execute_sql(sql, tables=tables)
     normalized_result = _execute_expr(normalized, tables=tables)
     assert original_result == normalized_result
@@ -246,17 +238,7 @@ def test_subquery_rewrite_semantics() -> None:
     tables = {"t": [{"a": "x", "b": 1}, {"a": "y", "b": 2}, {"a": "z", "b": 2}]}
     policy = default_sqlglot_policy()
     expr = parse_sql_strict(sql, dialect=policy.read_dialect)
-    normalized = normalize_expr(
-        expr,
-        options=NormalizeExprOptions(
-            schema=None,
-            rules=None,
-            rewrite_hook=None,
-            enable_rewrites=True,
-            policy=policy,
-            sql=sql,
-        ),
-    )
+    normalized = _canonical_expr(expr, schema={}, sql=sql, policy=policy)
     original_result = _execute_sql(sql, tables=tables)
     normalized_result = _execute_expr(normalized, tables=tables)
     assert original_result == normalized_result

@@ -2,11 +2,26 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from datafusion_engine.diagnostics import ensure_recorder_sink
+from datafusion_engine.diagnostics import (
+    ensure_recorder_sink,
+    rust_udf_snapshot_payload,
+    view_fingerprint_payload,
+    view_udf_parity_payload,
+)
+from datafusion_engine.schema_contracts import SchemaViolation
+from datafusion_engine.view_artifacts import ViewArtifact
 from serde_msgspec import StructBase
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+
+    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
+    from datafusion_engine.view_graph_registry import ViewNode
 
 
 @dataclass
@@ -97,4 +112,87 @@ def prepared_statement_hook(
     return _hook
 
 
-__all__ = ["DiagnosticsCollector", "PreparedStatementSpec", "prepared_statement_hook"]
+def record_view_fingerprints(
+    sink: DiagnosticsCollector,
+    *,
+    view_nodes: Sequence[ViewNode],
+    policy_profile: SQLPolicyProfile | None = None,
+) -> None:
+    """Record policy-aware view fingerprints into diagnostics."""
+    recorder_sink = ensure_recorder_sink(sink, session_id="obs")
+    recorder_sink.record_artifact(
+        "view_fingerprints_v1",
+        view_fingerprint_payload(view_nodes=view_nodes, policy_profile=policy_profile),
+    )
+
+
+def record_view_udf_parity(
+    sink: DiagnosticsCollector,
+    *,
+    snapshot: Mapping[str, object],
+    view_nodes: Sequence[ViewNode],
+    ctx: SessionContext | None = None,
+) -> None:
+    """Record view/UDF parity diagnostics into the sink."""
+    recorder_sink = ensure_recorder_sink(sink, session_id="obs")
+    recorder_sink.record_artifact(
+        "view_udf_parity_v1",
+        view_udf_parity_payload(snapshot=snapshot, view_nodes=view_nodes, ctx=ctx),
+    )
+
+
+def record_rust_udf_snapshot(
+    sink: DiagnosticsCollector,
+    *,
+    snapshot: Mapping[str, object],
+) -> None:
+    """Record a Rust UDF snapshot summary payload."""
+    recorder_sink = ensure_recorder_sink(sink, session_id="obs")
+    recorder_sink.record_artifact(
+        "rust_udf_snapshot_v1",
+        rust_udf_snapshot_payload(snapshot),
+    )
+
+
+def record_view_contract_violations(
+    sink: DiagnosticsCollector,
+    *,
+    table_name: str,
+    violations: Sequence[SchemaViolation],
+) -> None:
+    """Record schema contract violations for a view."""
+    payload = {
+        "view": table_name,
+        "violations": [
+            {
+                "violation_type": violation.violation_type.value,
+                "column_name": violation.column_name,
+                "expected": violation.expected,
+                "actual": violation.actual,
+            }
+            for violation in violations
+        ],
+    }
+    recorder_sink = ensure_recorder_sink(sink, session_id="obs")
+    recorder_sink.record_artifact("view_contract_violations_v1", payload)
+
+
+def record_view_artifact(sink: DiagnosticsCollector, *, artifact: ViewArtifact) -> None:
+    """Record a deterministic view artifact payload."""
+    recorder_sink = ensure_recorder_sink(sink, session_id="obs")
+    recorder_sink.record_artifact(
+        "datafusion_view_artifacts_v1",
+        artifact.diagnostics_payload(event_time_unix_ms=int(time.time() * 1000)),
+    )
+
+
+__all__ = [
+    "DiagnosticsCollector",
+    "PreparedStatementSpec",
+    "prepared_statement_hook",
+    "record_rust_udf_snapshot",
+    "record_view_artifact",
+    "record_view_contract_violations",
+    "record_view_fingerprints",
+    "record_view_udf_parity",
+]

@@ -858,18 +858,16 @@ def _invalidate_information_schema_cache(
 
 
 def _register_dataset_with_context(context: DataFusionRegistrationContext) -> DataFrame:
-    if context.location.format == "delta":
-        if context.options.provider == "delta_cdf":
-            df = _register_delta_cdf(context)
-        elif _should_register_delta_provider(context):
-            df = _register_delta_provider(context)
-        else:
-            msg = "Delta registration requires the native provider; DDL fallback is disabled."
-            raise ValueError(msg)
-    elif context.location.files:
-        df = _register_file_list_dataset(context)
+    if context.location.format != "delta":
+        msg = f"Non-delta dataset registration is disabled; got format={context.location.format!r}."
+        raise ValueError(msg)
+    if context.options.provider == "delta_cdf":
+        df = _register_delta_cdf(context)
+    elif _should_register_delta_provider(context):
+        df = _register_delta_provider(context)
     else:
-        df = _register_listing_table(context)
+        msg = "Delta registration requires the native provider; DDL fallback is disabled."
+        raise ValueError(msg)
     _invalidate_information_schema_cache(context.runtime_profile, context.ctx)
     _validate_schema_contracts(context)
     return df
@@ -1152,73 +1150,16 @@ def _finalize_registered_df(
 def _register_listing_table(
     context: DataFusionRegistrationContext,
 ) -> DataFrame:
-    """Register a listing table via DataFusion listing APIs.
+    """Raise because listing table registration is disabled.
 
-    Returns
-    -------
-    datafusion.dataframe.DataFrame
-        DataFrame for the registered listing table.
+    Raises
+    ------
+    ValueError
+        Raised when listing table registration is requested.
     """
-    scan = context.options.scan
-    file_extension = _file_extension_for_location(context.location, scan=scan)
-    table_schema_contract = _resolve_table_schema_contract(
-        schema=context.options.schema,
-        scan=scan,
-        partition_cols=scan.partition_cols if scan is not None else None,
-    )
-    _validate_table_schema_contract(table_schema_contract)
-    _validate_ordering_contract(context, scan=scan)
-    table_partition_cols = (
-        [(col, dtype) for col, dtype in scan.partition_cols]
-        if scan and scan.partition_cols
-        else None
-    )
-    table_partition_cols_payload = (
-        [(col, str(dtype)) for col, dtype in scan.partition_cols]
-        if scan and scan.partition_cols
-        else None
-    )
-    file_sort_order = None
-    if scan is not None and scan.file_sort_order:
-        file_sort_order = [
-            (str(column), str(direction)) for column, direction in scan.file_sort_order
-        ]
-    skip_metadata = None
-    if scan is not None:
-        skip_metadata = _effective_skip_metadata(context.location, scan)
-    _apply_scan_settings(
-        context.ctx,
-        scan=scan,
-        sql_options=_statement_sql_options_for_profile(context.runtime_profile),
-        runtime_profile=context.runtime_profile,
-    )
-    from datafusion_engine.io_adapter import DataFusionIOAdapter, ListingTableRegistration
-
-    adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
-    adapter.register_listing_table(
-        ListingTableRegistration(
-            name=context.name,
-            location=str(context.location.path),
-            table_partition_cols=table_partition_cols,
-            file_extension=file_extension,
-            schema=context.options.schema,
-            file_sort_order=file_sort_order,
-            overwrite=bool(scan.listing_mutable) if scan is not None else False,
-        )
-    )
-    df = context.ctx.table(context.name)
-    inputs = _RegistrationInputs(
-        scan=scan,
-        file_extension=file_extension,
-        table_partition_cols=table_partition_cols_payload,
-        skip_metadata=skip_metadata,
-        table_schema_contract=table_schema_contract,
-    )
-    return _finalize_registered_df(
-        context,
-        df,
-        inputs=inputs,
-    )
+    _ = context
+    msg = "Listing table registration is disabled; use Delta TableProvider."
+    raise ValueError(msg)
 
 
 def _register_file_list_dataset(
@@ -1571,7 +1512,6 @@ def _apply_projection_exprs(
         from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
 
         schema = _schema_from_df(df)
-        view_sql = plan.compiled.rendered_sql
         view_expr = plan.compiled.sqlglot_ast
         artifact = build_view_artifact(
             ViewArtifactInputs(
@@ -1579,7 +1519,6 @@ def _apply_projection_exprs(
                 name=table_name,
                 ast=view_expr,
                 schema=schema,
-                sql=view_sql,
             )
         )
         record_view_definition(runtime_profile, artifact=artifact)
@@ -2285,13 +2224,6 @@ def _require_partition_schema_validation(
     if missing or order_matches is False or type_mismatches:
         msg = f"Partition schema validation failed for {context.table_name}: {validation}."
         raise ValueError(msg)
-
-
-def _parquet_read_options(read_options: Mapping[str, object]) -> ds.ParquetReadOptions | None:
-    option = read_options.get("parquet_read_options")
-    if isinstance(option, ds.ParquetReadOptions):
-        return option
-    return None
 
 
 def _normalize_filesystem(filesystem: object) -> pafs.FileSystem | None:

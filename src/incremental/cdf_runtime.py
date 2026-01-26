@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from ibis_engine.registry import (
     DatasetLocation,
+    IbisDatasetRegistry,
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
@@ -130,8 +130,7 @@ def read_cdf_changes(
         starting_version=starting_version,
         ending_version=current_version,
     )
-    ctx = runtime.session_context()
-    with TempTableRegistry(ctx) as registry:
+    with TempTableRegistry(runtime) as registry:
         cdf_name = f"__cdf_{uuid.uuid4().hex}"
         try:
             location = DatasetLocation(
@@ -143,8 +142,11 @@ def read_cdf_changes(
                 delta_scan=inputs.scan_options,
                 datafusion_provider="delta_cdf",
             )
-            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime.profile)
-            _ = facade.register_dataset(name=cdf_name, location=location)
+            ibis_registry = IbisDatasetRegistry(
+                runtime.ibis_backend(),
+                runtime_profile=runtime.profile,
+            )
+            _ = ibis_registry.register_location(cdf_name, location)
         except ValueError:
             return None
         registry.track(cdf_name)

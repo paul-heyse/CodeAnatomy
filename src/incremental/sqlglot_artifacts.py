@@ -60,7 +60,6 @@ def record_view_artifact(
             ast=plan.compiled.sqlglot_ast,
             schema=schema,
             policy_profile=policy_profile,
-            sql=plan.compiled.rendered_sql,
         )
     )
     record_view_definition(runtime.profile, artifact=artifact)

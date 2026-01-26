@@ -62,7 +62,6 @@ def read_delta_table_via_facade(
     pyarrow.Table
         Materialized table from the Delta provider.
     """
-    ctx = context.runtime.session_context()
     profile_location = context.runtime.profile.dataset_location(name)
     resolved_storage = context.storage.storage_options or {}
     resolved_log_storage = context.storage.log_storage_options or {}
@@ -89,7 +88,7 @@ def read_delta_table_via_facade(
         delta_timestamp=resolved_timestamp,
         delta_scan=resolved_scan,
     )
-    with TempTableRegistry(ctx) as registry:
+    with TempTableRegistry(context.runtime) as registry:
         expr = read_delta_ibis(
             context.runtime.ibis_backend(),
             str(path),

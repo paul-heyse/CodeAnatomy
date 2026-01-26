@@ -4,28 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from datafusion_engine.runtime import (
-    dataset_schema_from_context,
-    dataset_spec_from_context,
-)
-from incremental.registry_rows import DATASET_ROWS, DatasetRow
+from datafusion_engine.runtime import dataset_schema_from_context, dataset_spec_from_context
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
     from schema_spec.system import ContractSpec, DatasetSpec
-
-_DATASET_ROWS: dict[str, DatasetRow] = {row.name: row for row in DATASET_ROWS}
-
-
-def dataset_row(name: str) -> DatasetRow:
-    """Return the dataset row spec by name.
-
-    Returns
-    -------
-    DatasetRow
-        Row specification for the dataset.
-    """
-    return _DATASET_ROWS[name]
 
 
 def dataset_spec(name: str) -> DatasetSpec:
@@ -61,9 +44,4 @@ def dataset_contract_spec(name: str) -> ContractSpec:
     return dataset_spec_from_context(name).contract_spec_or_default()
 
 
-__all__ = [
-    "dataset_contract_spec",
-    "dataset_row",
-    "dataset_schema",
-    "dataset_spec",
-]
+__all__ = ["dataset_contract_spec", "dataset_schema", "dataset_spec"]

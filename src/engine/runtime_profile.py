@@ -123,26 +123,7 @@ class RuntimeProfileSnapshot:
         }
 
 
-PROFILE_HASH_VERSION: int = 1
-_PARQUET_READ_SCHEMA = pa.struct(
-    [
-        pa.field("dictionary_columns", pa.list_(pa.string())),
-        pa.field("coerce_int96_timestamp_unit", pa.string()),
-        pa.field("binary_type", pa.string()),
-        pa.field("list_type", pa.string()),
-    ]
-)
-_PARQUET_FRAGMENT_SCAN_SCHEMA = pa.struct(
-    [
-        pa.field("buffer_size", pa.int64()),
-        pa.field("pre_buffer", pa.bool_()),
-        pa.field("use_buffered_stream", pa.bool_()),
-        pa.field("page_checksum_verification", pa.bool_()),
-        pa.field("thrift_string_size_limit", pa.int64()),
-        pa.field("thrift_container_size_limit", pa.int64()),
-        pa.field("arrow_extensions_enabled", pa.bool_()),
-    ]
-)
+PROFILE_HASH_VERSION: int = 2
 _SCAN_PROFILE_SCHEMA = pa.struct(
     [
         pa.field("name", pa.string()),
@@ -150,8 +131,6 @@ _SCAN_PROFILE_SCHEMA = pa.struct(
         pa.field("batch_readahead", pa.int64()),
         pa.field("fragment_readahead", pa.int64()),
         pa.field("fragment_scan_options", pa.map_(pa.string(), pa.string())),
-        pa.field("parquet_read_options", _PARQUET_READ_SCHEMA),
-        pa.field("parquet_fragment_scan_options", _PARQUET_FRAGMENT_SCAN_SCHEMA),
         pa.field("cache_metadata", pa.bool_()),
         pa.field("use_threads", pa.bool_()),
         pa.field("require_sequenced_output", pa.bool_()),
@@ -416,8 +395,6 @@ def _scan_profile_payload(scan: ScanProfile) -> dict[str, object]:
         "batch_readahead": scan.batch_readahead,
         "fragment_readahead": scan.fragment_readahead,
         "fragment_scan_options": _fragment_scan_options(scan.fragment_scan_options),
-        "parquet_read_options": scan.parquet_read_payload(),
-        "parquet_fragment_scan_options": scan.parquet_fragment_scan_payload(),
         "cache_metadata": scan.cache_metadata,
         "use_threads": scan.use_threads,
         "require_sequenced_output": scan.require_sequenced_output,

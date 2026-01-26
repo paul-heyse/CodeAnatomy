@@ -3,21 +3,31 @@
 from __future__ import annotations
 
 from types import ModuleType
+from typing import TYPE_CHECKING, cast
 
 from hamilton import driver
 
+from datafusion_engine.view_graph_registry import ViewNode
 from hamilton_pipeline.task_module_builder import (
     TaskExecutionModuleOptions,
     build_task_execution_module,
 )
-from ibis_engine.plan import IbisPlan
 from relspec.schedule_events import TaskScheduleMetadata
-from relspec.task_catalog import TaskBuildContext, TaskCatalog, TaskSpec
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
 
 
-def _dummy_build(_: TaskBuildContext) -> IbisPlan:
-    msg = "build should not be invoked during module generation"
-    raise RuntimeError(msg)
+def _dummy_view_node(name: str) -> ViewNode:
+    def _build_view(_ctx: object) -> object:
+        msg = "view build should not be invoked during module generation"
+        raise RuntimeError(msg)
+
+    builder = cast("Callable[[SessionContext], DataFrame]", _build_view)
+    return ViewNode(name=name, deps=(), builder=builder)
 
 
 def _driver_for_module(module: ModuleType) -> driver.Driver:
@@ -26,15 +36,13 @@ def _driver_for_module(module: ModuleType) -> driver.Driver:
 
 def test_task_module_builder_wires_dependencies() -> None:
     """Ensure dependency mapping creates upstream edges in the graph."""
-    catalog = TaskCatalog(
-        tasks=(
-            TaskSpec(name="task.alpha", output="out_alpha", build=_dummy_build),
-            TaskSpec(name="task.beta", output="out_beta", build=_dummy_build),
-        )
+    view_nodes = (
+        _dummy_view_node("out_alpha"),
+        _dummy_view_node("out_beta"),
     )
     module = build_task_execution_module(
         dependency_map={"out_beta": ("out_alpha",)},
-        task_catalog=catalog,
+        view_nodes=view_nodes,
     )
     graph = _driver_for_module(module).graph
     node = graph.nodes["out_beta"]
@@ -44,20 +52,18 @@ def test_task_module_builder_wires_dependencies() -> None:
 
 def test_task_module_builder_applies_schedule_tags() -> None:
     """Ensure schedule metadata is propagated to task node tags."""
-    catalog = TaskCatalog(
-        tasks=(
-            TaskSpec(name="task.alpha", output="out_alpha", build=_dummy_build),
-            TaskSpec(name="task.beta", output="out_beta", build=_dummy_build),
-        )
+    view_nodes = (
+        _dummy_view_node("out_alpha"),
+        _dummy_view_node("out_beta"),
     )
     schedule_metadata = {
-        "task.alpha": TaskScheduleMetadata(
+        "out_alpha": TaskScheduleMetadata(
             schedule_index=0,
             generation_index=0,
             generation_order=0,
             generation_size=1,
         ),
-        "task.beta": TaskScheduleMetadata(
+        "out_beta": TaskScheduleMetadata(
             schedule_index=1,
             generation_index=1,
             generation_order=0,
@@ -66,7 +72,7 @@ def test_task_module_builder_applies_schedule_tags() -> None:
     }
     module = build_task_execution_module(
         dependency_map={"out_beta": ("out_alpha",)},
-        task_catalog=catalog,
+        view_nodes=view_nodes,
         options=TaskExecutionModuleOptions(schedule_metadata=schedule_metadata),
     )
     graph = _driver_for_module(module).graph

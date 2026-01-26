@@ -10,10 +10,19 @@ from types import ModuleType
 from hamilton.function_modifiers import cache, group, inject, source, tag, value
 from hamilton.function_modifiers.dependencies import ParametrizedDependency
 
+from datafusion_engine.view_graph_registry import ViewNode
 from hamilton_pipeline.modules import task_execution
 from relspec.runtime_artifacts import TableLike
 from relspec.schedule_events import TaskScheduleMetadata
-from relspec.task_catalog import TaskCatalog, TaskSpec
+from relspec.view_defs import (
+    DEFAULT_REL_TASK_PRIORITY,
+    REL_CALLSITE_QNAME_OUTPUT,
+    REL_CALLSITE_SYMBOL_OUTPUT,
+    REL_DEF_SYMBOL_OUTPUT,
+    REL_IMPORT_SYMBOL_OUTPUT,
+    REL_NAME_SYMBOL_OUTPUT,
+    RELATION_OUTPUT_NAME,
+)
 
 
 @dataclass(frozen=True)
@@ -29,7 +38,7 @@ class TaskExecutionModuleOptions:
 def build_task_execution_module(
     *,
     dependency_map: Mapping[str, Sequence[str]],
-    task_catalog: TaskCatalog,
+    view_nodes: Sequence[ViewNode],
     options: TaskExecutionModuleOptions | None = None,
 ) -> ModuleType:
     """Build a Hamilton module with per-task execution nodes.
@@ -44,22 +53,23 @@ def build_task_execution_module(
     sys.modules[resolved.module_name] = module
     all_names: list[str] = []
     module.__dict__["__all__"] = all_names
-    outputs = {task.output: task for task in task_catalog.tasks}
+    outputs = {node.name: node for node in view_nodes}
     plan_fingerprints = dict(resolved.plan_fingerprints or {})
     schedule_metadata = dict(resolved.schedule_metadata or {})
-    for output_name, task in outputs.items():
-        node = _build_task_node(
+    for output_name, view_node in outputs.items():
+        spec = _task_spec_from_view_node(view_node)
+        task_node = _build_task_node(
             TaskNodeContext(
-                task=task,
+                task=spec,
                 output_name=output_name,
                 dependencies=tuple(dependency_map.get(output_name, ())),
-                plan_fingerprint=plan_fingerprints.get(task.name),
-                schedule_metadata=schedule_metadata.get(task.name),
+                plan_fingerprint=plan_fingerprints.get(spec.name),
+                schedule_metadata=schedule_metadata.get(spec.name),
                 use_generation_gate=resolved.use_generation_gate,
             )
         )
-        node.__module__ = resolved.module_name
-        module.__dict__[output_name] = node
+        task_node.__module__ = resolved.module_name
+        module.__dict__[output_name] = task_node
         all_names.append(output_name)
     return module
 
@@ -68,7 +78,7 @@ def build_task_execution_module(
 class TaskNodeContext:
     """Context for generating a single task node."""
 
-    task: TaskSpec
+    task: TaskNodeSpec
     output_name: str
     dependencies: Sequence[str]
     plan_fingerprint: str | None
@@ -113,6 +123,47 @@ def _build_task_node(context: TaskNodeContext) -> Callable[..., TableLike]:
     return _decorate_task_node(
         node_fn=node_fn,
         context=context,
+    )
+
+
+_RELSPEC_OUTPUTS: frozenset[str] = frozenset(
+    {
+        REL_NAME_SYMBOL_OUTPUT,
+        REL_IMPORT_SYMBOL_OUTPUT,
+        REL_DEF_SYMBOL_OUTPUT,
+        REL_CALLSITE_SYMBOL_OUTPUT,
+        REL_CALLSITE_QNAME_OUTPUT,
+        RELATION_OUTPUT_NAME,
+    }
+)
+
+
+def _priority_for_output(output: str) -> int:
+    if output in _RELSPEC_OUTPUTS:
+        return DEFAULT_REL_TASK_PRIORITY
+    if output.startswith("cpg_"):
+        return 100
+    return 100
+
+
+@dataclass(frozen=True)
+class TaskNodeSpec:
+    """Minimal task metadata derived from a view node."""
+
+    name: str
+    output: str
+    kind: str
+    priority: int
+    cache_policy: str = "none"
+
+
+def _task_spec_from_view_node(node: ViewNode) -> TaskNodeSpec:
+    return TaskNodeSpec(
+        name=node.name,
+        output=node.name,
+        kind="view",
+        priority=_priority_for_output(node.name),
+        cache_policy="none",
     )
 
 

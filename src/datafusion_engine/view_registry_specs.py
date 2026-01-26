@@ -50,11 +50,13 @@ if TYPE_CHECKING:
     from sqlglot_tools.bridge import IbisCompilerBackend
 
 try:
+    from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
     from datafusion.unparser import Dialect as DataFusionDialect
     from datafusion.unparser import Unparser as DataFusionUnparser
 except ImportError:  # pragma: no cover - optional dependency
     DataFusionDialect = None
     DataFusionUnparser = None
+    DataFusionLogicalPlan = None
 
 
 def _merge_metadata_specs(specs: Sequence[SchemaMetadataSpec]) -> SchemaMetadataSpec:
@@ -83,10 +85,15 @@ def _contract_builder(
     name: str,
     *,
     metadata_spec: SchemaMetadataSpec | None = None,
+    enforce_columns: bool = False,
 ) -> Callable[[pa.Schema], SchemaContract]:
     def _build(schema: pa.Schema) -> SchemaContract:
         resolved = metadata_spec.apply(schema) if metadata_spec is not None else schema
-        return SchemaContract.from_arrow_schema(name, resolved)
+        return SchemaContract.from_arrow_schema(
+            name,
+            resolved,
+            enforce_columns=enforce_columns,
+        )
 
     return _build
 
@@ -130,15 +137,17 @@ def _deps_from_ast(expr: Expression) -> tuple[str, ...]:
 
 
 def _sqlglot_from_dataframe(df: DataFrame) -> Expression | None:
-    if DataFusionUnparser is None or DataFusionDialect is None:
+    if DataFusionUnparser is None or DataFusionDialect is None or DataFusionLogicalPlan is None:
         return None
     logical_plan = getattr(df, "logical_plan", None)
     if not callable(logical_plan):
         return None
+    sql = ""
     try:
         plan_obj = logical_plan()
-        unparser = DataFusionUnparser(DataFusionDialect.default())
-        sql = str(unparser.plan_to_sql(plan_obj))
+        if isinstance(plan_obj, DataFusionLogicalPlan):
+            unparser = DataFusionUnparser(DataFusionDialect.default())
+            sql = str(unparser.plan_to_sql(plan_obj))
     except (RuntimeError, TypeError, ValueError):
         return None
     if not sql:
@@ -146,13 +155,14 @@ def _sqlglot_from_dataframe(df: DataFrame) -> Expression | None:
     policy = resolve_sqlglot_policy(name="datafusion")
     register_datafusion_dialect()
     try:
-        return parse_sql_strict(
+        ast = parse_sql_strict(
             sql,
             dialect=policy.write_dialect,
             options=StrictParseOptions(error_level=policy.error_level),
         )
     except (TypeError, ValueError):
         return None
+    return ast
 
 
 def _arrow_schema_from_df(df: DataFrame) -> pa.Schema:

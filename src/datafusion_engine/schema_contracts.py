@@ -176,6 +176,7 @@ class SchemaContract:
     ordering: tuple[str, ...] = ()
     evolution_policy: EvolutionPolicy = EvolutionPolicy.STRICT
     schema_metadata: dict[bytes, bytes] = field(default_factory=dict)
+    enforce_columns: bool = True
 
     @classmethod
     def from_arrow_schema(
@@ -258,6 +259,9 @@ class SchemaContract:
                     actual=None,
                 )
             )
+            return violations
+
+        if not self.enforce_columns:
             return violations
 
         # Get actual columns

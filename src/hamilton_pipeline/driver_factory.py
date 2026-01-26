@@ -18,6 +18,7 @@ from hamilton.lifecycle import base as lifecycle_base
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.interop import SchemaLike
 from core_types import JsonValue
 from cpg.kind_catalog import validate_edge_kind_requirements
 from datafusion_engine.view_registry import ensure_view_graph
@@ -38,8 +39,6 @@ from relspec.graph_inference import build_task_graph_from_views
 from relspec.inferred_deps import infer_deps_from_view_nodes
 from relspec.rustworkx_graph import task_graph_signature, task_graph_snapshot
 from relspec.rustworkx_schedule import schedule_tasks, task_schedule_metadata
-from relspec.task_catalog import TaskCatalog
-from relspec.task_catalog_builders import task_catalog_from_view_nodes
 from relspec.view_defs import RELATION_OUTPUT_NAME
 
 if TYPE_CHECKING:
@@ -127,16 +126,15 @@ def _build_dependency_map(
     config: Mapping[str, JsonValue],
 ) -> tuple[
     Mapping[str, tuple[str, ...]],
-    TaskCatalog,
+    tuple[ViewNode, ...],
     Mapping[str, str],
     str,
     Mapping[str, TaskScheduleMetadata],
 ]:
     ctx, nodes_with_ast = _view_graph_context(config)
-    task_catalog = task_catalog_from_view_nodes(nodes_with_ast)
     dependency_map, plan_fingerprints = _dependency_payloads(nodes_with_ast)
     signature, schedule_metadata = _task_graph_metadata(nodes_with_ast, ctx=ctx)
-    return dependency_map, task_catalog, plan_fingerprints, signature, schedule_metadata
+    return dependency_map, nodes_with_ast, plan_fingerprints, signature, schedule_metadata
 
 
 def _view_graph_context(
@@ -424,7 +422,7 @@ def build_driver(
     modules = list(modules) if modules is not None else default_modules()
     (
         dependency_map,
-        task_catalog,
+        view_nodes,
         plan_fingerprints,
         graph_signature,
         schedule_metadata,
@@ -433,7 +431,7 @@ def build_driver(
     modules.append(
         build_task_execution_module(
             dependency_map=dependency_map,
-            task_catalog=task_catalog,
+            view_nodes=view_nodes,
             options=TaskExecutionModuleOptions(
                 plan_fingerprints=plan_fingerprints,
                 schedule_metadata=schedule_metadata,
@@ -455,11 +453,11 @@ def build_driver(
     return builder.build()
 
 
-def _relation_output_schema(session: SessionContext) -> object:
+def _relation_output_schema(session: SessionContext) -> SchemaLike:
     if not session.table_exist(RELATION_OUTPUT_NAME):
         msg = f"Relation output view {RELATION_OUTPUT_NAME!r} is not registered."
         raise ValueError(msg)
-    return session.table(RELATION_OUTPUT_NAME).schema()
+    return cast("SchemaLike", session.table(RELATION_OUTPUT_NAME).schema())
 
 
 @dataclass

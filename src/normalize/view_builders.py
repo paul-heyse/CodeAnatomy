@@ -585,7 +585,7 @@ def _empty_reaches_plan(table: Table) -> IbisPlan:
         use_event_id=ibis_null_literal(pa.string()),
         symbol=ibis_null_literal(pa.string()),
     )
-    empty = empty.filter(ibis.literal(value=False))
+    empty = empty.filter(ibis.literal(value=False) == ibis.literal(value=True))
     return IbisPlan(expr=empty, ordering=Ordering.unordered())
 
 

@@ -6,7 +6,6 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
-    "CachePolicy": ("relspec.task_catalog", "CachePolicy"),
     "EdgeValidationResult": ("relspec.graph_edge_validation", "EdgeValidationResult"),
     "EvidenceCatalog": ("relspec.evidence", "EvidenceCatalog"),
     "EvidenceNode": ("relspec.rustworkx_graph", "EvidenceNode"),
@@ -15,24 +14,12 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "GraphNode": ("relspec.rustworkx_graph", "GraphNode"),
     "GraphValidationSummary": ("relspec.graph_edge_validation", "GraphValidationSummary"),
     "IncrementalDiff": ("relspec.incremental", "IncrementalDiff"),
-    "PlanArtifact": ("relspec.plan_catalog", "PlanArtifact"),
-    "PlanCatalog": ("relspec.plan_catalog", "PlanCatalog"),
     "TaskGraphSnapshot": ("relspec.rustworkx_graph", "TaskGraphSnapshot"),
     "TaskNode": ("relspec.rustworkx_graph", "TaskNode"),
     "TaskSchedule": ("relspec.rustworkx_schedule", "TaskSchedule"),
     "TaskValidationResult": ("relspec.graph_edge_validation", "TaskValidationResult"),
-    "TaskBuildContext": ("relspec.task_catalog", "TaskBuildContext"),
-    "TaskCatalog": ("relspec.task_catalog", "TaskCatalog"),
-    "TaskExecutionRequest": ("relspec.execution", "TaskExecutionRequest"),
     "TaskGraph": ("relspec.graph_inference", "TaskGraph"),
-    "TaskKind": ("relspec.task_catalog", "TaskKind"),
-    "TaskSpec": ("relspec.task_catalog", "TaskSpec"),
-    "build_task_catalog": ("relspec.task_catalog_builders", "build_task_catalog"),
-    "build_task_graph": ("relspec.graph_inference", "build_task_graph"),
-    "compile_task_catalog": ("relspec.plan_catalog", "compile_task_catalog"),
-    "compile_task_plan": ("relspec.plan_catalog", "compile_task_plan"),
-    "diff_plan_catalog": ("relspec.incremental", "diff_plan_catalog"),
-    "execute_plan_artifact": ("relspec.execution", "execute_plan_artifact"),
+    "build_task_graph_from_views": ("relspec.graph_inference", "build_task_graph_from_views"),
     "impacted_tasks": ("relspec.rustworkx_schedule", "impacted_tasks"),
     "impacted_tasks_for_evidence": ("relspec.rustworkx_schedule", "impacted_tasks_for_evidence"),
     "provenance_for_task": ("relspec.rustworkx_schedule", "provenance_for_task"),
@@ -50,7 +37,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "task_graph_subgraph": ("relspec.rustworkx_graph", "task_graph_subgraph"),
     "task_schedule_metadata": ("relspec.rustworkx_schedule", "task_schedule_metadata"),
     "schedule_tasks": ("relspec.rustworkx_schedule", "schedule_tasks"),
-    "task_graph_from_catalog": ("relspec.graph_inference", "task_graph_from_catalog"),
     "validate_edge_requirements": ("relspec.graph_edge_validation", "validate_edge_requirements"),
     "validate_edge_requirements_detailed": (
         "relspec.graph_edge_validation",
@@ -60,7 +46,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
 }
 
 if TYPE_CHECKING:
-    CachePolicy: Any
     EdgeValidationResult: Any
     EvidenceCatalog: Any
     EvidenceNode: Any
@@ -69,24 +54,12 @@ if TYPE_CHECKING:
     GraphNode: Any
     GraphValidationSummary: Any
     IncrementalDiff: Any
-    PlanArtifact: Any
-    PlanCatalog: Any
     TaskGraphSnapshot: Any
     TaskNode: Any
     TaskSchedule: Any
     TaskValidationResult: Any
-    TaskBuildContext: Any
-    TaskCatalog: Any
-    TaskExecutionRequest: Any
     TaskGraph: Any
-    TaskKind: Any
-    TaskSpec: Any
-    build_task_catalog: Any
-    build_task_graph: Any
-    compile_task_catalog: Any
-    compile_task_plan: Any
-    diff_plan_catalog: Any
-    execute_plan_artifact: Any
+    build_task_graph_from_views: Any
     impacted_tasks: Any
     impacted_tasks_for_evidence: Any
     provenance_for_task: Any
@@ -101,7 +74,6 @@ if TYPE_CHECKING:
     task_graph_subgraph: Any
     task_schedule_metadata: Any
     schedule_tasks: Any
-    task_graph_from_catalog: Any
     validate_edge_requirements: Any
     validate_edge_requirements_detailed: Any
     validate_graph_edges: Any
@@ -122,7 +94,6 @@ def __dir__() -> list[str]:
 
 
 __all__ = (
-    "CachePolicy",
     "EdgeValidationResult",
     "EvidenceCatalog",
     "EvidenceNode",
@@ -131,31 +102,18 @@ __all__ = (
     "GraphNode",
     "GraphValidationSummary",
     "IncrementalDiff",
-    "PlanArtifact",
-    "PlanCatalog",
-    "TaskBuildContext",
-    "TaskCatalog",
-    "TaskExecutionRequest",
     "TaskGraph",
     "TaskGraphSnapshot",
-    "TaskKind",
     "TaskNode",
     "TaskSchedule",
-    "TaskSpec",
     "TaskValidationResult",
-    "build_task_catalog",
-    "build_task_graph",
-    "compile_task_catalog",
-    "compile_task_plan",
-    "diff_plan_catalog",
-    "execute_plan_artifact",
+    "build_task_graph_from_views",
     "impacted_tasks",
     "impacted_tasks_for_evidence",
     "provenance_for_task",
     "ready_tasks_with_column_validation",
     "schedule_tasks",
     "task_graph_diagnostics",
-    "task_graph_from_catalog",
     "task_graph_impact_subgraph",
     "task_graph_isolate_labels",
     "task_graph_node_label",

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     )
     from engine.function_registry import FunctionRegistry, default_function_registry
     from engine.materialize_pipeline import (
+        build_plan_product,
         build_view_product,
         resolve_cache_policy,
         resolve_prefer_reader,
@@ -37,6 +38,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "RuntimeProfileSpec": ("engine.runtime_profile", "RuntimeProfileSpec"),
     "WriterStrategy": ("engine.plan_policy", "WriterStrategy"),
     "build_engine_session": ("engine.session_factory", "build_engine_session"),
+    "build_plan_product": ("engine.materialize_pipeline", "build_plan_product"),
     "build_view_product": ("engine.materialize_pipeline", "build_view_product"),
     "default_function_registry": ("engine.function_registry", "default_function_registry"),
     "delta_history": ("engine.delta_tools", "delta_history"),
@@ -73,6 +75,7 @@ __all__ = [
     "WriterStrategy",
     "build_engine_runtime",
     "build_engine_session",
+    "build_plan_product",
     "build_view_product",
     "default_function_registry",
     "delta_history",

@@ -80,9 +80,8 @@ def register_view_graph(
     for node in ordered:
         _validate_deps(ctx, node, materialized)
         _validate_udf_calls(snapshot, node)
-        required = _required_udfs(node, snapshot=snapshot)
-        validate_required_udfs(snapshot, required=required)
-        _validate_required_functions(ctx, required)
+        validate_required_udfs(snapshot, required=node.required_udfs)
+        _validate_required_functions(ctx, node.required_udfs)
         df = node.builder(ctx)
         adapter.register_view(
             node.name,
@@ -114,7 +113,8 @@ def _validate_deps(
 
 def _validate_udf_calls(snapshot: Mapping[str, object], node: ViewNode) -> None:
     if node.sqlglot_ast is None:
-        return
+        msg = f"View {node.name!r} missing SQLGlot AST."
+        raise ValueError(msg)
     from sqlglot_tools.lineage import referenced_udf_calls
 
     udf_calls = referenced_udf_calls(node.sqlglot_ast)
@@ -134,15 +134,12 @@ def _materialize_nodes(
 ) -> tuple[ViewNode, ...]:
     resolved: list[ViewNode] = []
     for node in nodes:
-        deps = node.deps
-        required = node.required_udfs
-        if node.sqlglot_ast is not None:
-            deps = _deps_from_ast(node.sqlglot_ast)
-            required = _required_udfs_from_ast(node.sqlglot_ast, snapshot=snapshot)
-        if deps is node.deps and required is node.required_udfs:
-            resolved.append(node)
-        else:
-            resolved.append(replace(node, deps=deps, required_udfs=required))
+        if node.sqlglot_ast is None:
+            msg = f"View {node.name!r} missing SQLGlot AST."
+            raise ValueError(msg)
+        deps = _deps_from_ast(node.sqlglot_ast)
+        required = _required_udfs_from_ast(node.sqlglot_ast, snapshot=snapshot)
+        resolved.append(replace(node, deps=deps, required_udfs=required))
     return tuple(resolved)
 
 
@@ -198,14 +195,6 @@ def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -
     if missing:
         msg = f"information_schema missing required functions: {sorted(missing)}."
         raise ValueError(msg)
-
-
-def _required_udfs(node: ViewNode, *, snapshot: Mapping[str, object]) -> tuple[str, ...]:
-    if node.required_udfs:
-        return tuple(node.required_udfs)
-    if node.sqlglot_ast is None:
-        return ()
-    return _required_udfs_from_ast(node.sqlglot_ast, snapshot=snapshot)
 
 
 def _schema_from_df(df: DataFrame) -> pa.Schema:

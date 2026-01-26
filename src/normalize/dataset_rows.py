@@ -101,6 +101,7 @@ class DatasetRow:
     join_keys: tuple[str, ...] = ()
     contract: ContractRow | None = None
     template: str | None = None
+    view_builder: str | None = None
     metadata_extra: dict[bytes, bytes] = field(default_factory=dict)
     register_view: bool = True
 

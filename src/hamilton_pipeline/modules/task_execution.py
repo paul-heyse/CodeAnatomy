@@ -88,20 +88,21 @@ def _plan_fingerprints(nodes: Sequence[ViewNode]) -> dict[str, str]:
 
 def _record_output(
     *,
+    inputs: TaskExecutionInputs,
     task_name: str,
     task_output: str,
     plan_fingerprint: str | None,
     table: TableLike,
-    evidence: EvidenceCatalog,
-    runtime: RuntimeArtifacts,
 ) -> None:
+    evidence = inputs.evidence
+    runtime = inputs.runtime
     schema = table.schema
     evidence.register_schema(task_output, schema)
     if task_output in runtime.execution_artifacts:
         return
     runtime.register_execution(
         task_output,
-        ExecutionResult.from_table(table),
+        ExecutionResult.from_table(cast("ArrowTableLike", table)),
         spec=ExecutionArtifactSpec(
             source_task=task_name,
             schema_fingerprint=schema_fingerprint(schema),
@@ -269,11 +270,6 @@ def execute_task_from_catalog(
     -------
     TableLike
         Materialized table output.
-
-    Raises
-    ------
-    ValueError
-        Raised when the DataFusion runtime profile is missing.
     """
     _touch_dependencies(dependencies)
     runtime = inputs.runtime
@@ -291,12 +287,11 @@ def execute_task_from_catalog(
     result = _execute_view(runtime, view_name=task_output)
     table = result.require_table()
     _record_output(
+        inputs=inputs,
         task_name=task_name,
         task_output=task_output,
         plan_fingerprint=plan_fingerprint,
         table=table,
-        evidence=evidence,
-        runtime=runtime,
     )
     return table
 
@@ -331,17 +326,15 @@ def generation_outputs(
     list[TableLike]
         Outputs produced for the generation.
     """
-    outputs: list[TableLike] = []
-    for task_name in task_generation_wave:
-        outputs.append(
-            execute_task_from_catalog(
-                inputs=task_execution_inputs,
-                task_name=task_name,
-                task_output=task_name,
-                dependencies=(),
-            )
+    return [
+        execute_task_from_catalog(
+            inputs=task_execution_inputs,
+            task_name=task_name,
+            task_output=task_name,
+            dependencies=(),
         )
-    return outputs
+        for task_name in task_generation_wave
+    ]
 
 
 @tag(layer="execution", artifact="generation_outputs_all", kind="parallel")

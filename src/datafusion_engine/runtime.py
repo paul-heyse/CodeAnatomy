@@ -65,7 +65,6 @@ from datafusion_engine.schema_registry import (
     AST_CORE_VIEW_NAMES,
     AST_OPTIONAL_VIEW_NAMES,
     CST_VIEW_NAMES,
-    SCIP_VIEW_SCHEMA_MAP,
     TREE_SITTER_CHECK_VIEWS,
     TREE_SITTER_VIEW_NAMES,
     is_nested_dataset,
@@ -1871,7 +1870,6 @@ class _CompileOptionResolution:
 @dataclass(frozen=True)
 class _ScipRegistrationSnapshot:
     name: str
-    requested_name: str
     location: DatasetLocation
     expected_fingerprint: str
     actual_fingerprint: str
@@ -3645,12 +3643,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         location = self.extract_dataset_location(name)
         if location is not None:
             return location
-        for view_name, schema_name in SCIP_VIEW_SCHEMA_MAP.items():
-            if schema_name != name:
-                continue
-            mapped = self.scip_dataset_locations.get(view_name)
-            if mapped is not None:
-                return mapped
+        mapped = self.scip_dataset_locations.get(name)
+        if mapped is not None:
+            return mapped
         for catalog in self.registry_catalogs.values():
             if catalog.has(name):
                 return catalog.get(name)
@@ -3682,9 +3677,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
         adapter = DataFusionIOAdapter(ctx=ctx, profile=self)
         for name, location in sorted(self.scip_dataset_locations.items()):
-            schema_name = SCIP_VIEW_SCHEMA_MAP.get(name, name)
             try:
-                expected_schema = schema_for(schema_name)
+                expected_schema = schema_for(name)
             except KeyError as exc:
                 msg = f"Unknown SCIP dataset name: {name!r}."
                 raise ValueError(msg) from exc
@@ -3704,11 +3698,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 )
             resolved = replace(resolved, datafusion_scan=scan)
             with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                adapter.deregister_table(schema_name)
+                adapter.deregister_table(name)
             from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
             facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=self)
-            df = facade.register_dataset(name=schema_name, location=resolved)
+            df = facade.register_dataset(name=name, location=resolved)
             expected = expected_schema.remove_metadata()
             actual = df.schema().remove_metadata()
             expected_fingerprint = schema_fingerprint(expected)
@@ -3717,20 +3711,19 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             if not match and not self.enable_schema_evolution_adapter:
                 msg = (
                     "SCIP dataset schema mismatch for "
-                    f"{schema_name!r}: expected {expected_fingerprint}, "
+                    f"{name!r}: expected {expected_fingerprint}, "
                     f"observed {actual_fingerprint}."
                 )
                 raise ValueError(msg)
             if not match:
                 logger.warning(
                     "SCIP dataset schema mismatch: %s expected %s observed %s",
-                    schema_name,
+                    name,
                     expected_fingerprint,
                     actual_fingerprint,
                 )
             snapshot = _ScipRegistrationSnapshot(
-                name=schema_name,
-                requested_name=name,
+                name=name,
                 location=resolved,
                 expected_fingerprint=expected_fingerprint,
                 actual_fingerprint=actual_fingerprint,
@@ -3822,7 +3815,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         payload = {
             "event_time_unix_ms": int(time.time() * 1000),
             "name": snapshot.name,
-            "requested_name": snapshot.requested_name,
             "location": str(location.path),
             "format": location.format,
             "datafusion_provider": location.datafusion_provider,

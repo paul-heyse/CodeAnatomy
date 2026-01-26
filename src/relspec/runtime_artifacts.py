@@ -7,7 +7,7 @@ view references, and schema caches.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -24,10 +24,8 @@ from datafusion_engine.execution_facade import ExecutionResult, ExecutionResultK
 if TYPE_CHECKING:
     import pyarrow as pa
     from diskcache import Cache, FanoutCache
-    from ibis.expr.types import Value as IbisValue
 
     from ibis_engine.execution import IbisExecutionContext
-    from relspec.plan_catalog import PlanArtifact
 
 
 class TableLike(Protocol):
@@ -445,46 +443,6 @@ class RuntimeArtifacts:
         if name in self.execution_artifacts:
             return self.execution_artifacts[name].source_task
         return None
-
-    def param_mapping_for_task(
-        self,
-        artifact: PlanArtifact,
-    ) -> Mapping[IbisValue, object] | None:
-        """Return parameter mapping for a plan artifact if configured.
-
-        Returns
-        -------
-        Mapping[IbisValue, object] | None
-            Ibis parameter mapping for execution, or None when not parameterized.
-        """
-        parameterization = artifact.parameterization
-        if parameterization is None:
-            return None
-        values = self._resolve_rulepack_values(
-            task_name=artifact.task.name,
-            output=artifact.task.output,
-            param_names=parameterization.param_specs.keys(),
-        )
-        return cast("Mapping[IbisValue, object]", parameterization.param_mapping(values))
-
-    def _resolve_rulepack_values(
-        self,
-        *,
-        task_name: str,
-        output: str,
-        param_names: Iterable[str],
-    ) -> dict[str, object]:
-        values: dict[str, object] = {}
-        for name in param_names:
-            resolved = _lookup_rulepack_value(
-                self.rulepack_param_values,
-                task_name=task_name,
-                output=output,
-                param_name=name,
-            )
-            if resolved is not None:
-                values[name] = resolved
-        return values
 
     def clone(self) -> RuntimeArtifacts:
         """Create a shallow copy for staged updates.

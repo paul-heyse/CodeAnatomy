@@ -23,7 +23,6 @@ from incremental.cdf_runtime import read_cdf_changes
 from incremental.delta_context import DeltaAccessContext
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import EvidenceCatalog
-from relspec.plan_catalog import PlanCatalog
 from relspec.rustworkx_graph import TaskGraph
 from relspec.rustworkx_schedule import impacted_tasks
 from sqlglot_tools.optimizer import register_datafusion_dialect, sqlglot_sql
@@ -72,26 +71,6 @@ class CdfImpactRequest:
     cursor_store: CdfCursorStore
     evidence: EvidenceCatalog | None = None
     filter_policy: CdfFilterPolicy | None = None
-
-
-def diff_plan_catalog(prev: PlanCatalog, curr: PlanCatalog) -> IncrementalDiff:
-    """Return a diff summary between two plan catalogs.
-
-    Parameters
-    ----------
-    prev : PlanCatalog
-        Previous plan catalog snapshot.
-    curr : PlanCatalog
-        Current plan catalog snapshot.
-
-    Returns
-    -------
-    IncrementalDiff
-        Diff summary based on plan fingerprints.
-    """
-    prev_snapshots = plan_snapshot_map(prev)
-    curr_snapshots = plan_snapshot_map(curr)
-    return diff_plan_snapshots(prev_snapshots, curr_snapshots)
 
 
 def diff_plan_fingerprints(
@@ -196,34 +175,6 @@ def impacted_tasks_for_cdf(request: CdfImpactRequest) -> tuple[str, ...]:
     return tuple(sorted(impacted))
 
 
-def plan_fingerprint_map(catalog: PlanCatalog) -> dict[str, str]:
-    """Return a mapping of task names to plan fingerprints.
-
-    Returns
-    -------
-    dict[str, str]
-        Mapping of task name to plan fingerprint.
-    """
-    return {artifact.task.name: artifact.plan_fingerprint for artifact in catalog.artifacts}
-
-
-def plan_snapshot_map(catalog: PlanCatalog) -> dict[str, PlanFingerprintSnapshot]:
-    """Return a mapping of task names to plan snapshots.
-
-    Returns
-    -------
-    dict[str, PlanFingerprintSnapshot]
-        Mapping of task name to snapshot metadata.
-    """
-    snapshots: dict[str, PlanFingerprintSnapshot] = {}
-    for artifact in catalog.artifacts:
-        snapshots[artifact.task.name] = PlanFingerprintSnapshot(
-            plan_fingerprint=artifact.plan_fingerprint,
-            plan_sql=sqlglot_sql(artifact.sqlglot_ast),
-        )
-    return snapshots
-
-
 def view_fingerprint_map(nodes: Sequence[ViewNode]) -> dict[str, str]:
     """Return a mapping of view names to plan fingerprints.
 
@@ -245,6 +196,11 @@ def view_snapshot_map(nodes: Sequence[ViewNode]) -> dict[str, PlanFingerprintSna
     -------
     dict[str, PlanFingerprintSnapshot]
         Mapping of view name to snapshot metadata.
+
+    Raises
+    ------
+    ValueError
+        Raised when a view node is missing a SQLGlot AST.
     """
     from relspec.inferred_deps import infer_deps_from_view_nodes
 
@@ -306,12 +262,9 @@ def _semantic_diff_map(
 __all__ = [
     "CdfImpactRequest",
     "IncrementalDiff",
-    "diff_plan_catalog",
     "diff_plan_fingerprints",
     "diff_plan_snapshots",
     "impacted_tasks_for_cdf",
-    "plan_fingerprint_map",
-    "plan_snapshot_map",
     "view_fingerprint_map",
     "view_snapshot_map",
 ]

@@ -265,7 +265,7 @@ def _empty_props_plan(expr: Table) -> IbisPlan:
         task_name=ibis_null_literal(pa.string()),
         task_priority=ibis_null_literal(pa.int32()),
     )
-    empty = row.filter(ibis.literal(value=False))
+    empty = row.filter(ibis.literal(value=False) == ibis.literal(value=True))
     return IbisPlan(expr=empty, ordering=Ordering.unordered())
 
 

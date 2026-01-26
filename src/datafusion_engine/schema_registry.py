@@ -1872,223 +1872,6 @@ AST_ATTRS_VIEW_NAMES: tuple[str, ...] = (
     "ast_edge_attrs",
 )
 AST_VIEW_NAMES: tuple[str, ...] = AST_CORE_VIEW_NAMES + AST_OPTIONAL_VIEW_NAMES
-AST_VIEW_COLUMN_MAP: dict[str, tuple[str, ...]] = {
-    "ast_nodes": (
-        "file_id",
-        "path",
-        "ast_id",
-        "parent_ast_id",
-        "kind",
-        "name",
-        "value_repr",
-        "lineno",
-        "col_offset",
-        "end_lineno",
-        "end_col_offset",
-        "line_base",
-        "col_unit",
-        "end_exclusive",
-        "bstart",
-        "bend",
-        "span",
-        "attrs",
-        "ast_record",
-    ),
-    "ast_edges": (
-        "file_id",
-        "path",
-        "src",
-        "dst",
-        "kind",
-        "slot",
-        "idx",
-        "attrs",
-    ),
-    "ast_errors": (
-        "file_id",
-        "path",
-        "error_type",
-        "message",
-        "lineno",
-        "col_offset",
-        "end_lineno",
-        "end_col_offset",
-        "line_base",
-        "col_unit",
-        "end_exclusive",
-        "span",
-        "attrs",
-        "ast_record",
-    ),
-    "ast_docstrings": (
-        "file_id",
-        "path",
-        "owner_ast_id",
-        "owner_kind",
-        "owner_name",
-        "docstring",
-        "source",
-        "lineno",
-        "col_offset",
-        "end_lineno",
-        "end_col_offset",
-        "line_base",
-        "col_unit",
-        "end_exclusive",
-        "span",
-        "attrs",
-        "ast_record",
-    ),
-    "ast_imports": (
-        "file_id",
-        "path",
-        "ast_id",
-        "parent_ast_id",
-        "kind",
-        "module",
-        "name",
-        "asname",
-        "alias_index",
-        "level",
-        "lineno",
-        "col_offset",
-        "end_lineno",
-        "end_col_offset",
-        "line_base",
-        "col_unit",
-        "end_exclusive",
-        "span",
-        "attrs",
-        "ast_record",
-    ),
-    "ast_defs": (
-        "file_id",
-        "path",
-        "ast_id",
-        "parent_ast_id",
-        "kind",
-        "name",
-        "decorator_count",
-        "arg_count",
-        "posonly_count",
-        "kwonly_count",
-        "type_params_count",
-        "base_count",
-        "keyword_count",
-        "lineno",
-        "col_offset",
-        "end_lineno",
-        "end_col_offset",
-        "line_base",
-        "col_unit",
-        "end_exclusive",
-        "span",
-        "attrs",
-        "ast_record",
-    ),
-    "ast_calls": (
-        "file_id",
-        "path",
-        "ast_id",
-        "parent_ast_id",
-        "func_kind",
-        "func_name",
-        "arg_count",
-        "keyword_count",
-        "starred_count",
-        "kw_star_count",
-        "lineno",
-        "col_offset",
-        "end_lineno",
-        "end_col_offset",
-        "line_base",
-        "col_unit",
-        "end_exclusive",
-        "span",
-        "attrs",
-        "ast_record",
-    ),
-    "ast_type_ignores": (
-        "file_id",
-        "path",
-        "ast_id",
-        "tag",
-        "lineno",
-        "col_offset",
-        "end_lineno",
-        "end_col_offset",
-        "line_base",
-        "col_unit",
-        "end_exclusive",
-        "span",
-        "attrs",
-        "ast_record",
-    ),
-    "ast_node_attrs": (
-        "file_id",
-        "path",
-        "ast_id",
-        "parent_ast_id",
-        "kind",
-        "name",
-        "attr_key",
-        "attr_value",
-    ),
-    "ast_def_attrs": (
-        "file_id",
-        "path",
-        "ast_id",
-        "parent_ast_id",
-        "kind",
-        "name",
-        "attr_key",
-        "attr_value",
-    ),
-    "ast_call_attrs": (
-        "file_id",
-        "path",
-        "ast_id",
-        "parent_ast_id",
-        "func_kind",
-        "func_name",
-        "attr_key",
-        "attr_value",
-    ),
-    "ast_edge_attrs": (
-        "file_id",
-        "path",
-        "src",
-        "dst",
-        "kind",
-        "slot",
-        "idx",
-        "attr_key",
-        "attr_value",
-    ),
-    "ast_span_metadata": (
-        "nodes_line_base",
-        "nodes_col_unit",
-        "nodes_end_exclusive",
-        "errors_line_base",
-        "errors_col_unit",
-        "errors_end_exclusive",
-        "docstrings_line_base",
-        "docstrings_col_unit",
-        "docstrings_end_exclusive",
-        "imports_line_base",
-        "imports_col_unit",
-        "imports_end_exclusive",
-        "defs_line_base",
-        "defs_col_unit",
-        "defs_end_exclusive",
-        "calls_line_base",
-        "calls_col_unit",
-        "calls_end_exclusive",
-        "type_ignores_line_base",
-        "type_ignores_col_unit",
-        "type_ignores_end_exclusive",
-    ),
-}
 
 TREE_SITTER_VIEW_NAMES: tuple[str, ...] = (
     "ts_nodes",
@@ -2115,21 +1898,19 @@ TREE_SITTER_CHECK_VIEWS: tuple[str, ...] = (
     "ts_cst_docstrings_check",
 )
 
-SCIP_VIEW_SCHEMA_MAP: dict[str, str] = {
-    "scip_metadata": "scip_metadata_v1",
-    "scip_index_stats": "scip_index_stats_v1",
-    "scip_documents": "scip_documents_v1",
-    "scip_document_texts": "scip_document_texts_v1",
-    "scip_occurrences": "scip_occurrences_v1",
-    "scip_symbol_information": "scip_symbol_information_v1",
-    "scip_document_symbols": "scip_document_symbols_v1",
-    "scip_external_symbol_information": "scip_external_symbol_information_v1",
-    "scip_symbol_relationships": "scip_symbol_relationships_v1",
-    "scip_signature_occurrences": "scip_signature_occurrences_v1",
-    "scip_diagnostics": "scip_diagnostics_v1",
-}
-
-SCIP_VIEW_NAMES: tuple[str, ...] = tuple(SCIP_VIEW_SCHEMA_MAP)
+SCIP_VIEW_NAMES: tuple[str, ...] = (
+    "scip_metadata",
+    "scip_index_stats",
+    "scip_documents",
+    "scip_document_texts",
+    "scip_occurrences",
+    "scip_symbol_information",
+    "scip_document_symbols",
+    "scip_external_symbol_information",
+    "scip_symbol_relationships",
+    "scip_signature_occurrences",
+    "scip_diagnostics",
+)
 
 SYMTABLE_VIEW_NAMES: tuple[str, ...] = (
     "symtable_scopes",
@@ -2996,7 +2777,6 @@ def validate_ast_views(
     introspector = SchemaIntrospector(ctx, sql_options=sql_options_for_profile(None))
     _validate_ast_function_requirements(ctx, resolved_views, errors)
     _validate_ast_view_outputs_all(ctx, introspector, resolved_views, errors)
-    _validate_ast_information_schema(introspector, resolved_views, errors)
     _validate_ast_file_types(ctx, errors)
     if "ast_span_metadata" in resolved_views:
         _validate_ast_span_metadata(ctx, errors)
@@ -3043,24 +2823,6 @@ def _validate_ast_view_outputs_all(
     for name in view_names:
         _validate_ast_view_outputs(ctx, introspector=introspector, name=name, errors=errors)
 
-
-def _validate_ast_information_schema(
-    introspector: SchemaIntrospector,
-    view_names: Sequence[str],
-    errors: dict[str, str],
-) -> None:
-    for name in view_names:
-        expected = AST_VIEW_COLUMN_MAP.get(name)
-        if not expected:
-            continue
-        try:
-            actual = introspector.table_column_names(name)
-        except (RuntimeError, TypeError, ValueError, KeyError) as exc:
-            errors[f"{name}_information_schema"] = str(exc)
-            continue
-        missing = sorted(set(expected) - actual)
-        if missing:
-            errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
 
 
 def _validate_ast_file_types(ctx: SessionContext, errors: dict[str, str]) -> None:
@@ -3193,7 +2955,6 @@ def validate_symtable_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    sql_options = sql_options_for_profile(None)
     function_catalog = _function_catalog(ctx)
     requirements = _function_requirements(SYMTABLE_FILES_SCHEMA)
     _validate_required_functions(
@@ -3216,21 +2977,11 @@ def validate_symtable_views(ctx: SessionContext) -> None:
             errors=errors,
             catalog=function_catalog,
         )
-    introspector = SchemaIntrospector(ctx, sql_options=sql_options)
     for name in SYMTABLE_VIEW_NAMES:
         try:
             _sql_with_options(ctx, f"DESCRIBE SELECT * FROM {name}").collect()
         except (RuntimeError, TypeError, ValueError) as exc:
             errors[name] = str(exc)
-    for name in SYMTABLE_VIEW_NAMES:
-        try:
-            expected = set(schema_for(name).names)
-            actual = introspector.table_column_names(name)
-            missing = sorted(expected - actual)
-            if missing:
-                errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
-        except (RuntimeError, TypeError, ValueError, KeyError) as exc:
-            errors[f"{name}_information_schema"] = str(exc)
     try:
         _sql_with_options(
             ctx,
@@ -3291,15 +3042,6 @@ def validate_scip_views(ctx: SessionContext) -> None:
         invalid = _invalid_output_names(columns)
         if invalid:
             errors[f"{view_name}_invalid_columns"] = f"Invalid column names: {invalid}."
-    for view_name, schema_name in SCIP_VIEW_SCHEMA_MAP.items():
-        try:
-            expected = set(schema_for(schema_name).names)
-            actual = introspector.table_column_names(view_name)
-            missing = sorted(expected - actual)
-            if missing:
-                errors[f"{view_name}_information_schema"] = f"Missing columns: {missing}."
-        except (RuntimeError, TypeError, ValueError, KeyError) as exc:
-            errors[f"{view_name}_information_schema"] = str(exc)
     if errors:
         msg = f"SCIP view validation failed: {errors}."
         raise ValueError(msg)
@@ -4310,7 +4052,6 @@ __all__ = [
     "SCIP_SYMBOL_INFORMATION_SCHEMA",
     "SCIP_SYMBOL_RELATIONSHIPS_SCHEMA",
     "SCIP_VIEW_NAMES",
-    "SCIP_VIEW_SCHEMA_MAP",
     "SQLGLOT_PARSE_ERRORS_SCHEMA",
     "SYMTABLE_FILES_SCHEMA",
     "SYMTABLE_VIEW_NAMES",

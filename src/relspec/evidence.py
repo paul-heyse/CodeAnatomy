@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
     from datafusion_engine.introspection import IntrospectionSnapshot
     from datafusion_engine.view_graph_registry import ViewNode
-    from relspec.plan_catalog import PlanCatalog
     from schema_spec.system import ContractSpec, DatasetSpec
 
 
@@ -186,29 +185,6 @@ def evidence_requirements_from_views(
     return requirements
 
 
-def evidence_requirements_from_plan(
-    catalog: PlanCatalog,
-    *,
-    task_names: set[str] | None = None,
-) -> EvidenceRequirements:
-    """Return evidence requirements aggregated from plan artifacts.
-
-    Returns
-    -------
-    EvidenceRequirements
-        Aggregated evidence requirements for the selected tasks.
-    """
-    requirements = EvidenceRequirements()
-    for artifact in catalog.artifacts:
-        if task_names is not None and artifact.task.name not in task_names:
-            continue
-        requirements.sources.update(artifact.deps.inputs)
-        _merge_required_columns(requirements.columns, artifact.deps.required_columns)
-        _merge_required_types(requirements.types, artifact.deps.required_types)
-        _merge_required_metadata(requirements.metadata, artifact.deps.required_metadata)
-    return requirements
-
-
 def initial_evidence_from_views(
     nodes: Sequence[ViewNode],
     *,
@@ -248,47 +224,6 @@ def initial_evidence_from_views(
             _seed_evidence_from_requirements(evidence, source, requirements)
     return evidence
 
-
-def initial_evidence_from_plan(
-    catalog: PlanCatalog,
-    *,
-    ctx: SessionContext | None = None,
-    snapshot: IntrospectionSnapshot | None = None,
-    task_names: set[str] | None = None,
-) -> EvidenceCatalog:
-    """Build initial evidence catalog seeded from plan requirements.
-
-    Returns
-    -------
-    EvidenceCatalog
-        Evidence catalog with known sources registered.
-    """
-    outputs = {
-        artifact.task.output
-        for artifact in catalog.artifacts
-        if task_names is None or artifact.task.name in task_names
-    }
-    requirements = evidence_requirements_from_plan(catalog, task_names=task_names)
-    if ctx is not None:
-        _validate_udf_info_schema_parity(ctx)
-    seed_sources = requirements.sources - outputs
-    evidence = EvidenceCatalog(sources=set(seed_sources))
-    ctx_id = id(ctx) if ctx is not None else None
-    resolved_snapshot = snapshot or _snapshot_from_ctx(ctx)
-    registration_ctx = EvidenceRegistrationContext(
-        ctx=ctx,
-        ctx_id=ctx_id,
-        snapshot=resolved_snapshot,
-    )
-    for source in sorted(seed_sources):
-        registered = _register_evidence_source(
-            evidence,
-            source,
-            context=registration_ctx,
-        )
-        if not registered:
-            _seed_evidence_from_requirements(evidence, source, requirements)
-    return evidence
 
 
 def _merge_required_columns(
@@ -485,8 +420,6 @@ def _bool_from_metadata(value: object | None) -> bool | None:
 __all__ = [
     "EvidenceCatalog",
     "EvidenceRequirements",
-    "evidence_requirements_from_plan",
     "evidence_requirements_from_views",
-    "initial_evidence_from_plan",
     "initial_evidence_from_views",
 ]

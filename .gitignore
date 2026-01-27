@@ -11,7 +11,8 @@ wheels/
 !build/scip/**
 
 # Rust build artifacts
-target/
+rust/datafusion_ext/target/
+rust/datafusion_ext/Cargo.lock
 Cargo.lock
 # Virtual environments
 .venv

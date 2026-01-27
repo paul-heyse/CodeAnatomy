@@ -22,6 +22,7 @@ from arrowdsl.core.interop import SchemaLike
 from core_types import JsonValue
 from engine.runtime_profile import resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
+from hamilton_pipeline.execution_manager import PlanExecutionManager
 from hamilton_pipeline.lifecycle import (
     DiagnosticsNodeHook,
     PlanDiagnosticsHook,
@@ -178,7 +179,11 @@ def _view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContext:
         include_registry_views=True,
     )
     validate_edge_kind_requirements(_relation_output_schema(session))
-    nodes = view_graph_nodes(session, snapshot=snapshot)
+    nodes = view_graph_nodes(
+        session,
+        snapshot=snapshot,
+        runtime_profile=profile,
+    )
     return ViewGraphContext(
         ctx=ctx,
         profile=profile,
@@ -455,12 +460,16 @@ def _apply_dynamic_execution(
     enable_submission_hook = bool(config.get("enable_plan_task_submission_hook", True))
     enable_grouping_hook = bool(config.get("enable_plan_task_grouping_hook", True))
     enforce_submission = bool(config.get("enforce_plan_task_submission", True))
+    local_executor = executors.SynchronousLocalTaskExecutor()
     remote_executor = executors.MultiProcessingExecutor(max_tasks=max_tasks)
+    execution_manager = PlanExecutionManager(
+        local_executor=local_executor,
+        remote_executor=remote_executor,
+    )
 
     dynamic_builder = (
         builder.enable_dynamic_execution(allow_experimental_mode=True)
-        .with_local_executor(executors.SynchronousLocalTaskExecutor())
-        .with_remote_executor(remote_executor)
+        .with_execution_manager(execution_manager)
         .with_grouping_strategy(plan_grouping_strategy(plan))
     )
     if enable_submission_hook:

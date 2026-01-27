@@ -408,6 +408,53 @@ def table_from_arrays(
     return table_from_schema(schema, columns=columns, num_rows=num_rows)
 
 
+def _empty_extension_array(data_type: pa.ExtensionType) -> pa.ExtensionArray:
+    storage = _empty_array_for_type(data_type.storage_type)
+    return pa.ExtensionArray.from_storage(data_type, storage)
+
+
+def _empty_struct_array(data_type: pa.StructType) -> pa.StructArray:
+    fields = list(data_type)
+    arrays = [_empty_array_for_type(field.type) for field in fields]
+    return pa.StructArray.from_arrays(arrays, fields=fields)
+
+
+def _empty_list_array(data_type: pa.DataType) -> pa.Array:
+    values = _empty_array_for_type(data_type.value_type)
+    if patypes.is_list(data_type):
+        offsets = pa.array([0], type=pa.int32())
+        return pa.ListArray.from_arrays(
+            offsets,
+            values,
+            type=cast("pa.ListType", data_type),
+        )
+    offsets = pa.array([0], type=pa.int64())
+    return pa.LargeListArray.from_arrays(
+        offsets,
+        values,
+        type=cast("pa.LargeListType", data_type),
+    )
+
+
+def _empty_map_array(data_type: pa.MapType) -> pa.MapArray:
+    offsets = pa.array([0], type=pa.int32())
+    keys = _empty_array_for_type(data_type.key_type)
+    items = _empty_array_for_type(data_type.item_type)
+    return pa.MapArray.from_arrays(offsets, keys, items, type=data_type)
+
+
+def _empty_array_for_type(data_type: pa.DataType) -> pa.Array:
+    if isinstance(data_type, pa.ExtensionType):
+        return _empty_extension_array(data_type)
+    if patypes.is_struct(data_type):
+        return _empty_struct_array(cast("pa.StructType", data_type))
+    if patypes.is_list(data_type) or patypes.is_large_list(data_type):
+        return _empty_list_array(data_type)
+    if patypes.is_map(data_type):
+        return _empty_map_array(cast("pa.MapType", data_type))
+    return pa.array([], type=data_type)
+
+
 def empty_table(schema: SchemaLike) -> TableLike:
     """Return an empty table with the provided schema.
 
@@ -416,7 +463,12 @@ def empty_table(schema: SchemaLike) -> TableLike:
     TableLike
         Empty table with the schema.
     """
-    return pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
+    # Register any extension types before constructing arrays that depend on them.
+    from arrowdsl.schema.schema import register_schema_extensions
+
+    register_schema_extensions(schema)
+    arrays = [_empty_array_for_type(field.type) for field in schema]
+    return pa.Table.from_arrays(arrays, schema=schema)
 
 
 def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> TableLike:

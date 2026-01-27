@@ -1511,7 +1511,12 @@ def _apply_projection_exprs(
         from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
 
         schema = _schema_from_df(projected)
-        bundle = build_plan_bundle(ctx, projected)
+        session_runtime = runtime_profile.session_runtime()
+        bundle = build_plan_bundle(
+            ctx,
+            projected,
+            session_runtime=session_runtime,
+        )
         required_udfs = bundle.required_udfs
         referenced_tables = referenced_tables_from_plan(bundle.optimized_logical_plan)
         artifact = build_view_artifact_from_bundle(

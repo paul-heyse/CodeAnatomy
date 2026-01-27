@@ -109,6 +109,8 @@ def build_session_runtime(profile: DataFusionRuntimeProfile) -> SessionRuntime:
 - [x] Centralize object store and catalog registration behind runtime bootstrap.
 - [x] Persist a session settings snapshot (`information_schema.df_settings`) per plan bundle.
 
+Status note: `SessionRuntime` is widely used in core planning/execution flows, but it is still an optional API surface rather than a hard enforcement boundary.
+
 ---
 
 ## Scope 2 — Enriched plan bundle as the system-of-record
@@ -191,7 +193,7 @@ class DataFusionPlanBundle:
 - [ ] Include Delta version pins for all scans.
 - [x] Update cache keys to incorporate plan fingerprint, UDF snapshot hash, required UDFs/tags, settings hash, and Delta pins.
 
-Status note: `DeltaInputPin` exists on the bundle, but it is not yet populated from scan units.
+Status note: `DeltaInputPin` is populated when scan units are passed (for example via `plan_with_delta_pins(...)`), but many plan-bundle call sites still compile without pinned scan units.
 
 ---
 
@@ -297,13 +299,13 @@ def extract_lineage(plan: object, *, udf_snapshot: dict[str, object]) -> Lineage
 
 - [x] Implement structured logical-plan traversal using `to_variant()` and `inputs()`.
 - [x] Extract scans, projections, predicates, join keys, and subqueries structurally.
-- [x] Extract UDF references from expression trees and emit `required_udfs` as lineage output.
+- [ ] Extract UDF references from expression trees and emit `required_udfs` as lineage output.
 - [x] Derive required rewrite tags from the UDF registry snapshot and emit them in lineage.
-- [x] Propagate required columns per dataset with a structured dependency model.
-- [x] Validate that required UDFs are available before lineage is accepted as canonical.
-- [x] Make structured lineage the only supported lineage path.
+- [ ] Propagate required columns per dataset with a structured dependency model.
+- [ ] Validate that required UDFs are available before lineage is accepted as canonical.
+- [ ] Make structured lineage the only supported lineage path.
 
-Status note: a display-string fallback remains for compatibility/debug and can be removed in Scope 18.
+Status note: lineage traversal is plan-variant based, but key dependency extraction (referenced columns and UDF detection) still relies on regex/string parsing of expression text.
 
 ---
 
@@ -558,11 +560,11 @@ def write_delta(ctx: SessionContext, df: DataFrame, spec: DeltaWriteSpec) -> Wri
 
 - [x] Introduce a declarative `DeltaWriteSpec` that captures layout and lifecycle requirements.
 - [x] Enable Delta features required for incremental execution and change capture.
-- [x] Prefer provider insert for Delta when available; fall back to delta-rs writer explicitly.
-- [x] Standardize commit properties for idempotency and reproducibility.
+- [ ] Prefer provider insert for Delta when available; fall back to delta-rs writer explicitly.
+- [ ] Standardize commit properties for idempotency and reproducibility.
 - [ ] Persist write metadata (version, timestamp, commit props) into plan artifacts.
 
-Status note: write metadata is recorded to diagnostics artifacts but not yet normalized into the plan artifact store.
+Status note: the deterministic write pipeline is strong, but many write paths still call `write_delta_table(...)` directly rather than flowing through `WritePipeline`.
 
 ---
 
@@ -703,7 +705,7 @@ class PlanArtifactRow:
 - [x] Make artifacts queryable via registered Delta tables in the session catalog.
 - [ ] Use artifacts to validate determinism (plan, UDF snapshot, required UDFs/tags, settings, and Delta pins).
 
-Status note: determinism validation is partially captured (for example, UDF compatibility) but not yet enforced via artifact-table queries.
+Status note: determinism validation helpers exist, but they are not yet invoked as a canonical gate in planning or execution flows.
 
 ---
 
@@ -768,11 +770,13 @@ def register_table_spec(ctx: SessionContext, spec: TableSpec) -> str:
 
 ### Implementation checklist
 
-- [ ] Introduce a declarative table spec model for all registrations.
+- [x] Introduce a declarative table spec model for all registrations.
 - [ ] Register Delta tables using provider-based registration only.
 - [ ] Treat UDF registry surfaces (`udf_registry`, `udf_docs`, and `information_schema` parity) as part of the registration contract.
 - [ ] Ensure registration invalidates and refreshes `information_schema` caches deterministically.
 - [ ] Emit registration metadata, including the UDF snapshot hash, into the plan artifacts store.
+
+Status note: `TableSpec` and `ProviderRegistry` exist, but registration still primarily flows through `registry_bridge` rather than a unified registry contract.
 
 ---
 
@@ -836,7 +840,7 @@ def add_identifier_columns(df: DataFrame, *, spec: IdentifierSpec) -> DataFrame:
 - [ ] Replace identifier scaffolding across view builders, normalize builders, and relationship builders.
 - [x] Tag these UDFs with rewrite tags like `id` and `hash` in the registry snapshot.
 
-Status note: these primitives are now widely available and partially adopted, but repo-wide scaffolding cleanup is still pending.
+Status note: these primitives are available and adopted in some builders, but extensive `concat_ws + coalesce` identifier scaffolding still exists (notably in `view_registry.py` and `symtable_views.py`).
 
 ---
 
@@ -902,7 +906,7 @@ def filter_span_overlaps(df: DataFrame) -> DataFrame:
 - [ ] Replace manual span struct-building logic with the span UDFs in core view builders.
 - [x] Tag span UDFs with rewrite tags like `span` and `position_encoding`.
 
-Status note: span primitives are implemented and tagged; remaining work is systematic replacement of local span scaffolding.
+Status note: span primitives are implemented and partially adopted, but manual span construction patterns remain in multiple view builders.
 
 ---
 
@@ -954,7 +958,7 @@ def normalize_symbols(df: DataFrame) -> DataFrame:
 - [ ] Replace normalization chains in property transforms and view builders.
 - [x] Tag normalization UDFs with rewrite tags like `string_norm` and `symbol`.
 
-Status note: the normalization UDFs, tags, and ExprIR coverage are in place; adoption and micro-optimizations remain.
+Status note: normalization primitives and ExprIR hooks are in place, but normalization is not yet consistently expressed through the new UDFs across property transforms and view builders.
 
 ---
 
@@ -1009,7 +1013,7 @@ def normalize_nested_attrs(df: DataFrame) -> DataFrame:
 - [ ] Replace nested scaffolding patterns in nested schema view registration.
 - [x] Tag nested UDFs with rewrite tags like `nested`, `map`, `list`, and `struct`.
 
-Status note: nested primitives are implemented, tagged, and reachable via ExprIR; adoption work remains.
+Status note: nested primitives are implemented, tagged, and reachable via ExprIR; systematic adoption in nested schema and view registration remains open.
 
 ---
 
@@ -1065,7 +1069,7 @@ def canonicalize_group(df: DataFrame) -> DataFrame:
 - [ ] Update dedupe and canonicalization specs to use deterministic aggregates.
 - [x] Tag aggregate UDFs with rewrite tags like `aggregate` and `deterministic`.
 
-Status note: the deterministic aggregate UDAFs and tags exist, but Python-level wrappers, ExprIR, and adoption are still open.
+Status note: deterministic aggregate UDAFs and tags exist in Rust, but Python wrappers/ExprIR coverage and adoption in canonicalization flows are still open.
 
 ---
 
@@ -1117,7 +1121,7 @@ def classify_cdf_changes(df: DataFrame) -> DataFrame:
 - [ ] Replace ad hoc change-type logic in incremental helpers.
 - [x] Tag incremental UDFs with rewrite tags like `incremental`, `cdf`, and `delta`.
 
-Status note: the UDFs, tags, and ExprIR hooks are in place; incremental modules still need to pivot to them.
+Status note: the incremental UDFs, tags, and ExprIR hooks are in place, but incremental modules still implement change-type classification ad hoc.
 
 ---
 
@@ -1197,7 +1201,7 @@ impl ScalarUDFImpl for StableIdPartsUdf {
 - [x] Expose UDF docs through `udf_docs()` and validate parity against `information_schema`.
 - [ ] Expand ExprIR coverage so all new primitives are reachable without SQL.
 
-Status note: ExprIR coverage now spans the new scalar primitives but not yet the new deterministic aggregate UDAFs.
+Status note: rewrite tags, docs, and planner wiring are materially improved, but ExprIR coverage and canonical usage still lag for aggregate primitives.
 
 ---
 
@@ -1218,6 +1222,8 @@ Status note: ExprIR coverage now spans the new scalar primitives but not yet the
 - [ ] Delete fallback plan parsing and non-Substrait fingerprints once structured lineage is complete.
 - [ ] Ensure all scheduling and execution flows require a plan bundle.
 - [ ] Re-run all quality gates and update documentation to reflect the single-engine architecture.
+
+Status note: code imports of Ibis/SQLGlot appear largely removed, but many documentation and tooling references remain, and string-based fallback logic still exists in lineage/fingerprinting.
 
 ---
 

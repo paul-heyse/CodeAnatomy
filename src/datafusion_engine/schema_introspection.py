@@ -17,7 +17,9 @@ Key introspection surfaces:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import importlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -25,11 +27,6 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
-from datafusion_engine.introspection import (
-    IntrospectionCache,
-    IntrospectionSnapshot,
-    introspection_cache_for_ctx,
-)
 from datafusion_engine.sql_options import (
     sql_options_for_profile,
     statement_sql_options_for_profile,
@@ -38,6 +35,9 @@ from datafusion_engine.table_provider_metadata import table_provider_metadata
 from serde_msgspec import dumps_msgpack, to_builtins
 
 SchemaMapping = dict[str, dict[str, dict[str, dict[str, str]]]]
+
+if TYPE_CHECKING:
+    from datafusion_engine.introspection import IntrospectionCache, IntrospectionSnapshot
 
 
 def schema_map_fingerprint_from_mapping(mapping: SchemaMapping) -> str:
@@ -85,6 +85,19 @@ def _read_only_sql_options() -> SQLOptions:
 
 def _statement_sql_options() -> SQLOptions:
     return statement_sql_options_for_profile(None)
+
+
+def _introspection_cache_for_ctx(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None,
+) -> IntrospectionCache:
+    try:
+        from datafusion_engine.introspection import introspection_cache_for_ctx
+    except ImportError as exc:  # pragma: no cover - defensive fallback
+        msg = "DataFusion introspection helpers are unavailable."
+        raise ValueError(msg) from exc
+    return introspection_cache_for_ctx(ctx, sql_options=sql_options)
 
 
 def _stable_cache_key(prefix: str, payload: Mapping[str, object]) -> str:
@@ -189,7 +202,7 @@ def table_names_snapshot(
     set[str]
         Set of table names registered in the session.
     """
-    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
     if "table_name" not in snapshot.tables.column_names:
         return set()
     return {str(name) for name in snapshot.tables["table_name"].to_pylist() if name is not None}
@@ -207,7 +220,7 @@ def settings_snapshot_table(
     pyarrow.Table
         Table of settings from information_schema.df_settings.
     """
-    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
     return snapshot.settings
 
 
@@ -223,7 +236,7 @@ def tables_snapshot_table(
     pyarrow.Table
         Table inventory from information_schema.tables.
     """
-    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
     return snapshot.tables
 
 
@@ -502,6 +515,26 @@ def _merge_registry_parameters(ctx: SessionContext, base: pa.Table | None) -> pa
     return pa.Table.from_pylist(_aligned_rows(routines, schema_names), schema=base_table.schema)
 
 
+def _information_schema_table(
+    ctx: SessionContext,
+    *,
+    name: str,
+    sql_options: SQLOptions | None,
+) -> pa.Table | None:
+    panic_exception_type: type[Exception] = RuntimeError
+    with contextlib.suppress(ImportError):  # pragma: no cover - optional dependency
+        module = importlib.import_module("pyo3_runtime")
+        candidate = getattr(module, "PanicException", RuntimeError)
+        if isinstance(candidate, type) and issubclass(candidate, Exception):
+            panic_exception_type = candidate
+    query = f"select * from information_schema.{name}"
+    try:
+        df = ctx.sql(query, options=sql_options)
+        return df.to_arrow_table()
+    except (RuntimeError, TypeError, ValueError, AttributeError, panic_exception_type):
+        return None
+
+
 def routines_snapshot_table(
     ctx: SessionContext,
     *,
@@ -514,8 +547,12 @@ def routines_snapshot_table(
     pyarrow.Table
         Routine inventory from information_schema.routines.
     """
-    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
     base = snapshot.routines if snapshot.routines is not None else _empty_routines_table()
+    if base.num_rows == 0:
+        fallback = _information_schema_table(ctx, name="routines", sql_options=sql_options)
+        if fallback is not None:
+            base = fallback
     return _merge_registry_routines(ctx, base)
 
 
@@ -531,8 +568,12 @@ def parameters_snapshot_table(
     pyarrow.Table | None
         Parameter inventory from information_schema.parameters, or None if unavailable.
     """
-    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
-    base = snapshot.parameters
+    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    base = getattr(snapshot, "parameters", None)
+    if base is None or base.num_rows == 0:
+        fallback = _information_schema_table(ctx, name="parameters", sql_options=sql_options)
+        if fallback is not None:
+            base = fallback
     merged = _merge_registry_parameters(ctx, base)
     if base is None and merged.num_rows == 0:
         return None
@@ -552,7 +593,7 @@ def table_constraint_rows(
     list[dict[str, object]]
         Rows including constraint type and column names where available.
     """
-    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
     return _constraint_rows_from_snapshot(snapshot, table_name=table_name)
 
 
@@ -570,7 +611,7 @@ def constraint_rows(
     list[dict[str, object]]
         Rows including constraint type and column names where available.
     """
-    snapshot = introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
+    snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
     return _constraint_rows_from_snapshot(snapshot, catalog=catalog, schema=schema)
 
 
@@ -662,7 +703,7 @@ class SchemaIntrospector:
             object.__setattr__(
                 self,
                 "introspection_cache",
-                introspection_cache_for_ctx(self.ctx, sql_options=self.sql_options),
+                _introspection_cache_for_ctx(self.ctx, sql_options=self.sql_options),
             )
         if self.snapshot is None and self.introspection_cache is not None:
             object.__setattr__(self, "snapshot", self.introspection_cache.snapshot)

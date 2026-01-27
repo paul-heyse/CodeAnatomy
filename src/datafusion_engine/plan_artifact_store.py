@@ -40,8 +40,10 @@ if TYPE_CHECKING:
 
 PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v1"
 WRITE_ARTIFACTS_TABLE_NAME = "datafusion_write_artifacts_v1"
+HAMILTON_EVENTS_TABLE_NAME = "datafusion_hamilton_events_v1"
 _ARTIFACTS_DIRNAME = PLAN_ARTIFACTS_TABLE_NAME
 _WRITE_ARTIFACTS_DIRNAME = WRITE_ARTIFACTS_TABLE_NAME
+_HAMILTON_EVENTS_DIRNAME = HAMILTON_EVENTS_TABLE_NAME
 _LOCAL_ARTIFACTS_DIRNAME = "artifacts"
 _PLAN_EVENT_KIND = "plan"
 _EXECUTION_EVENT_KIND = "execution"
@@ -61,6 +63,7 @@ class PlanArtifactRow:
     event_kind: str
     view_name: str
     plan_fingerprint: str
+    plan_identity_hash: str
     udf_snapshot_hash: str
     function_registry_hash: str
     required_udfs_json: str
@@ -100,6 +103,7 @@ class PlanArtifactRow:
             "event_kind": self.event_kind,
             "view_name": self.view_name,
             "plan_fingerprint": self.plan_fingerprint,
+            "plan_identity_hash": self.plan_identity_hash,
             "udf_snapshot_hash": self.udf_snapshot_hash,
             "function_registry_hash": self.function_registry_hash,
             "required_udfs_json": self.required_udfs_json,
@@ -136,6 +140,8 @@ class DeterminismValidationResult:
     view_name: str | None
     matching_artifact_count: int
     conflicting_fingerprints: tuple[str, ...]
+    plan_identity_hashes: tuple[str, ...] = ()
+    conflicting_plan_identity_hashes: tuple[str, ...] = ()
     validation_error: str | None = None
 
     def payload(self) -> dict[str, object]:
@@ -152,6 +158,8 @@ class DeterminismValidationResult:
             "view_name": self.view_name,
             "matching_artifact_count": self.matching_artifact_count,
             "conflicting_fingerprints": list(self.conflicting_fingerprints),
+            "plan_identity_hashes": list(self.plan_identity_hashes),
+            "conflicting_plan_identity_hashes": list(self.conflicting_plan_identity_hashes),
             "validation_error": self.validation_error,
         }
 
@@ -211,6 +219,39 @@ class WriteArtifactRow:
         }
 
 
+@dataclass(frozen=True)
+class HamiltonEventRow:
+    """Serializable Hamilton event row persisted to the Delta store."""
+
+    event_time_unix_ms: int
+    profile_name: str | None
+    run_id: str
+    event_name: str
+    plan_signature: str
+    reduced_plan_signature: str
+    event_payload_json: str
+    event_payload_hash: str
+
+    def to_row(self) -> dict[str, object]:
+        """Return a JSON-ready row mapping.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-ready row payload.
+        """
+        return {
+            "event_time_unix_ms": self.event_time_unix_ms,
+            "profile_name": self.profile_name,
+            "run_id": self.run_id,
+            "event_name": self.event_name,
+            "plan_signature": self.plan_signature,
+            "reduced_plan_signature": self.reduced_plan_signature,
+            "event_payload_json": self.event_payload_json,
+            "event_payload_hash": self.event_payload_hash,
+        }
+
+
 def ensure_plan_artifacts_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
@@ -233,6 +274,28 @@ def ensure_plan_artifacts_table(
     return location
 
 
+def ensure_hamilton_events_table(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+) -> DatasetLocation | None:
+    """Ensure the Hamilton events table exists and is registered.
+
+    Returns
+    -------
+    DatasetLocation | None
+        Location for the Hamilton events table when enabled.
+    """
+    location = _hamilton_events_location(profile)
+    if location is None:
+        return None
+    table_path = Path(location.path)
+    existing_version = delta_table_version(str(table_path))
+    if existing_version is None:
+        _bootstrap_hamilton_events_table(profile, table_path)
+    _refresh_hamilton_events_registration(ctx, profile, location)
+    return location
+
+
 @dataclass(frozen=True)
 class PlanArtifactsForViewsRequest:
     """Inputs for persisting plan artifacts for view nodes."""
@@ -241,6 +304,17 @@ class PlanArtifactsForViewsRequest:
     scan_units: Sequence[ScanUnit] = ()
     scan_keys_by_view: Mapping[str, Sequence[str]] | None = None
     lineage_by_view: Mapping[str, LineageReport] | None = None
+
+
+@dataclass(frozen=True)
+class HamiltonEventsRequest:
+    """Inputs for persisting Hamilton lifecycle events."""
+
+    run_id: str
+    plan_signature: str
+    reduced_plan_signature: str
+    events_snapshot: Mapping[str, Sequence[Mapping[str, object]]]
+    event_names: Sequence[str] | None = None
 
 
 def persist_plan_artifacts_for_views(
@@ -253,6 +327,10 @@ def persist_plan_artifacts_for_views(
 
     Parameters
     ----------
+    ctx
+        DataFusion session context used for artifact persistence.
+    profile
+        Runtime profile for artifact storage configuration.
     request
         Plan artifact persistence request payload.
 
@@ -331,29 +409,28 @@ def validate_plan_determinism(
             conflicting_fingerprints=(),
             validation_error="artifact_store_disabled",
         )
-    try:
-        table_path = str(location.path)
-        query = _determinism_validation_query(table_path, view_name=view_name)
-        result_df = ctx.sql(query)
-        results = result_df.collect()
-    except (RuntimeError, ValueError, TypeError) as exc:
+    table_path = str(location.path)
+    results, identity_error = _collect_determinism_results(
+        ctx,
+        table_path,
+        view_name=view_name,
+        plan_fingerprint=plan_fingerprint,
+    )
+    if results is None:
         return DeterminismValidationResult(
             is_deterministic=True,
             plan_fingerprint=plan_fingerprint,
             view_name=view_name,
             matching_artifact_count=0,
             conflicting_fingerprints=(),
-            validation_error=str(exc),
+            validation_error=identity_error,
         )
-    fingerprints: set[str] = set()
-    row_count = 0
-    for batch in results:
-        for row in batch.to_pylist():
-            row_count += 1
-            fp = row.get("plan_fingerprint")
-            if fp is not None:
-                fingerprints.add(str(fp))
-    is_deterministic = len(fingerprints) <= 1 or plan_fingerprint in fingerprints
+    row_count, fingerprints, identities = _determinism_sets(results)
+    is_deterministic, plan_identity_hashes, conflicting_identities = _determinism_outcome(
+        plan_fingerprint=plan_fingerprint,
+        fingerprints=fingerprints,
+        identities=identities,
+    )
     conflicting = tuple(sorted(fp for fp in fingerprints if fp != plan_fingerprint))
     return DeterminismValidationResult(
         is_deterministic=is_deterministic,
@@ -361,13 +438,84 @@ def validate_plan_determinism(
         view_name=view_name,
         matching_artifact_count=row_count,
         conflicting_fingerprints=conflicting,
+        plan_identity_hashes=plan_identity_hashes,
+        conflicting_plan_identity_hashes=conflicting_identities,
+        validation_error=identity_error,
     )
+
+
+def _collect_determinism_results(
+    ctx: SessionContext,
+    table_path: str,
+    *,
+    view_name: str | None,
+    plan_fingerprint: str,
+) -> tuple[list[pa.RecordBatch] | None, str | None]:
+    identity_error: str | None = None
+    identity_query = _determinism_validation_query(
+        table_path,
+        view_name=view_name,
+        plan_fingerprint=plan_fingerprint,
+        include_identity=True,
+    )
+    try:
+        return ctx.sql(identity_query).collect(), None
+    except (RuntimeError, ValueError, TypeError) as exc:
+        identity_error = str(exc)
+    fallback_query = _determinism_validation_query(
+        table_path,
+        view_name=view_name,
+        plan_fingerprint=plan_fingerprint,
+        include_identity=False,
+    )
+    try:
+        return ctx.sql(fallback_query).collect(), identity_error
+    except (RuntimeError, ValueError, TypeError) as fallback_exc:
+        error = identity_error or str(fallback_exc)
+        return None, error
+
+
+def _determinism_sets(
+    results: Sequence[pa.RecordBatch],
+) -> tuple[int, set[str], set[str]]:
+    fingerprints: set[str] = set()
+    identities: set[str] = set()
+    row_count = 0
+    for batch in results:
+        for row in batch.to_pylist():
+            row_count += 1
+            fp = row.get("plan_fingerprint")
+            if fp is not None:
+                fingerprints.add(str(fp))
+            identity = row.get("plan_identity_hash")
+            if identity is not None:
+                identities.add(str(identity))
+    return row_count, fingerprints, identities
+
+
+def _determinism_outcome(
+    *,
+    plan_fingerprint: str,
+    fingerprints: set[str],
+    identities: set[str],
+) -> tuple[bool, tuple[str, ...], tuple[str, ...]]:
+    plan_identity_hashes = tuple(sorted(identities))
+    if plan_identity_hashes:
+        baseline_identity = plan_identity_hashes[0]
+        conflicting_identities = tuple(
+            value for value in plan_identity_hashes if value != baseline_identity
+        )
+        return (not conflicting_identities), plan_identity_hashes, conflicting_identities
+    is_deterministic = len(fingerprints) <= 1 or plan_fingerprint in fingerprints
+    return is_deterministic, plan_identity_hashes, ()
 
 
 def _determinism_validation_query(
     table_path: str,
     *,
     view_name: str | None,
+    plan_fingerprint: str,
+    include_identity: bool,
 ) -> str:
     """Build SQL query for determinism validation.
 
@@ -376,10 +524,18 @@ def _determinism_validation_query(
     str
         SQL query for determinism checks.
     """
-    base = f"SELECT DISTINCT plan_fingerprint FROM delta_scan('{table_path}')"
-    if view_name is not None:
-        return f"{base} WHERE view_name = '{view_name}'"
-    return base
+    plan_literal = plan_fingerprint.replace("'", "''")
+    select_cols = "plan_fingerprint"
+    if include_identity:
+        select_cols = "plan_fingerprint, plan_identity_hash"
+    base = (
+        f"SELECT DISTINCT {select_cols} FROM delta_scan('{table_path}') "
+        f"WHERE plan_fingerprint = '{plan_literal}'"
+    )
+    if view_name is None:
+        return base
+    view_literal = view_name.replace("'", "''")
+    return f"{base} AND view_name = '{view_literal}'"
 
 
 @dataclass(frozen=True)
@@ -566,6 +722,135 @@ def persist_plan_artifact_rows(
     return tuple(rows)
 
 
+def persist_hamilton_events(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+    *,
+    request: HamiltonEventsRequest,
+) -> tuple[HamiltonEventRow, ...]:
+    """Persist Hamilton lifecycle events to the Delta-backed artifact store.
+
+    Returns
+    -------
+    tuple[HamiltonEventRow, ...]
+        Persisted Hamilton event rows.
+    """
+    location = ensure_hamilton_events_table(ctx, profile)
+    if location is None:
+        return ()
+    events_snapshot = request.events_snapshot
+    names = (
+        tuple(request.event_names)
+        if request.event_names is not None
+        else tuple(sorted(events_snapshot))
+    )
+    rows: list[HamiltonEventRow] = []
+    for event_name in names:
+        rows_for_event = events_snapshot.get(event_name, ())
+        if not rows_for_event:
+            continue
+        for payload in rows_for_event:
+            normalized = {str(key): value for key, value in payload.items()}
+            event_time_unix_ms = _event_time_unix_ms(normalized)
+            payload_hash = _payload_hash(
+                {
+                    "event_name": event_name,
+                    "plan_signature": request.plan_signature,
+                    "reduced_plan_signature": request.reduced_plan_signature,
+                    "payload": normalized,
+                }
+            )
+            rows.append(
+                HamiltonEventRow(
+                    event_time_unix_ms=event_time_unix_ms,
+                    profile_name=_profile_name(profile),
+                    run_id=request.run_id,
+                    event_name=event_name,
+                    plan_signature=request.plan_signature,
+                    reduced_plan_signature=request.reduced_plan_signature,
+                    event_payload_json=_json_text(normalized),
+                    event_payload_hash=payload_hash,
+                )
+            )
+    if not rows:
+        return ()
+    return persist_hamilton_event_rows(ctx, profile, rows=rows, location=location)
+
+
+def persist_hamilton_event_rows(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+    *,
+    rows: Sequence[HamiltonEventRow],
+    location: DatasetLocation | None = None,
+) -> tuple[HamiltonEventRow, ...]:
+    """Persist Hamilton event rows to the Delta-backed artifact store.
+
+    Returns
+    -------
+    tuple[HamiltonEventRow, ...]
+        Persisted Hamilton event rows.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Delta version cannot be resolved after write.
+    """
+    if not rows:
+        return ()
+    resolved_location = location or ensure_hamilton_events_table(ctx, profile)
+    if resolved_location is None:
+        return ()
+    table_path = Path(resolved_location.path)
+    arrow_table = pa.Table.from_pylist(
+        [row.to_row() for row in rows],
+        schema=_hamilton_events_schema(),
+    )
+    commit_metadata = _commit_metadata_for_hamilton_events(rows)
+    commit_key = str(table_path)
+    commit_options, commit_run = profile.reserve_delta_commit(
+        key=commit_key,
+        metadata=commit_metadata,
+        commit_metadata=commit_metadata,
+    )
+    commit_properties = idempotent_commit_properties(
+        operation="hamilton_events_store",
+        mode="append",
+        idempotent=commit_options,
+        extra_metadata=commit_metadata,
+    )
+    options = DeltaWriteOptions(
+        mode="append",
+        schema_mode="merge",
+        configuration=DEFAULT_DELTA_FEATURE_PROPERTIES,
+        commit_metadata=commit_metadata,
+        commit_properties=commit_properties,
+    )
+    write_result = write_delta_table(
+        arrow_table,
+        str(table_path),
+        options=options,
+    )
+    final_version = delta_table_version(str(table_path))
+    if final_version is None:
+        final_version = write_result.version
+    if final_version is None:
+        msg = f"Failed to resolve Delta version for Hamilton events: {table_path}."
+        raise RuntimeError(msg)
+    profile.finalize_delta_commit(
+        key=commit_key,
+        run=commit_run,
+        metadata={
+            "operation": "hamilton_events_store",
+            "row_count": len(rows),
+            "delta_version": final_version,
+        },
+    )
+    _refresh_hamilton_events_registration(ctx, profile, resolved_location)
+    _record_hamilton_events_summary(profile, rows=rows, path=str(table_path), version=final_version)
+    return tuple(rows)
+
+
 def build_plan_artifact_row(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
@@ -583,11 +868,20 @@ def build_plan_artifact_row(
     scan_payload = _scan_units_payload(request.scan_units, scan_keys=request.scan_keys)
     scan_keys_payload = tuple(sorted(set(request.scan_keys)))
     delta_inputs_payload = _delta_inputs_payload(request.bundle)
+    plan_identity_payload = _plan_identity_payload(
+        bundle=request.bundle,
+        profile=profile,
+        delta_inputs_payload=delta_inputs_payload,
+        scan_payload=scan_payload,
+        scan_keys_payload=scan_keys_payload,
+    )
+    plan_identity_hash = _payload_hash(plan_identity_payload)
     udf_ok, udf_detail = _udf_compatibility(ctx, request.bundle)
     plan_details_payload = _plan_details_payload(
         request.bundle,
         delta_inputs_payload=delta_inputs_payload,
         scan_payload=scan_payload,
+        plan_identity_hash=plan_identity_hash,
     )
     return PlanArtifactRow(
         event_time_unix_ms=int(time.time() * 1000),
@@ -595,6 +889,7 @@ def build_plan_artifact_row(
         event_kind=request.event_kind,
         view_name=request.view_name,
         plan_fingerprint=request.bundle.plan_fingerprint,
+        plan_identity_hash=plan_identity_hash,
         udf_snapshot_hash=request.bundle.artifacts.udf_snapshot_hash,
         function_registry_hash=request.bundle.artifacts.function_registry_hash,
         required_udfs_json=_json_text(request.bundle.required_udfs),
@@ -630,6 +925,19 @@ def _plan_artifacts_location(profile: DataFusionRuntimeProfile) -> DatasetLocati
         return None
     location = DatasetLocation(
         path=str(root / _ARTIFACTS_DIRNAME),
+        format="delta",
+        storage_options={},
+        delta_log_storage_options={},
+    )
+    return _with_delta_settings(location)
+
+
+def _hamilton_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
+    root = _plan_artifacts_root(profile)
+    if root is None:
+        return None
+    location = DatasetLocation(
+        path=str(root / _HAMILTON_EVENTS_DIRNAME),
         format="delta",
         storage_options={},
         delta_log_storage_options={},
@@ -755,6 +1063,87 @@ def _record_plan_artifact_summary(
         record_artifact(profile, PLAN_ARTIFACTS_TABLE_NAME, row.to_row())
 
 
+def _hamilton_events_schema() -> pa.Schema:
+    from datafusion_engine.schema_registry import DATAFUSION_HAMILTON_EVENTS_SCHEMA
+
+    schema = DATAFUSION_HAMILTON_EVENTS_SCHEMA
+    if isinstance(schema, pa.Schema):
+        return schema
+    return pa.schema(schema)
+
+
+def _bootstrap_hamilton_events_table(
+    _profile: DataFusionRuntimeProfile,
+    table_path: Path,
+) -> None:
+    schema = _hamilton_events_schema()
+    empty_table = pa.Table.from_pylist([], schema=schema)
+    commit_metadata = {
+        "operation": "hamilton_events_bootstrap",
+        "mode": "overwrite",
+        "table": HAMILTON_EVENTS_TABLE_NAME,
+    }
+    commit_properties = idempotent_commit_properties(
+        operation="hamilton_events_bootstrap",
+        mode="overwrite",
+        extra_metadata=commit_metadata,
+    )
+    options = DeltaWriteOptions(
+        mode="overwrite",
+        schema_mode="overwrite",
+        configuration=DEFAULT_DELTA_FEATURE_PROPERTIES,
+        commit_metadata=commit_metadata,
+        commit_properties=commit_properties,
+    )
+    write_delta_table(empty_table, str(table_path), options=options)
+    enable_delta_features(
+        str(table_path),
+        features=DEFAULT_DELTA_FEATURE_PROPERTIES,
+        commit_metadata=commit_metadata,
+    )
+
+
+def _refresh_hamilton_events_registration(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+    location: DatasetLocation,
+) -> None:
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+    from datafusion_engine.registry_bridge import DataFusionCachePolicy
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
+    if ctx.table_exist(HAMILTON_EVENTS_TABLE_NAME):
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            adapter.deregister_table(HAMILTON_EVENTS_TABLE_NAME)
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
+    facade.register_dataset(
+        name=HAMILTON_EVENTS_TABLE_NAME,
+        location=location,
+        cache_policy=DataFusionCachePolicy(enabled=False, max_columns=None),
+    )
+
+
+def _record_hamilton_events_summary(
+    profile: DataFusionRuntimeProfile,
+    *,
+    rows: Sequence[HamiltonEventRow],
+    path: str,
+    version: int,
+) -> None:
+    payload = {
+        "table": HAMILTON_EVENTS_TABLE_NAME,
+        "path": path,
+        "row_count": len(rows),
+        "event_names": sorted({row.event_name for row in rows}),
+        "run_ids": sorted({row.run_id for row in rows}),
+        "delta_version": version,
+    }
+    record_artifact(profile, "hamilton_events_store_v1", payload)
+    for row in rows:
+        record_artifact(profile, HAMILTON_EVENTS_TABLE_NAME, row.to_row())
+
+
 def _commit_metadata_for_rows(rows: Sequence[PlanArtifactRow]) -> dict[str, str]:
     event_kinds = sorted({row.event_kind for row in rows})
     view_names = sorted({row.view_name for row in rows})
@@ -768,6 +1157,32 @@ def _commit_metadata_for_rows(rows: Sequence[PlanArtifactRow]) -> dict[str, str]
         metadata["first_view_name"] = view_names[0]
         metadata["view_count"] = str(len(view_names))
     return metadata
+
+
+def _commit_metadata_for_hamilton_events(rows: Sequence[HamiltonEventRow]) -> dict[str, str]:
+    event_names = sorted({row.event_name for row in rows})
+    run_ids = sorted({row.run_id for row in rows})
+    metadata: dict[str, str] = {
+        "operation": "hamilton_events_store",
+        "mode": "append",
+        "row_count": str(len(rows)),
+        "event_name_count": str(len(event_names)),
+    }
+    if event_names:
+        metadata["first_event_name"] = event_names[0]
+    if run_ids:
+        metadata["first_run_id"] = run_ids[0]
+        metadata["run_id_count"] = str(len(run_ids))
+    return metadata
+
+
+def _event_time_unix_ms(payload: Mapping[str, object]) -> int:
+    value = payload.get("event_time_unix_ms")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return int(time.time() * 1000)
 
 
 def _lineage_from_bundle(bundle: DataFusionPlanBundle) -> LineageReport:
@@ -850,7 +1265,7 @@ def _scan_units_payload(
 
 
 def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, object], ...]:
-    payloads = [
+    payloads: list[dict[str, object]] = [
         {
             "dataset_name": pin.dataset_name,
             "version": pin.version,
@@ -862,16 +1277,46 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, objec
     return tuple(payloads)
 
 
+def _plan_identity_payload(
+    *,
+    bundle: DataFusionPlanBundle,
+    profile: DataFusionRuntimeProfile,
+    delta_inputs_payload: Sequence[Mapping[str, object]],
+    scan_payload: Sequence[Mapping[str, object]],
+    scan_keys_payload: Sequence[str],
+) -> Mapping[str, object]:
+    df_settings_entries = tuple(
+        sorted((str(key), str(value)) for key, value in bundle.artifacts.df_settings.items())
+    )
+    return {
+        "version": 1,
+        "plan_fingerprint": bundle.plan_fingerprint,
+        "udf_snapshot_hash": bundle.artifacts.udf_snapshot_hash,
+        "function_registry_hash": bundle.artifacts.function_registry_hash,
+        "required_udfs": tuple(sorted(bundle.required_udfs)),
+        "required_rewrite_tags": tuple(sorted(bundle.required_rewrite_tags)),
+        "domain_planner_names": tuple(sorted(bundle.artifacts.domain_planner_names)),
+        "df_settings_entries": df_settings_entries,
+        "delta_inputs": tuple(delta_inputs_payload),
+        "scan_units": tuple(scan_payload),
+        "scan_keys": tuple(sorted(set(scan_keys_payload))),
+        "profile_settings_hash": profile.settings_hash(),
+        "profile_context_key": profile.context_cache_key(),
+    }
+
+
 def _plan_details_payload(
     bundle: DataFusionPlanBundle,
     *,
     delta_inputs_payload: Sequence[Mapping[str, object]],
     scan_payload: Sequence[Mapping[str, object]],
+    plan_identity_hash: str,
 ) -> Mapping[str, object]:
     base_details = dict(bundle.plan_details)
     base_details["delta_inputs_hash"] = _payload_hash(delta_inputs_payload)
     base_details["scan_units_hash"] = _payload_hash(scan_payload)
     base_details["df_settings_hash"] = _payload_hash(bundle.artifacts.df_settings)
+    base_details["plan_identity_hash"] = plan_identity_hash
     return base_details
 
 
@@ -927,14 +1372,21 @@ def _json_text(payload: object) -> str:
 
 
 __all__ = [
+    "HAMILTON_EVENTS_TABLE_NAME",
     "PLAN_ARTIFACTS_TABLE_NAME",
     "WRITE_ARTIFACTS_TABLE_NAME",
     "DeterminismValidationResult",
+    "HamiltonEventRow",
+    "HamiltonEventsRequest",
     "PlanArtifactRow",
+    "PlanArtifactsForViewsRequest",
     "WriteArtifactRow",
     "build_plan_artifact_row",
+    "ensure_hamilton_events_table",
     "ensure_plan_artifacts_table",
     "persist_execution_artifact",
+    "persist_hamilton_event_rows",
+    "persist_hamilton_events",
     "persist_plan_artifact_rows",
     "persist_plan_artifacts_for_views",
     "persist_write_artifact",

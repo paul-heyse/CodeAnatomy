@@ -232,15 +232,51 @@ def _flush_plan_events(
             continue
         normalized_rows = [{str(key): value for key, value in row.items()} for row in rows]
         record_events(profile, name, normalized_rows)
+    plan_drift = _plan_drift_payload(
+        plan,
+        events_snapshot=events_snapshot,
+        run_id=run_id,
+    )
     record_artifact(
         profile,
         "hamilton_plan_drift_v1",
-        _plan_drift_payload(
-            plan,
-            events_snapshot=events_snapshot,
-            run_id=run_id,
-        ),
+        plan_drift,
     )
+    events_for_persistence = dict(events_snapshot)
+    events_for_persistence["hamilton_plan_drift_v1"] = [plan_drift]
+    persisted_event_names = (*plan_event_names, "hamilton_plan_drift_v1")
+    try:
+        from datafusion_engine.plan_artifact_store import (
+            HamiltonEventsRequest,
+            persist_hamilton_events,
+        )
+
+        session = profile.session_context()
+        request = HamiltonEventsRequest(
+            run_id=run_id,
+            plan_signature=plan.plan_signature,
+            reduced_plan_signature=plan.reduced_task_dependency_signature,
+            events_snapshot=events_for_persistence,
+            event_names=persisted_event_names,
+        )
+        persist_hamilton_events(
+            session,
+            profile,
+            request=request,
+        )
+    except (RuntimeError, ValueError, TypeError, OSError, KeyError, ImportError) as exc:
+        record_artifact(
+            profile,
+            "hamilton_events_store_failed_v1",
+            {
+                "run_id": run_id,
+                "plan_signature": plan.plan_signature,
+                "reduced_plan_signature": plan.reduced_task_dependency_signature,
+                "event_names": list(persisted_event_names),
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
     record_artifact(
         profile,
         "hamilton_plan_events_v1",

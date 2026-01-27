@@ -13,6 +13,7 @@ from arrowdsl.schema.metadata import metadata_list_bytes
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.schema_registry import (
     AST_VIEW_NAMES,
+    DATAFUSION_HAMILTON_EVENTS_SCHEMA,
     HAMILTON_PLAN_DRIFT_SCHEMA,
     HAMILTON_TASK_EXPANSION_SCHEMA,
     HAMILTON_TASK_GROUPING_SCHEMA,
@@ -130,3 +131,13 @@ def test_hamilton_diagnostics_schemas_cover_plan_events() -> None:
         "missing_generations",
         "submission_event_count",
     }.issubset(drift_fields)
+    events_fields = set(DATAFUSION_HAMILTON_EVENTS_SCHEMA.names)
+    assert {
+        "event_time_unix_ms",
+        "run_id",
+        "event_name",
+        "plan_signature",
+        "reduced_plan_signature",
+        "event_payload_json",
+        "event_payload_hash",
+    }.issubset(events_fields)

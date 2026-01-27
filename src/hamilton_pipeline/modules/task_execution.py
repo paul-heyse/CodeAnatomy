@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
+import pyarrow as pa
 from hamilton.function_modifiers import pipe_input, source, step, tag
 
 from arrowdsl.core.interop import TableLike as ArrowTableLike
@@ -21,8 +22,15 @@ from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, T
 if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.scan_planner import ScanUnit
     from engine.session import EngineSession
+else:
+    ExecutionContext = object
+    DataFusionPlanBundle = object
+    DataFusionRuntimeProfile = object
+    ScanUnit = object
+    EngineSession = object
 
 
 @dataclass(frozen=True)
@@ -36,6 +44,7 @@ class TaskExecutionInputs:
     plan_bundles_by_task: Mapping[str, DataFusionPlanBundle]
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_units_by_task_name: Mapping[str, ScanUnit]
     scan_units_hash: str | None
 
 
@@ -45,6 +54,7 @@ class PlanScanInputs:
 
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_units_by_task_name: Mapping[str, ScanUnit]
     scan_units_hash: str | None
 
 
@@ -65,6 +75,8 @@ class TaskExecutionSpec:
     task_name: str
     task_output: str
     plan_fingerprint: str
+    task_kind: Literal["view", "scan"]
+    scan_unit_key: str | None = None
 
 
 def _finalize_cpg_table(
@@ -142,6 +154,7 @@ def runtime_artifacts(
 def plan_scan_inputs(
     plan_scan_units: tuple[ScanUnit, ...],
     plan_scan_keys_by_task: Mapping[str, tuple[str, ...]],
+    plan_scan_units_by_task_name: Mapping[str, ScanUnit],
 ) -> PlanScanInputs:
     """Bundle scan-unit context for deterministic task execution.
 
@@ -150,14 +163,21 @@ def plan_scan_inputs(
     PlanScanInputs
         Scan-unit context and hash for the execution run.
     """
+    mapping_units = tuple(plan_scan_units_by_task_name.values())
+    units = (
+        plan_scan_units
+        if plan_scan_units
+        else tuple(sorted(mapping_units, key=lambda unit: unit.key))
+    )
     scan_hash: str | None = None
-    if plan_scan_units:
+    if units:
         from datafusion_engine.scan_overrides import scan_units_hash
 
-        scan_hash = scan_units_hash(plan_scan_units)
+        scan_hash = scan_units_hash(units)
     return PlanScanInputs(
-        scan_units=plan_scan_units,
+        scan_units=units,
         scan_keys_by_task=plan_scan_keys_by_task,
+        scan_units_by_task_name=dict(plan_scan_units_by_task_name),
         scan_units_hash=scan_hash,
     )
 
@@ -192,8 +212,38 @@ def task_execution_inputs(
         plan_bundles_by_task=plan_context.plan_bundles_by_task,
         scan_units=plan_context.plan_scan_inputs.scan_units,
         scan_keys_by_task=plan_context.plan_scan_inputs.scan_keys_by_task,
+        scan_units_by_task_name=plan_context.plan_scan_inputs.scan_units_by_task_name,
         scan_units_hash=plan_context.plan_scan_inputs.scan_units_hash,
     )
+
+
+def _ensure_scan_overrides(
+    runtime: RuntimeArtifacts,
+    *,
+    scan_context: PlanScanInputs,
+) -> DataFusionRuntimeProfile:
+    exec_ctx = runtime.execution
+    if exec_ctx is None:
+        msg = "RuntimeArtifacts.execution must be configured for view execution."
+        raise ValueError(msg)
+    profile = exec_ctx.runtime.datafusion
+    if profile is None:
+        msg = "DataFusion runtime profile is required for view execution."
+        raise ValueError(msg)
+    session = profile.session_context()
+    refresh_requested = (
+        scan_context.scan_units_hash is not None
+        and runtime.scan_override_hash != scan_context.scan_units_hash
+    )
+    if refresh_requested:
+        ensure_view_graph(
+            session,
+            runtime_profile=profile,
+            include_registry_views=True,
+            scan_units=scan_context.scan_units,
+        )
+        runtime.scan_override_hash = scan_context.scan_units_hash
+    return profile
 
 
 def _execute_view(
@@ -206,22 +256,9 @@ def _execute_view(
     if plan_bundle is None:
         msg = f"Plan bundle is required for view execution: {view_name!r}."
         raise ValueError(msg)
-    exec_ctx = runtime.execution
-    if exec_ctx is None:
-        msg = "RuntimeArtifacts.execution must be configured for view execution."
-        raise ValueError(msg)
-    profile = exec_ctx.runtime.datafusion
-    if profile is None:
-        msg = "DataFusion runtime profile is required for view execution."
-        raise ValueError(msg)
+    profile = _ensure_scan_overrides(runtime, scan_context=scan_context)
     session = profile.session_context()
-    refresh_requested = not session.table_exist(view_name)
-    if (
-        scan_context.scan_units_hash is not None
-        and runtime.scan_override_hash != scan_context.scan_units_hash
-    ):
-        refresh_requested = True
-    if refresh_requested:
+    if not session.table_exist(view_name):
         ensure_view_graph(
             session,
             runtime_profile=profile,
@@ -231,7 +268,6 @@ def _execute_view(
         if not session.table_exist(view_name):
             msg = f"View {view_name!r} is not registered; call ensure_view_graph first."
             raise ValueError(msg)
-        runtime.scan_override_hash = scan_context.scan_units_hash
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
     facade = DataFusionExecutionFacade(ctx=session, runtime_profile=profile)
@@ -243,6 +279,26 @@ def _execute_view(
     )
     dataframe = execution_result.require_dataframe()
     table = dataframe.to_arrow_table()
+    return ExecutionResult.from_table(table)
+
+
+def _execute_scan_task(
+    runtime: RuntimeArtifacts,
+    *,
+    scan_task_name: str,
+    scan_unit: ScanUnit,
+    scan_context: PlanScanInputs,
+) -> ExecutionResult:
+    _ensure_scan_overrides(runtime, scan_context=scan_context)
+    metadata: dict[bytes, bytes] = {
+        b"scan_task_name": scan_task_name.encode("utf-8"),
+        b"scan_unit_key": scan_unit.key.encode("utf-8"),
+        b"scan_dataset_name": scan_unit.dataset_name.encode("utf-8"),
+    }
+    if scan_unit.delta_version is not None:
+        metadata[b"scan_delta_version"] = str(scan_unit.delta_version).encode("utf-8")
+    schema = pa.schema([], metadata=metadata)
+    table = empty_table(schema)
     return ExecutionResult.from_table(table)
 
 
@@ -285,6 +341,11 @@ def execute_task_from_catalog(
         runtime.record_execution(f"{spec.task_name}:skipped")
         msg = f"Task {spec.task_name!r} is inactive under the current incremental plan."
         raise ValueError(msg)
+    if spec.task_kind == "scan":
+        scan_unit = inputs.scan_units_by_task_name.get(spec.task_name)
+        if scan_unit is None:
+            msg = f"Missing scan unit for scan task {spec.task_name!r}."
+            raise ValueError(msg)
     return _execute_and_record(
         inputs=inputs,
         spec=spec,
@@ -307,17 +368,31 @@ def _execute_and_record(
     runtime = inputs.runtime
     task_name = spec.task_name
     runtime.record_execution(task_name if not inactive else f"{task_name}:inactive")
-    plan_bundle = inputs.plan_bundles_by_task.get(spec.task_output)
-    result = _execute_view(
-        runtime,
-        view_name=spec.task_output,
-        plan_bundle=plan_bundle,
-        scan_context=PlanScanInputs(
-            scan_units=inputs.scan_units,
-            scan_keys_by_task=inputs.scan_keys_by_task,
-            scan_units_hash=inputs.scan_units_hash,
-        ),
+    scan_context = PlanScanInputs(
+        scan_units=inputs.scan_units,
+        scan_keys_by_task=inputs.scan_keys_by_task,
+        scan_units_by_task_name=inputs.scan_units_by_task_name,
+        scan_units_hash=inputs.scan_units_hash,
     )
+    if spec.task_kind == "scan":
+        scan_unit = inputs.scan_units_by_task_name.get(spec.task_name)
+        if scan_unit is None:
+            msg = f"Scan task {spec.task_name!r} is missing a scan unit mapping."
+            raise ValueError(msg)
+        result = _execute_scan_task(
+            runtime,
+            scan_task_name=spec.task_name,
+            scan_unit=scan_unit,
+            scan_context=scan_context,
+        )
+    else:
+        plan_bundle = inputs.plan_bundles_by_task.get(spec.task_output)
+        result = _execute_view(
+            runtime,
+            view_name=spec.task_output,
+            plan_bundle=plan_bundle,
+            scan_context=scan_context,
+        )
     table = result.require_table()
     _record_output(
         inputs=inputs,
@@ -380,6 +455,8 @@ def cpg_props_final(cpg_props_v1: TableLike) -> TableLike:
 
 
 __all__ = [
+    "PlanExecutionContext",
+    "PlanScanInputs",
     "TaskExecutionInputs",
     "TaskExecutionSpec",
     "_finalize_cpg_edges_stage",
@@ -389,6 +466,7 @@ __all__ = [
     "cpg_nodes_final",
     "cpg_props_final",
     "execute_task_from_catalog",
+    "plan_scan_inputs",
     "runtime_artifacts",
     "task_execution_inputs",
 ]

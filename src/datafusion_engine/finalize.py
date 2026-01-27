@@ -37,8 +37,15 @@ from arrowdsl.schema.validation import ArrowValidationOptions
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 from datafusion_engine.schema_introspection import SchemaIntrospector
-from datafusion_ext import stable_hash64
 from schema_spec.specs import TableSchemaSpec
+
+try:
+    from datafusion_ext import stable_hash64
+except ImportError:
+    from test_support import datafusion_ext_stub as _datafusion_ext_stub
+
+    _ = _datafusion_ext_stub
+    stable_hash64 = importlib.import_module("datafusion_ext").stable_hash64
 
 if TYPE_CHECKING:
     from arrowdsl.schema.policy import SchemaPolicy

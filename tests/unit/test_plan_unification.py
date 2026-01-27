@@ -49,10 +49,23 @@ def _install_introspection_stub() -> None:
         return
     stub = ModuleType("datafusion_engine.introspection")
 
-    class _IntrospectionCache:
-        snapshot: object | None = None
+    class _Snapshot:
+        routines: object | None = None
+        settings: object | None = None
+        tables: object | None = None
+        providers: object | None = None
+        constraints: object | None = None
+        parameters: object | None = None
 
-    def introspection_cache_for_ctx(_ctx: object) -> _IntrospectionCache:
+    class _IntrospectionCache:
+        snapshot: _Snapshot = _Snapshot()
+
+    def introspection_cache_for_ctx(
+        _ctx: object,
+        *,
+        sql_options: object | None = None,
+    ) -> _IntrospectionCache:
+        _ = sql_options
         return _IntrospectionCache()
 
     def invalidate_introspection_cache(_ctx: object | None = None) -> None:
@@ -366,14 +379,17 @@ def test_task_execution_rejects_plan_signature_mismatch() -> None:
         evidence=EvidenceCatalog(),
         plan_signature="plan:a",
         active_task_names=frozenset({"out_alpha"}),
+        plan_bundles_by_task={},
         scan_units=(),
         scan_keys_by_task={},
+        scan_units_by_task_name={},
         scan_units_hash=None,
     )
     spec = TaskExecutionSpec(
         task_name="out_alpha",
         task_output="out_alpha",
         plan_fingerprint="fingerprint:a",
+        task_kind="view",
     )
     with pytest.raises(ValueError, match="Plan signature mismatch"):
         execute_task_from_catalog(

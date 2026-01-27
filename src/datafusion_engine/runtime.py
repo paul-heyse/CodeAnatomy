@@ -60,11 +60,6 @@ from datafusion_engine.diagnostics import (
 )
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
-from datafusion_engine.introspection import (
-    capture_cache_diagnostics,
-    introspection_cache_for_ctx,
-    register_cache_introspection_functions,
-)
 from datafusion_engine.schema_introspection import (
     SchemaIntrospector,
     catalogs_snapshot,
@@ -94,6 +89,7 @@ from storage.ipc import payload_hash
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
 
+    from datafusion_engine.introspection import IntrospectionCache
     from datafusion_engine.plugin_manager import (
         DataFusionPluginManager,
         DataFusionPluginSpec,
@@ -285,6 +281,44 @@ def _supports_explain_analyze_level() -> bool:
     if DATAFUSION_MAJOR_VERSION is None:
         return False
     return DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
+
+
+def _introspection_cache_for_ctx(
+    ctx: SessionContext,
+    *,
+    sql_options: SQLOptions | None,
+) -> IntrospectionCache:
+    from datafusion_engine.introspection import introspection_cache_for_ctx
+
+    return introspection_cache_for_ctx(ctx, sql_options=sql_options)
+
+
+def _capture_cache_diagnostics(ctx: SessionContext) -> Mapping[str, object]:
+    from datafusion_engine.introspection import capture_cache_diagnostics
+
+    return capture_cache_diagnostics(ctx)
+
+
+def _register_cache_introspection_functions(ctx: SessionContext) -> None:
+    from datafusion_engine.introspection import register_cache_introspection_functions
+
+    register_cache_introspection_functions(ctx)
+
+
+def _cache_config_payload(cache_diag: Mapping[str, object]) -> Mapping[str, object]:
+    payload = cache_diag.get("config")
+    if isinstance(payload, Mapping):
+        return payload
+    return {}
+
+
+def _cache_snapshot_rows(cache_diag: Mapping[str, object]) -> list[Mapping[str, object]]:
+    payload = cache_diag.get("cache_snapshots")
+    if not isinstance(payload, Sequence):
+        return []
+    rows: list[Mapping[str, object]] = []
+    rows.extend(snapshot for snapshot in payload if isinstance(snapshot, Mapping))
+    return rows
 
 
 DATAFUSION_MAJOR_VERSION: int | None = _parse_major_version(datafusion.__version__)
@@ -1078,6 +1112,7 @@ def register_view_specs(
     nodes = _build_view_nodes(
         ctx,
         views=views,
+        runtime_profile=runtime_profile,
     )
     register_view_graph(
         ctx,
@@ -1107,6 +1142,7 @@ def _build_view_nodes(
     ctx: SessionContext,
     *,
     views: Sequence[ViewSpec],
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> list[ViewNode]:
     """Build view nodes for registration (DEPRECATED).
 
@@ -1121,11 +1157,19 @@ def _build_view_nodes(
     from datafusion_engine.plan_bundle import build_plan_bundle
     from datafusion_engine.view_graph_registry import ViewNode
 
+    session_runtime = (
+        runtime_profile.session_runtime() if runtime_profile is not None else None
+    )
     nodes: list[ViewNode] = []
     for view in views:
         builder = _resolve_view_builder(ctx, view=view)
         df = builder(ctx)
-        plan_bundle = build_plan_bundle(ctx, df, compute_execution_plan=False)
+        plan_bundle = build_plan_bundle(
+            ctx,
+            df,
+            compute_execution_plan=False,
+            session_runtime=session_runtime,
+        )
         nodes.append(
             ViewNode(
                 name=view.name,
@@ -1506,7 +1550,7 @@ def settings_snapshot_for_profile(
     pyarrow.Table
         Table of settings from information_schema.df_settings.
     """
-    cache = introspection_cache_for_ctx(ctx, sql_options=profile.sql_options())
+    cache = _introspection_cache_for_ctx(ctx, sql_options=profile.sql_options())
     return cache.snapshot.settings
 
 
@@ -1520,7 +1564,7 @@ def catalog_snapshot_for_profile(
     pyarrow.Table
         Table inventory from information_schema.tables.
     """
-    cache = introspection_cache_for_ctx(ctx, sql_options=profile.sql_options())
+    cache = _introspection_cache_for_ctx(ctx, sql_options=profile.sql_options())
     return cache.snapshot.tables
 
 
@@ -1838,7 +1882,14 @@ def diagnostics_plan_artifacts_hook(
 
     def _hook(payload: Mapping[str, object]) -> None:
         recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
-        recorder_sink.record_artifact("datafusion_plan_artifacts_v1", payload)
+        normalized = dict(payload)
+        if "plan_identity_hash" not in normalized:
+            fingerprint_value = normalized.get("plan_fingerprint")
+            if isinstance(fingerprint_value, str) and fingerprint_value:
+                normalized["plan_identity_hash"] = fingerprint_value
+            else:
+                normalized["plan_identity_hash"] = "unknown_plan_identity"
+        recorder_sink.record_artifact("datafusion_plan_artifacts_v1", normalized)
 
     return _hook
 
@@ -4581,12 +4632,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         """
         if self.diagnostics_sink is None:
             return
-        cache_diag = capture_cache_diagnostics(ctx)
-        self.record_artifact(
-            "datafusion_cache_config_v1",
-            cache_diag.get("config", {}),
-        )
-        cache_snapshots = cache_diag.get("cache_snapshots", [])
+        cache_diag = _capture_cache_diagnostics(ctx)
+        config_payload = _cache_config_payload(cache_diag)
+        self.record_artifact("datafusion_cache_config_v1", config_payload)
+        cache_snapshots = _cache_snapshot_rows(cache_diag)
         if cache_snapshots:
             self.record_events(
                 "datafusion_cache_state_v1",
@@ -4595,7 +4644,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         diskcache_profile = self.diskcache_profile
         if diskcache_profile is None:
             return
-        diskcache_events: list[dict[str, object]] = []
+        diskcache_events = self._diskcache_event_rows(diskcache_profile)
+        if diskcache_events:
+            self.record_events(
+                "diskcache_stats_v1",
+                diskcache_events,
+            )
+
+    def _diskcache_event_rows(self, diskcache_profile: DiskCacheProfile) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
         for kind in ("plan", "extract", "schema", "repo_scan", "runtime", "coordination"):
             cache = self._diskcache(cast("DiskCacheKind", kind))
             if cache is None:
@@ -4618,18 +4675,14 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     "sqlite_synchronous": settings.sqlite_synchronous,
                 }
             )
-            diskcache_events.append(payload)
-        if diskcache_events:
-            self.record_events(
-                "diskcache_stats_v1",
-                diskcache_events,
-            )
+            rows.append(payload)
+        return rows
 
     def _install_cache_tables(self, ctx: SessionContext) -> None:
         if not (self.enable_cache_manager or self.cache_enabled):
             return
         try:
-            register_cache_introspection_functions(ctx)
+            _register_cache_introspection_functions(ctx)
         except ImportError as exc:
             msg = "Cache table functions require datafusion_ext."
             raise RuntimeError(msg) from exc
@@ -5144,7 +5197,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         pyarrow.Table
             Table of settings from information_schema.df_settings.
         """
-        cache = introspection_cache_for_ctx(ctx, sql_options=self._sql_options())
+        cache = _introspection_cache_for_ctx(ctx, sql_options=self._sql_options())
         return cache.snapshot.settings
 
     def _catalog_snapshot(self, ctx: SessionContext) -> pa.Table:
@@ -5155,7 +5208,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         pyarrow.Table
             Table inventory from information_schema.tables.
         """
-        cache = introspection_cache_for_ctx(ctx, sql_options=self._sql_options())
+        cache = _introspection_cache_for_ctx(ctx, sql_options=self._sql_options())
         return cache.snapshot.tables
 
     def _function_catalog_snapshot(

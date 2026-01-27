@@ -167,7 +167,7 @@ class IntrospectionSnapshot:
                 .sort(col("specific_name"), col("ordinal_position"))
                 .to_arrow_table()
             )
-        except (ValueError, TypeError, RuntimeError):
+        except (KeyError, ValueError, TypeError, RuntimeError):
             # DataFusion versions may not expose routines/parameters views
             routines = None
             parameters = None
@@ -176,7 +176,7 @@ class IntrospectionSnapshot:
         try:
             table_constraints = ctx.table("information_schema.table_constraints").to_arrow_table()
             key_column_usage = ctx.table("information_schema.key_column_usage").to_arrow_table()
-        except (ValueError, TypeError, RuntimeError):
+        except (KeyError, ValueError, TypeError, RuntimeError):
             table_constraints = None
             key_column_usage = None
 

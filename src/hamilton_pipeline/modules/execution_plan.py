@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import TYPE_CHECKING
 
-from hamilton.function_modifiers import extract_fields, tag
+from hamilton.function_modifiers import cache, extract_fields, tag
 
+from hamilton_pipeline.modules import task_execution
 from relspec.evidence import EvidenceCatalog
 from relspec.execution_plan import (
     ExecutionPlan,
@@ -34,6 +35,7 @@ else:
     ExecutionContext = object
     DataFusionPlanBundle = object
     DataFusionRuntimeProfile = object
+    ScanUnit = object
     ViewNode = object
     PlanFingerprintSnapshot = object
     IncrementalConfig = object
@@ -103,9 +105,12 @@ def _plan_node_functions(
         ("dataset_specs", _dataset_specs_node()),
         ("plan_scan_units", _plan_scan_units_node()),
         ("plan_scan_keys_by_task", _plan_scan_keys_by_task_node()),
+        ("plan_scan_units_by_task_name", _plan_scan_units_by_task_name_node()),
+        ("plan_context", _plan_context_node()),
         ("task_graph", _task_graph_node()),
         ("evidence_catalog", _evidence_catalog_node(options)),
         ("plan_artifacts", _plan_artifacts_node()),
+        ("plan_signature_value", _plan_signature_value_node(plan.plan_signature)),
         ("plan_signature", _plan_signature_node()),
         ("task_schedule", _task_schedule_node()),
         ("task_generations", _task_generations_node()),
@@ -178,6 +183,34 @@ def _plan_scan_keys_by_task_node() -> object:
     return plan_scan_keys_by_task
 
 
+def _plan_scan_units_by_task_name_node() -> object:
+    @tag(layer="plan", artifact="plan_scan_units_by_task_name", kind="mapping")
+    def plan_scan_units_by_task_name(
+        execution_plan: ExecutionPlan,
+    ) -> Mapping[str, ScanUnit]:
+        return execution_plan.scan_task_units_by_name
+
+    return plan_scan_units_by_task_name
+
+
+def _plan_context_node() -> object:
+    @tag(layer="plan", artifact="plan_context", kind="context")
+    def plan_context(
+        plan_signature: str,
+        active_task_names: frozenset[str],
+        plan_bundles_by_task: Mapping[str, DataFusionPlanBundle],
+        plan_scan_inputs: task_execution.PlanScanInputs,
+    ) -> task_execution.PlanExecutionContext:
+        return task_execution.PlanExecutionContext(
+            plan_signature=plan_signature,
+            active_task_names=active_task_names,
+            plan_bundles_by_task=dict(plan_bundles_by_task),
+            plan_scan_inputs=plan_scan_inputs,
+        )
+
+    return plan_context
+
+
 def _task_graph_node() -> object:
     @tag(layer="plan", artifact="task_graph", kind="graph")
     def task_graph(execution_plan: ExecutionPlan) -> TaskGraph:
@@ -206,11 +239,21 @@ def _evidence_catalog_node(options: PlanModuleOptions) -> object:
 
 
 def _plan_signature_node() -> object:
+    @cache(format="pickle", behavior="recompute")
     @tag(layer="plan", artifact="plan_signature", kind="scalar")
-    def plan_signature(execution_plan: ExecutionPlan) -> str:
-        return execution_plan.plan_signature
+    def plan_signature(plan_signature_value: str) -> str:
+        return plan_signature_value
 
     return plan_signature
+
+
+def _plan_signature_value_node(plan_signature: str) -> object:
+    @cache(format="pickle", behavior="recompute")
+    @tag(layer="plan", artifact="plan_signature_value", kind="scalar")
+    def plan_signature_value() -> str:
+        return plan_signature
+
+    return plan_signature_value
 
 
 def _plan_artifacts_node() -> object:

@@ -391,7 +391,7 @@ class DataFusionPlanBundle:
 ### Implementation checklist
 
 - [x] Runtime profiles already enforce `information_schema=True`.
-- [ ] Introduce `SessionRuntime` and require it across planning boundaries.
+- [x] Introduce `SessionRuntime` and require it across planning boundaries.
 - [ ] Snapshot:
   - [ ] `df_settings`,
   - [ ] `udf_snapshot_hash`,
@@ -497,7 +497,7 @@ def plan_scan_unit(*, delta_table, lineage) -> ScanUnit:
   - [ ] required columns per dataset,
   - [ ] required UDFs,
   - [ ] required rewrite tags.
-- [ ] Introduce scan units with pinned Delta versions.
+- [x] Introduce scan units with pinned Delta versions.
 - [ ] Derive scan units from lineage plus Delta metadata and pruning policy.
 - [ ] Bind scan units into plan signatures and cache keys.
 
@@ -594,9 +594,9 @@ def plan_artifacts(execution_plan) -> dict[str, object]:
 - [x] Promote plan artifacts to Hamilton nodes via `@extract_fields`.
 - [x] Enforce required semantic tags in registry compilation.
 - [x] Remove suppression comments by structurally routing hook inputs.
-- [ ] Introduce an `ExecutionManager` routing profile for scan-heavy tasks.
+- [x] Introduce an `ExecutionManager` routing profile for scan-heavy tasks.
 - [x] Stabilize `dag_name` and move plan identity into tags.
-- [ ] Persist plan artifacts and plan events as Delta-backed diagnostics tables.
+- [x] Persist plan artifacts and plan events as Delta-backed diagnostics tables.
 
 ---
 

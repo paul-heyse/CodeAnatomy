@@ -4,19 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
 
 from arrowdsl.schema.abi import schema_fingerprint
-from datafusion_engine.schema_contracts import (
-    SCHEMA_ABI_FINGERPRINT_META,
-    SchemaContract,
-    SchemaViolation,
-    SchemaViolationType,
-)
 from datafusion_engine.schema_introspection import SchemaIntrospector
+
+if TYPE_CHECKING:
+    from datafusion_engine.schema_contracts import (
+        SchemaContract,
+        SchemaViolation,
+    )
 
 
 class ViewSchemaMismatchError(ValueError):
@@ -163,6 +164,8 @@ class ViewSpec:
         if self.schema is None:
             return
         actual = self._resolve_schema(ctx, sql_options=sql_options)
+        from datafusion_engine.schema_contracts import SchemaContract
+
         contract = SchemaContract.from_arrow_schema(self.name, self.schema)
         introspector = SchemaIntrospector(ctx, sql_options=sql_options)
         snapshot = introspector.snapshot
@@ -203,6 +206,12 @@ def _schema_metadata_violations(
     schema: pa.Schema,
     contract: SchemaContract,
 ) -> list[SchemaViolation]:
+    from datafusion_engine.schema_contracts import (
+        SCHEMA_ABI_FINGERPRINT_META,
+        SchemaViolation,
+        SchemaViolationType,
+    )
+
     expected = contract.schema_metadata or {}
     if not expected:
         return []

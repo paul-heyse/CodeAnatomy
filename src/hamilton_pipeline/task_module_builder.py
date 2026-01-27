@@ -6,7 +6,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from hamilton.function_modifiers import cache, group, inject, source, tag, value
 from hamilton.function_modifiers.dependencies import ParametrizedDependency
@@ -46,8 +46,32 @@ def build_task_execution_module(
     module.__dict__["__all__"] = all_names
     dependency_map = plan.dependency_map
     outputs = {node.name: node for node in plan.view_nodes}
+    scan_units_by_task = dict(plan.scan_task_units_by_name)
     plan_fingerprints = dict(plan.plan_fingerprints)
     schedule_metadata = dict(plan.schedule_metadata)
+    for scan_task_name in sorted(scan_units_by_task):
+        scan_unit = scan_units_by_task[scan_task_name]
+        task_spec = TaskNodeSpec(
+            name=scan_task_name,
+            output=scan_task_name,
+            kind="scan",
+            priority=priority_for_task(scan_task_name),
+            cache_policy="none",
+        )
+        task_node = _build_task_node(
+            TaskNodeContext(
+                task=task_spec,
+                output_name=scan_task_name,
+                dependencies=tuple(dependency_map.get(scan_task_name, ())),
+                plan_fingerprint=plan_fingerprints.get(scan_task_name, ""),
+                plan_signature=plan.plan_signature,
+                schedule_metadata=schedule_metadata.get(scan_task_name),
+                scan_unit_key=scan_unit.key,
+            )
+        )
+        task_node.__module__ = resolved.module_name
+        module.__dict__[scan_task_name] = task_node
+        all_names.append(scan_task_name)
     for output_name, view_node in outputs.items():
         spec = _task_spec_from_view_node(view_node)
         task_node = _build_task_node(
@@ -58,6 +82,7 @@ def build_task_execution_module(
                 plan_fingerprint=plan_fingerprints.get(spec.name, ""),
                 plan_signature=plan.plan_signature,
                 schedule_metadata=schedule_metadata.get(spec.name),
+                scan_unit_key=None,
             )
         )
         task_node.__module__ = resolved.module_name
@@ -76,6 +101,7 @@ class TaskNodeContext:
     plan_fingerprint: str
     plan_signature: str
     schedule_metadata: TaskScheduleMetadata | None
+    scan_unit_key: str | None
 
 
 def _build_task_node(context: TaskNodeContext) -> Callable[..., TableLike]:
@@ -108,7 +134,7 @@ class TaskNodeSpec:
 
     name: str
     output: str
-    kind: str
+    kind: Literal["view", "scan"]
     priority: int
     cache_policy: str = "none"
 
@@ -136,6 +162,8 @@ def _decorate_task_node(
         task_name=task.name,
         task_output=context.output_name,
         plan_fingerprint=context.plan_fingerprint,
+        task_kind=task.kind,
+        scan_unit_key=context.scan_unit_key,
     )
     if dependency_sources:
         inject_kwargs: dict[str, ParametrizedDependency] = {

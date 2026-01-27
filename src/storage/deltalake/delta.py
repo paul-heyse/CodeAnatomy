@@ -15,8 +15,9 @@ import pyarrow as pa
 from deltalake import CommitProperties, Transaction, WriterProperties
 
 from arrow_utils.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
-from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
-from arrowdsl.schema.schema import SchemaTransform
+from arrow_utils.schema.encoding import EncodingPolicy
+from datafusion_engine.encoding import apply_encoding
+from datafusion_engine.schema_alignment import align_table
 from storage.ipc import ipc_bytes
 
 if TYPE_CHECKING:
@@ -647,8 +648,11 @@ def coerce_delta_table(
     """
     table = _coerce_table(value)
     if schema is not None:
-        table = SchemaTransform(schema=schema, safe_cast=False, keep_extra_columns=False).apply(
-            table
+        table = align_table(
+            table,
+            schema=schema,
+            safe_cast=False,
+            keep_extra_columns=False,
         )
     if encoding_policy is not None:
         table = apply_encoding(table, policy=encoding_policy)

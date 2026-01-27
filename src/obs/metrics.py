@@ -28,8 +28,8 @@ from arrow_utils.schema.build import (
     table_from_arrays,
     table_from_schema,
 )
-from arrowdsl.schema.encoding_policy import EncodingPolicy
-from arrowdsl.schema.normalize import NormalizePolicy
+from arrow_utils.schema.encoding import EncodingPolicy
+from datafusion_engine.encoding import NormalizePolicy
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 
 type RowValue = str | int

@@ -13,7 +13,7 @@ from datafusion import SessionContext
 import normalize.dataset_specs as static_dataset_specs
 from arrow_utils.core.interop import SchemaLike
 from arrow_utils.schema.metadata import SchemaMetadataSpec
-from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
+from datafusion_engine.schema_policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from core_types import PathLike, ensure_path
 from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.introspection import introspection_cache_for_ctx

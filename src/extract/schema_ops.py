@@ -9,7 +9,7 @@ import pyarrow as pa
 
 from arrow_utils.core.interop import TableLike
 from arrow_utils.schema.metadata import SchemaMetadataSpec
-from arrowdsl.schema.policy import SchemaPolicy
+from datafusion_engine.schema_policy import SchemaPolicy
 from core_types import DeterminismTier
 from datafusion_engine.extract_registry import (
     dataset_metadata_with_options,

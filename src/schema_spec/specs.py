@@ -25,7 +25,7 @@ from arrow_utils.schema.encoding_metadata import (
     dict_field_metadata,
 )
 from arrow_utils.schema.metadata import SchemaMetadataSpec, metadata_list_bytes
-from arrowdsl.schema.schema import CastErrorPolicy, SchemaTransform
+from datafusion_engine.schema_alignment import CastErrorPolicy, SchemaTransform
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 

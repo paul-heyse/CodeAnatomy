@@ -29,10 +29,10 @@ from arrow_utils.core.schema_constants import PROVENANCE_COLS
 from arrow_utils.schema.build import ColumnDefaultsSpec, ConstExpr
 from arrow_utils.schema.chunking import ChunkPolicy
 from arrow_utils.schema.metadata import SchemaMetadataSpec
-from arrowdsl.schema.encoding_policy import EncodingPolicy
-from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import AlignmentInfo, align_table
-from arrowdsl.schema.validation import ArrowValidationOptions
+from arrow_utils.schema.encoding import EncodingPolicy
+from datafusion_engine.schema_alignment import AlignmentInfo, align_table
+from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
+from datafusion_engine.schema_validation import ArrowValidationOptions
 from core_types import DeterminismTier
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.kernel_specs import DedupeSpec, SortKey
@@ -50,7 +50,7 @@ except ImportError:
     stable_hash64 = importlib.import_module("datafusion_ext").stable_hash64
 
 if TYPE_CHECKING:
-    from arrowdsl.schema.policy import SchemaPolicy
+    from datafusion_engine.schema_policy import SchemaPolicy
 
 
 type InvariantFn = Callable[[TableLike], tuple[ArrayLike, str]]

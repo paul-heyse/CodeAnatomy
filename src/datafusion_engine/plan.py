@@ -80,7 +80,7 @@ class DataFusionPlan:
 
         Returns
         -------
-        arrowdsl.core.interop.TableLike
+        arrow_utils.core.interop.TableLike
             Arrow table for the plan result.
         """
         table = self.df.to_arrow_table()
@@ -91,7 +91,7 @@ class DataFusionPlan:
 
         Returns
         -------
-        arrowdsl.core.interop.RecordBatchReaderLike
+        arrow_utils.core.interop.RecordBatchReaderLike
             RecordBatchReader for the plan result.
         """
         if batch_size is None:

@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Literal, cast, overload
 import pyarrow as pa
 
 from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.schema import align_table, encode_table
+from datafusion_engine.encoding import encode_table
+from datafusion_engine.schema_alignment import align_table
 from core_types import DeterminismTier
 from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
@@ -34,7 +35,7 @@ from extract.session import ExtractSession, build_extract_session
 from extract.string_utils import normalize_string_items
 
 if TYPE_CHECKING:
-    from arrowdsl.schema.policy import SchemaPolicy
+    from datafusion_engine.schema_policy import SchemaPolicy
     from extract.evidence_plan import EvidencePlan
 
 from extract.scip_proto_loader import load_scip_pb2_from_build

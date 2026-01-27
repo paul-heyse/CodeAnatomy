@@ -387,6 +387,18 @@ impl ScalarUDFImpl for SqlMacroUdf {
         Some(&self.documentation)
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .iter()
+            .any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.return_type.clone(),
+            nullable,
+        )))
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
     }

@@ -620,9 +620,18 @@ fn arg_min_udaf() -> AggregateUDF {
 
 fn arg_best_signature(volatility: Volatility) -> Signature {
     signature_with_names(
-        Signature::one_of(vec![TypeSignature::Any(2)], volatility),
+        Signature::one_of(vec![TypeSignature::UserDefined], volatility),
         &["value", "order_key"],
     )
+}
+
+fn arg_best_coerce_types(name: &str, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+    if arg_types.len() != 2 {
+        return Err(DataFusionError::Plan(format!(
+            "{name} expects exactly two arguments"
+        )));
+    }
+    Ok(vec![DataType::Utf8, DataType::Int64])
 }
 
 fn arg_best_state_fields(args: StateFieldsArgs, label: &str) -> Vec<FieldRef> {
@@ -860,6 +869,10 @@ impl AggregateUDFImpl for AnyValueDetUdaf {
         &self.signature
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_best_coerce_types(self.name(), arg_types)
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
     }
@@ -921,6 +934,10 @@ impl AggregateUDFImpl for ArgMaxUdaf {
         &self.signature
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_best_coerce_types(self.name(), arg_types)
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
     }
@@ -980,6 +997,10 @@ impl AggregateUDFImpl for ArgMinUdaf {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_best_coerce_types(self.name(), arg_types)
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {

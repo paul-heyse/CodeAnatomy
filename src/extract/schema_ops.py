@@ -68,7 +68,8 @@ def _information_schema_column_order(
         msg = "information_schema must be enabled for schema introspection."
         raise ValueError(msg)
     sql_options = sql_options_for_profile(runtime)
-    introspector = SchemaIntrospector(runtime.session_context(), sql_options=sql_options)
+    session_runtime = runtime.session_runtime()
+    introspector = SchemaIntrospector(session_runtime.ctx, sql_options=sql_options)
     try:
         rows = introspector.table_columns_with_ordinal(name)
     except (RuntimeError, TypeError, ValueError):

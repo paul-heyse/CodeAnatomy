@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
-from deltalake import DeltaTable
 
 
 @dataclass(frozen=True)
@@ -63,51 +62,6 @@ class FileIndexEntry:
             stats_max=row.get("stats_max"),
             num_records=row.get("num_records"),
         )
-
-
-def build_delta_file_index(dt: DeltaTable) -> pa.Table:
-    """Build a file index table from Delta table add actions.
-
-    This function extracts file-level metadata from the Delta transaction log,
-    including file paths, sizes, partition values, and column statistics. The
-    resulting table can be used for file pruning and optimization.
-
-    Parameters
-    ----------
-    dt : DeltaTable
-        Delta table to extract file index from.
-
-    Returns
-    -------
-    pa.Table
-        File index table with the following schema:
-        - path: string (relative file path)
-        - size_bytes: int64 (file size in bytes)
-        - modification_time: int64 (modification timestamp in ms)
-        - partition_values: map<string, string> (partition column values)
-        - stats_min: map<string, string> (minimum values per column)
-        - stats_max: map<string, string> (maximum values per column)
-        - num_records: int64 (number of records in file)
-
-    Raises
-    ------
-    ValueError
-        If the Delta table has no add actions or cannot be processed.
-    """
-    try:
-        # Get add actions with flattened structure
-        adds = dt.get_add_actions(flatten=True)
-        index_table = _coerce_adds_table(adds)
-    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to extract add actions from Delta table: {exc}"
-        raise ValueError(msg) from exc
-
-    if index_table.num_rows == 0:
-        # Return empty table with expected schema
-        return _empty_file_index_table()
-
-    # Normalize column names and structure
-    return _normalize_file_index(index_table)
 
 
 def _coerce_int_field(value: object, *, field: str) -> int:
@@ -424,6 +378,5 @@ def _empty_file_index_table() -> pa.Table:
 
 __all__ = [
     "FileIndexEntry",
-    "build_delta_file_index",
     "build_delta_file_index_from_add_actions",
 ]

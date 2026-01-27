@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from normalize.dataset_specs import dataset_contract_schema
     from normalize.df_view_builders import (
         VIEW_BUILDERS,
+        VIEW_BUNDLE_BUILDERS,
         cfg_blocks_df_builder,
         cfg_edges_df_builder,
         def_use_events_df_builder,
@@ -56,6 +57,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "REACH_EDGE_ID_SPEC": ("datafusion_engine.normalize_ids", "REACH_EDGE_ID_SPEC"),
     "TYPE_EXPR_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_EXPR_ID_SPEC"),
     "TYPE_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_ID_SPEC"),
+    "VIEW_BUNDLE_BUILDERS": ("normalize.df_view_builders", "VIEW_BUNDLE_BUILDERS"),
     "VIEW_BUILDERS": ("normalize.df_view_builders", "VIEW_BUILDERS"),
     "cfg_blocks_df_builder": ("normalize.df_view_builders", "cfg_blocks_df_builder"),
     "cfg_edges_df_builder": ("normalize.df_view_builders", "cfg_edges_df_builder"),
@@ -109,6 +111,7 @@ __all__ = [
     "TYPE_EXPR_ID_SPEC",
     "TYPE_ID_SPEC",
     "VIEW_BUILDERS",
+    "VIEW_BUNDLE_BUILDERS",
     "cfg_blocks_df_builder",
     "cfg_edges_df_builder",
     "dataset_alias",

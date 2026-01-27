@@ -51,9 +51,7 @@ def _metadata_db_path(meta_path: Path) -> Path:
 def _latest_run_id(meta_path: Path) -> str:
     db_path = _metadata_db_path(meta_path)
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            "select run_id from run_ids order by id desc limit 1"
-        ).fetchone()
+        row = conn.execute("select run_id from run_ids order by id desc limit 1").fetchone()
     if row is None:
         msg = "Cache metadata store does not contain any runs."
         raise ValueError(msg)
@@ -118,9 +116,7 @@ def test_metadata_store_lineage_rows_are_deterministic_and_decodable(
     assert errors_b == 0
     assert rows_a
     assert rows_a == rows_b
-    node_names = [
-        row["node_name"] for row in rows_a if isinstance(row.get("node_name"), str)
-    ]
+    node_names = [row["node_name"] for row in rows_a if isinstance(row.get("node_name"), str)]
     assert node_names == sorted(node_names)
     for row in rows_a:
         dependencies = row.get("dependencies_data_versions")

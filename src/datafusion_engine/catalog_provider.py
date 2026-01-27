@@ -16,12 +16,13 @@ from datafusion.catalog import (
     Table,
 )
 from datafusion.dataframe import DataFrame
-from deltalake import DeltaTable
 
 from datafusion_engine.dataset_registry import (
     DatasetCatalog,
     DatasetLocation,
     resolve_dataset_schema,
+    resolve_delta_log_storage_options,
+    resolve_delta_scan_options,
 )
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
@@ -42,8 +43,6 @@ def _normalize_dataset_name(name: str) -> str:
 def _table_from_dataset(dataset: object) -> Table:
     if isinstance(dataset, Table):
         return dataset
-    if isinstance(dataset, DeltaTable):
-        return Table(dataset)
     if isinstance(dataset, ds.Dataset):
         return Table(dataset)
     if isinstance(dataset, DataFrame):
@@ -51,21 +50,39 @@ def _table_from_dataset(dataset: object) -> Table:
     return Table(ds.dataset(dataset))
 
 
-def _dataset_from_location(location: DatasetLocation) -> object:
+def _dataset_from_location(
+    ctx: SessionContext,
+    location: DatasetLocation,
+) -> object:
     schema = resolve_dataset_schema(location)
     if location.format == "delta":
         storage_options = dict(location.storage_options)
+        log_storage_options = resolve_delta_log_storage_options(location)
+        if log_storage_options:
+            storage_options.update(log_storage_options)
         if location.delta_version is not None and location.delta_timestamp is not None:
             msg = "Delta dataset open requires either delta_version or delta_timestamp."
             raise ValueError(msg)
-        table = DeltaTable(
-            str(location.path),
-            storage_options=storage_options or None,
-            version=location.delta_version,
+        try:
+            from datafusion_engine.delta_control_plane import (
+                DeltaProviderRequest,
+                delta_provider_from_session,
+            )
+        except ImportError as exc:
+            msg = "Delta control-plane provider construction is unavailable."
+            raise ValueError(msg) from exc
+        pinned_timestamp = location.delta_timestamp if location.delta_version is None else None
+        bundle = delta_provider_from_session(
+            ctx,
+            request=DeltaProviderRequest(
+                table_uri=str(location.path),
+                storage_options=storage_options or None,
+                version=location.delta_version,
+                timestamp=pinned_timestamp,
+                delta_scan=resolve_delta_scan_options(location),
+            ),
         )
-        if location.delta_timestamp is not None:
-            table.load_as_version(location.delta_timestamp)
-        return table
+        return bundle.provider
     return ds.dataset(
         location.path,
         format=location.format,
@@ -152,15 +169,19 @@ class RegistrySchemaProvider(SchemaProvider):
         if not self.catalog.has(key):
             return None
         location = self.catalog.get(key)
-        table = _table_from_dataset(_dataset_from_location(location))
+        ctx = self.ctx
+        if ctx is None:
+            msg = "RegistrySchemaProvider requires a SessionContext to resolve tables."
+            raise ValueError(msg)
+        table = _table_from_dataset(_dataset_from_location(ctx, location))
         self._tables[key] = table
-        if self.ctx is not None:
+        if ctx is not None:
             metadata = TableProviderMetadata(
                 table_name=key,
                 storage_location=str(location.path),
                 file_format=location.format or "unknown",
             )
-            record_table_provider_metadata(id(self.ctx), metadata=metadata)
+            record_table_provider_metadata(id(ctx), metadata=metadata)
         return table
 
     def table_metadata(self, name: str) -> TableProviderMetadata | None:

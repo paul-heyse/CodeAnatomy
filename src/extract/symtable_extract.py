@@ -14,7 +14,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
-from datafusion_engine.plan import DataFusionPlan
+from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from extract.cache_utils import (
     CacheSetOptions,
     cache_for_extract,
@@ -708,7 +708,7 @@ def _build_symtable_file_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
-) -> DataFusionPlan:
+) -> DataFusionPlanBundle:
     return extract_plan_from_rows(
         "symtable_files_v1",
         rows,
@@ -773,13 +773,13 @@ def extract_symtable_plans(
     options: SymtableExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, DataFusionPlan]:
+) -> dict[str, DataFusionPlanBundle]:
     """Extract symbol table plans from repository files.
 
     Returns
     -------
-    dict[str, DataFusionPlan]
-        Ibis plan bundle keyed by symtable outputs.
+    dict[str, DataFusionPlanBundle]
+        Plan bundle keyed by symtable outputs.
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
     exec_context = context or ExtractExecutionContext()

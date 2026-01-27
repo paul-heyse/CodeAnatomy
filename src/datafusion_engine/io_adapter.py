@@ -87,7 +87,9 @@ def _convert_array_to_storage(array: pa.Array, target_type: pa.DataType) -> pa.A
     if isinstance(array, pa.ExtensionArray):
         return _convert_array_to_storage(array.storage, target_type)
     if pa.types.is_struct(target_type):
-        return _convert_struct_array(cast("pa.StructArray", array), cast("pa.StructType", target_type))
+        return _convert_struct_array(
+            cast("pa.StructArray", array), cast("pa.StructType", target_type)
+        )
     if pa.types.is_list(target_type) or pa.types.is_large_list(target_type):
         return _convert_list_array(array, target_type)
     if pa.types.is_map(target_type):
@@ -105,8 +107,7 @@ def _convert_chunked_array(column: pa.ChunkedArray, target_type: pa.DataType) ->
 def _datafusion_compatible_table(table: pa.Table) -> pa.Table:
     target_schema = _storage_schema(table.schema)
     arrays = [
-        _convert_chunked_array(table.column(field.name), field.type)
-        for field in target_schema
+        _convert_chunked_array(table.column(field.name), field.type) for field in target_schema
     ]
     return pa.Table.from_arrays(arrays, schema=target_schema)
 

@@ -65,8 +65,6 @@ class SemanticTagSpec:
 F = TypeVar("F", bound=Callable[..., object])
 
 
-
-
 if TYPE_CHECKING:
     from core_types import JsonValue
 

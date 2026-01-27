@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage_datafusion import LineageReport
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.scan_planner import ScanUnit
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,20 @@ def register_view_graph(
         _validate_udf_calls(snapshot, node)
         validate_required_udfs(snapshot, required=node.required_udfs)
         _validate_required_functions(ctx, node.required_udfs)
+        if runtime.runtime_profile is not None and node.plan_bundle is not None:
+            scan_units = _plan_scan_units_for_bundle(
+                ctx,
+                bundle=node.plan_bundle,
+                runtime_profile=runtime.runtime_profile,
+            )
+            if scan_units:
+                from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+
+                apply_scan_unit_overrides(
+                    ctx,
+                    scan_units=scan_units,
+                    runtime_profile=runtime.runtime_profile,
+                )
         df = node.builder(ctx)
         if resolved.temporary:
             adapter.register_view(
@@ -239,6 +254,30 @@ def _deps_from_plan_bundle(bundle: DataFusionPlanBundle) -> tuple[str, ...]:
     """
     lineage = _lineage_from_bundle(bundle)
     return lineage.referenced_tables
+
+
+def _plan_scan_units_for_bundle(
+    ctx: SessionContext,
+    *,
+    bundle: DataFusionPlanBundle,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> tuple[ScanUnit, ...]:
+    from datafusion_engine.scan_planner import plan_scan_unit
+
+    lineage = _lineage_from_bundle(bundle)
+    scan_units: dict[str, ScanUnit] = {}
+    for scan in lineage.scans:
+        location = runtime_profile.dataset_location(scan.dataset_name)
+        if location is None:
+            continue
+        unit = plan_scan_unit(
+            ctx,
+            dataset_name=scan.dataset_name,
+            location=location,
+            lineage=scan,
+        )
+        scan_units[unit.key] = unit
+    return tuple(sorted(scan_units.values(), key=lambda unit: unit.key))
 
 
 def _required_udfs_from_plan_bundle(

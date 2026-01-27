@@ -12,6 +12,7 @@ from datafusion import SessionContext
 
 from datafusion_engine.dataset_registry import (
     DatasetLocation,
+    resolve_delta_feature_gate,
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
@@ -59,8 +60,10 @@ def apply_scan_unit_overrides(
         location = _resolve_dataset_location(runtime_profile, dataset_name)
         if location is None or location.format != "delta":
             continue
+        gate = resolve_delta_feature_gate(location)
         units = units_by_dataset[dataset_name]
         pinned_version = _pinned_version_for_units(location, units)
+        pinned_timestamp = _pinned_timestamp_for_units(location, units)
         scan_files = _scan_files_for_units(location, units)
         if pinned_version is None and not scan_files:
             continue
@@ -77,14 +80,16 @@ def apply_scan_unit_overrides(
             spec=_DeltaOverrideSpec(
                 name=dataset_name,
                 location=updated_location,
-                scan_files=scan_files,
-                runtime_profile=runtime_profile,
-            ),
+            scan_files=scan_files,
+            runtime_profile=runtime_profile,
+        ),
         )
         _record_override_artifact(
             runtime_profile,
             dataset_name=dataset_name,
             pinned_version=pinned_version,
+            pinned_timestamp=pinned_timestamp,
+            gate=gate,
             scan_files=scan_files,
         )
 
@@ -97,7 +102,17 @@ def scan_units_hash(scan_units: Sequence[ScanUnit]) -> str:
     str
         Stable hash for the scan unit collection.
     """
-    payload = tuple(sorted((unit.key, unit.delta_version) for unit in scan_units))
+    payload = tuple(
+        sorted(
+            (
+                unit.key,
+                unit.delta_version,
+                unit.delta_timestamp,
+                unit.snapshot_timestamp,
+            )
+            for unit in scan_units
+        )
+    )
     return _hash_payload(payload)
 
 
@@ -149,6 +164,21 @@ def _pinned_version_for_units(
         storage_options=storage_options,
         log_storage_options=log_storage_options,
     )
+
+
+def _pinned_timestamp_for_units(
+    location: DatasetLocation,
+    units: Sequence[ScanUnit],
+) -> str | None:
+    timestamps = {unit.snapshot_timestamp for unit in units if unit.snapshot_timestamp is not None}
+    if len(timestamps) > 1:
+        msg = "Scan units for a dataset resolved to multiple snapshot timestamps."
+        raise ValueError(msg)
+    if timestamps:
+        return str(timestamps.pop())
+    if location.delta_timestamp:
+        return location.delta_timestamp
+    return None
 
 
 def _scan_files_for_units(
@@ -237,6 +267,7 @@ def _delta_table_provider_with_files(
             version=location.delta_version,
             timestamp=location.delta_timestamp,
             delta_scan=delta_scan,
+            gate=resolve_delta_feature_gate(location),
         ),
     )
     return bundle.provider
@@ -266,16 +297,35 @@ def _record_override_artifact(
     *,
     dataset_name: str,
     pinned_version: int | None,
+    pinned_timestamp: str | None,
+    gate: object | None,
     scan_files: Sequence[str],
 ) -> None:
     scan_files_hash = _hash_payload(scan_files)
     payload = {
         "dataset_name": dataset_name,
         "pinned_version": pinned_version,
+        "pinned_timestamp": pinned_timestamp,
+        "delta_feature_gate": _gate_payload(gate),
         "scan_file_count": len(scan_files),
         "scan_files_hash": scan_files_hash,
     }
     record_artifact(runtime_profile, "scan_unit_overrides_v1", payload)
+
+
+def _gate_payload(gate: object | None) -> dict[str, object] | None:
+    if gate is None:
+        return None
+    min_reader_version = getattr(gate, "min_reader_version", None)
+    min_writer_version = getattr(gate, "min_writer_version", None)
+    required_reader_features = getattr(gate, "required_reader_features", ())
+    required_writer_features = getattr(gate, "required_writer_features", ())
+    return {
+        "min_reader_version": min_reader_version,
+        "min_writer_version": min_writer_version,
+        "required_reader_features": list(required_reader_features),
+        "required_writer_features": list(required_writer_features),
+    }
 
 
 def _hash_payload(payload: object) -> str:

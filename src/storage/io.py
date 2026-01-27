@@ -20,7 +20,6 @@ from storage.deltalake import (
     delta_table_features,
     delta_table_version,
     enable_delta_features,
-    open_delta_table,
     read_delta_cdf,
     vacuum_delta,
 )
@@ -90,7 +89,6 @@ __all__ = [
     "mmap_file",
     "open_compressed_input",
     "open_compressed_output",
-    "open_delta_table",
     "read_delta_cdf",
     "read_table_ipc_file",
     "vacuum_delta",

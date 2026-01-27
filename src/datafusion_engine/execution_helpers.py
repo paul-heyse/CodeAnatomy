@@ -77,6 +77,7 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object
             "dataset_name": pin.dataset_name,
             "version": pin.version,
             "timestamp": pin.timestamp,
+            "feature_gate": _delta_gate_payload(pin.feature_gate),
         }
         for pin in bundle.delta_inputs
     ]
@@ -88,6 +89,23 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object
         )
     )
     return payloads
+
+
+def _delta_gate_payload(
+    gate: object | None,
+) -> dict[str, object] | None:
+    if gate is None:
+        return None
+    min_reader_version = getattr(gate, "min_reader_version", None)
+    min_writer_version = getattr(gate, "min_writer_version", None)
+    required_reader_features = getattr(gate, "required_reader_features", ())
+    required_writer_features = getattr(gate, "required_writer_features", ())
+    return {
+        "min_reader_version": min_reader_version,
+        "min_writer_version": min_writer_version,
+        "required_reader_features": list(required_reader_features),
+        "required_writer_features": list(required_writer_features),
+    }
 
 
 def plan_bundle_cache_key(

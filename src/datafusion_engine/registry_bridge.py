@@ -58,6 +58,7 @@ from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_datafusion_scan_options,
     resolve_dataset_schema,
+    resolve_delta_feature_gate,
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
@@ -100,6 +101,7 @@ from storage.deltalake import DeltaCdfOptions
 
 if TYPE_CHECKING:
     from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
+    from datafusion_engine.delta_protocol import DeltaFeatureGate
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
@@ -928,12 +930,14 @@ class _DeltaProviderRequest:
     version: int | None
     timestamp: str | None
     delta_scan: DeltaScanOptions | None
+    gate: DeltaFeatureGate | None
 
 
 @dataclass(frozen=True)
 class _DeltaProviderResponse:
     provider: object
     delta_scan_effective: Mapping[str, object] | None
+    snapshot: Mapping[str, object] | None
 
 
 def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
@@ -953,6 +957,7 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
         version=location.delta_version,
         timestamp=location.delta_timestamp,
         delta_scan=delta_scan,
+        gate=resolve_delta_feature_gate(location),
     )
     response = _delta_table_provider_from_session(request)
     provider = response.provider
@@ -969,6 +974,7 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
                 location,
                 delta_scan=delta_scan,
                 delta_scan_effective=response.delta_scan_effective,
+                snapshot=response.snapshot,
             ),
         ),
     )
@@ -993,6 +999,7 @@ def _register_delta_cdf(context: DataFusionRegistrationContext) -> DataFrame:
         name=context.name,
         path=str(context.location.path),
         options=options,
+        gate=resolve_delta_feature_gate(context.location),
     )
 
 
@@ -1012,11 +1019,13 @@ def _delta_table_provider_from_session(
             version=request.version,
             timestamp=request.timestamp,
             delta_scan=request.delta_scan,
+            gate=request.gate,
         ),
     )
     return _DeltaProviderResponse(
         provider=bundle.provider,
         delta_scan_effective=bundle.scan_effective,
+        snapshot=bundle.snapshot,
     )
 
 
@@ -1025,8 +1034,10 @@ def _delta_provider_artifact_payload(
     *,
     delta_scan: DeltaScanOptions | None,
     delta_scan_effective: Mapping[str, object] | None,
+    snapshot: Mapping[str, object] | None,
 ) -> dict[str, object]:
     log_storage = resolve_delta_log_storage_options(location)
+    gate = resolve_delta_feature_gate(location)
     return {
         "path": str(location.path),
         "delta_version": location.delta_version,
@@ -1034,6 +1045,23 @@ def _delta_provider_artifact_payload(
         "delta_log_storage_options": dict(log_storage) if log_storage else None,
         "delta_scan": _delta_scan_payload(delta_scan),
         "delta_scan_effective": delta_scan_effective,
+        "delta_feature_gate": _delta_gate_payload(gate),
+        "delta_snapshot": snapshot,
+    }
+
+
+def _delta_gate_payload(gate: object | None) -> dict[str, object] | None:
+    if gate is None:
+        return None
+    min_reader_version = getattr(gate, "min_reader_version", None)
+    min_writer_version = getattr(gate, "min_writer_version", None)
+    required_reader_features = getattr(gate, "required_reader_features", ())
+    required_writer_features = getattr(gate, "required_writer_features", ())
+    return {
+        "min_reader_version": min_reader_version,
+        "min_writer_version": min_writer_version,
+        "required_reader_features": list(required_reader_features),
+        "required_writer_features": list(required_writer_features),
     }
 
 
@@ -2181,6 +2209,7 @@ def register_delta_cdf_df(
     name: str,
     path: str,
     options: DeltaCdfRegistrationOptions | None = None,
+    gate: DeltaFeatureGate | None = None,
 ) -> DataFrame:
     """Register a Delta CDF snapshot as a DataFusion table.
 
@@ -2202,6 +2231,7 @@ def register_delta_cdf_df(
         path=path,
         storage_options=storage_options,
         options=cdf_options,
+        gate=gate,
     )
     if bundle is None:
         msg = "Delta CDF provider requires Rust control-plane support."
@@ -2253,6 +2283,7 @@ def _delta_cdf_table_provider(
     path: str,
     storage_options: Mapping[str, str] | None,
     options: DeltaCdfOptions | None,
+    gate: DeltaFeatureGate | None,
 ) -> DeltaCdfProviderBundle | None:
     try:
         from datafusion_engine.delta_control_plane import DeltaCdfRequest, delta_cdf_provider
@@ -2264,6 +2295,7 @@ def _delta_cdf_table_provider(
                 version=None,
                 timestamp=None,
                 options=options,
+                gate=gate,
             )
         )
     except (ImportError, RuntimeError, TypeError, ValueError):

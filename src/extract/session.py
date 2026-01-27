@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
 from arrowdsl.core.execution_context import ExecutionContext
 from engine.session import EngineSession
 from engine.session_factory import build_engine_session
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import SessionRuntime
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,26 @@ class ExtractSession:
             msg = "DataFusion SessionContext is required for extract workloads."
             raise ValueError(msg)
         return ctx
+
+    @property
+    def session_runtime(self) -> SessionRuntime:
+        """Return the DataFusion SessionRuntime for extract workloads.
+
+        Returns
+        -------
+        SessionRuntime
+            Planning-ready DataFusion session runtime.
+
+        Raises
+        ------
+        ValueError
+            Raised when the DataFusion SessionRuntime is unavailable.
+        """
+        runtime = self.engine_session.df_runtime()
+        if runtime is None:
+            msg = "DataFusion SessionRuntime is required for extract workloads."
+            raise ValueError(msg)
+        return runtime
 
 
 def build_extract_session(ctx: ExecutionContext) -> ExtractSession:

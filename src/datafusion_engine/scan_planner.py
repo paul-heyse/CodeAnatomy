@@ -10,8 +10,9 @@ from pathlib import Path
 
 from datafusion import SessionContext
 
-from datafusion_engine.dataset_registry import DatasetLocation
+from datafusion_engine.dataset_registry import DatasetLocation, resolve_delta_feature_gate
 from datafusion_engine.delta_control_plane import DeltaSnapshotRequest, delta_add_actions
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.lineage_datafusion import ScanLineage
 from serde_msgspec import dumps_msgpack
 from storage.deltalake import build_delta_file_index_from_add_actions
@@ -31,17 +32,26 @@ def _scan_unit_key(
     dataset_name: str,
     *,
     delta_version: int | None,
+    delta_timestamp: str | None,
+    delta_feature_gate: DeltaFeatureGate | None,
     projected_columns: tuple[str, ...],
     pushed_filters: tuple[str, ...],
 ) -> str:
     payload = {
         "dataset_name": dataset_name,
         "delta_version": delta_version,
+        "delta_timestamp": delta_timestamp,
+        "delta_feature_gate": _gate_payload(delta_feature_gate),
         "projected_columns": projected_columns,
         "pushed_filters": pushed_filters,
     }
     digest = hashlib.sha256(dumps_msgpack(payload)).hexdigest()[:16]
-    version_token = "latest" if delta_version is None else str(delta_version)
+    if delta_version is not None:
+        version_token = str(delta_version)
+    elif delta_timestamp:
+        version_token = delta_timestamp
+    else:
+        version_token = "latest"
     return f"scan::{dataset_name}::{version_token}::{digest}"
 
 
@@ -52,6 +62,9 @@ class ScanUnit:
     key: str
     dataset_name: str
     delta_version: int | None
+    delta_timestamp: str | None
+    snapshot_timestamp: int | None
+    delta_feature_gate: DeltaFeatureGate | None
     candidate_files: tuple[Path, ...]
     pushed_filters: tuple[str, ...]
     projected_columns: tuple[str, ...]
@@ -72,9 +85,14 @@ def plan_scan_unit(
         Deterministic scan unit for the dataset and lineage inputs.
     """
     delta_version = location.delta_version if location is not None else None
+    delta_timestamp = None
+    if location is not None and delta_version is None:
+        delta_timestamp = location.delta_timestamp
+    delta_feature_gate = resolve_delta_feature_gate(location) if location is not None else None
     candidate_files: tuple[Path, ...] = ()
+    snapshot_timestamp: int | None = None
     if location is not None and location.format == "delta":
-        candidate_files, delta_version = _delta_scan_candidates(
+        candidate_files, delta_version, snapshot_timestamp = _delta_scan_candidates(
             ctx,
             location=location,
             lineage=lineage,
@@ -82,6 +100,8 @@ def plan_scan_unit(
     key = _scan_unit_key(
         dataset_name,
         delta_version=delta_version,
+        delta_timestamp=delta_timestamp,
+        delta_feature_gate=delta_feature_gate,
         projected_columns=lineage.projected_columns,
         pushed_filters=lineage.pushed_filters,
     )
@@ -89,6 +109,9 @@ def plan_scan_unit(
         key=key,
         dataset_name=dataset_name,
         delta_version=delta_version,
+        delta_timestamp=delta_timestamp,
+        snapshot_timestamp=snapshot_timestamp,
+        delta_feature_gate=delta_feature_gate,
         candidate_files=candidate_files,
         pushed_filters=lineage.pushed_filters,
         projected_columns=lineage.projected_columns,
@@ -132,16 +155,18 @@ def _delta_scan_candidates(
     *,
     location: DatasetLocation,
     lineage: ScanLineage,
-) -> tuple[tuple[Path, ...], int | None]:
+) -> tuple[tuple[Path, ...], int | None, int | None]:
     request = _delta_snapshot_request(location)
     payload = _delta_add_actions_payload(request=request)
     if not payload.add_actions:
-        return (), payload.delta_version
+        return (), payload.delta_version, payload.snapshot_timestamp
     index = build_delta_file_index_from_add_actions(payload.add_actions)
     policy = _policy_from_lineage(location=location, lineage=lineage)
     pruning = evaluate_and_select_files(index, policy, ctx=ctx)
-    candidate_files = tuple(Path(str(location.path)) / Path(path) for path in pruning.candidate_paths)
-    return candidate_files, payload.delta_version
+    candidate_files = tuple(
+        Path(str(location.path)) / Path(path) for path in pruning.candidate_paths
+    )
+    return candidate_files, payload.delta_version, payload.snapshot_timestamp
 
 
 @dataclass(frozen=True)
@@ -149,6 +174,7 @@ class _DeltaAddActionsPayload:
     """Normalized Delta add-action payload for scan planning."""
 
     delta_version: int | None
+    snapshot_timestamp: int | None
     add_actions: tuple[Mapping[str, object], ...]
 
 
@@ -167,6 +193,20 @@ def _delta_snapshot_request(location: DatasetLocation) -> DeltaSnapshotRequest:
         storage_options=_delta_storage_options(location),
         version=pinned_version,
         timestamp=pinned_timestamp,
+        gate=resolve_delta_feature_gate(location),
+    )
+
+
+def _gate_payload(
+    gate: DeltaFeatureGate | None,
+) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
+    if gate is None:
+        return None
+    return (
+        gate.min_reader_version,
+        gate.min_writer_version,
+        tuple(gate.required_reader_features),
+        tuple(gate.required_writer_features),
     )
 
 
@@ -192,8 +232,13 @@ def _delta_add_actions_payload(
         msg = "Delta add-actions response missing snapshot mapping."
         raise TypeError(msg)
     delta_version = _resolve_delta_version(snapshot, pinned_version=request.version)
+    snapshot_timestamp = _resolve_snapshot_timestamp(snapshot)
     add_actions = _coerce_add_actions(response.get("add_actions"))
-    return _DeltaAddActionsPayload(delta_version=delta_version, add_actions=add_actions)
+    return _DeltaAddActionsPayload(
+        delta_version=delta_version,
+        snapshot_timestamp=snapshot_timestamp,
+        add_actions=add_actions,
+    )
 
 
 def _resolve_delta_version(
@@ -219,6 +264,21 @@ def _resolve_delta_version(
     return pinned_version
 
 
+def _resolve_snapshot_timestamp(snapshot: Mapping[str, object]) -> int | None:
+    """Resolve a snapshot timestamp from snapshot metadata."""
+    timestamp = snapshot.get("snapshot_timestamp")
+    if isinstance(timestamp, int):
+        return timestamp
+    if isinstance(timestamp, float):
+        return int(timestamp)
+    if isinstance(timestamp, str) and timestamp.strip():
+        try:
+            return int(timestamp)
+        except ValueError:
+            return None
+    return None
+
+
 def _coerce_add_actions(add_actions_raw: object) -> tuple[Mapping[str, object], ...]:
     """Coerce add actions into a tuple of mapping payloads.
 
@@ -230,9 +290,7 @@ def _coerce_add_actions(add_actions_raw: object) -> tuple[Mapping[str, object], 
     if isinstance(add_actions_raw, Sequence) and not isinstance(
         add_actions_raw, (str, bytes, bytearray)
     ):
-        return tuple(
-            action for action in add_actions_raw if isinstance(action, Mapping)
-        )
+        return tuple(action for action in add_actions_raw if isinstance(action, Mapping))
     return ()
 
 

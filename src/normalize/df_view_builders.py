@@ -1,8 +1,8 @@
 """DataFusion-native view builders for normalize outputs.
 
 This module provides DataFusion DataFrame-based view builders that replace
-the Ibis-based builders in view_builders.py. These builders return DataFrame
-instances directly and support DataFusionPlanBundle-based lineage extraction.
+legacy builders in view_builders.py. These builders return DataFrame instances
+directly and support DataFusionPlanBundle-based lineage extraction.
 """
 
 from __future__ import annotations
@@ -21,13 +21,55 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from datafusion_ext import span_make, stable_id_parts, utf8_null_if_blank
+from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundle
+from datafusion_engine.runtime import SessionRuntime
+from datafusion_ext import span_make, stable_id_parts, utf8_normalize, utf8_null_if_blank
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
 
 # Type alias for DataFrame builder functions
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
+
+# Type alias for bundle builder functions
+PlanBundleBuilder = Callable[[SessionRuntime], DataFusionPlanBundle]
+
+
+def _plan_bundle_from_df(
+    df: DataFrame,
+    *,
+    session_runtime: SessionRuntime,
+) -> DataFusionPlanBundle:
+    """Build a plan bundle from a DataFrame using a session runtime.
+
+    Returns
+    -------
+    DataFusionPlanBundle
+        Plan bundle with Substrait-first artifacts.
+    """
+    return build_plan_bundle(
+        session_runtime.ctx,
+        df,
+        compute_execution_plan=False,
+        compute_substrait=True,
+        validate_udfs=True,
+        session_runtime=session_runtime,
+    )
+
+
+def _bundle_builder(builder: DataFrameBuilder) -> PlanBundleBuilder:
+    """Wrap a DataFrame builder into a plan bundle builder.
+
+    Returns
+    -------
+    PlanBundleBuilder
+        Builder that produces DataFusionPlanBundle artifacts.
+    """
+    def _build(session_runtime: SessionRuntime) -> DataFusionPlanBundle:
+        df = builder(session_runtime.ctx)
+        return _plan_bundle_from_df(df, session_runtime=session_runtime)
+
+    return _build
 
 # Def/Use operation detection constants
 _DEF_USE_OPS: tuple[str, ...] = ("IMPORT_NAME", "IMPORT_FROM")
@@ -85,6 +127,17 @@ def _hash_part(expr: Expr, *, null_sentinel: str) -> Expr:
         Normalized hash-part expression.
     """
     return f.coalesce(_arrow_cast(expr, "Utf8"), lit(null_sentinel))
+
+
+def _normalized_text(expr: Expr) -> Expr:
+    """Normalize UTF-8 text with the canonical UDF.
+
+    Returns
+    -------
+    Expr
+        Normalized text expression.
+    """
+    return utf8_normalize(expr, collapse_ws=True)
 
 
 def _stable_id_expr(prefix: str, parts: Sequence[Expr], *, null_sentinel: str) -> Expr:
@@ -150,7 +203,7 @@ def type_exprs_df_builder(ctx: SessionContext) -> DataFrame:
 
     # Filter out empty or whitespace-only expressions using utf8_null_if_blank UDF
     expr_text = _arrow_cast(col("expr_text"), "Utf8")
-    type_repr = utf8_null_if_blank(f.trim(expr_text))
+    type_repr = utf8_null_if_blank(_normalized_text(expr_text))
 
     df = table.filter(type_repr.is_not_null()).with_column("type_repr", type_repr)
 
@@ -213,7 +266,7 @@ def type_nodes_df_builder(ctx: SessionContext) -> DataFrame:
     type_exprs = ctx.table("type_exprs_norm_v1")
 
     # Build rows from type expressions using utf8_null_if_blank for blank checks
-    expr_type_repr = utf8_null_if_blank(f.trim(_arrow_cast(col("type_repr"), "Utf8")))
+    expr_type_repr = utf8_null_if_blank(_normalized_text(_arrow_cast(col("type_repr"), "Utf8")))
     expr_valid = expr_type_repr.is_not_null() & col("type_id").is_not_null()
 
     expr_rows = (
@@ -228,7 +281,7 @@ def type_nodes_df_builder(ctx: SessionContext) -> DataFrame:
     try:
         scip = ctx.table("scip_symbol_information")
         if "type_repr" in scip.schema().names:
-            scip_type_repr = utf8_null_if_blank(f.trim(_arrow_cast(col("type_repr"), "Utf8")))
+            scip_type_repr = utf8_null_if_blank(_normalized_text(_arrow_cast(col("type_repr"), "Utf8")))
 
             scip_rows = (
                 scip.filter(scip_type_repr.is_not_null())
@@ -564,10 +617,16 @@ VIEW_BUILDERS: dict[str, DataFrameBuilder] = {
     "span_errors_v1": span_errors_df_builder,
 }
 
+VIEW_BUNDLE_BUILDERS: dict[str, PlanBundleBuilder] = {
+    name: _bundle_builder(builder) for name, builder in VIEW_BUILDERS.items()
+}
+
 
 __all__ = [
     "VIEW_BUILDERS",
+    "VIEW_BUNDLE_BUILDERS",
     "DataFrameBuilder",
+    "PlanBundleBuilder",
     "cfg_blocks_df_builder",
     "cfg_edges_df_builder",
     "def_use_events_df_builder",

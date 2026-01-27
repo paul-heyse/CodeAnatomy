@@ -14,10 +14,10 @@ from incremental.delta_context import DeltaAccessContext, read_delta_table_via_f
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
+    delta_merge_arrow,
     delta_table_version,
     enable_delta_features,
     idempotent_commit_properties,
-    open_delta_table,
     write_delta_table,
 )
 
@@ -155,30 +155,28 @@ def write_repo_snapshot(
         idempotent=commit_options,
         extra_metadata=commit_metadata,
     )
-    table = open_delta_table(
-        str(target),
-        storage_options=storage.storage_options,
-        log_storage_options=storage.log_storage_options,
-    )
     update_predicate = (
         "source.file_sha256 <> target.file_sha256 OR "
         "source.path <> target.path OR "
         "source.size_bytes <> target.size_bytes OR "
         "source.mtime_ns <> target.mtime_ns"
     )
-    (
-        table.merge(
-            snapshot,
-            predicate="source.file_id = target.file_id",
-            source_alias="source",
-            target_alias="target",
-            merge_schema=True,
-            commit_properties=commit_properties,
-        )
-        .when_matched_update_all(predicate=update_predicate)
-        .when_not_matched_insert_all()
-        .when_not_matched_by_source_delete()
-        .execute()
+    ctx = context.runtime.session_context()
+    delta_merge_arrow(
+        ctx,
+        path=str(target),
+        source=snapshot,
+        predicate="source.file_id = target.file_id",
+        storage_options=storage.storage_options,
+        log_storage_options=storage.log_storage_options,
+        source_alias="source",
+        target_alias="target",
+        matched_predicate=update_predicate,
+        update_all=True,
+        insert_all=True,
+        delete_not_matched_by_source=True,
+        commit_properties=commit_properties,
+        commit_metadata=commit_metadata,
     )
     context.runtime.profile.finalize_delta_commit(
         key=commit_key,

@@ -41,6 +41,7 @@ from arrowdsl.schema.schema import (
     register_schema_extensions,
 )
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.finalize import Contract, FinalizeContext
 from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
 from datafusion_engine.schema_introspection import SchemaIntrospector
@@ -417,6 +418,7 @@ class DatasetSpec:
     delta_scan: DeltaScanOptions | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
+    delta_feature_gate: DeltaFeatureGate | None = None
     delta_constraints: tuple[str, ...] = ()
     derived_fields: tuple[DerivedFieldSpec, ...] = ()
     predicate: ExprSpec | None = None
@@ -732,6 +734,7 @@ class DatasetSpecKwargs(TypedDict, total=False):
     delta_scan: DeltaScanOptions | None
     delta_write_policy: DeltaWritePolicy | None
     delta_schema_policy: DeltaSchemaPolicy | None
+    delta_feature_gate: DeltaFeatureGate | None
     delta_constraints: Sequence[str]
     derived_fields: Sequence[DerivedFieldSpec]
     predicate: ExprSpec | None
@@ -901,6 +904,7 @@ def make_dataset_spec(
         delta_scan=kwargs.get("delta_scan"),
         delta_write_policy=kwargs.get("delta_write_policy"),
         delta_schema_policy=kwargs.get("delta_schema_policy"),
+        delta_feature_gate=kwargs.get("delta_feature_gate"),
         delta_constraints=tuple(kwargs.get("delta_constraints", ())),
         derived_fields=tuple(kwargs.get("derived_fields", ())),
         predicate=kwargs.get("predicate"),

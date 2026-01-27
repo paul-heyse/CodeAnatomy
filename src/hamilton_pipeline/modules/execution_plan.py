@@ -425,7 +425,7 @@ def _incremental_plan_diff_node(options: PlanModuleOptions) -> object:
                 plan_signature=execution_plan.plan_signature,
                 total_tasks=len(current),
             )
-        write_plan_snapshots(state_store, current)
+        write_plan_snapshots(state_store, current, context=context)
         return diff
 
     return incremental_plan_diff

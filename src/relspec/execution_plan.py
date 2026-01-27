@@ -109,7 +109,7 @@ class ExecutionPlan:
     runtime_profile: DataFusionRuntimeProfile | None = None
     session_runtime_hash: str | None = None
     scan_units: tuple[ScanUnit, ...] = ()
-    scan_unit_delta_pins: Mapping[str, int] = field(default_factory=dict)
+    scan_unit_delta_pins: Mapping[str, tuple[int | None, str | None]] = field(default_factory=dict)
     scan_keys_by_task: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     scan_task_units_by_name: Mapping[str, ScanUnit] = field(default_factory=dict)
     scan_task_name_by_key: Mapping[str, str] = field(default_factory=dict)
@@ -234,8 +234,10 @@ def priority_for_task(task_name: str) -> int:
     return 100
 
 
-def _scan_unit_delta_pins(scan_units: Sequence[ScanUnit]) -> dict[str, int]:
-    """Extract Delta version pins from scan units for determinism tracking.
+def _scan_unit_delta_pins(
+    scan_units: Sequence[ScanUnit],
+) -> dict[str, tuple[int | None, str | None]]:
+    """Extract Delta pins from scan units for determinism tracking.
 
     Parameters
     ----------
@@ -244,25 +246,27 @@ def _scan_unit_delta_pins(scan_units: Sequence[ScanUnit]) -> dict[str, int]:
 
     Returns
     -------
-    dict[str, int]
-        Mapping of dataset name to pinned Delta version.
+    dict[str, tuple[int | None, str | None]]
+        Mapping of dataset name to pinned Delta version and timestamp.
 
     Raises
     ------
     ValueError
         When conflicting Delta versions exist for the same dataset.
     """
-    pins: dict[str, int] = {}
+    pins: dict[str, tuple[int | None, str | None]] = {}
     for unit in scan_units:
-        if unit.delta_version is not None:
-            existing = pins.get(unit.dataset_name)
-            if existing is not None and existing != unit.delta_version:
-                msg = (
-                    f"Conflicting Delta versions for {unit.dataset_name!r}: "
-                    f"{existing} vs {unit.delta_version}"
-                )
-                raise ValueError(msg)
-            pins[unit.dataset_name] = unit.delta_version
+        timestamp = unit.delta_timestamp
+        if timestamp is None and unit.snapshot_timestamp is not None:
+            timestamp = str(unit.snapshot_timestamp)
+        if unit.delta_version is None and timestamp is None:
+            continue
+        existing = pins.get(unit.dataset_name)
+        candidate = (unit.delta_version, timestamp)
+        if existing is not None and existing != candidate:
+            msg = f"Conflicting Delta pins for {unit.dataset_name!r}: {existing} vs {candidate}"
+            raise ValueError(msg)
+        pins[unit.dataset_name] = candidate
     return pins
 
 
@@ -403,9 +407,7 @@ def _pruned_plan_bundle(
         active_tasks=active_tasks,
     )
     pruned_scan_task_units = {
-        name: unit
-        for name, unit in inputs.scan_task_units_by_name.items()
-        if name in active_tasks
+        name: unit for name, unit in inputs.scan_task_units_by_name.items() if name in active_tasks
     }
     pruned_scan_task_name_by_key = {
         key: name
@@ -906,19 +908,44 @@ def _df_settings_hash(df_settings: Mapping[str, str]) -> str:
     return _hash_payload(entries)
 
 
-def _delta_inputs_payload(bundle: object) -> tuple[tuple[str, int | None, str | None], ...]:
+def _delta_inputs_payload(
+    bundle: object,
+) -> tuple[tuple[str, int | None, str | None, tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None], ...]:
     delta_inputs = getattr(bundle, "delta_inputs", ())
     payload: list[tuple[str, int | None, str | None]] = []
     for item in delta_inputs:
         dataset_name = getattr(item, "dataset_name", None)
         version = getattr(item, "version", None)
         timestamp = getattr(item, "timestamp", None)
+        gate = getattr(item, "feature_gate", None)
         if not isinstance(dataset_name, str) or not dataset_name:
             continue
         version_value = int(version) if isinstance(version, int) else None
-        timestamp_value = str(timestamp) if isinstance(timestamp, str) else None
-        payload.append((dataset_name, version_value, timestamp_value))
+        if isinstance(timestamp, str):
+            timestamp_value = timestamp
+        elif isinstance(timestamp, (int, float)):
+            timestamp_value = str(int(timestamp))
+        else:
+            timestamp_value = None
+        payload.append((dataset_name, version_value, timestamp_value, _delta_gate_payload(gate)))
     return tuple(sorted(payload, key=lambda entry: entry[0]))
+
+
+def _delta_gate_payload(
+    gate: object | None,
+) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
+    if gate is None:
+        return None
+    min_reader_version = getattr(gate, "min_reader_version", None)
+    min_writer_version = getattr(gate, "min_writer_version", None)
+    required_reader_features = tuple(getattr(gate, "required_reader_features", ()))
+    required_writer_features = tuple(getattr(gate, "required_writer_features", ()))
+    return (
+        min_reader_version,
+        min_writer_version,
+        required_reader_features,
+        required_writer_features,
+    )
 
 
 def _scan_unit_signature(scan_unit: ScanUnit, *, runtime_hash: str | None) -> str:
@@ -929,6 +956,9 @@ def _scan_unit_signature(scan_unit: ScanUnit, *, runtime_hash: str | None) -> st
         ("scan_key", scan_unit.key),
         ("dataset_name", scan_unit.dataset_name),
         ("delta_version", scan_unit.delta_version),
+        ("delta_timestamp", scan_unit.delta_timestamp),
+        ("snapshot_timestamp", scan_unit.snapshot_timestamp),
+        ("delta_feature_gate", _delta_gate_payload(scan_unit.delta_feature_gate)),
         ("candidate_files", candidate_files),
         ("pushed_filters", tuple(sorted(scan_unit.pushed_filters))),
         ("projected_columns", tuple(sorted(scan_unit.projected_columns))),
@@ -995,9 +1025,7 @@ def _plan_task_signature_map(
         if view_node is not None and view_node.plan_bundle is not None:
             scan_keys = context.scan_keys_by_task.get(task_name, ())
             scan_signatures = [
-                scan_signatures_by_key[key]
-                for key in scan_keys
-                if key in scan_signatures_by_key
+                scan_signatures_by_key[key] for key in scan_keys if key in scan_signatures_by_key
             ]
             bundle_signature = _plan_bundle_task_signature(
                 bundle=view_node.plan_bundle,
@@ -1073,9 +1101,7 @@ def _pruned_plan_components(
         active_tasks=active_tasks,
     )
     pruned_scan_task_units = {
-        name: unit
-        for name, unit in plan.scan_task_units_by_name.items()
-        if name in active_tasks
+        name: unit for name, unit in plan.scan_task_units_by_name.items() if name in active_tasks
     }
     pruned_scan_task_name_by_key = {
         key: name

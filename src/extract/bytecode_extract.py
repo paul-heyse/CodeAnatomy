@@ -20,7 +20,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
-from datafusion_engine.plan import DataFusionPlan
+from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from extract.cache_utils import (
     CacheSetOptions,
     cache_for_extract,
@@ -1581,7 +1581,7 @@ def _build_bytecode_file_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
     session: ExtractSession,
-) -> DataFusionPlan:
+) -> DataFusionPlanBundle:
     return extract_plan_from_rows(
         "bytecode_files_v1",
         rows,
@@ -1675,13 +1675,13 @@ def extract_bytecode_plans(
     options: BytecodeExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, DataFusionPlan]:
+) -> dict[str, DataFusionPlanBundle]:
     """Extract bytecode plans from repository files.
 
     Returns
     -------
-    dict[str, DataFusionPlan]
-        Ibis plan bundle keyed by bytecode output name.
+    dict[str, DataFusionPlanBundle]
+        Plan bundle keyed by bytecode output name.
     """
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
     exec_context = context or ExtractExecutionContext()

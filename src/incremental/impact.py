@@ -481,7 +481,6 @@ def _optional_tables(
     return out
 
 
-
 __all__ = [
     "changed_file_impact_table",
     "impacted_callers_from_changed_exports",

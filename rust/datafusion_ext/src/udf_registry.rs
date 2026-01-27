@@ -71,6 +71,120 @@ pub fn all_udfs() -> Vec<UdfSpec> {
             aliases: &[],
         },
         UdfSpec {
+            name: "stable_id_parts",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::stable_id_parts_udf()),
+            aliases: &["stable_id_multi"],
+        },
+        UdfSpec {
+            name: "prefixed_hash_parts64",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::prefixed_hash_parts64_udf()),
+            aliases: &["prefixed_hash_parts"],
+        },
+        UdfSpec {
+            name: "stable_hash_any",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::stable_hash_any_udf()),
+            aliases: &["stable_hash"],
+        },
+        UdfSpec {
+            name: "span_make",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::span_make_udf()),
+            aliases: &["span"],
+        },
+        UdfSpec {
+            name: "span_len",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::span_len_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
+            name: "span_overlaps",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::span_overlaps_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
+            name: "span_contains",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::span_contains_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
+            name: "span_id",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::span_id_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
+            name: "utf8_normalize",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::utf8_normalize_udf()),
+            aliases: &["normalize_utf8"],
+        },
+        UdfSpec {
+            name: "utf8_null_if_blank",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::utf8_null_if_blank_udf()),
+            aliases: &["null_if_blank"],
+        },
+        UdfSpec {
+            name: "qname_normalize",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::qname_normalize_udf()),
+            aliases: &["qualname_normalize"],
+        },
+        UdfSpec {
+            name: "map_get_default",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::map_get_default_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
+            name: "map_normalize",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::map_normalize_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
+            name: "list_compact",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::list_compact_udf()),
+            aliases: &["array_compact"],
+        },
+        UdfSpec {
+            name: "list_unique_sorted",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::list_unique_sorted_udf()),
+            aliases: &["array_unique_sorted"],
+        },
+        UdfSpec {
+            name: "struct_pick",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::struct_pick_udf()),
+            aliases: &["struct_select"],
+        },
+        UdfSpec {
+            name: "cdf_change_rank",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::cdf_change_rank_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
+            name: "cdf_is_upsert",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::cdf_is_upsert_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
+            name: "cdf_is_delete",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::cdf_is_delete_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
             name: "col_to_byte",
             kind: UdfKind::Scalar,
             builder: || UdfHandle::Scalar(udf_custom::col_to_byte_udf()),
@@ -88,8 +202,8 @@ pub fn all_udfs() -> Vec<UdfSpec> {
 pub fn register_all(
     ctx: &SessionContext,
     enable_async: bool,
-    async_udf_timeout_ms: Option<u64>,
-    async_udf_batch_size: Option<usize>,
+    _async_udf_timeout_ms: Option<u64>,
+    _async_udf_batch_size: Option<usize>,
 ) -> Result<()> {
     for spec in all_udfs() {
         match (spec.kind, (spec.builder)()) {

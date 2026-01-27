@@ -24,7 +24,7 @@ from cpg.spec_registry import (
     scip_role_flag_prop_spec,
 )
 from cpg.specs import NodeEmitSpec, PropFieldSpec, PropTableSpec, TaskIdentity
-from datafusion_ext import stable_id
+from datafusion_ext import stable_id_parts
 from relspec.view_defs import RELATION_OUTPUT_NAME
 
 if TYPE_CHECKING:
@@ -81,6 +81,25 @@ def _literal_or_null(value: object | None, dtype: pa.DataType) -> Expr:
         arrow_type = str(dtype).replace("_", "").title()
         return _null_expr(arrow_type)
     return lit(value)
+
+
+def _stable_id_from_parts(prefix: str, parts: Sequence[Expr]) -> Expr:
+    """Build a stable identifier from variadic expression parts.
+
+    Returns
+    -------
+    Expr
+        Stable identifier expression.
+
+    Raises
+    ------
+    ValueError
+        Raised when no expression parts are provided.
+    """
+    if not parts:
+        msg = "stable identifiers require at least one part."
+        raise ValueError(msg)
+    return stable_id_parts(prefix, parts[0], *parts[1:])
 
 
 def build_cpg_nodes_df(
@@ -165,7 +184,7 @@ def _emit_nodes_df(
     node_id_parts = [col(c) if c in df.schema().names else _null_expr("Utf8") for c in id_cols]
     node_id_parts.append(lit(str(spec.node_kind)))
 
-    node_id = stable_id("node", *node_id_parts)
+    node_id = _stable_id_from_parts("node", node_id_parts)
     node_kind = lit(str(spec.node_kind))
     path = _coalesce_cols(df, spec.path_cols, pa.string())
     bstart = _coalesce_cols(df, spec.bstart_cols, pa.int64())
@@ -249,10 +268,10 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
     edge_kind = col("kind") if "kind" in names else _null_expr("Utf8")
 
     base_id_parts = [edge_kind, col("src"), col("dst")]
-    base_id = stable_id("edge", *base_id_parts)
+    base_id = _stable_id_from_parts("edge", base_id_parts)
 
     span_id_parts = [edge_kind, col("src"), col("dst"), col("path"), col("bstart"), col("bend")]
-    span_id = stable_id("edge", *span_id_parts)
+    span_id = _stable_id_from_parts("edge", span_id_parts)
 
     has_span = col("path").is_not_null() & col("bstart").is_not_null() & col("bend").is_not_null()
     valid_nodes = col("src").is_not_null() & col("dst").is_not_null()
@@ -529,7 +548,7 @@ def _entity_id_expr_df(df: DataFrame, spec: PropTableSpec) -> Expr:
     if spec.entity_kind == EntityKind.NODE and spec.node_kind is not None:
         id_parts.append(lit(str(spec.node_kind)))
 
-    return stable_id(prefix, *id_parts)
+    return _stable_id_from_parts(prefix, id_parts)
 
 
 def _value_columns_df(value_expr: Expr, *, value_type_str: str) -> dict[str, Expr]:

@@ -14,7 +14,7 @@ from engine.runtime import EngineRuntime
 
 if TYPE_CHECKING:
     from arrowdsl.core.runtime_profiles import RuntimeProfile
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
 from datafusion_engine.dataset_registry import DatasetCatalog
 from obs.diagnostics import DiagnosticsCollector
 
@@ -52,6 +52,19 @@ class EngineSession:
         if self.engine_runtime.datafusion_profile is None:
             return None
         return self.engine_runtime.datafusion_profile.session_context()
+
+    def df_runtime(self) -> SessionRuntime | None:
+        """Return the DataFusion SessionRuntime when configured.
+
+        Returns
+        -------
+        SessionRuntime | None
+            Session runtime when available.
+        """
+        profile = self.engine_runtime.datafusion_profile
+        if profile is None:
+            return None
+        return profile.session_runtime()
 
     def datafusion_facade(self) -> DataFusionExecutionFacade | None:
         """Return a DataFusion execution facade when configured.

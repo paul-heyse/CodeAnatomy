@@ -25,15 +25,20 @@ from datafusion_ext import (
     map_extract,
     map_keys,
     map_values,
-    prefixed_hash64,
-    stable_id,
     union_extract,
     union_tag,
+)
+from datafusion_ext import (
+    prefixed_hash_parts64 as prefixed_hash64,
+)
+from datafusion_ext import (
+    stable_id_parts as stable_id,
 )
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.udf_platform import RustUdfPlatformOptions
 
 
@@ -2854,8 +2859,21 @@ def ensure_view_graph(
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
     include_registry_views: bool = True,
+    scan_units: Sequence[ScanUnit] = (),
 ) -> Mapping[str, object]:
     """Install the UDF platform (if needed) and register all views.
+
+    Parameters
+    ----------
+    ctx
+        Active DataFusion session context.
+    runtime_profile
+        Runtime profile used for registration policies and diagnostics.
+    include_registry_views
+        Whether to register registry-fragment views before pipeline views.
+    scan_units
+        Optional scan units that pin Delta versions and candidate files
+        before view registration.
 
     Returns
     -------
@@ -2868,6 +2886,14 @@ def ensure_view_graph(
     options = _platform_options(runtime_profile)
     platform = install_rust_udf_platform(ctx, options=options)
     snapshot = platform.snapshot or rust_udf_snapshot(ctx)
+    if scan_units and runtime_profile is not None:
+        from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+
+        apply_scan_unit_overrides(
+            ctx,
+            scan_units=scan_units,
+            runtime_profile=runtime_profile,
+        )
     try:
         register_all_views(
             ctx,

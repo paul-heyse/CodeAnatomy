@@ -15,6 +15,7 @@ from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
 from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
+    from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.view_graph_registry import ViewNode
     from schema_spec.system import DatasetSpec
 
@@ -22,7 +23,7 @@ NodeKind = Literal["evidence", "task"]
 EdgeKind = Literal["requires", "produces"]
 OutputPolicy = Literal["all_producers"]
 
-TASK_GRAPH_SNAPSHOT_VERSION = 1
+TASK_GRAPH_SNAPSHOT_VERSION = 2
 TASK_DEPENDENCY_SNAPSHOT_VERSION = 1
 _CYCLE_EDGE_MIN_LEN = 2
 _TASK_GRAPH_NODE_SCHEMA = pa.struct(
@@ -33,6 +34,9 @@ _TASK_GRAPH_NODE_SCHEMA = pa.struct(
         pa.field("output", pa.string(), nullable=True),
         pa.field("priority", pa.int32(), nullable=True),
         pa.field("signature", pa.string(), nullable=True),
+        pa.field("scan_dataset_name", pa.string(), nullable=True),
+        pa.field("scan_delta_version", pa.int64(), nullable=True),
+        pa.field("scan_candidate_file_count", pa.int64(), nullable=True),
     ]
 )
 _TASK_GRAPH_EDGE_SCHEMA = pa.struct(
@@ -107,6 +111,9 @@ class EvidenceNode:
     """Evidence dataset node payload."""
 
     name: str
+    scan_dataset_name: str | None = None
+    scan_delta_version: int | None = None
+    scan_candidate_file_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -221,13 +228,33 @@ class GraphDiagnostics:
     dependency_removed_edge_count: int | None = None
 
 
+@dataclass(frozen=True)
+class TaskGraphBuildOptions:
+    """Options for building inferred task graphs."""
+
+    output_policy: OutputPolicy = "all_producers"
+    priority: int = 100
+    priorities: Mapping[str, int] | None = None
+    extra_evidence: Iterable[str] | None = None
+    scan_units: Sequence[ScanUnit] = ()
+    scan_keys_by_task: Mapping[str, tuple[str, ...]] | None = None
+
+
+@dataclass(frozen=True)
+class InferredGraphConfig:
+    """Configuration for inferred graph assembly."""
+
+    output_policy: OutputPolicy
+    fingerprints: Mapping[str, str]
+    requirements: TaskEdgeRequirements
+    extra_evidence: Iterable[str] | None = None
+    scan_units: Mapping[str, ScanUnit] | None = None
+
+
 def build_task_graph_from_inferred_deps(
     deps: Sequence[InferredDeps],
     *,
-    output_policy: OutputPolicy = "all_producers",
-    priority: int = 100,
-    priorities: Mapping[str, int] | None = None,
-    extra_evidence: Iterable[str] | None = None,
+    options: TaskGraphBuildOptions | None = None,
 ) -> TaskGraph:
     """Build a task graph from inferred dependencies.
 
@@ -236,14 +263,24 @@ def build_task_graph_from_inferred_deps(
     TaskGraph
         Graph constructed from inferred dependencies.
     """
-    priority_map = priorities or {}
+    resolved = options or TaskGraphBuildOptions()
+    priority_map = resolved.priorities or {}
+    scan_unit_map = {unit.key: unit for unit in resolved.scan_units}
+    scan_key_map = dict(resolved.scan_keys_by_task or {})
     task_nodes = tuple(
         TaskNode(
             name=dep.task_name,
             output=dep.output,
             inputs=dep.inputs,
-            sources=dep.inputs,
-            priority=priority_map.get(dep.task_name, priority),
+            sources=tuple(
+                dict.fromkeys(
+                    (
+                        *dep.inputs,
+                        *scan_key_map.get(dep.task_name, ()),
+                    )
+                )
+            ),
+            priority=priority_map.get(dep.task_name, resolved.priority),
         )
         for dep in deps
     )
@@ -253,12 +290,20 @@ def build_task_graph_from_inferred_deps(
         types={dep.task_name: dep.required_types for dep in deps},
         metadata={dep.task_name: dep.required_metadata for dep in deps},
     )
+    scan_keys_all = tuple(sorted(scan_unit_map))
+    extra_evidence_tokens = tuple(resolved.extra_evidence or ())
+    extra_evidence_all = tuple(
+        dict.fromkeys((*extra_evidence_tokens, *scan_keys_all))
+    )
     return _build_task_graph_inferred(
         task_nodes,
-        output_policy=output_policy,
-        fingerprints=fingerprints,
-        requirements=requirements,
-        extra_evidence=extra_evidence,
+        config=InferredGraphConfig(
+            output_policy=resolved.output_policy,
+            fingerprints=fingerprints,
+            requirements=requirements,
+            extra_evidence=extra_evidence_all,
+            scan_units=scan_unit_map,
+        ),
     )
 
 
@@ -281,10 +326,12 @@ def build_task_graph_from_views(
     extra_evidence_names = _extra_evidence_names(extra_evidence)
     return build_task_graph_from_inferred_deps(
         inferred,
-        output_policy=output_policy,
-        priority=priority,
-        priorities=priorities,
-        extra_evidence=extra_evidence_names,
+        options=TaskGraphBuildOptions(
+            output_policy=output_policy,
+            priority=priority,
+            priorities=priorities,
+            extra_evidence=extra_evidence_names,
+        ),
     )
 
 
@@ -330,9 +377,13 @@ def task_graph_snapshot(
         )
         ordered_pairs = [(node_map[id(node)], node) for node in ordered_nodes]
     except ValueError:
-        ordered_pairs = [(idx, graph.graph[idx]) for idx in sorted(graph.graph.node_indices())]
+        ordered_pairs = [
+            (idx, graph.graph[idx])
+            for idx in sorted(graph.graph.node_indices())
+        ]
     nodes = tuple(
-        _node_payload(node_id, node, signatures=signatures) for node_id, node in ordered_pairs
+        _node_payload(node_id, node, signatures=signatures)
+        for node_id, node in ordered_pairs
     )
     edges = tuple(_edge_payloads(graph.graph))
     return TaskGraphSnapshot(
@@ -393,8 +444,14 @@ def _cycle_graph_diagnostics(
     node_link_json: str | None,
 ) -> GraphDiagnostics:
     cycle_sample = _cycle_sample_nodes(rx.digraph_find_cycle(graph))
-    cycles = tuple(tuple(cycle) for cycle in rx.simple_cycles(graph)) if include_cycles else ()
-    scc = tuple(tuple(component) for component in rx.strongly_connected_components(graph))
+    cycles = (
+        tuple(tuple(cycle) for cycle in rx.simple_cycles(graph))
+        if include_cycles
+        else ()
+    )
+    scc = tuple(
+        tuple(component) for component in rx.strongly_connected_components(graph)
+    )
     return GraphDiagnostics(
         status="cycle",
         cycles=cycles,
@@ -554,10 +611,18 @@ def task_graph_subgraph(
         edge_count_hint=len(edge_payloads),
     )
     node_indices = subgraph.add_nodes_from([node for _, node in nodes_to_add])
-    node_map = dict(zip([node_idx for node_idx, _ in nodes_to_add], node_indices, strict=True))
-    subgraph.add_edges_from(
-        [(node_map[source], node_map[target], payload) for source, target, payload in edge_payloads]
+    node_map = dict(
+        zip(
+            [node_idx for node_idx, _node in nodes_to_add],
+            node_indices,
+            strict=True,
+        )
     )
+    edges_to_add = [
+        (node_map[source], node_map[target], payload)
+        for source, target, payload in edge_payloads
+    ]
+    subgraph.add_edges_from(edges_to_add)
     evidence_idx: dict[str, int] = {}
     task_idx: dict[str, int] = {}
     for idx in subgraph.node_indices():
@@ -761,8 +826,14 @@ def task_dependency_critical_path_tasks(graph: rx.PyDiGraph) -> tuple[str, ...]:
 def _task_dependency_edges(graph: TaskGraph) -> dict[tuple[str, str], set[str]]:
     edges: dict[tuple[str, str], set[str]] = {}
     for evidence_name, evidence_idx in graph.evidence_idx.items():
-        producers = _task_neighbors(graph, graph.graph.predecessor_indices(evidence_idx))
-        consumers = _task_neighbors(graph, graph.graph.successor_indices(evidence_idx))
+        producers = _task_neighbors(
+            graph,
+            graph.graph.predecessor_indices(evidence_idx),
+        )
+        consumers = _task_neighbors(
+            graph,
+            graph.graph.successor_indices(evidence_idx),
+        )
         if not producers or not consumers:
             continue
         for producer in producers:
@@ -824,7 +895,9 @@ def _task_dependency_snapshot(
 
 def _task_dependency_edge_payloads(graph: rx.PyDiGraph) -> Sequence[dict[str, object]]:
     node_names = {
-        idx: graph[idx].name for idx in graph.node_indices() if isinstance(graph[idx], TaskNode)
+        idx: graph[idx].name
+        for idx in graph.node_indices()
+        if isinstance(graph[idx], TaskNode)
     }
     edges: list[dict[str, object]] = []
     for source, target, payload in graph.weighted_edge_list():
@@ -843,7 +916,10 @@ def _task_dependency_edge_payloads(graph: rx.PyDiGraph) -> Sequence[dict[str, ob
         source_name = node_names.get(source, "") if isinstance(source, int) else ""
         target_name = node_names.get(target, "") if isinstance(target, int) else ""
         evidence_names = item.get("evidence_names")
-        if isinstance(evidence_names, Sequence) and not isinstance(evidence_names, (str, bytes)):
+        if isinstance(evidence_names, Sequence) and not isinstance(
+            evidence_names,
+            (str, bytes),
+        ):
             evidence_label = ",".join(str(name) for name in evidence_names)
         else:
             evidence_label = ""
@@ -898,16 +974,14 @@ def _task_node_weight(node: object) -> float:
 def _build_task_graph_inferred(
     tasks: Sequence[TaskNode],
     *,
-    output_policy: OutputPolicy,
-    fingerprints: Mapping[str, str],
-    requirements: TaskEdgeRequirements,
-    extra_evidence: Iterable[str] | None = None,
+    config: InferredGraphConfig,
 ) -> TaskGraph:
-    evidence_names = _collect_evidence_names(tasks, extra=extra_evidence)
+    evidence_names = _collect_evidence_names(tasks, extra=config.extra_evidence)
     graph, evidence_idx, task_idx, tasks_sorted = _seed_inferred_task_graph(
         tasks,
         evidence_names=evidence_names,
-        output_policy=output_policy,
+        output_policy=config.output_policy,
+        scan_units=config.scan_units,
     )
     _add_inferred_task_edges(
         graph,
@@ -915,15 +989,15 @@ def _build_task_graph_inferred(
         context=InferredEdgeContext(
             evidence_idx=evidence_idx,
             task_idx=task_idx,
-            fingerprints=fingerprints,
-            requirements=requirements,
+            fingerprints=config.fingerprints,
+            requirements=config.requirements,
         ),
     )
     return TaskGraph(
         graph=graph,
         evidence_idx=evidence_idx,
         task_idx=task_idx,
-        output_policy=output_policy,
+        output_policy=config.output_policy,
     )
 
 
@@ -932,6 +1006,7 @@ def _seed_inferred_task_graph(
     *,
     evidence_names: set[str],
     output_policy: OutputPolicy,
+    scan_units: Mapping[str, ScanUnit] | None = None,
 ) -> tuple[rx.PyDiGraph, dict[str, int], dict[str, int], list[TaskNode]]:
     if output_policy != "all_producers":
         msg = f"Unsupported output policy: {output_policy!r}."
@@ -939,6 +1014,7 @@ def _seed_inferred_task_graph(
     _validate_task_names(tasks)
     evidence_names_sorted = sorted(evidence_names)
     tasks_sorted = sorted(tasks, key=lambda item: item.name)
+    scan_unit_map = dict(scan_units or {})
     node_count_hint = len(evidence_names_sorted) + len(tasks_sorted)
     edge_count_hint = sum(len(task.sources) + 1 for task in tasks_sorted)
     graph = rx.PyDiGraph(
@@ -949,14 +1025,35 @@ def _seed_inferred_task_graph(
         edge_count_hint=edge_count_hint,
     )
     evidence_payloads = [
-        GraphNode("evidence", EvidenceNode(name)) for name in evidence_names_sorted
+        GraphNode("evidence", _evidence_node(name, scan_units=scan_unit_map))
+        for name in evidence_names_sorted
     ]
     task_payloads = [GraphNode("task", task) for task in tasks_sorted]
     evidence_indices = graph.add_nodes_from(evidence_payloads)
     task_indices = graph.add_nodes_from(task_payloads)
     evidence_idx = dict(zip(evidence_names_sorted, evidence_indices, strict=True))
-    task_idx = dict(zip([task.name for task in tasks_sorted], task_indices, strict=True))
+    task_idx = dict(
+        zip(
+            [task.name for task in tasks_sorted],
+            task_indices,
+            strict=True,
+        )
+    )
     return graph, evidence_idx, task_idx, tasks_sorted
+
+
+def _evidence_node(name: str, *, scan_units: Mapping[str, ScanUnit]) -> EvidenceNode:
+    unit = scan_units.get(name)
+    if unit is None:
+        return EvidenceNode(name=name)
+    candidate_count = len(unit.candidate_files)
+    delta_version = unit.delta_version
+    return EvidenceNode(
+        name=name,
+        scan_dataset_name=unit.dataset_name,
+        scan_delta_version=delta_version,
+        scan_candidate_file_count=candidate_count,
+    )
 
 
 @dataclass(frozen=True)
@@ -1032,7 +1129,7 @@ def _collect_evidence_names(
     names: set[str] = set()
     for task in tasks:
         names.add(task.output)
-        names.update(task.inputs)
+        names.update(task.sources)
     if extra is not None:
         names.update(extra)
     return names
@@ -1077,6 +1174,9 @@ def _node_payload(
             "output": None,
             "priority": None,
             "signature": None,
+            "scan_dataset_name": payload.scan_dataset_name,
+            "scan_delta_version": payload.scan_delta_version,
+            "scan_candidate_file_count": payload.scan_candidate_file_count,
         }
     payload = node.payload
     if not isinstance(payload, TaskNode):
@@ -1089,6 +1189,9 @@ def _node_payload(
         "output": payload.output,
         "priority": payload.priority,
         "signature": signatures.get(payload.name),
+        "scan_dataset_name": None,
+        "scan_delta_version": None,
+        "scan_candidate_file_count": None,
     }
 
 
@@ -1105,10 +1208,12 @@ def _edge_payloads(graph: rx.PyDiGraph) -> Sequence[dict[str, object]]:
                 "name": payload.name,
                 "required_columns": list(payload.required_columns),
                 "required_types": [
-                    {"name": name, "type": dtype} for name, dtype in payload.required_types
+                    {"name": name, "type": dtype}
+                    for name, dtype in payload.required_types
                 ],
                 "required_metadata": [
-                    {"key": key, "value": value} for key, value in payload.required_metadata
+                    {"key": key, "value": value}
+                    for key, value in payload.required_metadata
                 ],
             }
         )
@@ -1123,34 +1228,41 @@ def _node_link_graph_attrs(attrs: object) -> dict[str, str]:
     return {"value": str(attrs)}
 
 
+def _evidence_node_attrs(evidence: EvidenceNode) -> dict[str, str]:
+    attrs: dict[str, str] = {
+        "kind": "evidence",
+        "name": evidence.name,
+    }
+    if evidence.scan_dataset_name is not None:
+        attrs["scan_dataset_name"] = evidence.scan_dataset_name
+    if evidence.scan_delta_version is not None:
+        attrs["scan_delta_version"] = str(evidence.scan_delta_version)
+    if evidence.scan_candidate_file_count is not None:
+        attrs["scan_candidate_file_count"] = str(evidence.scan_candidate_file_count)
+    return attrs
+
+
+def _task_node_attrs(task: TaskNode) -> dict[str, str]:
+    return {
+        "kind": "task",
+        "name": task.name,
+        "output": task.output,
+        "priority": str(task.priority),
+        "inputs": json.dumps(list(task.inputs)),
+        "sources": json.dumps(list(task.sources)),
+    }
+
+
 def _node_link_node_attrs(payload: object) -> dict[str, str]:
     if isinstance(payload, GraphNode):
         if payload.kind == "evidence" and isinstance(payload.payload, EvidenceNode):
-            return {
-                "kind": payload.kind,
-                "name": payload.payload.name,
-            }
+            return _evidence_node_attrs(payload.payload)
         if payload.kind == "task" and isinstance(payload.payload, TaskNode):
-            task = payload.payload
-            return {
-                "kind": payload.kind,
-                "name": task.name,
-                "output": task.output,
-                "priority": str(task.priority),
-                "inputs": json.dumps(list(task.inputs)),
-                "sources": json.dumps(list(task.sources)),
-            }
+            return _task_node_attrs(payload.payload)
     if isinstance(payload, TaskNode):
-        return {
-            "kind": "task",
-            "name": payload.name,
-            "output": payload.output,
-            "priority": str(payload.priority),
-            "inputs": json.dumps(list(payload.inputs)),
-            "sources": json.dumps(list(payload.sources)),
-        }
+        return _task_node_attrs(payload)
     if isinstance(payload, EvidenceNode):
-        return {"kind": "evidence", "name": payload.name}
+        return _evidence_node_attrs(payload)
     return {}
 
 
@@ -1158,7 +1270,8 @@ def _node_link_edge_attrs(payload: object) -> dict[str, str]:
     if not isinstance(payload, GraphEdge):
         return {}
     metadata = [
-        {"key": key.hex(), "value": value.hex()} for key, value in payload.required_metadata
+        {"key": key.hex(), "value": value.hex()}
+        for key, value in payload.required_metadata
     ]
     return {
         "kind": payload.kind,
@@ -1183,6 +1296,7 @@ __all__ = [
     "TaskDependencySnapshot",
     "TaskEdgeRequirements",
     "TaskGraph",
+    "TaskGraphBuildOptions",
     "TaskGraphSnapshot",
     "TaskNode",
     "build_task_graph_from_inferred_deps",

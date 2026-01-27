@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import TYPE_CHECKING
 
-from hamilton.function_modifiers import tag
+from hamilton.function_modifiers import extract_fields, tag
 
 from relspec.evidence import EvidenceCatalog
 from relspec.execution_plan import (
@@ -20,6 +20,7 @@ from relspec.execution_plan import (
 if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
     from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.view_graph_registry import ViewNode
     from incremental.plan_fingerprints import PlanFingerprintSnapshot
     from incremental.types import IncrementalConfig
@@ -28,6 +29,17 @@ if TYPE_CHECKING:
     from relspec.rustworkx_schedule import TaskSchedule
     from relspec.schedule_events import TaskScheduleMetadata
     from schema_spec.system import DatasetSpec
+else:
+    ExecutionContext = object
+    DataFusionRuntimeProfile = object
+    ViewNode = object
+    PlanFingerprintSnapshot = object
+    IncrementalConfig = object
+    IncrementalDiff = object
+    TaskGraph = object
+    TaskSchedule = object
+    TaskScheduleMetadata = object
+    DatasetSpec = object
 
 
 @dataclass(frozen=True)
@@ -86,8 +98,11 @@ def _plan_node_functions(
         ("execution_plan", _execution_plan_node(plan)),
         ("view_nodes", _view_nodes_node()),
         ("dataset_specs", _dataset_specs_node()),
+        ("plan_scan_units", _plan_scan_units_node()),
+        ("plan_scan_keys_by_task", _plan_scan_keys_by_task_node()),
         ("task_graph", _task_graph_node()),
         ("evidence_catalog", _evidence_catalog_node(options)),
+        ("plan_artifacts", _plan_artifacts_node()),
         ("plan_signature", _plan_signature_node()),
         ("task_schedule", _task_schedule_node()),
         ("task_generations", _task_generations_node()),
@@ -127,6 +142,24 @@ def _dataset_specs_node() -> object:
     return dataset_specs
 
 
+def _plan_scan_units_node() -> object:
+    @tag(layer="plan", artifact="plan_scan_units", kind="catalog")
+    def plan_scan_units(execution_plan: ExecutionPlan) -> tuple[ScanUnit, ...]:
+        return execution_plan.scan_units
+
+    return plan_scan_units
+
+
+def _plan_scan_keys_by_task_node() -> object:
+    @tag(layer="plan", artifact="plan_scan_keys_by_task", kind="mapping")
+    def plan_scan_keys_by_task(
+        execution_plan: ExecutionPlan,
+    ) -> Mapping[str, tuple[str, ...]]:
+        return execution_plan.scan_keys_by_task
+
+    return plan_scan_keys_by_task
+
+
 def _task_graph_node() -> object:
     @tag(layer="plan", artifact="task_graph", kind="graph")
     def task_graph(execution_plan: ExecutionPlan) -> TaskGraph:
@@ -160,6 +193,51 @@ def _plan_signature_node() -> object:
         return execution_plan.plan_signature
 
     return plan_signature
+
+
+def _plan_artifacts_node() -> object:
+    @tag(layer="plan", artifact="plan_artifacts", kind="mapping")
+    @extract_fields(
+        {
+            "plan_task_dependency_signature": str,
+            "plan_reduced_task_dependency_signature": str,
+            "plan_task_count": int,
+            "plan_generation_count": int,
+            "plan_reduction_edge_count": int,
+            "plan_reduction_removed_edge_count": int,
+            "plan_reduction_reduced_edge_count": int,
+            "plan_critical_path_task_names": tuple,
+            "plan_critical_path_length_weighted": float | None,
+            "plan_scan_unit_count": int,
+            "plan_scan_file_candidate_count": int,
+        }
+    )
+    def plan_artifacts(execution_plan: ExecutionPlan) -> dict[str, object]:
+        reduced_edge_count = max(
+            execution_plan.reduction_edge_count - execution_plan.reduction_removed_edge_count,
+            0,
+        )
+        scan_unit_count = len(execution_plan.scan_units)
+        scan_file_candidate_count = sum(
+            len(unit.candidate_files) for unit in execution_plan.scan_units
+        )
+        return {
+            "plan_task_dependency_signature": (execution_plan.task_dependency_signature),
+            "plan_reduced_task_dependency_signature": (
+                execution_plan.reduced_task_dependency_signature
+            ),
+            "plan_task_count": len(execution_plan.active_tasks),
+            "plan_generation_count": len(execution_plan.task_schedule.generations),
+            "plan_reduction_edge_count": execution_plan.reduction_edge_count,
+            "plan_reduction_removed_edge_count": (execution_plan.reduction_removed_edge_count),
+            "plan_reduction_reduced_edge_count": reduced_edge_count,
+            "plan_critical_path_task_names": (execution_plan.critical_path_task_names),
+            "plan_critical_path_length_weighted": (execution_plan.critical_path_length_weighted),
+            "plan_scan_unit_count": scan_unit_count,
+            "plan_scan_file_candidate_count": scan_file_candidate_count,
+        }
+
+    return plan_artifacts
 
 
 def _task_schedule_node() -> object:

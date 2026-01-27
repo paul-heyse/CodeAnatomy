@@ -1,17 +1,22 @@
 use std::any::Any;
 use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::{
     Array,
     ArrayRef,
+    BooleanArray,
+    BooleanBuilder,
     Int32Builder,
     Int32Array,
     Int64Array,
     Int64Builder,
     LargeStringArray,
     ListArray,
+    ListBuilder,
+    MapArray,
     MapBuilder,
     StringArray,
     StringBuilder,
@@ -43,7 +48,8 @@ use datafusion_python::context::PySessionContext;
 use datafusion_python::expr::PyExpr;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyBytesMethods};
+use pyo3::types::{PyBytes, PyBytesMethods, PyTuple};
+use unicode_normalization::UnicodeNormalization;
 
 #[cfg(feature = "async-udf")]
 use crate::udf_async;
@@ -51,6 +57,10 @@ use crate::udf_async;
 const ENC_UTF8: i32 = 1;
 const ENC_UTF16: i32 = 2;
 const ENC_UTF32: i32 = 3;
+const PART_SEPARATOR: &str = "\u{001f}";
+const NULL_SENTINEL: &str = "__NULL__";
+const DEFAULT_SPAN_COL_UNIT: &str = "byte";
+const DEFAULT_NORMALIZE_FORM: &str = "NFKC";
 
 #[derive(Debug)]
 struct FunctionParameter {
@@ -351,6 +361,71 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         "stable_id" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableIdUdf {
             signature: SignatureEqHash::new(signature),
         }))),
+        "stable_id_parts" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableIdPartsUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "prefixed_hash_parts64" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            PrefixedHashParts64Udf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
+        "stable_hash_any" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableHashAnyUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "span_make" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanMakeUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "span_len" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanLenUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "span_overlaps" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanOverlapsUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "span_contains" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanContainsUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "span_id" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanIdUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "utf8_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(Utf8NormalizeUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "utf8_null_if_blank" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            Utf8NullIfBlankUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
+        "qname_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(QNameNormalizeUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "map_get_default" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(MapGetDefaultUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "map_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(MapNormalizeUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "list_compact" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(ListCompactUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "list_unique_sorted" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            ListUniqueSortedUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
+        "struct_pick" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StructPickUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "cdf_change_rank" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            CdfChangeRankUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
+        "cdf_is_upsert" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(CdfIsUpsertUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
+        "cdf_is_delete" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(CdfIsDeleteUdf {
+            signature: SignatureEqHash::new(signature),
+        }))),
         "position_encoding_norm" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
             PositionEncodingUdf {
                 signature: SignatureEqHash::new(signature),
@@ -456,6 +531,13 @@ fn string_int_string_signature(volatility: Volatility) -> Signature {
     Signature::one_of(expand_string_signatures(&arg_types), volatility)
 }
 
+fn variadic_any_signature(min_args: usize, max_args: usize, volatility: Volatility) -> Signature {
+    let signatures = (min_args..=max_args)
+        .map(TypeSignature::Any)
+        .collect::<Vec<_>>();
+    Signature::one_of(signatures, volatility)
+}
+
 fn scalar_str<'a>(value: &'a ScalarValue, message: &str) -> Result<Option<&'a str>> {
     value
         .try_as_str()
@@ -469,6 +551,13 @@ fn literal_string_value(value: &ScalarValue) -> Option<Option<String>> {
         }
         _ => None,
     }
+}
+
+fn literal_scalar(expr: &Expr) -> Option<&ScalarValue> {
+    let Expr::Literal(value, _) = expr else {
+        return None;
+    };
+    Some(value)
 }
 
 fn literal_string(expr: &Expr) -> Option<Option<String>> {
@@ -489,6 +578,283 @@ fn string_array_any<'a>(array: &'a ArrayRef, message: &str) -> Result<Cow<'a, St
         return Ok(Cow::Owned(StringArray::from_iter(values.iter())));
     }
     Err(DataFusionError::Plan(message.to_string()))
+}
+
+fn scalar_to_string(value: &ScalarValue) -> Result<Option<String>> {
+    match value {
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Utf8(v) | ScalarValue::LargeUtf8(v) | ScalarValue::Utf8View(v) => {
+            Ok(v.clone())
+        }
+        ScalarValue::Int8(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::Int16(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::Int32(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::Int64(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::UInt8(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::UInt16(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::UInt32(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::UInt64(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::Float32(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::Float64(v) => Ok(v.map(|x| x.to_string())),
+        ScalarValue::Boolean(v) => Ok(v.map(|x| x.to_string())),
+        other => Ok(Some(other.to_string())),
+    }
+}
+
+fn scalar_to_string_with_sentinel(value: &ScalarValue, sentinel: &str) -> Result<String> {
+    Ok(scalar_to_string(value)?.unwrap_or_else(|| sentinel.to_string()))
+}
+
+fn scalar_to_i64(value: &ScalarValue, context: &str) -> Result<Option<i64>> {
+    match value {
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Int8(v) => Ok(v.map(|x| x as i64)),
+        ScalarValue::Int16(v) => Ok(v.map(|x| x as i64)),
+        ScalarValue::Int32(v) => Ok(v.map(|x| x as i64)),
+        ScalarValue::Int64(v) => Ok(*v),
+        ScalarValue::UInt8(v) => Ok(v.map(|x| x as i64)),
+        ScalarValue::UInt16(v) => Ok(v.map(|x| x as i64)),
+        ScalarValue::UInt32(v) => Ok(v.map(|x| x as i64)),
+        ScalarValue::UInt64(v) => Ok(v.map(|x| x as i64)),
+        ScalarValue::Float32(v) => Ok(v.map(|x| x as i64)),
+        ScalarValue::Float64(v) => Ok(v.map(|x| x as i64)),
+        ScalarValue::Utf8(v) | ScalarValue::LargeUtf8(v) | ScalarValue::Utf8View(v) => {
+            if let Some(text) = v {
+                let parsed = text.parse::<i64>().map_err(|err| {
+                    DataFusionError::Plan(format!("{context}: failed to parse integer: {err}"))
+                })?;
+                Ok(Some(parsed))
+            } else {
+                Ok(None)
+            }
+        }
+        other => Err(DataFusionError::Plan(format!(
+            "{context}: unsupported integer conversion from {other:?}"
+        ))),
+    }
+}
+
+fn scalar_to_i32(value: &ScalarValue, context: &str) -> Result<Option<i32>> {
+    scalar_to_i64(value, context).map(|opt| opt.map(|x| x as i32))
+}
+
+fn scalar_to_bool(value: &ScalarValue, context: &str) -> Result<Option<bool>> {
+    match value {
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Boolean(v) => Ok(*v),
+        ScalarValue::Int8(v) => Ok(v.map(|x| x != 0)),
+        ScalarValue::Int16(v) => Ok(v.map(|x| x != 0)),
+        ScalarValue::Int32(v) => Ok(v.map(|x| x != 0)),
+        ScalarValue::Int64(v) => Ok(v.map(|x| x != 0)),
+        ScalarValue::UInt8(v) => Ok(v.map(|x| x != 0)),
+        ScalarValue::UInt16(v) => Ok(v.map(|x| x != 0)),
+        ScalarValue::UInt32(v) => Ok(v.map(|x| x != 0)),
+        ScalarValue::UInt64(v) => Ok(v.map(|x| x != 0)),
+        ScalarValue::Utf8(v) | ScalarValue::LargeUtf8(v) | ScalarValue::Utf8View(v) => {
+            if let Some(text) = v {
+                let normalized = text.trim().to_ascii_lowercase();
+                if normalized.is_empty() {
+                    return Ok(None);
+                }
+                if matches!(normalized.as_str(), "true" | "t" | "1" | "yes" | "y") {
+                    return Ok(Some(true));
+                }
+                if matches!(normalized.as_str(), "false" | "f" | "0" | "no" | "n") {
+                    return Ok(Some(false));
+                }
+                Err(DataFusionError::Plan(format!(
+                    "{context}: unsupported boolean literal {text:?}"
+                )))
+            } else {
+                Ok(None)
+            }
+        }
+        other => Err(DataFusionError::Plan(format!(
+            "{context}: unsupported boolean conversion from {other:?}"
+        ))),
+    }
+}
+
+fn columnar_to_strings(
+    value: &ColumnarValue,
+    num_rows: usize,
+    sentinel: &str,
+    context: &str,
+) -> Result<Vec<String>> {
+    match value {
+        ColumnarValue::Scalar(v) => {
+            let text = scalar_to_string_with_sentinel(v, sentinel)?;
+            Ok(vec![text; num_rows])
+        }
+        ColumnarValue::Array(array) => {
+            let mut out = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let scalar = ScalarValue::try_from_array(array, row)?;
+                out.push(scalar_to_string_with_sentinel(&scalar, sentinel)?);
+            }
+            if out.len() != num_rows {
+                return Err(DataFusionError::Plan(format!(
+                    "{context}: string conversion produced incorrect row count"
+                )));
+            }
+            Ok(out)
+        }
+    }
+}
+
+fn columnar_to_optional_strings(
+    value: &ColumnarValue,
+    num_rows: usize,
+    context: &str,
+) -> Result<Vec<Option<String>>> {
+    match value {
+        ColumnarValue::Scalar(v) => {
+            let converted = scalar_to_string(v)?;
+            Ok(vec![converted; num_rows])
+        }
+        ColumnarValue::Array(array) => {
+            let mut out = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let scalar = ScalarValue::try_from_array(array, row)?;
+                out.push(scalar_to_string(&scalar)?);
+            }
+            if out.len() != num_rows {
+                return Err(DataFusionError::Plan(format!(
+                    "{context}: string conversion produced incorrect row count"
+                )));
+            }
+            Ok(out)
+        }
+    }
+}
+
+fn columnar_to_i64(
+    value: &ColumnarValue,
+    num_rows: usize,
+    context: &str,
+) -> Result<Vec<Option<i64>>> {
+    match value {
+        ColumnarValue::Scalar(v) => {
+            let converted = scalar_to_i64(v, context)?;
+            Ok(vec![converted; num_rows])
+        }
+        ColumnarValue::Array(array) => {
+            let mut out = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let scalar = ScalarValue::try_from_array(array, row)?;
+                out.push(scalar_to_i64(&scalar, context)?);
+            }
+            Ok(out)
+        }
+    }
+}
+
+fn columnar_to_i32(
+    value: &ColumnarValue,
+    num_rows: usize,
+    context: &str,
+) -> Result<Vec<Option<i32>>> {
+    match value {
+        ColumnarValue::Scalar(v) => {
+            let converted = scalar_to_i32(v, context)?;
+            Ok(vec![converted; num_rows])
+        }
+        ColumnarValue::Array(array) => {
+            let mut out = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let scalar = ScalarValue::try_from_array(array, row)?;
+                out.push(scalar_to_i32(&scalar, context)?);
+            }
+            Ok(out)
+        }
+    }
+}
+
+fn columnar_to_bool(
+    value: &ColumnarValue,
+    num_rows: usize,
+    context: &str,
+) -> Result<Vec<Option<bool>>> {
+    match value {
+        ColumnarValue::Scalar(v) => {
+            let converted = scalar_to_bool(v, context)?;
+            Ok(vec![converted; num_rows])
+        }
+        ColumnarValue::Array(array) => {
+            let mut out = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let scalar = ScalarValue::try_from_array(array, row)?;
+                out.push(scalar_to_bool(&scalar, context)?);
+            }
+            Ok(out)
+        }
+    }
+}
+
+fn span_struct_type() -> DataType {
+    DataType::Struct(Fields::from(vec![
+        Field::new("bstart", DataType::Int64, true),
+        Field::new("bend", DataType::Int64, true),
+        Field::new("line_base", DataType::Int32, true),
+        Field::new("col_unit", DataType::Utf8, true),
+        Field::new("end_exclusive", DataType::Boolean, true),
+    ]))
+}
+
+fn scalar_argument<'a>(args: &ReturnFieldArgs<'a>, index: usize) -> Option<&'a ScalarValue> {
+    args.scalar_arguments.get(index).and_then(|value| *value)
+}
+
+fn scalar_argument_string(
+    args: &ReturnFieldArgs,
+    index: usize,
+    context: &str,
+) -> Result<Option<String>> {
+    let Some(value) = scalar_argument(args, index) else {
+        return Ok(None);
+    };
+    scalar_to_string(value).map_err(|err| {
+        DataFusionError::Plan(format!("{context}: failed to read scalar argument: {err}"))
+    })
+}
+
+fn scalar_columnar_value(value: &ColumnarValue, context: &str) -> Result<ScalarValue> {
+    match value {
+        ColumnarValue::Scalar(v) => Ok(v.clone()),
+        ColumnarValue::Array(_) => Err(DataFusionError::Plan(context.to_string())),
+    }
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_unicode_form(value: &str, form: &str) -> String {
+    let normalized_form = form.trim().to_ascii_uppercase();
+    match normalized_form.as_str() {
+        "NFC" => value.nfc().collect(),
+        "NFD" => value.nfd().collect(),
+        "NFKD" => value.nfkd().collect(),
+        _ => value.nfkc().collect(),
+    }
+}
+
+fn normalize_text(value: &str, form: &str, casefold: bool, collapse_ws: bool) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let normalized = normalize_unicode_form(trimmed, form);
+    let cased = if casefold {
+        normalized.to_lowercase()
+    } else {
+        normalized
+    };
+    if collapse_ws {
+        collapse_whitespace(&cased)
+    } else {
+        cased
+    }
 }
 
 fn prefixed_hash64_value(prefix: &str, value: &str) -> String {
@@ -786,6 +1152,151 @@ pub fn stable_id_udf() -> ScalarUDF {
     }))
 }
 
+pub fn stable_id_parts_udf() -> ScalarUDF {
+    let signature = variadic_any_signature(2, 65, Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(StableIdPartsUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn prefixed_hash_parts64_udf() -> ScalarUDF {
+    let signature = variadic_any_signature(2, 65, Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(PrefixedHashParts64Udf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn stable_hash_any_udf() -> ScalarUDF {
+    let signature = variadic_any_signature(1, 3, Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(StableHashAnyUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn span_make_udf() -> ScalarUDF {
+    let signature = variadic_any_signature(2, 5, Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(SpanMakeUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn span_len_udf() -> ScalarUDF {
+    let signature = Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(SpanLenUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn span_overlaps_udf() -> ScalarUDF {
+    let signature = Signature::one_of(vec![TypeSignature::Any(2)], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(SpanOverlapsUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn span_contains_udf() -> ScalarUDF {
+    let signature = Signature::one_of(vec![TypeSignature::Any(2)], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(SpanContainsUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn span_id_udf() -> ScalarUDF {
+    let signature = variadic_any_signature(4, 5, Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(SpanIdUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn utf8_normalize_udf() -> ScalarUDF {
+    let signature = variadic_any_signature(1, 4, Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(Utf8NormalizeUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn utf8_null_if_blank_udf() -> ScalarUDF {
+    let signature = signature_with_names(
+        Signature::one_of(expand_string_signatures(&[DataType::Utf8]), Volatility::Stable),
+        &["value"],
+    );
+    ScalarUDF::new_from_shared_impl(Arc::new(Utf8NullIfBlankUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn qname_normalize_udf() -> ScalarUDF {
+    let signature = variadic_any_signature(1, 3, Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(QNameNormalizeUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn map_get_default_udf() -> ScalarUDF {
+    let signature = Signature::one_of(vec![TypeSignature::Any(3)], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(MapGetDefaultUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn map_normalize_udf() -> ScalarUDF {
+    let signature = variadic_any_signature(1, 3, Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(MapNormalizeUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn list_compact_udf() -> ScalarUDF {
+    let signature = Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(ListCompactUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn list_unique_sorted_udf() -> ScalarUDF {
+    let signature = Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(ListUniqueSortedUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn struct_pick_udf() -> ScalarUDF {
+    let signature = variadic_any_signature(2, 7, Volatility::Stable);
+    ScalarUDF::new_from_shared_impl(Arc::new(StructPickUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn cdf_change_rank_udf() -> ScalarUDF {
+    let signature = signature_with_names(
+        Signature::one_of(expand_string_signatures(&[DataType::Utf8]), Volatility::Stable),
+        &["change_type"],
+    );
+    ScalarUDF::new_from_shared_impl(Arc::new(CdfChangeRankUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn cdf_is_upsert_udf() -> ScalarUDF {
+    let signature = signature_with_names(
+        Signature::one_of(expand_string_signatures(&[DataType::Utf8]), Volatility::Stable),
+        &["change_type"],
+    );
+    ScalarUDF::new_from_shared_impl(Arc::new(CdfIsUpsertUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
+pub fn cdf_is_delete_udf() -> ScalarUDF {
+    let signature = signature_with_names(
+        Signature::one_of(expand_string_signatures(&[DataType::Utf8]), Volatility::Stable),
+        &["change_type"],
+    );
+    ScalarUDF::new_from_shared_impl(Arc::new(CdfIsDeleteUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
 pub fn col_to_byte_udf() -> ScalarUDF {
     let signature = signature_with_names(
         string_int_string_signature(Volatility::Stable),
@@ -827,6 +1338,222 @@ pub fn prefixed_hash64(prefix: &str, value: PyExpr) -> PyExpr {
 #[pyfunction]
 pub fn stable_id(prefix: &str, value: PyExpr) -> PyExpr {
     stable_id_udf().call(vec![lit(prefix), value.into()]).into()
+}
+
+fn push_optional_expr(args: &mut Vec<Expr>, value: Option<PyExpr>) {
+    if let Some(expr) = value {
+        args.push(expr.into());
+    }
+}
+
+fn extend_expr_args_from_tuple(args: &mut Vec<Expr>, parts: &Bound<'_, PyTuple>) -> PyResult<()> {
+    for item in parts.iter() {
+        let expr: PyExpr = item.extract()?;
+        args.push(expr.into());
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(signature = (prefix, part1, *parts))]
+pub fn stable_id_parts(prefix: &str, part1: PyExpr, parts: &Bound<'_, PyTuple>) -> PyResult<PyExpr> {
+    let mut args: Vec<Expr> = vec![lit(prefix), part1.into()];
+    extend_expr_args_from_tuple(&mut args, parts)?;
+    Ok(stable_id_parts_udf().call(args).into())
+}
+
+#[pyfunction]
+#[pyo3(signature = (prefix, part1, *parts))]
+pub fn prefixed_hash_parts64(
+    prefix: &str,
+    part1: PyExpr,
+    parts: &Bound<'_, PyTuple>,
+) -> PyResult<PyExpr> {
+    let mut args: Vec<Expr> = vec![lit(prefix), part1.into()];
+    extend_expr_args_from_tuple(&mut args, parts)?;
+    Ok(prefixed_hash_parts64_udf().call(args).into())
+}
+
+#[pyfunction]
+#[pyo3(signature = (value, canonical=None, null_sentinel=None))]
+pub fn stable_hash_any(value: PyExpr, canonical: Option<bool>, null_sentinel: Option<&str>) -> PyExpr {
+    let mut args: Vec<Expr> = vec![value.into()];
+    if let Some(flag) = canonical {
+        args.push(lit(flag));
+    }
+    if let Some(sentinel) = null_sentinel {
+        args.push(lit(sentinel));
+    }
+    stable_hash_any_udf().call(args).into()
+}
+
+#[pyfunction]
+#[pyo3(signature = (bstart, bend, line_base=None, col_unit=None, end_exclusive=None))]
+pub fn span_make(
+    bstart: PyExpr,
+    bend: PyExpr,
+    line_base: Option<PyExpr>,
+    col_unit: Option<PyExpr>,
+    end_exclusive: Option<PyExpr>,
+) -> PyExpr {
+    let mut args: Vec<Expr> = vec![bstart.into(), bend.into()];
+    push_optional_expr(&mut args, line_base);
+    push_optional_expr(&mut args, col_unit);
+    push_optional_expr(&mut args, end_exclusive);
+    span_make_udf().call(args).into()
+}
+
+#[pyfunction]
+pub fn span_len(span: PyExpr) -> PyExpr {
+    span_len_udf().call(vec![span.into()]).into()
+}
+
+#[pyfunction]
+pub fn span_overlaps(span_a: PyExpr, span_b: PyExpr) -> PyExpr {
+    span_overlaps_udf()
+        .call(vec![span_a.into(), span_b.into()])
+        .into()
+}
+
+#[pyfunction]
+pub fn span_contains(span_a: PyExpr, span_b: PyExpr) -> PyExpr {
+    span_contains_udf()
+        .call(vec![span_a.into(), span_b.into()])
+        .into()
+}
+
+#[pyfunction]
+#[pyo3(signature = (prefix, path, bstart, bend, kind=None))]
+pub fn span_id(prefix: &str, path: PyExpr, bstart: PyExpr, bend: PyExpr, kind: Option<PyExpr>) -> PyExpr {
+    let mut args: Vec<Expr> = vec![lit(prefix), path.into(), bstart.into(), bend.into()];
+    push_optional_expr(&mut args, kind);
+    span_id_udf().call(args).into()
+}
+
+#[pyfunction]
+#[pyo3(signature = (value, form=None, casefold=None, collapse_ws=None))]
+pub fn utf8_normalize(
+    value: PyExpr,
+    form: Option<&str>,
+    casefold: Option<bool>,
+    collapse_ws: Option<bool>,
+) -> PyExpr {
+    let mut args: Vec<Expr> = vec![value.into()];
+    if let Some(form) = form {
+        args.push(lit(form));
+    }
+    if let Some(flag) = casefold {
+        args.push(lit(flag));
+    }
+    if let Some(flag) = collapse_ws {
+        args.push(lit(flag));
+    }
+    utf8_normalize_udf().call(args).into()
+}
+
+#[pyfunction]
+pub fn utf8_null_if_blank(value: PyExpr) -> PyExpr {
+    utf8_null_if_blank_udf().call(vec![value.into()]).into()
+}
+
+#[pyfunction]
+#[pyo3(signature = (symbol, module=None, lang=None))]
+pub fn qname_normalize(symbol: PyExpr, module: Option<PyExpr>, lang: Option<PyExpr>) -> PyExpr {
+    let mut args: Vec<Expr> = vec![symbol.into()];
+    push_optional_expr(&mut args, module);
+    push_optional_expr(&mut args, lang);
+    qname_normalize_udf().call(args).into()
+}
+
+#[pyfunction]
+pub fn map_get_default(map_expr: PyExpr, key: &str, default_value: PyExpr) -> PyExpr {
+    map_get_default_udf()
+        .call(vec![map_expr.into(), lit(key), default_value.into()])
+        .into()
+}
+
+#[pyfunction]
+#[pyo3(signature = (map_expr, key_case=None, sort_keys=None))]
+pub fn map_normalize(map_expr: PyExpr, key_case: Option<&str>, sort_keys: Option<bool>) -> PyExpr {
+    let mut args: Vec<Expr> = vec![map_expr.into()];
+    if let Some(key_case) = key_case {
+        args.push(lit(key_case));
+    }
+    if let Some(sort_keys) = sort_keys {
+        args.push(lit(sort_keys));
+    }
+    map_normalize_udf().call(args).into()
+}
+
+#[pyfunction]
+pub fn list_compact(list_expr: PyExpr) -> PyExpr {
+    list_compact_udf().call(vec![list_expr.into()]).into()
+}
+
+#[pyfunction]
+pub fn list_unique_sorted(list_expr: PyExpr) -> PyExpr {
+    list_unique_sorted_udf()
+        .call(vec![list_expr.into()])
+        .into()
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    struct_expr,
+    field1,
+    field2=None,
+    field3=None,
+    field4=None,
+    field5=None,
+    field6=None
+))]
+pub fn struct_pick(
+    struct_expr: PyExpr,
+    field1: &str,
+    field2: Option<&str>,
+    field3: Option<&str>,
+    field4: Option<&str>,
+    field5: Option<&str>,
+    field6: Option<&str>,
+) -> PyExpr {
+    let mut args: Vec<Expr> = vec![struct_expr.into(), lit(field1)];
+    if let Some(field) = field2 {
+        args.push(lit(field));
+    }
+    if let Some(field) = field3 {
+        args.push(lit(field));
+    }
+    if let Some(field) = field4 {
+        args.push(lit(field));
+    }
+    if let Some(field) = field5 {
+        args.push(lit(field));
+    }
+    if let Some(field) = field6 {
+        args.push(lit(field));
+    }
+    struct_pick_udf().call(args).into()
+}
+
+#[pyfunction]
+pub fn cdf_change_rank(change_type: PyExpr) -> PyExpr {
+    cdf_change_rank_udf()
+        .call(vec![change_type.into()])
+        .into()
+}
+
+#[pyfunction]
+pub fn cdf_is_upsert(change_type: PyExpr) -> PyExpr {
+    cdf_is_upsert_udf()
+        .call(vec![change_type.into()])
+        .into()
+}
+
+#[pyfunction]
+pub fn cdf_is_delete(change_type: PyExpr) -> PyExpr {
+    cdf_is_delete_udf()
+        .call(vec![change_type.into()])
+        .into()
 }
 
 #[pyfunction]
@@ -1291,6 +2018,1910 @@ impl ScalarUDFImpl for StableIdUdf {
                 Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
         }
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Compute a stable identifier from a prefix and variadic parts.",
+    syntax_example = "stable_id_parts(prefix, part1, part2, ...)",
+    argument(name = "prefix", description = "Namespace prefix to prepend to the hash."),
+    argument(
+        name = "parts",
+        description = "Variadic parts to join with a stable separator and hash."
+    )
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct StableIdPartsUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for StableIdPartsUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "stable_id_parts"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+        if args.len() < 2 {
+            return Err(DataFusionError::Plan(
+                "stable_id_parts expects at least two arguments".into(),
+            ));
+        }
+        let mut scalars: Vec<&ScalarValue> = Vec::with_capacity(args.len());
+        for expr in &args {
+            let Some(value) = literal_scalar(expr) else {
+                return Ok(ExprSimplifyResult::Original(args));
+            };
+            scalars.push(value);
+        }
+        let prefix = scalar_to_string(scalars[0])?;
+        let Some(prefix) = prefix else {
+            return Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(None))));
+        };
+        let mut parts: Vec<String> = Vec::with_capacity(scalars.len() - 1);
+        for scalar in scalars.iter().skip(1) {
+            parts.push(scalar_to_string_with_sentinel(scalar, NULL_SENTINEL)?);
+        }
+        let joined = parts.join(PART_SEPARATOR);
+        let hashed = stable_id_value(&prefix, &joined);
+        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(Some(
+            hashed,
+        )))))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() < 2 {
+            return Err(DataFusionError::Plan(
+                "stable_id_parts expects at least two arguments".into(),
+            ));
+        }
+        let num_rows = args.number_rows;
+        let prefixes = columnar_to_optional_strings(
+            &args.args[0],
+            num_rows,
+            "stable_id_parts expects string prefix input",
+        )?;
+        let mut part_columns: Vec<Vec<String>> = Vec::with_capacity(args.args.len() - 1);
+        for value in args.args.iter().skip(1) {
+            part_columns.push(columnar_to_strings(
+                value,
+                num_rows,
+                NULL_SENTINEL,
+                "stable_id_parts expects string-compatible part input",
+            )?);
+        }
+        let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 32);
+        for row in 0..num_rows {
+            let Some(prefix) = prefixes[row].as_deref() else {
+                builder.append_null();
+                continue;
+            };
+            let mut joined = String::new();
+            for (index, column) in part_columns.iter().enumerate() {
+                if index > 0 {
+                    joined.push_str(PART_SEPARATOR);
+                }
+                joined.push_str(&column[row]);
+            }
+            builder.append_value(stable_id_value(prefix, &joined));
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Compute a prefixed stable 64-bit hash from variadic parts.",
+    syntax_example = "prefixed_hash_parts64(prefix, part1, part2, ...)",
+    argument(name = "prefix", description = "Namespace prefix to prepend to the hash."),
+    argument(
+        name = "parts",
+        description = "Variadic parts to join with a stable separator and hash."
+    )
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct PrefixedHashParts64Udf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for PrefixedHashParts64Udf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "prefixed_hash_parts64"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+        if args.len() < 2 {
+            return Err(DataFusionError::Plan(
+                "prefixed_hash_parts64 expects at least two arguments".into(),
+            ));
+        }
+        let mut scalars: Vec<&ScalarValue> = Vec::with_capacity(args.len());
+        for expr in &args {
+            let Some(value) = literal_scalar(expr) else {
+                return Ok(ExprSimplifyResult::Original(args));
+            };
+            scalars.push(value);
+        }
+        let prefix = scalar_to_string(scalars[0])?;
+        let Some(prefix) = prefix else {
+            return Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(None))));
+        };
+        let mut parts: Vec<String> = Vec::with_capacity(scalars.len() - 1);
+        for scalar in scalars.iter().skip(1) {
+            parts.push(scalar_to_string_with_sentinel(scalar, NULL_SENTINEL)?);
+        }
+        let joined = parts.join(PART_SEPARATOR);
+        let hashed = prefixed_hash64_value(&prefix, &joined);
+        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(Some(
+            hashed,
+        )))))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() < 2 {
+            return Err(DataFusionError::Plan(
+                "prefixed_hash_parts64 expects at least two arguments".into(),
+            ));
+        }
+        let num_rows = args.number_rows;
+        let prefixes = columnar_to_optional_strings(
+            &args.args[0],
+            num_rows,
+            "prefixed_hash_parts64 expects string prefix input",
+        )?;
+        let mut part_columns: Vec<Vec<String>> = Vec::with_capacity(args.args.len() - 1);
+        for value in args.args.iter().skip(1) {
+            part_columns.push(columnar_to_strings(
+                value,
+                num_rows,
+                NULL_SENTINEL,
+                "prefixed_hash_parts64 expects string-compatible part input",
+            )?);
+        }
+        let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 24);
+        for row in 0..num_rows {
+            let Some(prefix) = prefixes[row].as_deref() else {
+                builder.append_null();
+                continue;
+            };
+            let mut joined = String::new();
+            for (index, column) in part_columns.iter().enumerate() {
+                if index > 0 {
+                    joined.push_str(PART_SEPARATOR);
+                }
+                joined.push_str(&column[row]);
+            }
+            builder.append_value(prefixed_hash64_value(prefix, &joined));
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Compute a stable 128-bit hash from any value with optional canonicalization.",
+    syntax_example = "stable_hash_any(value, canonical, null_sentinel)",
+    argument(name = "value", description = "Value to hash."),
+    argument(
+        name = "canonical",
+        description = "If true, apply default Unicode normalization and trimming."
+    ),
+    argument(
+        name = "null_sentinel",
+        description = "Sentinel string to use for null inputs."
+    )
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct StableHashAnyUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for StableHashAnyUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "stable_hash_any"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+        if args.is_empty() {
+            return Err(DataFusionError::Plan(
+                "stable_hash_any expects at least one argument".into(),
+            ));
+        }
+        let mut scalars: Vec<&ScalarValue> = Vec::with_capacity(args.len());
+        for expr in &args {
+            let Some(value) = literal_scalar(expr) else {
+                return Ok(ExprSimplifyResult::Original(args));
+            };
+            scalars.push(value);
+        }
+        let canonical = scalars
+            .get(1)
+            .map(|value| scalar_to_bool(value, "stable_hash_any canonical flag"))
+            .transpose()?
+            .flatten()
+            .unwrap_or(true);
+        let null_sentinel = scalars
+            .get(2)
+            .map(|value| scalar_to_string(value))
+            .transpose()?
+            .flatten()
+            .unwrap_or_else(|| NULL_SENTINEL.to_string());
+        let value = scalar_to_string_with_sentinel(scalars[0], &null_sentinel)?;
+        let canonical_value = if canonical {
+            normalize_text(&value, DEFAULT_NORMALIZE_FORM, false, false)
+        } else {
+            value
+        };
+        let hashed = hash128_value(&canonical_value);
+        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(Some(
+            hashed,
+        )))))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.is_empty() {
+            return Err(DataFusionError::Plan(
+                "stable_hash_any expects at least one argument".into(),
+            ));
+        }
+        let canonical = if args.args.len() >= 2 {
+            let scalar = scalar_columnar_value(
+                &args.args[1],
+                "stable_hash_any canonical flag must be a scalar literal",
+            )?;
+            scalar_to_bool(&scalar, "stable_hash_any canonical flag")?
+                .unwrap_or(true)
+        } else {
+            true
+        };
+        let null_sentinel = if args.args.len() >= 3 {
+            let scalar = scalar_columnar_value(
+                &args.args[2],
+                "stable_hash_any null_sentinel must be a scalar literal",
+            )?;
+            scalar_to_string(&scalar)?.unwrap_or_else(|| NULL_SENTINEL.to_string())
+        } else {
+            NULL_SENTINEL.to_string()
+        };
+        let num_rows = args.number_rows;
+        let values = columnar_to_strings(
+            &args.args[0],
+            num_rows,
+            &null_sentinel,
+            "stable_hash_any expects string-compatible input",
+        )?;
+        let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 32);
+        for value in values {
+            let canonical_value = if canonical {
+                normalize_text(&value, DEFAULT_NORMALIZE_FORM, false, false)
+            } else {
+                value
+            };
+            builder.append_value(hash128_value(&canonical_value));
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+fn span_int64_column<'a>(array: &'a StructArray, name: &str) -> Result<&'a Int64Array> {
+    let column = array
+        .column_by_name(name)
+        .ok_or_else(|| DataFusionError::Plan(format!("Missing span field: {name}")))?;
+    column
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| DataFusionError::Plan(format!("Span field {name} must be int64")))
+}
+
+fn span_bool_column<'a>(array: &'a StructArray, name: &str) -> Option<&'a BooleanArray> {
+    let column = array.column_by_name(name)?;
+    column.as_any().downcast_ref::<BooleanArray>()
+}
+
+fn span_end_exclusive(values: Option<&BooleanArray>, index: usize) -> bool {
+    let Some(values) = values else {
+        return true;
+    };
+    if values.is_null(index) {
+        return true;
+    }
+    values.value(index)
+}
+
+fn adjusted_end(end: i64, exclusive: bool) -> i64 {
+    if exclusive {
+        end
+    } else {
+        end.saturating_add(1)
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Span Functions"),
+    description = "Create a normalized span struct from offsets and options.",
+    syntax_example = "span_make(bstart, bend, line_base, col_unit, end_exclusive)",
+    argument(name = "bstart", description = "Start byte offset."),
+    argument(name = "bend", description = "End byte offset."),
+    argument(name = "line_base", description = "Optional line base offset."),
+    argument(name = "col_unit", description = "Optional column encoding unit."),
+    argument(name = "end_exclusive", description = "Whether the end offset is exclusive.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SpanMakeUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for SpanMakeUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "span_make"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), span_struct_type(), nullable)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(span_struct_type())
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if !(2..=5).contains(&args.args.len()) {
+            return Err(DataFusionError::Plan(
+                "span_make expects between two and five arguments".into(),
+            ));
+        }
+        let num_rows = args.number_rows;
+        let bstart_values = columnar_to_i64(
+            &args.args[0],
+            num_rows,
+            "span_make bstart must be int64-compatible",
+        )?;
+        let bend_values = columnar_to_i64(
+            &args.args[1],
+            num_rows,
+            "span_make bend must be int64-compatible",
+        )?;
+        let line_base_values = if args.args.len() >= 3 {
+            columnar_to_i32(
+                &args.args[2],
+                num_rows,
+                "span_make line_base must be int32-compatible",
+            )?
+        } else {
+            vec![Some(0); num_rows]
+        };
+        let col_unit_values = if args.args.len() >= 4 {
+            let values = columnar_to_optional_strings(
+                &args.args[3],
+                num_rows,
+                "span_make col_unit must be string-compatible",
+            )?;
+            values
+                .into_iter()
+                .map(|value| value.unwrap_or_else(|| DEFAULT_SPAN_COL_UNIT.to_string()))
+                .collect::<Vec<_>>()
+        } else {
+            vec![DEFAULT_SPAN_COL_UNIT.to_string(); num_rows]
+        };
+        let end_exclusive_values = if args.args.len() >= 5 {
+            let values = columnar_to_bool(
+                &args.args[4],
+                num_rows,
+                "span_make end_exclusive must be boolean-compatible",
+            )?;
+            values
+                .into_iter()
+                .map(|value| value.unwrap_or(true))
+                .collect::<Vec<_>>()
+        } else {
+            vec![true; num_rows]
+        };
+
+        let mut bstart_builder = Int64Builder::with_capacity(num_rows);
+        let mut bend_builder = Int64Builder::with_capacity(num_rows);
+        let mut line_base_builder = Int32Builder::with_capacity(num_rows);
+        let mut col_unit_builder = StringBuilder::with_capacity(num_rows, num_rows * 8);
+        let mut end_exclusive_builder = BooleanBuilder::with_capacity(num_rows);
+        for row in 0..num_rows {
+            if let Some(value) = bstart_values[row] {
+                bstart_builder.append_value(value);
+            } else {
+                bstart_builder.append_null();
+            }
+            if let Some(value) = bend_values[row] {
+                bend_builder.append_value(value);
+            } else {
+                bend_builder.append_null();
+            }
+            if let Some(value) = line_base_values[row] {
+                line_base_builder.append_value(value);
+            } else {
+                line_base_builder.append_null();
+            }
+            col_unit_builder.append_value(&col_unit_values[row]);
+            end_exclusive_builder.append_value(end_exclusive_values[row]);
+        }
+        let span_fields = match span_struct_type() {
+            DataType::Struct(fields) => fields,
+            _ => {
+                return Err(DataFusionError::Plan(
+                    "span_make span_struct_type must be a struct".into(),
+                ))
+            }
+        };
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(bstart_builder.finish()),
+            Arc::new(bend_builder.finish()),
+            Arc::new(line_base_builder.finish()),
+            Arc::new(col_unit_builder.finish()),
+            Arc::new(end_exclusive_builder.finish()),
+        ];
+        let span_array = StructArray::new(span_fields, arrays, None);
+        Ok(ColumnarValue::Array(Arc::new(span_array) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Span Functions"),
+    description = "Compute the length of a span.",
+    syntax_example = "span_len(span)",
+    argument(name = "span", description = "Span struct.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SpanLenUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for SpanLenUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "span_len"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [span_value] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan("span_len expects one argument".into()));
+        };
+        let span_array = span_value.to_array(args.number_rows)?;
+        let span_struct = span_array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Plan("span_len expects a struct input".into()))?;
+        let bstart = span_int64_column(span_struct, "bstart")?;
+        let bend = span_int64_column(span_struct, "bend")?;
+        let mut builder = Int64Builder::with_capacity(span_struct.len());
+        for row in 0..span_struct.len() {
+            if bstart.is_null(row) || bend.is_null(row) {
+                builder.append_null();
+                continue;
+            }
+            builder.append_value(bend.value(row) - bstart.value(row));
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Span Functions"),
+    description = "Determine whether two spans overlap.",
+    syntax_example = "span_overlaps(span_a, span_b)",
+    argument(name = "span_a", description = "First span struct."),
+    argument(name = "span_b", description = "Second span struct.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SpanOverlapsUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for SpanOverlapsUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "span_overlaps"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Boolean, true)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Boolean)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [left_value, right_value] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan(
+                "span_overlaps expects two arguments".into(),
+            ));
+        };
+        let left_array = left_value.to_array(args.number_rows)?;
+        let right_array = right_value.to_array(args.number_rows)?;
+        let left_struct = left_array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Plan("span_overlaps expects struct inputs".into()))?;
+        let right_struct = right_array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Plan("span_overlaps expects struct inputs".into()))?;
+
+        let left_start = span_int64_column(left_struct, "bstart")?;
+        let left_end = span_int64_column(left_struct, "bend")?;
+        let right_start = span_int64_column(right_struct, "bstart")?;
+        let right_end = span_int64_column(right_struct, "bend")?;
+        let left_exclusive = span_bool_column(left_struct, "end_exclusive");
+        let right_exclusive = span_bool_column(right_struct, "end_exclusive");
+
+        let len = args.number_rows;
+        if left_struct.len() != len || right_struct.len() != len {
+            return Err(DataFusionError::Plan(
+                "span_overlaps input lengths must match".into(),
+            ));
+        }
+        let mut builder = BooleanBuilder::with_capacity(len);
+        for row in 0..len {
+            if left_start.is_null(row)
+                || left_end.is_null(row)
+                || right_start.is_null(row)
+                || right_end.is_null(row)
+            {
+                builder.append_null();
+                continue;
+            }
+            let left_adjusted_end =
+                adjusted_end(left_end.value(row), span_end_exclusive(left_exclusive, row));
+            let right_adjusted_end =
+                adjusted_end(right_end.value(row), span_end_exclusive(right_exclusive, row));
+            let overlaps =
+                left_start.value(row) < right_adjusted_end
+                    && right_start.value(row) < left_adjusted_end;
+            builder.append_value(overlaps);
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Span Functions"),
+    description = "Determine whether one span fully contains another.",
+    syntax_example = "span_contains(span_a, span_b)",
+    argument(name = "span_a", description = "Container span struct."),
+    argument(name = "span_b", description = "Contained span struct.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SpanContainsUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for SpanContainsUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "span_contains"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Boolean, true)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Boolean)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [left_value, right_value] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan(
+                "span_contains expects two arguments".into(),
+            ));
+        };
+        let left_array = left_value.to_array(args.number_rows)?;
+        let right_array = right_value.to_array(args.number_rows)?;
+        let left_struct = left_array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Plan("span_contains expects struct inputs".into()))?;
+        let right_struct = right_array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Plan("span_contains expects struct inputs".into()))?;
+
+        let left_start = span_int64_column(left_struct, "bstart")?;
+        let left_end = span_int64_column(left_struct, "bend")?;
+        let right_start = span_int64_column(right_struct, "bstart")?;
+        let right_end = span_int64_column(right_struct, "bend")?;
+        let left_exclusive = span_bool_column(left_struct, "end_exclusive");
+        let right_exclusive = span_bool_column(right_struct, "end_exclusive");
+
+        let len = args.number_rows;
+        if left_struct.len() != len || right_struct.len() != len {
+            return Err(DataFusionError::Plan(
+                "span_contains input lengths must match".into(),
+            ));
+        }
+        let mut builder = BooleanBuilder::with_capacity(len);
+        for row in 0..len {
+            if left_start.is_null(row)
+                || left_end.is_null(row)
+                || right_start.is_null(row)
+                || right_end.is_null(row)
+            {
+                builder.append_null();
+                continue;
+            }
+            let left_adjusted_end =
+                adjusted_end(left_end.value(row), span_end_exclusive(left_exclusive, row));
+            let right_adjusted_end =
+                adjusted_end(right_end.value(row), span_end_exclusive(right_exclusive, row));
+            let contains =
+                left_start.value(row) <= right_start.value(row)
+                    && right_adjusted_end <= left_adjusted_end;
+            builder.append_value(contains);
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Span Functions"),
+    description = "Create a stable span identifier from prefix, path, and offsets.",
+    syntax_example = "span_id(prefix, path, bstart, bend, kind)",
+    argument(name = "prefix", description = "Namespace prefix for the identifier."),
+    argument(name = "path", description = "Path or document identifier."),
+    argument(name = "bstart", description = "Start byte offset."),
+    argument(name = "bend", description = "End byte offset."),
+    argument(name = "kind", description = "Optional span kind discriminator.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SpanIdUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for SpanIdUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "span_id"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if !(4..=5).contains(&args.args.len()) {
+            return Err(DataFusionError::Plan(
+                "span_id expects four or five arguments".into(),
+            ));
+        }
+        let num_rows = args.number_rows;
+        let prefixes = columnar_to_optional_strings(
+            &args.args[0],
+            num_rows,
+            "span_id expects string prefix input",
+        )?;
+        let mut part_columns: Vec<Vec<String>> = Vec::with_capacity(args.args.len() - 1);
+        for value in args.args.iter().skip(1) {
+            part_columns.push(columnar_to_strings(
+                value,
+                num_rows,
+                NULL_SENTINEL,
+                "span_id expects string-compatible part input",
+            )?);
+        }
+        let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 40);
+        for row in 0..num_rows {
+            let Some(prefix) = prefixes[row].as_deref() else {
+                builder.append_null();
+                continue;
+            };
+            let mut joined = String::new();
+            for (index, column) in part_columns.iter().enumerate() {
+                if index > 0 {
+                    joined.push_str(PART_SEPARATOR);
+                }
+                joined.push_str(&column[row]);
+            }
+            builder.append_value(stable_id_value(prefix, &joined));
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Normalize UTF-8 text with Unicode normalization, case folding, and whitespace collapse.",
+    syntax_example = "utf8_normalize(value, form, casefold, collapse_ws)",
+    standard_argument(name = "value", prefix = "String"),
+    argument(name = "form", description = "Unicode normalization form (NFC, NFD, NFKC, NFKD)."),
+    argument(name = "casefold", description = "Whether to lower-case the normalized text."),
+    argument(name = "collapse_ws", description = "Whether to collapse consecutive whitespace.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Utf8NormalizeUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for Utf8NormalizeUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "utf8_normalize"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+        if args.is_empty() {
+            return Err(DataFusionError::Plan(
+                "utf8_normalize expects at least one argument".into(),
+            ));
+        }
+        let mut scalars: Vec<&ScalarValue> = Vec::with_capacity(args.len());
+        for expr in &args {
+            let Some(value) = literal_scalar(expr) else {
+                return Ok(ExprSimplifyResult::Original(args));
+            };
+            scalars.push(value);
+        }
+        let form = scalars
+            .get(1)
+            .map(|value| scalar_to_string(value))
+            .transpose()?
+            .flatten()
+            .unwrap_or_else(|| DEFAULT_NORMALIZE_FORM.to_string());
+        let casefold = scalars
+            .get(2)
+            .map(|value| scalar_to_bool(value, "utf8_normalize casefold flag"))
+            .transpose()?
+            .flatten()
+            .unwrap_or(true);
+        let collapse_ws = scalars
+            .get(3)
+            .map(|value| scalar_to_bool(value, "utf8_normalize collapse_ws flag"))
+            .transpose()?
+            .flatten()
+            .unwrap_or(true);
+        let value = scalar_to_string(scalars[0])?;
+        let Some(value) = value else {
+            return Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(None))));
+        };
+        let normalized = normalize_text(&value, &form, casefold, collapse_ws);
+        let result = if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        };
+        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(result))))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.is_empty() {
+            return Err(DataFusionError::Plan(
+                "utf8_normalize expects at least one argument".into(),
+            ));
+        }
+        let form = if args.args.len() >= 2 {
+            let scalar = scalar_columnar_value(
+                &args.args[1],
+                "utf8_normalize form must be a scalar literal",
+            )?;
+            scalar_to_string(&scalar)?.unwrap_or_else(|| DEFAULT_NORMALIZE_FORM.to_string())
+        } else {
+            DEFAULT_NORMALIZE_FORM.to_string()
+        };
+        let casefold = if args.args.len() >= 3 {
+            let scalar = scalar_columnar_value(
+                &args.args[2],
+                "utf8_normalize casefold must be a scalar literal",
+            )?;
+            scalar_to_bool(&scalar, "utf8_normalize casefold flag")?.unwrap_or(true)
+        } else {
+            true
+        };
+        let collapse_ws = if args.args.len() >= 4 {
+            let scalar = scalar_columnar_value(
+                &args.args[3],
+                "utf8_normalize collapse_ws must be a scalar literal",
+            )?;
+            scalar_to_bool(&scalar, "utf8_normalize collapse_ws flag")?.unwrap_or(true)
+        } else {
+            true
+        };
+        let values = columnar_to_optional_strings(
+            &args.args[0],
+            args.number_rows,
+            "utf8_normalize expects string-compatible input",
+        )?;
+        let mut builder = StringBuilder::with_capacity(args.number_rows, args.number_rows * 16);
+        for value in values {
+            let Some(value) = value else {
+                builder.append_null();
+                continue;
+            };
+            let normalized = normalize_text(&value, &form, casefold, collapse_ws);
+            if normalized.is_empty() {
+                builder.append_null();
+            } else {
+                builder.append_value(normalized);
+            }
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Trim text and return null when the result is blank.",
+    syntax_example = "utf8_null_if_blank(value)",
+    standard_argument(name = "value", prefix = "String")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Utf8NullIfBlankUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for Utf8NullIfBlankUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "utf8_null_if_blank"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [value] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan(
+                "utf8_null_if_blank expects one argument".into(),
+            ));
+        };
+        let values = columnar_to_optional_strings(
+            value,
+            args.number_rows,
+            "utf8_null_if_blank expects string-compatible input",
+        )?;
+        let mut builder = StringBuilder::with_capacity(args.number_rows, args.number_rows * 8);
+        for value in values {
+            let Some(value) = value else {
+                builder.append_null();
+                continue;
+            };
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                builder.append_null();
+            } else {
+                builder.append_value(trimmed);
+            }
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Normalize and compose qualified names from symbol and optional module.",
+    syntax_example = "qname_normalize(symbol, module, lang)",
+    argument(name = "symbol", description = "Symbol or identifier."),
+    argument(name = "module", description = "Optional module or namespace."),
+    argument(name = "lang", description = "Optional language discriminator.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct QNameNormalizeUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for QNameNormalizeUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "qname_normalize"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if !(1..=3).contains(&args.args.len()) {
+            return Err(DataFusionError::Plan(
+                "qname_normalize expects between one and three arguments".into(),
+            ));
+        }
+        let symbols = columnar_to_optional_strings(
+            &args.args[0],
+            args.number_rows,
+            "qname_normalize symbol must be string-compatible",
+        )?;
+        let modules = if args.args.len() >= 2 {
+            columnar_to_optional_strings(
+                &args.args[1],
+                args.number_rows,
+                "qname_normalize module must be string-compatible",
+            )?
+        } else {
+            vec![None; args.number_rows]
+        };
+        let _langs = if args.args.len() >= 3 {
+            columnar_to_optional_strings(
+                &args.args[2],
+                args.number_rows,
+                "qname_normalize lang must be string-compatible",
+            )?
+        } else {
+            vec![None; args.number_rows]
+        };
+        let mut builder = StringBuilder::with_capacity(args.number_rows, args.number_rows * 16);
+        for row in 0..args.number_rows {
+            let Some(symbol) = symbols[row].as_deref() else {
+                builder.append_null();
+                continue;
+            };
+            let normalized_symbol = normalize_text(symbol, DEFAULT_NORMALIZE_FORM, true, true);
+            if normalized_symbol.is_empty() {
+                builder.append_null();
+                continue;
+            }
+            let normalized_module = modules[row]
+                .as_deref()
+                .map(|module| normalize_text(module, DEFAULT_NORMALIZE_FORM, true, true))
+                .filter(|module| !module.is_empty());
+            if normalized_symbol.contains('.') || normalized_module.is_none() {
+                builder.append_value(normalized_symbol);
+            } else if let Some(module) = normalized_module {
+                builder.append_value(format!("{module}.{normalized_symbol}"));
+            } else {
+                builder.append_value(normalized_symbol);
+            }
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+fn normalized_map_type() -> DataType {
+    let entry_fields = Fields::from(vec![
+        Field::new("keys", DataType::Utf8, false),
+        Field::new("values", DataType::Utf8, true),
+    ]);
+    let entry_field = Arc::new(Field::new("entries", DataType::Struct(entry_fields), false));
+    DataType::Map(entry_field, false)
+}
+
+fn normalize_key_case(key: &str, key_case: &str) -> String {
+    let normalized_case = key_case.trim().to_ascii_lowercase();
+    match normalized_case.as_str() {
+        "upper" => key.to_uppercase(),
+        "none" => key.to_string(),
+        _ => key.to_lowercase(),
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Nested Functions"),
+    description = "Extract a map value by key with a default fallback.",
+    syntax_example = "map_get_default(map_expr, key, default_value)",
+    argument(name = "map_expr", description = "Map expression."),
+    argument(name = "key", description = "Key to extract (scalar literal)."),
+    argument(name = "default_value", description = "Default value when the key is missing.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MapGetDefaultUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for MapGetDefaultUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "map_get_default"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() != 3 {
+            return Err(DataFusionError::Plan(
+                "map_get_default expects exactly three arguments".into(),
+            ));
+        }
+        let key_scalar = scalar_columnar_value(
+            &args.args[1],
+            "map_get_default key must be a scalar literal",
+        )?;
+        let Some(key) = scalar_to_string(&key_scalar)? else {
+            return Err(DataFusionError::Plan(
+                "map_get_default key cannot be null".into(),
+            ));
+        };
+
+        let map_array = args.args[0].to_array(args.number_rows)?;
+        let map_values = map_array
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .ok_or_else(|| DataFusionError::Plan("map_get_default expects a map input".into()))?;
+
+        let default_values = columnar_to_optional_strings(
+            &args.args[2],
+            args.number_rows,
+            "map_get_default default must be string-compatible",
+        )?;
+
+        let mut builder = StringBuilder::with_capacity(args.number_rows, args.number_rows * 8);
+        for row in 0..args.number_rows {
+            let default_value = default_values[row].as_deref();
+            if map_values.is_null(row) {
+                if let Some(value) = default_value {
+                    builder.append_value(value);
+                } else {
+                    builder.append_null();
+                }
+                continue;
+            }
+            let entries = map_values.value(row);
+            let entries_struct = entries.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
+                DataFusionError::Plan("map_get_default map entries must be a struct".into())
+            })?;
+            if entries_struct.num_columns() < 2 {
+                return Err(DataFusionError::Plan(
+                    "map_get_default map entries must include key and value columns".into(),
+                ));
+            }
+            let keys = entries_struct.column(0);
+            let values = entries_struct.column(1);
+            let mut selected_value: Option<String> = None;
+            for entry_index in 0..entries_struct.len() {
+                let entry_key = ScalarValue::try_from_array(keys.as_ref(), entry_index)?;
+                let entry_key_text = scalar_to_string(&entry_key)?;
+                if entry_key_text.as_deref() != Some(key.as_str()) {
+                    continue;
+                }
+                let entry_value = ScalarValue::try_from_array(values.as_ref(), entry_index)?;
+                selected_value = scalar_to_string(&entry_value)?;
+                if selected_value.is_some() {
+                    break;
+                }
+            }
+            if let Some(value) = selected_value.as_deref() {
+                builder.append_value(value);
+            } else if let Some(value) = default_value {
+                builder.append_value(value);
+            } else {
+                builder.append_null();
+            }
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Nested Functions"),
+    description = "Normalize map keys and optionally sort them deterministically.",
+    syntax_example = "map_normalize(map_expr, key_case, sort_keys)",
+    argument(name = "map_expr", description = "Map expression."),
+    argument(name = "key_case", description = "Key case normalization: lower, upper, none."),
+    argument(name = "sort_keys", description = "Whether to sort keys deterministically.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MapNormalizeUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for MapNormalizeUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "map_normalize"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        Ok(Arc::new(Field::new(self.name(), normalized_map_type(), nullable)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(normalized_map_type())
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if !(1..=3).contains(&args.args.len()) {
+            return Err(DataFusionError::Plan(
+                "map_normalize expects between one and three arguments".into(),
+            ));
+        }
+        let key_case = if args.args.len() >= 2 {
+            let scalar = scalar_columnar_value(
+                &args.args[1],
+                "map_normalize key_case must be a scalar literal",
+            )?;
+            scalar_to_string(&scalar)?.unwrap_or_else(|| "lower".to_string())
+        } else {
+            "lower".to_string()
+        };
+        let sort_keys = if args.args.len() >= 3 {
+            let scalar = scalar_columnar_value(
+                &args.args[2],
+                "map_normalize sort_keys must be a scalar literal",
+            )?;
+            scalar_to_bool(&scalar, "map_normalize sort_keys flag")?.unwrap_or(true)
+        } else {
+            true
+        };
+
+        let map_array = args.args[0].to_array(args.number_rows)?;
+        let maps = map_array
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .ok_or_else(|| DataFusionError::Plan("map_normalize expects a map input".into()))?;
+
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+        for row in 0..args.number_rows {
+            if maps.is_null(row) {
+                builder.append(false)?;
+                continue;
+            }
+            let entries = maps.value(row);
+            let entries_struct = entries.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
+                DataFusionError::Plan("map_normalize map entries must be a struct".into())
+            })?;
+            if entries_struct.num_columns() < 2 {
+                return Err(DataFusionError::Plan(
+                    "map_normalize map entries must include key and value columns".into(),
+                ));
+            }
+            let keys = entries_struct.column(0);
+            let values = entries_struct.column(1);
+            let mut normalized_entries: Vec<(String, Option<String>)> =
+                Vec::with_capacity(entries_struct.len());
+            for entry_index in 0..entries_struct.len() {
+                let entry_key = ScalarValue::try_from_array(keys.as_ref(), entry_index)?;
+                let Some(entry_key_text) = scalar_to_string(&entry_key)? else {
+                    continue;
+                };
+                let normalized_key = normalize_key_case(&entry_key_text, &key_case);
+                let entry_value = ScalarValue::try_from_array(values.as_ref(), entry_index)?;
+                let normalized_value = scalar_to_string(&entry_value)?;
+                normalized_entries.push((normalized_key, normalized_value));
+            }
+            let entries_to_write = if sort_keys {
+                let mut sorted_entries: BTreeMap<String, Option<String>> = BTreeMap::new();
+                for (key, value) in normalized_entries {
+                    sorted_entries.insert(key, value);
+                }
+                sorted_entries.into_iter().collect::<Vec<_>>()
+            } else {
+                normalized_entries
+            };
+            for (key, value) in entries_to_write {
+                builder.keys().append_value(key);
+                if let Some(value) = value {
+                    builder.values().append_value(value);
+                } else {
+                    builder.values().append_null();
+                }
+            }
+            builder.append(true)?;
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Nested Functions"),
+    description = "Remove null entries from a list and coerce values to strings.",
+    syntax_example = "list_compact(list_expr)",
+    argument(name = "list_expr", description = "List expression.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ListCompactUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for ListCompactUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "list_compact"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::List(item_field),
+            nullable,
+        )))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
+        Ok(DataType::List(item_field))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [value] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan("list_compact expects one argument".into()));
+        };
+        let list_array = value.to_array(args.number_rows)?;
+        let lists = list_array
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| DataFusionError::Plan("list_compact expects a list input".into()))?;
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for row in 0..args.number_rows {
+            if lists.is_null(row) {
+                builder.append(false);
+                continue;
+            }
+            let entries = lists.value(row);
+            for entry_index in 0..entries.len() {
+                let entry_value = ScalarValue::try_from_array(entries.as_ref(), entry_index)?;
+                let Some(entry_text) = scalar_to_string(&entry_value)? else {
+                    continue;
+                };
+                builder.values().append_value(entry_text);
+            }
+            builder.append(true);
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Nested Functions"),
+    description = "Compact a list, remove duplicates, and sort deterministically.",
+    syntax_example = "list_unique_sorted(list_expr)",
+    argument(name = "list_expr", description = "List expression.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ListUniqueSortedUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for ListUniqueSortedUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "list_unique_sorted"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .first()
+            .map(|field| field.is_nullable())
+            .unwrap_or(true);
+        let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::List(item_field),
+            nullable,
+        )))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
+        Ok(DataType::List(item_field))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [value] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan(
+                "list_unique_sorted expects one argument".into(),
+            ));
+        };
+        let list_array = value.to_array(args.number_rows)?;
+        let lists = list_array
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| DataFusionError::Plan("list_unique_sorted expects a list input".into()))?;
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for row in 0..args.number_rows {
+            if lists.is_null(row) {
+                builder.append(false);
+                continue;
+            }
+            let entries = lists.value(row);
+            let mut unique_values: BTreeSet<String> = BTreeSet::new();
+            for entry_index in 0..entries.len() {
+                let entry_value = ScalarValue::try_from_array(entries.as_ref(), entry_index)?;
+                let Some(entry_text) = scalar_to_string(&entry_value)? else {
+                    continue;
+                };
+                unique_values.insert(entry_text);
+            }
+            for entry in unique_values {
+                builder.values().append_value(entry);
+            }
+            builder.append(true);
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Nested Functions"),
+    description = "Select a subset of fields from a struct using scalar field names.",
+    syntax_example = "struct_pick(struct_expr, field1, field2, ...)",
+    argument(name = "struct_expr", description = "Struct expression."),
+    argument(name = "fields", description = "Scalar field names to select.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct StructPickUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for StructPickUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "struct_pick"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.len() < 2 {
+            return Err(DataFusionError::Plan(
+                "struct_pick expects a struct and at least one field name".into(),
+            ));
+        }
+        let struct_field = args.arg_fields.first().ok_or_else(|| {
+            DataFusionError::Plan("struct_pick requires a struct argument".into())
+        })?;
+        let DataType::Struct(struct_fields) = struct_field.data_type() else {
+            return Err(DataFusionError::Plan(
+                "struct_pick first argument must be a struct".into(),
+            ));
+        };
+        let parent_nullable = struct_field.is_nullable();
+        let mut selected_fields: Vec<Field> = Vec::with_capacity(args.arg_fields.len() - 1);
+        for index in 1..args.arg_fields.len() {
+            let field_name = scalar_argument_string(&args, index, "struct_pick field name")?
+                .ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "struct_pick field names must be scalar literals".into(),
+                    )
+                })?;
+            let trimmed = field_name.trim();
+            if trimmed.is_empty() {
+                return Err(DataFusionError::Plan(
+                    "struct_pick field names cannot be empty".into(),
+                ));
+            }
+            let field = struct_fields
+                .iter()
+                .find(|field| field.name() == trimmed)
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "struct_pick field not found in struct: {trimmed}"
+                    ))
+                })?;
+            let mut selected = field.as_ref().clone();
+            if parent_nullable {
+                selected = selected.with_nullable(true);
+            }
+            selected_fields.push(selected);
+        }
+        let output_type = DataType::Struct(Fields::from(selected_fields));
+        Ok(Arc::new(Field::new(self.name(), output_type, parent_nullable)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Err(DataFusionError::Plan(
+            "struct_pick requires return_field_from_args".into(),
+        ))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() < 2 {
+            return Err(DataFusionError::Plan(
+                "struct_pick expects a struct and at least one field name".into(),
+            ));
+        }
+        let struct_array = args.args[0].to_array(args.number_rows)?;
+        let struct_values = struct_array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Plan("struct_pick expects a struct input".into()))?;
+        let DataType::Struct(struct_fields) = struct_values.data_type() else {
+            return Err(DataFusionError::Plan(
+                "struct_pick struct input must have a struct type".into(),
+            ));
+        };
+        let parent_nullable = struct_values.nulls().is_some();
+        let mut field_names: Vec<String> = Vec::with_capacity(args.args.len() - 1);
+        for value in args.args.iter().skip(1) {
+            let scalar = scalar_columnar_value(
+                value,
+                "struct_pick field names must be scalar literals",
+            )?;
+            let Some(field_name) = scalar_to_string(&scalar)? else {
+                return Err(DataFusionError::Plan(
+                    "struct_pick field names cannot be null".into(),
+                ));
+            };
+            let trimmed = field_name.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(DataFusionError::Plan(
+                    "struct_pick field names cannot be empty".into(),
+                ));
+            }
+            field_names.push(trimmed);
+        }
+        let mut selected_fields: Vec<Field> = Vec::with_capacity(field_names.len());
+        let mut selected_arrays: Vec<ArrayRef> = Vec::with_capacity(field_names.len());
+        for field_name in field_names {
+            let field = struct_fields
+                .iter()
+                .find(|candidate| candidate.name() == &field_name)
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "struct_pick field not found in struct: {field_name}"
+                    ))
+                })?;
+            let mut selected = field.as_ref().clone();
+            if parent_nullable {
+                selected = selected.with_nullable(true);
+            }
+            selected_fields.push(selected);
+            let column = struct_values.column_by_name(&field_name).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "struct_pick field not found in struct data: {field_name}"
+                ))
+            })?;
+            selected_arrays.push(column.clone());
+        }
+        let nulls = struct_values.nulls().cloned();
+        let picked = StructArray::new(Fields::from(selected_fields), selected_arrays, nulls);
+        Ok(ColumnarValue::Array(Arc::new(picked) as ArrayRef))
+    }
+}
+
+fn cdf_rank(change_type: &str) -> i32 {
+    let normalized = change_type.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "update_postimage" => 3,
+        "insert" => 2,
+        "delete" => 1,
+        "update_preimage" => 0,
+        _ => -1,
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Delta Functions"),
+    description = "Rank Delta change types deterministically.",
+    syntax_example = "cdf_change_rank(change_type)",
+    argument(name = "change_type", description = "Delta change type string.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct CdfChangeRankUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for CdfChangeRankUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "cdf_change_rank"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, true)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int32)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [value] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan(
+                "cdf_change_rank expects one argument".into(),
+            ));
+        };
+        let values = columnar_to_optional_strings(
+            value,
+            args.number_rows,
+            "cdf_change_rank expects string-compatible input",
+        )?;
+        let mut builder = Int32Builder::with_capacity(args.number_rows);
+        for value in values {
+            let Some(value) = value else {
+                builder.append_null();
+                continue;
+            };
+            builder.append_value(cdf_rank(&value));
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Delta Functions"),
+    description = "Return true when the Delta change type represents an upsert.",
+    syntax_example = "cdf_is_upsert(change_type)",
+    argument(name = "change_type", description = "Delta change type string.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct CdfIsUpsertUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for CdfIsUpsertUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "cdf_is_upsert"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Boolean, true)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Boolean)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [value] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan(
+                "cdf_is_upsert expects one argument".into(),
+            ));
+        };
+        let values = columnar_to_optional_strings(
+            value,
+            args.number_rows,
+            "cdf_is_upsert expects string-compatible input",
+        )?;
+        let mut builder = BooleanBuilder::with_capacity(args.number_rows);
+        for value in values {
+            let Some(value) = value else {
+                builder.append_null();
+                continue;
+            };
+            let rank = cdf_rank(&value);
+            builder.append_value(rank == 3 || rank == 2);
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Delta Functions"),
+    description = "Return true when the Delta change type represents a delete.",
+    syntax_example = "cdf_is_delete(change_type)",
+    argument(name = "change_type", description = "Delta change type string.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct CdfIsDeleteUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for CdfIsDeleteUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "cdf_is_delete"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Boolean, true)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Boolean)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [value] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan(
+                "cdf_is_delete expects one argument".into(),
+            ));
+        };
+        let values = columnar_to_optional_strings(
+            value,
+            args.number_rows,
+            "cdf_is_delete expects string-compatible input",
+        )?;
+        let mut builder = BooleanBuilder::with_capacity(args.number_rows);
+        for value in values {
+            let Some(value) = value else {
+                builder.append_null();
+                continue;
+            };
+            builder.append_value(cdf_rank(&value) == 1);
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
     }
 }
 

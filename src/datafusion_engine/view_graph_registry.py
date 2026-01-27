@@ -183,11 +183,14 @@ def _validate_udf_calls(snapshot: Mapping[str, object], node: ViewNode) -> None:
     if node.plan_bundle is None:
         msg = f"View {node.name!r} missing plan bundle for UDF validation."
         raise ValueError(msg)
-    lineage = _lineage_from_bundle(node.plan_bundle)
-    if not lineage.referenced_udfs:
+    required_udfs = node.plan_bundle.required_udfs
+    if not required_udfs:
+        lineage = _lineage_from_bundle(node.plan_bundle)
+        required_udfs = lineage.required_udfs
+    if not required_udfs:
         return
     available = {name.lower() for name in udf_names_from_snapshot(snapshot)}
-    missing = [name for name in lineage.referenced_udfs if name.lower() not in available]
+    missing = [name for name in required_udfs if name.lower() not in available]
     if missing:
         msg = f"View {node.name!r} references non-Rust UDFs: {sorted(missing)}."
         raise ValueError(msg)
@@ -245,14 +248,17 @@ def _required_udfs_from_plan_bundle(
     tuple[str, ...]
         Required UDF names.
     """
-    lineage = _lineage_from_bundle(bundle)
-    if not lineage.referenced_udfs:
+    required_udfs = bundle.required_udfs
+    if not required_udfs:
+        lineage = _lineage_from_bundle(bundle)
+        required_udfs = lineage.required_udfs
+    if not required_udfs:
         return ()
     snapshot_names = udf_names_from_snapshot(snapshot)
     lookup = {name.lower(): name for name in snapshot_names}
     required = {
         lookup[name.lower()]
-        for name in lineage.referenced_udfs
+        for name in required_udfs
         if isinstance(name, str) and name.lower() in lookup
     }
     return tuple(sorted(required))
@@ -264,7 +270,8 @@ def _lineage_from_bundle(bundle: DataFusionPlanBundle) -> LineageReport:
         raise ValueError(msg)
     from datafusion_engine.lineage_datafusion import extract_lineage
 
-    return extract_lineage(bundle.optimized_logical_plan)
+    snapshot = bundle.artifacts.udf_snapshot
+    return extract_lineage(bundle.optimized_logical_plan, udf_snapshot=snapshot)
 
 
 def _validate_schema_contract(

@@ -72,8 +72,6 @@ def open_compressed_output(
     return pa.CompressedOutputStream(pa.output_stream(str(target)), compression)
 
 
-
-
 __all__ = [
     "DeltaCdfOptions",
     "DeltaSchemaPolicy",

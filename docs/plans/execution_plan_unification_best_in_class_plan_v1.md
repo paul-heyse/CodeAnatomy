@@ -31,11 +31,13 @@ change.
 - [x] Schedule duplication and generation-wave gating modules have been removed.
 - [x] Plan diagnostics, semantic registry, and cache lineage hooks are wired in.
 - [x] Dynamic execution uses a plan-aware grouping strategy.
-- [ ] Plan-aware submission/grouping lifecycle hooks (priority submission +
-      grouping diagnostics) are not yet implemented.
+- [x] Plan-aware submission/grouping lifecycle hooks are implemented and wired
+      into dynamic execution.
 - [x] Driver caching is plan-signature aware and rebuilds drivers when the plan
       changes.
 - [x] `active_task_names` now drives runtime gating for inactive tasks.
+- [x] Plan artifacts and plan drift diagnostics are emitted as first-class
+      artifacts.
 
 ---
 
@@ -362,10 +364,15 @@ class PrioritySubmissionHook(lifecycle_api.TaskSubmissionHook):
 - [x] Ensure only pruned tasks are present in the generated task module.
 - [x] Remove generation-wave gating in favor of per-task execution nodes.
 - [x] Use plan schedule metadata for generation-aware grouping.
-- [ ] Add plan-aware `TaskSubmissionHook` and/or `TaskGroupingHook` so ready
+- [x] Add plan-aware `TaskSubmissionHook` and/or `TaskGroupingHook` so ready
       work is ordered by bottom-level criticality at submission time.
-- [ ] Wire scheduling hooks into dynamic execution adapters and record their
+  - Plan admission and diagnostics live in `PlanTaskSubmissionHook`, while
+    bottom-level criticality ordering happens in the plan-aware grouping
+    strategy.
+- [x] Wire scheduling hooks into dynamic execution adapters and record their
       diagnostics artifacts.
+  - Dynamic execution now installs plan-native submission/grouping hooks and
+    emits `hamilton_task_*` events plus `hamilton_plan_drift_v1`.
 - [x] Keep rustworkx as the scheduling source of truth.
 - [x] Enforce runtime gating so tasks outside `active_task_names` are skipped,
       not executed.
@@ -521,10 +528,11 @@ injection, scheduler-driven execution, and plan-aware caching are all in place.
 ### Candidate deletions
 
 - `src/hamilton_pipeline/modules/task_graph.py`
-  - Replaced by plan injection and plan-derived schedule nodes.
+  - Replaced by plan injection and plan-derived schedule nodes (already
+    removed).
 - `src/hamilton_pipeline/modules/incremental_plan.py`
-  - Replace with plan compilation that includes incremental diff logic
-    and post-run snapshot persistence.
+  - Replaced by plan compilation that includes incremental diff logic and
+    post-run snapshot persistence (already removed).
 - Legacy schedule duplication helpers in `src/hamilton_pipeline/driver_factory.py`.
 - Generation wave gating path in `src/hamilton_pipeline/modules/task_execution.py`
   if any portion remains.
@@ -542,5 +550,5 @@ injection, scheduler-driven execution, and plan-aware caching are all in place.
 - [x] Verify no remaining imports reference the candidate modules.
 - [x] Replace tests with plan-centric scheduling and execution tests.
 - [x] Confirm plan signature changes invalidate cached results as intended.
-- [ ] Confirm dynamic execution uses plan submission/grouping hooks in addition
+- [x] Confirm dynamic execution uses plan submission/grouping hooks in addition
       to the grouping strategy.

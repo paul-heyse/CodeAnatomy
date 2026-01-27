@@ -20,6 +20,13 @@ class PlanCacheKey:
 
     profile_hash: str
     substrait_hash: str
+    plan_fingerprint: str
+    udf_snapshot_hash: str
+    function_registry_hash: str
+    required_udfs_hash: str
+    required_rewrite_tags_hash: str
+    settings_hash: str
+    delta_inputs_hash: str
 
     def as_key(self) -> str:
         """Return a stable cache key string.
@@ -29,7 +36,18 @@ class PlanCacheKey:
         str
             Stable cache key.
         """
-        return f"plan:{self.profile_hash}:{self.substrait_hash}"
+        parts = (
+            self.profile_hash,
+            self.substrait_hash,
+            self.plan_fingerprint,
+            self.udf_snapshot_hash,
+            self.function_registry_hash,
+            self.required_udfs_hash,
+            self.required_rewrite_tags_hash,
+            self.settings_hash,
+            self.delta_inputs_hash,
+        )
+        return "plan:" + ":".join(parts)
 
 
 @dataclass(frozen=True)
@@ -39,6 +57,13 @@ class PlanCacheEntry:
     profile_hash: str
     substrait_hash: str
     plan_bytes: bytes
+    plan_fingerprint: str = ""
+    udf_snapshot_hash: str = ""
+    function_registry_hash: str = ""
+    required_udfs_hash: str = ""
+    required_rewrite_tags_hash: str = ""
+    settings_hash: str = ""
+    delta_inputs_hash: str = ""
     compilation_lane: str | None = None
 
     def key(self) -> PlanCacheKey:
@@ -52,6 +77,13 @@ class PlanCacheEntry:
         return PlanCacheKey(
             profile_hash=self.profile_hash,
             substrait_hash=self.substrait_hash,
+            plan_fingerprint=self.plan_fingerprint,
+            udf_snapshot_hash=self.udf_snapshot_hash,
+            function_registry_hash=self.function_registry_hash,
+            required_udfs_hash=self.required_udfs_hash,
+            required_rewrite_tags_hash=self.required_rewrite_tags_hash,
+            settings_hash=self.settings_hash,
+            delta_inputs_hash=self.delta_inputs_hash,
         )
 
 

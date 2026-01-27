@@ -1387,6 +1387,108 @@ DATAFUSION_VIEW_ARTIFACTS_SCHEMA = _schema_with_metadata(
     ),
 )
 
+HAMILTON_TASK_FACT_STRUCT = pa.struct(
+    [
+        pa.field("task_name", pa.string(), nullable=False),
+        pa.field("bottom_level_cost", pa.float64(), nullable=False),
+        pa.field("on_critical_path", pa.bool_(), nullable=False),
+        pa.field("generation_index", pa.int64(), nullable=True),
+        pa.field("schedule_index", pa.int64(), nullable=True),
+    ]
+)
+
+HAMILTON_TASK_SUBMISSION_SCHEMA = _schema_with_metadata(
+    "hamilton_task_submission_v1",
+    pa.schema(
+        [
+            pa.field("run_id", pa.string(), nullable=False),
+            pa.field("task_id", pa.string(), nullable=False),
+            pa.field("purpose", pa.string(), nullable=False),
+            pa.field("plan_signature", pa.string(), nullable=False),
+            pa.field("reduced_plan_signature", pa.string(), nullable=False),
+            pa.field("plan_task_count", pa.int64(), nullable=False),
+            pa.field(
+                "execution_task_names",
+                pa.list_(pa.string()),
+                nullable=False,
+            ),
+            pa.field("admitted_tasks", pa.list_(pa.string()), nullable=False),
+            pa.field("rejected_tasks", pa.list_(pa.string()), nullable=False),
+            pa.field("unknown_tasks", pa.list_(pa.string()), nullable=False),
+            pa.field(
+                "critical_path_tasks",
+                pa.list_(pa.string()),
+                nullable=False,
+            ),
+            pa.field(
+                "task_facts",
+                pa.list_(HAMILTON_TASK_FACT_STRUCT),
+                nullable=False,
+            ),
+            pa.field("reduction_edge_count", pa.int64(), nullable=False),
+            pa.field("reduction_removed_edge_count", pa.int64(), nullable=False),
+        ]
+    ),
+)
+
+HAMILTON_TASK_GROUPING_SCHEMA = _schema_with_metadata(
+    "hamilton_task_grouping_v1",
+    pa.schema(
+        [
+            pa.field("run_id", pa.string(), nullable=False),
+            pa.field("plan_signature", pa.string(), nullable=False),
+            pa.field("reduced_plan_signature", pa.string(), nullable=False),
+            pa.field("task_ids", pa.list_(pa.string()), nullable=False),
+            pa.field("task_count", pa.int64(), nullable=False),
+        ]
+    ),
+)
+
+HAMILTON_TASK_EXPANSION_SCHEMA = _schema_with_metadata(
+    "hamilton_task_expansion_v1",
+    pa.schema(
+        [
+            pa.field("run_id", pa.string(), nullable=False),
+            pa.field("plan_signature", pa.string(), nullable=False),
+            pa.field("task_id", pa.string(), nullable=False),
+            pa.field("parameter_keys", pa.list_(pa.string()), nullable=False),
+            pa.field("parameter_count", pa.int64(), nullable=False),
+        ]
+    ),
+)
+
+HAMILTON_PLAN_DRIFT_SCHEMA = _schema_with_metadata(
+    "hamilton_plan_drift_v1",
+    pa.schema(
+        [
+            pa.field("run_id", pa.string(), nullable=False),
+            pa.field("plan_signature", pa.string(), nullable=False),
+            pa.field("reduced_plan_signature", pa.string(), nullable=False),
+            pa.field("plan_task_count", pa.int64(), nullable=False),
+            pa.field("admitted_task_count", pa.int64(), nullable=False),
+            pa.field("admitted_task_coverage_ratio", pa.float64(), nullable=False),
+            pa.field(
+                "missing_admitted_tasks",
+                pa.list_(pa.string()),
+                nullable=False,
+            ),
+            pa.field(
+                "unexpected_admitted_tasks",
+                pa.list_(pa.string()),
+                nullable=False,
+            ),
+            pa.field("plan_generation_count", pa.int64(), nullable=False),
+            pa.field("plan_generations", pa.list_(pa.int64()), nullable=False),
+            pa.field("admitted_generation_count", pa.int64(), nullable=False),
+            pa.field("admitted_generations", pa.list_(pa.int64()), nullable=False),
+            pa.field("missing_generations", pa.list_(pa.int64()), nullable=False),
+            pa.field("submission_event_count", pa.int64(), nullable=False),
+            pa.field("grouping_event_count", pa.int64(), nullable=False),
+            pa.field("expansion_event_count", pa.int64(), nullable=False),
+        ]
+    ),
+)
+
 DATAFUSION_SQL_INGEST_SCHEMA = _schema_with_metadata(
     "datafusion_sql_ingest_v1",
     pa.schema(
@@ -3623,10 +3725,17 @@ __all__ = [
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
     "CST_VIEW_NAMES",
+    "DATAFUSION_PLAN_ARTIFACTS_SCHEMA",
+    "DATAFUSION_RUNS_SCHEMA",
     "DATAFUSION_SQL_INGEST_SCHEMA",
+    "DATAFUSION_VIEW_ARTIFACTS_SCHEMA",
     "DIAG_DETAILS_TYPE",
     "DIAG_DETAIL_STRUCT",
     "DIAG_TAGS_TYPE",
+    "HAMILTON_PLAN_DRIFT_SCHEMA",
+    "HAMILTON_TASK_EXPANSION_SCHEMA",
+    "HAMILTON_TASK_GROUPING_SCHEMA",
+    "HAMILTON_TASK_SUBMISSION_SCHEMA",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
     "SCIP_DIAGNOSTICS_SCHEMA",

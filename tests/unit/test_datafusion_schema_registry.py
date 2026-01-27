@@ -5,12 +5,18 @@ from __future__ import annotations
 import pyarrow as pa
 from datafusion import SessionContext
 
+import test_support.datafusion_ext_stub as _datafusion_ext_stub
+import test_support.view_specs_stub as _view_specs_stub
 from arrowdsl.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
 from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.metadata import metadata_list_bytes
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.schema_registry import (
     AST_VIEW_NAMES,
+    HAMILTON_PLAN_DRIFT_SCHEMA,
+    HAMILTON_TASK_EXPANSION_SCHEMA,
+    HAMILTON_TASK_GROUPING_SCHEMA,
+    HAMILTON_TASK_SUBMISSION_SCHEMA,
     LIBCST_FILES_SCHEMA,
     SYMTABLE_FILES_SCHEMA,
     nested_view_spec,
@@ -21,6 +27,8 @@ from datafusion_engine.schema_registry import (
     validate_required_symtable_functions,
 )
 from datafusion_engine.udf_runtime import register_rust_udfs
+
+_ = (_datafusion_ext_stub, _view_specs_stub)
 
 
 def _to_arrow_schema(value: object) -> pa.Schema:
@@ -99,3 +107,26 @@ def test_validate_ast_views_smoke() -> None:
     ctx = SessionContext()
     register_rust_udfs(ctx)
     validate_ast_views(ctx, view_names=AST_VIEW_NAMES)
+
+
+def test_hamilton_diagnostics_schemas_cover_plan_events() -> None:
+    """Hamilton plan diagnostics schemas expose the expected contract fields."""
+    submission_fields = set(HAMILTON_TASK_SUBMISSION_SCHEMA.names)
+    assert {
+        "run_id",
+        "task_id",
+        "plan_signature",
+        "reduced_plan_signature",
+        "task_facts",
+    }.issubset(submission_fields)
+    grouping_fields = set(HAMILTON_TASK_GROUPING_SCHEMA.names)
+    assert {"run_id", "task_ids", "task_count"}.issubset(grouping_fields)
+    expansion_fields = set(HAMILTON_TASK_EXPANSION_SCHEMA.names)
+    assert {"run_id", "task_id", "parameter_keys"}.issubset(expansion_fields)
+    drift_fields = set(HAMILTON_PLAN_DRIFT_SCHEMA.names)
+    assert {
+        "plan_task_count",
+        "admitted_task_count",
+        "missing_generations",
+        "submission_event_count",
+    }.issubset(drift_fields)

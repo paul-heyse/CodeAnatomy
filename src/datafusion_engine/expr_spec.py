@@ -15,8 +15,21 @@ if TYPE_CHECKING:
 _EXACT_ONE = 1
 _EXACT_TWO = 2
 _EXACT_THREE = 3
+_EXACT_FOUR = 4
 _MIN_IN_SET = 2
 _MIN_BINARY_JOIN = 3
+_MAX_STABLE_ID_PART_ARGS = 65
+_MAX_SPAN_MAKE_ARGS = 5
+_SPAN_ID_KIND_ARG_COUNT = 5
+_MIN_STABLE_HASH_ANY_CANONICAL_ARGS = 2
+_MIN_STABLE_HASH_ANY_NULL_SENTINEL_ARGS = 3
+_MIN_UTF8_NORMALIZE_FORM_ARGS = 2
+_MIN_UTF8_NORMALIZE_CASEFOLD_ARGS = 3
+_MIN_UTF8_NORMALIZE_COLLAPSE_ARGS = 4
+_MIN_QNAME_LANG_ARGS = 3
+_MIN_MAP_NORMALIZE_KEY_CASE_ARGS = 2
+_MIN_MAP_NORMALIZE_SORT_KEYS_ARGS = 3
+_MAX_STRUCT_PICK_FIELDS = 6
 
 
 def _sql_literal(value: ScalarValue) -> str:
@@ -171,6 +184,17 @@ def _literal_string_arg(args: Sequence[ExprIR], *, name: str, index: int) -> str
     return literal
 
 
+def _literal_bool_arg(args: Sequence[ExprIR], *, name: str, index: int) -> bool:
+    if not args:
+        msg = f"{name} expects a literal boolean argument."
+        raise ValueError(msg)
+    literal = args[index].value
+    if not isinstance(literal, bool):
+        msg = f"{name} expects a literal boolean argument."
+        raise TypeError(msg)
+    return literal
+
+
 def _call_expr(name: str, *, args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
     _validate_call_name(name, args)
     handler = _EXPR_CALLS.get(name)
@@ -256,10 +280,10 @@ def _expr_binary_join(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
 
 
 def _expr_stable_id(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import stable_id
+    from datafusion_ext import stable_id_parts
 
     prefix = _literal_prefix(ir_args, name="stable_id")
-    return stable_id(prefix, args[1])
+    return stable_id_parts(prefix, args[1])
 
 
 def _expr_stable_hash64(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
@@ -275,10 +299,173 @@ def _expr_stable_hash128(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Ex
 
 
 def _expr_prefixed_hash64(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
-    from datafusion_ext import prefixed_hash64
+    from datafusion_ext import prefixed_hash_parts64
 
     prefix = _literal_prefix(ir_args, name="prefixed_hash64")
-    return prefixed_hash64(prefix, args[1])
+    return prefixed_hash_parts64(prefix, args[1])
+
+
+def _expr_stable_id_parts(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import stable_id_parts
+
+    prefix = _literal_prefix(ir_args, name="stable_id_parts")
+    if len(args) > _MAX_STABLE_ID_PART_ARGS:
+        max_parts = _MAX_STABLE_ID_PART_ARGS - 1
+        msg = f"stable_id_parts supports up to {max_parts} parts."
+        raise ValueError(msg)
+    return stable_id_parts(prefix, args[1], *args[2:])
+
+
+def _expr_prefixed_hash_parts64(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import prefixed_hash_parts64
+
+    prefix = _literal_prefix(ir_args, name="prefixed_hash_parts64")
+    if len(args) > _MAX_STABLE_ID_PART_ARGS:
+        max_parts = _MAX_STABLE_ID_PART_ARGS - 1
+        msg = f"prefixed_hash_parts64 supports up to {max_parts} parts."
+        raise ValueError(msg)
+    return prefixed_hash_parts64(prefix, args[1], *args[2:])
+
+
+def _expr_stable_hash_any(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import stable_hash_any
+
+    canonical = None
+    null_sentinel = None
+    if len(ir_args) >= _MIN_STABLE_HASH_ANY_CANONICAL_ARGS:
+        canonical = _literal_bool_arg(ir_args, name="stable_hash_any", index=1)
+    if len(ir_args) >= _MIN_STABLE_HASH_ANY_NULL_SENTINEL_ARGS:
+        null_sentinel = _literal_string_arg(ir_args, name="stable_hash_any", index=2)
+    return stable_hash_any(args[0], canonical=canonical, null_sentinel=null_sentinel)
+
+
+def _expr_span_make(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import span_make
+
+    if len(args) > _MAX_SPAN_MAKE_ARGS:
+        msg = "span_make supports up to five arguments."
+        raise ValueError(msg)
+    return span_make(args[0], args[1], *args[2:])
+
+
+def _expr_span_len(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import span_len
+
+    return span_len(args[0])
+
+
+def _expr_span_overlaps(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import span_overlaps
+
+    return span_overlaps(args[0], args[1])
+
+
+def _expr_span_contains(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import span_contains
+
+    return span_contains(args[0], args[1])
+
+
+def _expr_span_id(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import span_id
+
+    prefix = _literal_prefix(ir_args, name="span_id")
+    kind = args[4] if len(args) >= _SPAN_ID_KIND_ARG_COUNT else None
+    return span_id(prefix, args[1], args[2], args[3], kind=kind)
+
+
+def _expr_utf8_normalize(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import utf8_normalize as udf_utf8_normalize
+
+    form = None
+    casefold = None
+    collapse_ws = None
+    if len(ir_args) >= _MIN_UTF8_NORMALIZE_FORM_ARGS:
+        form = _literal_string_arg(ir_args, name="utf8_normalize", index=1)
+    if len(ir_args) >= _MIN_UTF8_NORMALIZE_CASEFOLD_ARGS:
+        casefold = _literal_bool_arg(ir_args, name="utf8_normalize", index=2)
+    if len(ir_args) >= _MIN_UTF8_NORMALIZE_COLLAPSE_ARGS:
+        collapse_ws = _literal_bool_arg(ir_args, name="utf8_normalize", index=3)
+    return udf_utf8_normalize(args[0], form=form, casefold=casefold, collapse_ws=collapse_ws)
+
+
+def _expr_utf8_null_if_blank(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import utf8_null_if_blank
+
+    return utf8_null_if_blank(args[0])
+
+
+def _expr_qname_normalize(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import qname_normalize
+
+    module = args[1] if len(args) > 1 else None
+    lang = args[2] if len(args) >= _MIN_QNAME_LANG_ARGS else None
+    return qname_normalize(args[0], module=module, lang=lang)
+
+
+def _expr_map_get_default(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import map_get_default
+
+    key = _literal_string_arg(ir_args, name="map_get_default", index=1)
+    return map_get_default(args[0], key, args[2])
+
+
+def _expr_map_normalize(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import map_normalize
+
+    key_case = None
+    sort_keys = None
+    if len(ir_args) >= _MIN_MAP_NORMALIZE_KEY_CASE_ARGS:
+        key_case = _literal_string_arg(ir_args, name="map_normalize", index=1)
+    if len(ir_args) >= _MIN_MAP_NORMALIZE_SORT_KEYS_ARGS:
+        sort_keys = _literal_bool_arg(ir_args, name="map_normalize", index=2)
+    return map_normalize(args[0], key_case=key_case, sort_keys=sort_keys)
+
+
+def _expr_list_compact(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import list_compact
+
+    return list_compact(args[0])
+
+
+def _expr_list_unique_sorted(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import list_unique_sorted
+
+    return list_unique_sorted(args[0])
+
+
+def _expr_struct_pick(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import struct_pick
+
+    field_names = [
+        _literal_string_arg(ir_args, name="struct_pick", index=index)
+        for index in range(1, len(ir_args))
+    ]
+    if not field_names:
+        msg = "struct_pick requires at least one field name."
+        raise ValueError(msg)
+    if len(field_names) > _MAX_STRUCT_PICK_FIELDS:
+        msg = "struct_pick supports up to six field names."
+        raise ValueError(msg)
+    return struct_pick(args[0], field_names[0], *field_names[1:])
+
+
+def _expr_cdf_change_rank(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import cdf_change_rank
+
+    return cdf_change_rank(args[0])
+
+
+def _expr_cdf_is_upsert(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import cdf_is_upsert
+
+    return cdf_is_upsert(args[0])
+
+
+def _expr_cdf_is_delete(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import cdf_is_delete
+
+    return cdf_is_delete(args[0])
 
 
 _EXACT_CALL_COUNTS: dict[str, int] = {
@@ -293,12 +480,31 @@ _EXACT_CALL_COUNTS: dict[str, int] = {
     "stable_hash64": _EXACT_ONE,
     "stable_hash128": _EXACT_ONE,
     "prefixed_hash64": _EXACT_TWO,
+    "span_len": _EXACT_ONE,
+    "span_overlaps": _EXACT_TWO,
+    "span_contains": _EXACT_TWO,
+    "utf8_null_if_blank": _EXACT_ONE,
+    "map_get_default": _EXACT_THREE,
+    "list_compact": _EXACT_ONE,
+    "list_unique_sorted": _EXACT_ONE,
+    "cdf_change_rank": _EXACT_ONE,
+    "cdf_is_upsert": _EXACT_ONE,
+    "cdf_is_delete": _EXACT_ONE,
 }
 _MIN_CALL_COUNTS: dict[str, int] = {
     "bit_wise_or": _EXACT_ONE,
     "bit_wise_and": _EXACT_ONE,
     "in_set": _MIN_IN_SET,
     "binary_join_element_wise": _MIN_BINARY_JOIN,
+    "stable_id_parts": _EXACT_TWO,
+    "prefixed_hash_parts64": _EXACT_TWO,
+    "stable_hash_any": _EXACT_ONE,
+    "span_make": _EXACT_TWO,
+    "span_id": _EXACT_FOUR,
+    "utf8_normalize": _EXACT_ONE,
+    "qname_normalize": _EXACT_ONE,
+    "map_normalize": _EXACT_ONE,
+    "struct_pick": _EXACT_TWO,
 }
 _EXPR_CALLS: dict[str, Callable[[Sequence[Expr], Sequence[ExprIR]], Expr]] = {
     "stringify": _expr_stringify,
@@ -317,6 +523,25 @@ _EXPR_CALLS: dict[str, Callable[[Sequence[Expr], Sequence[ExprIR]], Expr]] = {
     "stable_hash64": _expr_stable_hash64,
     "stable_hash128": _expr_stable_hash128,
     "prefixed_hash64": _expr_prefixed_hash64,
+    "stable_id_parts": _expr_stable_id_parts,
+    "prefixed_hash_parts64": _expr_prefixed_hash_parts64,
+    "stable_hash_any": _expr_stable_hash_any,
+    "span_make": _expr_span_make,
+    "span_len": _expr_span_len,
+    "span_overlaps": _expr_span_overlaps,
+    "span_contains": _expr_span_contains,
+    "span_id": _expr_span_id,
+    "utf8_normalize": _expr_utf8_normalize,
+    "utf8_null_if_blank": _expr_utf8_null_if_blank,
+    "qname_normalize": _expr_qname_normalize,
+    "map_get_default": _expr_map_get_default,
+    "map_normalize": _expr_map_normalize,
+    "list_compact": _expr_list_compact,
+    "list_unique_sorted": _expr_list_unique_sorted,
+    "struct_pick": _expr_struct_pick,
+    "cdf_change_rank": _expr_cdf_change_rank,
+    "cdf_is_upsert": _expr_cdf_is_upsert,
+    "cdf_is_delete": _expr_cdf_is_delete,
 }
 _SQL_CALLS: dict[str, Callable[[Sequence[str]], str]] = {
     "stringify": lambda rendered: f"CAST({rendered[0]} AS STRING)",

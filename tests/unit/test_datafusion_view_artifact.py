@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.plan_bundle import DataFusionPlanBundle, PlanArtifacts
 from datafusion_engine.view_artifacts import (
     DataFusionViewArtifact,
     build_view_artifact_from_bundle,
@@ -116,6 +116,20 @@ def mock_plan_bundle() -> DataFusionPlanBundle:
     mock_df = Mock()
     mock_logical_plan = Mock()
     mock_optimized_plan = Mock()
+    artifacts = PlanArtifacts(
+        logical_plan_display=None,
+        optimized_plan_display=None,
+        optimized_plan_graphviz=None,
+        optimized_plan_pgjson=None,
+        execution_plan_display=None,
+        df_settings={},
+        udf_snapshot_hash="mock_udf_hash",
+        function_registry_hash="mock_registry_hash",
+        function_registry_snapshot={},
+        rewrite_tags=(),
+        domain_planner_names=(),
+        udf_snapshot={},
+    )
 
     return DataFusionPlanBundle(
         df=mock_df,
@@ -124,5 +138,6 @@ def mock_plan_bundle() -> DataFusionPlanBundle:
         execution_plan=None,
         substrait_bytes=None,
         plan_fingerprint="mock_fp_12345",
+        artifacts=artifacts,
         plan_details={},
     )

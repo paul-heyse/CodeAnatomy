@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
@@ -44,6 +44,25 @@ class DeltaFeatureGate:
     min_writer_version: int | None = None
     required_reader_features: tuple[str, ...] = ()
     required_writer_features: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DeltaAppTransaction:
+    """Idempotent application transaction metadata for Delta commits."""
+
+    app_id: str
+    version: int
+    last_updated: int | None = None
+
+
+@dataclass(frozen=True)
+class DeltaCommitOptions:
+    """Commit options for Rust-native Delta mutations and maintenance."""
+
+    metadata: Mapping[str, str] = field(default_factory=dict)
+    app_transaction: DeltaAppTransaction | None = None
+    max_retries: int | None = None
+    create_checkpoint: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +210,38 @@ def _gate_payload(
     reader_features = list(gate.required_reader_features) or None
     writer_features = list(gate.required_writer_features) or None
     return gate.min_reader_version, gate.min_writer_version, reader_features, writer_features
+
+
+def _commit_payload(
+    options: DeltaCommitOptions | None,
+) -> tuple[
+    list[tuple[str, str]] | None,
+    str | None,
+    int | None,
+    int | None,
+    int | None,
+    bool | None,
+]:
+    """Convert commit options into Rust extension payload values."""
+    if options is None:
+        return None, None, None, None, None, None
+    metadata_items = sorted((str(key), str(value)) for key, value in options.metadata.items())
+    metadata_payload = metadata_items or None
+    app_id: str | None = None
+    app_version: int | None = None
+    app_last_updated: int | None = None
+    if options.app_transaction is not None:
+        app_id = options.app_transaction.app_id
+        app_version = options.app_transaction.version
+        app_last_updated = options.app_transaction.last_updated
+    return (
+        metadata_payload,
+        app_id,
+        app_version,
+        app_last_updated,
+        options.max_retries,
+        options.create_checkpoint,
+    )
 
 
 def _cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object]:
@@ -518,16 +569,460 @@ def delta_add_actions(
     return _ensure_mapping(response, label="delta_add_actions")
 
 
+def delta_write_ipc(
+    ctx: SessionContext,
+    *,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    data_ipc: bytes,
+    mode: str,
+    schema_mode: str | None,
+    partition_columns: Sequence[str] | None,
+    target_file_size: int | None,
+    extra_constraints: Sequence[str] | None,
+    gate: DeltaFeatureGate | None = None,
+    commit_options: DeltaCommitOptions | None = None,
+) -> Mapping[str, object]:
+    """Run a Rust-native Delta write over Arrow IPC bytes."""
+    module = _require_datafusion_ext()
+    write_fn = getattr(module, "delta_write_ipc", None)
+    if not callable(write_fn):
+        msg = "datafusion_ext.delta_write_ipc is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options else None
+    gate_payload = _gate_payload(gate)
+    commit_payload = _commit_payload(commit_options)
+    constraints_payload = list(extra_constraints) if extra_constraints else None
+    partitions_payload = list(partition_columns) if partition_columns else None
+    response = write_fn(
+        ctx,
+        table_uri,
+        storage_payload,
+        version,
+        timestamp,
+        data_ipc,
+        mode,
+        schema_mode,
+        partitions_payload,
+        target_file_size,
+        constraints_payload,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_write_ipc")
+
+
+def delta_delete(
+    ctx: SessionContext,
+    *,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    predicate: str | None,
+    extra_constraints: Sequence[str] | None,
+    gate: DeltaFeatureGate | None = None,
+    commit_options: DeltaCommitOptions | None = None,
+) -> Mapping[str, object]:
+    """Run a Rust-native Delta delete."""
+    module = _require_datafusion_ext()
+    delete_fn = getattr(module, "delta_delete", None)
+    if not callable(delete_fn):
+        msg = "datafusion_ext.delta_delete is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options else None
+    gate_payload = _gate_payload(gate)
+    commit_payload = _commit_payload(commit_options)
+    constraints_payload = list(extra_constraints) if extra_constraints else None
+    response = delete_fn(
+        ctx,
+        table_uri,
+        storage_payload,
+        version,
+        timestamp,
+        predicate,
+        constraints_payload,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_delete")
+
+
+def delta_update(
+    ctx: SessionContext,
+    *,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    predicate: str | None,
+    updates: Mapping[str, str],
+    extra_constraints: Sequence[str] | None,
+    gate: DeltaFeatureGate | None = None,
+    commit_options: DeltaCommitOptions | None = None,
+) -> Mapping[str, object]:
+    """Run a Rust-native Delta update."""
+    if not updates:
+        msg = "Delta update requires at least one column assignment."
+        raise ValueError(msg)
+    module = _require_datafusion_ext()
+    update_fn = getattr(module, "delta_update", None)
+    if not callable(update_fn):
+        msg = "datafusion_ext.delta_update is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options else None
+    gate_payload = _gate_payload(gate)
+    commit_payload = _commit_payload(commit_options)
+    constraints_payload = list(extra_constraints) if extra_constraints else None
+    updates_payload = sorted((str(key), str(value)) for key, value in updates.items())
+    response = update_fn(
+        ctx,
+        table_uri,
+        storage_payload,
+        version,
+        timestamp,
+        predicate,
+        updates_payload,
+        constraints_payload,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_update")
+
+
+def delta_merge(
+    ctx: SessionContext,
+    *,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    source_table: str,
+    predicate: str,
+    source_alias: str | None,
+    target_alias: str | None,
+    matched_predicate: str | None,
+    matched_updates: Mapping[str, str],
+    not_matched_predicate: str | None,
+    not_matched_inserts: Mapping[str, str],
+    not_matched_by_source_predicate: str | None,
+    delete_not_matched_by_source: bool,
+    extra_constraints: Sequence[str] | None,
+    gate: DeltaFeatureGate | None = None,
+    commit_options: DeltaCommitOptions | None = None,
+) -> Mapping[str, object]:
+    """Run a Rust-native Delta merge."""
+    module = _require_datafusion_ext()
+    merge_fn = getattr(module, "delta_merge", None)
+    if not callable(merge_fn):
+        msg = "datafusion_ext.delta_merge is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options else None
+    gate_payload = _gate_payload(gate)
+    commit_payload = _commit_payload(commit_options)
+    constraints_payload = list(extra_constraints) if extra_constraints else None
+    matched_payload = sorted((str(key), str(value)) for key, value in matched_updates.items())
+    inserts_payload = sorted((str(key), str(value)) for key, value in not_matched_inserts.items())
+    response = merge_fn(
+        ctx,
+        table_uri,
+        storage_payload,
+        version,
+        timestamp,
+        source_table,
+        predicate,
+        source_alias,
+        target_alias,
+        matched_predicate,
+        matched_payload,
+        not_matched_predicate,
+        inserts_payload,
+        not_matched_by_source_predicate,
+        delete_not_matched_by_source,
+        constraints_payload,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_merge")
+
+
+def delta_optimize_compact(
+    ctx: SessionContext,
+    *,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    target_size: int | None,
+    gate: DeltaFeatureGate | None = None,
+    commit_options: DeltaCommitOptions | None = None,
+) -> Mapping[str, object]:
+    """Run Rust-native Delta optimize/compact."""
+    module = _require_datafusion_ext()
+    optimize_fn = getattr(module, "delta_optimize_compact", None)
+    if not callable(optimize_fn):
+        msg = "datafusion_ext.delta_optimize_compact is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options else None
+    gate_payload = _gate_payload(gate)
+    commit_payload = _commit_payload(commit_options)
+    response = optimize_fn(
+        ctx,
+        table_uri,
+        storage_payload,
+        version,
+        timestamp,
+        target_size,
+        None,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_optimize_compact")
+
+
+def delta_vacuum(
+    ctx: SessionContext,
+    *,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    retention_hours: int | None,
+    dry_run: bool,
+    enforce_retention_duration: bool,
+    gate: DeltaFeatureGate | None = None,
+    commit_options: DeltaCommitOptions | None = None,
+) -> Mapping[str, object]:
+    """Run Rust-native Delta vacuum."""
+    module = _require_datafusion_ext()
+    vacuum_fn = getattr(module, "delta_vacuum", None)
+    if not callable(vacuum_fn):
+        msg = "datafusion_ext.delta_vacuum is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options else None
+    gate_payload = _gate_payload(gate)
+    commit_payload = _commit_payload(commit_options)
+    response = vacuum_fn(
+        ctx,
+        table_uri,
+        storage_payload,
+        version,
+        timestamp,
+        retention_hours,
+        dry_run,
+        enforce_retention_duration,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_vacuum")
+
+
+def delta_restore(
+    ctx: SessionContext,
+    *,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    restore_version: int | None,
+    restore_timestamp: str | None,
+    gate: DeltaFeatureGate | None = None,
+    commit_options: DeltaCommitOptions | None = None,
+) -> Mapping[str, object]:
+    """Run Rust-native Delta restore."""
+    module = _require_datafusion_ext()
+    restore_fn = getattr(module, "delta_restore", None)
+    if not callable(restore_fn):
+        msg = "datafusion_ext.delta_restore is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options else None
+    gate_payload = _gate_payload(gate)
+    commit_payload = _commit_payload(commit_options)
+    response = restore_fn(
+        ctx,
+        table_uri,
+        storage_payload,
+        version,
+        timestamp,
+        restore_version,
+        restore_timestamp,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_restore")
+
+
+def delta_set_properties(
+    ctx: SessionContext,
+    *,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    properties: Mapping[str, str],
+    gate: DeltaFeatureGate | None = None,
+    commit_options: DeltaCommitOptions | None = None,
+) -> Mapping[str, object]:
+    """Run Rust-native Delta property updates."""
+    if not properties:
+        msg = "Delta property update requires at least one key/value pair."
+        raise ValueError(msg)
+    module = _require_datafusion_ext()
+    set_fn = getattr(module, "delta_set_properties", None)
+    if not callable(set_fn):
+        msg = "datafusion_ext.delta_set_properties is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options else None
+    gate_payload = _gate_payload(gate)
+    commit_payload = _commit_payload(commit_options)
+    properties_payload = sorted((str(key), str(value)) for key, value in properties.items())
+    response = set_fn(
+        ctx,
+        table_uri,
+        storage_payload,
+        version,
+        timestamp,
+        properties_payload,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_set_properties")
+
+
+def delta_add_features(
+    ctx: SessionContext,
+    *,
+    table_uri: str,
+    storage_options: Mapping[str, str] | None,
+    version: int | None,
+    timestamp: str | None,
+    features: Sequence[str],
+    allow_protocol_versions_increase: bool,
+    gate: DeltaFeatureGate | None = None,
+    commit_options: DeltaCommitOptions | None = None,
+) -> Mapping[str, object]:
+    """Run Rust-native Delta feature enablement."""
+    if not features:
+        msg = "Delta add-features requires at least one feature name."
+        raise ValueError(msg)
+    module = _require_datafusion_ext()
+    add_fn = getattr(module, "delta_add_features", None)
+    if not callable(add_fn):
+        msg = "datafusion_ext.delta_add_features is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(storage_options.items()) if storage_options else None
+    gate_payload = _gate_payload(gate)
+    commit_payload = _commit_payload(commit_options)
+    features_payload = [str(feature) for feature in features]
+    response = add_fn(
+        ctx,
+        table_uri,
+        storage_payload,
+        version,
+        timestamp,
+        features_payload,
+        allow_protocol_versions_increase,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_add_features")
+
+
 __all__ = [
     "DeltaFeatureGate",
+    "DeltaAppTransaction",
     "DeltaCdfProviderBundle",
     "DeltaCdfRequest",
+    "DeltaCommitOptions",
     "DeltaProviderBundle",
     "DeltaProviderRequest",
     "DeltaSnapshotRequest",
     "delta_add_actions",
+    "delta_add_features",
     "delta_cdf_provider",
+    "delta_delete",
+    "delta_merge",
+    "delta_optimize_compact",
     "delta_provider_from_session",
     "delta_provider_with_files",
+    "delta_restore",
+    "delta_set_properties",
     "delta_snapshot_info",
+    "delta_update",
+    "delta_vacuum",
+    "delta_write_ipc",
 ]

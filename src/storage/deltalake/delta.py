@@ -20,6 +20,11 @@ if TYPE_CHECKING:
     from arro3.core.types import ArrowArrayExportable
     from datafusion import SessionContext
     from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
+    from datafusion_engine.delta_control_plane import (
+        DeltaAppTransaction,
+        DeltaCommitOptions,
+        DeltaFeatureGate,
+    )
 
 type StorageOptions = Mapping[str, str]
 
@@ -29,6 +34,42 @@ DEFAULT_DELTA_FEATURE_PROPERTIES: dict[str, str] = {
     "delta.enableDeletionVectors": "true",
     "delta.enableInCommitTimestamps": "true",
 }
+
+
+def _runtime_ctx(ctx: SessionContext | None) -> SessionContext:
+    if ctx is not None:
+        return ctx
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+    return DataFusionRuntimeProfile().session_context()
+
+
+def _snapshot_info(
+    path: str,
+    *,
+    storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
+    version: int | None = None,
+    timestamp: str | None = None,
+    gate: DeltaFeatureGate | None = None,
+) -> Mapping[str, object] | None:
+    storage = _log_storage_dict(storage_options, log_storage_options)
+    try:
+        from datafusion_engine.delta_control_plane import (
+            DeltaSnapshotRequest,
+            delta_snapshot_info,
+        )
+
+        request = DeltaSnapshotRequest(
+            table_uri=path,
+            storage_options=storage or None,
+            version=version,
+            timestamp=timestamp,
+            gate=gate,
+        )
+        return delta_snapshot_info(request)
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -161,10 +202,22 @@ def delta_table_version(
     int | None
         Latest Delta table version, or None if not a Delta table.
     """
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    if not DeltaTable.is_deltatable(path, storage_options=storage):
+    snapshot = _snapshot_info(
+        path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
+    if snapshot is None:
         return None
-    return DeltaTable(path, storage_options=storage).version()
+    version_value = snapshot.get("version")
+    if isinstance(version_value, int):
+        return version_value
+    if isinstance(version_value, str) and version_value.strip():
+        try:
+            return int(version_value)
+        except ValueError:
+            return None
+    return None
 
 
 def delta_table_schema(
@@ -183,17 +236,35 @@ def delta_table_schema(
         Arrow schema for the Delta table or ``None`` when the table does not exist.
     """
     storage = _log_storage_dict(storage_options, log_storage_options)
-    if not DeltaTable.is_deltatable(path, storage_options=storage):
+    ctx = _runtime_ctx(None)
+    try:
+        from datafusion_engine.delta_control_plane import (
+            DeltaProviderRequest,
+            delta_provider_from_session,
+        )
+
+        bundle = delta_provider_from_session(
+            ctx,
+            request=DeltaProviderRequest(
+                table_uri=path,
+                storage_options=storage or None,
+                version=version,
+                timestamp=timestamp,
+                delta_scan=None,
+            ),
+        )
+    except (ImportError, RuntimeError, TypeError, ValueError):
         return None
-    table = open_delta_table(
-        path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
-        version=version,
-        timestamp=timestamp,
-    )
-    schema = table.schema()
-    return schema.to_arrow()
+    df = ctx.read_table(bundle.provider)
+    schema = df.schema()
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    return None
 
 
 def delta_table_features(
@@ -209,18 +280,31 @@ def delta_table_features(
     dict[str, str] | None
         Feature configuration values or ``None`` if no features are set.
     """
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    if not DeltaTable.is_deltatable(path, storage_options=storage):
+    snapshot = _snapshot_info(
+        path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
+    if snapshot is None:
         return None
-    table = DeltaTable(path, storage_options=storage)
-    metadata = table.metadata()
-    configuration = metadata.configuration or {}
-    features = {key: str(value) for key, value in configuration.items() if key.startswith("delta.")}
-    protocol = table.protocol()
-    if protocol.reader_features:
-        features["reader_features"] = ",".join(protocol.reader_features)
-    if protocol.writer_features:
-        features["writer_features"] = ",".join(protocol.writer_features)
+    features: dict[str, str] = {}
+    properties = snapshot.get("table_properties")
+    if isinstance(properties, Mapping):
+        for key, value in properties.items():
+            name = str(key)
+            if not name.startswith("delta."):
+                continue
+            features[name] = str(value)
+    reader_features = snapshot.get("reader_features")
+    if isinstance(reader_features, Sequence) and not isinstance(
+        reader_features, (str, bytes, bytearray)
+    ):
+        features["reader_features"] = ",".join(str(value) for value in reader_features)
+    writer_features = snapshot.get("writer_features")
+    if isinstance(writer_features, Sequence) and not isinstance(
+        writer_features, (str, bytes, bytearray)
+    ):
+        features["writer_features"] = ",".join(str(value) for value in writer_features)
     return features or None
 
 
@@ -270,24 +354,14 @@ def delta_commit_metadata(
     dict[str, str] | None
         Custom commit metadata or ``None`` when not present.
     """
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    if not DeltaTable.is_deltatable(path, storage_options=storage):
+    snapshot = _snapshot_info(
+        path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
+    if snapshot is None:
         return None
-    history = DeltaTable(path, storage_options=storage).history(1)
-    if not history:
-        return None
-    record = history[0]
-    reserved = {
-        "timestamp",
-        "operation",
-        "operationParameters",
-        "engineInfo",
-        "clientVersion",
-        "operationMetrics",
-        "version",
-    }
-    custom = {key: str(value) for key, value in record.items() if key not in reserved}
-    return custom or None
+    return None
 
 
 def delta_history_snapshot(
@@ -304,13 +378,25 @@ def delta_history_snapshot(
     dict[str, object] | None
         History entry payload or ``None`` when unavailable.
     """
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    if not DeltaTable.is_deltatable(path, storage_options=storage):
+    snapshot = _snapshot_info(
+        path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
+    if snapshot is None:
         return None
-    history = DeltaTable(path, storage_options=storage).history(limit)
-    if not history:
-        return None
-    return _delta_json_value(history[0])
+    return {
+        "version": snapshot.get("version"),
+        "snapshot_timestamp": snapshot.get("snapshot_timestamp"),
+        "min_reader_version": snapshot.get("min_reader_version"),
+        "min_writer_version": snapshot.get("min_writer_version"),
+        "reader_features": snapshot.get("reader_features"),
+        "writer_features": snapshot.get("writer_features"),
+        "table_properties": snapshot.get("table_properties"),
+        "schema_json": snapshot.get("schema_json"),
+        "partition_columns": snapshot.get("partition_columns"),
+        "limit": limit,
+    }
 
 
 def delta_protocol_snapshot(
@@ -326,15 +412,18 @@ def delta_protocol_snapshot(
     dict[str, object] | None
         Protocol payload or ``None`` when unavailable.
     """
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    if not DeltaTable.is_deltatable(path, storage_options=storage):
+    snapshot = _snapshot_info(
+        path,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
+    if snapshot is None:
         return None
-    protocol = DeltaTable(path, storage_options=storage).protocol()
     return {
-        "min_reader_version": protocol.min_reader_version,
-        "min_writer_version": protocol.min_writer_version,
-        "reader_features": list(protocol.reader_features) if protocol.reader_features else None,
-        "writer_features": list(protocol.writer_features) if protocol.writer_features else None,
+        "min_reader_version": snapshot.get("min_reader_version"),
+        "min_writer_version": snapshot.get("min_writer_version"),
+        "reader_features": snapshot.get("reader_features"),
+        "writer_features": snapshot.get("writer_features"),
     }
 
 

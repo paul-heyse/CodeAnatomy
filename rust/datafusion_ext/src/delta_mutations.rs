@@ -319,6 +319,8 @@ pub async fn delta_merge(
     matched_updates: HashMap<String, String>,
     not_matched_predicate: Option<String>,
     not_matched_inserts: HashMap<String, String>,
+    not_matched_by_source_predicate: Option<String>,
+    delete_not_matched_by_source: bool,
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
     extra_constraints: Option<Vec<String>>,
@@ -374,6 +376,16 @@ pub async fn delta_merge(
             }
             for (column, expr) in insert_pairs {
                 clause = clause.set(column, expr);
+            }
+            clause
+        })?;
+    }
+    if delete_not_matched_by_source {
+        let not_matched_by_source_predicate = not_matched_by_source_predicate.clone();
+        builder = builder.when_not_matched_by_source_delete(|delete| {
+            let mut clause = delete;
+            if let Some(predicate) = not_matched_by_source_predicate {
+                clause = clause.predicate(predicate);
             }
             clause
         })?;

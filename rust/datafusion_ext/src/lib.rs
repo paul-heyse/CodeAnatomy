@@ -1648,6 +1648,8 @@ fn delta_merge(
     matched_updates: Option<Vec<(String, String)>>,
     not_matched_predicate: Option<String>,
     not_matched_inserts: Option<Vec<(String, String)>>,
+    not_matched_by_source_predicate: Option<String>,
+    delete_not_matched_by_source: Option<bool>,
     extra_constraints: Option<Vec<String>>,
     min_reader_version: Option<i32>,
     min_writer_version: Option<i32>,
@@ -1666,9 +1668,11 @@ fn delta_merge(
     let not_matched_inserts = not_matched_inserts
         .map(|entries| entries.into_iter().collect::<HashMap<String, String>>())
         .unwrap_or_default();
-    if matched_updates.is_empty() && not_matched_inserts.is_empty() {
+    let delete_not_matched_by_source = delete_not_matched_by_source.unwrap_or(false);
+    if matched_updates.is_empty() && not_matched_inserts.is_empty() && !delete_not_matched_by_source
+    {
         return Err(PyValueError::new_err(
-            "Delta merge requires at least one matched update or not-matched insert.",
+            "Delta merge requires a matched update, not-matched insert, or not-matched-by-source delete.",
         ));
     }
     let storage = storage_options_map(storage_options);
@@ -1702,6 +1706,8 @@ fn delta_merge(
             matched_updates,
             not_matched_predicate,
             not_matched_inserts,
+            not_matched_by_source_predicate,
+            delete_not_matched_by_source,
             gate,
             Some(commit_options),
             extra_constraints,

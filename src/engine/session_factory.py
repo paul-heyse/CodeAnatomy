@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from arrowdsl.core.execution_context import ExecutionContext
+from datafusion_engine.dataset_registry import DatasetCatalog, registry_snapshot
 from datafusion_engine.registry_bridge import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.runtime import feature_state_snapshot
 from engine.plan_policy import ExecutionSurfacePolicy
@@ -16,7 +17,6 @@ from engine.runtime_profile import (
 )
 from engine.session import EngineSession
 from ibis_engine.execution_factory import ibis_backend_from_ctx
-from ibis_engine.registry import IbisDatasetRegistry, registry_snapshot
 from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import DiagnosticsPolicy
 
@@ -62,7 +62,7 @@ def build_engine_session(
         )
         diagnostics.record_events("feature_state_v1", [snapshot.to_row()])
     backend = ibis_backend_from_ctx(ctx)
-    datasets = IbisDatasetRegistry(backend=backend, runtime_profile=df_profile)
+    datasets = DatasetCatalog()
     input_plugin_names: list[str] = []
     if df_profile is not None:
         plugin = dataset_input_plugin(datasets, runtime_profile=df_profile)
@@ -86,7 +86,7 @@ def build_engine_session(
             {
                 "plugins": input_plugin_names,
                 "prefixes": list(input_plugin_prefixes()),
-                "dataset_registry": registry_snapshot(datasets.catalog),
+                "dataset_registry": registry_snapshot(datasets),
             },
         )
     return EngineSession(

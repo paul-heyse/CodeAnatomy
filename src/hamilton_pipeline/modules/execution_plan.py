@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.view_graph_registry import ViewNode
-    from ibis_engine.execution import IbisExecutionContext
     from incremental.plan_fingerprints import PlanFingerprintSnapshot
     from incremental.types import IncrementalConfig
     from relspec.incremental import IncrementalDiff
@@ -239,7 +238,6 @@ def _incremental_plan_diff_node(options: PlanModuleOptions) -> object:
         execution_plan: ExecutionPlan,
         incremental_config: IncrementalConfig,
         ctx: ExecutionContext,
-        ibis_execution: IbisExecutionContext,
     ) -> IncrementalDiff | None:
         if not incremental_config.enabled or incremental_config.state_dir is None:
             return None
@@ -274,7 +272,7 @@ def _incremental_plan_diff_node(options: PlanModuleOptions) -> object:
                 plan_signature=execution_plan.plan_signature,
                 total_tasks=len(current),
             )
-        write_plan_snapshots(state_store, current, execution=ibis_execution)
+        write_plan_snapshots(state_store, current)
         return diff
 
     return incremental_plan_diff

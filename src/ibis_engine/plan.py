@@ -16,7 +16,7 @@ from arrowdsl.schema.metadata import ordering_metadata_spec
 from arrowdsl.schema.schema import SchemaMetadataSpec
 
 if TYPE_CHECKING:
-    from datafusion_engine.view_artifacts import ViewArtifact
+    from datafusion_engine.view_artifacts import DataFusionViewArtifact
 
 
 @overload
@@ -63,7 +63,7 @@ class IbisPlan:
 
     expr: Table
     ordering: Ordering = field(default_factory=Ordering.unordered)
-    artifact: ViewArtifact | None = None
+    artifact: DataFusionViewArtifact | None = None
 
     def to_table(self, *, params: Mapping[Value, object] | None = None) -> TableLike:
         """Materialize the plan to an Arrow table.

@@ -10,6 +10,7 @@ __all__ = (
     "DeltaDataCheckRequest",
     "DeltaSchemaPolicy",
     "DeltaVacuumOptions",
+    "DeltaWriteOptions",
     "DeltaWritePolicy",
     "DeltaWriteResult",
     "FileIndexEntry",
@@ -41,6 +42,7 @@ __all__ = (
     "read_delta_cdf",
     "select_candidate_files",
     "vacuum_delta",
+    "write_delta_table",
 )
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
@@ -51,6 +53,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaCdfOptions": ("storage.deltalake.delta", "DeltaCdfOptions"),
     "DeltaDataCheckRequest": ("storage.deltalake.delta", "DeltaDataCheckRequest"),
     "DeltaVacuumOptions": ("storage.deltalake.delta", "DeltaVacuumOptions"),
+    "DeltaWriteOptions": ("storage.deltalake.delta", "DeltaWriteOptions"),
     "DeltaWriteResult": ("storage.deltalake.delta", "DeltaWriteResult"),
     "StorageOptions": ("storage.deltalake.delta", "StorageOptions"),
     "build_commit_properties": ("storage.deltalake.delta", "build_commit_properties"),
@@ -74,6 +77,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
         "query_delta_via_querybuilder",
     ),
     "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
+    "write_delta_table": ("storage.deltalake.delta", "write_delta_table"),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
     "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
     "build_delta_file_index": ("storage.deltalake.file_index", "build_delta_file_index"),
@@ -102,6 +106,7 @@ if TYPE_CHECKING:
     DeltaCdfOptions = _delta_io.DeltaCdfOptions
     DeltaDataCheckRequest = _delta_io.DeltaDataCheckRequest
     DeltaVacuumOptions = _delta_io.DeltaVacuumOptions
+    DeltaWriteOptions = _delta_io.DeltaWriteOptions
     DeltaWriteResult = _delta_io.DeltaWriteResult
     StorageOptions = _delta_io.StorageOptions
     build_commit_properties = _delta_io.build_commit_properties
@@ -122,6 +127,7 @@ if TYPE_CHECKING:
     query_builder_available = _query_builder.query_builder_available
     query_delta_via_querybuilder = _query_builder.query_delta_via_querybuilder
     read_delta_cdf = _delta_io.read_delta_cdf
+    write_delta_table = _delta_io.write_delta_table
     vacuum_delta = _delta_io.vacuum_delta
     FileIndexEntry = _file_index.FileIndexEntry
     build_delta_file_index = _file_index.build_delta_file_index

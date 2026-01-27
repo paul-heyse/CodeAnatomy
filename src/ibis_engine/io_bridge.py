@@ -24,6 +24,7 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.core.streaming import to_reader
 from core_types import PathLike
+from datafusion_engine.dataset_registry import resolve_delta_log_storage_options
 from datafusion_engine.diagnostics import recorder_for_profile
 from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from datafusion_engine.io_adapter import DataFusionIOAdapter
@@ -43,7 +44,6 @@ from engine.plan_policy import WriterStrategy
 from engine.plan_product import PlanProduct
 from ibis_engine.execution import IbisExecutionContext, execute_ibis_plan
 from ibis_engine.plan import IbisPlan
-from ibis_engine.registry import resolve_delta_log_storage_options
 from ibis_engine.runner import async_stream_plan
 from ibis_engine.sources import (
     DatabaseHint,
@@ -77,8 +77,8 @@ type DeltaInsertMode = Literal["append", "overwrite"]
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.runtime import DataFusionRuntimeProfile
-    from ibis_engine.registry import DatasetLocation
     from obs.datafusion_runs import DataFusionRun
 
 
@@ -1285,17 +1285,15 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
                     )
                 )
         write_request = WriteRequest(
-            source=source.source_expr,
+            source=source.source_expr.sql(dialect="datafusion"),
             destination=request.table_name,
             format=WriteFormat.DELTA,
             mode=WriteMode.OVERWRITE if request.mode == "overwrite" else WriteMode.APPEND,
             table_name=request.table_name,
             constraints=request.constraints,
         )
-        profile = _write_pipeline_profile()
         pipeline = WritePipeline(
             request.ctx,
-            profile,
             sql_options=statement_sql_options_for_profile(request.runtime_profile),
             recorder=recorder_for_profile(
                 request.runtime_profile,
@@ -1379,7 +1377,6 @@ def write_ibis_named_datasets_copy(
     profile = _write_pipeline_profile()
     pipeline = WritePipeline(
         df_ctx,
-        profile,
         sql_options=statement_sql_options_for_profile(runtime_profile),
         recorder=recorder_for_profile(runtime_profile, operation_id="ibis_copy_write"),
         runtime_profile=runtime_profile,
@@ -1442,7 +1439,7 @@ def _write_named_dataset_copy(
     )
     try:
         request = WriteRequest(
-            source=source.source_expr,
+            source=source.source_expr.sql(dialect="datafusion"),
             destination=str(target_path),
             format=context.write_format,
             mode=WriteMode.OVERWRITE if context.options.overwrite else WriteMode.ERROR,

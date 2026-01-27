@@ -1,8 +1,8 @@
 """Unified write pipeline for all DataFusion output paths.
 
 This module provides a single writing surface with explicit format policy,
-partitioning, and schema constraints while using AST-first compilation and
-DataFusion-native writers (streaming + DataFrame writes).
+partitioning, and schema constraints while using DataFusion-native writers
+(streaming + DataFrame writes).
 
 Canonical write surfaces (Scope 15)
 ------------------------------------
@@ -11,14 +11,13 @@ All write operations route through DataFusion-native APIs:
 1. **CSV/JSON/Arrow**: `DataFrame.write_csv()`, `DataFrame.write_json()`, Arrow IPC
 2. **Parquet**: `DataFrame.write_parquet()` with `DataFrameWriteOptions`
 3. **Table inserts**: `DataFrame.write_table()` with `InsertOp.APPEND/OVERWRITE`
-4. **Delta (transitional)**: Streaming writes via Ibis bridge until DataFusion
-   native Delta writer supports partitioning and schema evolution
+4. **Delta**: Streaming writes via Delta Lake writer with partitioning support
 
 Pattern
 -------
 >>> from datafusion import DataFrameWriteOptions
 >>> from datafusion_engine.write_pipeline import WritePipeline, WriteRequest, WriteFormat
->>> pipeline = WritePipeline(ctx, profile)
+>>> pipeline = WritePipeline(ctx)
 >>> request = WriteRequest(
 ...     source="SELECT * FROM events",
 ...     destination="/data/events",
@@ -30,8 +29,10 @@ Pattern
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -40,17 +41,14 @@ from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 from datafusion import DataFrameWriteOptions, InsertOp, SQLOptions
-
-from sqlglot_tools.compat import exp
+from datafusion.dataframe import DataFrame
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
-    from datafusion.dataframe import DataFrame
 
     from datafusion_engine.diagnostics import DiagnosticsRecorder
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.streaming_executor import StreamingExecutionResult
-from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 
 
@@ -80,7 +78,6 @@ class WriteMethod(Enum):
 
 
 @dataclass(frozen=True)
-@dataclass(frozen=True)
 class WriteRequest:
     """Unified write request specification.
 
@@ -90,7 +87,7 @@ class WriteRequest:
     Parameters
     ----------
     source
-        SQL query string or SQLGlot expression defining the source data.
+        DataFusion DataFrame or SQL query string defining the source data.
     destination
         Path or table name for output.
     format
@@ -115,7 +112,7 @@ class WriteRequest:
     ... )
     """
 
-    source: str | exp.Expression  # SQL query or AST
+    source: DataFrame | str
     destination: str  # Path or table name
     format: WriteFormat = WriteFormat.DELTA
     mode: WriteMode = WriteMode.ERROR
@@ -183,16 +180,14 @@ class WritePipeline:
     ----------
     ctx
         DataFusion session context.
-    profile
-        SQL policy profile for parsing external SQL sources.
+    sql_options
+        Optional SQL execution options for SQL ingress.
 
     Examples
     --------
     >>> from datafusion import SessionContext
-    >>> from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     >>> ctx = SessionContext()
-    >>> profile = SQLPolicyProfile()
-    >>> pipeline = WritePipeline(ctx, profile)
+    >>> pipeline = WritePipeline(ctx)
     >>> request = WriteRequest(
     ...     source="SELECT * FROM events",
     ...     destination="/data/events",
@@ -204,7 +199,6 @@ class WritePipeline:
     def __init__(
         self,
         ctx: SessionContext,
-        profile: SQLPolicyProfile,
         *,
         sql_options: SQLOptions | None = None,
         recorder: DiagnosticsRecorder | None = None,
@@ -216,8 +210,6 @@ class WritePipeline:
         ----------
         ctx
             DataFusion session context.
-        profile
-            SQL policy profile for SQL generation.
         sql_options
             Optional SQL execution options for COPY statements.
         recorder
@@ -226,7 +218,6 @@ class WritePipeline:
             Optional DataFusion runtime profile for Delta writes.
         """
         self.ctx = ctx
-        self.profile = profile
         self.sql_options = sql_options
         self.recorder = recorder
         self.runtime_profile = runtime_profile
@@ -241,80 +232,36 @@ class WritePipeline:
         batches = df.collect()
         return any(batch.num_rows > 0 for batch in batches)
 
-    def _source_expr(self, request: WriteRequest) -> exp.Expression:
-        if isinstance(request.source, exp.Expression):
+    def _execute_sql(self, sql: str) -> DataFrame:
+        return self.ctx.sql_with_options(sql, self._resolved_sql_options())
+
+    def _source_df(self, request: WriteRequest) -> DataFrame:
+        if isinstance(request.source, DataFrame):
             return request.source
-        from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
-
-        # DEPRECATED: SQLGlot-based SQL validation for DataFusion queries.
-        # For DataFusion query validation, prefer DataFusion's native SQL parser
-        # with SQLOptions for ingress gating.
-        return parse_sql_strict(
-            request.source,
-            dialect=self.profile.read_dialect or "datafusion",
-            options=StrictParseOptions(
-                error_level=self.profile.error_level,
-                unsupported_level=self.profile.unsupported_level,
-            ),
-        )
-
-    def _execute_expr(self, expr: exp.Expression) -> DataFrame:
-        from datafusion_engine.compile_options import DataFusionCompileOptions
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-        options = DataFusionCompileOptions(
-            sql_options=self._resolved_sql_options(),
-            sql_policy_profile=self.profile,
-            cache=False,
-        )
-        facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
-        plan = facade.compile(expr, options=options)
-        result = facade.execute(plan)
-        if result.dataframe is None:
-            msg = "AST execution did not return a DataFusion DataFrame."
-            raise ValueError(msg)
-        return result.dataframe
+        return self._execute_sql(request.source)
 
     def _validate_constraints(
         self,
         *,
-        source_expr: exp.Expression,
+        df: DataFrame,
         constraints: tuple[str, ...],
     ) -> None:
         if not constraints:
             return
-        from sqlglot_tools.optimizer import (
-            StrictParseOptions,
-            build_select,
-            parse_sql_strict,  # DEPRECATED: Use DataFusion's native SQL parser for validation
-        )
-
-        for constraint in constraints:
-            if not constraint.strip():
-                continue
-            # DEPRECATED: Use DataFusion's native SQL parser for validation instead
-            constraint_expr = parse_sql_strict(
-                constraint,
-                dialect=self.profile.read_dialect or "datafusion",
-                options=StrictParseOptions(
-                    error_level=self.profile.error_level,
-                    unsupported_level=self.profile.unsupported_level,
-                ),
-            )
-            subquery = exp.Subquery(
-                this=source_expr.copy(),
-                alias=exp.TableAlias(this=exp.to_identifier("input")),
-            )
-            query_expr = build_select(
-                [exp.Literal.number(1)],
-                from_=subquery,
-                where=exp.not_(constraint_expr),
-                limit=1,
-            )
-            df = self._execute_expr(query_expr)
-            if self._df_has_rows(df):
-                msg = f"Delta constraint violated: {constraint}"
-                raise ValueError(msg)
+        view_name = f"__write_constraints_{uuid.uuid4().hex}"
+        self.ctx.register_table(view_name, df)
+        try:
+            for constraint in constraints:
+                if not constraint.strip():
+                    continue
+                query = f"SELECT 1 FROM {view_name} WHERE NOT ({constraint}) LIMIT 1"
+                constraint_df = self._execute_sql(query)
+                if self._df_has_rows(constraint_df):
+                    msg = f"Delta constraint violated: {constraint}"
+                    raise ValueError(msg)
+        finally:
+            with contextlib.suppress(Exception):
+                self.ctx.deregister_table(view_name)
 
     def write_via_streaming(
         self,
@@ -349,10 +296,9 @@ class WritePipeline:
         from datafusion_engine.streaming_executor import StreamingExecutionResult
 
         start = time.perf_counter()
-        source_expr = self._source_expr(request)
+        df = self._source_df(request)
         if request.constraints:
-            self._validate_constraints(source_expr=source_expr, constraints=request.constraints)
-        df = self._execute_expr(source_expr)
+            self._validate_constraints(df=df, constraints=request.constraints)
         result = StreamingExecutionResult(df=df)
 
         table_target = self._table_target(request)
@@ -416,9 +362,8 @@ class WritePipeline:
 
         Notes
         -----
-        The unified writer always compiles from AST and executes a
-        DataFusion DataFrame. Delta uses streaming dataset writes;
-        other formats use DataFusion-native writers.
+        The unified writer executes a DataFusion DataFrame. Delta uses
+        streaming dataset writes; other formats use DataFusion-native writers.
         """
         _ = prefer_streaming
         return self.write_via_streaming(request)
@@ -444,7 +389,7 @@ class WritePipeline:
             Write result metadata.
         """
         write_request = WriteRequest(
-            source=exp.select("*").from_(request.view_name),
+            source=self.ctx.table(request.view_name),
             destination=request.destination,
             format=request.format,
             mode=request.mode,
@@ -535,17 +480,15 @@ class WritePipeline:
             write_options=DataFrameWriteOptions(insert_operation=insert_op),
         )
 
+    @staticmethod
     def _write_delta(
-        self,
         result: StreamingExecutionResult,
         *,
         request: WriteRequest,
     ) -> None:
         """Write Delta table via DataFusion-native streaming writer.
 
-        This method currently routes through the Ibis bridge for Delta writes
-        to handle edge cases (partitioning, schema evolution, constraints).
-        Future versions will use DataFusion's native Delta writer when available.
+        This method writes Delta tables directly using the Delta Lake writer.
 
         Parameters
         ----------
@@ -559,31 +502,17 @@ class WritePipeline:
         ValueError
             Raised when runtime profile is missing or destination already exists in ERROR mode.
         """
-        if self.runtime_profile is None:
-            msg = "Delta writes require a DataFusion runtime profile."
-            raise ValueError(msg)
         if request.mode == WriteMode.ERROR and Path(request.destination).exists():
             msg = f"Delta destination already exists: {request.destination}"
             raise ValueError(msg)
-        from ibis_engine.execution_factory import ibis_execution_from_profile
-        from ibis_engine.io_bridge import IbisDatasetWriteOptions, write_ibis_dataset_delta
-        from ibis_engine.sources import IbisDeltaWriteOptions
+        from deltalake import write_deltalake
 
-        delta_options = IbisDeltaWriteOptions(
+        write_deltalake(
+            request.destination,
+            result.to_arrow_stream(),
             mode=_delta_mode(request.mode),
             partition_by=list(request.partition_by) if request.partition_by else None,
             configuration=_delta_configuration(request.format_options),
-        )
-        execution = ibis_execution_from_profile(self.runtime_profile)
-        write_ibis_dataset_delta(
-            result.to_arrow_stream(),
-            request.destination,
-            options=IbisDatasetWriteOptions(
-                execution=execution,
-                writer_strategy="datafusion",
-                delta_options=delta_options,
-            ),
-            table_name=request.table_name,
         )
 
     def _write_csv(self, df: DataFrame, *, request: WriteRequest) -> None:

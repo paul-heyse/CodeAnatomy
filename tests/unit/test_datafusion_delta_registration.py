@@ -8,9 +8,9 @@ from typing import cast
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.registry import DatasetLocation
 from ibis_engine.sources import IbisDeltaWriteOptions
 from tests.utils import write_delta_table
 

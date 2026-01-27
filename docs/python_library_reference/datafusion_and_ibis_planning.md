@@ -3333,3 +3333,484 @@ Use **multi-layer fingerprints**, each with a clear purpose:
 [12]: https://docs.rs/datafusion-proto/latest/datafusion_proto/?search=&utm_source=chatgpt.com "\"\" Search - Rust"
 [13]: https://datafusion.apache.org/python/autoapi/datafusion/substrait/index.html "datafusion.substrait — Apache Arrow DataFusion  documentation"
 [14]: https://github.com/apache/datafusion/issues/9299 "Can't serialize example `ExecutionPlan` to substrait · Issue #9299 · apache/datafusion · GitHub"
+
+## Additional DataFusion planning surfaces worth wiring into an orchestration + lineage stack
+
+### 1) Plan object inspection beyond `inputs()` / `to_variant()`
+
+**LogicalPlan (Python) has richer rendering + serialization hooks than just `inputs()` / `to_variant()`:**
+
+* `display_graphviz()` emits DOT for Graphviz, which is ideal for *stable-ish* visual snapshots and node/edge diff tooling (vs parsing indent text). ([Apache DataFusion][1])
+* `display_indent()` and `display_indent_schema()` remain the most reliable “string fixtures” for golden tests and schema-oracle fallbacks. ([Apache DataFusion][1])
+* `to_proto()` / `from_proto(ctx, bytes)` exist for both logical and physical plans, but **do not support tables created in memory from record batches** (this limitation is called out on the Python plan types). ([Apache DataFusion][1])
+
+**ExecutionPlan (Python) similarly exposes:**
+
+* `children()` (structural traversal), `display_indent()` (text fixture), and `partition_count` (physical parallelism hint). ([Apache DataFusion][1])
+
+> Orchestration consequence: treat plan objects as providing **(a)** a traversal API, **(b)** multiple orthogonal renderers (`indent`, `graphviz`, `tree` via EXPLAIN), and **(c)** best-effort serialization with clear source-type constraints.
+
+---
+
+### 2) DataFrame lifecycle APIs that influence “planning-as-a-service”
+
+A lot of “planning capability” in DataFusion is actually surfaced on the **DataFrame** object (because it *is* a plan builder).
+
+Key methods you’ll likely want to snapshot/call from an orchestrator:
+
+* `logical_plan()`, `optimized_logical_plan()`, `execution_plan()` are explicit first-class accessors. ([Apache Arrow][2])
+* `explain(verbose=False, analyze=False)` exists (DataFrame-level alternative to SQL EXPLAIN). ([Apache Arrow][2])
+* `cache()` inserts a cache boundary (important when you’re doing multi-step orchestration and want explicit reuse boundaries). ([Apache Arrow][2])
+* `collect_partitioned()` preserves input partitioning on collection—useful when you want “same partitioning shape” diagnostics to line up with file_groups / partitions. ([Apache Arrow][2])
+* Streaming surfaces exist:
+
+  * `execute_stream()` / `execute_stream_partitioned()` (streaming execution)
+  * `__arrow_c_stream__()` exports an Arrow C Stream and explicitly states it executes using streaming APIs and supports only *simple projections* when a requested schema is supplied (subset/reorder only; no computed expressions/renames). ([Apache DataFusion][3])
+
+> Orchestration pattern: if your scheduler needs “don’t materialize everything”, treat DataFusion DataFrames as **streamable plans** and use `execute_stream*` / `__arrow_c_stream__()` as a first-class execution mode, not as an afterthought. ([Apache DataFusion][3])
+
+---
+
+### 3) EXPLAIN is a configurable planning API (not just debugging)
+
+DataFusion’s docs explicitly position EXPLAIN as a way to see plans without running the query and point to DataFrame::explain as the programmatic equivalent. ([Apache DataFusion][4])
+
+**SQL EXPLAIN surface area:**
+
+* Syntax: `EXPLAIN [ANALYZE] [VERBOSE] [FORMAT format] statement` ([Apache DataFusion][5])
+* `EXPLAIN VERBOSE` only supports `indent` format. ([Apache DataFusion][5])
+* `FORMAT tree` exists and is described as modeled after DuckDB plans (often easier to diff structurally than indent). ([Apache DataFusion][5])
+* `EXPLAIN ANALYZE` metrics detail can be controlled by `datafusion.explain.analyze_level` and per-partition metrics are available via `EXPLAIN ANALYZE VERBOSE`. ([Apache DataFusion][5])
+
+**Session-level controls for EXPLAIN output** (high leverage for golden fixtures and orchestration metadata):
+
+* `datafusion.explain.logical_plan_only` / `physical_plan_only` (limit output) ([Apache DataFusion][6])
+* `datafusion.explain.show_statistics`, `show_sizes`, `show_schema` ([Apache DataFusion][6])
+* `datafusion.explain.format` (`indent` vs `tree`) + `tree_maximum_render_width` ([Apache DataFusion][6])
+* `datafusion.explain.analyze_level` (`summary` vs `dev`) ([Apache DataFusion][6])
+
+**Important semantic boundary:** DataFusion’s “Reading Explain Plans” guide emphasizes the physical plan depends on hardware and data organization (files/CPUs) and thus can differ across environments—so treat physical plan artifacts as *execution hints*, not semantic truth. ([Apache DataFusion][4])
+
+---
+
+### 4) SessionContext / SessionConfig knobs that materially change plan shape
+
+Python docs show `SessionContext` takes a `SessionConfig` and a `RuntimeEnvBuilder`, and demonstrate toggles that directly affect planning outcomes (catalog/schema defaults, target partitions, information schema, repartitioning, parquet pruning, and arbitrary config keys like parquet filter pushdown). ([Apache DataFusion][7])
+
+Example knobs that are “planning-relevant” (not just performance):
+
+* `with_target_partitions(N)` and repartition toggles (joins/aggs/windows) can insert/remove repartition operators and change physical partition counts. ([Apache DataFusion][7])
+* `with_information_schema(True)` enables metadata tables/SHOW commands used for catalog-driven orchestration. ([Apache DataFusion][7])
+* Parquet pruning / pushdown flags directly change scan nodes and what becomes `partial_filters` / scan predicates. ([Apache DataFusion][7])
+
+At the “global config” level, there are optimizer and execution options that *change pushdown behavior and thus your scheduling surface*, such as enabling dynamic filter pushdown, sort pushdown, and various join/agg repartitioning behaviors. ([Apache DataFusion][6])
+
+---
+
+### 5) SQL parser + source-span capture (for deterministic canonicalization and provenance)
+
+If you’re canonicalizing plans and want to map lineage back to SQL locations, the config surface includes:
+
+* `datafusion.sql_parser.dialect` (Generic, Postgres, DuckDB, etc.) ([Apache DataFusion][6])
+* `datafusion.sql_parser.enable_ident_normalization` (identifier case normalization) ([Apache DataFusion][6])
+* `datafusion.sql_parser.collect_spans` to record source locations (“Span”) in logical plan nodes ([Apache DataFusion][6])
+* Recursion limit and type parsing toggles (`parse_float_as_decimal`, etc.) that can change expression typing / AST shape. ([Apache DataFusion][6])
+
+> For orchestration: “collect spans” is the missing glue between (a) plan nodes and (b) user-authored SQL, making it much easier to generate *actionable* lineage diagnostics that point back to the exact predicate/projection text. ([Apache DataFusion][6])
+
+---
+
+### 6) Catalog + metadata planning primitives: `information_schema` and SHOW commands
+
+DataFusion supports ISO `information_schema` views and DataFusion-specific commands like `SHOW TABLES`, `SHOW COLUMNS`, `SHOW ALL`, and `SHOW FUNCTIONS`. ([Apache DataFusion][8])
+
+Practical orchestration uses:
+
+* `information_schema.tables` / `SHOW TABLES` for dataset discovery and dependency validation ([Apache DataFusion][8])
+* `information_schema.columns` / `SHOW COLUMNS` for schema contracts and required-column validation ([Apache DataFusion][8])
+* `information_schema.df_settings` / `SHOW ALL` to snapshot the *effective session planning config* as part of your plan fingerprint bundle ([Apache DataFusion][8])
+
+---
+
+### 7) Prepared statements + parameterized queries: plan reuse as a first-class planning feature
+
+DataFusion SQL supports `PREPARE` / `EXECUTE` with typed or inferred parameters, explicitly described as enabling repeated execution efficiently. ([Apache DataFusion][9])
+
+DataFusion Python adds **parameterized queries** with named placeholders (introduced in DataFusion-Python 51.0.0), explains string conversion caveats, and documents `param_values` for preserving exact Python-object values; it also notes DataFrame parameters may register temporary views in the SessionContext and warns about sessions needing temp-view support. ([Apache DataFusion][10])
+
+> For orchestration: prepared statements / parameterized queries are the “official” way to separate **plan shape** from **runtime values**, which is exactly what you want for stable plan caching keys and incremental recomputation. ([Apache DataFusion][9])
+
+---
+
+### 8) Programmatic plan construction + plan rewriting ecosystems (often overlooked)
+
+#### 8.1 Building logical plans directly (Rust-level, but defines the conceptual model)
+
+DataFusion documents:
+
+* `LogicalPlan` is an enum of operator variants and includes an `Extension` variant for custom logical operators. ([Apache DataFusion][11])
+* `LogicalPlanBuilder` is the recommended way to programmatically build plans; the DataFrame API delegates to it. ([Apache DataFusion][11])
+* Logical plans must be compiled to physical plans (ExecutionPlan), e.g. via `SessionState::create_physical_plan` (Rust). ([Apache DataFusion][11])
+
+#### 8.2 Query optimizer as a plan transformation pipeline
+
+The Query Optimizer docs emphasize:
+
+* an extensive set of `OptimizerRule` and `PhysicalOptimizerRule` can rewrite plans/expressions ([Apache DataFusion][12])
+* the optimizer can be run with an observer that sees the plan after each rule (great for generating “why did this schedule change?” traces). ([Apache DataFusion][12])
+* expression naming has two canonical forms: `display_name` for schema naming and `canonical_name` for equivalence checks. ([Apache DataFusion][12])
+* the TreeNode API is the recommended way (Rust-side) to recursively walk expressions/plans and find subqueries/joins; conceptually important even if you reimplement similar traversal in Python. ([Apache DataFusion][12])
+
+#### 8.3 Extending SQL planning (custom operators/types/relations)
+
+DataFusion documents a dedicated extension system where extension planners intercept SQL AST during `SqlToRel`:
+
+* `ExprPlanner` (custom expressions/operators), `TypePlanner` (custom SQL types), `RelationPlanner` (custom FROM elements), including registration methods and planner precedence rules. ([Apache DataFusion][13])
+
+#### 8.4 Extending operators via optimizer rules (logical and physical)
+
+The “Extending Operators” guide explicitly frames operator extension as transforming `LogicalPlan` and `ExecutionPlan` using customized optimizer rules, and gives an example of rewriting a logical plan into a `LogicalPlan::TableScan` backed by a `MemTable`. ([Apache DataFusion][14])
+
+---
+
+### 9) TableProvider scan semantics (pushdown truth table matters for scheduling)
+
+The Custom Table Provider guide is explicit about scan-time contracts:
+
+* `TableProvider::scan` is “likely the most important” method and returns an `ExecutionPlan`. ([Apache DataFusion][15])
+* `supports_filters_pushdown` can return per-filter pushdown classifications:
+
+  * `Unsupported`, `Exact`, `Inexact`, and DataFusion will re-apply `Inexact` filters after the scan for correctness. ([Apache DataFusion][15])
+* `scan` receives `projection`, `filters`, and `limit`—all of which are explicit pushdown opportunities. ([Apache DataFusion][15])
+* The guide also points at `ListingTableProvider`, `FileFormat`, and `FileOpener` as the abstraction set for file-backed providers (directly relevant to file-group scheduling and custom pruning indexes). ([Apache DataFusion][15])
+
+> Orchestration consequence: your “pushdown predicate” model should be *three-valued* (Unsupported / Exact / Inexact) rather than boolean, because `Inexact` implies **residual correctness filters remain above scan** even if you see scan-level predicate application. ([Apache DataFusion][15])
+
+---
+
+### 10) File-level scheduling: don’t ignore COPY/CREATE EXTERNAL TABLE options
+
+Two often-missed planning surfaces that affect file scheduling:
+
+1. **EXPLAIN outputs encode file work units** (`DataSourceExec` lines show file/range groupings; see Reading Explain Plans for how file counts/ranges appear and how physical plans depend on file organization). ([Apache DataFusion][4])
+2. **Write paths introduce partition-parallel file emission**: the Format Options guide notes that when writing via `COPY ... PARTITIONED BY (...)`, DataFusion writes one Parquet file in parallel “for each partition in the query,” and options precedence can come from CREATE EXTERNAL TABLE / COPY options / session defaults. ([Apache DataFusion][16])
+
+If you schedule “materialization steps” (writes) as tasks, you’ll want to snapshot:
+
+* the *write* partitioning shape (logical + physical partitions),
+* and the resolved format options (session defaults vs statement overrides). ([Apache DataFusion][16])
+
+---
+
+### 11) Plan interchange + canonicalization: Substrait + Unparser are first-class Python modules
+
+**Substrait (Python)**
+
+* `datafusion.substrait` provides:
+
+  * `Serde.serialize_bytes()` / `deserialize_bytes()`
+  * `Producer.to_substrait_plan(logical_plan, ctx)` + `Plan.encode()`
+  * `Consumer.from_substrait_plan(ctx, plan)` ([Apache DataFusion][17])
+* Substrait itself is defined as a format for describing compute operations on structured data designed for interoperability. ([Substrait][18])
+
+**Unparser (Python)**
+
+* `datafusion.unparser` provides `Unparser.plan_to_sql(plan)` plus selectable dialects and pretty-printing. ([Apache DataFusion][19])
+
+> Orchestration implication: you can build a robust “plan bundle” with three orthogonal canonical forms:
+>
+> * LogicalPlan (structured) → Substrait bytes (portable fingerprint)
+> * LogicalPlan (structured) → SQL (diffable, SQLGlot-friendly)
+> * LogicalPlan/ExecutionPlan → indent/tree/graphviz renderings (golden fixtures + debugging)
+
+Also note: Python plan protobuf serialization (`to_proto`) exists but is explicitly constrained by in-memory record-batch sources. ([Apache DataFusion][1])
+And even at the Rust crate level, upgrade guides show serde API shifts (e.g., datafusion-proto physical plan serde expecting TaskContext rather than SessionContext), which is a practical reminder that protobuf-based persistence is more brittle than Substrait + SQL snapshots. ([Apache DataFusion][20])
+
+---
+
+## Practical “next wiring” checklist for your orchestrator
+
+If you’re extending your current approach, the highest-impact additional signals to add to your bundle are:
+
+1. **Graphviz DOT** for logical plans (`LogicalPlan.display_graphviz`) alongside indent fixtures. ([Apache DataFusion][1])
+2. **EXPLAIN config snapshot** from `information_schema.df_settings` / `SHOW ALL` embedded in every plan bundle (so changes in pushdown flags explain scheduling changes). ([Apache DataFusion][8])
+3. **EXPLAIN tree format** for structural diffs + `EXPLAIN VERBOSE` (indent-only) for full intermediate plans when debugging optimizer-driven rewrites. ([Apache DataFusion][5])
+4. **Substrait bytes** as your primary plan fingerprint (`Serde.serialize_bytes` or `Producer.to_substrait_plan(...).encode()`) + Unparser SQL for human diffing. ([Apache DataFusion][17])
+5. **Pushdown truth model** (Unsupported/Exact/Inexact) from provider capabilities, so file-level scheduling doesn’t over-assume scan-level predicates imply correctness. ([Apache DataFusion][15])
+6. **Prepared/parameterized query surfaces** for stable plan reuse: PREPARE/EXECUTE and Python named parameters with `param_values` when type fidelity matters. ([Apache DataFusion][9])
+
+[1]: https://datafusion.apache.org/python/autoapi/datafusion/plan/index.html "datafusion.plan — Apache Arrow DataFusion  documentation"
+[2]: https://arrow.staged.apache.org/datafusion-python/generated/datafusion.DataFrame.html "datafusion.DataFrame — Apache Arrow DataFusion  documentation"
+[3]: https://datafusion.apache.org/python/autoapi/datafusion/dataframe/index.html "datafusion.dataframe — Apache Arrow DataFusion  documentation"
+[4]: https://datafusion.apache.org/user-guide/explain-usage.html "Reading Explain Plans — Apache DataFusion  documentation"
+[5]: https://datafusion.apache.org/user-guide/sql/explain.html "EXPLAIN — Apache DataFusion  documentation"
+[6]: https://datafusion.apache.org/user-guide/configs.html "Configuration Settings — Apache DataFusion  documentation"
+[7]: https://datafusion.apache.org/python/user-guide/configuration.html "Configuration — Apache Arrow DataFusion  documentation"
+[8]: https://datafusion.apache.org/user-guide/sql/information_schema.html "Information Schema — Apache DataFusion  documentation"
+[9]: https://datafusion.apache.org/user-guide/sql/prepared_statements.html "Prepared Statements — Apache DataFusion  documentation"
+[10]: https://datafusion.apache.org/python/user-guide/sql.html "SQL — Apache Arrow DataFusion  documentation"
+[11]: https://datafusion.apache.org/library-user-guide/building-logical-plans.html "Building Logical Plans — Apache DataFusion  documentation"
+[12]: https://datafusion.apache.org/library-user-guide/query-optimizer.html "Query Optimizer — Apache DataFusion  documentation"
+[13]: https://datafusion.apache.org/library-user-guide/extending-sql.html "Extending SQL Syntax — Apache DataFusion  documentation"
+[14]: https://datafusion.apache.org/library-user-guide/extending-operators.html "Extending Operators — Apache DataFusion  documentation"
+[15]: https://datafusion.apache.org/library-user-guide/custom-table-providers.html "Custom Table Provider — Apache DataFusion  documentation"
+[16]: https://datafusion.apache.org/user-guide/sql/format_options.html "Format Options — Apache DataFusion  documentation"
+[17]: https://datafusion.apache.org/python/autoapi/datafusion/substrait/index.html "datafusion.substrait — Apache Arrow DataFusion  documentation"
+[18]: https://substrait.io/?utm_source=chatgpt.com "Home - Substrait: Cross-Language Serialization for Relational ..."
+[19]: https://datafusion.apache.org/python/autoapi/datafusion/unparser/index.html "datafusion.unparser — Apache Arrow DataFusion  documentation"
+[20]: https://datafusion.apache.org/library-user-guide/upgrading.html?utm_source=chatgpt.com "Upgrade Guides — Apache DataFusion documentation"
+
+## Additional DataFusion planning capabilities worth modeling explicitly
+
+What follows is a “second-pass” deep dive over DataFusion’s planning surface area—focused on **APIs and behaviors that materially affect plan inspection, lineage extraction, scheduling, caching, and distributed execution**, and that are easy to miss if you only wire `optimized_logical_plan()/to_variant()/inputs()` + `execution_plan()/children()`.
+
+---
+
+### 1) Plan presentation formats that remove the need to parse `indent` strings
+
+If you’re still primarily scraping `display_indent()` / `EXPLAIN FORMAT INDENT`, DataFusion now offers **structured (or at least more machine-friendly) plan outputs** you can treat as first-class artifacts.
+
+#### 1.1 SQL `EXPLAIN FORMAT` now has multiple “serialization-like” formats
+
+The SQL docs enumerate several formats beyond `indent`/`tree`, including:
+
+* `tree` (high-level structure)
+* `indent` (one line per operator; includes both logical + physical)
+* `pgjson` (Postgres JSON–modeled; designed to work with existing plan visualization tools like dalibo)
+* `graphviz` (DOT language output) ([Apache DataFusion][1])
+
+Also note:
+
+* `EXPLAIN ANALYZE` only supports `indent` format, and `EXPLAIN VERBOSE` only supports `indent` format. ([Apache DataFusion][1])
+* When you omit `FORMAT`, the format comes from `datafusion.explain.format`, so **your harness should always set the config or specify `FORMAT`** to avoid drift. ([Apache DataFusion][1])
+
+**Why you should care:** `pgjson` is effectively “plan-as-JSON” without needing to reverse-engineer `indent` text, and `graphviz` is stable enough for visual diffs and topology checks.
+
+#### 1.2 Rust-level plan renderers that matter even in Python systems
+
+On the Rust `LogicalPlan`, there are dedicated display helpers:
+
+* `display_pg_json()` and `display_graphviz()` exist as explicit renderers (and describe their intended usage). ([Docs.rs][2])
+
+Even if Python bindings don’t surface every renderer directly, the SQL `EXPLAIN FORMAT PGJSON/GRAPHVIZ` route gives you those artifacts in a portable way. ([Apache DataFusion][1])
+
+**Practical recommendation:**
+In your plan bundle, store **both**:
+
+* `EXPLAIN FORMAT PGJSON …` output (for machine parsing / tooling)
+* `EXPLAIN FORMAT GRAPHVIZ …` output (for visual diffs / debugging)
+
+---
+
+### 2) Plan provenance and deterministic mapping back to SQL text
+
+If you’re generating scheduling diagnostics (“this filter caused pruning”, “this join introduced a dynamic filter”), it’s far more useful when you can map plan fragments back to the originating SQL span.
+
+#### 2.1 Source-span capture
+
+There is a config option:
+
+* `datafusion.sql_parser.collect_spans`: when enabled, DataFusion collects and records source locations (“Span”) into logical plan nodes. ([Apache DataFusion][3])
+
+**Why it matters for orchestration:** you can attach “why” diagnostics to the precise sub-expression location, not just a stringified predicate.
+
+#### 2.2 SQL parser normalization knobs that affect canonicalization
+
+Also in config:
+
+* dialect selection (`datafusion.sql_parser.dialect`)
+* identifier normalization (`enable_ident_normalization`)
+* recursion limit, and type-mapping flags ([Apache DataFusion][3])
+
+If you fingerprint plans based on SQL text, these options can change AST/plan shape and must be captured in your plan bundle (e.g., `SHOW ALL` / `information_schema.df_settings` snapshots—if you use them).
+
+---
+
+### 3) SQL ↔ Plan round-tripping as a planning capability (not just debugging)
+
+#### 3.1 Python unparser module (`datafusion.unparser`)
+
+DataFusion Python exposes `Unparser.plan_to_sql(plan)` and dialect helpers (`Dialect.postgres()`, `Dialect.duckdb()`, etc.), plus `with_pretty()`. ([Apache DataFusion][4])
+
+This lets you:
+
+* extract logical plans structurally,
+* modify/normalize them,
+* then **emit canonical SQL** for SQLGlot lineage and/or human diffs.
+
+#### 3.2 “Plan to SQL” is a strategic capability (federation + pushdown)
+
+The DataFusion 40.0.0 release highlights converting `Expr` and `LogicalPlan` back to SQL as a core feature, explicitly noting use cases like predicate pushdown into other systems and query generation. ([Apache DataFusion][5])
+
+**Orchestration payoff:** your canonical expression normalizer can choose from:
+
+* DataFusion `Expr.canonical_name()` (engine-native stable strings)
+* DataFusion `plan_to_sql()` (diffable + SQLGlot-compatible)
+* Substrait bytes (portable structured fingerprint)
+
+---
+
+### 4) Plan reuse is an explicit first-class planning feature (PREPARE + Python named params)
+
+#### 4.1 SQL prepared statements (`PREPARE` / `EXECUTE`)
+
+DataFusion documents prepared statements and shows:
+
+* typed parameters,
+* inferred types,
+* positional arguments with multiple params,
+* repeated execution “in an efficient manner.” ([Apache DataFusion][6])
+
+This is a planning surface because it separates **plan shape** from **runtime values**, enabling stable plan caching keys and repeatable execution.
+
+#### 4.2 Python “parameterized queries” (named placeholders)
+
+DataFusion Python adds named parameters (introduced in 51.0.0), with important behaviors:
+
+* Python objects are converted to string representations
+* DataFrame parameters are special-cased by registering a temporary view with a generated name
+* Named placeholders don’t work for some SQL dialects (`hive`, `mysql`). ([Apache DataFusion][7])
+
+**Orchestration implication:**
+If you accept `ctx.sql(query, **params)` in your scheduling API, you must treat:
+
+* parameter payloads,
+* any temp-view registrations,
+* and the configured dialect
+  as part of the plan bundle / fingerprint story.
+
+---
+
+### 5) Plans as *objects* that can be created, injected, and executed partition-by-partition
+
+This is one of the most important “planning capability clusters” for orchestration and distributed execution.
+
+#### 5.1 Construct DataFrames from existing plans
+
+Python `SessionContext` supports:
+
+* `create_dataframe_from_logical_plan(plan)` → DataFrame from an existing `LogicalPlan`. ([Apache DataFusion][8])
+
+This is the missing glue for “plan on coordinator, execute later” pipelines (especially when combined with Substrait).
+
+#### 5.2 Execute physical plans directly (partitioned execution)
+
+Python `SessionContext.execute(plan, partitions)` executes an `ExecutionPlan` and returns a record batch stream. ([Apache DataFusion][8])
+
+This is effectively a “manual scheduler hook”: you can choose *which partitions* to run and when.
+
+#### 5.3 DataFrame streaming execution
+
+The Python DataFrame exposes:
+
+* `execute_stream()` (single-partition stream)
+* `execute_stream_partitioned()` (one stream per partition)
+* `explain(verbose, analyze)` which can run the plan and report metrics ([Apache DataFusion][9])
+
+**Orchestration payoff:** you can align your scheduler’s “work units” with physical partitions and stream results without forcing a full collect.
+
+---
+
+### 6) File-level scheduling is deeper than `file_groups` parsing
+
+Most orchestrators stop at “parse `DataSourceExec.file_groups`”. DataFusion’s file planning stack has additional primitives that can change how file groups are formed and how pruning happens.
+
+#### 6.1 FileGroup-aware splitting and repartitioning based on statistics (Rust-level, scheduling-relevant)
+
+`FileScanConfig` provides helpers to **split file groups using min/max statistics** to enable parallelism while maintaining sort order and non-overlap constraints. ([Docs.rs][10])
+
+This matters because your “file groups” are not just a static property—they can be transformed by target-partition settings and statistics-aware grouping.
+
+Also note the `DataSource` trait on `FileScanConfig` supports repartitioning files by size (`repartitioned(...)`), which interacts with configs like `target_partitions` and `repartition_file_min_size`. ([Docs.rs][10])
+
+#### 6.2 Dynamic filters change scan predicates *during execution*
+
+DataFusion’s dynamic filters (blogged in 2025) show that:
+
+* `DataSourceExec.predicate` can contain a placeholder (`true`) prior to execution,
+* and is updated during execution (e.g., TopK / join-derived filters), enabling additional file/row skipping beyond static plan inspection. ([Apache DataFusion][11])
+
+**Scheduling implication:**
+A “static plan bundle” can’t fully predict scan pruning. Your scheduler should treat dynamic-filter-enabled scans as “late-binding”: still schedule file groups, but expect effective pruning to evolve during execution.
+
+#### 6.3 Low-level Parquet pruning and user-supplied access plans
+
+The DataFusion 40.0.0 release notes “Low Level APIs for Fast Parquet Access (indexing)” and introduces `ParquetAccessPlan` as a way for users to supply pruning info to skip decoding parts of files—explicitly positioned as useful alongside index information and object-store access optimization. ([Apache DataFusion][5])
+
+This is highly relevant if you’re building external indexes (or CPG-like metadata stores) and want scan-time pruning beyond what the optimizer infers.
+
+#### 6.4 Built-in metadata inspection for Parquet (CLI-level function, operationally useful)
+
+The CLI ships a `parquet_metadata` table function that exposes row-group stats and sizes for Parquet files. ([Apache DataFusion][12])
+
+Even if it’s “CLI-specific”, the concept is important: DataFusion has a first-class notion of exposing Parquet metadata for debugging and design decisions. If you build file-level schedulers, you can use the same metadata ideas (stats_min/max, row counts, compressed sizes) as inputs to grouping and pruning decisions.
+
+---
+
+### 7) Custom catalogs and schemas in Python and Rust (planning surface, not just metadata)
+
+DataFusion Python explicitly supports **Catalogs written in Python or Rust**, with guidance on:
+
+* implementing `CatalogProvider` in Python,
+* exporting a Rust catalog via PyO3,
+* and the subtlety that Python access may return the original Python object rather than a wrapper around a Rust wrapper. ([Apache DataFusion][13])
+
+For orchestration:
+
+* dataset identity resolution (`catalog.schema.table`) becomes a first-class mapping problem,
+* and catalog-provider behavior must be captured in your plan bundle (especially if it influences table resolution, view expansion, and function availability).
+
+---
+
+### 8) Plan persistence and interchange: Substrait is “the portable layer”, proto is “best-effort”
+
+#### 8.1 LogicalPlan / ExecutionPlan proto serialization limitations (Python)
+
+Python plan docs are explicit:
+
+* `LogicalPlan.to_proto()` / `from_proto(ctx, bytes)` and similar exist
+* but **tables created in memory from record batches are currently not supported**. ([Apache DataFusion][14])
+
+So proto persistence is not universally applicable if your workloads include in-memory tables (`create_dataframe`, `register_record_batches`, etc.).
+
+#### 8.2 Substrait in Python
+
+DataFusion Python supports serializing and deserializing query plans in Substrait format (noted as a feature) ([PyPI][15]), and exposes `datafusion.substrait` APIs (e.g., `Serde.serialize_bytes(sql, ctx)` in earlier work).
+
+**Recommendation for plan bundles:**
+
+* primary fingerprint: Substrait bytes hash
+* secondary: canonical SQL (via unparser) + SQLGlot AST hash
+* debug: `EXPLAIN FORMAT PGJSON` + `FORMAT GRAPHVIZ` snapshots
+* best-effort: DF proto hashes when sources permit
+
+---
+
+## Concrete “completeness upgrades” to your existing PlanBundle
+
+If you already store `(logical_indent, physical_indent, file_groups, substrait_hash, ibis_unbound_repr)`, the most meaningful additions are:
+
+1. **`EXPLAIN FORMAT PGJSON`** snapshot as your primary machine-friendly plan extraction (no indent parsing). ([Apache DataFusion][1])
+2. **`EXPLAIN FORMAT GRAPHVIZ`** snapshot for topology diffs / visual debugging. ([Apache DataFusion][1])
+3. **Session-level config snapshot** of `datafusion.explain.*` and `datafusion.sql_parser.*` (spans/dialect/normalization), because they change plan output and canonicalization behavior. ([Apache DataFusion][3])
+4. **Prepared/parameterized-query metadata**: record whether you used SQL `PREPARE`/`EXECUTE` or Python named params and whether DataFrame params created temp views. ([Apache DataFusion][6])
+5. **Dynamic-filter awareness**: tag scans where runtime predicate updates are expected (don’t over-interpret the static predicate in `DataSourceExec`). ([Apache DataFusion][11])
+6. **File-group shaping factors**: capture `target_partitions`, `repartition_file_min_size`, and whether file statistics collection is enabled for the listing provider (these affect group formation). ([Docs.rs][10])
+7. If you’re building external indexes: model `ParquetAccessPlan`-style “user-supplied pruning plans” as a first-class input to scan scheduling. ([Apache DataFusion][5])
+
+
+[1]: https://datafusion.apache.org/user-guide/sql/explain.html "EXPLAIN — Apache DataFusion  documentation"
+[2]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html "LogicalPlan in datafusion_expr::logical_plan - Rust"
+[3]: https://datafusion.apache.org/user-guide/configs.html "Configuration Settings — Apache DataFusion  documentation"
+[4]: https://datafusion.apache.org/python/autoapi/datafusion/unparser/index.html "datafusion.unparser — Apache Arrow DataFusion  documentation"
+[5]: https://datafusion.apache.org/blog/2024/07/24/datafusion-40.0.0/ "Apache DataFusion 40.0.0 Released - Apache DataFusion Blog"
+[6]: https://datafusion.apache.org/user-guide/sql/prepared_statements.html "Prepared Statements — Apache DataFusion  documentation"
+[7]: https://datafusion.apache.org/python/user-guide/sql.html "SQL — Apache Arrow DataFusion  documentation"
+[8]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[9]: https://datafusion.apache.org/python/autoapi/datafusion/dataframe/index.html "datafusion.dataframe — Apache Arrow DataFusion  documentation"
+[10]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html "FileScanConfig in datafusion::datasource::physical_plan - Rust"
+[11]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters/ "Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries - Apache DataFusion Blog"
+[12]: https://datafusion.apache.org/user-guide/cli/functions.html "CLI Specific Functions — Apache DataFusion  documentation"
+[13]: https://datafusion.apache.org/python/user-guide/data-sources.html "Data Sources — Apache Arrow DataFusion  documentation"
+[14]: https://datafusion.apache.org/python/autoapi/datafusion/plan/index.html "datafusion.plan — Apache Arrow DataFusion  documentation"
+[15]: https://pypi.org/project/datafusion/25.0.0/ "datafusion · PyPI"

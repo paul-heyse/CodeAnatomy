@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         def_use_events_df_builder,
         diagnostics_df_builder,
         reaching_defs_df_builder,
+        span_errors_df_builder,
         type_exprs_df_builder,
         type_nodes_df_builder,
     )
@@ -78,6 +79,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "def_use_events_df_builder": ("normalize.df_view_builders", "def_use_events_df_builder"),
     "diagnostics_df_builder": ("normalize.df_view_builders", "diagnostics_df_builder"),
     "reaching_defs_df_builder": ("normalize.df_view_builders", "reaching_defs_df_builder"),
+    "span_errors_df_builder": ("normalize.df_view_builders", "span_errors_df_builder"),
     "type_exprs_df_builder": ("normalize.df_view_builders", "type_exprs_df_builder"),
     "type_nodes_df_builder": ("normalize.df_view_builders", "type_nodes_df_builder"),
     "DiagnosticsSources": ("normalize.ibis_api", "DiagnosticsSources"),
@@ -182,6 +184,7 @@ __all__ = [
     "normalize_types",
     "reaching_defs_df_builder",
     "run_reaching_defs",
+    "span_errors_df_builder",
     "type_exprs_df_builder",
     "type_nodes_df_builder",
 ]

@@ -1,4 +1,4 @@
-"""AST-first view specifications for DataFusion integration."""
+"""DataFusion-first view specifications for registry views."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from dataclasses import dataclass
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
-from sqlglot.schema import MappingSchema
 
 from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.schema_contracts import (
@@ -18,12 +17,6 @@ from datafusion_engine.schema_contracts import (
     SchemaViolationType,
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector
-from datafusion_engine.sql_policy_engine import (
-    SQLPolicyProfile,
-    compile_sql_policy,
-    render_for_execution,
-)
-from sqlglot_tools.compat import Expression
 
 
 class ViewSchemaMismatchError(ValueError):
@@ -37,8 +30,6 @@ class ViewSpecInputs:
     ctx: SessionContext
     name: str
     builder: Callable[[SessionContext], DataFrame]
-    ast: Expression
-    sql: str | None = None
     schema: pa.Schema | None = None
 
 
@@ -48,55 +39,32 @@ def view_spec_from_builder(inputs: ViewSpecInputs) -> ViewSpec:
     Parameters
     ----------
     inputs:
-        DataFusion session context used to build the view AST.
+        DataFusion session context used to resolve the view schema.
 
     Returns
     -------
     ViewSpec
-        View specification with a canonical SQLGlot AST.
+        View specification derived from a DataFusion builder.
 
-    Raises
-    ------
-    ValueError
-        Raised when the view does not expose a SQLGlot AST.
     """
-    ast = inputs.ast
-    if ast is None:
-        msg = f"View {inputs.name!r} missing SQLGlot AST."
-        raise ValueError(msg)
-    canonical_sql = inputs.sql
-    if ast is not None:
-        profile = SQLPolicyProfile()
-        try:
-            schema_map = SchemaIntrospector(inputs.ctx).schema_map()
-            canonical_ast, _artifacts = compile_sql_policy(
-                ast,
-                schema=MappingSchema(dict(schema_map)),
-                profile=profile,
-                original_sql=inputs.sql,
-            )
-            canonical_sql = render_for_execution(canonical_ast, profile)
-            ast = canonical_ast
-        except (RuntimeError, TypeError, ValueError):
-            canonical_sql = inputs.sql
+    schema = inputs.schema
+    if schema is None:
+        df = inputs.builder(inputs.ctx)
+        schema = _arrow_schema_from_df(df)
     return ViewSpec(
         name=inputs.name,
-        sql=canonical_sql,
-        schema=inputs.schema,
+        schema=schema,
         builder=inputs.builder,
-        sqlglot_ast=ast,
     )
 
 
 @dataclass(frozen=True)
 class ViewSpec:
-    """AST-first view definition."""
+    """DataFusion-first view definition."""
 
     name: str
-    sql: str | None
     schema: pa.Schema | None = None
     builder: Callable[[SessionContext], DataFrame] | None = None
-    sqlglot_ast: Expression | None = None
 
     def describe(
         self,
@@ -124,14 +92,27 @@ class ViewSpec:
         Raises
         ------
         ValueError
-            Raised when the view lacks SQL and AST for describe output.
+            Raised when the view lacks a builder and is not registered.
         """
-        if introspector is None:
-            introspector = SchemaIntrospector(ctx, sql_options=sql_options)
-        if self.sqlglot_ast is not None:
-            return introspector.describe_expression(self.sqlglot_ast)
-        msg = f"View {self.name!r} missing SQLGlot AST for describe."
-        raise ValueError(msg)
+        if self.builder is None:
+            if introspector is None:
+                introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+            try:
+                df = ctx.table(self.name)
+            except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+                msg = f"View {self.name!r} missing builder and registration."
+                raise ValueError(msg) from exc
+        else:
+            df = self.builder(ctx)
+        schema = _arrow_schema_from_df(df)
+        return [
+            {
+                "column_name": field.name,
+                "data_type": str(field.type),
+                "nullable": field.nullable,
+            }
+            for field in schema
+        ]
 
     def register(
         self,
@@ -197,22 +178,25 @@ class ViewSpec:
     def _resolve_schema(self, ctx: SessionContext, *, sql_options: SQLOptions | None) -> pa.Schema:
         _ = sql_options
         try:
-            return ctx.table(self.name).schema()
+            return _arrow_schema_from_df(ctx.table(self.name))
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             if self.builder is not None:
-                df = self.builder(ctx)
-                schema = df.schema()
-                if isinstance(schema, pa.Schema):
-                    return schema
-                to_arrow = getattr(schema, "to_arrow", None)
-                if callable(to_arrow):
-                    resolved = to_arrow()
-                    if isinstance(resolved, pa.Schema):
-                        return resolved
-                msg = "Failed to resolve DataFusion schema."
-                raise TypeError(msg) from exc
+                return _arrow_schema_from_df(self.builder(ctx))
             msg = f"View {self.name!r} does not define a builder."
             raise ValueError(msg) from exc
+
+
+def _arrow_schema_from_df(df: DataFrame) -> pa.Schema:
+    schema = df.schema()
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Failed to resolve DataFusion schema."
+    raise TypeError(msg)
 
 
 def _schema_metadata_violations(

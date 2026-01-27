@@ -18,7 +18,7 @@ import pyarrow.dataset as ds
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext, SQLOptions
 
-from datafusion_engine.compile_options import DataFusionSqlPolicy
+from datafusion import SQLOptions
 
 
 @dataclass(frozen=True)
@@ -241,7 +241,7 @@ class StreamingExecutor:
             Optional SQL options to apply for query execution.
         """
         self.ctx = ctx
-        self.sql_options = sql_options or DataFusionSqlPolicy().to_sql_options()
+        self.sql_options = sql_options or SQLOptions()
 
     def execute_sql(
         self,
@@ -270,7 +270,7 @@ class StreamingExecutor:
         Raises
         ------
         ValueError
-            Raised when SQL fails safety validation.
+            Raised when scalar parameters are provided for SQL execution.
 
         Examples
         --------
@@ -278,43 +278,14 @@ class StreamingExecutor:
         >>> table = result.to_table()
         """
         resolved_options = sql_options or self.sql_options
-        from sqlglot.errors import ParseError
+        from datafusion_engine.param_binding import register_table_params, resolve_param_bindings
 
-        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
-        from datafusion_engine.sql_safety import sanitize_external_sql
-        from sqlglot_tools.optimizer import (
-            StrictParseOptions,
-            parse_sql_strict,  # DEPRECATED: Use DataFusion's native SQL parser for validation
-            register_datafusion_dialect,
-        )
-
-        options = DataFusionCompileOptions(
-            sql_options=resolved_options,
-            sql_policy=DataFusionSqlPolicy(),
-            params=params or None,
-        )
-        facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
-        # DEPRECATED: SQLGlot-based SQL validation for DataFusion queries.
-        # For DataFusion query ingress, prefer DataFusion's native SQL parser
-        # with SQLOptions gating.
-        try:
-            register_datafusion_dialect()
-            sanitized = sanitize_external_sql(sql)
-            expr = parse_sql_strict(
-                sanitized,
-                dialect=options.dialect,
-                options=StrictParseOptions(preserve_params=True),
-            )
-        except (ParseError, TypeError, ValueError) as exc:
-            msg = "Streaming SQL parse failed."
-            raise ValueError(msg) from exc
-        plan = facade.compile(expr, options=options)
-        result = facade.execute(plan)
-        if result.dataframe is None:
-            msg = "Streaming SQL did not return a DataFusion DataFrame."
+        bindings = resolve_param_bindings(params or None)
+        if bindings.param_values:
+            msg = "Scalar SQL parameters are not supported for streaming execution."
             raise ValueError(msg)
-        df = result.dataframe
+        with register_table_params(self.ctx, bindings):
+            df = self.ctx.sql_with_options(sql, resolved_options)
         return StreamingExecutionResult(df=df)
 
     def from_table(
@@ -337,7 +308,7 @@ class StreamingExecutor:
         Examples
         --------
         >>> from datafusion_engine.execution_facade import DataFusionExecutionFacade
-        >>> from ibis_engine.registry import DatasetLocation
+        >>> from datafusion_engine.dataset_registry import DatasetLocation
         >>> facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
         >>> facade.register_dataset(
         ...     name="events",

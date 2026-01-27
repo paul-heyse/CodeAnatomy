@@ -22,8 +22,8 @@ if TYPE_CHECKING:
     import pyarrow as pa
     from diskcache import Deque, Index
 
+    from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.runtime import DataFusionRuntimeProfile
-    from ibis_engine.registry import DatasetLocation
 
 
 class _ArrowBatch(Protocol):

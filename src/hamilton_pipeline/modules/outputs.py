@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TypeVar
 
 import pyarrow as pa
 from hamilton.function_modifiers import (
@@ -22,12 +22,13 @@ from arrowdsl.core.interop import TableLike
 from core_types import JsonDict
 from hamilton_pipeline.pipeline_types import OutputConfig
 from hamilton_pipeline.validators import NonEmptyTableValidator
-from ibis_engine.io_bridge import IbisDatasetWriteOptions, IbisDeltaWriteOptions
-from storage.io import write_ibis_dataset_delta
+from storage.deltalake import (
+    DeltaWriteOptions,
+    delta_schema_configuration,
+    delta_write_configuration,
+    write_delta_table,
+)
 from storage.ipc import payload_hash
-
-if TYPE_CHECKING:
-    from ibis_engine.execution import IbisExecutionContext
 
 
 def _rows(table: TableLike) -> int:
@@ -86,7 +87,6 @@ def _delta_write(
     *,
     output_config: OutputConfig,
     dataset_name: str,
-    ibis_execution: IbisExecutionContext,
 ) -> JsonDict:
     base_dir = output_config.output_dir or output_config.work_dir
     if not base_dir:
@@ -94,29 +94,27 @@ def _delta_write(
         raise ValueError(msg)
     target_dir = Path(base_dir) / dataset_name
     target_dir.mkdir(parents=True, exist_ok=True)
-    delta_options = IbisDeltaWriteOptions(
-        mode="overwrite",
-        schema_mode="overwrite",
-        commit_metadata={
-            "dataset_name": dataset_name,
-            "schema_fingerprint": payload_hash(
-                {"schema": list(getattr(table.schema, "names", []))},
-                pa.schema([pa.field("schema", pa.list_(pa.string()))]),
-            ),
-        },
-    )
-    result = write_ibis_dataset_delta(
+    configuration: dict[str, str | None] = {}
+    if output_config.delta_write_policy is not None:
+        configuration.update(delta_write_configuration(output_config.delta_write_policy) or {})
+    if output_config.delta_schema_policy is not None:
+        configuration.update(delta_schema_configuration(output_config.delta_schema_policy) or {})
+    result = write_delta_table(
         table,
         str(target_dir),
-        options=IbisDatasetWriteOptions(
-            execution=ibis_execution,
-            writer_strategy="datafusion",
-            delta_options=delta_options,
-            delta_write_policy=output_config.delta_write_policy,
-            delta_schema_policy=output_config.delta_schema_policy,
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={
+                "dataset_name": dataset_name,
+                "schema_fingerprint": payload_hash(
+                    {"schema": list(getattr(table.schema, "names", []))},
+                    pa.schema([pa.field("schema", pa.list_(pa.string()))]),
+                ),
+            },
+            configuration=configuration or None,
             storage_options=output_config.delta_storage_options,
         ),
-        table_name=dataset_name,
     )
     return {
         "path": str(target_dir),
@@ -218,7 +216,6 @@ def cpg_props(cpg_props_final: TableLike) -> TableLike:
 def write_cpg_nodes_delta(
     cpg_nodes: TableLike,
     output_config: OutputConfig,
-    ibis_execution: IbisExecutionContext,
 ) -> JsonDict:
     """Return stub metadata for CPG nodes output.
 
@@ -231,7 +228,6 @@ def write_cpg_nodes_delta(
         cpg_nodes,
         output_config=output_config,
         dataset_name="cpg_nodes",
-        ibis_execution=ibis_execution,
     )
 
 
@@ -240,7 +236,6 @@ def write_cpg_nodes_delta(
 def write_cpg_edges_delta(
     cpg_edges: TableLike,
     output_config: OutputConfig,
-    ibis_execution: IbisExecutionContext,
 ) -> JsonDict:
     """Return stub metadata for CPG edges output.
 
@@ -253,7 +248,6 @@ def write_cpg_edges_delta(
         cpg_edges,
         output_config=output_config,
         dataset_name="cpg_edges",
-        ibis_execution=ibis_execution,
     )
 
 
@@ -262,7 +256,6 @@ def write_cpg_edges_delta(
 def write_cpg_props_delta(
     cpg_props: TableLike,
     output_config: OutputConfig,
-    ibis_execution: IbisExecutionContext,
 ) -> JsonDict:
     """Return stub metadata for CPG properties output.
 
@@ -275,7 +268,6 @@ def write_cpg_props_delta(
         cpg_props,
         output_config=output_config,
         dataset_name="cpg_props",
-        ibis_execution=ibis_execution,
     )
 
 
@@ -284,7 +276,6 @@ def write_cpg_props_delta(
 def write_cpg_nodes_quality_delta(
     cpg_nodes: TableLike,
     output_config: OutputConfig,
-    ibis_execution: IbisExecutionContext,
 ) -> JsonDict:
     """Return stub metadata for CPG node quality output.
 
@@ -297,7 +288,6 @@ def write_cpg_nodes_quality_delta(
         cpg_nodes,
         output_config=output_config,
         dataset_name="cpg_nodes_quality",
-        ibis_execution=ibis_execution,
     )
 
 
@@ -306,7 +296,6 @@ def write_cpg_nodes_quality_delta(
 def write_cpg_props_quality_delta(
     cpg_props: TableLike,
     output_config: OutputConfig,
-    ibis_execution: IbisExecutionContext,
 ) -> JsonDict:
     """Return stub metadata for CPG prop quality output.
 
@@ -319,7 +308,6 @@ def write_cpg_props_quality_delta(
         cpg_props,
         output_config=output_config,
         dataset_name="cpg_props_quality",
-        ibis_execution=ibis_execution,
     )
 
 
@@ -328,7 +316,6 @@ def write_cpg_props_quality_delta(
 def write_cpg_props_json_delta(
     cpg_props: TableLike,
     output_config: OutputConfig,
-    ibis_execution: IbisExecutionContext,
 ) -> JsonDict:
     """Return stub metadata for CPG props JSON output.
 
@@ -341,7 +328,6 @@ def write_cpg_props_json_delta(
         cpg_props,
         output_config=output_config,
         dataset_name="cpg_props_json",
-        ibis_execution=ibis_execution,
     )
 
 

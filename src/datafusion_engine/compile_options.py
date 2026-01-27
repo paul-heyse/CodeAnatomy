@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from datafusion import SQLOptions
 
-from sqlglot_tools.optimizer import SqlGlotSurface, sqlglot_surface_policy
-
 if TYPE_CHECKING:
-    from ibis.expr.types import Expr, Value
-
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.runtime import DataFusionRuntimeProfile
-    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     from engine.plan_cache import PlanCache
-    from sqlglot_tools.compat import Expression
-    from sqlglot_tools.optimizer import SqlGlotPolicy
 
     ExplainRows = TableLike | RecordBatchReaderLike
 else:
@@ -100,35 +93,29 @@ def resolve_sql_policy(
 class DataFusionCacheEvent:
     """Diagnostics payload for DataFusion cache decisions.
 
-    DEPRECATED: ast_fingerprint and policy_hash are deprecated.
-    Use plan_fingerprint from DataFusionPlanBundle instead.
+    Uses plan_fingerprint from DataFusionPlanBundle.
     """
 
     cache_enabled: bool
     cache_max_columns: int | None
     column_count: int
     reason: str
-    ast_fingerprint: str | None = None  # DEPRECATED: Use plan_fingerprint instead
-    policy_hash: str | None = None  # DEPRECATED: Use plan_fingerprint instead
     profile_hash: str | None = None
-    plan_fingerprint: str | None = None  # Preferred over ast_fingerprint + policy_hash
+    plan_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
 class DataFusionSubstraitFallbackEvent:
     """Diagnostics payload for Substrait fallback decisions.
 
-    DEPRECATED: ast_fingerprint and policy_hash are deprecated.
-    Use plan_fingerprint from DataFusionPlanBundle instead.
+    Uses plan_fingerprint from DataFusionPlanBundle.
     """
 
     reason: str
     expr_type: str
-    ast_fingerprint: str | None = None  # DEPRECATED: Use plan_fingerprint instead
-    policy_hash: str | None = None  # DEPRECATED: Use plan_fingerprint instead
     profile_hash: str | None = None
     run_id: str | None = None
-    plan_fingerprint: str | None = None  # Preferred over ast_fingerprint + policy_hash
+    plan_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -144,9 +131,7 @@ class DataFusionDmlOptions:
     params: Mapping[str, object] | None = None
     named_params: Mapping[str, object] | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
-    dialect: str = field(
-        default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_DML).dialect
-    )
+    dialect: str = "datafusion"
     record_hook: Callable[[Mapping[str, object]], None] | None = None
 
 
@@ -160,9 +145,8 @@ class DataFusionCompileOptions:
     cache: bool | None = None
     cache_max_columns: int | None = 64
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None = None
-    params: Mapping[str, object] | Mapping[Value, object] | None = None
+    params: Mapping[str, object] | None = None
     named_params: Mapping[str, object] | None = None
-    ibis_expr: Expr | None = None
     param_identifier_allowlist: tuple[str, ...] | None = None
     prepared_statements: bool = True
     prepared_param_types: Mapping[str, str] | None = None
@@ -171,11 +155,9 @@ class DataFusionCompileOptions:
     sql_policy_name: str | None = None
     enforce_sql_policy: bool = True
     enforce_preflight: bool = True
-    dialect: str = field(
-        default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_COMPILE).dialect
-    )
+    dialect: str = "datafusion"
     enable_rewrites: bool = True
-    rewrite_hook: Callable[[Expression], Expression] | None = None
+    rewrite_hook: Callable[[object], object] | None = None
     sql_ingest_hook: Callable[[Mapping[str, object]], None] | None = None
     capture_explain: bool = False
     explain_analyze: bool = False
@@ -187,17 +169,12 @@ class DataFusionCompileOptions:
     diagnostics_allow_sql: bool = False
     substrait_plan_override: bytes | None = None
     capture_semantic_diff: bool = False
-    semantic_diff_base_expr: Expression | None = None
+    semantic_diff_base_expr: object | None = None
     semantic_diff_base_sql: str | None = None
     semantic_diff_hook: Callable[[Mapping[str, object]], None] | None = None
     plan_cache: PlanCache | None = None
-    ast_fingerprint: str | None = None  # DEPRECATED: Use plan_fingerprint from bundle
-    policy_hash: str | None = None  # DEPRECATED: Use plan_fingerprint from bundle
     profile_hash: str | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
-    sqlglot_policy: SqlGlotPolicy | None = None  # DEPRECATED: Use DataFusion-native planning
-    sqlglot_policy_hash: str | None = None  # DEPRECATED: Use plan_fingerprint from bundle
-    sql_policy_profile: SQLPolicyProfile | None = None  # DEPRECATED: Use DataFusion-native
     run_id: str | None = None
     prefer_substrait: bool = False
     prefer_ast_execution: bool = True

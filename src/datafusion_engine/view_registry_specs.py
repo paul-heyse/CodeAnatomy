@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal, cast
+from functools import partial
+from typing import TYPE_CHECKING, Literal
 
-import ibis
 import pyarrow as pa
 
-from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.core.ordering import Ordering, OrderingLevel
-from arrowdsl.core.runtime_profiles import runtime_profile_factory
-from arrowdsl.schema.build import empty_table
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import (
     function_requirements_metadata_spec,
     merge_metadata_specs,
@@ -22,33 +18,21 @@ from arrowdsl.schema.metadata import (
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from cpg.specs import TaskIdentity
 from datafusion_engine.lineage_datafusion import extract_lineage
-from datafusion_engine.nested_tables import ViewReference
-from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundle
+from datafusion_engine.plan_bundle import build_plan_bundle
+from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
 from datafusion_engine.schema_contracts import SchemaContract
-from datafusion_engine.schema_introspection import table_names_snapshot
-from datafusion_engine.sqlglot_exprs import sqlglot_ast_from_dataframe
 from datafusion_engine.udf_runtime import udf_names_from_snapshot, validate_rust_udf_snapshot
 from datafusion_engine.view_graph_registry import ViewNode
-from ibis_engine.catalog import IbisPlanCatalog
-from ibis_engine.plan import IbisPlan
-from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
-from sqlglot_tools.compat import Expression
-from sqlglot_tools.lineage import referenced_tables, referenced_udf_calls
-from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_sql
-from sqlglot_tools.view_builders import select_all
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
-    from ibis.backends import BaseBackend
-    from ibis.expr.types import Table
 
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-    from ibis_engine.catalog import IbisPlanSource
+    from datafusion_engine.plan_bundle import DataFusionPlanBundle
     from schema_spec.system import DatasetSpec
-    from sqlglot_tools.bridge import IbisCompilerBackend
 
-    DataFusionLogicalPlan = None
+
+DataFrameBuilder = Callable[["SessionContext"], "DataFrame"]
 
 
 def _merge_metadata_specs(specs: Sequence[SchemaMetadataSpec]) -> SchemaMetadataSpec:
@@ -111,105 +95,36 @@ def _metadata_from_dataset_spec(spec: DatasetSpec) -> SchemaMetadataSpec:
     return _merge_metadata_specs([spec.metadata_spec, ordering])
 
 
-def _required_udfs_from_ast(
-    expr: Expression,
-    snapshot: Mapping[str, object],
-) -> tuple[str, ...]:
-    udf_calls = referenced_udf_calls(expr)
-    if not udf_calls:
-        return ()
-    snapshot_names = udf_names_from_snapshot(snapshot)
-    lookup = {name.lower(): name for name in snapshot_names}
-    required = {
-        lookup[name.lower()]
-        for name in udf_calls
-        if isinstance(name, str) and name.lower() in lookup
-    }
-    return tuple(sorted(required))
-
-
 def _required_udfs_from_plan_bundle(
     bundle: DataFusionPlanBundle,
     snapshot: Mapping[str, object],
 ) -> tuple[str, ...]:
-    """Extract required UDFs from a DataFusion plan bundle.
-
-    This extracts UDF references from the optimized logical plan display
-    and validates them against the snapshot.
-
-    Parameters
-    ----------
-    bundle
-        DataFusion plan bundle containing optimized logical plan.
-    snapshot
-        Rust UDF registry snapshot for validation.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Sorted tuple of required UDF names.
-    """
-    # Get the optimized plan display string
-    plan_display = bundle.display_optimized_plan()
-    if plan_display is None:
+    required = extract_udfs_from_plan_bundle(bundle)
+    if not required:
         return ()
-
-    # Parse UDF calls from the plan display
-    # This is a heuristic approach - we look for function calls in the display
     snapshot_names = udf_names_from_snapshot(snapshot)
     lookup = {name.lower(): name for name in snapshot_names}
-
-    # Search for potential UDF calls in the plan display
-    import re
-
-    # Pattern matches function calls like: function_name(...)
-    pattern = r"\b([a-zA-Z_]\w*)\s*\("
-    matches = re.findall(pattern, plan_display)
-
-    required = {
-        lookup[name.lower()] for name in matches if isinstance(name, str) and name.lower() in lookup
-    }
-    return tuple(sorted(required))
+    resolved = {lookup[name.lower()] for name in required if name.lower() in lookup}
+    return tuple(sorted(resolved))
 
 
-def _deps_from_ast(expr: Expression) -> tuple[str, ...]:
-    return tuple(referenced_tables(expr))
-
-
-def _deps_from_plan_bundle(bundle: DataFusionPlanBundle) -> tuple[str, ...]:
-    """Extract dependencies from a DataFusion plan bundle.
-
-    Parameters
-    ----------
-    bundle
-        DataFusion plan bundle containing optimized logical plan.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Sorted tuple of referenced table names.
-    """
-    lineage = extract_lineage(bundle.optimized_logical_plan)
-    return lineage.referenced_tables
-
-
-def _ibis_expr_from_sqlglot(
-    build_ctx: ViewBuildContext,
-    expr: Expression,
+def _bundle_deps_and_udfs(
+    ctx: SessionContext,
+    builder: DataFrameBuilder,
+    snapshot: Mapping[str, object],
     *,
     label: str,
-) -> Table:
-    policy = resolve_sqlglot_policy(name="datafusion_compile")
-    sql = sqlglot_sql(expr, policy=policy)
-    sql_func = getattr(build_ctx.backend, "sql", None)
-    if not callable(sql_func):
-        msg = f"Backend does not support SQL compilation for view {label!r}."
-        raise TypeError(msg)
+) -> tuple[DataFusionPlanBundle, tuple[str, ...], tuple[str, ...]]:
+    df = builder(ctx)
+    bundle = build_plan_bundle(ctx, df, compute_execution_plan=False)
     try:
-        return cast("Table", sql_func(sql))
+        lineage = extract_lineage(bundle.optimized_logical_plan)
     except (RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to build Ibis expression for view {label!r}."
+        msg = f"Failed to extract lineage for view {label!r}."
         raise ValueError(msg) from exc
+    deps = lineage.referenced_tables
+    required = _required_udfs_from_plan_bundle(bundle, snapshot)
+    return bundle, deps, required
 
 
 def _arrow_schema_from_df(df: DataFrame) -> pa.Schema:
@@ -237,200 +152,6 @@ def _arrow_schema_from_contract(schema: SchemaLike) -> pa.Schema:
     raise TypeError(msg)
 
 
-def _arrow_schema_from_ibis(plan: IbisPlan | Table) -> pa.Schema:
-    expr = plan.expr if isinstance(plan, IbisPlan) else plan
-    schema = expr.schema()
-    to_pyarrow = getattr(schema, "to_pyarrow", None)
-    if callable(to_pyarrow):
-        resolved = to_pyarrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    msg = "Failed to resolve Ibis schema."
-    raise TypeError(msg)
-
-
-@dataclass(frozen=True)
-class ViewBuildContext:
-    """Shared context for building Ibis-backed view DataFrames."""
-
-    ctx: SessionContext
-    snapshot: Mapping[str, object]
-    backend: BaseBackend
-    exec_ctx: ExecutionContext
-    facade: DataFusionExecutionFacade
-    catalog: IbisPlanCatalog
-
-    @classmethod
-    def from_session(
-        cls,
-        ctx: SessionContext,
-        *,
-        snapshot: Mapping[str, object],
-    ) -> ViewBuildContext:
-        """Build a view context from a SessionContext and snapshot.
-
-        Parameters
-        ----------
-        ctx
-            DataFusion session context for view registration.
-        snapshot
-            Rust UDF registry snapshot for validation and wiring.
-
-        Returns
-        -------
-        ViewBuildContext
-            Ready-to-use view build context.
-        """
-        validate_rust_udf_snapshot(snapshot)
-        backend = _ibis_backend(ctx, snapshot=snapshot)
-        runtime = replace(runtime_profile_factory("default"), datafusion=None)
-        exec_ctx = ExecutionContext(runtime=runtime)
-        catalog = _catalog_for_ctx(ctx, backend)
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-        facade = DataFusionExecutionFacade(
-            ctx=ctx,
-            runtime_profile=None,
-            ibis_backend=cast("IbisCompilerBackend", backend),
-        )
-        return cls(
-            ctx=ctx,
-            snapshot=snapshot,
-            backend=backend,
-            exec_ctx=exec_ctx,
-            facade=facade,
-            catalog=catalog,
-        )
-
-    def plan_and_ast(
-        self,
-        plan_builder: Callable[..., IbisPlan | Table | None],
-        *,
-        builder_kwargs: Mapping[str, object] | None = None,
-        label: str | None = None,
-    ) -> tuple[IbisPlan | Table, Expression]:
-        """Build a plan and SQLGlot AST from a plan builder.
-
-        Parameters
-        ----------
-        plan_builder
-            Callable returning an Ibis plan for the view.
-        builder_kwargs
-            Optional keyword arguments passed into the plan builder.
-        label
-            Optional label for diagnostics/errors.
-
-        Returns
-        -------
-        tuple[IbisPlan | Table, Expression]
-            The built plan and compiled SQLGlot AST.
-
-        Raises
-        ------
-        ValueError
-            Raised when the plan builder returns None.
-        """
-        kwargs = dict(builder_kwargs or {})
-        plan = plan_builder(self.catalog, self.exec_ctx, self.backend, **kwargs)
-        if plan is None:
-            msg = f"View builder {label or plan_builder.__name__} returned None."
-            raise ValueError(msg)
-        expr = plan.expr if isinstance(plan, IbisPlan) else plan
-        from datafusion_engine.compile_options import DataFusionCompileOptions
-        from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-
-        compiled = self.facade.compile(
-            expr,
-            options=DataFusionCompileOptions(sql_policy_profile=SQLPolicyProfile()),
-        )
-        return plan, compiled.compiled.sqlglot_ast
-
-    def register_plan(self, name: str, plan: IbisPlan | Table) -> None:
-        """Register a derived plan into the shared catalog."""
-        if isinstance(plan, IbisPlan):
-            self.catalog.add(name, plan)
-            return
-        ibis_plan = IbisPlan(expr=plan, ordering=Ordering.unordered())
-        self.catalog.add(name, ibis_plan)
-
-    def register_schema(self, name: str, schema: pa.Schema) -> None:
-        """Register an empty-schema placeholder for a derived view."""
-        contract = SchemaContract.from_arrow_schema(name, schema)
-        empty = empty_table(contract.to_arrow_schema())
-        plan = register_ibis_table(
-            empty,
-            options=SourceToIbisOptions(
-                backend=self.backend,
-                name=None,
-                ordering=Ordering.unordered(),
-                runtime_profile=self.exec_ctx.runtime.datafusion,
-            ),
-        )
-        self.catalog.add(name, plan)
-
-    def builder_from_plan(
-        self,
-        plan: IbisPlan | Table,
-        *,
-        label: str | None = None,
-    ) -> Callable[[SessionContext], DataFrame]:
-        """Wrap a pre-built plan into a DataFusion view builder.
-
-        Parameters
-        ----------
-        plan
-            Ibis plan or table expression for the view.
-        label
-            Optional label for diagnostics/errors.
-
-        Returns
-        -------
-        Callable[[SessionContext], DataFrame]
-            View builder that returns a DataFusion DataFrame.
-        """
-
-        def _build(actual_ctx: SessionContext) -> DataFrame:
-            _ensure_ctx(actual_ctx, self.ctx, label=label)
-            return _plan_to_dataframe(actual_ctx, plan, self.facade)
-
-        return _build
-
-    def builder(
-        self,
-        plan_builder: Callable[..., IbisPlan | Table | None],
-        *,
-        builder_kwargs: Mapping[str, object] | None = None,
-        label: str | None = None,
-    ) -> Callable[[SessionContext], DataFrame]:
-        """Wrap a plan builder into a DataFusion view builder.
-
-        Parameters
-        ----------
-        plan_builder
-            Callable returning an Ibis plan for the view.
-        builder_kwargs
-            Optional keyword arguments passed into the plan builder.
-        label
-            Optional label for diagnostics/errors.
-
-        Returns
-        -------
-        Callable[[SessionContext], DataFrame]
-            View builder function that returns a DataFusion DataFrame.
-        """
-        plan, _ = self.plan_and_ast(
-            plan_builder,
-            builder_kwargs=builder_kwargs,
-            label=label,
-        )
-        return self.builder_from_plan(plan, label=label)
-
-
 def view_graph_nodes(
     ctx: SessionContext,
     *,
@@ -452,93 +173,63 @@ def view_graph_nodes(
     if stage not in {"all", "pre_cpg", "cpg"}:
         msg = f"Unsupported view graph stage: {stage!r}."
         raise ValueError(msg)
-    build_ctx = ViewBuildContext.from_session(ctx, snapshot=snapshot)
+    validate_rust_udf_snapshot(snapshot)
     nodes: list[ViewNode] = []
     if stage in {"all", "pre_cpg"}:
-        nodes.extend(_normalize_view_nodes(build_ctx))
-        nodes.extend(_relspec_view_nodes(build_ctx))
-        nodes.extend(_symtable_view_nodes(build_ctx))
+        nodes.extend(_normalize_view_nodes(ctx, snapshot=snapshot))
+        nodes.extend(_relspec_view_nodes(ctx, snapshot=snapshot))
+        nodes.extend(_symtable_view_nodes(ctx, snapshot=snapshot))
     if stage in {"all", "cpg"}:
-        nodes.extend(_cpg_view_nodes(build_ctx))
-    nodes.extend(_alias_nodes(nodes, build_ctx=build_ctx))
+        nodes.extend(_cpg_view_nodes(ctx, snapshot=snapshot))
+    nodes.extend(_alias_nodes(nodes, ctx=ctx, snapshot=snapshot))
     return tuple(nodes)
 
 
-def _normalize_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
+def _normalize_view_nodes(
+    ctx: SessionContext,
+    *,
+    snapshot: Mapping[str, object],
+) -> list[ViewNode]:
+    from normalize.dataset_rows import DATASET_ROWS
     from normalize.dataset_specs import dataset_contract_schema, dataset_spec
-    from normalize.view_builders import normalize_view_specs
+    from normalize.df_view_builders import VIEW_BUILDERS
 
     nodes: list[ViewNode] = []
-    for spec in normalize_view_specs():
-        plan, ast = build_ctx.plan_and_ast(spec.builder, label=spec.label)
-        build_ctx.register_plan(spec.name, plan)
-        required = _required_udfs_from_ast(ast, build_ctx.snapshot)
-        dataset = dataset_spec(spec.name)
+    for row in DATASET_ROWS:
+        if not row.register_view:
+            continue
+        builder = VIEW_BUILDERS.get(row.name)
+        if builder is None:
+            msg = f"Missing DataFusion builder for normalize view {row.name!r}."
+            raise KeyError(msg)
+        dataset = dataset_spec(row.name)
         metadata = _metadata_from_dataset_spec(dataset)
+        expected_schema = _arrow_schema_from_contract(dataset_contract_schema(row.name))
+        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=row.name)
         metadata = _metadata_with_required_udfs(metadata, required)
-        expected_schema = _arrow_schema_from_contract(dataset_contract_schema(spec.name))
-        ibis_expr = plan.expr if isinstance(plan, IbisPlan) else plan
-
-        # Build plan bundle for DataFusion-native lineage
-        df = build_ctx.builder_from_plan(plan, label=spec.label)(build_ctx.ctx)
-        plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
-
         nodes.append(
             ViewNode(
-                name=spec.name,
-                deps=_deps_from_ast(ast),
-                builder=build_ctx.builder_from_plan(plan, label=spec.label),
+                name=row.name,
+                deps=deps,
+                builder=builder,
                 contract_builder=_contract_builder(
-                    spec.name,
+                    row.name,
                     metadata_spec=metadata,
                     expected_schema=expected_schema,
                     enforce_columns=True,
                 ),
                 required_udfs=required,
-                sqlglot_ast=ast,
-                ibis_expr=ibis_expr,
-                plan_bundle=plan_bundle,
+                plan_bundle=bundle,
             )
         )
     return nodes
 
 
-def _view_node_from_sqlglot(
-    build_ctx: ViewBuildContext,
+def _relspec_view_nodes(
+    ctx: SessionContext,
     *,
-    name: str,
-    expr: Expression,
-    schema_metadata: SchemaMetadataSpec | None = None,
-) -> ViewNode:
-    compiled = build_ctx.facade.compile(expr)
-    canonical_ast = compiled.compiled.sqlglot_ast
-    ibis_expr = _ibis_expr_from_sqlglot(build_ctx, canonical_ast, label=name)
-
-    def _build(actual_ctx: SessionContext) -> DataFrame:
-        _ensure_ctx(actual_ctx, build_ctx.ctx, label=name)
-        result = build_ctx.facade.execute(compiled)
-        return result.require_dataframe()
-
-    required = _required_udfs_from_ast(canonical_ast, build_ctx.snapshot)
-    metadata = _metadata_with_required_udfs(schema_metadata, required)
-
-    # Build plan bundle for DataFusion-native lineage
-    df = _build(build_ctx.ctx)
-    plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
-
-    return ViewNode(
-        name=name,
-        deps=_deps_from_ast(canonical_ast),
-        builder=_build,
-        contract_builder=_contract_builder(name, metadata_spec=metadata),
-        required_udfs=required,
-        sqlglot_ast=canonical_ast,
-        ibis_expr=ibis_expr,
-        plan_bundle=plan_bundle,
-    )
-
-
-def _relspec_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
+    snapshot: Mapping[str, object],
+) -> list[ViewNode]:
     from relspec.contracts import (
         rel_callsite_qname_metadata_spec,
         rel_callsite_symbol_metadata_spec,
@@ -566,80 +257,81 @@ def _relspec_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
     )
 
     priority = DEFAULT_REL_TASK_PRIORITY
-
-    def _rel_view_node_df(
-        name: str,
-        *,
-        builder: Callable[[SessionContext], DataFrame],
-        metadata: SchemaMetadataSpec,
-    ) -> ViewNode:
-        df = builder(build_ctx.ctx)
-        build_ctx.register_schema(name, _arrow_schema_from_df(df))
-        ast = sqlglot_ast_from_dataframe(df)
-        deps = _deps_from_ast(ast)
-        required = _required_udfs_from_ast(ast, build_ctx.snapshot)
-        metadata_with_udfs = _metadata_with_required_udfs(metadata, required)
-        ibis_expr = _ibis_expr_from_sqlglot(build_ctx, ast, label=name)
-
-        # Build plan bundle for DataFusion-native lineage
-        plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
-
-        return ViewNode(
-            name=name,
-            deps=deps,
-            builder=builder,
-            contract_builder=_contract_builder(name, metadata_spec=metadata_with_udfs),
-            required_udfs=required,
-            sqlglot_ast=ast,
-            ibis_expr=ibis_expr,
-            plan_bundle=plan_bundle,
-        )
-
-    return [
-        _rel_view_node_df(
+    view_specs = (
+        (
             REL_NAME_SYMBOL_OUTPUT,
-            builder=lambda ctx: build_rel_name_symbol_df(
-                ctx, task_name="rel.name_symbol", task_priority=priority
+            partial(
+                build_rel_name_symbol_df,
+                task_name="rel.name_symbol",
+                task_priority=priority,
             ),
-            metadata=rel_name_symbol_metadata_spec(),
+            rel_name_symbol_metadata_spec(),
         ),
-        _rel_view_node_df(
+        (
             REL_IMPORT_SYMBOL_OUTPUT,
-            builder=lambda ctx: build_rel_import_symbol_df(
-                ctx, task_name="rel.import_symbol", task_priority=priority
+            partial(
+                build_rel_import_symbol_df,
+                task_name="rel.import_symbol",
+                task_priority=priority,
             ),
-            metadata=rel_import_symbol_metadata_spec(),
+            rel_import_symbol_metadata_spec(),
         ),
-        _rel_view_node_df(
+        (
             REL_DEF_SYMBOL_OUTPUT,
-            builder=lambda ctx: build_rel_def_symbol_df(
-                ctx, task_name="rel.def_symbol", task_priority=priority
+            partial(
+                build_rel_def_symbol_df,
+                task_name="rel.def_symbol",
+                task_priority=priority,
             ),
-            metadata=rel_def_symbol_metadata_spec(),
+            rel_def_symbol_metadata_spec(),
         ),
-        _rel_view_node_df(
+        (
             REL_CALLSITE_SYMBOL_OUTPUT,
-            builder=lambda ctx: build_rel_callsite_symbol_df(
-                ctx, task_name="rel.callsite_symbol", task_priority=priority
+            partial(
+                build_rel_callsite_symbol_df,
+                task_name="rel.callsite_symbol",
+                task_priority=priority,
             ),
-            metadata=rel_callsite_symbol_metadata_spec(),
+            rel_callsite_symbol_metadata_spec(),
         ),
-        _rel_view_node_df(
+        (
             REL_CALLSITE_QNAME_OUTPUT,
-            builder=lambda ctx: build_rel_callsite_qname_df(
-                ctx, task_name="rel.callsite_qname", task_priority=priority
+            partial(
+                build_rel_callsite_qname_df,
+                task_name="rel.callsite_qname",
+                task_priority=priority,
             ),
-            metadata=rel_callsite_qname_metadata_spec(),
+            rel_callsite_qname_metadata_spec(),
         ),
-        _rel_view_node_df(
+        (
             RELATION_OUTPUT_NAME,
-            builder=build_relation_output_df,
-            metadata=relation_output_metadata_spec(),
+            build_relation_output_df,
+            relation_output_metadata_spec(),
         ),
-    ]
+    )
+
+    nodes: list[ViewNode] = []
+    for name, builder, metadata in view_specs:
+        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=name)
+        metadata_with_udfs = _metadata_with_required_udfs(metadata, required)
+        nodes.append(
+            ViewNode(
+                name=name,
+                deps=deps,
+                builder=builder,
+                contract_builder=_contract_builder(name, metadata_spec=metadata_with_udfs),
+                required_udfs=required,
+                plan_bundle=bundle,
+            )
+        )
+    return nodes
 
 
-def _symtable_view_nodes(_build_ctx: ViewBuildContext) -> list[ViewNode]:
+def _symtable_view_nodes(
+    ctx: SessionContext,
+    *,
+    snapshot: Mapping[str, object],
+) -> list[ViewNode]:
     from datafusion_engine.symtable_views import (
         symtable_binding_resolutions_df,
         symtable_bindings_df,
@@ -649,141 +341,94 @@ def _symtable_view_nodes(_build_ctx: ViewBuildContext) -> list[ViewNode]:
         symtable_use_sites_df,
     )
 
-    def _metadata(required: Sequence[str]) -> SchemaMetadataSpec | None:
-        return _metadata_with_required_udfs(None, required)
+    view_specs: tuple[tuple[str, DataFrameBuilder], ...] = (
+        ("symtable_bindings", symtable_bindings_df),
+        ("symtable_def_sites", symtable_def_sites_df),
+        ("symtable_use_sites", symtable_use_sites_df),
+        ("symtable_type_params", symtable_type_params_df),
+        ("symtable_type_param_edges", symtable_type_param_edges_df),
+        ("symtable_binding_resolutions", symtable_binding_resolutions_df),
+    )
 
-    def _df_view_node(
-        name: str,
-        *,
-        builder: Callable[[SessionContext], DataFrame],
-    ) -> ViewNode:
-        df = builder(_build_ctx.ctx)
-        _build_ctx.register_schema(name, _arrow_schema_from_df(df))
-        ast = sqlglot_ast_from_dataframe(df)
-        deps = _deps_from_ast(ast)
-        required = _required_udfs_from_ast(ast, _build_ctx.snapshot)
-        ibis_expr = _ibis_expr_from_sqlglot(_build_ctx, ast, label=name)
-
-        # Build plan bundle for DataFusion-native lineage
-        plan_bundle = build_plan_bundle(_build_ctx.ctx, df, compute_execution_plan=False)
-
-        return ViewNode(
-            name=name,
-            deps=deps,
-            builder=builder,
-            contract_builder=_contract_builder(name, metadata_spec=_metadata(required)),
-            required_udfs=required,
-            sqlglot_ast=ast,
-            ibis_expr=ibis_expr,
-            plan_bundle=plan_bundle,
+    nodes: list[ViewNode] = []
+    for name, builder in view_specs:
+        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=name)
+        metadata = _metadata_with_required_udfs(None, required)
+        nodes.append(
+            ViewNode(
+                name=name,
+                deps=deps,
+                builder=builder,
+                contract_builder=_contract_builder(name, metadata_spec=metadata),
+                required_udfs=required,
+                plan_bundle=bundle,
+            )
         )
-
-    return [
-        _df_view_node(
-            "symtable_bindings",
-            builder=symtable_bindings_df,
-        ),
-        _df_view_node(
-            "symtable_def_sites",
-            builder=symtable_def_sites_df,
-        ),
-        _df_view_node(
-            "symtable_use_sites",
-            builder=symtable_use_sites_df,
-        ),
-        _df_view_node(
-            "symtable_type_params",
-            builder=symtable_type_params_df,
-        ),
-        _df_view_node(
-            "symtable_type_param_edges",
-            builder=symtable_type_param_edges_df,
-        ),
-        _df_view_node(
-            "symtable_binding_resolutions",
-            builder=symtable_binding_resolutions_df,
-        ),
-    ]
+    return nodes
 
 
-def _cpg_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
-    from cpg.view_builders import build_cpg_edges_expr, build_cpg_nodes_expr, build_cpg_props_expr
+def _cpg_view_nodes(
+    ctx: SessionContext,
+    *,
+    snapshot: Mapping[str, object],
+) -> list[ViewNode]:
+    from cpg.view_builders_df import build_cpg_edges_df, build_cpg_nodes_df, build_cpg_props_df
 
     priority = 100
-    plan_specs = (
-        ("cpg_nodes_v1", build_cpg_nodes_expr, TaskIdentity(name="cpg.nodes", priority=priority)),
-        ("cpg_edges_v1", build_cpg_edges_expr, None),
-        ("cpg_props_v1", build_cpg_props_expr, TaskIdentity(name="cpg.props", priority=priority)),
+    nodes_identity = TaskIdentity(name="cpg.nodes", priority=priority)
+    props_identity = TaskIdentity(name="cpg.props", priority=priority)
+
+    view_specs: tuple[tuple[str, DataFrameBuilder], ...] = (
+        ("cpg_nodes_v1", partial(build_cpg_nodes_df, task_identity=nodes_identity)),
+        ("cpg_edges_v1", build_cpg_edges_df),
+        ("cpg_props_v1", partial(build_cpg_props_df, task_identity=props_identity)),
     )
-    resolved: list[tuple[str, IbisPlan | Table, Expression]] = []
-    for name, builder, identity in plan_specs:
-        kwargs = {"task_identity": identity} if identity is not None else {}
-        plan, ast = build_ctx.plan_and_ast(builder, builder_kwargs=kwargs, label=name)
-        build_ctx.register_plan(name, plan)
-        resolved.append((name, plan, ast))
-    return [
-        _cpg_view_node(build_ctx, name=name, plan=plan, ast=ast) for name, plan, ast in resolved
-    ]
+
+    nodes: list[ViewNode] = []
+    for name, builder in view_specs:
+        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=name)
+        metadata = _metadata_with_required_udfs(None, required)
+        schema = _arrow_schema_from_df(bundle.df)
+        nodes.append(
+            ViewNode(
+                name=name,
+                deps=deps,
+                builder=builder,
+                contract_builder=_contract_builder(
+                    name,
+                    metadata_spec=metadata,
+                    expected_schema=schema,
+                    enforce_columns=True,
+                ),
+                required_udfs=required,
+                plan_bundle=bundle,
+            )
+        )
+    return nodes
 
 
-def _cpg_view_node(
-    build_ctx: ViewBuildContext,
+def _alias_nodes(
+    nodes: Sequence[ViewNode],
     *,
-    name: str,
-    plan: IbisPlan | Table,
-    ast: Expression,
-) -> ViewNode:
-    required = _required_udfs_from_ast(ast, build_ctx.snapshot)
-    metadata = _metadata_with_required_udfs(None, required)
-    schema = _arrow_schema_from_ibis(plan)
-
-    # Build plan bundle for DataFusion-native lineage
-    builder = build_ctx.builder_from_plan(plan, label=name)
-    df = builder(build_ctx.ctx)
-    plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
-
-    return ViewNode(
-        name=name,
-        deps=_deps_from_ast(ast),
-        builder=builder,
-        contract_builder=_contract_builder(
-            name,
-            metadata_spec=metadata,
-            expected_schema=schema,
-            enforce_columns=True,
-        ),
-        required_udfs=required,
-        sqlglot_ast=ast,
-        ibis_expr=plan.expr if isinstance(plan, IbisPlan) else plan,
-        plan_bundle=plan_bundle,
-    )
-
-
-def _alias_nodes(nodes: Sequence[ViewNode], *, build_ctx: ViewBuildContext) -> list[ViewNode]:
+    ctx: SessionContext,
+    snapshot: Mapping[str, object],
+) -> list[ViewNode]:
     registered = {node.name for node in nodes}
     alias_nodes: list[ViewNode] = []
     for name in registered:
         alias = _resolve_alias(name)
         if alias == name or alias in registered:
             continue
-        expr = select_all(name)
-        ibis_expr = _ibis_expr_from_sqlglot(build_ctx, expr, label=alias)
         builder = _alias_builder(source=name)
-
-        # Build plan bundle for DataFusion-native lineage
-        df = builder(build_ctx.ctx)
-        plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
-
+        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=alias)
         alias_nodes.append(
             ViewNode(
                 name=alias,
-                deps=_deps_from_ast(expr),
+                deps=deps,
                 builder=builder,
                 contract_builder=_contract_builder(alias, metadata_spec=None),
-                required_udfs=(),
-                sqlglot_ast=expr,
-                ibis_expr=ibis_expr,
-                plan_bundle=plan_bundle,
+                required_udfs=required,
+                plan_bundle=bundle,
             )
         )
     return alias_nodes
@@ -795,8 +440,7 @@ def _resolve_alias(name: str) -> str:
     try:
         return dataset_alias(name)
     except KeyError:
-        pass
-    return _strip_version(name)
+        return _strip_version(name)
 
 
 def _strip_version(name: str) -> str:
@@ -806,48 +450,11 @@ def _strip_version(name: str) -> str:
     return name
 
 
-def _ibis_backend(ctx: SessionContext, *, snapshot: Mapping[str, object]) -> BaseBackend:
-    validate_rust_udf_snapshot(snapshot)
-    backend = ibis.datafusion.connect(ctx)
-    from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
-
-    register_ibis_udf_snapshot(snapshot)
-    return backend
-
-
-def _catalog_for_ctx(ctx: SessionContext, backend: BaseBackend) -> IbisPlanCatalog:
-    names = table_names_snapshot(ctx)
-    tables: dict[str, IbisPlanSource] = {name: ViewReference(name) for name in names}
-    if not tables:
-        msg = "No DataFusion tables registered; cannot build view catalog."
-        raise ValueError(msg)
-    return IbisPlanCatalog(backend=backend, tables=tables)
-
-
-def _plan_to_dataframe(
-    ctx: SessionContext,
-    plan: IbisPlan | Table,
-    facade: DataFusionExecutionFacade,
-) -> DataFrame:
-    _ = ctx
-    expr = plan.expr if isinstance(plan, IbisPlan) else plan
-    compiled = facade.compile(expr)
-    result = facade.execute(compiled)
-    return result.require_dataframe()
-
-
-def _alias_builder(source: str) -> Callable[[SessionContext], DataFrame]:
+def _alias_builder(source: str) -> DataFrameBuilder:
     def _build(ctx: SessionContext) -> DataFrame:
         return ctx.table(source)
 
     return _build
 
 
-def _ensure_ctx(actual: SessionContext, expected: SessionContext, *, label: str | None) -> None:
-    if actual is expected:
-        return
-    msg = f"View builder {label or 'unknown'} received an unexpected SessionContext."
-    raise ValueError(msg)
-
-
-__all__ = ["ViewBuildContext", "view_graph_nodes"]
+__all__ = ["view_graph_nodes"]

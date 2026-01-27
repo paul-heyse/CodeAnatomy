@@ -10,14 +10,14 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from engine.runtime_profile import runtime_profile_snapshot
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
 from incremental.delta_context import read_delta_table_via_facade
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
-from storage.deltalake import delta_table_version, enable_delta_features
+from storage.deltalake import (
+    DeltaWriteOptions,
+    delta_table_version,
+    enable_delta_features,
+    write_delta_table,
+)
 from storage.ipc import payload_hash
 
 INVALIDATION_SNAPSHOT_VERSION = 1
@@ -176,19 +176,15 @@ def write_invalidation_snapshot(
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = snapshot.to_payload()
     table = pa.Table.from_pylist([payload], schema=_INVALIDATION_SCHEMA)
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         table,
         str(path),
-        options=IbisDatasetWriteOptions(
-            execution=context.runtime.ibis_execution(),
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={"snapshot_kind": "incremental_invalidation_snapshot"},
-                storage_options=context.storage.storage_options,
-                log_storage_options=context.storage.log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"snapshot_kind": "incremental_invalidation_snapshot"},
+            storage_options=context.storage.storage_options,
+            log_storage_options=context.storage.log_storage_options,
         ),
     )
     enable_delta_features(

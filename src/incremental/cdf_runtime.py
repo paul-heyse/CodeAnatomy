@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from ibis_engine.registry import (
+from datafusion_engine.dataset_registry import (
     DatasetLocation,
-    IbisDatasetRegistry,
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.delta_context import DeltaAccessContext
@@ -142,11 +142,10 @@ def read_cdf_changes(
                 delta_scan=inputs.scan_options,
                 datafusion_provider="delta_cdf",
             )
-            ibis_registry = IbisDatasetRegistry(
-                runtime.ibis_backend(),
-                runtime_profile=runtime.profile,
-            )
-            _ = ibis_registry.register_location(cdf_name, location)
+            runtime_profile = runtime.profile
+            ctx = runtime_profile.session_context()
+            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+            _ = facade.register_dataset(name=cdf_name, location=location)
         except ValueError:
             return None
         registry.track(cdf_name)

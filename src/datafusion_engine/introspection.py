@@ -14,12 +14,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
+from datafusion import SQLOptions
 
 if TYPE_CHECKING:
     from datafusion import SessionContext, SQLOptions
 
 from datafusion_engine.sql_options import sql_options_for_profile
-from sqlglot_tools.compat import exp
 
 
 @dataclass
@@ -86,59 +86,26 @@ class IntrospectionSnapshot:
             Snapshot containing all available catalog metadata
         """
 
-        def _table(expr: exp.Expression) -> pa.Table:
-            from datafusion_engine.compile_options import (
-                DataFusionCompileOptions,
-                DataFusionSqlPolicy,
-            )
-            from datafusion_engine.execution_facade import DataFusionExecutionFacade
-            from sqlglot_tools.optimizer import register_datafusion_dialect
-
-            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-            options = DataFusionCompileOptions(
-                sql_options=sql_options,
-                sql_policy=DataFusionSqlPolicy(),
-            )
-            register_datafusion_dialect()
-            plan = facade.compile(expr, options=options)
-            result = facade.execute(plan)
-            if result.dataframe is None:
-                msg = "Introspection SQL did not return a DataFusion DataFrame."
-                raise ValueError(msg)
-            return result.dataframe.to_arrow_table()
+        def _table(sql: str) -> pa.Table:
+            options = sql_options or SQLOptions()
+            df = ctx.sql_with_options(sql, options)
+            return df.to_arrow_table()
 
         tables = _table(
-            exp.select(
-                "table_catalog",
-                "table_schema",
-                "table_name",
-                "table_type",
-            ).from_("information_schema.tables")
+            "SELECT table_catalog, table_schema, table_name, table_type "
+            "FROM information_schema.tables"
         )
 
         columns = _table(
-            exp.select(
-                "table_catalog",
-                "table_schema",
-                "table_name",
-                "column_name",
-                "ordinal_position",
-                "data_type",
-                "is_nullable",
-                "column_default",
-            )
-            .from_("information_schema.columns")
-            .order_by(
-                "table_catalog",
-                "table_schema",
-                "table_name",
-                "ordinal_position",
-            )
+            "SELECT table_catalog, table_schema, table_name, column_name, "
+            "ordinal_position, data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "ORDER BY table_catalog, table_schema, table_name, ordinal_position"
         )
 
         try:
             schemata = _table(
-                exp.select("catalog_name", "schema_name").from_("information_schema.schemata")
+                "SELECT catalog_name, schema_name FROM information_schema.schemata"
             )
         except (ValueError, TypeError, RuntimeError):
             schemata = pa.Table.from_arrays(
@@ -146,35 +113,21 @@ class IntrospectionSnapshot:
                 names=["catalog_name", "schema_name"],
             )
 
-        settings = _table(exp.select("name", "value").from_("information_schema.df_settings"))
+        settings = _table("SELECT name, value FROM information_schema.df_settings")
 
         # Routines may not be available in all configurations
         try:
             routines = _table(
-                exp.select(
-                    "specific_catalog",
-                    "specific_schema",
-                    "specific_name",
-                    "routine_catalog",
-                    "routine_schema",
-                    "routine_name",
-                    "routine_type",
-                    "data_type",
-                ).from_("information_schema.routines")
+                "SELECT specific_catalog, specific_schema, specific_name, "
+                "routine_catalog, routine_schema, routine_name, routine_type, data_type "
+                "FROM information_schema.routines"
             )
 
             parameters = _table(
-                exp.select(
-                    "specific_catalog",
-                    "specific_schema",
-                    "specific_name",
-                    "ordinal_position",
-                    "parameter_mode",
-                    "parameter_name",
-                    "data_type",
-                )
-                .from_("information_schema.parameters")
-                .order_by("specific_name", "ordinal_position")
+                "SELECT specific_catalog, specific_schema, specific_name, "
+                "ordinal_position, parameter_mode, parameter_name, data_type "
+                "FROM information_schema.parameters "
+                "ORDER BY specific_name, ordinal_position"
             )
         except (ValueError, TypeError, RuntimeError):
             # DataFusion versions may not expose routines/parameters views
@@ -183,10 +136,8 @@ class IntrospectionSnapshot:
 
         # Constraints may not be available in all configurations
         try:
-            table_constraints = _table(
-                exp.select("*").from_("information_schema.table_constraints")
-            )
-            key_column_usage = _table(exp.select("*").from_("information_schema.key_column_usage"))
+            table_constraints = _table("SELECT * FROM information_schema.table_constraints")
+            key_column_usage = _table("SELECT * FROM information_schema.key_column_usage")
         except (ValueError, TypeError, RuntimeError):
             table_constraints = None
             key_column_usage = None
@@ -204,7 +155,7 @@ class IntrospectionSnapshot:
 
     def schema_map(self) -> dict[str, dict[str, str]]:
         """
-        Build schema mapping for SQLGlot optimizer.
+        Build schema mapping for DataFusion catalog metadata.
 
         Returns
         -------
@@ -509,23 +460,9 @@ def _cache_snapshot_from_table(
 
 
 def _cache_snapshot_table(ctx: SessionContext, *, table_name: str) -> pa.Table:
-    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-    from sqlglot_tools.optimizer import register_datafusion_dialect
-
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    options = DataFusionCompileOptions(
-        sql_options=sql_options_for_profile(None),
-        sql_policy=DataFusionSqlPolicy(),
-    )
-    register_datafusion_dialect()
-    expr = exp.select("*").from_(exp.func(table_name))
-    plan = facade.compile(expr, options=options)
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "Cache introspection SQL did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    return result.dataframe.to_arrow_table()
+    sql = f"SELECT * FROM {table_name}"
+    df = ctx.sql_with_options(sql, sql_options_for_profile(None))
+    return df.to_arrow_table()
 
 
 def _settings_snapshot(ctx: SessionContext) -> list[dict[str, object]]:

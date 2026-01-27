@@ -16,10 +16,20 @@ from typing import TYPE_CHECKING, Literal, cast
 import datafusion
 import msgspec
 import pyarrow as pa
-from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext, SQLOptions
+from datafusion import (
+    RuntimeEnvBuilder,
+    SessionConfig,
+    SessionContext,
+    SQLOptions,
+    col,
+    lit,
+)
+from datafusion import (
+    functions as f,
+)
 from datafusion.dataframe import DataFrame
+from datafusion.expr import Expr
 from datafusion.object_store import LocalFileSystem
-from sqlglot.errors import ParseError
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
@@ -80,25 +90,21 @@ from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_ud
 from datafusion_engine.udf_runtime import register_rust_udfs
 from engine.plan_cache import PlanCache
 from serde_msgspec import StructBase
-from sqlglot_tools.compat import exp
 from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
-    from ibis.expr.types import Table
 
-    from datafusion_engine.execution_facade import CompiledPlan, DataFusionExecutionFacade
     from datafusion_engine.plugin_manager import (
         DataFusionPluginManager,
         DataFusionPluginSpec,
     )
     from datafusion_engine.udf_catalog import UdfCatalog
-    from datafusion_engine.view_artifacts import DataFusionViewArtifact, ViewArtifact
+    from datafusion_engine.view_artifacts import DataFusionViewArtifact
     from datafusion_engine.view_graph_registry import ViewNode
-    from ibis_engine.registry import DatasetCatalog, DatasetLocation
     from obs.datafusion_runs import DataFusionRun
-    from sqlglot_tools.optimizer import SqlGlotPolicy
     from storage.deltalake.delta import IdempotentWriteOptions
+from datafusion_engine.dataset_registry import DatasetCatalog, DatasetLocation
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
     DataFusionScanOptions,
@@ -107,10 +113,8 @@ from schema_spec.system import (
     dataset_spec_from_schema,
 )
 from schema_spec.view_specs import ViewSpec
-from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
 if TYPE_CHECKING:
-    from ibis.expr.types import Value as IbisValue
 
     ExplainRows = TableLike | RecordBatchReaderLike
 else:
@@ -593,9 +597,9 @@ class DataFusionPlanCollector:
 class DataFusionViewRegistry:
     """Record DataFusion view artifacts for reproducibility."""
 
-    entries: dict[str, ViewArtifact | DataFusionViewArtifact] = field(default_factory=dict)
+    entries: dict[str, DataFusionViewArtifact] = field(default_factory=dict)
 
-    def record(self, *, name: str, artifact: ViewArtifact | DataFusionViewArtifact) -> None:
+    def record(self, *, name: str, artifact: DataFusionViewArtifact) -> None:
         """Record a view artifact by name.
 
         Parameters
@@ -603,7 +607,7 @@ class DataFusionViewRegistry:
         name
             View name.
         artifact
-            View artifact (legacy ViewArtifact or DataFusion-native DataFusionViewArtifact).
+            View artifact payload for the registry.
         """
         self.entries[name] = artifact
 
@@ -824,39 +828,6 @@ def _prepare_statement_sql(statement: PreparedStatementSpec) -> str:
     return f"PREPARE {statement.name} AS {statement.sql}"
 
 
-def _prepare_statement_expr(statement: PreparedStatementSpec) -> exp.Expression:
-    """Build SQLGlot AST for prepared statement validation.
-
-    DEPRECATED: This function uses SQLGlot's parse_sql_strict for validation.
-    For DataFusion query validation, prefer DataFusion's native SQL parser
-    with SQLOptions for ingress gating. SQLGlot validation is retained for
-    backward compatibility during migration only.
-
-    Parameters
-    ----------
-    statement
-        Prepared statement specification to convert to SQLGlot AST.
-
-    Returns
-    -------
-    exp.Expression
-        SQLGlot expression for the prepared statement.
-
-    Raises
-    ------
-    ValueError
-        Raised when SQLGlot AST construction fails.
-    """
-    sql = _prepare_statement_sql(statement)
-    register_datafusion_dialect()
-    try:
-        # DEPRECATED: Use DataFusion's native SQL parser for validation instead
-        return parse_sql_strict(sql, dialect="datafusion")
-    except (TypeError, ValueError) as exc:
-        msg = f"Failed to build SQLGlot AST for prepared statement {statement.name!r}."
-        raise ValueError(msg) from exc
-
-
 def _table_logical_plan(ctx: SessionContext, *, name: str) -> str:
     try:
         module = importlib.import_module("datafusion_ext")
@@ -887,83 +858,47 @@ def _table_dfschema_tree(ctx: SessionContext, *, name: str) -> str:
     return str(schema)
 
 
-def _sql_parser_dialect(profile: DataFusionRuntimeProfile) -> str:
-    if profile.schema_hardening is not None:
-        resolved = profile.schema_hardening
-    elif profile.schema_hardening_name is None:
-        resolved = None
-    else:
-        resolved = SCHEMA_HARDENING_PRESETS.get(
-            profile.schema_hardening_name,
-            SCHEMA_HARDENING_PRESETS["schema_hardening"],
-        )
-    if resolved is not None and resolved.parser_dialect:
-        return resolved.parser_dialect
-    return "datafusion"
-
-
-def _sql_parse_errors(sql: str, *, dialect: str) -> list[dict[str, object]] | None:
-    """Parse SQL and collect parsing errors.
-
-    DEPRECATED: This function uses SQLGlot's parse_sql_strict for validation.
-    For DataFusion query validation, prefer DataFusion's native SQL parser
-    with SQLOptions for ingress gating.
+def _sql_parse_errors(
+    ctx: SessionContext,
+    sql: str,
+    *,
+    sql_options: SQLOptions,
+) -> list[dict[str, object]] | None:
+    """Parse SQL using DataFusion and collect parsing errors.
 
     Parameters
     ----------
+    ctx
+        DataFusion SessionContext used for SQL parsing.
     sql
         SQL string to parse and validate.
-    dialect
-        SQL dialect for parsing.
+    sql_options
+        SQL options that gate SQL execution behavior.
 
     Returns
     -------
     list[dict[str, object]] | None
         List of parsing errors if any, None if parsing succeeds.
     """
-    register_datafusion_dialect()
     try:
-        # DEPRECATED: Use DataFusion's native SQL parser for validation instead
-        parse_sql_strict(sql, dialect=dialect)
-    except ParseError as exc:
-        errors: list[dict[str, object]] = []
-        for item in exc.errors:
-            if not isinstance(item, Mapping):
-                continue
-            entry: dict[str, object] = {}
-            for key in (
-                "description",
-                "line",
-                "col",
-                "start_context",
-                "highlight",
-                "end_context",
-                "into_expression",
-            ):
-                value = item.get(key)
-                if value is not None:
-                    entry[key] = value
-            if entry:
-                errors.append(entry)
-        if not errors:
-            errors.append({"message": str(exc)})
-        return errors
-    except (RuntimeError, TypeError, ValueError) as exc:
+        _ = _sql_with_options(ctx, sql, sql_options=sql_options)
+    except ValueError as exc:
         return [{"message": str(exc)}]
     return None
 
 
 def _collect_view_sql_parse_errors(
+    ctx: SessionContext,
     registry: DataFusionViewRegistry,
     *,
-    dialect: str,
+    sql_options: SQLOptions,
 ) -> dict[str, list[dict[str, object]]] | None:
     errors: dict[str, list[dict[str, object]]] = {}
     for name, entry in registry.entries.items():
         sql = entry if isinstance(entry, str) else getattr(entry, "sql", None)
         if not isinstance(sql, str) or not sql:
             continue
-        parse_errors = _sql_parse_errors(sql, dialect=dialect)
+        parse_errors = _sql_parse_errors(ctx, sql, sql_options=sql_options)
         if parse_errors:
             errors[name] = parse_errors
     return errors or None
@@ -1138,20 +1073,13 @@ def register_view_specs(
         ViewGraphRuntimeOptions,
         register_view_graph,
     )
-    from sqlglot_tools.optimizer import resolve_sqlglot_policy
 
     if not views:
         return
     snapshot = _register_view_specs_udfs(ctx, runtime_profile=runtime_profile)
-    policy = resolve_sqlglot_policy(name="datafusion_compile")
-    # DEPRECATED: ibis_backend is deprecated, will be removed in future version
-    ibis_backend = None
     nodes = _build_view_nodes(
         ctx,
         views=views,
-        policy=policy,
-        snapshot=snapshot,
-        ibis_backend=ibis_backend,  # DEPRECATED
     )
     register_view_graph(
         ctx,
@@ -1181,40 +1109,31 @@ def _build_view_nodes(
     ctx: SessionContext,
     *,
     views: Sequence[ViewSpec],
-    policy: SqlGlotPolicy,
-    snapshot: Mapping[str, object],
-    ibis_backend: object | None,  # DEPRECATED: Ibis backend is deprecated
 ) -> list[ViewNode]:
     """Build view nodes for registration (DEPRECATED).
 
-    DEPRECATED: This function uses deprecated Ibis backend integration.
-    Use DataFusion-native builder functions instead.
+    DEPRECATED: This function supports legacy view-spec registration paths.
+    Prefer DataFusion-native builder functions for new work.
 
     Returns
     -------
     list[ViewNode]
         List of compiled view nodes.
     """
+    from datafusion_engine.plan_bundle import build_plan_bundle
     from datafusion_engine.view_graph_registry import ViewNode
 
     nodes: list[ViewNode] = []
-    backend = ibis_backend
     for view in views:
-        builder, sqlglot_ast = _resolve_view_builder(ctx, view=view)
-        backend = _ensure_ibis_backend(ctx, backend=backend, snapshot=snapshot)
-        ibis_expr = _ibis_expr_from_ast(
-            backend,
-            sqlglot_ast=sqlglot_ast,
-            view_name=view.name,
-            policy=policy,
-        )
+        builder = _resolve_view_builder(ctx, view=view)
+        df = builder(ctx)
+        plan_bundle = build_plan_bundle(ctx, df, compute_execution_plan=False)
         nodes.append(
             ViewNode(
                 name=view.name,
                 deps=(),
                 builder=builder,
-                sqlglot_ast=sqlglot_ast,
-                ibis_expr=ibis_expr,
+                plan_bundle=plan_bundle,
             )
         )
     return nodes
@@ -1223,97 +1142,13 @@ def _build_view_nodes(
 def _resolve_view_builder(
     ctx: SessionContext,
     view: ViewSpec,
-) -> tuple[Callable[[SessionContext], DataFrame], exp.Expression]:
-    from datafusion_engine.compile_options import DataFusionCompileOptions
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
-
-    if view.sqlglot_ast is None:
-        msg = f"View {view.name!r} missing SQLGlot AST for registration."
-        raise ValueError(msg)
-    sqlglot_ast = view.sqlglot_ast
-    builder = view.builder
-    if builder is not None:
-        return builder, sqlglot_ast
-    profile = SQLPolicyProfile()
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    plan = facade.compile(
-        sqlglot_ast,
-        options=DataFusionCompileOptions(sql_policy_profile=profile),
-    )
-    sqlglot_ast = plan.compiled.sqlglot_ast or sqlglot_ast
-    builder = _plan_dataframe_builder(
-        expected_ctx=ctx,
-        facade=facade,
-        plan=plan,
-        view_name=view.name,
-    )
-    return builder, sqlglot_ast
-
-
-def _plan_dataframe_builder(
-    *,
-    expected_ctx: SessionContext,
-    facade: DataFusionExecutionFacade,
-    plan: CompiledPlan,
-    view_name: str,
 ) -> Callable[[SessionContext], DataFrame]:
-    def _build(actual_ctx: SessionContext) -> DataFrame:
-        if actual_ctx is not expected_ctx:
-            msg = f"View {view_name!r} requires the original SessionContext."
-            raise ValueError(msg)
-        return facade.execute(plan).require_dataframe()
-
-    return _build
-
-
-def _ensure_ibis_backend(
-    ctx: SessionContext,
-    *,
-    backend: object | None,
-    snapshot: Mapping[str, object],
-) -> object:
-    """Ensure Ibis backend is initialized (DEPRECATED).
-
-    DEPRECATED: This function supports legacy view compilation. Use DataFusion-native
-    builder functions instead.
-
-    Returns
-    -------
-    object
-        Initialized Ibis backend.
-    """
-    if backend is not None:
-        return backend
-    import ibis
-
-    # DEPRECATED: Ibis backend connection is deprecated
-    ibis_backend = ibis.datafusion.connect(ctx)
-    from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
-
-    register_ibis_udf_snapshot(snapshot)
-    return ibis_backend
-
-
-def _ibis_expr_from_ast(
-    backend: object,
-    *,
-    sqlglot_ast: exp.Expression,
-    view_name: str,
-    policy: SqlGlotPolicy | None,
-) -> Table:
-    from sqlglot_tools.optimizer import sqlglot_sql
-
-    sql = sqlglot_sql(sqlglot_ast, policy=policy)
-    sql_func = getattr(backend, "sql", None)
-    if not callable(sql_func):
-        msg = f"Ibis backend does not support SQL compilation for view {view_name!r}."
-        raise TypeError(msg)
-    try:
-        return cast("Table", sql_func(sql))
-    except (RuntimeError, TypeError, ValueError) as exc:
-        msg = f"Failed to build Ibis expression for view {view_name!r}."
-        raise ValueError(msg) from exc
+    _ = ctx
+    builder = view.builder
+    if builder is None:
+        msg = f"View {view.name!r} missing builder for registration."
+        raise ValueError(msg)
+    return builder
 
 
 def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
@@ -1617,37 +1452,24 @@ def _read_only_sql_options() -> SQLOptions:
 
 def _sql_with_options(
     ctx: SessionContext,
-    expr: exp.Expression,
+    sql: str,
     *,
     sql_options: SQLOptions | None = None,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
     allow_statements: bool | None = None,
 ) -> DataFrame:
-    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
     resolved_sql_options = sql_options or _read_only_sql_options()
     if allow_statements:
         allow_statements_flag = True
         resolved_sql_options = resolved_sql_options.with_allow_statements(allow_statements_flag)
-    sql_policy = DataFusionSqlPolicy(allow_statements=bool(allow_statements))
-
-    def _sql_ingest(_payload: Mapping[str, object]) -> None:
-        return None
-
-    options = DataFusionCompileOptions(
-        sql_options=resolved_sql_options,
-        sql_policy=sql_policy,
-        runtime_profile=runtime_profile,
-        sql_ingest_hook=_sql_ingest,
-    )
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    plan = facade.compile(expr, options=options)
-    result = facade.execute(plan)
-    if result.dataframe is None:
+    try:
+        df = ctx.sql_with_options(sql, resolved_sql_options)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = "Runtime SQL execution did not return a DataFusion DataFrame."
+        raise ValueError(msg) from exc
+    if df is None:
         msg = "Runtime SQL execution did not return a DataFusion DataFrame."
         raise ValueError(msg)
-    return result.dataframe
+    return df
 
 
 def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
@@ -1723,7 +1545,7 @@ def function_catalog_snapshot_for_profile(
 def record_view_definition(
     profile: DataFusionRuntimeProfile,
     *,
-    artifact: ViewArtifact | DataFusionViewArtifact,
+    artifact: DataFusionViewArtifact,
 ) -> None:
     """Record a view artifact for diagnostics snapshots.
 
@@ -1732,7 +1554,7 @@ def record_view_definition(
     profile
         Runtime profile for recording diagnostics.
     artifact
-        View artifact (legacy ViewArtifact or DataFusion-native DataFusionViewArtifact).
+        View artifact payload for diagnostics.
     """
     if profile.view_registry is None:
         return
@@ -1743,8 +1565,7 @@ def record_view_definition(
 
 def _datafusion_version(ctx: SessionContext) -> str | None:
     try:
-        expr = exp.select(exp.func("version").as_("version"))
-        table = _sql_with_options(ctx, expr).to_arrow_table()
+        table = _sql_with_options(ctx, "SELECT version() AS version").to_arrow_table()
     except (RuntimeError, TypeError, ValueError):
         return None
     if "version" not in table.column_names or table.num_rows < 1:
@@ -1935,9 +1756,8 @@ def diagnostics_cache_hook(
                     "cache_max_columns": event.cache_max_columns,
                     "column_count": event.column_count,
                     "reason": event.reason,
-                    "ast_fingerprint": event.ast_fingerprint,
-                    "policy_hash": event.policy_hash,
                     "profile_hash": event.profile_hash,
+                    "plan_fingerprint": event.plan_fingerprint,
                 }
             ],
         )
@@ -1965,10 +1785,9 @@ def diagnostics_substrait_fallback_hook(
                     "event_time_unix_ms": int(time.time() * 1000),
                     "reason": event.reason,
                     "expr_type": event.expr_type,
-                    "ast_fingerprint": event.ast_fingerprint,
-                    "policy_hash": event.policy_hash,
                     "profile_hash": event.profile_hash,
                     "run_id": event.run_id,
+                    "plan_fingerprint": event.plan_fingerprint,
                 }
             ],
         )
@@ -2138,7 +1957,7 @@ class _ResolvedCompileHooks:
 class _CompileOptionResolution:
     cache: bool | None
     cache_max_columns: int | None
-    params: Mapping[str, object] | Mapping[IbisValue, object] | None
+    params: Mapping[str, object] | None
     param_allowlist: tuple[str, ...] | None
     prepared_param_types: Mapping[str, str] | None
     prepared_statements: bool
@@ -2163,19 +1982,10 @@ class _ScipRegistrationSnapshot:
 
 def _resolve_prepared_statement_options(
     resolved: DataFusionCompileOptions,
-    *,
-    resolved_params: Mapping[str, object] | Mapping[IbisValue, object] | None,
 ) -> tuple[Mapping[str, str] | None, bool, bool | None]:
     prepared_param_types = resolved.prepared_param_types
     prepared_statements = resolved.prepared_statements
     dynamic_projection = resolved.dynamic_projection
-    if prepared_param_types is None and prepared_statements and resolved_params:
-        from ibis_engine.params_bridge import param_types_from_bindings
-
-        try:
-            prepared_param_types = param_types_from_bindings(resolved_params)
-        except ValueError:
-            prepared_param_types = None
     return prepared_param_types, prepared_statements, dynamic_projection
 
 
@@ -3613,16 +3423,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
             payload["tree_sitter_checks"] = json.dumps(tree_sitter_checks, default=str)
         if result.view_errors and self.view_registry is not None:
-            parser_dialect = _sql_parser_dialect(self)
             parse_errors = _collect_view_sql_parse_errors(
+                ctx,
                 self.view_registry,
-                dialect=parser_dialect,
+                sql_options=self._sql_options(),
             )
             if parse_errors:
                 import json
 
                 payload["sql_parse_errors"] = json.dumps(parse_errors, default=str)
-                payload["sql_parser_dialect"] = parser_dialect
         self.record_artifact("datafusion_schema_registry_validation_v1", payload)
         return result
 
@@ -3729,7 +3538,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             raise ValueError(msg)
         if self.ast_delta_location:
             delta_scan = self.ast_delta_scan
-            from ibis_engine.registry import DatasetLocation
+            from datafusion_engine.dataset_registry import DatasetLocation
 
             return DatasetLocation(
                 path=self.ast_delta_location,
@@ -3740,7 +3549,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 delta_scan=delta_scan,
             )
         if self.ast_external_location:
-            from ibis_engine.registry import DatasetLocation
+            from datafusion_engine.dataset_registry import DatasetLocation
 
             scan = DataFusionScanOptions(
                 partition_cols=self.ast_external_partition_cols,
@@ -3797,7 +3606,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             raise ValueError(msg)
         if self.bytecode_delta_location:
             delta_scan = self.bytecode_delta_scan
-            from ibis_engine.registry import DatasetLocation
+            from datafusion_engine.dataset_registry import DatasetLocation
 
             return DatasetLocation(
                 path=self.bytecode_delta_location,
@@ -3808,7 +3617,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 delta_scan=delta_scan,
             )
         if self.bytecode_external_location:
-            from ibis_engine.registry import DatasetLocation
+            from datafusion_engine.dataset_registry import DatasetLocation
 
             scan = DataFusionScanOptions(
                 partition_cols=self.bytecode_external_partition_cols,
@@ -4187,19 +3996,15 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         errors: dict[str, str] = {}
         for name in TREE_SITTER_CHECK_VIEWS:
             try:
-                summary_expr = exp.select(
-                    exp.func("count", exp.Star()).as_("row_count"),
-                    exp.func(
-                        "sum",
-                        exp.Case()
-                        .when(exp.column("mismatch"), exp.Literal.number(1))
-                        .else_(exp.Literal.number(0)),
-                    ).as_("mismatch_count"),
-                ).from_(name)
+                summary_sql = (
+                    "SELECT count(*) AS row_count, "
+                    "sum(CASE WHEN mismatch THEN 1 ELSE 0 END) AS mismatch_count "
+                    f"FROM {name}"
+                )
                 summary_rows = (
                     _sql_with_options(
                         ctx,
-                        summary_expr,
+                        summary_sql,
                         sql_options=self._sql_options(),
                     )
                     .to_arrow_table()
@@ -4222,13 +4027,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     "mismatch_count": mismatch_count,
                 }
                 if mismatch_count:
-                    sample_expr = (
-                        exp.select("*").from_(name).where(exp.column("mismatch")).limit(25)
-                    )
+                    sample_sql = f"SELECT * FROM {name} WHERE mismatch LIMIT 25"
                     sample_rows = (
                         _sql_with_options(
                             ctx,
-                            sample_expr,
+                            sample_sql,
                             sql_options=self._sql_options(),
                         )
                         .to_arrow_table()
@@ -4533,7 +4336,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             seen.add(statement.name)
             _sql_with_options(
                 ctx,
-                _prepare_statement_expr(statement),
+                _prepare_statement_sql(statement),
                 sql_options=self._statement_sql_options(),
             )
             self._record_prepared_statement(statement)
@@ -4992,7 +4795,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self,
         *,
         options: DataFusionCompileOptions | None = None,
-        params: Mapping[str, object] | Mapping[IbisValue, object] | None = None,
+        params: Mapping[str, object] | None = None,
         execution_policy: AdapterExecutionPolicy | None = None,
         execution_label: ExecutionLabel | None = None,
     ) -> DataFusionCompileOptions:
@@ -5009,7 +4812,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             enforce_preflight=self.enforce_preflight,
         )
         resolved_params = resolved.params if resolved.params is not None else params
-        prepared = _resolve_prepared_statement_options(resolved, resolved_params=resolved_params)
+        prepared = _resolve_prepared_statement_options(resolved)
         capture_explain = resolved.capture_explain or self.capture_explain
         explain_analyze = resolved.explain_analyze or self.explain_analyze
         substrait_validation = resolved.substrait_validation or self.substrait_validation
@@ -5185,7 +4988,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return None
         return profile.ttl_for(kind)
 
-    def _record_view_definition(self, *, artifact: ViewArtifact) -> None:
+    def _record_view_definition(self, *, artifact: DataFusionViewArtifact) -> None:
         """Record a view artifact for diagnostics snapshots.
 
         Parameters
@@ -5691,20 +5494,15 @@ def _datafusion_type_name(dtype: pa.DataType) -> str:
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_table_provider("t", ctx.from_arrow(table))
-    expr = (
-        exp.select(exp.func("arrow_typeof", exp.column("value")).as_("dtype")).from_("t").limit(1)
-    )
-    result = _sql_with_options(ctx, expr).to_arrow_table()
+    result = _sql_with_options(
+        ctx,
+        "SELECT arrow_typeof(value) AS dtype FROM t LIMIT 1",
+    ).to_arrow_table()
     value = result["dtype"][0].as_py()
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
         raise TypeError(msg)
     return value
-
-
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
 
 
 def _apply_table_schema_metadata(
@@ -5740,32 +5538,20 @@ def _align_projection_exprs(
     schema: pa.Schema,
     input_columns: Sequence[str],
     keep_extra_columns: bool,
-) -> list[exp.Expression]:
-    selections: list[exp.Expression] = []
+) -> list[Expr]:
+    selections: list[Expr] = []
     for schema_field in schema:
         dtype_name = _datafusion_type_name(schema_field.type)
         col_name = schema_field.name
         if schema_field.name in input_columns:
-            selections.append(
-                exp.func(
-                    "arrow_cast",
-                    exp.column(col_name),
-                    exp.Literal.string(dtype_name),
-                ).as_(col_name)
-            )
+            selections.append(f.arrow_cast(col(col_name), lit(dtype_name)).alias(col_name))
         else:
-            selections.append(
-                exp.func(
-                    "arrow_cast",
-                    exp.null(),
-                    exp.Literal.string(dtype_name),
-                ).as_(col_name)
-            )
+            selections.append(f.arrow_cast(lit(None), lit(dtype_name)).alias(col_name))
     if keep_extra_columns:
         for name in input_columns:
             if name in schema.names:
                 continue
-            selections.append(exp.column(name))
+            selections.append(col(name))
     return selections
 
 
@@ -5803,9 +5589,7 @@ def align_table_to_schema(
             input_columns=resolved_table.column_names,
             keep_extra_columns=keep_extra_columns,
         )
-        select_expr = exp.select(*selections).from_(temp_name)
-        df = _sql_with_options(session, select_expr)
-        aligned = df.to_arrow_table()
+        aligned = session.table(temp_name).select(*selections).to_arrow_table()
     finally:
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table(temp_name)

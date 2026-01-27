@@ -480,11 +480,11 @@ def _execute_ast(
 
 
 def build_schema_from_introspection(ctx: SessionContext) -> SchemaMapping:
-    """Build SQLGlot-compatible schema mapping from DataFusion context.
+    """Build schema mapping from DataFusion context.
 
     This function introspects the DataFusion SessionContext to extract
     all registered tables and their column schemas, returning a nested
-    mapping structure compatible with SQLGlot's qualification system.
+    mapping structure for downstream planning.
 
     Parameters
     ----------
@@ -496,10 +496,7 @@ def build_schema_from_introspection(ctx: SessionContext) -> SchemaMapping:
     SchemaMapping
         Nested schema mapping: {catalog: {schema: {table: {column: type}}}}.
     """
-    from datafusion_engine.schema_introspection import (
-        SchemaIntrospector,
-        schema_map_for_sqlglot,
-    )
+    from datafusion_engine.schema_introspection import SchemaIntrospector
 
     introspector = SchemaIntrospector(ctx, sql_options=None)
-    return schema_map_for_sqlglot(introspector)
+    return introspector.schema_map()

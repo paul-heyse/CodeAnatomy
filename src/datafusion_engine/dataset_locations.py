@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.registry import DatasetLocation
 
 
 def resolve_dataset_location(

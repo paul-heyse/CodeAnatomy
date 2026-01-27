@@ -1,13 +1,7 @@
 """Plan fingerprint persistence for incremental scheduling.
 
-Plan fingerprints are now based on DataFusion plan bundles and Substrait bytes,
+Plan fingerprints are based on DataFusion plan bundles and Substrait bytes,
 replacing SQLGlot AST-based fingerprints.
-
-Note
-----
-This module currently uses `write_ibis_dataset_delta` for Delta table writes.
-This is a transitional bridge that will be replaced with DataFusion-native
-write surfaces from `WritePipeline` once the migration is complete (Scope 15).
 """
 
 from __future__ import annotations
@@ -15,21 +9,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
 from incremental.delta_context import read_delta_table_via_facade
 from storage.deltalake import delta_table_version, enable_delta_features
 
 if TYPE_CHECKING:
-    from ibis_engine.execution import IbisExecutionContext
     from incremental.delta_context import DeltaAccessContext
     from incremental.state_store import StateStore
     from storage.deltalake import StorageOptions
@@ -133,7 +121,6 @@ def write_plan_snapshots(
     state_store: StateStore,
     snapshots: Mapping[str, PlanFingerprintSnapshot],
     *,
-    execution: IbisExecutionContext,
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
 ) -> str:
@@ -162,34 +149,34 @@ def write_plan_snapshots(
             },
             num_rows=len(names),
         )
-    result = write_ibis_dataset_delta(
-        table,
-        str(path),
-        options=IbisDatasetWriteOptions(
-            execution=execution,
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={"snapshot_kind": "plan_fingerprints"},
-                storage_options=storage_options,
-                log_storage_options=log_storage_options,
-            ),
-        ),
-    )
-    enable_delta_features(
-        result.path,
+    from deltalake import CommitProperties, write_deltalake
+
+    resolved_storage = _resolve_storage_options(
         storage_options=storage_options,
         log_storage_options=log_storage_options,
     )
-    return result.path
+    write_deltalake(
+        str(path),
+        cast("pa.Table", table),
+        mode="overwrite",
+        schema_mode="overwrite",
+        storage_options=resolved_storage,
+        commit_properties=CommitProperties(
+            custom_metadata={"snapshot_kind": "plan_fingerprints"},
+        ),
+    )
+    enable_delta_features(
+        str(path),
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+    )
+    return str(path)
 
 
 def write_plan_fingerprints(
     state_store: StateStore,
     fingerprints: Mapping[str, str],
     *,
-    execution: IbisExecutionContext,
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
 ) -> str:
@@ -207,7 +194,6 @@ def write_plan_fingerprints(
     return write_plan_snapshots(
         state_store,
         snapshots,
-        execution=execution,
         storage_options=storage_options,
         log_storage_options=log_storage_options,
     )
@@ -220,6 +206,19 @@ def _read_delta_table(
     name: str,
 ) -> pa.Table:
     return read_delta_table_via_facade(context, path=path, name=name)
+
+
+def _resolve_storage_options(
+    *,
+    storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
+) -> dict[str, str] | None:
+    if storage_options is None and log_storage_options is None:
+        return None
+    resolved = dict(storage_options or {})
+    if log_storage_options is not None:
+        resolved.update(dict(log_storage_options))
+    return resolved or None
 
 
 __all__ = [

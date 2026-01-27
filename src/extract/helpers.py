@@ -43,18 +43,18 @@ from extract.schema_ops import (
 )
 from extract.session import ExtractSession, build_extract_session
 from extract.spec_helpers import ExtractExecutionOptions, plan_requires_row, rule_execution_options
+from ibis_engine.dataset_reads import ReadDatasetParams, read_dataset
 from ibis_engine.execution import execute_ibis_plan
 from ibis_engine.execution_factory import datafusion_facade_from_ctx, ibis_execution_from_ctx
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
-from ibis_engine.registry import ReadDatasetParams, read_dataset
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
 
-    from ibis_engine.registry import DatasetLocation
+    from datafusion_engine.dataset_registry import DatasetLocation
 
 
 @dataclass(frozen=True)
@@ -885,20 +885,26 @@ def _record_extract_view_artifact(
         raise ValueError(msg)
     facade = datafusion_facade_from_ctx(ctx)
     try:
-        compiled = facade.compile(plan.expr)
+        result = facade.execute_expr(plan.expr)
     except (RuntimeError, TypeError, ValueError):
         return
+    if result.plan_bundle is None:
+        return
+    from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
+    from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
     from datafusion_engine.runtime import record_view_definition
-    from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
+    from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
 
-    artifact = build_view_artifact(
-        ViewArtifactInputs(
-            ctx=facade.ctx,
-            name=name,
-            ast=compiled.compiled.sqlglot_ast,
-            schema=schema,
-            policy_profile=compiled.options.sql_policy_profile,
-        )
+    required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(result.plan_bundle)))
+    referenced_tables = tuple(
+        sorted(referenced_tables_from_plan(result.plan_bundle.optimized_logical_plan))
+    )
+    artifact = build_view_artifact_from_bundle(
+        result.plan_bundle,
+        name=name,
+        schema=schema,
+        required_udfs=required_udfs,
+        referenced_tables=referenced_tables,
     )
     record_view_definition(profile, artifact=artifact)
 

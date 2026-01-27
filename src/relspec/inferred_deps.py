@@ -62,19 +62,19 @@ class InferredDepsInputs:
         Name of the task these dependencies apply to.
     output : str
         Output dataset name produced by the task.
+    plan_bundle : DataFusionPlanBundle
+        DataFusion plan bundle for native lineage extraction.
     snapshot : Mapping[str, object] | None
         Optional Rust UDF snapshot for validation.
     required_udfs : Sequence[str] | None
         Optional explicit UDF names.
-    plan_bundle : DataFusionPlanBundle
-        DataFusion plan bundle for native lineage extraction.
     """
 
     task_name: str
     output: str
+    plan_bundle: DataFusionPlanBundle
     snapshot: Mapping[str, object] | None = None
     required_udfs: Sequence[str] | None = None
-    plan_bundle: DataFusionPlanBundle
 
 
 def infer_deps_from_plan_bundle(
@@ -95,12 +95,9 @@ def infer_deps_from_plan_bundle(
     InferredDeps
         Inferred dependencies extracted from DataFusion plan.
 
-    Raises
-    ------
-    ValueError
-        Raised when plan_bundle is None or invalid.
     """
     from datafusion_engine.lineage_datafusion import extract_lineage
+
     plan_bundle = inputs.plan_bundle
 
     # Extract lineage from the optimized logical plan

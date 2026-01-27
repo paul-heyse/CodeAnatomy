@@ -6,9 +6,9 @@ catalog and information_schema views, making DataFusion the source of truth
 for all schema metadata.
 
 IO contracts are specified through DataFusion registration (register_listing_table,
-register_object_store) and DDL surfaces (CREATE EXTERNAL TABLE). Schema validation
-and introspection query DataFusion's information_schema.columns, information_schema.tables,
-information_schema.table_constraints, and information_schema.key_column_usage views.
+register_object_store). Schema validation and introspection query DataFusion's
+information_schema.columns, information_schema.tables, information_schema.table_constraints,
+and information_schema.key_column_usage views.
 """
 
 from __future__ import annotations
@@ -17,15 +17,12 @@ import hashlib
 import importlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, Unpack, cast
 
-import ibis
 import pyarrow as pa
 import pyarrow.dataset as ds
-from ibis.backends import BaseBackend
-from ibis.expr.types import BooleanValue, Table
 
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
@@ -41,22 +38,17 @@ from arrowdsl.schema.schema import (
     EncodingPolicy,
     SchemaEvolutionSpec,
     SchemaMetadataSpec,
-    missing_key_fields,
     register_schema_extensions,
-    required_field_names,
 )
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from datafusion_engine.finalize import Contract, FinalizeContext
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import extract_nested_dataset_names
-from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.specs import (
     ArrowFieldSpec,
     DerivedFieldSpec,
-    ExternalTableConfig,
-    ExternalTableConfigOverrides,
     FieldBundle,
     TableSchemaSpec,
 )
@@ -66,11 +58,10 @@ from storage.dataset_sources import (
     PathLike,
     normalize_dataset_source,
 )
+from storage.deltalake import delta_table_schema
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
-    from ibis_engine.execution import IbisExecutionContext
-    from ibis_engine.sources import PlanSource
     from schema_spec.view_specs import ViewSpec
     from sqlglot_tools.expr_spec import SqlExprSpec
 
@@ -569,96 +560,6 @@ class DatasetSpec:
             return self.datafusion_scan.unbounded
         return False
 
-    def external_table_config_with_streaming(
-        self,
-        *,
-        location: str,
-        file_format: str,
-        overrides: ExternalTableConfigOverrides | None = None,
-    ) -> ExternalTableConfig:
-        """Return ExternalTableConfig with streaming flag from scan options.
-
-        This method creates an ExternalTableConfig that respects the unbounded
-        flag from DataFusionScanOptions, enabling proper DDL generation for
-        streaming sources.
-
-        Parameters
-        ----------
-        location : str
-            Storage location for the external table.
-        file_format : str
-            File format (e.g., 'delta', 'csv').
-        overrides : ExternalTableConfigOverrides | None
-            Optional configuration overrides. If unbounded is explicitly set
-            in overrides, it takes precedence over the scan options.
-
-        Returns
-        -------
-        ExternalTableConfig
-            Configuration with unbounded flag properly set.
-        """
-        resolved = overrides or ExternalTableConfigOverrides()
-        unbounded = resolved.unbounded if resolved.unbounded is not None else self.is_streaming
-        return ExternalTableConfig(
-            location=location,
-            file_format=file_format,
-            table_name=resolved.table_name or self.name,
-            dialect=resolved.dialect,
-            options=resolved.options,
-            partitioned_by=resolved.partitioned_by,
-            file_sort_order=resolved.file_sort_order,
-            compression=resolved.compression,
-            unbounded=unbounded,
-        )
-
-    def external_table_sql(self, config: ExternalTableConfig) -> str:
-        """Return a CREATE EXTERNAL TABLE statement for this dataset.
-
-        Returns
-        -------
-        str
-            CREATE EXTERNAL TABLE statement for this dataset schema.
-        """
-        return self.table_spec.to_create_external_table_sql(config)
-
-    def _plan_for_validation(
-        self,
-        source: PlanSource,
-        *,
-        ctx: ExecutionContext,
-        backend: BaseBackend,
-    ) -> IbisPlan:
-        from ibis_engine.sources import DatasetSource, plan_from_dataset, plan_from_source
-
-        if isinstance(source, DatasetSource):
-            return plan_from_dataset(
-                source.dataset,
-                spec=self,
-                ctx=ctx,
-                backend=backend,
-                name=self.name,
-            )
-        return plan_from_source(
-            source,
-            ctx=ctx,
-            backend=backend,
-            name=f"{self.name}_validate",
-        )
-
-    def validation_plans(self, source: PlanSource, *, ctx: ExecutionContext) -> ValidationPlans:
-        """Return plan-lane validation pipelines for invalid rows and duplicate keys.
-
-        Returns
-        -------
-        ValidationPlans
-            Plans for invalid rows and duplicate keys.
-        """
-        backend = _ibis_backend_for_ctx(ctx)
-        plan = self._plan_for_validation(source, ctx=ctx, backend=backend)
-        invalid = _invalid_rows_plan(plan, spec=self.table_spec)
-        dupes = _duplicate_key_rows_plan(plan, keys=self.table_spec.key_fields)
-        return ValidationPlans(invalid_rows=invalid, duplicate_keys=dupes)
-
     def finalize_context(self, ctx: ExecutionContext) -> FinalizeContext:
         """Return a FinalizeContext for this dataset spec.
 
@@ -723,91 +624,6 @@ class DatasetSpec:
 
 
 @dataclass(frozen=True)
-class ValidationPlans:
-    """Plan-lane validation outputs for a dataset."""
-
-    invalid_rows: IbisPlan
-    duplicate_keys: IbisPlan
-
-    def to_tables(self, *, ctx: ExecutionContext) -> tuple[TableLike, TableLike]:
-        """Materialize validation plans into Arrow tables.
-
-        Returns
-        -------
-        tuple[TableLike, TableLike]
-            Invalid rows and duplicate key tables.
-        """
-        execution = _ibis_execution_for_ctx(ctx)
-        module = importlib.import_module("ibis_engine.execution")
-        execute = module.execute_ibis_plan
-        invalid = execute(self.invalid_rows, execution=execution, streaming=False).require_table()
-        dupes = execute(self.duplicate_keys, execution=execution, streaming=False).require_table()
-        return invalid, dupes
-
-
-def _ibis_backend_for_ctx(ctx: ExecutionContext) -> BaseBackend:
-    from ibis_engine.execution_factory import ibis_backend_from_ctx
-
-    return ibis_backend_from_ctx(ctx)
-
-
-def _ibis_execution_for_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
-    from ibis_engine.execution_factory import ibis_execution_from_ctx
-
-    return ibis_execution_from_ctx(ctx)
-
-
-def _invalid_rows_plan(plan: IbisPlan, *, spec: TableSchemaSpec) -> IbisPlan:
-    required = required_field_names(spec)
-    available = set(plan.expr.columns)
-    predicates = [plan.expr[name].isnull() for name in required if name in available]
-    if not predicates:
-        filtered = plan.expr.filter(cast("BooleanValue", ibis.literal(value=False)))
-        return IbisPlan(expr=filtered, ordering=Ordering.unordered())
-    predicate = predicates[0]
-    for part in predicates[1:]:
-        predicate |= part
-    filtered = plan.expr.filter(predicate)
-    return IbisPlan(expr=filtered, ordering=Ordering.unordered())
-
-
-def _duplicate_key_rows_plan(plan: IbisPlan, *, keys: Sequence[str]) -> IbisPlan:
-    if not keys:
-        filtered = plan.expr.filter(cast("BooleanValue", ibis.literal(value=False)))
-        return IbisPlan(expr=filtered, ordering=Ordering.unordered())
-    available = set(plan.expr.columns)
-    missing = missing_key_fields(keys, missing_cols=[key for key in keys if key not in available])
-    if missing:
-        filtered = plan.expr.filter(cast("BooleanValue", ibis.literal(value=False)))
-        return IbisPlan(expr=filtered, ordering=Ordering.unordered())
-    count_col = f"{keys[0]}_count"
-    grouped = plan.expr.group_by([plan.expr[key] for key in keys]).aggregate(
-        **{count_col: plan.expr[keys[0]].count()}
-    )
-    filtered = grouped.filter(grouped[count_col] > ibis.literal(1))
-    return IbisPlan(expr=filtered, ordering=Ordering.unordered())
-
-
-class _ReadDatasetParams(Protocol):
-    def __init__(self, **kwargs: object) -> None: ...
-
-
-class _IbisRegistryModule(Protocol):
-    ReadDatasetParams: type[_ReadDatasetParams]
-
-    def read_dataset(
-        self,
-        backend: ibis.backends.BaseBackend,
-        *,
-        params: _ReadDatasetParams,
-    ) -> Table: ...
-
-
-def _ibis_registry_module() -> _IbisRegistryModule:
-    return cast("_IbisRegistryModule", importlib.import_module("ibis_engine.registry"))
-
-
-@dataclass(frozen=True)
 class DatasetOpenSpec:
     """Dataset open parameters for schema discovery."""
 
@@ -837,7 +653,7 @@ class DatasetOpenSpec:
             Opened dataset instance.
         """
         if self.dataset_format == "delta":
-            msg = "Delta dataset discovery requires DataFusion; use read_ibis_table."
+            msg = "Delta dataset discovery requires DataFusion catalog introspection."
             raise ValueError(msg)
         if self.dataset_format == "parquet":
             msg = "Parquet dataset discovery is disabled for delta-only IO."
@@ -858,46 +674,6 @@ class DatasetOpenSpec:
                 discovery=self.discovery,
             ),
         )
-
-    def read_ibis_table(
-        self,
-        path: PathLike,
-        *,
-        backend: ibis.backends.BaseBackend,
-        table_name: str | None = None,
-        dataset_spec: DatasetSpec | None = None,
-    ) -> Table:
-        """Read an Ibis table using the stored options.
-
-        Parameters
-        ----------
-        path : PathLike
-            Dataset location.
-        backend : ibis.backends.BaseBackend
-            Ibis backend used for reading.
-        table_name : str | None
-            Optional name for registering the table.
-        dataset_spec : DatasetSpec | None
-            Optional dataset spec with DataFusion scan options.
-
-        Returns
-        -------
-        ibis.expr.types.Table
-            Ibis table expression for the dataset.
-        """
-        module = _ibis_registry_module()
-        params = module.ReadDatasetParams(
-            path=path,
-            dataset_format=self.dataset_format,
-            read_options=self.read_options,
-            storage_options=self.storage_options,
-            delta_log_storage_options=self.delta_log_storage_options,
-            filesystem=self.filesystem,
-            partitioning=self.partitioning,
-            table_name=table_name,
-            dataset_spec=dataset_spec,
-        )
-        return module.read_dataset(backend, params=params)
 
 
 @dataclass(frozen=True)
@@ -1422,13 +1198,24 @@ def dataset_spec_from_path(
     -------
     DatasetSpec
         Dataset spec derived from the dataset path.
+
+    Raises
+    ------
+    ValueError
+        Raised when the Delta schema cannot be resolved from the dataset path.
     """
     options = options or DatasetOpenSpec()
     if options.dataset_format == "delta":
-        ctx = execution_context_factory("default")
-        backend = _ibis_backend_for_ctx(ctx)
-        table = options.read_ibis_table(path, backend=backend)
-        schema = table.schema().to_pyarrow()
+        schema = delta_table_schema(
+            str(path),
+            storage_options=options.storage_options or None,
+            log_storage_options=options.delta_log_storage_options or None,
+            version=options.delta_version,
+            timestamp=options.delta_timestamp,
+        )
+        if schema is None:
+            msg = f"Delta schema unavailable for dataset at {path!r}."
+            raise ValueError(msg)
         return dataset_spec_from_schema(name, schema, version=version)
     dataset = options.open(path)
     return dataset_spec_from_dataset(name, dataset, version=version)
@@ -1505,7 +1292,6 @@ __all__ = [
     "SortKeySpec",
     "TableSchemaContract",
     "TableSpecConstraints",
-    "ValidationPlans",
     "VirtualFieldSpec",
     "dataset_spec_from_contract",
     "dataset_spec_from_dataset",

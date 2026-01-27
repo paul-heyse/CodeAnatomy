@@ -8,10 +8,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
-from datafusion import SessionContext
+from datafusion import SessionContext, SQLOptions
 
-from sqlglot_tools.ddl_builders import CreateFunctionConfig, build_create_function_ast
-from sqlglot_tools.optimizer import resolve_sqlglot_policy
 from storage.ipc import payload_ipc_bytes
 
 if TYPE_CHECKING:
@@ -94,6 +92,28 @@ class RulePrimitive:
             "description": self.description,
             "supports_named_args": self.supports_named_args,
         }
+
+
+@dataclass(frozen=True)
+class FunctionArgSpec:
+    """Argument definition for CREATE FUNCTION statements."""
+
+    name: str
+    dtype: str
+
+
+@dataclass(frozen=True)
+class CreateFunctionConfig:
+    """Configuration for CREATE FUNCTION statements."""
+
+    name: str
+    args: tuple[FunctionArgSpec, ...] = ()
+    return_type: str | None = None
+    returns_table: bool = False
+    body_sql: str | None = None
+    language: str | None = None
+    volatility: str | None = None
+    replace: bool = False
 
 
 @dataclass(frozen=True)
@@ -385,34 +405,71 @@ def register_function(
     runtime_profile
         Optional runtime profile for policy enforcement.
     """
-    from datafusion_engine.compile_options import DataFusionCompileOptions
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
     from datafusion_engine.introspection import invalidate_introspection_cache
-    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 
-    expr = build_create_function_ast(config=config)
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    policy_profile = SQLPolicyProfile(policy=resolve_sqlglot_policy(name="datafusion_compile"))
-    plan = facade.compile(
-        expr,
-        options=DataFusionCompileOptions(
-            sql_policy_profile=policy_profile,
-            runtime_profile=runtime_profile,
-        ),
+    sql = build_create_function_sql(config=config)
+    allow_ddl = True
+    allow_statements = True
+    options = (
+        (runtime_profile.sql_options() if runtime_profile else SQLOptions())
+        .with_allow_ddl(allow_ddl)
+        .with_allow_statements(allow_statements)
     )
-    facade.execute(plan)
+    ctx.sql_with_options(sql, options).collect()
     invalidate_introspection_cache(ctx)
+
+
+def build_create_function_sql(*, config: CreateFunctionConfig) -> str:
+    """Build CREATE FUNCTION statements as SQL text.
+
+    Parameters
+    ----------
+    config
+        Function configuration including name, args, return type, and body.
+
+    Returns
+    -------
+    str
+        CREATE FUNCTION SQL string.
+
+    Raises
+    ------
+    ValueError
+        Raised when the function body is missing or the return type is invalid.
+    """
+    if not config.body_sql:
+        msg = "CREATE FUNCTION requires a function body."
+        raise ValueError(msg)
+    if config.return_type is None and not config.returns_table:
+        msg = "CREATE FUNCTION requires a return type or returns_table=True."
+        raise ValueError(msg)
+    args_sql = ", ".join(f"{arg.name} {arg.dtype}" for arg in config.args)
+    replace_sql = " OR REPLACE" if config.replace else ""
+    if config.returns_table:
+        returns_sql = "RETURNS TABLE"
+    else:
+        if config.return_type is None:
+            msg = "CREATE FUNCTION requires a return type when returns_table is False."
+            raise ValueError(msg)
+        returns_sql = f"RETURNS {config.return_type}"
+    language_sql = f" LANGUAGE {config.language}" if config.language else ""
+    volatility_sql = f" {config.volatility.upper()}" if config.volatility else ""
+    return (
+        f"CREATE{replace_sql} FUNCTION {config.name}({args_sql}) "
+        f"{returns_sql}{language_sql}{volatility_sql} AS {config.body_sql}"
+    )
 
 
 __all__ = [
     "CreateFunctionConfig",
+    "FunctionArgSpec",
     "FunctionFactoryPolicy",
     "FunctionParameter",
     "RulePrimitive",
     "UdafSpecInput",
     "UdfVolatility",
     "UdwfSpecInput",
-    "build_create_function_ast",
+    "build_create_function_sql",
     "create_udaf_spec",
     "create_udwf_spec",
     "function_factory_payloads",

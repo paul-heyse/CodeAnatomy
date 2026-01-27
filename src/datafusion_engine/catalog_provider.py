@@ -18,16 +18,15 @@ from datafusion.catalog import (
 from datafusion.dataframe import DataFrame
 from deltalake import DeltaTable
 
+from datafusion_engine.dataset_registry import (
+    DatasetCatalog,
+    DatasetLocation,
+    resolve_dataset_schema,
+)
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
     table_provider_metadata,
-)
-from ibis_engine.registry import (
-    DatasetCatalog,
-    DatasetLocation,
-    IbisDatasetRegistry,
-    resolve_dataset_schema,
 )
 
 DATASET_HANDLE_PREFIXES: tuple[str, ...] = ("dataset://", "repo://")
@@ -369,7 +368,7 @@ class MultiRegistryCatalogProvider(CatalogProvider):
 def register_registry_catalog(
     ctx: SessionContext,
     *,
-    registry: IbisDatasetRegistry | DatasetCatalog,
+    registry: DatasetCatalog,
     catalog_name: str = "datafusion",
     schema_name: str = "public",
 ) -> RegistryCatalogProvider:
@@ -380,7 +379,7 @@ def register_registry_catalog(
     ctx:
         DataFusion session context used for catalog registration.
     registry:
-        Dataset registry or catalog used for table resolution.
+        Dataset catalog used for table resolution.
     catalog_name:
         Catalog name to register in DataFusion.
     schema_name:
@@ -393,8 +392,7 @@ def register_registry_catalog(
     """
     from datafusion_engine.io_adapter import DataFusionIOAdapter
 
-    dataset_catalog = registry.catalog if isinstance(registry, IbisDatasetRegistry) else registry
-    provider = RegistryCatalogProvider(dataset_catalog, schema_name=schema_name, ctx=ctx)
+    provider = RegistryCatalogProvider(registry, schema_name=schema_name, ctx=ctx)
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_catalog_provider(catalog_name, provider)
     return provider

@@ -48,9 +48,7 @@ from arrowdsl.schema.semantic_types import (
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
-from datafusion_engine.sqlglot_exprs import sqlglot_ast_from_dataframe
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
-from sqlglot_tools.compat import exp
 
 if TYPE_CHECKING:
     from datafusion_engine.schema_contracts import SchemaContract
@@ -108,24 +106,9 @@ SQLGLOT_PARSE_ERROR_DETAILS_TYPE = list_view_type(
 )
 
 
-def _sql_with_options(ctx: SessionContext, expr: exp.Expression) -> DataFrame:
-    from datafusion_engine.compile_options import DataFusionCompileOptions
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-    def _sql_ingest(_payload: Mapping[str, object]) -> None:
-        return None
-
-    options = DataFusionCompileOptions(
-        sql_options=sql_options_for_profile(None),
-        sql_ingest_hook=_sql_ingest,
-    )
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    plan = facade.compile(expr, options=options)
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "Schema registry SQL execution did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    return result.dataframe
+def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
+    options = sql_options_for_profile(None)
+    return ctx.sql_with_options(sql, options)
 
 
 def _attrs_field(name: str = "attrs") -> pa.Field:
@@ -2796,15 +2779,11 @@ def nested_view_spec(
         View specification derived from the registered base table.
     """
     builder = partial(nested_base_df, name=name, table=table)
-    df = builder(ctx)
-    ast = sqlglot_ast_from_dataframe(df)
     return view_spec_from_builder(
         ViewSpecInputs(
             ctx=ctx,
             name=name,
             builder=builder,
-            ast=ast,
-            sql=None,
         )
     )
 
@@ -2843,8 +2822,8 @@ def validate_schema_metadata(schema: pa.Schema) -> None:
 
 def validate_nested_types(ctx: SessionContext, name: str) -> None:
     """Validate nested dataset types using DataFusion arrow_typeof."""
-    expr = exp.select(exp.func("arrow_typeof", exp.Star()).as_("row_type")).from_(name).limit(1)
-    _sql_with_options(ctx, expr).collect()
+    sql = f"SELECT arrow_typeof(*) AS row_type FROM {name} LIMIT 1"
+    _sql_with_options(ctx, sql).collect()
 
 
 def _require_semantic_type(
@@ -2855,18 +2834,11 @@ def _require_semantic_type(
     expected: str,
 ) -> None:
     meta_key = SEMANTIC_TYPE_META.decode("utf-8")
-    expr = (
-        exp.select(
-            exp.func(
-                "arrow_metadata",
-                exp.column(column_name),
-                exp.Literal.string(meta_key),
-            ).as_("semantic_type")
-        )
-        .from_(table_name)
-        .limit(1)
+    sql = (
+        f"SELECT arrow_metadata({column_name}, '{meta_key}') AS semantic_type "
+        f"FROM {table_name} LIMIT 1"
     )
-    rows = _sql_with_options(ctx, expr).to_arrow_table().to_pylist()
+    rows = _sql_with_options(ctx, sql).to_arrow_table().to_pylist()
     semantic_type = rows[0].get("semantic_type") if rows else None
     if semantic_type is None:
         msg = f"Missing semantic type metadata on {table_name}.{column_name}."
@@ -2900,34 +2872,18 @@ def _validate_ast_view_outputs_all(
 
 def _validate_ast_file_types(ctx: SessionContext, errors: dict[str, str]) -> None:
     exprs = (
-        exp.select(exp.func("arrow_typeof", exp.column("nodes")).as_("nodes_type"))
-        .from_("ast_files_v1")
-        .limit(1),
-        exp.select(exp.func("arrow_typeof", exp.column("edges")).as_("edges_type"))
-        .from_("ast_files_v1")
-        .limit(1),
-        exp.select(exp.func("arrow_typeof", exp.column("errors")).as_("errors_type"))
-        .from_("ast_files_v1")
-        .limit(1),
-        exp.select(exp.func("arrow_typeof", exp.column("docstrings")).as_("docstrings_type"))
-        .from_("ast_files_v1")
-        .limit(1),
-        exp.select(exp.func("arrow_typeof", exp.column("imports")).as_("imports_type"))
-        .from_("ast_files_v1")
-        .limit(1),
-        exp.select(exp.func("arrow_typeof", exp.column("defs")).as_("defs_type"))
-        .from_("ast_files_v1")
-        .limit(1),
-        exp.select(exp.func("arrow_typeof", exp.column("calls")).as_("calls_type"))
-        .from_("ast_files_v1")
-        .limit(1),
-        exp.select(exp.func("arrow_typeof", exp.column("type_ignores")).as_("type_ignores_type"))
-        .from_("ast_files_v1")
-        .limit(1),
+        "SELECT arrow_typeof(nodes) AS nodes_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(edges) AS edges_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(errors) AS errors_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(docstrings) AS docstrings_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(imports) AS imports_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(defs) AS defs_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(calls) AS calls_type FROM ast_files_v1 LIMIT 1",
+        "SELECT arrow_typeof(type_ignores) AS type_ignores_type FROM ast_files_v1 LIMIT 1",
     )
     try:
-        for expr in exprs:
-            _sql_with_options(ctx, expr).collect()
+        for sql in exprs:
+            _sql_with_options(ctx, sql).collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ast_files_v1"] = str(exc)
 
@@ -3253,10 +3209,7 @@ def _ts_span_expected_meta() -> dict[str, str]:
 def _validate_ast_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> None:
     expected = _ast_span_expected_meta()
     try:
-        table = _sql_with_options(
-            ctx,
-            exp.select(exp.Star()).from_("ast_span_metadata"),
-        ).to_arrow_table()
+        table = _sql_with_options(ctx, "SELECT * FROM ast_span_metadata").to_arrow_table()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ast_span_metadata"] = str(exc)
         return
@@ -3290,10 +3243,7 @@ def _validate_ast_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> 
 def _validate_ts_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> None:
     expected = _ts_span_expected_meta()
     try:
-        table = _sql_with_options(
-            ctx,
-            exp.select(exp.Star()).from_("ts_span_metadata"),
-        ).to_arrow_table()
+        table = _sql_with_options(ctx, "SELECT * FROM ts_span_metadata").to_arrow_table()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ts_span_metadata"] = str(exc)
         return
@@ -3360,8 +3310,8 @@ def _validate_ast_view_outputs(
     errors: dict[str, str],
 ) -> None:
     try:
-        expr = exp.select(exp.Star()).from_(name)
-        rows = introspector.describe_expression(expr)
+        sql = f"SELECT * FROM {name}"
+        rows = introspector.describe_query(sql)
     except (RuntimeError, TypeError, ValueError) as exc:
         errors[name] = str(exc)
         return
@@ -3397,8 +3347,8 @@ def _validate_ts_view_outputs(
     errors: dict[str, str],
 ) -> None:
     try:
-        expr = exp.select(exp.Star()).from_(name)
-        rows = introspector.describe_expression(expr)
+        sql = f"SELECT * FROM {name}"
+        rows = introspector.describe_query(sql)
     except (RuntimeError, TypeError, ValueError) as exc:
         errors[name] = str(exc)
         return
@@ -3492,8 +3442,8 @@ def _validate_cst_view_outputs(
     errors: dict[str, str],
 ) -> None:
     try:
-        expr = exp.select(exp.Star()).from_(name)
-        rows = introspector.describe_expression(expr)
+        sql = f"SELECT * FROM {name}"
+        rows = introspector.describe_query(sql)
     except (RuntimeError, TypeError, ValueError) as exc:
         errors[name] = str(exc)
         return
@@ -3547,10 +3497,7 @@ def validate_cst_views(ctx: SessionContext) -> None:
             errors=errors,
         )
     try:
-        _sql_with_options(
-            ctx,
-            exp.select(exp.Star()).from_("cst_schema_diagnostics"),
-        ).collect()
+        _sql_with_options(ctx, "SELECT * FROM cst_schema_diagnostics").collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["cst_schema_diagnostics"] = str(exc)
     if errors:

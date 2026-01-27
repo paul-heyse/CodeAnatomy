@@ -8,9 +8,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.registry import DatasetLocation
 from obs.diagnostics import DiagnosticsCollector
 from schema_spec.system import DataFusionScanOptions
 

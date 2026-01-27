@@ -26,15 +26,15 @@ from datafusion_engine.table_provider_metadata import (
     record_table_provider_metadata,
     table_provider_metadata,
 )
+from ibis_engine.datafusion_context import datafusion_context
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
-from ibis_engine.registry import datafusion_context
 from ibis_engine.schema_utils import bind_expr_schema, ibis_schema_from_arrow, resolve_arrow_schema
 
 if TYPE_CHECKING:
+    from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.runtime import DataFusionRuntimeProfile
-    from datafusion_engine.view_artifacts import ViewArtifact
-    from ibis_engine.registry import DatasetLocation
+    from datafusion_engine.view_artifacts import DataFusionViewArtifact
     from schema_spec.system import DeltaScanOptions
     from sqlglot_tools.bridge import IbisCompilerBackend
 
@@ -345,7 +345,7 @@ def _record_ibis_view_artifact(
     *,
     view_name: str,
     options: SourceToIbisOptions,
-) -> ViewArtifact | None:
+) -> DataFusionViewArtifact | None:
     runtime_profile = options.runtime_profile
     if runtime_profile is None:
         return None
@@ -354,8 +354,10 @@ def _record_ibis_view_artifact(
     except (RuntimeError, TypeError, ValueError):
         return None
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
+    from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
+    from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
     from datafusion_engine.runtime import record_view_definition
-    from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
+    from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
 
     facade = DataFusionExecutionFacade(
         ctx=ctx,
@@ -363,18 +365,22 @@ def _record_ibis_view_artifact(
         ibis_backend=cast("IbisCompilerBackend", options.backend),
     )
     try:
-        compiled = facade.compile(expr)
+        result = facade.execute_expr(expr)
     except (RuntimeError, TypeError, ValueError):
         return None
+    if result.plan_bundle is None:
+        return None
     schema = expr.schema().to_pyarrow()
-    artifact = build_view_artifact(
-        ViewArtifactInputs(
-            ctx=ctx,
-            name=view_name,
-            ast=compiled.compiled.sqlglot_ast,
-            schema=schema,
-            policy_profile=compiled.options.sql_policy_profile,
-        )
+    required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(result.plan_bundle)))
+    referenced_tables = tuple(
+        sorted(referenced_tables_from_plan(result.plan_bundle.optimized_logical_plan))
+    )
+    artifact = build_view_artifact_from_bundle(
+        result.plan_bundle,
+        name=view_name,
+        schema=schema,
+        required_udfs=required_udfs,
+        referenced_tables=referenced_tables,
     )
     record_view_definition(runtime_profile, artifact=artifact)
     return artifact
@@ -542,7 +548,7 @@ def _delta_location_from_options(
     DatasetLocation
         Resolved dataset location with Delta scan settings applied.
     """
-    from ibis_engine.registry import (
+    from datafusion_engine.dataset_registry import (
         DatasetLocation,
         resolve_delta_log_storage_options,
         resolve_delta_scan_options,
@@ -675,7 +681,7 @@ def read_delta_ibis(
         raise TypeError(msg)
     name = resolved.table_name or _delta_table_alias(path)
     location = _delta_location_from_options(path, resolved=resolved)
-    from ibis_engine.registry import resolve_datafusion_provider
+    from datafusion_engine.dataset_registry import resolve_datafusion_provider
 
     provider = resolve_datafusion_provider(location)
     if provider is not None:

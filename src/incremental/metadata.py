@@ -12,17 +12,17 @@ import pyarrow as pa
 from arrowdsl.schema.build import table_from_schema
 from datafusion_engine.view_artifacts import view_artifact_payload_table
 from engine.runtime_profile import runtime_profile_snapshot
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from serde_msgspec import to_builtins
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
-from storage.deltalake import StorageOptions, enable_delta_features
+from storage.deltalake import (
+    DeltaWriteOptions,
+    StorageOptions,
+    enable_delta_features,
+    write_delta_table,
+)
 
 _CDF_CURSOR_SCHEMA = pa.schema(
     [
@@ -58,19 +58,15 @@ def write_incremental_metadata(
     }
     table = pa.Table.from_pylist([payload])
     path = state_store.incremental_metadata_path()
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         table,
         str(path),
-        options=IbisDatasetWriteOptions(
-            execution=runtime.ibis_execution(),
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={"snapshot_kind": "incremental_metadata"},
-                storage_options=storage_options,
-                log_storage_options=log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"snapshot_kind": "incremental_metadata"},
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
         ),
     )
     enable_delta_features(
@@ -109,6 +105,7 @@ def write_cdf_cursor_snapshot(
     str
         Delta table path for the cursor snapshot.
     """
+    _ = runtime
     state_store.ensure_dirs()
     cursors = cursor_store.list_cursors()
     if cursors:
@@ -117,19 +114,15 @@ def write_cdf_cursor_snapshot(
     else:
         table = table_from_schema(_CDF_CURSOR_SCHEMA, columns={}, num_rows=0)
     path = state_store.cdf_cursor_snapshot_path()
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         table,
         str(path),
-        options=IbisDatasetWriteOptions(
-            execution=runtime.ibis_execution(),
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={"snapshot_kind": "cdf_cursor_snapshot"},
-                storage_options=storage_options,
-                log_storage_options=log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"snapshot_kind": "cdf_cursor_snapshot"},
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
         ),
     )
     enable_delta_features(
@@ -204,19 +197,15 @@ def _write_artifact_rows(
     if not rows:
         return None
     table = _artifacts_to_table(rows)
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         table,
         str(path),
-        options=IbisDatasetWriteOptions(
-            execution=context.runtime.ibis_execution(),
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={"artifact_name": name},
-                storage_options=context.storage_options,
-                log_storage_options=context.log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"artifact_name": name},
+            storage_options=context.storage_options,
+            log_storage_options=context.log_storage_options,
         ),
     )
     enable_delta_features(
@@ -237,19 +226,15 @@ def _write_view_artifact_rows(
     if not rows:
         return None
     table = view_artifact_payload_table(rows)
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         table,
         str(path),
-        options=IbisDatasetWriteOptions(
-            execution=context.runtime.ibis_execution(),
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={"artifact_name": name},
-                storage_options=context.storage_options,
-                log_storage_options=context.log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"artifact_name": name},
+            storage_options=context.storage_options,
+            log_storage_options=context.log_storage_options,
         ),
     )
     enable_delta_features(
@@ -273,19 +258,15 @@ def _write_artifact_table(
     if not artifacts:
         return None
     table = _artifacts_to_table(artifacts)
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         table,
         str(path),
-        options=IbisDatasetWriteOptions(
-            execution=context.runtime.ibis_execution(),
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={"artifact_name": name},
-                storage_options=context.storage_options,
-                log_storage_options=context.log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"artifact_name": name},
+            storage_options=context.storage_options,
+            log_storage_options=context.log_storage_options,
         ),
     )
     enable_delta_features(

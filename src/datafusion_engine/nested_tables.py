@@ -12,7 +12,7 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from ibis_engine.registry import datafusion_context
+from ibis_engine.datafusion_context import datafusion_context
 
 
 @dataclass(frozen=True)

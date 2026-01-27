@@ -12,7 +12,6 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.introspection import invalidate_introspection_cache
-from sqlglot_tools.compat import Expression, exp
 
 
 @dataclass(frozen=True)
@@ -161,24 +160,11 @@ def evaluate_filters_against_index(
         adapter.register_record_batches(temp_table_name, [list(index.to_batches())])
 
         # Construct and execute filter expression
-        expr = _build_filter_expr(temp_table_name, policy)
-        from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
+        sql = _build_filter_sql(temp_table_name, policy)
         from datafusion_engine.sql_options import sql_options_for_profile
 
-        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-        plan = facade.compile(
-            expr,
-            options=DataFusionCompileOptions(
-                sql_options=sql_options_for_profile(None),
-                sql_policy=DataFusionSqlPolicy(),
-            ),
-        )
-        result = facade.execute(plan)
-        if result.dataframe is None:
-            msg = "File pruning SQL did not return a DataFusion DataFrame."
-            raise ValueError(msg)
-        return result.dataframe.to_arrow_table()
+        df = ctx.sql_with_options(sql, sql_options_for_profile(None))
+        return df.to_arrow_table()
     finally:
         # Deregister temporary table
         _deregister_table(ctx, temp_table_name)
@@ -275,8 +261,8 @@ def evaluate_and_select_files(
     )
 
 
-def _build_filter_expr(table_name: str, policy: FilePruningPolicy) -> Expression:
-    """Build SQLGlot filter expression for file index.
+def _build_filter_sql(table_name: str, policy: FilePruningPolicy) -> str:
+    """Build SQL filter query for file index.
 
     Parameters
     ----------
@@ -287,56 +273,28 @@ def _build_filter_expr(table_name: str, policy: FilePruningPolicy) -> Expression
 
     Returns
     -------
-    sqlglot.expressions.Expression
-        SQLGlot select expression.
+    str
+        SQL query string for filtering the file index.
     """
     predicate = _combine_predicates((*policy.partition_filters, *policy.stats_filters))
-    select_expr = exp.select(exp.Star()).from_(table_name)
+    select_sql = f"SELECT * FROM {table_name}"
     if predicate is None:
-        return select_expr
-    return select_expr.where(predicate)
+        return select_sql
+    return f"{select_sql} WHERE {predicate}"
 
 
-def _combine_predicates(filters: Sequence[str]) -> Expression | None:
-    predicates: list[Expression] = []
+def _combine_predicates(filters: Sequence[str]) -> str | None:
+    predicates: list[str] = []
     for raw in filters:
         text = str(raw).strip()
         if not text:
             continue
-        predicates.append(_parse_predicate(text))
+        predicates.append(f"({text})")
     if not predicates:
         return None
     if len(predicates) == 1:
         return predicates[0]
-    return exp.and_(*predicates)
-
-
-def _parse_predicate(predicate: str) -> Expression:
-    from sqlglot.errors import ParseError
-
-    from datafusion_engine.compile_options import DataFusionCompileOptions
-    from sqlglot_tools.optimizer import (
-        StrictParseOptions,
-        parse_sql_strict,
-        register_datafusion_dialect,
-    )
-
-    register_datafusion_dialect()
-    try:
-        expr = parse_sql_strict(
-            f"SELECT * FROM __file_index WHERE {predicate}",
-            dialect=DataFusionCompileOptions().dialect,
-            options=StrictParseOptions(error_level=None),
-        )
-    except (ParseError, TypeError, ValueError) as exc:
-        msg = f"Failed to parse pruning predicate: {predicate!r}."
-        raise ValueError(msg) from exc
-    where = expr.args.get("where")
-    condition = getattr(where, "this", None)
-    if not isinstance(condition, Expression):
-        msg = f"Failed to resolve pruning predicate expression: {predicate!r}."
-        raise TypeError(msg)
-    return condition
+    return " AND ".join(predicates)
 
 
 def _parse_partition_filters(filters: list[str]) -> dict[str, str]:

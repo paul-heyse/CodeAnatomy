@@ -3,10 +3,37 @@
 from __future__ import annotations
 
 import pyarrow as pa
-import sqlglot.expressions as exp
 
+from datafusion_engine.plan_bundle import build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
+from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
+
+
+def _arrow_schema_from_df(df: object) -> pa.Schema:
+    """Resolve a DataFusion DataFrame schema into PyArrow.
+
+    Returns
+    -------
+    pa.Schema
+        Resolved PyArrow schema for the DataFrame.
+
+    Raises
+    ------
+    TypeError
+        Raised when the schema cannot be resolved to PyArrow.
+    """
+    schema = getattr(df, "schema", None)
+    if callable(schema):
+        schema = schema()
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Failed to resolve DataFusion schema."
+    raise TypeError(msg)
 
 
 def test_view_registry_snapshot_stable_for_repeated_registration() -> None:
@@ -15,24 +42,25 @@ def test_view_registry_snapshot_stable_for_repeated_registration() -> None:
     ctx = profile.session_context()
     registry = profile.view_registry
     assert registry is not None
-    schema = pa.schema([])
-    alpha = build_view_artifact(
-        ViewArtifactInputs(
-            ctx=ctx,
-            name="alpha_view",
-            ast=exp.select(exp.Literal.number(1)),
-            schema=schema,
-            sql="SELECT 1",
-        )
+    alpha_df = ctx.sql("SELECT 1 AS value")
+    beta_df = ctx.sql("SELECT 2 AS value")
+    alpha_bundle = build_plan_bundle(ctx, alpha_df, compute_execution_plan=False)
+    beta_bundle = build_plan_bundle(ctx, beta_df, compute_execution_plan=False)
+    alpha_schema = _arrow_schema_from_df(alpha_df)
+    beta_schema = _arrow_schema_from_df(beta_df)
+    alpha = build_view_artifact_from_bundle(
+        alpha_bundle,
+        name="alpha_view",
+        schema=alpha_schema,
+        required_udfs=(),
+        referenced_tables=(),
     )
-    beta = build_view_artifact(
-        ViewArtifactInputs(
-            ctx=ctx,
-            name="beta_view",
-            ast=exp.select(exp.Literal.number(2)),
-            schema=schema,
-            sql="SELECT 2",
-        )
+    beta = build_view_artifact_from_bundle(
+        beta_bundle,
+        name="beta_view",
+        schema=beta_schema,
+        required_udfs=(),
+        referenced_tables=(),
     )
     registry.record(name="alpha_view", artifact=alpha)
     registry.record(name="beta_view", artifact=beta)

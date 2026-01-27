@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from arrowdsl.core.runtime_profiles import RuntimeProfile
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from sqlglot_tools.bridge import IbisCompilerBackend
-from ibis_engine.registry import IbisDatasetRegistry
+from datafusion_engine.dataset_registry import DatasetCatalog
 from obs.diagnostics import DiagnosticsCollector
 
 
@@ -32,7 +32,7 @@ class EngineSession:
     ctx: ExecutionContext
     engine_runtime: EngineRuntime
     ibis_backend: BaseBackend
-    datasets: IbisDatasetRegistry
+    datasets: DatasetCatalog
     diagnostics: DiagnosticsCollector | None = None
     surface_policy: ExecutionSurfacePolicy = field(default_factory=ExecutionSurfacePolicy)
     settings_hash: str | None = None

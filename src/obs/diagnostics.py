@@ -14,13 +14,12 @@ from datafusion_engine.diagnostics import (
     view_udf_parity_payload,
 )
 from datafusion_engine.schema_contracts import SchemaViolation
-from datafusion_engine.view_artifacts import ViewArtifact
+from datafusion_engine.view_artifacts import DataFusionViewArtifact
 from serde_msgspec import StructBase
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     from datafusion_engine.view_graph_registry import ViewNode
 
 
@@ -116,13 +115,12 @@ def record_view_fingerprints(
     sink: DiagnosticsCollector,
     *,
     view_nodes: Sequence[ViewNode],
-    policy_profile: SQLPolicyProfile | None = None,
 ) -> None:
     """Record policy-aware view fingerprints into diagnostics."""
     recorder_sink = ensure_recorder_sink(sink, session_id="obs")
     recorder_sink.record_artifact(
         "view_fingerprints_v1",
-        view_fingerprint_payload(view_nodes=view_nodes, policy_profile=policy_profile),
+        view_fingerprint_payload(view_nodes=view_nodes),
     )
 
 
@@ -177,7 +175,7 @@ def record_view_contract_violations(
     recorder_sink.record_artifact("view_contract_violations_v1", payload)
 
 
-def record_view_artifact(sink: DiagnosticsCollector, *, artifact: ViewArtifact) -> None:
+def record_view_artifact(sink: DiagnosticsCollector, *, artifact: DataFusionViewArtifact) -> None:
     """Record a deterministic view artifact payload."""
     recorder_sink = ensure_recorder_sink(sink, session_id="obs")
     recorder_sink.record_artifact(

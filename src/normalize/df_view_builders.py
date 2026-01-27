@@ -541,6 +541,22 @@ def diagnostics_df_builder(ctx: SessionContext) -> DataFrame:
         """)
 
 
+def span_errors_df_builder(ctx: SessionContext) -> DataFrame:
+    """Build a DataFrame for span error rows.
+
+    Parameters
+    ----------
+    ctx : SessionContext
+        DataFusion session context with registered base tables.
+
+    Returns
+    -------
+    DataFrame
+        DataFrame for span error rows.
+    """
+    return ctx.table("span_errors_v1")
+
+
 # View builder registry mapping view names to builders
 VIEW_BUILDERS: dict[str, DataFrameBuilder] = {
     "type_exprs_norm_v1": type_exprs_df_builder,
@@ -550,6 +566,7 @@ VIEW_BUILDERS: dict[str, DataFrameBuilder] = {
     "py_bc_def_use_events_v1": def_use_events_df_builder,
     "py_bc_reaches_v1": reaching_defs_df_builder,
     "diagnostics_norm_v1": diagnostics_df_builder,
+    "span_errors_v1": span_errors_df_builder,
 }
 
 
@@ -561,6 +578,7 @@ __all__ = [
     "def_use_events_df_builder",
     "diagnostics_df_builder",
     "reaching_defs_df_builder",
+    "span_errors_df_builder",
     "type_exprs_df_builder",
     "type_nodes_df_builder",
 ]

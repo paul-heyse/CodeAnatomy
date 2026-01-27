@@ -20,8 +20,8 @@ from datafusion_engine.diagnostics import record_artifact, recorder_for_profile
 from datafusion_engine.introspection import invalidate_introspection_cache
 
 if TYPE_CHECKING:
+    from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.runtime import DataFusionRuntimeProfile
-    from ibis_engine.registry import DatasetLocation
 
 _REGISTERED_OBJECT_STORES: dict[int, set[tuple[str, str | None]]] = {}
 

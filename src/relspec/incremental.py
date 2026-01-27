@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from datafusion_engine.dataset_registry import DatasetCatalog
 from datafusion_engine.semantic_diff import RebuildPolicy, SemanticDiff
-from ibis_engine.registry import DatasetCatalog
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.cdf_runtime import read_cdf_changes

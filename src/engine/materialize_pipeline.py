@@ -15,6 +15,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
 from datafusion_engine.dataset_locations import resolve_dataset_location
+from datafusion_engine.dataset_registry import resolve_delta_log_storage_options
 from datafusion_engine.diagnostics import record_artifact, record_events
 from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.runtime import (
@@ -23,22 +24,15 @@ from datafusion_engine.runtime import (
 from datafusion_engine.streaming_executor import StreamingExecutionResult
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
-from ibis_engine.execution_factory import ibis_execution_from_ctx
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
 from ibis_engine.params_bridge import param_binding_mode, param_binding_signature
 from ibis_engine.plan import IbisPlan
-from ibis_engine.registry import resolve_delta_log_storage_options
 from ibis_engine.runner import IbisCachePolicy
-from storage.deltalake import DeltaWriteResult
+from storage.deltalake import DeltaWriteOptions, DeltaWriteResult, write_delta_table
 
 if TYPE_CHECKING:
-    from datafusion_engine.view_artifacts import DataFusionViewArtifact, ViewArtifact
+    from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.view_artifacts import DataFusionViewArtifact
     from ibis_engine.execution import IbisExecutionContext
-    from ibis_engine.registry import DatasetLocation
 
 
 def _resolve_prefer_reader(
@@ -259,7 +253,7 @@ def _record_plan_execution(
     *,
     plan_id: str,
     result: ExecutionResult,
-    view_artifact: ViewArtifact | DataFusionViewArtifact | None = None,
+    view_artifact: DataFusionViewArtifact | None = None,
 ) -> None:
     profile = ctx.runtime.datafusion
     if profile is None:
@@ -274,12 +268,6 @@ def _record_plan_execution(
     }
     if view_artifact is not None:
         payload["plan_fingerprint"] = view_artifact.plan_fingerprint
-        ast_fingerprint = getattr(view_artifact, "ast_fingerprint", None)
-        if isinstance(ast_fingerprint, str):
-            payload["ast_fingerprint"] = ast_fingerprint
-        policy_hash = getattr(view_artifact, "policy_hash", None)
-        if isinstance(policy_hash, str):
-            payload["policy_hash"] = policy_hash
     record_artifact(profile, "plan_execute_v1", payload)
 
 
@@ -344,13 +332,6 @@ def _record_diskcache_stats(runtime_profile: DataFusionRuntimeProfile) -> None:
         record_events(runtime_profile, "diskcache_stats_v1", events)
 
 
-def _ibis_execution_from_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
-    if ctx.runtime.datafusion is None:
-        runtime_profile = ctx.runtime.with_datafusion(DataFusionRuntimeProfile())
-        ctx = ExecutionContext(runtime=runtime_profile)
-    return ibis_execution_from_ctx(ctx)
-
-
 def _coerce_reader(
     data: TableLike | RecordBatchReaderLike | Iterable[pa.RecordBatch],
 ) -> tuple[RecordBatchReaderLike | None, int | None]:
@@ -389,7 +370,6 @@ class _DeltaWriteContext:
     runtime_profile: DataFusionRuntimeProfile
     location: DatasetLocation
     rows: int | None
-    execution: IbisExecutionContext
 
 
 def _write_delta(
@@ -398,19 +378,14 @@ def _write_delta(
     context: _DeltaWriteContext,
 ) -> None:
     log_storage_options = resolve_delta_log_storage_options(context.location)
-    datafusion_result = write_ibis_dataset_delta(
+    datafusion_result = write_delta_table(
         reader,
         str(context.location.path),
-        options=IbisDatasetWriteOptions(
-            execution=context.execution,
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="append",
-                storage_options=context.location.storage_options,
-                log_storage_options=log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="append",
+            storage_options=context.location.storage_options,
+            log_storage_options=log_storage_options,
         ),
-        table_name=context.dataset,
     )
     _record_extract_write(
         context.runtime_profile,
@@ -457,7 +432,6 @@ def write_extract_outputs(
     if location.format.lower() != "delta":
         msg = f"Delta-only extract writes are enforced; got {location.format!r}."
         raise ValueError(msg)
-    execution = _ibis_execution_from_ctx(ctx)
     _write_delta(
         reader,
         context=_DeltaWriteContext(
@@ -465,7 +439,6 @@ def write_extract_outputs(
             runtime_profile=runtime_profile,
             location=location,
             rows=rows,
-            execution=execution,
         ),
     )
     _record_diskcache_stats(runtime_profile)

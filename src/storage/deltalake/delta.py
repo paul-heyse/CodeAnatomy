@@ -5,10 +5,11 @@ from __future__ import annotations
 import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
-from deltalake import CommitProperties, DeltaTable, Transaction
+from deltalake import CommitProperties, DeltaTable, Transaction, WriterProperties
+from deltalake.writer.writer import write_deltalake
 
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
@@ -17,6 +18,7 @@ from storage.ipc import ipc_bytes
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+    from deltalake.writer.writer import ArrowArrayExportable
 
 type StorageOptions = Mapping[str, str]
 
@@ -34,6 +36,24 @@ class DeltaWriteResult:
 
     path: str
     version: int | None
+
+
+@dataclass(frozen=True)
+class DeltaWriteOptions:
+    """Options for Delta Lake writes."""
+
+    mode: Literal["error", "append", "overwrite", "ignore"] = "append"
+    schema_mode: Literal["merge", "overwrite"] | None = None
+    predicate: str | None = None
+    partition_by: Sequence[str] | None = None
+    configuration: Mapping[str, str | None] | None = None
+    commit_metadata: Mapping[str, str] | None = None
+    target_file_size: int | None = None
+    writer_properties: WriterProperties | None = None
+    app_id: str | None = None
+    version: int | None = None
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -477,6 +497,78 @@ def read_delta_cdf(
     return cast("TableLike", df.to_arrow_table())
 
 
+def write_delta_table(
+    data: TableLike | RecordBatchReaderLike,
+    path: str,
+    *,
+    options: DeltaWriteOptions | None = None,
+) -> DeltaWriteResult:
+    """Write an Arrow table or stream to a Delta table path.
+
+    Parameters
+    ----------
+    data
+        Table-like or record-batch reader to persist.
+    path
+        Delta table path.
+    options
+        Optional Delta write options.
+
+    Returns
+    -------
+    DeltaWriteResult
+        Delta write result containing path and version metadata.
+    """
+    resolved = options or DeltaWriteOptions()
+    storage = dict(resolved.storage_options or {})
+    if resolved.log_storage_options is not None:
+        storage.update(dict(resolved.log_storage_options))
+    commit_properties = build_commit_properties(
+        app_id=resolved.app_id,
+        version=resolved.version,
+        commit_metadata=resolved.commit_metadata,
+    )
+    if isinstance(data, RecordBatchReaderLike):
+        table = cast("pa.Table", data.read_all())
+    else:
+        table = cast("pa.Table", data)
+    resolved_data: Sequence[ArrowArrayExportable] = [cast("ArrowArrayExportable", table)]
+    writer_properties = resolved.writer_properties or WriterProperties()
+    if resolved.mode == "overwrite":
+        write_deltalake(
+            path,
+            resolved_data,
+            mode="overwrite",
+            schema_mode=resolved.schema_mode,
+            predicate=resolved.predicate,
+            partition_by=list(resolved.partition_by) if resolved.partition_by else None,
+            configuration=resolved.configuration,
+            storage_options=storage or None,
+            target_file_size=resolved.target_file_size,
+            writer_properties=writer_properties,
+            commit_properties=commit_properties,
+        )
+    else:
+        write_deltalake(
+            path,
+            resolved_data,
+            mode=resolved.mode,
+            schema_mode=resolved.schema_mode,
+            partition_by=list(resolved.partition_by) if resolved.partition_by else None,
+            configuration=resolved.configuration,
+            storage_options=storage or None,
+            target_file_size=resolved.target_file_size,
+            writer_properties=writer_properties,
+            commit_properties=commit_properties,
+        )
+    version = delta_table_version(
+        path,
+        storage_options=resolved.storage_options,
+        log_storage_options=resolved.log_storage_options,
+    )
+    return DeltaWriteResult(path=path, version=version)
+
+
 def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
     """Validate incoming data against Delta table constraints.
 
@@ -635,6 +727,7 @@ __all__ = [
     "DeltaCdfOptions",
     "DeltaDataCheckRequest",
     "DeltaVacuumOptions",
+    "DeltaWriteOptions",
     "DeltaWriteResult",
     "EncodingPolicy",
     "IdempotentWriteOptions",
@@ -654,4 +747,5 @@ __all__ = [
     "open_delta_table",
     "read_delta_cdf",
     "vacuum_delta",
+    "write_delta_table",
 ]

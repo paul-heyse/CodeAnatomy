@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from ibis_engine.registry import (
+from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,

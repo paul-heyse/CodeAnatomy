@@ -35,7 +35,6 @@ from arrowdsl.schema.schema import (
 )
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_introspection import table_constraint_rows
-from sqlglot_tools.compat import Expression, exp
 
 
 class _ArrowFieldSpec(Protocol):
@@ -142,42 +141,28 @@ def _session_context(ctx: ExecutionContext) -> SessionContext:
 
 def _expr_table(
     ctx: SessionContext,
-    expr: Expression,
+    sql: str,
     *,
     sql_options: SQLOptions,
 ) -> ArrowTable:
-    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
-    plan = facade.compile(
-        expr,
-        options=DataFusionCompileOptions(
-            sql_options=sql_options,
-            sql_policy=DataFusionSqlPolicy(),
-        ),
-    )
-    result = facade.execute(plan)
-    if result.dataframe is None:
-        msg = "Schema validation SQL did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    return result.dataframe.to_arrow_table()
+    df = ctx.sql_with_options(sql, sql_options)
+    return df.to_arrow_table()
 
 
-def _is_null(expr: Expression) -> Expression:
-    return exp.Is(this=expr, expression=exp.null())
+def _is_null(expr: str) -> str:
+    return f"{expr} IS NULL"
 
 
-def _is_not_null(expr: Expression) -> Expression:
-    return exp.Not(this=_is_null(expr))
+def _is_not_null(expr: str) -> str:
+    return f"{expr} IS NOT NULL"
 
 
-def _or_expressions(expressions: Sequence[Expression]) -> Expression | None:
+def _or_expressions(expressions: Sequence[str]) -> str | None:
     if not expressions:
         return None
     if len(expressions) == 1:
         return expressions[0]
-    return exp.or_(*expressions)
+    return " OR ".join(expressions)
 
 
 def _constraint_key_fields(rows: Sequence[Mapping[str, object]]) -> list[str]:
@@ -250,10 +235,8 @@ def _datafusion_type_name(dtype: DataTypeLike) -> str:
     from datafusion_engine.sql_options import sql_options_for_profile
 
     options = sql_options_for_profile(None)
-    expr = (
-        exp.select(exp.func("arrow_typeof", exp.column("value")).as_("dtype")).from_("t").limit(1)
-    )
-    result = _expr_table(ctx, expr, sql_options=options)
+    sql = "SELECT arrow_typeof(value) AS dtype FROM t LIMIT 1"
+    result = _expr_table(ctx, sql, sql_options=options)
     value = result["dtype"][0].as_py()
     if not isinstance(value, str):
         msg = "Failed to resolve DataFusion type name."
@@ -288,13 +271,13 @@ def _count_rows(
     ctx: SessionContext,
     *,
     table_name: str,
-    where: Expression | None = None,
+    where: str | None = None,
     sql_options: SQLOptions,
 ) -> int:
-    select_expr = exp.select(exp.func("count", exp.Star()).as_("count")).from_(table_name)
+    sql = f"SELECT count(*) AS count FROM {table_name}"
     if where is not None:
-        select_expr = select_expr.where(where)
-    table = _expr_table(ctx, select_expr, sql_options=sql_options)
+        sql = f"{sql} WHERE {where}"
+    table = _expr_table(ctx, sql, sql_options=sql_options)
     value = table["count"][0].as_py() if table.num_rows else 0
     return int(value or 0)
 
@@ -331,11 +314,12 @@ def _cast_failure_count(
     sql_options: SQLOptions,
 ) -> int:
     dtype_name = _datafusion_type_name(dtype)
-    col_expr = exp.column(column)
-    cast_expr = exp.func("arrow_cast", col_expr, exp.Literal.string(dtype_name))
-    condition = exp.and_(_is_not_null(col_expr), _is_null(cast_expr))
-    case_expr = exp.Case().when(condition, exp.Literal.number(1)).else_(exp.Literal.number(0))
-    select_expr = exp.select(exp.func("sum", case_expr).as_("failures")).from_(table_name)
+    cast_expr = f"arrow_cast({column}, '{dtype_name}')"
+    condition = f"{_is_not_null(column)} AND {_is_null(cast_expr)}"
+    select_expr = (
+        "SELECT sum(CASE WHEN "
+        f"{condition} THEN 1 ELSE 0 END) AS failures FROM {table_name}"
+    )
     try:
         table = _expr_table(ctx, select_expr, sql_options=sql_options)
     except (RuntimeError, TypeError, ValueError) as exc:
@@ -354,17 +338,12 @@ def _duplicate_row_count(
 ) -> int:
     if not keys:
         return 0
-    group_cols = [exp.column(name) for name in keys]
-    count_expr = exp.func("count", exp.Star())
+    group_cols = ", ".join(keys)
     inner = (
-        exp.select(count_expr.copy().as_("dupe_count"))
-        .from_(table_name)
-        .group_by(*group_cols)
-        .having(exp.GT(this=count_expr.copy(), expression=exp.Literal.number(1)))
+        f"SELECT count(*) AS dupe_count FROM {table_name} "
+        f"GROUP BY {group_cols} HAVING count(*) > 1"
     )
-    outer = exp.select(exp.func("sum", exp.column("dupe_count")).as_("dupes")).from_(
-        inner.subquery()
-    )
+    outer = f"SELECT sum(dupe_count) AS dupes FROM ({inner})"
     table = _expr_table(ctx, outer, sql_options=sql_options)
     value = table["dupes"][0].as_py() if table.num_rows else 0
     return int(value or 0)
@@ -426,23 +405,22 @@ def _null_violation_results(
     required_fields: Sequence[str],
     missing_cols: Sequence[str],
     sql_options: SQLOptions,
-) -> tuple[list[_ValidationErrorEntry], Expression | None]:
+) -> tuple[list[_ValidationErrorEntry], str | None]:
     required_present = [name for name in required_fields if name not in missing_cols]
     if not required_present:
         return [], None
-    selections: list[Expression] = []
+    selections: list[str] = []
     alias_by_field: dict[str, str] = {}
-    null_checks: list[Expression] = []
+    null_checks: list[str] = []
     for idx, name in enumerate(required_present):
         alias = f"null_{idx}"
         alias_by_field[name] = alias
-        col_expr = exp.column(name)
-        null_check = _is_null(col_expr)
+        null_check = _is_null(name)
         null_checks.append(null_check)
-        case_expr = exp.Case().when(null_check, exp.Literal.number(1)).else_(exp.Literal.number(0))
-        selections.append(exp.func("sum", case_expr).as_(alias))
-    select_expr = exp.select(*selections).from_(table_name)
-    table = _expr_table(ctx, select_expr, sql_options=sql_options)
+        case_expr = f"CASE WHEN {null_check} THEN 1 ELSE 0 END"
+        selections.append(f"sum({case_expr}) AS {alias}")
+    select_sql = f"SELECT {', '.join(selections)} FROM {table_name}"
+    table = _expr_table(ctx, select_sql, sql_options=sql_options)
     entries: list[_ValidationErrorEntry] = []
     for name, alias in alias_by_field.items():
         value = table[alias][0].as_py() if table.num_rows else 0
@@ -458,7 +436,7 @@ class _RowFilterInputs:
     ctx: SessionContext
     table_name: str
     aligned: TableLike
-    invalid_expr: Expression | None
+    invalid_expr: str | None
     options: ArrowValidationOptions
     sql_options: SQLOptions
 
@@ -470,11 +448,10 @@ def _row_filter_results(
         return inputs.aligned, None, 0
     invalid_rows = None
     if inputs.options.emit_invalid_rows or inputs.options.strict == "filter":
-        invalid_rows = _expr_table(
-            inputs.ctx,
-            exp.select(exp.Star()).from_(inputs.table_name).where(inputs.invalid_expr),
-            sql_options=inputs.sql_options,
+        invalid_sql = (
+            f"SELECT * FROM {inputs.table_name} WHERE {inputs.invalid_expr}"
         )
+        invalid_rows = _expr_table(inputs.ctx, invalid_sql, sql_options=inputs.sql_options)
     invalid_row_count = _count_rows(
         inputs.ctx,
         table_name=inputs.table_name,
@@ -483,13 +460,10 @@ def _row_filter_results(
     )
     validated = inputs.aligned
     if inputs.options.strict == "filter":
-        validated = _expr_table(
-            inputs.ctx,
-            exp.select(exp.Star())
-            .from_(inputs.table_name)
-            .where(exp.Not(this=inputs.invalid_expr)),
-            sql_options=inputs.sql_options,
+        valid_sql = (
+            f"SELECT * FROM {inputs.table_name} WHERE NOT ({inputs.invalid_expr})"
         )
+        validated = _expr_table(inputs.ctx, valid_sql, sql_options=inputs.sql_options)
     return validated, invalid_rows, invalid_row_count
 
 

@@ -36,7 +36,6 @@ from datafusion_engine.sql_options import (
 )
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from serde_msgspec import dumps_msgpack, to_builtins
-from sqlglot_tools.compat import Expression
 
 SchemaMapping = dict[str, dict[str, dict[str, dict[str, str]]]]
 
@@ -92,38 +91,6 @@ def _stable_cache_key(prefix: str, payload: Mapping[str, object]) -> str:
     raw = dumps_msgpack(to_builtins(payload))
     digest = hashlib.sha256(raw).hexdigest()
     return f"{prefix}:{digest}"
-
-
-def _schema_from_expression(
-    ctx: SessionContext,
-    expr: object,
-    *,
-    sql_options: SQLOptions | None = None,
-) -> pa.Schema:
-    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_helpers import _compilation_pipeline
-    from sqlglot_tools.compat import Expression
-
-    if not isinstance(expr, Expression):
-        msg = f"Expected SQLGlot Expression, got {type(expr).__name__}."
-        raise TypeError(msg)
-    resolved_options = DataFusionCompileOptions(
-        sql_options=sql_options or _read_only_sql_options(),
-        sql_policy=DataFusionSqlPolicy(),
-    )
-    pipeline = _compilation_pipeline(ctx, options=resolved_options)
-    compiled = pipeline.compile_ast(expr)
-    df = pipeline.execute(compiled, sql_options=resolved_options.sql_options)
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    msg = "Schema introspection failed to resolve a PyArrow schema."
-    raise TypeError(msg)
 
 
 def _normalized_rows(table: pa.Table) -> list[dict[str, object]]:
@@ -677,7 +644,7 @@ def _table_name_from_ddl(ddl: str) -> str:
     raise ValueError(msg)
 
 
-@dataclass(frozen=True)  # noqa: PLR0904
+@dataclass(frozen=True)
 class SchemaIntrospector:
     """Expose schema reflection across tables, queries, and settings."""
 
@@ -736,6 +703,8 @@ class SchemaIntrospector:
         ------
         ValueError
             Raised when the SQL cannot be parsed for schema introspection.
+        TypeError
+            Raised when the DataFusion schema cannot be resolved to PyArrow.
         """
         cache = self.cache
         payload = {"sql": sql}
@@ -744,67 +713,21 @@ class SchemaIntrospector:
             cached = cache.get(key, default=None, retry=True)
             if isinstance(cached, list):
                 return cached
-        from sqlglot.errors import ParseError
-
-        from datafusion_engine.compile_options import DataFusionCompileOptions
-        from sqlglot_tools.optimizer import (
-            StrictParseOptions,
-            parse_sql_strict,  # DEPRECATED: Use DataFusion's native SQL parser for validation
-            register_datafusion_dialect,
-        )
-
-        # DEPRECATED: SQLGlot-based SQL validation for DataFusion queries.
-        # For DataFusion query validation, prefer DataFusion's native SQL parser
-        # with SQLOptions for ingress gating.
         try:
-            register_datafusion_dialect()
-            expr = parse_sql_strict(
-                sql,
-                dialect=DataFusionCompileOptions().dialect,
-                options=StrictParseOptions(preserve_params=True),
-            )
-        except (ParseError, TypeError, ValueError) as exc:
+            df = self.ctx.sql_with_options(sql, self.sql_options or _read_only_sql_options())
+        except (RuntimeError, TypeError, ValueError) as exc:
             msg = "Schema introspection SQL parse failed."
             raise ValueError(msg) from exc
-        schema = _schema_from_expression(
-            self.ctx,
-            expr,
-            sql_options=self.sql_options,
-        )
-        rows = [
-            {
-                "column_name": field.name,
-                "data_type": str(field.type),
-                "nullable": field.nullable,
-            }
-            for field in schema
-        ]
-        if cache is not None:
-            cache.set(key, rows, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)
-        return rows
-
-    def describe_expression(self, expr: Expression) -> list[dict[str, object]]:
-        """Return the computed output schema for a SQLGlot expression.
-
-        Returns
-        -------
-        list[dict[str, object]]
-            ``DESCRIBE`` rows for the expression.
-        """
-        cache = self.cache
-        from sqlglot_tools.lineage import canonical_ast_fingerprint
-
-        payload = {"ast_fingerprint": canonical_ast_fingerprint(expr)}
-        key = self._cache_key("describe_expression", payload=payload)
-        if cache is not None:
-            cached = cache.get(key, default=None, retry=True)
-            if isinstance(cached, list):
-                return cached
-        schema = _schema_from_expression(
-            self.ctx,
-            expr,
-            sql_options=self.sql_options,
-        )
+        schema = df.schema()
+        if not isinstance(schema, pa.Schema):
+            to_arrow = getattr(schema, "to_arrow", None)
+            if callable(to_arrow):
+                resolved = to_arrow()
+                if isinstance(resolved, pa.Schema):
+                    schema = resolved
+        if not isinstance(schema, pa.Schema):
+            msg = "Schema introspection failed to resolve a PyArrow schema."
+            raise TypeError(msg)
         rows = [
             {
                 "column_name": field.name,
@@ -1130,7 +1053,7 @@ class SchemaIntrospector:
         return tuple(constraints)
 
     def schema_map(self) -> dict[str, dict[str, str]]:
-        """Build schema mapping for SQLGlot optimizer.
+        """Build schema mapping from information_schema snapshots.
 
         Delegates to the underlying IntrospectionSnapshot.schema_map() method
         to provide a mapping of table names to their columns and types.
@@ -1144,25 +1067,6 @@ class SchemaIntrospector:
         if snapshot is None:
             return {}
         return snapshot.schema_map()
-
-
-def schema_map_for_sqlglot(introspector: SchemaIntrospector) -> dict[str, dict[str, str]]:
-    """Return schema mapping for SQLGlot optimizer from an introspector.
-
-    This helper extracts the schema map from a SchemaIntrospector instance
-    in a format suitable for SQLGlot's MappingSchema.
-
-    Parameters
-    ----------
-    introspector : SchemaIntrospector
-        Schema introspector to extract mapping from.
-
-    Returns
-    -------
-    dict[str, dict[str, str]]
-        Mapping of table_name -> {column_name: data_type}.
-    """
-    return introspector.schema_map()
 
 
 def find_struct_field_keys(
@@ -1263,6 +1167,5 @@ __all__ = [
     "parameters_snapshot_table",
     "routines_snapshot_table",
     "schema_from_table",
-    "schema_map_for_sqlglot",
     "tables_snapshot_table",
 ]

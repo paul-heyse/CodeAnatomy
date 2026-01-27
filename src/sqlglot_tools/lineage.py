@@ -436,7 +436,7 @@ def _collect_leaf_names(node: Node) -> set[str]:
 
 def _schema_map_from_backend(backend: IbisCompilerBackend) -> dict[str, dict[str, str]] | None:
     from datafusion_engine.runtime import sql_options_for_profile
-    from ibis_engine.registry import datafusion_context
+    from ibis_engine.datafusion_context import datafusion_context
 
     try:
         ctx = datafusion_context(backend)

@@ -185,7 +185,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             canonical_sort=(SortKeySpec(column="type_expr_id", order="ascending"),),
         ),
         template="normalize_cst",
-        view_builder="type_exprs_plan_ibis",
+        view_builder="type_exprs_df_builder",
     ),
     DatasetRow(
         name="type_nodes_v1",
@@ -206,7 +206,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             canonical_sort=(SortKeySpec(column="type_id", order="ascending"),),
         ),
         template="normalize_type",
-        view_builder="type_nodes_plan_ibis",
+        view_builder="type_nodes_df_builder",
     ),
     DatasetRow(
         name="py_bc_blocks_norm_v1",
@@ -221,7 +221,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
         ),
         template="normalize_bytecode",
-        view_builder="cfg_blocks_plan_ibis",
+        view_builder="cfg_blocks_df_builder",
         metadata_extra={
             EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"span": "span", "role": "kind"}),
             EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_blocks"}),
@@ -248,7 +248,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
         ),
         template="normalize_bytecode",
-        view_builder="cfg_edges_plan_ibis",
+        view_builder="cfg_edges_df_builder",
         metadata_extra={
             EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"role": "kind"}),
             EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_cfg_edges"}),
@@ -289,7 +289,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
         ),
         template="normalize_bytecode",
-        view_builder="def_use_events_plan_ibis",
+        view_builder="def_use_events_df_builder",
         metadata_extra={
             EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"span": "span", "role": "kind"}),
             EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes(
@@ -315,7 +315,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
         ),
         template="normalize_bytecode",
-        view_builder="reaching_defs_plan_ibis",
+        view_builder="reaching_defs_df_builder",
         metadata_extra={
             EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_reaches"}),
         },
@@ -326,7 +326,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         bundles=(),
         fields=("document_id", "path", "reason"),
         template="normalize_span",
-        view_builder="span_errors_plan_ibis",
+        view_builder="span_errors_df_builder",
     ),
     DatasetRow(
         name="diagnostics_norm_v1",
@@ -346,7 +346,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             canonical_sort=(SortKeySpec(column="diag_id", order="ascending"),),
         ),
         template="normalize_diagnostics",
-        view_builder="diagnostics_plan_ibis",
+        view_builder="diagnostics_df_builder",
     ),
 )
 

@@ -43,7 +43,7 @@ from urllib.parse import urlparse
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
-from datafusion import SessionContext, SQLOptions
+from datafusion import SessionContext, SQLOptions, col
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
 
@@ -62,12 +62,14 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_scan_options,
 )
 from datafusion_engine.diagnostics import record_artifact
-from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from datafusion_engine.introspection import (
     introspection_cache_for_ctx,
     invalidate_introspection_cache,
 )
 from datafusion_engine.io_adapter import DataFusionIOAdapter
+from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
+from datafusion_engine.plan_bundle import build_plan_bundle
+from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
 from datafusion_engine.runtime import schema_introspector_for_profile
 from datafusion_engine.schema_contracts import schema_contract_from_table_schema_contract
 from datafusion_engine.schema_introspection import (
@@ -1211,7 +1213,6 @@ def _register_file_list_dataset(
         context.ctx,
         scan=scan,
         sql_options=_statement_sql_options_for_profile(context.runtime_profile),
-        runtime_profile=context.runtime_profile,
     )
     files = context.location.files
     if not files:
@@ -1605,7 +1606,6 @@ def _apply_scan_settings(
     *,
     scan: DataFusionScanOptions | None,
     sql_options: SQLOptions,
-    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> None:
     """Apply per-table DataFusion scan settings via SET statements.
 
@@ -1617,8 +1617,6 @@ def _apply_scan_settings(
         Scan options to apply.
     sql_options
         SQL options to use for SET statements.
-    runtime_profile
-        Runtime profile used to validate SQL policy.
     """
     if scan is None:
         return
@@ -1647,7 +1645,6 @@ def _apply_scan_settings(
             key=key,
             value=text,
             sql_options=sql_options,
-            runtime_profile=runtime_profile,
         )
 
 
@@ -1657,7 +1654,6 @@ def _set_runtime_setting(
     key: str,
     value: str,
     sql_options: SQLOptions,
-    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> None:
     """Apply a DataFusion session setting.
 
@@ -1671,8 +1667,6 @@ def _set_runtime_setting(
         Setting value to apply.
     sql_options
         SQL options to use for the SET statement.
-    runtime_profile
-        Runtime profile used to validate SQL policy.
 
     Raises
     ------

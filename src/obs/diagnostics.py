@@ -193,7 +193,7 @@ def record_view_artifact(sink: DiagnosticsCollector, *, artifact: DataFusionView
     """Record a deterministic view artifact payload."""
     recorder_sink = ensure_recorder_sink(sink, session_id="obs")
     recorder_sink.record_artifact(
-        "datafusion_view_artifacts_v1",
+        "datafusion_view_artifacts_v2",
         artifact.diagnostics_payload(event_time_unix_ms=int(time.time() * 1000)),
     )
 

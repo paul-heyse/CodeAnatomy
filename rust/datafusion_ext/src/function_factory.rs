@@ -1,46 +1,28 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use async_trait::async_trait;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction};
 use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_doc::DocSection;
-use datafusion_expr::function::{
-    AccumulatorArgs,
-    AggregateFunctionSimplification,
-    StateFieldsArgs,
-    WindowFunctionSimplification,
-};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{
-    Accumulator,
-    AggregateUDF,
-    AggregateUDFImpl,
-    Documentation,
-    Expr,
-    GroupsAccumulator,
-    PartitionEvaluator,
-    ReversedUDAF,
-    SetMonotonicity,
-    Signature,
-    StatisticsArgs,
-    Volatility,
-    WindowFrame,
-    WindowFunctionDefinition,
-    WindowUDF,
-    WindowUDFImpl,
-    ScalarUDF,
-    ScalarUDFImpl,
-};
 use datafusion_expr::expr::{AggregateFunctionParams, Cast, WindowFunctionParams};
-use datafusion_expr::udf_eq::UdfEq;
+use datafusion_expr::function::{
+    AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs, WindowFunctionSimplification,
+};
 use datafusion_expr::logical_plan::OperateFunctionArg;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::udf_eq::UdfEq;
 use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_expr::{
+    Accumulator, AggregateUDF, AggregateUDFImpl, Documentation, Expr, GroupsAccumulator,
+    PartitionEvaluator, ReversedUDAF, ScalarUDF, ScalarUDFImpl, SetMonotonicity, Signature,
+    StatisticsArgs, Volatility, WindowFrame, WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
+};
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -160,7 +142,8 @@ fn build_register_function(
         .map(|arg| arg.data_type.clone())
         .collect::<Vec<_>>();
     let parameter_names = extract_parameter_names(&arg_list).unwrap_or_default();
-    let kind_override = kind_from_language(params.language.as_ref().map(|ident| ident.value.as_str()))?;
+    let kind_override =
+        kind_from_language(params.language.as_ref().map(|ident| ident.value.as_str()))?;
     let kind = kind_override.unwrap_or_else(|| infer_kind(&body));
     ensure_kind(&body, kind, &name)?;
 
@@ -209,11 +192,11 @@ fn build_scalar_macro(
     let volatility = requested_volatility.unwrap_or(Volatility::Volatile);
     let mut signature = Signature::exact(arg_types, volatility);
     if !parameter_names.is_empty() {
-        signature = signature.with_parameter_names(parameter_names.clone()).map_err(|err| {
-            DataFusionError::Plan(format!(
-                "CREATE FUNCTION invalid parameter names: {err}"
-            ))
-        })?;
+        signature = signature
+            .with_parameter_names(parameter_names.clone())
+            .map_err(|err| {
+                DataFusionError::Plan(format!("CREATE FUNCTION invalid parameter names: {err}"))
+            })?;
     }
     let documentation = sql_macro_documentation(&name, arg_list, &return_type);
     let udf_impl = SqlMacroUdf {
@@ -224,7 +207,9 @@ fn build_scalar_macro(
         parameter_names,
         documentation,
     };
-    Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(udf_impl))))
+    Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(
+        udf_impl,
+    ))))
 }
 
 fn build_aggregate_alias(
@@ -308,7 +293,12 @@ fn build_window_alias(
                 )));
             };
             validate_window_params(&window.params, &name)?;
-            validate_placeholder_args(&window.params.args, parameter_names, arg_types.len(), &name)?;
+            validate_placeholder_args(
+                &window.params.args,
+                parameter_names,
+                arg_types.len(),
+                &name,
+            )?;
             register_window_alias(
                 name,
                 udwf,
@@ -352,16 +342,12 @@ fn register_window_alias(
     let signature = apply_parameter_names(&name, udwf.signature(), parameter_names)?;
     validate_window_return_type(&name, return_type, &udwf, arg_types, parameter_names)?;
     let renamed = RenamedWindowUdf::new(name, signature, Arc::clone(udwf.inner()));
-    Ok(RegisterFunction::Window(Arc::new(WindowUDF::new_from_shared_impl(
-        Arc::new(renamed),
-    ))))
+    Ok(RegisterFunction::Window(Arc::new(
+        WindowUDF::new_from_shared_impl(Arc::new(renamed)),
+    )))
 }
 
-fn build_table_alias(
-    state: &SessionState,
-    name: String,
-    body: Expr,
-) -> Result<RegisterFunction> {
+fn build_table_alias(state: &SessionState, name: String, body: Expr) -> Result<RegisterFunction> {
     let target = extract_table_target(&body, &name)?;
     let table_function = state.table_functions().get(&target).ok_or_else(|| {
         DataFusionError::Plan(format!(
@@ -457,9 +443,7 @@ fn sql_macro_documentation(
     } else {
         format!("{name}({args_display})")
     };
-    let description = format!(
-        "SQL macro defined via CREATE FUNCTION returning {return_type}."
-    );
+    let description = format!("SQL macro defined via CREATE FUNCTION returning {return_type}.");
     let mut builder = Documentation::builder(DOC_SECTION_SQL_MACRO, description, syntax);
     for (idx, arg) in arg_list.iter().enumerate() {
         let arg_name = arg
@@ -547,10 +531,7 @@ impl AggregateUDFImpl for RenamedAggregateUdf {
         self.inner.create_groups_accumulator(args)
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         self.inner.create_sliding_accumulator(args)
     }
 
@@ -688,11 +669,14 @@ fn apply_parameter_names(
     if parameter_names.is_empty() {
         return Ok(signature.clone());
     }
-    signature.clone().with_parameter_names(parameter_names.to_vec()).map_err(|err| {
-        DataFusionError::Plan(format!(
-            "CREATE FUNCTION {name} invalid parameter names: {err}"
-        ))
-    })
+    signature
+        .clone()
+        .with_parameter_names(parameter_names.to_vec())
+        .map_err(|err| {
+            DataFusionError::Plan(format!(
+                "CREATE FUNCTION {name} invalid parameter names: {err}"
+            ))
+        })
 }
 
 fn validate_placeholder_args(
@@ -797,11 +781,7 @@ fn validate_volatility(
     Ok(())
 }
 
-fn validate_return_type(
-    name: &str,
-    expected: Option<DataType>,
-    actual: DataType,
-) -> Result<()> {
+fn validate_return_type(name: &str, expected: Option<DataType>, actual: DataType) -> Result<()> {
     let Some(expected) = expected else {
         return Ok(());
     };
@@ -880,9 +860,9 @@ fn extract_parameter_names(args: &[OperateFunctionArg]) -> Option<Vec<String>> {
 }
 
 fn resolve_placeholder_index(id: &str, parameter_names: &[String]) -> Result<usize> {
-    let raw = id.strip_prefix('$').ok_or_else(|| {
-        DataFusionError::Plan(format!("Invalid placeholder identifier: {id}"))
-    })?;
+    let raw = id
+        .strip_prefix('$')
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid placeholder identifier: {id}")))?;
     if let Ok(index) = raw.parse::<usize>() {
         return index
             .checked_sub(1)

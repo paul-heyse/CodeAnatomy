@@ -134,7 +134,11 @@ fn docs_table_provider(ctx: &SessionContext) -> Result<Arc<dyn TableProvider>> {
         } else {
             sql_example_builder.append_null();
         }
-        append_argument_pairs(&mut arg_name_builder, &mut arg_desc_builder, doc.arguments.as_ref());
+        append_argument_pairs(
+            &mut arg_name_builder,
+            &mut arg_desc_builder,
+            doc.arguments.as_ref(),
+        );
         append_list(&mut alternative_builder, doc.alternative_syntax.as_ref());
         append_list(&mut related_builder, doc.related_udfs.as_ref());
     }
@@ -212,10 +216,7 @@ fn registry_kind_map(snapshot: &registry_snapshot::RegistrySnapshot) -> BTreeMap
     kinds
 }
 
-fn append_list(
-    builder: &mut ListBuilder<StringBuilder>,
-    values: Option<&Vec<String>>,
-) {
+fn append_list(builder: &mut ListBuilder<StringBuilder>, values: Option<&Vec<String>>) {
     if let Some(values) = values {
         for value in values {
             builder.values().append_value(value);

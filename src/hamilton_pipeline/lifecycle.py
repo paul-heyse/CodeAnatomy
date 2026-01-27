@@ -137,6 +137,9 @@ def _plan_diagnostics_payload(
     plan_fingerprints = {
         name: plan.plan_fingerprints[name] for name in sorted(plan.plan_fingerprints)
     }
+    plan_task_signatures = {
+        name: plan.plan_task_signatures[name] for name in sorted(plan.plan_task_signatures)
+    }
     bottom_level_costs = {
         name: plan.bottom_level_costs[name] for name in sorted(plan.bottom_level_costs)
     }
@@ -163,6 +166,8 @@ def _plan_diagnostics_payload(
         "node_link_json": diagnostics.node_link_json,
         "active_tasks": sorted(plan.active_tasks),
         "plan_fingerprints": plan_fingerprints,
+        "plan_task_signatures": plan_task_signatures,
+        "session_runtime_hash": plan.session_runtime_hash,
         "bottom_level_costs": bottom_level_costs,
     }
 

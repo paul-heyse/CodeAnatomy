@@ -47,6 +47,8 @@ class ViewReference:
         Hash of the view schema for validation.
     plan_fingerprint : str | None
         Hash of the plan that created this view.
+    plan_task_signature : str | None
+        Runtime-aware signature for the task that created this view.
     plan_signature : str | None
         Signature of the execution plan for the run.
     """
@@ -55,6 +57,7 @@ class ViewReference:
     source_task: str
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
+    plan_task_signature: str | None = None
     plan_signature: str | None = None
 
 
@@ -74,6 +77,8 @@ class MaterializedTable:
         Hash of the table schema.
     plan_fingerprint : str | None
         Hash of the plan that created this table.
+    plan_task_signature : str | None
+        Runtime-aware signature for the task that created this table.
     plan_signature : str | None
         Signature of the execution plan for the run.
     storage_path : str | None
@@ -85,6 +90,7 @@ class MaterializedTable:
     row_count: int = 0
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
+    plan_task_signature: str | None = None
     plan_signature: str | None = None
     storage_path: str | None = None
 
@@ -96,6 +102,7 @@ class MaterializedTableSpec:
     source_task: str
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
+    plan_task_signature: str | None = None
     plan_signature: str | None = None
     storage_path: str | None = None
 
@@ -106,6 +113,7 @@ class ExecutionArtifactSpec:
 
     source_task: str
     plan_fingerprint: str | None = None
+    plan_task_signature: str | None = None
     plan_signature: str | None = None
     schema_fingerprint: str | None = None
     storage_path: str | None = None
@@ -120,6 +128,7 @@ class ExecutionArtifact:
     result: ExecutionResult
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
+    plan_task_signature: str | None = None
     plan_signature: str | None = None
     storage_path: str | None = None
 
@@ -194,10 +203,7 @@ class RuntimeArtifacts:
         self,
         name: str,
         *,
-        source_task: str,
-        schema_fingerprint: str | None = None,
-        plan_fingerprint: str | None = None,
-        plan_signature: str | None = None,
+        spec: ViewReference,
     ) -> ViewReference:
         """Register a view reference.
 
@@ -205,14 +211,8 @@ class RuntimeArtifacts:
         ----------
         name : str
             View name.
-        source_task : str
-            Task that produced the view.
-        schema_fingerprint : str | None
-            Schema hash for validation.
-        plan_fingerprint : str | None
-            Plan hash for cache invalidation.
-        plan_signature : str | None
-            Plan signature for cross-run identity.
+        spec : ViewReference
+            View reference metadata for the producing task.
 
         Returns
         -------
@@ -221,10 +221,11 @@ class RuntimeArtifacts:
         """
         ref = ViewReference(
             name=name,
-            source_task=source_task,
-            schema_fingerprint=schema_fingerprint,
-            plan_fingerprint=plan_fingerprint,
-            plan_signature=plan_signature,
+            source_task=spec.source_task,
+            schema_fingerprint=spec.schema_fingerprint,
+            plan_fingerprint=spec.plan_fingerprint,
+            plan_task_signature=spec.plan_task_signature,
+            plan_signature=spec.plan_signature,
         )
         self.view_references[name] = ref
         return ref
@@ -270,6 +271,7 @@ class RuntimeArtifacts:
             row_count=row_count,
             schema_fingerprint=spec.schema_fingerprint,
             plan_fingerprint=spec.plan_fingerprint,
+            plan_task_signature=spec.plan_task_signature,
             plan_signature=spec.plan_signature,
             storage_path=spec.storage_path,
         )
@@ -317,6 +319,7 @@ class RuntimeArtifacts:
             result=result,
             schema_fingerprint=schema_fp,
             plan_fingerprint=spec.plan_fingerprint,
+            plan_task_signature=spec.plan_task_signature,
             plan_signature=spec.plan_signature,
             storage_path=spec.storage_path,
         )
@@ -329,6 +332,7 @@ class RuntimeArtifacts:
                     source_task=spec.source_task,
                     schema_fingerprint=schema_fp,
                     plan_fingerprint=spec.plan_fingerprint,
+                    plan_task_signature=spec.plan_task_signature,
                     plan_signature=spec.plan_signature,
                     storage_path=spec.storage_path,
                 ),

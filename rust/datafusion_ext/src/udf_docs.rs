@@ -41,7 +41,10 @@ static READ_CSV_DOC: LazyLock<Documentation> = LazyLock::new(|| {
         "schema_ipc",
         "Optional Arrow schema IPC bytes (binary literal or hex string) to override inference.",
     )
-    .with_argument("has_header", "Optional boolean indicating CSV header presence.")
+    .with_argument(
+        "has_header",
+        "Optional boolean indicating CSV header presence.",
+    )
     .with_argument(
         "delimiter",
         "Optional single-character delimiter (defaults to comma).",

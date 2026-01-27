@@ -2,10 +2,10 @@ use arrow::datatypes::DataType;
 use datafusion_common::{utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
+use datafusion_expr::sqlparser::ast::BinaryOperator;
 use datafusion_expr::{Expr, ExprSchemable};
 use datafusion_functions::core::get_field as get_field_udf;
 use datafusion_functions_nested::expr_fn::array_has_all;
-use datafusion_expr::sqlparser::ast::BinaryOperator;
 
 #[derive(Debug, Default)]
 pub struct CodeAnatomyDomainPlanner;
@@ -19,10 +19,8 @@ impl ExprPlanner for CodeAnatomyDomainPlanner {
         let RawBinaryExpr { op, left, right } = expr;
 
         if is_arrow_operator(&op) && can_use_get_field(&left, schema)? {
-            let planned = Expr::ScalarFunction(ScalarFunction::new_udf(
-                get_field_udf(),
-                vec![left, right],
-            ));
+            let planned =
+                Expr::ScalarFunction(ScalarFunction::new_udf(get_field_udf(), vec![left, right]));
             return Ok(PlannerResult::Planned(planned));
         }
 

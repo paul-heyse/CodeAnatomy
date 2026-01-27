@@ -397,14 +397,22 @@ class DataFusionExecutionFacade:
         DataFusionPlanBundle
             Canonical plan artifact for execution and scheduling.
 
+        Raises
+        ------
+        ValueError
+            Raised when the session runtime is unavailable for planning.
+
         Examples
         --------
         >>> def build_query(ctx: SessionContext) -> DataFrame:
         ...     return ctx.sql("SELECT * FROM my_table")
         >>> bundle = facade.compile_to_bundle(build_query)
         """
-        df = builder(self.ctx)
         session_runtime = self._session_runtime()
+        if session_runtime is None:
+            msg = "SessionRuntime is required to compile plan bundles."
+            raise ValueError(msg)
+        df = builder(self.ctx)
         return build_plan_bundle(
             self.ctx,
             df,
@@ -577,73 +585,6 @@ class DataFusionExecutionFacade:
             },
         )
 
-    def execute_builder(
-        self,
-        builder: DataFrameBuilder,
-        *,
-        compute_execution_plan: bool = False,
-        compute_substrait: bool = True,
-    ) -> ExecutionResult:
-        """Execute a DataFrame builder and return a unified result.
-
-        Parameters
-        ----------
-        builder
-            Callable that returns a DataFrame given a SessionContext.
-        compute_execution_plan
-            Whether to compute the physical execution plan (expensive).
-        compute_substrait
-            Whether to compute Substrait bytes for fingerprinting.
-
-        Returns
-        -------
-        ExecutionResult
-            Unified execution result for the builder.
-        """
-        df = builder(self.ctx)
-        session_runtime = self._session_runtime()
-        bundle = build_plan_bundle(
-            self.ctx,
-            df,
-            compute_execution_plan=compute_execution_plan,
-            compute_substrait=compute_substrait,
-            session_runtime=session_runtime,
-        )
-        return self.execute_plan_bundle(bundle)
-
-    def execute_dataframe(
-        self,
-        df: DataFrame,
-        *,
-        compute_execution_plan: bool = False,
-        compute_substrait: bool = True,
-    ) -> ExecutionResult:
-        """Wrap a DataFrame with a plan bundle for scheduling.
-
-        Parameters
-        ----------
-        df
-            DataFusion DataFrame to execute.
-        compute_execution_plan
-            Whether to compute the physical execution plan (expensive).
-        compute_substrait
-            Whether to compute Substrait bytes for fingerprinting.
-
-        Returns
-        -------
-        ExecutionResult
-            Unified execution result for the DataFrame.
-        """
-        session_runtime = self._session_runtime()
-        bundle = build_plan_bundle(
-            self.ctx,
-            df,
-            compute_execution_plan=compute_execution_plan,
-            compute_substrait=compute_substrait,
-            session_runtime=session_runtime,
-        )
-        return self.execute_plan_bundle(bundle)
-
     def write(
         self,
         request: WriteRequest,
@@ -735,7 +676,15 @@ class DataFusionExecutionFacade:
         -------
         DataFrame
             DataFusion DataFrame representing the registered dataset.
+
+        Raises
+        ------
+        ValueError
+            Raised when the runtime profile is unavailable.
         """
+        if self.runtime_profile is None:
+            msg = "Runtime profile is required for dataset registration."
+            raise ValueError(msg)
         from datafusion_engine.registry_bridge import register_dataset_df
 
         return register_dataset_df(
@@ -786,8 +735,16 @@ class DataFusionExecutionFacade:
         -------
         DataFusionPlanBundle
             Canonical plan artifact for the DataFrame.
+
+        Raises
+        ------
+        ValueError
+            Raised when the session runtime is unavailable for planning.
         """
         session_runtime = self._session_runtime()
+        if session_runtime is None:
+            msg = "SessionRuntime is required to build plan bundles."
+            raise ValueError(msg)
         return build_plan_bundle(
             self.ctx,
             df,

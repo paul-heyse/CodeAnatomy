@@ -4,14 +4,15 @@ use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::ipc::reader::StreamReader;
+use async_trait::async_trait;
 use datafusion::catalog::{Session, TableFunctionImpl, TableProvider};
 use datafusion::execution::context::SessionContext;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion_common::{DataFusionError, DFSchema, Result, ScalarValue, Statistics};
+use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue, Statistics};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::ListingTableUrl;
@@ -20,17 +21,15 @@ use datafusion_datasource_parquet::file_format::ParquetFormat;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion::physical_plan::ExecutionPlan;
+use hex;
 use tokio::runtime::{Handle, Runtime};
 use tokio::task::block_in_place;
-use hex;
 
 pub fn register_external_udtfs(ctx: &SessionContext) -> Result<()> {
     let read_parquet: Arc<dyn TableFunctionImpl> =
         Arc::new(ReadParquetTableFunction::new(ctx.clone()));
     ctx.register_udtf("read_parquet", Arc::clone(&read_parquet));
-    let read_csv: Arc<dyn TableFunctionImpl> =
-        Arc::new(ReadCsvTableFunction::new(ctx.clone()));
+    let read_csv: Arc<dyn TableFunctionImpl> = Arc::new(ReadCsvTableFunction::new(ctx.clone()));
     ctx.register_udtf("read_csv", Arc::clone(&read_csv));
     Ok(())
 }
@@ -101,8 +100,7 @@ impl TableFunctionImpl for ReadCsvTableFunction {
         if let Some(compression) = compression {
             let compression_type = FileCompressionType::from_str(&compression)?;
             format = format.with_file_compression_type(compression_type);
-            file_extension_override =
-                Some(format.get_ext_with_compression(&compression_type)?);
+            file_extension_override = Some(format.get_ext_with_compression(&compression_type)?);
         }
         let provider = listing_table_provider(
             &self.ctx,
@@ -191,11 +189,7 @@ fn extract_optional_string(
     Ok(Some(value))
 }
 
-fn extract_optional_delimiter(
-    args: &[Expr],
-    func_name: &str,
-    index: usize,
-) -> Result<Option<u8>> {
+fn extract_optional_delimiter(args: &[Expr], func_name: &str, index: usize) -> Result<Option<u8>> {
     let value = extract_optional_string(args, func_name, index, "delimiter")?;
     let Some(value) = value else {
         return Ok(None);
@@ -229,13 +223,13 @@ fn extract_optional_schema(
         Expr::Literal(ScalarValue::FixedSizeBinary(_, Some(value)), _) => value,
         Expr::Literal(ScalarValue::Utf8(Some(value)), _)
         | Expr::Literal(ScalarValue::LargeUtf8(Some(value)), _)
-        | Expr::Literal(ScalarValue::Utf8View(Some(value)), _) => hex::decode(value).map_err(
-            |err| {
+        | Expr::Literal(ScalarValue::Utf8View(Some(value)), _) => {
+            hex::decode(value).map_err(|err| {
                 DataFusionError::Plan(format!(
                     "{func_name} expects schema to be hex-encoded IPC bytes: {err}"
                 ))
-            },
-        )?,
+            })?
+        }
         _ => {
             return Err(DataFusionError::Plan(format!(
                 "{func_name} expects schema to be an IPC binary literal"
@@ -293,11 +287,9 @@ fn listing_table_provider(
     file_extension_override: Option<String>,
 ) -> Result<Arc<dyn TableProvider>> {
     let state = ctx.state();
-    let mut options =
-        ListingOptions::new(format).with_session_config_options(state.config());
-    let table_path = ListingTableUrl::parse(path).or_else(|_| {
-        ListingTableUrl::parse(format!("file://{path}").as_str())
-    })?;
+    let mut options = ListingOptions::new(format).with_session_config_options(state.config());
+    let table_path = ListingTableUrl::parse(path)
+        .or_else(|_| ListingTableUrl::parse(format!("file://{path}").as_str()))?;
     let extension = if let Some(extension) = file_extension_override {
         extension
     } else {
@@ -316,10 +308,7 @@ fn listing_table_provider(
             .map(|name| {
                 (
                     name,
-                    DataType::Dictionary(
-                        Box::new(DataType::UInt16),
-                        Box::new(DataType::Utf8),
-                    ),
+                    DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
                 )
             })
             .collect::<Vec<_>>();
@@ -342,9 +331,8 @@ fn listing_table_provider(
 }
 
 fn schema_from_ipc(payload: Vec<u8>) -> Result<SchemaRef> {
-    let mut reader = StreamReader::try_new(Cursor::new(payload), None).map_err(|err| {
-        DataFusionError::Plan(format!("Failed to open schema IPC stream: {err}"))
-    })?;
+    let mut reader = StreamReader::try_new(Cursor::new(payload), None)
+        .map_err(|err| DataFusionError::Plan(format!("Failed to open schema IPC stream: {err}")))?;
     Ok(Arc::clone(&reader.schema()))
 }
 
@@ -355,9 +343,8 @@ where
     if let Ok(handle) = Handle::try_current() {
         return block_in_place(|| handle.block_on(future));
     }
-    let runtime = Runtime::new().map_err(|err| {
-        DataFusionError::Plan(format!("Failed to create Tokio runtime: {err}"))
-    })?;
+    let runtime = Runtime::new()
+        .map_err(|err| DataFusionError::Plan(format!("Failed to create Tokio runtime: {err}")))?;
     runtime.block_on(future)
 }
 

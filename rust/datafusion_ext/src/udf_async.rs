@@ -2,20 +2,14 @@ use std::any::Any;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use async_trait::async_trait;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
-    ColumnarValue,
-    Documentation,
-    ReturnFieldArgs,
-    ScalarFunctionArgs,
-    ScalarUDF,
-    ScalarUDFImpl,
-    Signature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use tokio::time;
@@ -84,9 +78,7 @@ impl AsyncEchoUdf {
         let signature = Signature::string(1, Volatility::Stable)
             .with_parameter_names(vec!["value".to_string()])
             .unwrap_or_else(|_| Signature::string(1, Volatility::Stable));
-        Self {
-            signature,
-        }
+        Self { signature }
     }
 }
 
@@ -120,9 +112,9 @@ impl ScalarUDFImpl for AsyncEchoUdf {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_type = arg_types.first().ok_or_else(|| {
-            DataFusionError::Plan("async_echo expects one argument".into())
-        })?;
+        let arg_type = arg_types
+            .first()
+            .ok_or_else(|| DataFusionError::Plan("async_echo expects one argument".into()))?;
         Ok(arg_type.clone())
     }
 

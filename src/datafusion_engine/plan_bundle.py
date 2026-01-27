@@ -1,7 +1,7 @@
 """Canonical DataFusion plan bundle for all planning and scheduling.
 
 This module provides the single canonical plan artifact that all execution
-and scheduling paths use, replacing SQLGlot/Ibis compilation pipelines.
+and scheduling paths use.
 """
 
 from __future__ import annotations
@@ -77,7 +77,6 @@ class DataFusionPlanBundle:
     """Canonical plan artifact for all planning and scheduling.
 
     This is the single source of truth for DataFusion plan information,
-    replacing SQLGlot AST artifacts and Ibis plan wrappers.
 
     Attributes
     ----------
@@ -236,7 +235,7 @@ def build_plan_bundle(  # noqa: PLR0913
     delta_inputs : Sequence[DeltaInputPin]
         Optional pinned Delta inputs for deterministic scans.
     session_runtime : SessionRuntime | None
-        Optional session runtime carrying UDF and settings snapshots.
+        Session runtime carrying UDF and settings snapshots.
     scan_units : Sequence[ScanUnit]
         Optional scan units for deriving Delta version pins.
 
@@ -244,7 +243,15 @@ def build_plan_bundle(  # noqa: PLR0913
     -------
     DataFusionPlanBundle
         Canonical plan artifact for execution and scheduling.
+
+    Raises
+    ------
+    ValueError
+        Raised when session runtime information is unavailable.
     """
+    if session_runtime is None:
+        msg = "SessionRuntime is required for plan bundle construction."
+        raise ValueError(msg)
     components = _bundle_components(
         ctx,
         df,
@@ -304,7 +311,6 @@ def _bundle_components(
         if options.compute_substrait and optimized is not None
         else None
     )
-    fingerprint = _hash_plan(substrait_bytes=substrait_bytes, optimized=optimized)
     udf_artifacts = _udf_artifacts(
         ctx,
         registry_snapshot=options.registry_snapshot,
@@ -322,6 +328,16 @@ def _bundle_components(
 
     scan_unit_pins = _delta_inputs_from_scan_units(options.scan_units)
     merged_delta_inputs = _merge_delta_inputs(options.delta_inputs, scan_unit_pins)
+    fingerprint = _hash_plan(
+        PlanFingerprintInputs(
+            substrait_bytes=substrait_bytes,
+            df_settings=df_settings,
+            udf_snapshot_hash=udf_artifacts.snapshot_hash,
+            required_udfs=required.required_udfs,
+            required_rewrite_tags=required.required_rewrite_tags,
+            delta_inputs=merged_delta_inputs,
+        )
+    )
 
     artifacts = PlanArtifacts(
         logical_plan_display=_plan_display(logical, method="display_indent_schema"),
@@ -398,42 +414,6 @@ def _merge_delta_inputs(
         pins[pin.dataset_name] = pin
     return tuple(pins[name] for name in sorted(pins))
 
-
-def build_plan_bundle_from_builder(
-    ctx: SessionContext,
-    builder: DataFrameBuilder,
-    *,
-    options: PlanBundleOptions | None = None,
-) -> DataFusionPlanBundle:
-    """Build a plan bundle from a DataFrame builder function.
-
-    Parameters
-    ----------
-    ctx : SessionContext
-        DataFusion session context.
-    builder : DataFrameBuilder
-        Callable that returns a DataFrame given a SessionContext.
-    options : PlanBundleOptions | None
-        Optional configuration overrides for plan bundle construction.
-
-    Returns
-    -------
-    DataFusionPlanBundle
-        Canonical plan artifact.
-    """
-    df = builder(ctx)
-    resolved = options or PlanBundleOptions()
-    return build_plan_bundle(
-        ctx,
-        df,
-        compute_execution_plan=resolved.compute_execution_plan,
-        compute_substrait=resolved.compute_substrait,
-        validate_udfs=resolved.validate_udfs,
-        registry_snapshot=resolved.registry_snapshot,
-        delta_inputs=resolved.delta_inputs,
-        session_runtime=resolved.session_runtime,
-        scan_units=resolved.scan_units,
-    )
 
 
 def _safe_logical_plan(df: DataFrame) -> object | None:
@@ -521,27 +501,58 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes 
     return None
 
 
-def _hash_plan(
-    *,
-    substrait_bytes: bytes | None,
-    optimized: object | None,
-) -> str:
-    """Compute a stable fingerprint for the plan.
+@dataclass(frozen=True)
+class PlanFingerprintInputs:
+    """Inputs required to fingerprint a plan bundle."""
 
-    Prefers Substrait bytes when available, falls back to plan display.
+    substrait_bytes: bytes | None
+    df_settings: Mapping[str, str]
+    udf_snapshot_hash: str
+    required_udfs: Sequence[str]
+    required_rewrite_tags: Sequence[str]
+    delta_inputs: Sequence[DeltaInputPin]
+
+
+def _hash_plan(inputs: PlanFingerprintInputs) -> str:
+    """Compute a stable fingerprint for the plan bundle.
+
+    Substrait bytes are required for reproducibility. The fingerprint also
+    incorporates session settings, UDF requirements, and Delta input pins.
 
     Returns
     -------
     str
         Stable plan fingerprint.
+
+    Raises
+    ------
+    ValueError
+        Raised when Substrait bytes are unavailable for fingerprinting.
     """
-    if substrait_bytes is not None:
-        return hashlib.sha256(substrait_bytes).hexdigest()
-    if optimized is not None:
-        display = _plan_display(optimized, method="display_indent_schema")
-        if display is not None:
-            return hashlib.sha256(display.encode("utf-8")).hexdigest()
-    return hashlib.sha256(b"empty_plan").hexdigest()
+    if inputs.substrait_bytes is None:
+        msg = "Plan fingerprinting requires Substrait bytes."
+        raise ValueError(msg)
+    settings_items = tuple(sorted(inputs.df_settings.items()))
+    settings_hash = hashlib.sha256(dumps_msgpack(settings_items)).hexdigest()
+    substrait_hash = hashlib.sha256(inputs.substrait_bytes).hexdigest()
+    delta_payload = tuple(
+        sorted(
+            (
+                (pin.dataset_name, pin.version, pin.timestamp)
+                for pin in inputs.delta_inputs
+            ),
+            key=lambda item: item[0],
+        )
+    )
+    payload = (
+        ("substrait_hash", substrait_hash),
+        ("settings_hash", settings_hash),
+        ("udf_snapshot_hash", inputs.udf_snapshot_hash),
+        ("required_udfs", tuple(sorted(inputs.required_udfs))),
+        ("required_rewrite_tags", tuple(sorted(inputs.required_rewrite_tags))),
+        ("delta_inputs", delta_payload),
+    )
+    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
 
 
 def _plan_display(plan: object | None, *, method: str) -> str | None:
@@ -763,5 +774,4 @@ __all__ = [
     "DeltaInputPin",
     "PlanArtifacts",
     "build_plan_bundle",
-    "build_plan_bundle_from_builder",
 ]

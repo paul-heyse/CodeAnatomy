@@ -15,7 +15,11 @@ from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
 from datafusion_engine.plan_bundle import build_plan_bundle
 from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile, record_view_definition
-from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
+from datafusion_engine.view_artifacts import (
+    ViewArtifactLineage,
+    ViewArtifactRequest,
+    build_view_artifact_from_bundle,
+)
 from incremental.delta_context import DeltaAccessContext
 from incremental.invalidations import (
     build_invalidation_snapshot,
@@ -67,17 +71,29 @@ def _record_view_artifact(
     table: pa.Table,
 ) -> None:
     ctx = runtime.session_context()
+    session_runtime = runtime.profile.session_runtime()
     ctx.register_record_batches(name, [table.to_batches()])
     df = ctx.table(name)
-    bundle = build_plan_bundle(ctx, df, compute_execution_plan=False, compute_substrait=True)
+    bundle = build_plan_bundle(
+        ctx,
+        df,
+        compute_execution_plan=False,
+        compute_substrait=True,
+        session_runtime=session_runtime,
+    )
     required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(bundle)))
     referenced_tables = referenced_tables_from_plan(bundle.optimized_logical_plan)
     artifact = build_view_artifact_from_bundle(
         bundle,
-        name=name,
-        schema=df.schema(),
-        required_udfs=required_udfs,
-        referenced_tables=referenced_tables,
+        request=ViewArtifactRequest(
+            name=name,
+            schema=df.schema(),
+            lineage=ViewArtifactLineage(
+                required_udfs=required_udfs,
+                referenced_tables=referenced_tables,
+            ),
+            runtime_hash=None,
+        ),
     )
     record_view_definition(runtime.profile, artifact=artifact)
 

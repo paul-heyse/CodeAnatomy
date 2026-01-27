@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use deltalake::DeltaTable;
 use deltalake::errors::DeltaTableError;
+use deltalake::DeltaTable;
 
 #[derive(Debug, Clone, Default)]
 pub struct DeltaFeatureGate {
@@ -25,15 +25,16 @@ pub struct DeltaSnapshotInfo {
     pub partition_columns: Vec<String>,
 }
 
-fn feature_strings(features: Option<&Vec<impl ToString>>) -> Vec<String> {
-    match features {
-        Some(items) => {
-            let mut names: Vec<String> = items.iter().map(ToString::to_string).collect();
-            names.sort();
-            names
-        }
+fn feature_strings<T>(features: Option<&[T]>) -> Vec<String>
+where
+    T: ToString,
+{
+    let mut names: Vec<String> = match features {
+        Some(items) => items.iter().map(ToString::to_string).collect(),
         None => Vec::new(),
-    }
+    };
+    names.sort();
+    names
 }
 
 pub async fn delta_snapshot_info(
@@ -48,22 +49,24 @@ pub async fn delta_snapshot_info(
     for (key, value) in metadata.configuration() {
         table_properties.insert(key.clone(), value.clone());
     }
-    let snapshot_timestamp = table
-        .history(Some(1))
-        .await?
-        .next()
-        .and_then(|commit| commit.timestamp);
+    let schema = metadata.parse_schema().map_err(|err| {
+        DeltaTableError::Generic(format!("Failed to parse Delta schema: {err:?}"))
+    })?;
+    let schema_json = serde_json::to_string(&schema)
+        .map_err(|err| DeltaTableError::Generic(format!("Failed to encode Delta schema: {err}")))?;
+    let mut history = table.history(Some(1)).await?;
+    let snapshot_timestamp = history.next().and_then(|commit| commit.timestamp);
     Ok(DeltaSnapshotInfo {
         table_uri: table_uri.to_owned(),
         version,
         snapshot_timestamp,
-        min_reader_version: protocol.min_reader_version,
-        min_writer_version: protocol.min_writer_version,
+        min_reader_version: protocol.min_reader_version(),
+        min_writer_version: protocol.min_writer_version(),
         reader_features: feature_strings(protocol.reader_features()),
         writer_features: feature_strings(protocol.writer_features()),
         table_properties,
-        schema_json: metadata.schema_string.clone(),
-        partition_columns: metadata.partition_columns.clone(),
+        schema_json,
+        partition_columns: metadata.partition_columns().to_vec(),
     })
 }
 
@@ -139,4 +142,3 @@ pub fn snapshot_payload(snapshot: &DeltaSnapshotInfo) -> HashMap<String, String>
     }
     payload
 }
-

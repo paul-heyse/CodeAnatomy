@@ -22,12 +22,13 @@ if TYPE_CHECKING:
     from incremental.state_store import StateStore
     from storage.deltalake import StorageOptions
 
-PLAN_FINGERPRINTS_VERSION = 4  # Incremented for DataFusion plan bundle migration
+PLAN_FINGERPRINTS_VERSION = 5  # Incremented for runtime-aware task signatures
 _PLAN_FINGERPRINTS_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32(), nullable=False),
         pa.field("task_name", pa.string(), nullable=False),
         pa.field("plan_fingerprint", pa.string(), nullable=False),
+        pa.field("plan_task_signature", pa.string(), nullable=False),
     ]
 )
 _PLAN_FINGERPRINTS_DIRNAME = "plan_fingerprints"
@@ -37,18 +38,21 @@ _PLAN_FINGERPRINTS_DIRNAME = "plan_fingerprints"
 class PlanFingerprintSnapshot:
     """Plan fingerprint snapshot.
 
-    Plan fingerprints are now based on DataFusion Substrait bytes or
-    optimized logical plan display when Substrait is unavailable.
+    Plan snapshots capture both the DataFusion plan fingerprint and a
+    runtime-aware task signature that includes session identity.
 
     Attributes
     ----------
     plan_fingerprint : str
         SHA256 hash of Substrait bytes or optimized plan display.
+    plan_task_signature : str
+        Runtime-aware task signature used for incremental diffs.
     substrait_bytes : bytes | None
         Optional Substrait serialization for portable plan storage.
     """
 
     plan_fingerprint: str
+    plan_task_signature: str = ""
     substrait_bytes: bytes | None = None
 
 
@@ -93,10 +97,13 @@ def read_plan_snapshots(
             continue
         name = row.get("task_name")
         fingerprint = row.get("plan_fingerprint")
+        task_signature = row.get("plan_task_signature")
         if name is None or fingerprint is None:
             continue
+        signature_value = str(task_signature) if task_signature else str(fingerprint)
         results[str(name)] = PlanFingerprintSnapshot(
             plan_fingerprint=str(fingerprint),
+            plan_task_signature=signature_value,
         )
     return results
 
@@ -140,12 +147,17 @@ def write_plan_snapshots(
     else:
         versions = [PLAN_FINGERPRINTS_VERSION] * len(names)
         fingerprints = [snapshots[name].plan_fingerprint for name in names]
+        task_signatures = [
+            snapshots[name].plan_task_signature or snapshots[name].plan_fingerprint
+            for name in names
+        ]
         table = table_from_arrays(
             _PLAN_FINGERPRINTS_SCHEMA,
             columns={
                 "version": pa.array(versions, type=pa.int32()),
                 "task_name": pa.array(names, type=pa.string()),
                 "plan_fingerprint": pa.array(fingerprints, type=pa.string()),
+                "plan_task_signature": pa.array(task_signatures, type=pa.string()),
             },
             num_rows=len(names),
         )
@@ -188,7 +200,10 @@ def write_plan_fingerprints(
         Delta table path where fingerprints were written.
     """
     snapshots = {
-        name: PlanFingerprintSnapshot(plan_fingerprint=fingerprint)
+        name: PlanFingerprintSnapshot(
+            plan_fingerprint=fingerprint,
+            plan_task_signature=fingerprint,
+        )
         for name, fingerprint in fingerprints.items()
     }
     return write_plan_snapshots(

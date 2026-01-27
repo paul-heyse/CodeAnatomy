@@ -11,10 +11,10 @@ from pathlib import Path
 from datafusion import SessionContext
 
 from datafusion_engine.dataset_registry import DatasetLocation
+from datafusion_engine.delta_control_plane import DeltaSnapshotRequest, delta_add_actions
 from datafusion_engine.lineage_datafusion import ScanLineage
 from serde_msgspec import dumps_msgpack
-from storage.deltalake.delta import delta_table_version, open_delta_table
-from storage.deltalake.file_index import build_delta_file_index
+from storage.deltalake import build_delta_file_index_from_add_actions
 from storage.deltalake.file_pruning import (
     FilePruningPolicy,
     PartitionFilter,
@@ -133,29 +133,126 @@ def _delta_scan_candidates(
     location: DatasetLocation,
     lineage: ScanLineage,
 ) -> tuple[tuple[Path, ...], int | None]:
-    table_path = str(location.path)
-    storage_options = dict(location.storage_options)
-    log_storage_options = dict(location.delta_log_storage_options)
+    request = _delta_snapshot_request(location)
+    payload = _delta_add_actions_payload(request=request)
+    if not payload.add_actions:
+        return (), payload.delta_version
+    index = build_delta_file_index_from_add_actions(payload.add_actions)
+    policy = _policy_from_lineage(location=location, lineage=lineage)
+    pruning = evaluate_and_select_files(index, policy, ctx=ctx)
+    candidate_files = tuple(Path(str(location.path)) / Path(path) for path in pruning.candidate_paths)
+    return candidate_files, payload.delta_version
+
+
+@dataclass(frozen=True)
+class _DeltaAddActionsPayload:
+    """Normalized Delta add-action payload for scan planning."""
+
+    delta_version: int | None
+    add_actions: tuple[Mapping[str, object], ...]
+
+
+def _delta_snapshot_request(location: DatasetLocation) -> DeltaSnapshotRequest:
+    """Build a control-plane snapshot request for a dataset location.
+
+    Returns
+    -------
+    DeltaSnapshotRequest
+        Snapshot request pinned to version or timestamp when provided.
+    """
     pinned_version = location.delta_version
     pinned_timestamp = location.delta_timestamp if pinned_version is None else None
-    if pinned_version is None and pinned_timestamp is None:
-        pinned_version = delta_table_version(
-            table_path,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-        )
-    table = open_delta_table(
-        table_path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
+    return DeltaSnapshotRequest(
+        table_uri=str(location.path),
+        storage_options=_delta_storage_options(location),
         version=pinned_version,
         timestamp=pinned_timestamp,
     )
-    index = build_delta_file_index(table)
-    policy = _policy_from_lineage(location=location, lineage=lineage)
-    pruning = evaluate_and_select_files(index, policy, ctx=ctx)
-    candidate_files = tuple(Path(table_path) / Path(path) for path in pruning.candidate_paths)
-    return candidate_files, table.version()
+
+
+def _delta_add_actions_payload(
+    *,
+    request: DeltaSnapshotRequest,
+) -> _DeltaAddActionsPayload:
+    """Resolve add actions and Delta version from the control plane.
+
+    Returns
+    -------
+    _DeltaAddActionsPayload
+        Delta version plus normalized add-action payloads.
+
+    Raises
+    ------
+    TypeError
+        Raised when the control-plane response is missing snapshot metadata.
+    """
+    response = delta_add_actions(request)
+    snapshot = response.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        msg = "Delta add-actions response missing snapshot mapping."
+        raise TypeError(msg)
+    delta_version = _resolve_delta_version(snapshot, pinned_version=request.version)
+    add_actions = _coerce_add_actions(response.get("add_actions"))
+    return _DeltaAddActionsPayload(delta_version=delta_version, add_actions=add_actions)
+
+
+def _resolve_delta_version(
+    snapshot: Mapping[str, object],
+    *,
+    pinned_version: int | None,
+) -> int | None:
+    """Resolve a Delta version from snapshot metadata.
+
+    Returns
+    -------
+    int | None
+        Resolved Delta version, or the pinned version when unavailable.
+    """
+    version_value = snapshot.get("version")
+    if isinstance(version_value, int):
+        return version_value
+    if isinstance(version_value, str) and version_value.strip():
+        try:
+            return int(version_value)
+        except ValueError:
+            return pinned_version
+    return pinned_version
+
+
+def _coerce_add_actions(add_actions_raw: object) -> tuple[Mapping[str, object], ...]:
+    """Coerce add actions into a tuple of mapping payloads.
+
+    Returns
+    -------
+    tuple[Mapping[str, object], ...]
+        Normalized add-action mappings.
+    """
+    if isinstance(add_actions_raw, Sequence) and not isinstance(
+        add_actions_raw, (str, bytes, bytearray)
+    ):
+        return tuple(
+            action for action in add_actions_raw if isinstance(action, Mapping)
+        )
+    return ()
+
+
+def _delta_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
+    """Normalize Delta storage and log-store options.
+
+    Returns
+    -------
+    Mapping[str, str] | None
+        Combined storage options, or ``None`` when no options are provided.
+    """
+    storage_options = {key: str(value) for key, value in dict(location.storage_options).items()}
+    log_storage_options = {
+        key: str(value) for key, value in dict(location.delta_log_storage_options).items()
+    }
+    if log_storage_options:
+        storage_options.update(log_storage_options)
+    if not storage_options:
+        return None
+    return storage_options
 
 
 def _policy_from_lineage(

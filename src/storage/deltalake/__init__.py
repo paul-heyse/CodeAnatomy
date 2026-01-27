@@ -21,6 +21,7 @@ __all__ = (
     "StorageOptions",
     "build_commit_properties",
     "build_delta_file_index",
+    "build_delta_file_index_from_add_actions",
     "build_delta_scan_config",
     "cleanup_delta_log",
     "coerce_delta_table",
@@ -85,6 +86,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
     "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
     "build_delta_file_index": ("storage.deltalake.file_index", "build_delta_file_index"),
+    "build_delta_file_index_from_add_actions": (
+        "storage.deltalake.file_index",
+        "build_delta_file_index_from_add_actions",
+    ),
     "PartitionFilter": ("storage.deltalake.file_pruning", "PartitionFilter"),
     "StatsFilter": ("storage.deltalake.file_pruning", "StatsFilter"),
     "FilePruningPolicy": ("storage.deltalake.file_pruning", "FilePruningPolicy"),
@@ -138,6 +143,9 @@ if TYPE_CHECKING:
     vacuum_delta = _delta_io.vacuum_delta
     FileIndexEntry = _file_index.FileIndexEntry
     build_delta_file_index = _file_index.build_delta_file_index
+    build_delta_file_index_from_add_actions = (
+        _file_index.build_delta_file_index_from_add_actions
+    )
     PartitionFilter = _file_pruning.PartitionFilter
     StatsFilter = _file_pruning.StatsFilter
     FilePruningPolicy = _file_pruning.FilePruningPolicy

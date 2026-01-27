@@ -428,9 +428,12 @@ def _with_graph_tags(
     merged_tags["reduced_plan_signature"] = plan.reduced_task_dependency_signature
     merged_tags["task_dependency_signature"] = plan.task_dependency_signature
     merged_tags["plan_task_count"] = str(len(plan.active_tasks))
+    merged_tags["plan_task_signature_count"] = str(len(plan.plan_task_signatures))
     merged_tags["plan_generation_count"] = str(len(plan.task_schedule.generations))
     merged_tags["plan_reduction_edge_count"] = str(plan.reduction_edge_count)
     merged_tags["plan_reduction_removed_edge_count"] = str(plan.reduction_removed_edge_count)
+    if plan.session_runtime_hash is not None:
+        merged_tags["session_runtime_hash"] = plan.session_runtime_hash
     merged_tags["semantic_version"] = _SEMANTIC_VERSION
     if plan.critical_path_length_weighted is not None:
         merged_tags["plan_critical_path_length_weighted"] = str(plan.critical_path_length_weighted)

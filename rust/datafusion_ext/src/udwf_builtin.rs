@@ -9,9 +9,6 @@ pub fn builtin_udwfs() -> Vec<WindowUDF> {
             .clone()
             .with_aliases(["row_number_window"]),
         lag_udwf().as_ref().clone().with_aliases(["lag_window"]),
-        lead_udwf()
-            .as_ref()
-            .clone()
-            .with_aliases(["lead_window"]),
+        lead_udwf().as_ref().clone().with_aliases(["lead_window"]),
     ]
 }

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -12,9 +11,6 @@ from datafusion_engine.udf_runtime import (
     validate_rust_udf_snapshot,
 )
 
-_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_QUALIFIED_COLUMN_PATTERN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)")
-_VARIANT_COLUMN_PATTERN = re.compile(r'table: "([^"]+)"[^}]*name: "([^"]+)"')
 _PAIR_LEN = 2
 _SINGLE_DATASET_COUNT = 1
 
@@ -335,22 +331,74 @@ def _expr_variant(expr: object) -> object | None:
         return None
 
 
+def _expr_variant_name(expr: object) -> str | None:
+    variant_name = getattr(expr, "variant_name", None)
+    if not callable(variant_name):
+        return None
+    try:
+        return str(variant_name())
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _expr_operands(expr: object) -> list[object]:
+    operands = getattr(expr, "rex_call_operands", None)
+    if not callable(operands):
+        return []
+    try:
+        value = operands()
+    except (RuntimeError, TypeError, ValueError):
+        return []
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [entry for entry in value if entry is not None]
+    return []
+
+
+def _rex_call_operator(expr: object) -> str | None:
+    operator = getattr(expr, "rex_call_operator", None)
+    if not callable(operator):
+        return None
+    try:
+        return str(operator())
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
 def _column_refs_from_expr(expr: object) -> set[tuple[str, str]]:
+    return _column_refs_from_expr_inner(expr, seen=set())
+
+
+def _column_refs_from_expr_inner(
+    expr: object,
+    *,
+    seen: set[int],
+) -> set[tuple[str, str]]:
+    expr_id = id(expr)
+    if expr_id in seen:
+        return set()
+    seen.add(expr_id)
     variant = _expr_variant(expr)
-    if variant is None:
-        return _column_refs_from_text(_expr_text(expr))
-    name = type(variant).__name__
-    if name == "Column":
-        relation = _safe_attr(variant, "relation")
-        column_name = _safe_attr(variant, "name")
-        if column_name is None:
-            return set()
-        dataset = "" if relation is None else str(relation)
-        return {(dataset, str(column_name))}
+    if variant is not None:
+        name = type(variant).__name__
+        if name == "Column":
+            relation = _safe_attr(variant, "relation")
+            column_name = _safe_attr(variant, "name")
+            if column_name is None:
+                return set()
+            dataset = "" if relation is None else str(relation)
+            column_value = str(column_name)
+            if not dataset and ("(" in column_value or " " in column_value):
+                return set()
+            return {(dataset, column_value)}
+        refs: set[tuple[str, str]] = set()
+        for child in _expr_children(variant):
+            refs.update(_column_refs_from_expr_inner(child, seen=seen))
+        return refs
     refs: set[tuple[str, str]] = set()
-    for child in _expr_children(variant):
-        refs.update(_column_refs_from_expr(child))
-    refs.update(_column_refs_from_text(_expr_text(expr)))
+    for child in _expr_operands(expr):
+        if child is expr:
+            continue
+        refs.update(_column_refs_from_expr_inner(child, seen=seen))
     return refs
 
 
@@ -360,25 +408,54 @@ def _expr_children(variant: object) -> Iterable[object]:
         yield from _normalize_exprs(value)
 
 
-def _column_refs_from_text(text: str | None) -> set[tuple[str, str]]:
-    if not text:
-        return set()
-    refs: set[tuple[str, str]] = set()
-    for dataset, column in _QUALIFIED_COLUMN_PATTERN.findall(text):
-        refs.add((dataset, column))
-    for dataset, column in _VARIANT_COLUMN_PATTERN.findall(text):
-        refs.add((dataset, column))
-    return refs
-
-
 def _udf_refs_from_expr(expr: object, udf_name_map: Mapping[str, str]) -> set[str]:
     if not udf_name_map:
         return set()
-    text = _expr_text(expr)
-    if not text:
+    return _udf_refs_from_expr_inner(expr, udf_name_map=udf_name_map, seen=set())
+
+
+def _udf_refs_from_expr_inner(
+    expr: object,
+    *,
+    udf_name_map: Mapping[str, str],
+    seen: set[int],
+) -> set[str]:
+    expr_id = id(expr)
+    if expr_id in seen:
         return set()
-    tokens = {token.lower() for token in _TOKEN_PATTERN.findall(text)}
-    return {udf_name_map[token] for token in tokens if token in udf_name_map}
+    seen.add(expr_id)
+    refs: set[str] = set()
+    udf_name = _udf_name_from_expr(expr)
+    if udf_name is not None:
+        key = udf_name.lower()
+        if key in udf_name_map:
+            refs.add(udf_name_map[key])
+    for child in _expr_children_from_expr(expr):
+        refs.update(_udf_refs_from_expr_inner(child, udf_name_map=udf_name_map, seen=seen))
+    return refs
+
+
+def _expr_children_from_expr(expr: object) -> list[object]:
+    variant = _expr_variant(expr)
+    if variant is not None:
+        return list(_expr_children(variant))
+    return _expr_operands(expr)
+
+
+def _udf_name_from_expr(expr: object) -> str | None:
+    variant = _expr_variant(expr)
+    if variant is not None:
+        variant_name = type(variant).__name__
+        if variant_name == "AggregateFunction":
+            name = _safe_attr(variant, "aggregate_type")
+            return str(name) if name is not None else None
+        if variant_name == "ScalarFunction":
+            return _rex_call_operator(expr)
+        return None
+    variant_name = _expr_variant_name(expr)
+    if variant_name == "ScalarFunction":
+        return _rex_call_operator(expr)
+    return None
 
 
 def _qualified_column_names(expr: object) -> list[str]:

@@ -123,9 +123,10 @@ def _bundle_deps_and_udfs(
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> tuple[DataFusionPlanBundle, tuple[str, ...], tuple[str, ...]]:
     df = builder(ctx)
-    session_runtime = (
-        runtime_profile.session_runtime() if runtime_profile is not None else None
-    )
+    if runtime_profile is None:
+        msg = f"Runtime profile is required for view planning: {label!r}."
+        raise ValueError(msg)
+    session_runtime = runtime_profile.session_runtime()
     bundle = build_plan_bundle(
         ctx,
         df,

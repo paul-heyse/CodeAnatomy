@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -25,6 +26,8 @@ class DataFusionViewArtifact:
         View name.
     plan_fingerprint : str
         DataFusion plan fingerprint from the plan bundle.
+    plan_task_signature : str
+        Runtime-aware task signature derived from the plan bundle.
     schema : pa.Schema
         View output schema.
     required_udfs : tuple[str, ...]
@@ -35,6 +38,7 @@ class DataFusionViewArtifact:
 
     name: str
     plan_fingerprint: str
+    plan_task_signature: str
     schema: pa.Schema
     required_udfs: tuple[str, ...]
     referenced_tables: tuple[str, ...]
@@ -50,6 +54,7 @@ class DataFusionViewArtifact:
         return {
             "name": self.name,
             "plan_fingerprint": self.plan_fingerprint,
+            "plan_task_signature": self.plan_task_signature,
             "schema": schema_to_dict(self.schema),
             "required_udfs": list(self.required_udfs),
             "referenced_tables": list(self.referenced_tables),
@@ -72,6 +77,7 @@ class DataFusionViewArtifact:
             "event_time_unix_ms": event_time_unix_ms,
             "name": self.name,
             "plan_fingerprint": self.plan_fingerprint,
+            "plan_task_signature": self.plan_task_signature,
             "schema_fingerprint": schema_fingerprint(self.schema),
             "schema_msgpack": schema_to_msgpack(self.schema),
             "required_udfs": list(self.required_udfs),
@@ -79,13 +85,75 @@ class DataFusionViewArtifact:
         }
 
 
+_PLAN_TASK_SIGNATURE_VERSION = 1
+
+
+def _hash_payload(payload: object) -> str:
+    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+
+
+def _df_settings_hash(df_settings: Mapping[str, str]) -> str:
+    entries = tuple(sorted((str(key), str(value)) for key, value in df_settings.items()))
+    return _hash_payload(entries)
+
+
+def _delta_inputs_payload(
+    bundle: DataFusionPlanBundle,
+) -> tuple[tuple[str, int | None, str | None], ...]:
+    payload: list[tuple[str, int | None, str | None]] = []
+    for item in bundle.delta_inputs:
+        dataset_name = item.dataset_name
+        if not dataset_name:
+            continue
+        payload.append((dataset_name, item.version, item.timestamp))
+    return tuple(sorted(payload, key=lambda entry: entry[0]))
+
+
+def _plan_task_signature(bundle: DataFusionPlanBundle, *, runtime_hash: str | None) -> str:
+    artifacts = bundle.artifacts
+    df_settings_hash = (
+        _df_settings_hash(artifacts.df_settings)
+        if isinstance(artifacts.df_settings, Mapping)
+        else ""
+    )
+    payload = (
+        ("version", _PLAN_TASK_SIGNATURE_VERSION),
+        ("runtime_hash", runtime_hash or ""),
+        ("plan_fingerprint", bundle.plan_fingerprint),
+        ("function_registry_hash", artifacts.function_registry_hash),
+        ("udf_snapshot_hash", artifacts.udf_snapshot_hash),
+        ("rewrite_tags", tuple(sorted(artifacts.rewrite_tags))),
+        ("domain_planner_names", tuple(sorted(artifacts.domain_planner_names))),
+        ("df_settings_hash", df_settings_hash),
+        ("required_udfs", tuple(sorted(bundle.required_udfs))),
+        ("required_rewrite_tags", tuple(sorted(bundle.required_rewrite_tags))),
+        ("delta_inputs", _delta_inputs_payload(bundle)),
+    )
+    return _hash_payload(payload)
+
+
+@dataclass(frozen=True)
+class ViewArtifactLineage:
+    """Lineage inputs for view artifact construction."""
+
+    required_udfs: tuple[str, ...]
+    referenced_tables: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ViewArtifactRequest:
+    """Inputs required to build a view artifact."""
+
+    name: str
+    schema: pa.Schema
+    lineage: ViewArtifactLineage
+    runtime_hash: str | None = None
+
+
 def build_view_artifact_from_bundle(
     bundle: DataFusionPlanBundle,
     *,
-    name: str,
-    schema: pa.Schema,
-    required_udfs: tuple[str, ...],
-    referenced_tables: tuple[str, ...],
+    request: ViewArtifactRequest,
 ) -> DataFusionViewArtifact:
     """Build a DataFusionViewArtifact from a DataFusion plan bundle.
 
@@ -93,26 +161,22 @@ def build_view_artifact_from_bundle(
     ----------
     bundle
         DataFusion plan bundle containing optimized logical plan.
-    name
-        View name.
-    schema
-        View output schema.
-    required_udfs
-        Required UDF names.
-    referenced_tables
-        Referenced table names.
+    request
+        View artifact request payload.
 
     Returns
     -------
     DataFusionViewArtifact
         DataFusion-native view artifact.
     """
+    plan_task_signature = _plan_task_signature(bundle, runtime_hash=request.runtime_hash)
     return DataFusionViewArtifact(
-        name=name,
+        name=request.name,
         plan_fingerprint=bundle.plan_fingerprint,
-        schema=schema,
-        required_udfs=required_udfs,
-        referenced_tables=referenced_tables,
+        plan_task_signature=plan_task_signature,
+        schema=request.schema,
+        required_udfs=request.lineage.required_udfs,
+        referenced_tables=request.lineage.referenced_tables,
     )
 
 
@@ -120,6 +184,7 @@ VIEW_ARTIFACT_PAYLOAD_SCHEMA = pa.schema(
     [
         pa.field("name", pa.string(), nullable=False),
         pa.field("plan_fingerprint", pa.string(), nullable=False),
+        pa.field("plan_task_signature", pa.string(), nullable=False),
         pa.field("schema_msgpack", pa.binary(), nullable=False),
         pa.field("required_udfs", pa.list_(pa.string()), nullable=True),
         pa.field("referenced_tables", pa.list_(pa.string()), nullable=True),
@@ -152,6 +217,7 @@ def view_artifact_payload_table(rows: Sequence[Mapping[str, object]]) -> pa.Tabl
         if name is None or plan_fingerprint is None:
             msg = "View artifact payload is missing required fields."
             raise ValueError(msg)
+        plan_task_signature = row.get("plan_task_signature") or plan_fingerprint
         schema_payload_raw = row.get("schema")
         schema_payload: Mapping[str, object] = {}
         if isinstance(schema_payload_raw, Mapping):
@@ -162,6 +228,7 @@ def view_artifact_payload_table(rows: Sequence[Mapping[str, object]]) -> pa.Tabl
             {
                 "name": str(name),
                 "plan_fingerprint": str(plan_fingerprint),
+                "plan_task_signature": str(plan_task_signature),
                 "schema_msgpack": dumps_msgpack(schema_payload),
                 "required_udfs": (
                     [str(value) for value in required_udfs]
@@ -183,6 +250,8 @@ def view_artifact_payload_table(rows: Sequence[Mapping[str, object]]) -> pa.Tabl
 __all__ = [
     "VIEW_ARTIFACT_PAYLOAD_SCHEMA",
     "DataFusionViewArtifact",
+    "ViewArtifactLineage",
+    "ViewArtifactRequest",
     "build_view_artifact_from_bundle",
     "view_artifact_payload_table",
 ]

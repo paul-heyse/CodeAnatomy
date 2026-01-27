@@ -101,9 +101,13 @@ def _plan_for_module(
 
     resolved_view_nodes = cast("tuple[RegistryViewNode, ...]", view_nodes)
     plan_fingerprints = {node.name: f"{node.name}_fingerprint" for node in view_nodes}
+    plan_task_signatures = {name: f"{name}_signature" for name in plan_fingerprints}
     plan_snapshots = {
-        name: PlanFingerprintSnapshot(plan_fingerprint=fingerprint)
-        for name, fingerprint in plan_fingerprints.items()
+        name: PlanFingerprintSnapshot(
+            plan_fingerprint=plan_fingerprints[name],
+            plan_task_signature=plan_task_signatures[name],
+        )
+        for name in plan_fingerprints
     }
     ordered_tasks = tuple(sorted(plan_fingerprints))
     task_schedule = TaskSchedule(ordered_tasks=ordered_tasks, generations=(ordered_tasks,))
@@ -134,6 +138,7 @@ def _plan_for_module(
         task_schedule=task_schedule,
         schedule_metadata=resolved_metadata,
         plan_fingerprints=plan_fingerprints,
+        plan_task_signatures=plan_task_signatures,
         plan_snapshots=plan_snapshots,
         output_contracts=output_contracts,
         plan_signature="plan:test",

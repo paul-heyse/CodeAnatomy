@@ -2,17 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array,
-    BooleanArray,
-    Int32Array,
-    Int64Array,
-    LargeStringArray,
-    ListArray,
-    StringArray,
-    StringViewArray,
-    StructArray,
-    UInt64Array,
-    UInt8Array,
+    Array, BooleanArray, Int32Array, Int64Array, LargeStringArray, ListArray, StringArray,
+    StringViewArray, StructArray, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::record_batch::RecordBatch;
@@ -24,10 +15,7 @@ use datafusion_common::Result;
 use tokio::runtime::Runtime;
 
 use datafusion_ext::{
-    install_expr_planners_native,
-    install_sql_macro_factory_native,
-    registry_snapshot,
-    udf_registry,
+    install_expr_planners_native, install_sql_macro_factory_native, registry_snapshot, udf_registry,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -133,7 +121,8 @@ fn information_schema_routines_match_snapshot() -> Result<()> {
     let ctx = SessionContext::new_with_config(config);
     udf_registry::register_all(&ctx)?;
     let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
-    let custom_names: std::collections::HashSet<String> = snapshot.custom_udfs.into_iter().collect();
+    let custom_names: std::collections::HashSet<String> =
+        snapshot.custom_udfs.into_iter().collect();
 
     let batches = run_query(
         &ctx,
@@ -220,10 +209,7 @@ fn information_schema_routines_match_snapshot() -> Result<()> {
                     None => has_any_signature,
                 }
             });
-            assert!(
-                matched,
-                "information_schema.routines mismatch for {name}"
-            );
+            assert!(matched, "information_schema.routines mismatch for {name}");
         }
     };
 
@@ -239,7 +225,8 @@ fn information_schema_parameters_match_snapshot() -> Result<()> {
     let ctx = SessionContext::new_with_config(config);
     udf_registry::register_all(&ctx)?;
     let snapshot = registry_snapshot::registry_snapshot(&ctx.state());
-    let custom_names: std::collections::HashSet<String> = snapshot.custom_udfs.into_iter().collect();
+    let custom_names: std::collections::HashSet<String> =
+        snapshot.custom_udfs.into_iter().collect();
 
     let batches = run_query(
         &ctx,
@@ -303,11 +290,20 @@ fn information_schema_parameters_match_snapshot() -> Result<()> {
             .push((ordinal, param_name, dtype));
     }
 
-    for name in snapshot.scalar.into_iter().chain(snapshot.aggregate).chain(snapshot.window) {
+    for name in snapshot
+        .scalar
+        .into_iter()
+        .chain(snapshot.aggregate)
+        .chain(snapshot.window)
+    {
         if !custom_names.contains(&name) {
             continue;
         }
-        let expected_inputs = snapshot.signature_inputs.get(&name).cloned().unwrap_or_default();
+        let expected_inputs = snapshot
+            .signature_inputs
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
         let expected_param_names = snapshot.parameter_names.get(&name).cloned();
         let has_any_signature = expected_inputs
             .iter()
@@ -396,10 +392,7 @@ fn stable_id_matches_expected() -> Result<()> {
 fn col_to_byte_returns_expected() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
-    let batches = run_query(
-        &ctx,
-        "SELECT col_to_byte('abcdef', 3, 'BYTE') AS value",
-    )?;
+    let batches = run_query(&ctx, "SELECT col_to_byte('abcdef', 3, 'BYTE') AS value")?;
     let array = batches[0]
         .column(0)
         .as_any()
@@ -421,7 +414,10 @@ fn arrow_metadata_extracts_key() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
     ctx.register_table("t", Arc::new(table))?;
-    let batches = run_query(&ctx, "SELECT arrow_metadata(code, 'line_base') AS value FROM t")?;
+    let batches = run_query(
+        &ctx,
+        "SELECT arrow_metadata(code, 'line_base') AS value FROM t",
+    )?;
     let array = batches[0]
         .column(0)
         .as_any()
@@ -550,20 +546,13 @@ fn sql_macro_aggregate_alias_respects_drop() -> Result<()> {
         &ctx,
         "CREATE FUNCTION count_distinct_alias(value STRING) RETURNS BIGINT RETURN count_distinct_agg($1)",
     )?;
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::Utf8,
-        true,
-    )]));
-    let array = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("a")]))
-        as Arc<dyn Array>;
+    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+    let array =
+        Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("a")])) as Arc<dyn Array>;
     let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
     ctx.register_table("t", Arc::new(table))?;
-    let batches = run_query(
-        &ctx,
-        "SELECT count_distinct_alias(value) AS value FROM t",
-    )?;
+    let batches = run_query(&ctx, "SELECT count_distinct_alias(value) AS value FROM t")?;
     let array = batches[0]
         .column(0)
         .as_any()
@@ -571,10 +560,7 @@ fn sql_macro_aggregate_alias_respects_drop() -> Result<()> {
         .expect("int64 column");
     assert_eq!(array.value(0), 2);
     run_query(&ctx, "DROP FUNCTION count_distinct_alias")?;
-    let batches = run_query(
-        &ctx,
-        "SELECT count_distinct_agg(value) AS value FROM t",
-    )?;
+    let batches = run_query(&ctx, "SELECT count_distinct_agg(value) AS value FROM t")?;
     let array = batches[0]
         .column(0)
         .as_any()
@@ -593,11 +579,7 @@ fn sql_macro_window_alias_executes() -> Result<()> {
         &ctx,
         "CREATE FUNCTION row_number_alias() LANGUAGE window RETURN 'row_number_window'",
     )?;
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "id",
-        DataType::Int64,
-        false,
-    )]));
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
     let array = Arc::new(Int64Array::from(vec![1, 2, 3])) as Arc<dyn Array>;
     let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
@@ -662,16 +644,16 @@ fn arrow_operator_rewrites_to_get_field() -> Result<()> {
     let batches = run_query(&ctx, "EXPLAIN SELECT payload->'name' AS name FROM t")?;
     let batch = &batches[0];
     let schema = batch.schema();
-    let plan_index = schema
-        .index_of("plan")
-        .ok()
-        .unwrap_or_else(|| {
-            if schema.fields().len() > 1 {
-                1
-            } else {
-                0
-            }
-        });
+    let plan_index =
+        schema.index_of("plan").ok().unwrap_or_else(
+            || {
+                if schema.fields().len() > 1 {
+                    1
+                } else {
+                    0
+                }
+            },
+        );
     let array = batch
         .column(plan_index)
         .as_any()
@@ -689,18 +671,16 @@ fn arrow_operator_rewrites_to_get_field() -> Result<()> {
 fn list_unique_null_treatment_respects_clause() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::Utf8,
-        true,
-    )]));
-    let array = Arc::new(StringArray::from(vec![Some("a"), None, Some("a")]))
-        as Arc<dyn Array>;
+    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+    let array = Arc::new(StringArray::from(vec![Some("a"), None, Some("a")])) as Arc<dyn Array>;
     let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
     ctx.register_table("t", Arc::new(table))?;
 
-    let batches = run_query(&ctx, "SELECT list_unique(value) IGNORE NULLS AS value FROM t")?;
+    let batches = run_query(
+        &ctx,
+        "SELECT list_unique(value) IGNORE NULLS AS value FROM t",
+    )?;
     let list_array = batches[0]
         .column(0)
         .as_any()
@@ -738,13 +718,8 @@ fn list_unique_null_treatment_respects_clause() -> Result<()> {
 fn count_distinct_null_treatment_respects_clause() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::Utf8,
-        true,
-    )]));
-    let array = Arc::new(StringArray::from(vec![Some("a"), None, Some("a")]))
-        as Arc<dyn Array>;
+    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+    let array = Arc::new(StringArray::from(vec![Some("a"), None, Some("a")])) as Arc<dyn Array>;
     let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
     ctx.register_table("t", Arc::new(table))?;
@@ -777,11 +752,7 @@ fn count_distinct_null_treatment_respects_clause() -> Result<()> {
 fn count_distinct_default_value_on_empty() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
     let table = MemTable::try_new(schema, vec![vec![]])?;
     ctx.register_table("t", Arc::new(table))?;
     let batches = run_query(&ctx, "SELECT count_distinct_agg(value) AS value FROM t")?;

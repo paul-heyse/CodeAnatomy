@@ -75,6 +75,7 @@ class TaskExecutionSpec:
     task_name: str
     task_output: str
     plan_fingerprint: str
+    plan_task_signature: str
     task_kind: Literal["view", "scan"]
     scan_unit_key: str | None = None
 
@@ -127,6 +128,7 @@ def _record_output(
             source_task=spec.task_name,
             schema_fingerprint=schema_fingerprint(schema),
             plan_fingerprint=spec.plan_fingerprint,
+            plan_task_signature=spec.plan_task_signature,
             plan_signature=plan_signature,
         ),
     )

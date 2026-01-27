@@ -24,6 +24,8 @@ from datafusion_engine.udf_runtime import (
     validate_rust_udf_snapshot,
 )
 from datafusion_engine.view_artifacts import (
+    ViewArtifactLineage,
+    ViewArtifactRequest,
     build_view_artifact_from_bundle,
 )
 
@@ -121,6 +123,11 @@ def register_view_graph(
     materialized = _materialize_nodes(nodes, snapshot=snapshot)
     ordered = _topo_sort_nodes(materialized)
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime.runtime_profile)
+    runtime_hash: str | None = None
+    if runtime.runtime_profile is not None:
+        from datafusion_engine.runtime import session_runtime_hash
+
+        runtime_hash = session_runtime_hash(runtime.runtime_profile.session_runtime())
     for node in ordered:
         _validate_deps(ctx, node, materialized)
         _validate_udf_calls(snapshot, node)
@@ -154,10 +161,15 @@ def register_view_graph(
                 raise ValueError(msg)
             artifact = build_view_artifact_from_bundle(
                 node.plan_bundle,
-                name=node.name,
-                schema=schema,
-                required_udfs=node.required_udfs,
-                referenced_tables=node.deps,
+                request=ViewArtifactRequest(
+                    name=node.name,
+                    schema=schema,
+                    lineage=ViewArtifactLineage(
+                        required_udfs=node.required_udfs,
+                        referenced_tables=node.deps,
+                    ),
+                    runtime_hash=runtime_hash,
+                ),
             )
             record_view_definition(runtime.runtime_profile, artifact=artifact)
 

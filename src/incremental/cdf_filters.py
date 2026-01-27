@@ -150,7 +150,7 @@ class CdfFilterPolicy:
         if self.include_delete:
             included_types.append(CdfChangeType.DELETE.to_cdf_column_value())
         if not included_types:
-            return lit(False)
+            return lit(value=False)
         change_type_col = col("_change_type")
         if len(included_types) == 1:
             return change_type_col == lit(included_types[0])

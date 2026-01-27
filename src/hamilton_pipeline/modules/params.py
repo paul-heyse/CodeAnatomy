@@ -281,7 +281,7 @@ def param_table_name_map(
 
 
 @tag(layer="params", artifact="param_tables_df", kind="object")
-def param_tables_ibis(
+def param_tables_datafusion(
     param_table_registry: ParamTableRegistry,
     engine_session: EngineSession,
 ) -> dict[str, DataFrame]:

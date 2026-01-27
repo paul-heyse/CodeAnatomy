@@ -26,15 +26,6 @@ _SUPPORTS_PLAN: dict[str, bool] = {
     "scip": True,
     "repo_scan": False,
 }
-_SUPPORTS_IBIS: dict[str, bool] = {
-    "ast": True,
-    "cst": True,
-    "tree_sitter": True,
-    "bytecode": True,
-    "symtable": True,
-    "scip": True,
-    "repo_scan": False,
-}
 
 
 @dataclass(frozen=True)
@@ -47,7 +38,6 @@ class ExtractorSpec:
     optional_outputs: tuple[str, ...] = ()
     required_inputs: tuple[str, ...] = ()
     supports_plan: bool = False
-    supports_ibis: bool = False
 
 
 def _rows_by_template() -> Mapping[str, tuple[ExtractMetadata, ...]]:
@@ -77,7 +67,6 @@ for _template, _rows in _rows_by_template().items():
         optional_outputs=_optional_outputs(_rows),
         required_inputs=_REQUIRED_INPUTS.get(_template, ()),
         supports_plan=_SUPPORTS_PLAN.get(_template, False),
-        supports_ibis=_SUPPORTS_IBIS.get(_template, False),
     )
 
 _OUTPUT_TO_TEMPLATE: dict[str, str] = {

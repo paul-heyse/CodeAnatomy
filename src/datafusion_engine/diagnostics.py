@@ -528,7 +528,7 @@ class DiagnosticsRecorder:
         database: Mapping[str, Any],
         overwrite: bool,
     ) -> None:
-        """Record namespace actions from Ibis integrations.
+        """Record namespace actions from DataFusion integrations.
 
         Parameters
         ----------
@@ -544,7 +544,7 @@ class DiagnosticsRecorder:
         if not self.enabled or self._sink is None:
             return
         self._sink.record_artifact(
-            "ibis_namespace_actions_v1",
+            "datafusion_namespace_actions_v1",
             {
                 "session_id": self._context.session_id,
                 "operation_id": self._context.operation_id,

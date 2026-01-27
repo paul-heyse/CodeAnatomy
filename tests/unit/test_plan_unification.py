@@ -38,7 +38,6 @@ class ViewNode:
     deps: tuple[str, ...]
     builder: Callable[[SessionContext], DataFrame]
     contract_builder: Callable[[object], object] | None = None
-    sqlglot_ast: object | None = None
 
 
 if not TYPE_CHECKING:

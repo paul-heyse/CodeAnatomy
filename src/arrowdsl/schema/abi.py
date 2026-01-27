@@ -131,8 +131,7 @@ def schema_fingerprint(schema: SchemaLike) -> str:
 class DatasetFingerprintInputs:
     """Inputs used to compute a dataset fingerprint."""
 
-    ast_fingerprint: str
-    policy_hash: str
+    plan_fingerprint: str
     schema_fingerprint: str
     profile_hash: str
     writer_strategy: str
@@ -149,8 +148,7 @@ def dataset_fingerprint(inputs: DatasetFingerprintInputs) -> str:
     """
     payload = {
         "version": DATASET_FINGERPRINT_VERSION,
-        "ast_fingerprint": inputs.ast_fingerprint,
-        "policy_hash": inputs.policy_hash,
+        "plan_fingerprint": inputs.plan_fingerprint,
         "schema_fingerprint": inputs.schema_fingerprint,
         "profile_hash": inputs.profile_hash,
         "writer_strategy": inputs.writer_strategy,

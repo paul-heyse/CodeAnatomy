@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
@@ -728,13 +728,14 @@ class SchemaIntrospector:
         if not isinstance(schema, pa.Schema):
             msg = "Schema introspection failed to resolve a PyArrow schema."
             raise TypeError(msg)
+        resolved_schema = cast("pa.Schema", schema)
         rows = [
             {
                 "column_name": field.name,
                 "data_type": str(field.type),
                 "nullable": field.nullable,
             }
-            for field in schema
+            for field in resolved_schema
         ]
         if cache is not None:
             cache.set(key, rows, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)

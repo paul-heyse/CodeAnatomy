@@ -19,7 +19,7 @@ class UdfParityMismatch:
     func_id: str
     kind: str
     issue: str
-    ibis_value: object | None = None
+    runtime_value: object | None = None
     rust_value: object | None = None
 
 
@@ -46,7 +46,7 @@ class UdfParityReport:
                     "func_id": item.func_id,
                     "kind": item.kind,
                     "issue": item.issue,
-                    "ibis_value": item.ibis_value,
+                    "runtime_value": item.runtime_value,
                     "rust_value": item.rust_value,
                 }
                 for item in self.param_name_mismatches
@@ -56,7 +56,7 @@ class UdfParityReport:
                     "func_id": item.func_id,
                     "kind": item.kind,
                     "issue": item.issue,
-                    "ibis_value": item.ibis_value,
+                    "runtime_value": item.runtime_value,
                     "rust_value": item.rust_value,
                 }
                 for item in self.volatility_mismatches
@@ -89,7 +89,7 @@ class UdfInfoSchemaParityReport:
                     "func_id": item.func_id,
                     "kind": item.kind,
                     "issue": item.issue,
-                    "ibis_value": item.ibis_value,
+                    "runtime_value": item.runtime_value,
                     "rust_value": item.rust_value,
                 }
                 for item in self.param_name_mismatches
@@ -318,7 +318,7 @@ def _registry_param_mismatches(
                     func_id=name,
                     kind="info_schema",
                     issue="missing_parameters",
-                    ibis_value=None,
+                    runtime_value=None,
                     rust_value=rust_params,
                 )
             )
@@ -329,7 +329,7 @@ def _registry_param_mismatches(
                     func_id=name,
                     kind="info_schema",
                     issue="param_names",
-                    ibis_value=sorted(info_sets),
+                    runtime_value=sorted(info_sets),
                     rust_value=rust_params,
                 )
             )

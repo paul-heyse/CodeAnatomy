@@ -6,6 +6,7 @@ import uuid
 
 from datafusion import col, lit
 from datafusion import functions as f
+from datafusion.dataframe import DataFrame
 
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from incremental.cdf_filters import CdfChangeType
@@ -45,43 +46,19 @@ def file_changes_from_cdf(
         _ = datafusion_from_arrow(ctx, name=cdf_name, value=cdf_result.table)
         registry.track(cdf_name)
         df = ctx.table(cdf_name)
-        change_type_col = col("_change_type")
-        file_id_col = col(file_id_column)
-        insert_type = lit(CdfChangeType.INSERT.to_cdf_column_value())
-        update_type = lit(CdfChangeType.UPDATE_POSTIMAGE.to_cdf_column_value())
-        delete_type = lit(CdfChangeType.DELETE.to_cdf_column_value())
-
-        changed_filter = (
-            f.in_list(change_type_col, [insert_type, update_type]) & file_id_col.is_not_null()
+        changed = _collect_file_ids(
+            df,
+            change_types=(
+                CdfChangeType.INSERT.to_cdf_column_value(),
+                CdfChangeType.UPDATE_POSTIMAGE.to_cdf_column_value(),
+            ),
+            file_id_column=file_id_column,
         )
-        changed_table = (
-            df.filter(changed_filter)
-            .select(file_id_col.alias("file_id"))
-            .distinct()
-            .to_arrow_table()
+        deleted = _collect_file_ids(
+            df,
+            change_types=(CdfChangeType.DELETE.to_cdf_column_value(),),
+            file_id_column=file_id_column,
         )
-        changed_values = {
-            value
-            for value in changed_table["file_id"].to_pylist()
-            if isinstance(value, str)
-        }
-        changed = tuple(sorted(changed_values))
-
-        deleted_filter = (
-            f.in_list(change_type_col, [delete_type]) & file_id_col.is_not_null()
-        )
-        deleted_table = (
-            df.filter(deleted_filter)
-            .select(file_id_col.alias("file_id"))
-            .distinct()
-            .to_arrow_table()
-        )
-        deleted_values = {
-            value
-            for value in deleted_table["file_id"].to_pylist()
-            if isinstance(value, str)
-        }
-        deleted = tuple(sorted(deleted_values))
 
     # CDF always represents a delta, not a full refresh
     return IncrementalFileChanges(
@@ -89,6 +66,28 @@ def file_changes_from_cdf(
         deleted_file_ids=deleted,
         full_refresh=False,
     )
+
+
+def _collect_file_ids(
+    df: DataFrame,
+    *,
+    change_types: tuple[str, ...],
+    file_id_column: str,
+) -> tuple[str, ...]:
+    """Collect distinct file IDs for the requested CDF change types.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted, unique file identifiers.
+    """
+    change_type_col = col("_change_type")
+    file_id_col = col(file_id_column)
+    change_literals = [lit(value) for value in change_types]
+    predicate = f.in_list(change_type_col, change_literals) & file_id_col.is_not_null()
+    table = df.filter(predicate).select(file_id_col.alias("file_id")).distinct().to_arrow_table()
+    values = {value for value in table["file_id"].to_pylist() if isinstance(value, str)}
+    return tuple(sorted(values))
 
 
 __all__ = ["file_changes_from_cdf"]

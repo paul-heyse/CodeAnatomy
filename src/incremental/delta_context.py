@@ -115,13 +115,12 @@ def register_delta_df(
         delta_timestamp=resolved_timestamp,
         delta_scan=resolved_scan,
     )
-    df = register_dataset_df(
+    return register_dataset_df(
         context.runtime.session_context(),
         name=name,
         location=location,
         runtime_profile=context.runtime.profile,
     )
-    return df
 
 
 __all__ = [

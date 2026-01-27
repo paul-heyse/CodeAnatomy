@@ -6,13 +6,14 @@ from collections.abc import Sequence
 from typing import cast
 
 import pyarrow as pa
-from datafusion import col, functions as f, lit
+from datafusion import col, lit
+from datafusion import functions as f
 
 from arrowdsl.core.interop import TableLike, coerce_table_like
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
-from incremental.registry_specs import dataset_schema
 from datafusion_ext import prefixed_hash64
+from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 
 

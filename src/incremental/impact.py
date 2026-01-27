@@ -185,7 +185,7 @@ def impacted_importers_from_changed_exports(
         )
         pieces.append(by_name)
 
-        star = imports_resolved.filter(col("is_star") == lit(True))
+        star = imports_resolved.filter(col("is_star") == lit(value=True))
         by_star = star.join(
             exports_table,
             "imported_module_fqn",
@@ -242,7 +242,7 @@ def import_closure_only_from_changed_exports(
             prefix="export_keys",
         )
         module_imports = imports_resolved.filter(
-            col("imported_name").is_null() & (col("is_star") == lit(False))
+            col("imported_name").is_null() & (col("is_star") == lit(value=False))
         )
         module_hits = module_imports.join(
             exports_table,
@@ -257,7 +257,7 @@ def import_closure_only_from_changed_exports(
         )
         pieces.append(module_hits)
 
-        star = imports_resolved.filter(col("is_star") == lit(True))
+        star = imports_resolved.filter(col("is_star") == lit(value=True))
         star_hits = star.join(
             exports_table,
             "imported_module_fqn",

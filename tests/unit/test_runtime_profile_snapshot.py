@@ -38,20 +38,6 @@ def test_runtime_profile_hash_changes_with_join_policy() -> None:
     assert snapshot_base.profile_hash != snapshot_modified.profile_hash
 
 
-def test_runtime_profile_hash_changes_with_ibis_options() -> None:
-    """Update profile hash when Ibis options change."""
-    base = RuntimeProfile(name="test", scan=ScanProfile(name="default"))
-    snapshot_base = runtime_profile_snapshot(base)
-    modified = RuntimeProfile(
-        name="test",
-        scan=ScanProfile(name="default"),
-        ibis_fuse_selects=False,
-        ibis_default_limit=100,
-    )
-    snapshot_modified = runtime_profile_snapshot(modified)
-    assert snapshot_base.profile_hash != snapshot_modified.profile_hash
-
-
 def test_schema_evolution_adapter_enabled_by_default() -> None:
     """Enable schema evolution adapter in the default profile."""
     profile = DataFusionRuntimeProfile()

@@ -19,8 +19,6 @@ def test_inputs_nodes_marked_ignore_for_cache() -> None:
         "ctx",
         "diagnostics_collector",
         "engine_session",
-        "ibis_backend",
-        "ibis_execution",
         "streaming_table_provider",
     )
     for name in ignore_nodes:

@@ -66,7 +66,7 @@ def flag_to_bool_expr(expr: Expr) -> Expr:
     casted = f.arrow_cast(expr, lit("Int64"))
     hit = casted == lit(1)
     null_bool = f.arrow_cast(lit(None), lit("Boolean"))
-    return f.when(hit, lit(True)).otherwise(null_bool)
+    return f.when(hit, lit(value=True)).otherwise(null_bool)
 
 
 __all__ = [

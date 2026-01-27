@@ -62,9 +62,7 @@ def materialize_view_reference(
     Raises
     ------
     ValueError
-        Raised when an Ibis or DataFusion backend is unavailable.
-    TypeError
-        Raised when the backend lacks a DataFusion session context.
+        Raised when a DataFusion session context is unavailable.
     """
     if ctx is None:
         msg = f"View {view.name!r} requires a DataFusion session context."

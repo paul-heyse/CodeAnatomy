@@ -17,8 +17,8 @@ from arrowdsl.schema.schema import SchemaTransform
 from storage.ipc import ipc_bytes
 
 if TYPE_CHECKING:
+    from arro3.core.types import ArrowArrayExportable
     from datafusion import SessionContext
-    from deltalake.writer.writer import ArrowArrayExportable
 
 type StorageOptions = Mapping[str, str]
 

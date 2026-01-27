@@ -63,7 +63,12 @@ fn record_scalar_udfs(state: &SessionState, snapshot: &mut RegistrySnapshot) {
     for (name, udf) in state.scalar_functions() {
         snapshot.scalar.push(name.clone());
         record_aliases(name, udf.aliases(), &mut snapshot.aliases);
-        record_signature(name, udf.signature(), &mut snapshot.parameter_names, &mut snapshot.volatility);
+        record_signature(
+            name,
+            udf.signature(),
+            &mut snapshot.parameter_names,
+            &mut snapshot.volatility,
+        );
         record_rewrite_tags(name, snapshot);
         record_signature_details(name, udf.signature(), snapshot, |arg_types| {
             udf.return_type(arg_types).ok()
@@ -428,12 +433,7 @@ fn record_signature_details<F>(
     let mut input_rows = Vec::with_capacity(arg_sets.len());
     let mut return_rows = Vec::with_capacity(arg_sets.len());
     for arg_types in arg_sets {
-        input_rows.push(
-            arg_types
-                .iter()
-                .map(format_data_type)
-                .collect::<Vec<_>>(),
-        );
+        input_rows.push(arg_types.iter().map(format_data_type).collect::<Vec<_>>());
         let resolved = return_type(&arg_types).unwrap_or(DataType::Null);
         return_rows.push(format_data_type(&resolved));
     }
@@ -466,7 +466,11 @@ fn arg_sets_from_type_signature(signature: &TypeSignature) -> Vec<Vec<DataType>>
     }
 }
 
-fn window_return_type(udwf: &WindowUDF, arg_types: &[DataType], name: &str) -> datafusion_common::Result<DataType> {
+fn window_return_type(
+    udwf: &WindowUDF,
+    arg_types: &[DataType],
+    name: &str,
+) -> datafusion_common::Result<DataType> {
     let arg_fields = build_arg_fields(arg_types);
     let field = udwf.field(WindowUDFFieldArgs::new(&arg_fields, name))?;
     Ok(field.data_type().clone())

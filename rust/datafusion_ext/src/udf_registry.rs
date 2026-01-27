@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
+use datafusion::catalog::TableFunctionImpl;
 use datafusion::execution::context::SessionContext;
+use datafusion_common::Result;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::RangeFunc;
-use datafusion::catalog::TableFunctionImpl;
-use datafusion_common::Result;
 
-use crate::{udaf_builtin, udtf_builtin, udtf_external, udwf_builtin, udf_custom};
 #[cfg(feature = "async-udf")]
 use crate::udf_async;
+use crate::{udaf_builtin, udf_custom, udtf_builtin, udtf_external, udwf_builtin};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -270,7 +270,7 @@ pub fn register_all(
 mod tests {
     use std::collections::HashSet;
 
-    use super::{UdfKind, all_udfs};
+    use super::{all_udfs, UdfKind};
 
     #[test]
     fn registry_contains_expected_entries() {

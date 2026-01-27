@@ -116,6 +116,7 @@ def _plan_node_functions(
         ("task_generations", _task_generations_node()),
         ("schedule_metadata", _schedule_metadata_node()),
         ("plan_fingerprints", _plan_fingerprints_node()),
+        ("plan_task_signatures", _plan_task_signatures_node()),
         ("plan_snapshots", _plan_snapshots_node()),
         ("bottom_level_costs", _bottom_level_costs_node()),
         ("dependency_map", _dependency_map_node()),
@@ -271,6 +272,8 @@ def _plan_artifacts_node() -> object:
             "plan_critical_path_length_weighted": float | None,
             "plan_scan_unit_count": int,
             "plan_scan_file_candidate_count": int,
+            "plan_task_signature_count": int,
+            "plan_session_runtime_hash": str | None,
         }
     )
     def plan_artifacts(execution_plan: ExecutionPlan) -> dict[str, object]:
@@ -282,6 +285,7 @@ def _plan_artifacts_node() -> object:
         scan_file_candidate_count = sum(
             len(unit.candidate_files) for unit in execution_plan.scan_units
         )
+        plan_task_signature_count = len(execution_plan.plan_task_signatures)
         return {
             "plan_task_dependency_signature": (execution_plan.task_dependency_signature),
             "plan_reduced_task_dependency_signature": (
@@ -296,6 +300,8 @@ def _plan_artifacts_node() -> object:
             "plan_critical_path_length_weighted": (execution_plan.critical_path_length_weighted),
             "plan_scan_unit_count": scan_unit_count,
             "plan_scan_file_candidate_count": scan_file_candidate_count,
+            "plan_task_signature_count": plan_task_signature_count,
+            "plan_session_runtime_hash": execution_plan.session_runtime_hash,
         }
 
     return plan_artifacts
@@ -333,6 +339,14 @@ def _plan_fingerprints_node() -> object:
         return execution_plan.plan_fingerprints
 
     return plan_fingerprints
+
+
+def _plan_task_signatures_node() -> object:
+    @tag(layer="plan", artifact="plan_task_signatures", kind="mapping")
+    def plan_task_signatures(execution_plan: ExecutionPlan) -> Mapping[str, str]:
+        return execution_plan.plan_task_signatures
+
+    return plan_task_signatures
 
 
 def _plan_snapshots_node() -> object:

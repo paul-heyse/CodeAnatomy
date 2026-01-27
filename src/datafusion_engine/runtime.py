@@ -154,6 +154,17 @@ _SETTINGS_HASH_SCHEMA = pa.schema(
         pa.field("entries", pa.list_(_MAP_ENTRY_SCHEMA)),
     ]
 )
+_SESSION_RUNTIME_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("profile_context_key", pa.string(), nullable=False),
+        pa.field("profile_settings_hash", pa.string(), nullable=False),
+        pa.field("udf_snapshot_hash", pa.string(), nullable=False),
+        pa.field("udf_rewrite_tags", pa.list_(pa.string()), nullable=False),
+        pa.field("domain_planner_names", pa.list_(pa.string()), nullable=False),
+        pa.field("df_settings_entries", pa.list_(_MAP_ENTRY_SCHEMA), nullable=False),
+    ]
+)
 _SQL_POLICY_SCHEMA = pa.struct(
     [
         pa.field("allow_ddl", pa.bool_()),
@@ -1095,9 +1106,14 @@ def register_view_specs(
     views:
         View specifications to register.
     runtime_profile:
-        Optional runtime profile for recording view definitions.
+        Runtime profile for recording view definitions.
     validate:
         Whether to validate view schemas after registration.
+
+    Raises
+    ------
+    ValueError
+        Raised when ``runtime_profile`` is not provided.
 
     """
     from datafusion_engine.view_graph_registry import (
@@ -1108,6 +1124,9 @@ def register_view_specs(
 
     if not views:
         return
+    if runtime_profile is None:
+        msg = "Runtime profile is required for view registration."
+        raise ValueError(msg)
     snapshot = _register_view_specs_udfs(ctx, runtime_profile=runtime_profile)
     nodes = _build_view_nodes(
         ctx,
@@ -1153,12 +1172,20 @@ def _build_view_nodes(
     -------
     list[ViewNode]
         List of compiled view nodes.
+
+    Raises
+    ------
+    ValueError
+        Raised when the runtime profile is unavailable.
     """
     from datafusion_engine.plan_bundle import build_plan_bundle
     from datafusion_engine.view_graph_registry import ViewNode
 
+    if runtime_profile is None:
+        msg = "Runtime profile is required for view planning."
+        raise ValueError(msg)
     session_runtime = (
-        runtime_profile.session_runtime() if runtime_profile is not None else None
+        runtime_profile.session_runtime()
     )
     nodes: list[ViewNode] = []
     for view in views:
@@ -1604,7 +1631,7 @@ def record_view_definition(
         return
     profile.view_registry.record(name=artifact.name, artifact=artifact)
     payload = artifact.diagnostics_payload(event_time_unix_ms=int(time.time() * 1000))
-    record_artifact(profile, "datafusion_view_artifacts_v1", payload)
+    record_artifact(profile, "datafusion_view_artifacts_v2", payload)
 
 
 def _datafusion_version(ctx: SessionContext) -> str | None:
@@ -2585,6 +2612,8 @@ class SessionRuntime:
 
 _SESSION_RUNTIME_CACHE: dict[str, SessionRuntime] = {}
 
+_SESSION_RUNTIME_HASH_VERSION = 1
+
 
 def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str, str]:
     """Build a name/value settings mapping from introspection rows.
@@ -2660,6 +2689,47 @@ def build_session_runtime(
     if use_cache:
         _SESSION_RUNTIME_CACHE[cache_key] = runtime
     return runtime
+
+
+def _session_runtime_entries(mapping: Mapping[str, str]) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for key, value in sorted(mapping.items(), key=lambda item: item[0]):
+        entries.append(
+            {
+                "key": str(key),
+                "value_kind": type(value).__name__,
+                "value": str(value),
+            }
+        )
+    return entries
+
+
+def session_runtime_hash(runtime: SessionRuntime) -> str:
+    """Return a stable hash for session runtime identity.
+
+    Parameters
+    ----------
+    runtime
+        Planning-ready session runtime snapshot.
+
+    Returns
+    -------
+    str
+        Stable identity hash for runtime-sensitive plan signatures.
+    """
+    profile_context_key = runtime.profile.context_cache_key()
+    profile_settings_hash = runtime.profile.settings_hash()
+    df_entries = _session_runtime_entries(runtime.df_settings)
+    payload = {
+        "version": _SESSION_RUNTIME_HASH_VERSION,
+        "profile_context_key": profile_context_key,
+        "profile_settings_hash": profile_settings_hash,
+        "udf_snapshot_hash": runtime.udf_snapshot_hash,
+        "udf_rewrite_tags": list(runtime.udf_rewrite_tags),
+        "domain_planner_names": list(runtime.domain_planner_names),
+        "df_settings_entries": df_entries,
+    }
+    return payload_hash(payload, _SESSION_RUNTIME_HASH_SCHEMA)
 
 
 @dataclass(frozen=True)
@@ -2999,6 +3069,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     def session_context(self) -> SessionContext:
         """Return a SessionContext configured from the profile.
 
+        Use session_runtime() for planning to ensure UDF and settings
+        snapshots are captured deterministically.
+
         Returns
         -------
         datafusion.SessionContext
@@ -3044,6 +3117,9 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
     def ephemeral_context(self) -> SessionContext:
         """Return a non-cached SessionContext configured from the profile.
+
+        Use session_runtime() for planning to ensure UDF and settings
+        snapshots are captured deterministically.
 
         Returns
         -------
@@ -5896,10 +5972,12 @@ __all__ = [
     "MemoryPool",
     "PreparedStatementSpec",
     "SchemaHardeningProfile",
+    "SessionRuntime",
     "align_table_to_schema",
     "apply_execution_label",
     "apply_execution_policy",
     "assert_schema_metadata",
+    "build_session_runtime",
     "collect_datafusion_metrics",
     "collect_datafusion_traces",
     "dataset_schema_from_context",
@@ -5911,6 +5989,7 @@ __all__ = [
     "read_delta_as_reader",
     "register_view_specs",
     "run_diskcache_maintenance",
+    "session_runtime_hash",
     "snapshot_plans",
     "sql_options_for_profile",
     "statement_sql_options_for_profile",

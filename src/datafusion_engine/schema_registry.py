@@ -6,7 +6,7 @@ the runtime profile enables `enable_schema_evolution_adapter=True`. Schema
 adapters normalize physical batches at the TableProvider boundary, handling
 column reordering, type coercion, and missing/extra columns during physical
 plan execution. This eliminates the need for downstream drift normalization
-transforms expressed as SQLGlot rewrites or Ibis casts.
+transforms.
 """
 
 from __future__ import annotations
@@ -1397,12 +1397,13 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
 )
 
 DATAFUSION_VIEW_ARTIFACTS_SCHEMA = _schema_with_metadata(
-    "datafusion_view_artifacts_v1",
+    "datafusion_view_artifacts_v2",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
             pa.field("name", pa.string(), nullable=False),
             pa.field("plan_fingerprint", pa.string(), nullable=False),
+            pa.field("plan_task_signature", pa.string(), nullable=False),
             pa.field("schema_fingerprint", pa.string(), nullable=False),
             pa.field("schema_msgpack", pa.binary(), nullable=False),
             pa.field("required_udfs", pa.list_(pa.string()), nullable=True),

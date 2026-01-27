@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, cast
@@ -47,13 +48,14 @@ from relspec.view_defs import (
     REL_NAME_SYMBOL_OUTPUT,
     RELATION_OUTPUT_NAME,
 )
+from serde_msgspec import dumps_msgpack
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.lineage_datafusion import LineageReport
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.schema_contracts import SchemaContract
     from datafusion_engine.view_graph_registry import ViewNode
@@ -88,6 +90,7 @@ class ExecutionPlan:
     task_schedule: TaskSchedule
     schedule_metadata: Mapping[str, TaskScheduleMetadata]
     plan_fingerprints: Mapping[str, str]
+    plan_task_signatures: Mapping[str, str]
     plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
     output_contracts: Mapping[str, OutputContract]
     plan_signature: str
@@ -104,6 +107,7 @@ class ExecutionPlan:
     dataset_specs: Mapping[str, DatasetSpec]
     active_tasks: frozenset[str]
     runtime_profile: DataFusionRuntimeProfile | None = None
+    session_runtime_hash: str | None = None
     scan_units: tuple[ScanUnit, ...] = ()
     scan_unit_delta_pins: Mapping[str, int] = field(default_factory=dict)
     scan_keys_by_task: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
@@ -142,6 +146,7 @@ class _PlanBuildContext:
     evidence: EvidenceCatalog
     dataset_spec_map: Mapping[str, DatasetSpec]
     runtime_profile: DataFusionRuntimeProfile | None
+    session_runtime: SessionRuntime | None
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
     scan_task_units_by_name: Mapping[str, ScanUnit]
@@ -197,6 +202,7 @@ class _PrunedPlanComponents:
     task_graph: TaskGraph
     view_nodes: tuple[ViewNode, ...]
     plan_fingerprints: Mapping[str, str]
+    plan_task_signatures: Mapping[str, str]
     plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
     output_contracts: Mapping[str, OutputContract]
     dependency_map: Mapping[str, tuple[str, ...]]
@@ -282,7 +288,11 @@ def compile_execution_plan(
     """
     context = _prepare_plan_context(session, request)
     plan_fingerprints = _plan_fingerprint_map(context.inferred)
-    reduction = _task_dependency_reduction(context.task_graph, plan_fingerprints)
+    plan_task_signatures = _plan_task_signature_map(
+        context=context,
+        plan_fingerprints=plan_fingerprints,
+    )
+    reduction = _task_dependency_reduction(context.task_graph, plan_task_signatures)
     output_schema_for = _output_schema_lookup(context.output_contracts)
     schedule = schedule_tasks(
         context.task_graph,
@@ -292,10 +302,14 @@ def compile_execution_plan(
         reduced_dependency_graph=reduction.reduced_graph,
     )
     schedule_meta = task_schedule_metadata(schedule)
-    plan_snapshots = _plan_snapshot_map(context.view_nodes, plan_fingerprints)
+    plan_snapshots = _plan_snapshot_map(
+        context.view_nodes,
+        plan_fingerprints,
+        plan_task_signatures,
+    )
     signature, diagnostics = _plan_signature_and_diagnostics(
         context.task_graph,
-        plan_fingerprints,
+        plan_task_signatures,
         reduction=reduction,
     )
     bottom_costs = bottom_level_costs(reduction.reduced_graph)
@@ -305,6 +319,7 @@ def compile_execution_plan(
         scan_task_names_by_task=context.scan_task_names_by_task,
     )
     scan_delta_pins = _scan_unit_delta_pins(context.scan_units)
+    session_runtime_hash = _session_runtime_hash(context.session_runtime)
     return ExecutionPlan(
         view_nodes=context.view_nodes,
         task_graph=context.task_graph,
@@ -314,6 +329,7 @@ def compile_execution_plan(
         task_schedule=schedule,
         schedule_metadata=schedule_meta,
         plan_fingerprints=plan_fingerprints,
+        plan_task_signatures=plan_task_signatures,
         plan_snapshots=plan_snapshots,
         output_contracts=context.output_contracts,
         plan_signature=signature,
@@ -330,6 +346,7 @@ def compile_execution_plan(
         dataset_specs=context.dataset_spec_map,
         active_tasks=frozenset(context.active_tasks),
         runtime_profile=context.runtime_profile,
+        session_runtime_hash=session_runtime_hash,
         scan_units=context.scan_units,
         scan_unit_delta_pins=scan_delta_pins,
         scan_keys_by_task=context.scan_keys_by_task,
@@ -535,6 +552,7 @@ def _prepare_plan_context(
         evidence=contracts_evidence.evidence,
         dataset_spec_map=dataset_spec_map,
         runtime_profile=request.runtime_profile,
+        session_runtime=planned.session_runtime,
         requested_task_names=requested_task_names,
         impacted_task_names=impacted_task_names,
         allow_partial=bool(request.allow_partial),
@@ -621,21 +639,21 @@ def _scan_keys_from_mapping(
 
 def _task_dependency_reduction(
     graph: TaskGraph,
-    plan_fingerprints: Mapping[str, str],
+    plan_task_signatures: Mapping[str, str],
 ) -> TaskDependencyReduction:
-    return task_dependency_reduction(graph, task_signatures=plan_fingerprints)
+    return task_dependency_reduction(graph, task_signatures=plan_task_signatures)
 
 
 def _plan_signature_and_diagnostics(
     graph: TaskGraph,
-    plan_fingerprints: Mapping[str, str],
+    plan_task_signatures: Mapping[str, str],
     *,
     reduction: TaskDependencyReduction,
 ) -> tuple[str, GraphDiagnostics]:
     snapshot_payload = task_graph_snapshot(
         graph,
         label="execution_plan",
-        task_signatures=plan_fingerprints,
+        task_signatures=plan_task_signatures,
     )
     signature = task_graph_signature(snapshot_payload)
     diagnostics = task_graph_diagnostics(graph, include_node_link=True)
@@ -867,9 +885,136 @@ def _plan_fingerprint_map(inferred: Sequence[InferredDeps]) -> dict[str, str]:
     return {dep.task_name: dep.plan_fingerprint for dep in inferred}
 
 
+_PLAN_TASK_SIGNATURE_VERSION = 1
+_SCAN_UNIT_SIGNATURE_VERSION = 1
+
+
+def _session_runtime_hash(runtime: SessionRuntime | None) -> str | None:
+    if runtime is None:
+        return None
+    from datafusion_engine.runtime import session_runtime_hash
+
+    return session_runtime_hash(runtime)
+
+
+def _hash_payload(payload: object) -> str:
+    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+
+
+def _df_settings_hash(df_settings: Mapping[str, str]) -> str:
+    entries = tuple(sorted((str(key), str(value)) for key, value in df_settings.items()))
+    return _hash_payload(entries)
+
+
+def _delta_inputs_payload(bundle: object) -> tuple[tuple[str, int | None, str | None], ...]:
+    delta_inputs = getattr(bundle, "delta_inputs", ())
+    payload: list[tuple[str, int | None, str | None]] = []
+    for item in delta_inputs:
+        dataset_name = getattr(item, "dataset_name", None)
+        version = getattr(item, "version", None)
+        timestamp = getattr(item, "timestamp", None)
+        if not isinstance(dataset_name, str) or not dataset_name:
+            continue
+        version_value = int(version) if isinstance(version, int) else None
+        timestamp_value = str(timestamp) if isinstance(timestamp, str) else None
+        payload.append((dataset_name, version_value, timestamp_value))
+    return tuple(sorted(payload, key=lambda entry: entry[0]))
+
+
+def _scan_unit_signature(scan_unit: ScanUnit, *, runtime_hash: str | None) -> str:
+    candidate_files = tuple(sorted(str(path) for path in scan_unit.candidate_files))
+    payload = (
+        ("version", _SCAN_UNIT_SIGNATURE_VERSION),
+        ("runtime_hash", runtime_hash or ""),
+        ("scan_key", scan_unit.key),
+        ("dataset_name", scan_unit.dataset_name),
+        ("delta_version", scan_unit.delta_version),
+        ("candidate_files", candidate_files),
+        ("pushed_filters", tuple(sorted(scan_unit.pushed_filters))),
+        ("projected_columns", tuple(sorted(scan_unit.projected_columns))),
+    )
+    return _hash_payload(payload)
+
+
+def _plan_bundle_task_signature(
+    *,
+    bundle: object,
+    runtime_hash: str | None,
+    scan_signatures: Sequence[str],
+) -> str:
+    artifacts = getattr(bundle, "artifacts", None)
+    if artifacts is None:
+        return ""
+    plan_fingerprint = getattr(bundle, "plan_fingerprint", "")
+    function_registry_hash = getattr(artifacts, "function_registry_hash", "")
+    udf_snapshot_hash = getattr(artifacts, "udf_snapshot_hash", "")
+    rewrite_tags = tuple(sorted(getattr(artifacts, "rewrite_tags", ())))
+    domain_planner_names = tuple(sorted(getattr(artifacts, "domain_planner_names", ())))
+    df_settings = getattr(artifacts, "df_settings", {})
+    df_settings_hash = _df_settings_hash(df_settings) if isinstance(df_settings, Mapping) else ""
+    required_udfs = tuple(sorted(getattr(bundle, "required_udfs", ())))
+    required_rewrite_tags = tuple(sorted(getattr(bundle, "required_rewrite_tags", ())))
+    delta_inputs_payload = _delta_inputs_payload(bundle)
+    payload = (
+        ("version", _PLAN_TASK_SIGNATURE_VERSION),
+        ("runtime_hash", runtime_hash or ""),
+        ("plan_fingerprint", str(plan_fingerprint)),
+        ("function_registry_hash", str(function_registry_hash)),
+        ("udf_snapshot_hash", str(udf_snapshot_hash)),
+        ("rewrite_tags", rewrite_tags),
+        ("domain_planner_names", domain_planner_names),
+        ("df_settings_hash", df_settings_hash),
+        ("required_udfs", required_udfs),
+        ("required_rewrite_tags", required_rewrite_tags),
+        ("delta_inputs", delta_inputs_payload),
+        ("scan_signatures", tuple(sorted(scan_signatures))),
+    )
+    return _hash_payload(payload)
+
+
+def _plan_task_signature_map(
+    *,
+    context: _PlanBuildContext,
+    plan_fingerprints: Mapping[str, str],
+) -> dict[str, str]:
+    runtime_hash = _session_runtime_hash(context.session_runtime)
+    scan_units_by_key = {unit.key: unit for unit in context.scan_units}
+    scan_signatures_by_key = {
+        key: _scan_unit_signature(unit, runtime_hash=runtime_hash)
+        for key, unit in scan_units_by_key.items()
+    }
+    view_nodes_by_name = {node.name: node for node in context.view_nodes}
+    signatures: dict[str, str] = {}
+    for dep in context.inferred:
+        task_name = dep.task_name
+        if task_name in context.scan_task_units_by_name:
+            scan_unit = context.scan_task_units_by_name[task_name]
+            signatures[task_name] = _scan_unit_signature(scan_unit, runtime_hash=runtime_hash)
+            continue
+        view_node = view_nodes_by_name.get(task_name)
+        if view_node is not None and view_node.plan_bundle is not None:
+            scan_keys = context.scan_keys_by_task.get(task_name, ())
+            scan_signatures = [
+                scan_signatures_by_key[key]
+                for key in scan_keys
+                if key in scan_signatures_by_key
+            ]
+            bundle_signature = _plan_bundle_task_signature(
+                bundle=view_node.plan_bundle,
+                runtime_hash=runtime_hash,
+                scan_signatures=scan_signatures,
+            )
+            if bundle_signature:
+                signatures[task_name] = bundle_signature
+                continue
+        signatures[task_name] = plan_fingerprints.get(task_name, "")
+    return signatures
+
+
 def _plan_snapshot_map(
     view_nodes: Sequence[ViewNode],
     plan_fingerprints: Mapping[str, str],
+    plan_task_signatures: Mapping[str, str],
 ) -> dict[str, PlanFingerprintSnapshot]:
     snapshots: dict[str, PlanFingerprintSnapshot] = {}
     for node in view_nodes:
@@ -878,6 +1023,7 @@ def _plan_snapshot_map(
             substrait_bytes = node.plan_bundle.substrait_bytes
         snapshots[node.name] = PlanFingerprintSnapshot(
             plan_fingerprint=plan_fingerprints.get(node.name, ""),
+            plan_task_signature=plan_task_signatures.get(node.name, ""),
             substrait_bytes=substrait_bytes,
         )
     return snapshots
@@ -951,6 +1097,11 @@ def _pruned_plan_components(
         for name in sorted(active_tasks)
         if name in plan.plan_fingerprints
     }
+    pruned_task_signatures = {
+        name: plan.plan_task_signatures[name]
+        for name in sorted(active_tasks)
+        if name in plan.plan_task_signatures
+    }
     pruned_snapshots = {
         name: plan.plan_snapshots[name]
         for name in sorted(active_tasks)
@@ -966,8 +1117,6 @@ def _pruned_plan_components(
         for name, deps in plan.dependency_map.items()
         if name in active_tasks
     }
-    pruned_requested = tuple(name for name in plan.requested_task_names if name in active_tasks)
-    pruned_impacted = tuple(name for name in plan.impacted_task_names if name in active_tasks)
     pruned_diff = _prune_incremental_diff(
         plan.incremental_diff,
         active_tasks=active_tasks,
@@ -976,6 +1125,7 @@ def _pruned_plan_components(
         task_graph=pruned_graph,
         view_nodes=pruned_view_nodes,
         plan_fingerprints=pruned_fingerprints,
+        plan_task_signatures=pruned_task_signatures,
         plan_snapshots=pruned_snapshots,
         output_contracts=pruned_contracts,
         dependency_map=pruned_dependency_map,
@@ -985,8 +1135,12 @@ def _pruned_plan_components(
         scan_task_name_by_key=pruned_scan_task_name_by_key,
         scan_task_names_by_task=pruned_scan_task_names_by_task,
         lineage_by_view=pruned_lineage_by_view,
-        requested_task_names=pruned_requested,
-        impacted_task_names=pruned_impacted,
+        requested_task_names=tuple(
+            name for name in plan.requested_task_names if name in active_tasks
+        ),
+        impacted_task_names=tuple(
+            name for name in plan.impacted_task_names if name in active_tasks
+        ),
         incremental_diff=pruned_diff,
     )
 
@@ -1018,7 +1172,7 @@ def prune_execution_plan(
     components = _pruned_plan_components(plan=plan, active_tasks=target_active)
     reduction = _task_dependency_reduction(
         components.task_graph,
-        components.plan_fingerprints,
+        components.plan_task_signatures,
     )
     output_schema_for = _output_schema_lookup(components.output_contracts)
     evidence_for_schedule = plan.evidence.clone()
@@ -1032,7 +1186,7 @@ def prune_execution_plan(
     schedule_meta = task_schedule_metadata(schedule)
     signature, diagnostics = _plan_signature_and_diagnostics(
         components.task_graph,
-        components.plan_fingerprints,
+        components.plan_task_signatures,
         reduction=reduction,
     )
     bottom_costs = bottom_level_costs(reduction.reduced_graph)
@@ -1046,6 +1200,7 @@ def prune_execution_plan(
         task_schedule=schedule,
         schedule_metadata=schedule_meta,
         plan_fingerprints=components.plan_fingerprints,
+        plan_task_signatures=components.plan_task_signatures,
         plan_snapshots=components.plan_snapshots,
         output_contracts=components.output_contracts,
         plan_signature=signature,
@@ -1062,6 +1217,7 @@ def prune_execution_plan(
         dataset_specs=plan.dataset_specs,
         active_tasks=frozenset(target_active),
         runtime_profile=plan.runtime_profile,
+        session_runtime_hash=plan.session_runtime_hash,
         scan_units=components.scan_units,
         scan_unit_delta_pins=scan_delta_pins,
         scan_keys_by_task=components.scan_keys_by_task,

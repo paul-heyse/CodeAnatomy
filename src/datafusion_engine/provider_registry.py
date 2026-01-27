@@ -14,7 +14,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
 
+    from datafusion_engine.registry_bridge import DataFusionCachePolicy
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.table_spec import TableSpec
 
@@ -72,7 +74,7 @@ class ProviderRegistry:
     ctx
         DataFusion SessionContext for table registration.
     runtime_profile
-        Optional runtime profile for configuration and diagnostics.
+        Runtime profile for configuration and diagnostics.
     """
 
     ctx: SessionContext
@@ -85,6 +87,7 @@ class ProviderRegistry:
         spec: TableSpec,
         *,
         overwrite: bool = False,
+        cache_policy: DataFusionCachePolicy | None = None,
     ) -> RegistrationMetadata:
         """Register a table from a TableSpec.
 
@@ -94,6 +97,8 @@ class ProviderRegistry:
             Table specification with schema, location, and format.
         overwrite
             Whether to overwrite an existing registration.
+        cache_policy
+            Optional cache policy to apply during registration.
 
         Returns
         -------
@@ -109,7 +114,7 @@ class ProviderRegistry:
             msg = f"Table {spec.name!r} already registered. Use overwrite=True."
             raise ValueError(msg)
 
-        metadata = self._do_registration(spec)
+        _, metadata = self._do_registration(spec, cache_policy=cache_policy)
         self._registrations[spec.name] = metadata
         self._emit_registration_diagnostic(metadata)
         return metadata
@@ -119,6 +124,7 @@ class ProviderRegistry:
         spec: TableSpec,
         *,
         overwrite: bool = False,
+        cache_policy: DataFusionCachePolicy | None = None,
     ) -> RegistrationMetadata:
         """Register a Delta table with version pinning support.
 
@@ -128,6 +134,8 @@ class ProviderRegistry:
             Table specification for a Delta table.
         overwrite
             Whether to overwrite an existing registration.
+        cache_policy
+            Optional cache policy to apply during registration.
 
         Returns
         -------
@@ -142,7 +150,44 @@ class ProviderRegistry:
         if spec.format != "delta":
             msg = f"Expected delta format, got {spec.format!r}"
             raise ValueError(msg)
-        return self.register(spec, overwrite=overwrite)
+        return self.register(spec, overwrite=overwrite, cache_policy=cache_policy)
+
+    def register_df(
+        self,
+        spec: TableSpec,
+        *,
+        overwrite: bool = False,
+        cache_policy: DataFusionCachePolicy | None = None,
+    ) -> DataFrame:
+        """Register a table and return the DataFrame.
+
+        Parameters
+        ----------
+        spec
+            Table specification with schema, location, and format.
+        overwrite
+            Whether to overwrite an existing registration.
+        cache_policy
+            Optional cache policy to apply during registration.
+
+        Returns
+        -------
+        DataFrame
+            DataFrame for the registered table.
+
+        Raises
+        ------
+        ValueError
+            When table already registered and overwrite is False.
+        """
+        if spec.name in self._registrations and not overwrite:
+            msg = f"Table {spec.name!r} already registered. Use overwrite=True."
+            raise ValueError(msg)
+
+        df, metadata = self._do_registration(spec, cache_policy=cache_policy)
+        self._registrations[spec.name] = metadata
+        self._emit_registration_diagnostic(metadata)
+        return df
 
     def udf_registry_hash(self) -> str | None:
         """Return the current UDF registry snapshot hash.
@@ -189,18 +234,35 @@ class ProviderRegistry:
         """
         return name in self._registrations
 
-    def _do_registration(self, spec: TableSpec) -> RegistrationMetadata:
+    def _do_registration(
+        self,
+        spec: TableSpec,
+        *,
+        cache_policy: DataFusionCachePolicy | None,
+    ) -> tuple[DataFrame, RegistrationMetadata]:
         """Perform the actual table registration.
 
         This method handles the DataFusion-specific registration logic.
 
         Returns
         -------
-        RegistrationMetadata
-            Metadata for the registration event.
+        tuple[DataFrame, RegistrationMetadata]
+            DataFrame and metadata for the registration event.
+
+        Raises
+        ------
+        ValueError
+            Raised when the runtime profile is missing.
         """
         from datafusion_engine.dataset_registry import DatasetLocation
-        from datafusion_engine.registry_bridge import register_dataset_df
+        from datafusion_engine.registry_bridge import (
+            _build_registration_context,
+            _register_dataset_with_context,
+        )
+
+        if self.runtime_profile is None:
+            msg = "ProviderRegistry requires a runtime profile for registration."
+            raise ValueError(msg)
 
         location = DatasetLocation(
             path=spec.storage_location,
@@ -210,41 +272,22 @@ class ProviderRegistry:
             storage_options=spec.storage_options,
         )
 
-        if self.runtime_profile is not None:
-            register_dataset_df(
-                self.ctx,
-                name=spec.name,
-                location=location,
-                runtime_profile=self.runtime_profile,
-            )
-        else:
-            # Fallback registration without profile
-            self._register_without_profile(spec)
-
-        return RegistrationMetadata(
+        context = _build_registration_context(
+            self.ctx,
+            name=spec.name,
+            location=location,
+            cache_policy=cache_policy,
+            runtime_profile=self.runtime_profile,
+        )
+        df = _register_dataset_with_context(context)
+        metadata = RegistrationMetadata(
             table_name=spec.name,
             registration_time_ms=int(time.time() * 1000),
             table_spec_hash=spec.cache_key(),
             udf_snapshot_hash=self.udf_registry_hash(),
             delta_version=spec.delta_version,
         )
-
-    def _register_without_profile(self, spec: TableSpec) -> None:
-        """Register table when runtime profile is unavailable.
-
-        Raises
-        ------
-        ValueError
-            When the format is unsupported without a runtime profile.
-        """
-        if spec.format == "delta":
-            from deltalake import DeltaTable
-
-            dt = DeltaTable(spec.storage_location, version=spec.delta_version)
-            self.ctx.register_dataset(spec.name, dt.to_pyarrow_dataset())
-        else:
-            msg = f"Unsupported format without profile: {spec.format}"
-            raise ValueError(msg)
+        return df, metadata
 
     def _emit_registration_diagnostic(
         self,

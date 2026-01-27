@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pyarrow as pa
-from datafusion import SessionContext
 
 import test_support.datafusion_ext_stub as _datafusion_ext_stub
 import test_support.view_specs_stub as _view_specs_stub
@@ -11,6 +10,7 @@ from arrowdsl.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_ME
 from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.metadata import metadata_list_bytes
 from datafusion_engine.io_adapter import DataFusionIOAdapter
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_registry import (
     AST_VIEW_NAMES,
     DATAFUSION_HAMILTON_EVENTS_SCHEMA,
@@ -44,15 +44,16 @@ def _to_arrow_schema(value: object) -> pa.Schema:
 
 def test_nested_view_spec_roundtrip() -> None:
     """Ensure nested view specs round-trip from the DataFusion context."""
-    ctx = SessionContext()
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     adapter.register_arrow_table(
         "libcst_files_v1",
         empty_table(LIBCST_FILES_SCHEMA),
         overwrite=True,
     )
     view_spec = nested_view_spec(ctx, "cst_parse_manifest")
-    view_spec.register(ctx, validate=False)
+    view_spec.register(ctx, runtime_profile=profile, validate=False)
     actual = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert "file_id" in actual.names
     assert "path" in actual.names
@@ -77,35 +78,40 @@ def test_symtable_schema_metadata() -> None:
 
 def test_required_functions_present() -> None:
     """Validate required CST function inventory and signatures."""
-    ctx = SessionContext()
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
     register_rust_udfs(ctx)
     validate_required_cst_functions(ctx)
 
 
 def test_required_symtable_functions_present() -> None:
     """Validate required symtable function inventory and signatures."""
-    ctx = SessionContext()
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
     register_rust_udfs(ctx)
     validate_required_symtable_functions(ctx)
 
 
 def test_required_bytecode_functions_present() -> None:
     """Validate required bytecode function inventory and signatures."""
-    ctx = SessionContext()
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
     register_rust_udfs(ctx)
     validate_required_bytecode_functions(ctx)
 
 
 def test_required_engine_functions_present() -> None:
     """Validate required engine function inventory."""
-    ctx = SessionContext()
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
     register_rust_udfs(ctx)
     validate_required_engine_functions(ctx)
 
 
 def test_validate_ast_views_smoke() -> None:
     """Ensure AST view validation runs against registered views."""
-    ctx = SessionContext()
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
     register_rust_udfs(ctx)
     validate_ast_views(ctx, view_names=AST_VIEW_NAMES)
 

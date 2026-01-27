@@ -5,23 +5,9 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array,
-    ArrayRef,
-    BooleanArray,
-    BooleanBuilder,
-    Int32Builder,
-    Int32Array,
-    Int64Array,
-    Int64Builder,
-    LargeStringArray,
-    ListArray,
-    ListBuilder,
-    MapArray,
-    MapBuilder,
-    StringArray,
-    StringBuilder,
-    StringViewArray,
-    StructArray,
+    Array, ArrayRef, BooleanArray, BooleanBuilder, Int32Array, Int32Builder, Int64Array,
+    Int64Builder, LargeStringArray, ListArray, ListBuilder, MapArray, MapBuilder, StringArray,
+    StringBuilder, StringViewArray, StructArray,
 };
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::ipc::reader::StreamReader;
@@ -29,20 +15,11 @@ use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{
-    ColumnarValue,
-    Documentation,
-    Expr,
-    ReturnFieldArgs,
-    ScalarFunctionArgs,
-    ScalarUDF,
-    ScalarUDFImpl,
-    Signature,
-    TypeSignature,
-    Volatility,
-    lit,
-};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::{
+    lit, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use datafusion_macros::user_doc;
 use datafusion_python::context::PySessionContext;
 use datafusion_python::expr::PyExpr;
@@ -108,9 +85,8 @@ fn install_sql_macro_factory(ctx: &SessionContext) -> Result<()> {
 }
 
 fn policy_from_ipc(payload: &[u8]) -> Result<FunctionFactoryPolicy> {
-    let mut reader = StreamReader::try_new(std::io::Cursor::new(payload), None).map_err(|err| {
-        DataFusionError::Plan(format!("Failed to open policy IPC stream: {err}"))
-    })?;
+    let mut reader = StreamReader::try_new(std::io::Cursor::new(payload), None)
+        .map_err(|err| DataFusionError::Plan(format!("Failed to open policy IPC stream: {err}")))?;
     let batch = reader
         .next()
         .ok_or_else(|| DataFusionError::Plan("Policy IPC stream is empty.".into()))?
@@ -279,10 +255,7 @@ fn list_field<'a>(array: &'a StructArray, name: &str) -> Result<&'a ListArray> {
         .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} field type.")))
 }
 
-fn bool_field<'a>(
-    array: &'a StructArray,
-    name: &str,
-) -> Result<&'a arrow::array::BooleanArray> {
+fn bool_field<'a>(array: &'a StructArray, name: &str) -> Result<&'a arrow::array::BooleanArray> {
     let column = array
         .column_by_name(name)
         .ok_or_else(|| DataFusionError::Plan(format!("Missing {name} field.")))?;
@@ -309,7 +282,9 @@ fn read_optional_string(array: &StringArray, index: usize) -> Option<String> {
 
 fn read_bool_value(array: &arrow::array::BooleanArray, index: usize) -> Result<bool> {
     if array.is_null(index) {
-        return Err(DataFusionError::Plan("Boolean value cannot be null.".into()));
+        return Err(DataFusionError::Plan(
+            "Boolean value cannot be null.".into(),
+        ));
     }
     Ok(array.value(index))
 }
@@ -352,26 +327,34 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         "stable_hash64" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableHash64Udf {
             signature: SignatureEqHash::new(signature),
         }))),
-        "stable_hash128" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableHash128Udf {
-            signature: SignatureEqHash::new(signature),
-        }))),
-        "prefixed_hash64" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(PrefixedHash64Udf {
-            signature: SignatureEqHash::new(signature),
-        }))),
+        "stable_hash128" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            StableHash128Udf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
+        "prefixed_hash64" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            PrefixedHash64Udf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
         "stable_id" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableIdUdf {
             signature: SignatureEqHash::new(signature),
         }))),
-        "stable_id_parts" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableIdPartsUdf {
-            signature: SignatureEqHash::new(signature),
-        }))),
+        "stable_id_parts" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            StableIdPartsUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
         "prefixed_hash_parts64" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
             PrefixedHashParts64Udf {
                 signature: SignatureEqHash::new(signature),
             },
         ))),
-        "stable_hash_any" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(StableHashAnyUdf {
-            signature: SignatureEqHash::new(signature),
-        }))),
+        "stable_hash_any" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            StableHashAnyUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
         "span_make" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanMakeUdf {
             signature: SignatureEqHash::new(signature),
         }))),
@@ -387,20 +370,26 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         "span_id" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanIdUdf {
             signature: SignatureEqHash::new(signature),
         }))),
-        "utf8_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(Utf8NormalizeUdf {
-            signature: SignatureEqHash::new(signature),
-        }))),
+        "utf8_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            Utf8NormalizeUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
         "utf8_null_if_blank" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
             Utf8NullIfBlankUdf {
                 signature: SignatureEqHash::new(signature),
             },
         ))),
-        "qname_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(QNameNormalizeUdf {
-            signature: SignatureEqHash::new(signature),
-        }))),
-        "map_get_default" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(MapGetDefaultUdf {
-            signature: SignatureEqHash::new(signature),
-        }))),
+        "qname_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            QNameNormalizeUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
+        "map_get_default" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            MapGetDefaultUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
         "map_normalize" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(MapNormalizeUdf {
             signature: SignatureEqHash::new(signature),
         }))),
@@ -451,17 +440,29 @@ fn primitive_signature(primitive: &RulePrimitive, prefer_named: bool) -> Result<
         volatility_from_str(primitive.volatility.as_str())?,
     );
     if prefer_named && primitive.supports_named_args {
-        let names = primitive.params.iter().map(|param| param.name.clone()).collect();
+        let names = primitive
+            .params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect();
         return signature.with_parameter_names(names).map_err(|err| {
-            DataFusionError::Plan(format!("Invalid parameter names for {}: {err}", primitive.name))
+            DataFusionError::Plan(format!(
+                "Invalid parameter names for {}: {err}",
+                primitive.name
+            ))
         });
     }
     Ok(signature)
 }
 
 fn signature_from_arg_types(arg_types: Vec<DataType>, volatility: Volatility) -> Signature {
-    let has_string = arg_types.iter().any(|dtype| matches!(dtype, DataType::Utf8));
-    if arg_types.iter().all(|dtype| matches!(dtype, DataType::Utf8)) {
+    let has_string = arg_types
+        .iter()
+        .any(|dtype| matches!(dtype, DataType::Utf8));
+    if arg_types
+        .iter()
+        .all(|dtype| matches!(dtype, DataType::Utf8))
+    {
         Signature::string(arg_types.len(), volatility)
     } else if has_string {
         Signature::one_of(expand_string_signatures(&arg_types), volatility)
@@ -950,7 +951,11 @@ impl ScalarUDFImpl for CpgScoreUdf {
             .first()
             .map(|field| field.is_nullable())
             .unwrap_or(true);
-        Ok(Arc::new(Field::new(self.name(), DataType::Float64, nullable)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Float64,
+            nullable,
+        )))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -974,7 +979,10 @@ impl ScalarUDFImpl for CpgScoreUdf {
     doc_section(label = "Other Functions"),
     description = "Extract Arrow field metadata. When a key is provided, returns a single metadata value; otherwise returns a map of all metadata entries.",
     syntax_example = "arrow_metadata(expr [, key])",
-    argument(name = "expr", description = "Expression whose field metadata should be inspected."),
+    argument(
+        name = "expr",
+        description = "Expression whose field metadata should be inspected."
+    ),
     argument(name = "key", description = "Optional metadata key to extract.")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1087,8 +1095,7 @@ impl ScalarUDFImpl for ArrowMetadataUdf {
             let value = metadata.get(key).cloned();
             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(value)))
         } else if args.args.len() == 1 {
-            let mut map_builder =
-                MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+            let mut map_builder = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
             let mut entries: Vec<_> = metadata.iter().collect();
             entries.sort_by_key(|(key, _)| *key);
             for (key, value) in entries {
@@ -1113,20 +1120,14 @@ pub fn arrow_metadata_udf() -> ScalarUDF {
 }
 
 pub fn stable_hash64_udf() -> ScalarUDF {
-    let signature = signature_with_names(
-        Signature::string(1, Volatility::Stable),
-        &["value"],
-    );
+    let signature = signature_with_names(Signature::string(1, Volatility::Stable), &["value"]);
     ScalarUDF::new_from_shared_impl(Arc::new(StableHash64Udf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn stable_hash128_udf() -> ScalarUDF {
-    let signature = signature_with_names(
-        Signature::string(1, Volatility::Stable),
-        &["value"],
-    );
+    let signature = signature_with_names(Signature::string(1, Volatility::Stable), &["value"]);
     ScalarUDF::new_from_shared_impl(Arc::new(StableHash128Udf {
         signature: SignatureEqHash::new(signature),
     }))
@@ -1217,7 +1218,10 @@ pub fn utf8_normalize_udf() -> ScalarUDF {
 
 pub fn utf8_null_if_blank_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::one_of(expand_string_signatures(&[DataType::Utf8]), Volatility::Stable),
+        Signature::one_of(
+            expand_string_signatures(&[DataType::Utf8]),
+            Volatility::Stable,
+        ),
         &["value"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(Utf8NullIfBlankUdf {
@@ -1269,7 +1273,10 @@ pub fn struct_pick_udf() -> ScalarUDF {
 
 pub fn cdf_change_rank_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::one_of(expand_string_signatures(&[DataType::Utf8]), Volatility::Stable),
+        Signature::one_of(
+            expand_string_signatures(&[DataType::Utf8]),
+            Volatility::Stable,
+        ),
         &["change_type"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(CdfChangeRankUdf {
@@ -1279,7 +1286,10 @@ pub fn cdf_change_rank_udf() -> ScalarUDF {
 
 pub fn cdf_is_upsert_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::one_of(expand_string_signatures(&[DataType::Utf8]), Volatility::Stable),
+        Signature::one_of(
+            expand_string_signatures(&[DataType::Utf8]),
+            Volatility::Stable,
+        ),
         &["change_type"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(CdfIsUpsertUdf {
@@ -1289,7 +1299,10 @@ pub fn cdf_is_upsert_udf() -> ScalarUDF {
 
 pub fn cdf_is_delete_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::one_of(expand_string_signatures(&[DataType::Utf8]), Volatility::Stable),
+        Signature::one_of(
+            expand_string_signatures(&[DataType::Utf8]),
+            Volatility::Stable,
+        ),
         &["change_type"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(CdfIsDeleteUdf {
@@ -1356,7 +1369,11 @@ fn extend_expr_args_from_tuple(args: &mut Vec<Expr>, parts: &Bound<'_, PyTuple>)
 
 #[pyfunction]
 #[pyo3(signature = (prefix, part1, *parts))]
-pub fn stable_id_parts(prefix: &str, part1: PyExpr, parts: &Bound<'_, PyTuple>) -> PyResult<PyExpr> {
+pub fn stable_id_parts(
+    prefix: &str,
+    part1: PyExpr,
+    parts: &Bound<'_, PyTuple>,
+) -> PyResult<PyExpr> {
     let mut args: Vec<Expr> = vec![lit(prefix), part1.into()];
     extend_expr_args_from_tuple(&mut args, parts)?;
     Ok(stable_id_parts_udf().call(args).into())
@@ -1376,7 +1393,11 @@ pub fn prefixed_hash_parts64(
 
 #[pyfunction]
 #[pyo3(signature = (value, canonical=None, null_sentinel=None))]
-pub fn stable_hash_any(value: PyExpr, canonical: Option<bool>, null_sentinel: Option<&str>) -> PyExpr {
+pub fn stable_hash_any(
+    value: PyExpr,
+    canonical: Option<bool>,
+    null_sentinel: Option<&str>,
+) -> PyExpr {
     let mut args: Vec<Expr> = vec![value.into()];
     if let Some(flag) = canonical {
         args.push(lit(flag));
@@ -1424,7 +1445,13 @@ pub fn span_contains(span_a: PyExpr, span_b: PyExpr) -> PyExpr {
 
 #[pyfunction]
 #[pyo3(signature = (prefix, path, bstart, bend, kind=None))]
-pub fn span_id(prefix: &str, path: PyExpr, bstart: PyExpr, bend: PyExpr, kind: Option<PyExpr>) -> PyExpr {
+pub fn span_id(
+    prefix: &str,
+    path: PyExpr,
+    bstart: PyExpr,
+    bend: PyExpr,
+    kind: Option<PyExpr>,
+) -> PyExpr {
     let mut args: Vec<Expr> = vec![lit(prefix), path.into(), bstart.into(), bend.into()];
     push_optional_expr(&mut args, kind);
     span_id_udf().call(args).into()
@@ -1492,9 +1519,7 @@ pub fn list_compact(list_expr: PyExpr) -> PyExpr {
 
 #[pyfunction]
 pub fn list_unique_sorted(list_expr: PyExpr) -> PyExpr {
-    list_unique_sorted_udf()
-        .call(vec![list_expr.into()])
-        .into()
+    list_unique_sorted_udf().call(vec![list_expr.into()]).into()
 }
 
 #[pyfunction]
@@ -1537,23 +1562,17 @@ pub fn struct_pick(
 
 #[pyfunction]
 pub fn cdf_change_rank(change_type: PyExpr) -> PyExpr {
-    cdf_change_rank_udf()
-        .call(vec![change_type.into()])
-        .into()
+    cdf_change_rank_udf().call(vec![change_type.into()]).into()
 }
 
 #[pyfunction]
 pub fn cdf_is_upsert(change_type: PyExpr) -> PyExpr {
-    cdf_is_upsert_udf()
-        .call(vec![change_type.into()])
-        .into()
+    cdf_is_upsert_udf().call(vec![change_type.into()]).into()
 }
 
 #[pyfunction]
 pub fn cdf_is_delete(change_type: PyExpr) -> PyExpr {
-    cdf_is_delete_udf()
-        .call(vec![change_type.into()])
-        .into()
+    cdf_is_delete_udf().call(vec![change_type.into()]).into()
 }
 
 #[pyfunction]
@@ -1624,8 +1643,8 @@ impl ScalarUDFImpl for StableHash64Udf {
         };
         match value {
             ColumnarValue::Scalar(value) => {
-                let hashed = scalar_str(value, "stable_hash64 expects string input")?
-                    .map(hash64_value);
+                let hashed =
+                    scalar_str(value, "stable_hash64 expects string input")?.map(hash64_value);
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(hashed)))
             }
             ColumnarValue::Array(array) => {
@@ -1705,8 +1724,8 @@ impl ScalarUDFImpl for StableHash128Udf {
         };
         match value {
             ColumnarValue::Scalar(value) => {
-                let hashed = scalar_str(value, "stable_hash128 expects string input")?
-                    .map(hash128_value);
+                let hashed =
+                    scalar_str(value, "stable_hash128 expects string input")?.map(hash128_value);
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)))
             }
             ColumnarValue::Array(array) => {
@@ -1729,7 +1748,10 @@ impl ScalarUDFImpl for StableHash128Udf {
     doc_section(label = "Hashing Functions"),
     description = "Compute a stable 64-bit hash of a string and prefix the result with a namespace.",
     syntax_example = "prefixed_hash64(prefix, value)",
-    argument(name = "prefix", description = "Namespace prefix to prepend to the hash."),
+    argument(
+        name = "prefix",
+        description = "Namespace prefix to prepend to the hash."
+    ),
     standard_argument(name = "value", prefix = "String")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1799,10 +1821,8 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
         };
         match (prefix_value, input_value) {
             (ColumnarValue::Scalar(prefix), ColumnarValue::Scalar(value)) => {
-                let prefix =
-                    scalar_str(prefix, "prefixed_hash64 expects string prefix input")?;
-                let value =
-                    scalar_str(value, "prefixed_hash64 expects string value input")?;
+                let prefix = scalar_str(prefix, "prefixed_hash64 expects string prefix input")?;
+                let value = scalar_str(value, "prefixed_hash64 expects string value input")?;
                 let hashed = match (prefix, value) {
                     (Some(prefix), Some(value)) => Some(prefixed_hash64_value(prefix, value)),
                     _ => None,
@@ -1810,14 +1830,10 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)))
             }
             (ColumnarValue::Array(prefixes), ColumnarValue::Array(values)) => {
-                let prefixes = string_array_any(
-                    prefixes,
-                    "prefixed_hash64 expects string prefix input",
-                )?;
-                let values = string_array_any(
-                    values,
-                    "prefixed_hash64 expects string value input",
-                )?;
+                let prefixes =
+                    string_array_any(prefixes, "prefixed_hash64 expects string prefix input")?;
+                let values =
+                    string_array_any(values, "prefixed_hash64 expects string value input")?;
                 let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 16);
                 for index in 0..values.len() {
                     if prefixes.is_null(index) || values.is_null(index) {
@@ -1832,12 +1848,9 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
                 Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             (ColumnarValue::Array(prefixes), ColumnarValue::Scalar(value)) => {
-                let prefixes = string_array_any(
-                    prefixes,
-                    "prefixed_hash64 expects string prefix input",
-                )?;
-                let value =
-                    scalar_str(value, "prefixed_hash64 expects string value input")?;
+                let prefixes =
+                    string_array_any(prefixes, "prefixed_hash64 expects string prefix input")?;
+                let value = scalar_str(value, "prefixed_hash64 expects string value input")?;
                 let mut builder = StringBuilder::with_capacity(prefixes.len(), prefixes.len() * 16);
                 for index in 0..prefixes.len() {
                     if prefixes.is_null(index) {
@@ -1853,12 +1866,9 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
                 Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             (ColumnarValue::Scalar(prefix), ColumnarValue::Array(values)) => {
-                let prefix =
-                    scalar_str(prefix, "prefixed_hash64 expects string prefix input")?;
-                let values = string_array_any(
-                    values,
-                    "prefixed_hash64 expects string value input",
-                )?;
+                let prefix = scalar_str(prefix, "prefixed_hash64 expects string prefix input")?;
+                let values =
+                    string_array_any(values, "prefixed_hash64 expects string value input")?;
                 let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 16);
                 for index in 0..values.len() {
                     if values.is_null(index) {
@@ -1881,7 +1891,10 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
     doc_section(label = "Hashing Functions"),
     description = "Compute a stable identifier by prefixing a 128-bit hash of a string.",
     syntax_example = "stable_id(prefix, value)",
-    argument(name = "prefix", description = "Namespace prefix to prepend to the hash."),
+    argument(
+        name = "prefix",
+        description = "Namespace prefix to prepend to the hash."
+    ),
     standard_argument(name = "value", prefix = "String")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1960,12 +1973,8 @@ impl ScalarUDFImpl for StableIdUdf {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(hashed)))
             }
             (ColumnarValue::Array(prefixes), ColumnarValue::Array(values)) => {
-                let prefixes = string_array_any(
-                    prefixes,
-                    "stable_id expects string prefix input",
-                )?;
-                let values =
-                    string_array_any(values, "stable_id expects string value input")?;
+                let prefixes = string_array_any(prefixes, "stable_id expects string prefix input")?;
+                let values = string_array_any(values, "stable_id expects string value input")?;
                 let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 32);
                 for index in 0..values.len() {
                     if prefixes.is_null(index) || values.is_null(index) {
@@ -1980,10 +1989,7 @@ impl ScalarUDFImpl for StableIdUdf {
                 Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             (ColumnarValue::Array(prefixes), ColumnarValue::Scalar(value)) => {
-                let prefixes = string_array_any(
-                    prefixes,
-                    "stable_id expects string prefix input",
-                )?;
+                let prefixes = string_array_any(prefixes, "stable_id expects string prefix input")?;
                 let value = scalar_str(value, "stable_id expects string value input")?;
                 let mut builder = StringBuilder::with_capacity(prefixes.len(), prefixes.len() * 32);
                 for index in 0..prefixes.len() {
@@ -2001,8 +2007,7 @@ impl ScalarUDFImpl for StableIdUdf {
             }
             (ColumnarValue::Scalar(prefix), ColumnarValue::Array(values)) => {
                 let prefix = scalar_str(prefix, "stable_id expects string prefix input")?;
-                let values =
-                    string_array_any(values, "stable_id expects string value input")?;
+                let values = string_array_any(values, "stable_id expects string value input")?;
                 let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 32);
                 for index in 0..values.len() {
                     if values.is_null(index) {
@@ -2025,7 +2030,10 @@ impl ScalarUDFImpl for StableIdUdf {
     doc_section(label = "Hashing Functions"),
     description = "Compute a stable identifier from a prefix and variadic parts.",
     syntax_example = "stable_id_parts(prefix, part1, part2, ...)",
-    argument(name = "prefix", description = "Namespace prefix to prepend to the hash."),
+    argument(
+        name = "prefix",
+        description = "Namespace prefix to prepend to the hash."
+    ),
     argument(
         name = "parts",
         description = "Variadic parts to join with a stable separator and hash."
@@ -2089,9 +2097,9 @@ impl ScalarUDFImpl for StableIdPartsUdf {
         }
         let joined = parts.join(PART_SEPARATOR);
         let hashed = stable_id_value(&prefix, &joined);
-        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(Some(
-            hashed,
-        )))))
+        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(
+            Some(hashed),
+        ))))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -2138,7 +2146,10 @@ impl ScalarUDFImpl for StableIdPartsUdf {
     doc_section(label = "Hashing Functions"),
     description = "Compute a prefixed stable 64-bit hash from variadic parts.",
     syntax_example = "prefixed_hash_parts64(prefix, part1, part2, ...)",
-    argument(name = "prefix", description = "Namespace prefix to prepend to the hash."),
+    argument(
+        name = "prefix",
+        description = "Namespace prefix to prepend to the hash."
+    ),
     argument(
         name = "parts",
         description = "Variadic parts to join with a stable separator and hash."
@@ -2202,9 +2213,9 @@ impl ScalarUDFImpl for PrefixedHashParts64Udf {
         }
         let joined = parts.join(PART_SEPARATOR);
         let hashed = prefixed_hash64_value(&prefix, &joined);
-        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(Some(
-            hashed,
-        )))))
+        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(
+            Some(hashed),
+        ))))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -2328,9 +2339,9 @@ impl ScalarUDFImpl for StableHashAnyUdf {
             value
         };
         let hashed = hash128_value(&canonical_value);
-        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(Some(
-            hashed,
-        )))))
+        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(
+            Some(hashed),
+        ))))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -2344,8 +2355,7 @@ impl ScalarUDFImpl for StableHashAnyUdf {
                 &args.args[1],
                 "stable_hash_any canonical flag must be a scalar literal",
             )?;
-            scalar_to_bool(&scalar, "stable_hash_any canonical flag")?
-                .unwrap_or(true)
+            scalar_to_bool(&scalar, "stable_hash_any canonical flag")?.unwrap_or(true)
         } else {
             true
         };
@@ -2419,7 +2429,10 @@ fn adjusted_end(end: i64, exclusive: bool) -> i64 {
     argument(name = "bend", description = "End byte offset."),
     argument(name = "line_base", description = "Optional line base offset."),
     argument(name = "col_unit", description = "Optional column encoding unit."),
-    argument(name = "end_exclusive", description = "Whether the end offset is exclusive.")
+    argument(
+        name = "end_exclusive",
+        description = "Whether the end offset is exclusive."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct SpanMakeUdf {
@@ -2445,7 +2458,11 @@ impl ScalarUDFImpl for SpanMakeUdf {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
-        Ok(Arc::new(Field::new(self.name(), span_struct_type(), nullable)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            span_struct_type(),
+            nullable,
+        )))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -2592,7 +2609,9 @@ impl ScalarUDFImpl for SpanLenUdf {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [span_value] = args.args.as_slice() else {
-            return Err(DataFusionError::Plan("span_len expects one argument".into()));
+            return Err(DataFusionError::Plan(
+                "span_len expects one argument".into(),
+            ));
         };
         let span_array = span_value.to_array(args.number_rows)?;
         let span_struct = span_array
@@ -2692,11 +2711,12 @@ impl ScalarUDFImpl for SpanOverlapsUdf {
             }
             let left_adjusted_end =
                 adjusted_end(left_end.value(row), span_end_exclusive(left_exclusive, row));
-            let right_adjusted_end =
-                adjusted_end(right_end.value(row), span_end_exclusive(right_exclusive, row));
-            let overlaps =
-                left_start.value(row) < right_adjusted_end
-                    && right_start.value(row) < left_adjusted_end;
+            let right_adjusted_end = adjusted_end(
+                right_end.value(row),
+                span_end_exclusive(right_exclusive, row),
+            );
+            let overlaps = left_start.value(row) < right_adjusted_end
+                && right_start.value(row) < left_adjusted_end;
             builder.append_value(overlaps);
         }
         Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
@@ -2782,11 +2802,12 @@ impl ScalarUDFImpl for SpanContainsUdf {
             }
             let left_adjusted_end =
                 adjusted_end(left_end.value(row), span_end_exclusive(left_exclusive, row));
-            let right_adjusted_end =
-                adjusted_end(right_end.value(row), span_end_exclusive(right_exclusive, row));
-            let contains =
-                left_start.value(row) <= right_start.value(row)
-                    && right_adjusted_end <= left_adjusted_end;
+            let right_adjusted_end = adjusted_end(
+                right_end.value(row),
+                span_end_exclusive(right_exclusive, row),
+            );
+            let contains = left_start.value(row) <= right_start.value(row)
+                && right_adjusted_end <= left_adjusted_end;
             builder.append_value(contains);
         }
         Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
@@ -2883,9 +2904,18 @@ impl ScalarUDFImpl for SpanIdUdf {
     description = "Normalize UTF-8 text with Unicode normalization, case folding, and whitespace collapse.",
     syntax_example = "utf8_normalize(value, form, casefold, collapse_ws)",
     standard_argument(name = "value", prefix = "String"),
-    argument(name = "form", description = "Unicode normalization form (NFC, NFD, NFKC, NFKD)."),
-    argument(name = "casefold", description = "Whether to lower-case the normalized text."),
-    argument(name = "collapse_ws", description = "Whether to collapse consecutive whitespace.")
+    argument(
+        name = "form",
+        description = "Unicode normalization form (NFC, NFD, NFKC, NFKD)."
+    ),
+    argument(
+        name = "casefold",
+        description = "Whether to lower-case the normalized text."
+    ),
+    argument(
+        name = "collapse_ws",
+        description = "Whether to collapse consecutive whitespace."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct Utf8NormalizeUdf {
@@ -2958,7 +2988,9 @@ impl ScalarUDFImpl for Utf8NormalizeUdf {
         } else {
             Some(normalized)
         };
-        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(result))))
+        Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::Utf8(
+            result,
+        ))))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -3198,7 +3230,10 @@ fn normalize_key_case(key: &str, key_case: &str) -> String {
     syntax_example = "map_get_default(map_expr, key, default_value)",
     argument(name = "map_expr", description = "Map expression."),
     argument(name = "key", description = "Key to extract (scalar literal)."),
-    argument(name = "default_value", description = "Default value when the key is missing.")
+    argument(
+        name = "default_value",
+        description = "Default value when the key is missing."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct MapGetDefaultUdf {
@@ -3270,9 +3305,13 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
                 continue;
             }
             let entries = map_values.value(row);
-            let entries_struct = entries.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-                DataFusionError::Plan("map_get_default map entries must be a struct".into())
-            })?;
+            let entries_struct =
+                entries
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Plan("map_get_default map entries must be a struct".into())
+                    })?;
             if entries_struct.num_columns() < 2 {
                 return Err(DataFusionError::Plan(
                     "map_get_default map entries must include key and value columns".into(),
@@ -3310,8 +3349,14 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
     description = "Normalize map keys and optionally sort them deterministically.",
     syntax_example = "map_normalize(map_expr, key_case, sort_keys)",
     argument(name = "map_expr", description = "Map expression."),
-    argument(name = "key_case", description = "Key case normalization: lower, upper, none."),
-    argument(name = "sort_keys", description = "Whether to sort keys deterministically.")
+    argument(
+        name = "key_case",
+        description = "Key case normalization: lower, upper, none."
+    ),
+    argument(
+        name = "sort_keys",
+        description = "Whether to sort keys deterministically."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct MapNormalizeUdf {
@@ -3341,7 +3386,11 @@ impl ScalarUDFImpl for MapNormalizeUdf {
             .first()
             .map(|field| field.is_nullable())
             .unwrap_or(true);
-        Ok(Arc::new(Field::new(self.name(), normalized_map_type(), nullable)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            normalized_map_type(),
+            nullable,
+        )))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3386,9 +3435,13 @@ impl ScalarUDFImpl for MapNormalizeUdf {
                 continue;
             }
             let entries = maps.value(row);
-            let entries_struct = entries.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-                DataFusionError::Plan("map_normalize map entries must be a struct".into())
-            })?;
+            let entries_struct =
+                entries
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Plan("map_normalize map entries must be a struct".into())
+                    })?;
             if entries_struct.num_columns() < 2 {
                 return Err(DataFusionError::Plan(
                     "map_normalize map entries must include key and value columns".into(),
@@ -3480,7 +3533,9 @@ impl ScalarUDFImpl for ListCompactUdf {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [value] = args.args.as_slice() else {
-            return Err(DataFusionError::Plan("list_compact expects one argument".into()));
+            return Err(DataFusionError::Plan(
+                "list_compact expects one argument".into(),
+            ));
         };
         let list_array = value.to_array(args.number_rows)?;
         let lists = list_array
@@ -3564,7 +3619,9 @@ impl ScalarUDFImpl for ListUniqueSortedUdf {
         let lists = list_array
             .as_any()
             .downcast_ref::<ListArray>()
-            .ok_or_else(|| DataFusionError::Plan("list_unique_sorted expects a list input".into()))?;
+            .ok_or_else(|| {
+                DataFusionError::Plan("list_unique_sorted expects a list input".into())
+            })?;
         let mut builder = ListBuilder::new(StringBuilder::new());
         for row in 0..args.number_rows {
             if lists.is_null(row) {
@@ -3637,9 +3694,7 @@ impl ScalarUDFImpl for StructPickUdf {
         for index in 1..args.arg_fields.len() {
             let field_name = scalar_argument_string(&args, index, "struct_pick field name")?
                 .ok_or_else(|| {
-                    DataFusionError::Plan(
-                        "struct_pick field names must be scalar literals".into(),
-                    )
+                    DataFusionError::Plan("struct_pick field names must be scalar literals".into())
                 })?;
             let trimmed = field_name.trim();
             if trimmed.is_empty() {
@@ -3662,7 +3717,11 @@ impl ScalarUDFImpl for StructPickUdf {
             selected_fields.push(selected);
         }
         let output_type = DataType::Struct(Fields::from(selected_fields));
-        Ok(Arc::new(Field::new(self.name(), output_type, parent_nullable)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            output_type,
+            parent_nullable,
+        )))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3690,10 +3749,8 @@ impl ScalarUDFImpl for StructPickUdf {
         let parent_nullable = struct_values.nulls().is_some();
         let mut field_names: Vec<String> = Vec::with_capacity(args.args.len() - 1);
         for value in args.args.iter().skip(1) {
-            let scalar = scalar_columnar_value(
-                value,
-                "struct_pick field names must be scalar literals",
-            )?;
+            let scalar =
+                scalar_columnar_value(value, "struct_pick field names must be scalar literals")?;
             let Some(field_name) = scalar_to_string(&scalar)? else {
                 return Err(DataFusionError::Plan(
                     "struct_pick field names cannot be null".into(),
@@ -4070,19 +4127,13 @@ impl ScalarUDFImpl for PositionEncodingUdf {
         };
         match value {
             ColumnarValue::Scalar(value) => {
-                let normalized = scalar_str(
-                    value,
-                    "position_encoding_norm expects string input",
-                )?
-                .map(normalize_position_encoding)
-                .unwrap_or(ENC_UTF32);
+                let normalized = scalar_str(value, "position_encoding_norm expects string input")?
+                    .map(normalize_position_encoding)
+                    .unwrap_or(ENC_UTF32);
                 Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(normalized))))
             }
             ColumnarValue::Array(array) => {
-                let input = string_array_any(
-                    array,
-                    "position_encoding_norm expects string input",
-                )?;
+                let input = string_array_any(array, "position_encoding_norm expects string input")?;
                 let mut builder = Int32Builder::with_capacity(input.len());
                 for index in 0..input.len() {
                     if input.is_null(index) {
@@ -4101,9 +4152,15 @@ impl ScalarUDFImpl for PositionEncodingUdf {
     doc_section(label = "Other Functions"),
     description = "Convert a column offset to a byte offset for a line and encoding.",
     syntax_example = "col_to_byte(line_text, col, col_unit)",
-    argument(name = "line_text", description = "Line text to compute offsets within."),
+    argument(
+        name = "line_text",
+        description = "Line text to compute offsets within."
+    ),
     argument(name = "col", description = "Column offset within the line."),
-    argument(name = "col_unit", description = "Encoding unit (BYTE, UTF8, UTF16, UTF32).")
+    argument(
+        name = "col_unit",
+        description = "Encoding unit (BYTE, UTF8, UTF16, UTF32)."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ColToByteUdf {
@@ -4180,13 +4237,10 @@ impl ScalarUDFImpl for ColToByteUdf {
             let byte_offset = if matches!(unit, ColUnit::Byte) {
                 clamp_offset(*offset, line.as_bytes().len()) as i64
             } else {
-                let py_index =
-                    code_unit_offset_to_py_index(line, normalize_offset(*offset), unit)?;
+                let py_index = code_unit_offset_to_py_index(line, normalize_offset(*offset), unit)?;
                 byte_offset_from_py_index(line, py_index) as i64
             };
-            return Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(
-                byte_offset,
-            ))));
+            return Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(byte_offset))));
         }
         let len = args
             .args
@@ -4203,24 +4257,22 @@ impl ScalarUDFImpl for ColToByteUdf {
             ColumnarValue::Scalar(_) => None,
         };
         let offset_array = match offset_value {
-            ColumnarValue::Array(array) => Some(
-                array
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .ok_or_else(|| DataFusionError::Plan("col_to_byte expects int64 input".into()))?,
-            ),
+            ColumnarValue::Array(array) => {
+                Some(array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+                    DataFusionError::Plan("col_to_byte expects int64 input".into())
+                })?)
+            }
             ColumnarValue::Scalar(_) => None,
         };
         let encoding_array = match encoding_value {
-            ColumnarValue::Array(array) => {
-                Some(string_array_any(array, "col_to_byte expects string encoding")?)
-            }
+            ColumnarValue::Array(array) => Some(string_array_any(
+                array,
+                "col_to_byte expects string encoding",
+            )?),
             ColumnarValue::Scalar(_) => None,
         };
         let line_scalar = match line_value {
-            ColumnarValue::Scalar(value) => {
-                scalar_str(value, "col_to_byte expects string input")?
-            }
+            ColumnarValue::Scalar(value) => scalar_str(value, "col_to_byte expects string input")?,
             ColumnarValue::Array(_) => None,
         };
         let offset_scalar = match offset_value {

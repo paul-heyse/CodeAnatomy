@@ -4,36 +4,20 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array,
-    ArrayRef,
-    BooleanArray,
-    Int64Array,
-    Int64Builder,
-    LargeStringArray,
-    ListArray,
-    ListBuilder,
-    StringArray,
-    StringBuilder,
-    StringViewArray,
+    Array, ArrayRef, BooleanArray, Int64Array, Int64Builder, LargeStringArray, ListArray,
+    ListBuilder, StringArray, StringBuilder, StringViewArray,
 };
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator,
-    AggregateUDF,
-    AggregateUDFImpl,
-    Documentation,
-    EmitTo,
-    GroupsAccumulator,
-    Signature,
-    TypeSignature,
-    Volatility,
+    Accumulator, AggregateUDF, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator,
+    Signature, TypeSignature, Volatility,
 };
-use datafusion_macros::user_doc;
 use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
+use datafusion_macros::user_doc;
 
 const LIST_UNIQUE_NAME: &str = "list_unique";
 const COUNT_DISTINCT_NAME: &str = "count_distinct_agg";
@@ -134,9 +118,7 @@ impl AggregateUDFImpl for ListUniqueUdaf {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(ListUniqueAccumulator::new(
-            acc_args.ignore_nulls,
-        )))
+        Ok(Box::new(ListUniqueAccumulator::new(acc_args.ignore_nulls)))
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -152,10 +134,7 @@ impl AggregateUDFImpl for ListUniqueUdaf {
         )))
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(ListUniqueSlidingAccumulator::new(
             args.ignore_nulls,
         )))
@@ -175,10 +154,7 @@ struct CollectSetUdaf {
 
 impl CollectSetUdaf {
     fn new() -> Self {
-        let signature = signature_with_names(
-            string_signature(Volatility::Immutable),
-            &["value"],
-        );
+        let signature = signature_with_names(string_signature(Volatility::Immutable), &["value"]);
         Self { signature }
     }
 }
@@ -221,9 +197,7 @@ impl AggregateUDFImpl for CollectSetUdaf {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(ListUniqueAccumulator::new(
-            acc_args.ignore_nulls,
-        )))
+        Ok(Box::new(ListUniqueAccumulator::new(acc_args.ignore_nulls)))
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -239,10 +213,7 @@ impl AggregateUDFImpl for CollectSetUdaf {
         )))
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(ListUniqueSlidingAccumulator::new(
             args.ignore_nulls,
         )))
@@ -339,10 +310,7 @@ impl AggregateUDFImpl for CountDistinctUdaf {
         )))
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(CountDistinctSlidingAccumulator::new(
             args.ignore_nulls,
         )))
@@ -398,7 +366,8 @@ struct CountIfUdaf {
 
 impl CountIfUdaf {
     fn new() -> Self {
-        let signature = signature_with_names(boolean_signature(Volatility::Immutable), &["predicate"]);
+        let signature =
+            signature_with_names(boolean_signature(Volatility::Immutable), &["predicate"]);
         Self { signature }
     }
 }
@@ -678,9 +647,9 @@ fn arg_best_state_fields(args: StateFieldsArgs, label: &str) -> Vec<FieldRef> {
 fn scalar_to_string(value: &ScalarValue) -> Option<String> {
     match value {
         ScalarValue::Null => None,
-        ScalarValue::Utf8(value)
-        | ScalarValue::LargeUtf8(value)
-        | ScalarValue::Utf8View(value) => value.clone(),
+        ScalarValue::Utf8(value) | ScalarValue::LargeUtf8(value) | ScalarValue::Utf8View(value) => {
+            value.clone()
+        }
         other => Some(other.to_string()),
     }
 }
@@ -708,9 +677,7 @@ fn scalar_to_i64(value: &ScalarValue, context: &str) -> Result<Option<i64>> {
         | ScalarValue::DurationMillisecond(value)
         | ScalarValue::DurationMicrosecond(value)
         | ScalarValue::DurationNanosecond(value) => Ok(*value),
-        ScalarValue::Utf8(value)
-        | ScalarValue::LargeUtf8(value)
-        | ScalarValue::Utf8View(value) => {
+        ScalarValue::Utf8(value) | ScalarValue::LargeUtf8(value) | ScalarValue::Utf8View(value) => {
             if let Some(text) = value {
                 let parsed = text.parse::<i64>().map_err(|err| {
                     DataFusionError::Plan(format!(
@@ -787,7 +754,12 @@ impl ArgBestAccumulator {
         }
     }
 
-    fn update_from_arrays(&mut self, values: &ArrayRef, keys: &ArrayRef, context: &str) -> Result<()> {
+    fn update_from_arrays(
+        &mut self,
+        values: &ArrayRef,
+        keys: &ArrayRef,
+        context: &str,
+    ) -> Result<()> {
         if values.len() != keys.len() {
             return Err(DataFusionError::Plan(format!(
                 "{context}: value and order_key lengths must match"
@@ -849,7 +821,10 @@ impl Accumulator for ArgBestAccumulator {
     description = "Return a deterministic value by selecting the row with the smallest order key.",
     syntax_example = "any_value_det(value, order_key)",
     argument(name = "value", description = "Value to return."),
-    argument(name = "order_key", description = "Ordering key used for deterministic selection.")
+    argument(
+        name = "order_key",
+        description = "Ordering key used for deterministic selection."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct AnyValueDetUdaf {
@@ -907,7 +882,10 @@ impl AggregateUDFImpl for AnyValueDetUdaf {
     description = "Return the value associated with the maximum order key.",
     syntax_example = "arg_max(value, order_key)",
     argument(name = "value", description = "Value to return."),
-    argument(name = "order_key", description = "Ordering key used to select the maximum value.")
+    argument(
+        name = "order_key",
+        description = "Ordering key used to select the maximum value."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ArgMaxUdaf {
@@ -965,7 +943,10 @@ impl AggregateUDFImpl for ArgMaxUdaf {
     description = "Return the value associated with the minimum order key.",
     syntax_example = "arg_min(value, order_key)",
     argument(name = "value", description = "Value to return."),
-    argument(name = "order_key", description = "Ordering key used to select the minimum value.")
+    argument(
+        name = "order_key",
+        description = "Ordering key used to select the minimum value."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ArgMinUdaf {
@@ -1185,8 +1166,11 @@ impl Accumulator for ListUniqueAccumulator {
                 "list_unique expects a single input value".into(),
             ));
         };
-        self.state
-            .update_from_array(values, "list_unique expects string input", self.include_null)
+        self.state.update_from_array(
+            values,
+            "list_unique expects string input",
+            self.include_null,
+        )
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -1212,9 +1196,7 @@ impl Accumulator for ListUniqueAccumulator {
         let list_array = state
             .as_any()
             .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("list_unique expects list state".into())
-            })?;
+            .ok_or_else(|| DataFusionError::Plan("list_unique expects list state".into()))?;
         self.state.merge_from_list_array(
             list_array,
             "list_unique expects string state",
@@ -1297,9 +1279,7 @@ impl GroupsAccumulator for ListUniqueGroupsAccumulator {
         let list_array = values
             .as_any()
             .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("list_unique expects list state".into())
-            })?;
+            .ok_or_else(|| DataFusionError::Plan("list_unique expects list state".into()))?;
         ensure_group_capacity(&mut self.groups, total_num_groups);
         update_groups_from_list_array(
             &mut self.groups,
@@ -1390,9 +1370,7 @@ impl Accumulator for CountDistinctAccumulator {
         let list_array = state
             .as_any()
             .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("count_distinct_agg expects list state".into())
-            })?;
+            .ok_or_else(|| DataFusionError::Plan("count_distinct_agg expects list state".into()))?;
         self.state.merge_from_list_array(
             list_array,
             "count_distinct_agg expects string state",
@@ -1485,9 +1463,7 @@ impl GroupsAccumulator for CountDistinctGroupsAccumulator {
         let list_array = values
             .as_any()
             .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("count_distinct_agg expects list state".into())
-            })?;
+            .ok_or_else(|| DataFusionError::Plan("count_distinct_agg expects list state".into()))?;
         ensure_group_capacity(&mut self.groups, total_num_groups);
         update_groups_from_list_array(
             &mut self.groups,
@@ -1544,7 +1520,10 @@ impl DistinctStringCounts {
                 }
                 continue;
             }
-            let entry = self.values.entry(values.value(index).to_string()).or_insert(0);
+            let entry = self
+                .values
+                .entry(values.value(index).to_string())
+                .or_insert(0);
             *entry += 1;
         }
         Ok(())
@@ -1684,9 +1663,7 @@ impl Accumulator for ListUniqueSlidingAccumulator {
         let list_array = state
             .as_any()
             .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("list_unique expects list state".into())
-            })?;
+            .ok_or_else(|| DataFusionError::Plan("list_unique expects list state".into()))?;
         self.state.merge_from_list_array(
             list_array,
             "list_unique expects string state",
@@ -1767,9 +1744,7 @@ impl Accumulator for CountDistinctSlidingAccumulator {
         let list_array = state
             .as_any()
             .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("count_distinct_agg expects list state".into())
-            })?;
+            .ok_or_else(|| DataFusionError::Plan("count_distinct_agg expects list state".into()))?;
         self.state.merge_from_list_array(
             list_array,
             "count_distinct_agg expects string state",

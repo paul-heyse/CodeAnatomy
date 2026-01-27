@@ -30,7 +30,6 @@ Pattern
 from __future__ import annotations
 
 import contextlib
-import importlib
 import shutil
 import time
 import uuid
@@ -279,6 +278,7 @@ class DeltaWriteSpec:
     partition_by: tuple[str, ...] = ()
     table_properties: Mapping[str, str] = field(default_factory=dict)
     target_file_size: int | None = None
+    schema_mode: Literal["merge", "overwrite"] | None = None
     commit_app_id: str | None = None
     commit_version: int | None = None
     commit_run: DataFusionRun | None = None
@@ -769,6 +769,7 @@ class WritePipeline:
             partition_by=request.partition_by,
             table_properties=policy_ctx.table_properties,
             target_file_size=policy_ctx.target_file_size,
+            schema_mode=_delta_schema_mode(options),
             commit_app_id=commit_app_id,
             commit_version=commit_version,
             commit_run=commit_run,
@@ -914,6 +915,7 @@ class WritePipeline:
             raise ValueError(msg)
         delta_options = DeltaWriteOptions(
             mode=spec.mode,
+            schema_mode=spec.schema_mode,
             partition_by=spec.partition_by,
             configuration=spec.table_properties,
             commit_properties=spec.commit_properties,
@@ -978,29 +980,31 @@ class WritePipeline:
         if existing_version is None:
             return None
         try:
-            module = importlib.import_module("datafusion_ext")
+            from datafusion_engine.delta_control_plane import (
+                DeltaProviderRequest,
+                delta_provider_from_session,
+            )
         except ImportError:
             return None
-        provider_factory = getattr(module, "delta_table_provider_from_session", None)
-        if not callable(provider_factory):
-            return None
         temp_name = request.table_name or f"__delta_write_{uuid.uuid4().hex}"
-        storage_payload = _delta_storage_payload(
+        storage_options = _delta_storage_payload(
             spec.storage_options,
             log_storage_options=spec.log_storage_options,
         )
-        provider = provider_factory(
-            self.ctx,
-            spec.table_uri,
-            storage_payload,
-            existing_version,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        try:
+            bundle = delta_provider_from_session(
+                self.ctx,
+                request=DeltaProviderRequest(
+                    table_uri=spec.table_uri,
+                    storage_options=storage_options,
+                    version=existing_version,
+                    timestamp=None,
+                    delta_scan=None,
+                ),
+            )
+        except (RuntimeError, TypeError, ValueError):
+            return None
+        provider = bundle.provider
         from datafusion_engine.io_adapter import DataFusionIOAdapter
         from datafusion_engine.table_provider_capsule import TableProviderCapsule
 
@@ -1153,6 +1157,19 @@ def _delta_target_file_size(
     return None
 
 
+def _delta_schema_mode(options: Mapping[str, object]) -> Literal["merge", "overwrite"] | None:
+    value = options.get("schema_mode")
+    if value is None:
+        value = options.get("delta_schema_mode")
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "merge":
+            return "merge"
+        if normalized == "overwrite":
+            return "overwrite"
+    return None
+
+
 def _delta_storage_options(
     options: Mapping[str, object],
     *,
@@ -1247,7 +1264,7 @@ def _delta_storage_payload(
     storage_options: Mapping[str, str] | None,
     *,
     log_storage_options: Mapping[str, str] | None,
-) -> list[tuple[str, str]] | None:
+) -> dict[str, str] | None:
     merged: dict[str, str] = {}
     if storage_options:
         merged.update(storage_options)
@@ -1255,7 +1272,7 @@ def _delta_storage_payload(
         merged.update(log_storage_options)
     if not merged:
         return None
-    return list(merged.items())
+    return merged
 
 
 def _delta_mode(mode: WriteMode) -> Literal["append", "overwrite"]:

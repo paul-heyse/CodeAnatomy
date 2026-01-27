@@ -14,6 +14,7 @@ from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.schema_introspection import SchemaIntrospector
 
 if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.schema_contracts import (
         SchemaContract,
         SchemaViolation,
@@ -121,6 +122,7 @@ class ViewSpec:
         *,
         validate: bool = True,
         sql_options: SQLOptions | None = None,
+        runtime_profile: DataFusionRuntimeProfile,
     ) -> None:
         """Register the view definition on a SessionContext.
 
@@ -132,6 +134,8 @@ class ViewSpec:
             Whether to validate the resulting schema after registration.
         sql_options:
             Optional SQL options to enforce SQL execution policy.
+        runtime_profile:
+            Runtime profile for deterministic view registration.
 
         """
         from datafusion_engine.runtime import register_view_specs
@@ -140,7 +144,7 @@ class ViewSpec:
         register_view_specs(
             ctx,
             views=(self,),
-            runtime_profile=None,
+            runtime_profile=runtime_profile,
             validate=validate,
         )
 

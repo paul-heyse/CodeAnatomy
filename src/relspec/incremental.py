@@ -113,8 +113,12 @@ def diff_plan_snapshots(
     IncrementalDiff
         Diff summary with semantic diff metadata when available.
     """
-    prev_fingerprints = {name: snap.plan_fingerprint for name, snap in prev.items()}
-    curr_fingerprints = {name: snap.plan_fingerprint for name, snap in curr.items()}
+    prev_fingerprints = {
+        name: snap.plan_task_signature or snap.plan_fingerprint for name, snap in prev.items()
+    }
+    curr_fingerprints = {
+        name: snap.plan_task_signature or snap.plan_fingerprint for name, snap in curr.items()
+    }
     diff = diff_plan_fingerprints(prev_fingerprints, curr_fingerprints)
     semantic = _semantic_diff_map(prev, curr, diff.changed_tasks)
     return IncrementalDiff(

@@ -19,11 +19,12 @@ from storage.deltalake import (
 )
 from storage.ipc import payload_hash
 
-INVALIDATION_SNAPSHOT_VERSION = 1
+INVALIDATION_SNAPSHOT_VERSION = 2
 _PLAN_FINGERPRINT_ENTRY = pa.struct(
     [
         pa.field("plan_name", pa.string(), nullable=False),
         pa.field("plan_fingerprint", pa.string(), nullable=False),
+        pa.field("plan_task_signature", pa.string(), nullable=False),
     ]
 )
 _INVALIDATION_SCHEMA = pa.schema(
@@ -56,6 +57,7 @@ class PlanFingerprint:
     """Fingerprint fields for a compiled plan."""
 
     plan_fingerprint: str
+    plan_task_signature: str = ""
 
 
 @dataclass(frozen=True)
@@ -288,10 +290,15 @@ def _plan_fingerprints_from_artifacts(
     for payload in artifacts:
         name = payload.get("name")
         plan_fingerprint = payload.get("plan_fingerprint")
+        plan_task_signature = payload.get("plan_task_signature")
         if not name or not plan_fingerprint:
             continue
+        signature_value = (
+            str(plan_task_signature) if plan_task_signature else str(plan_fingerprint)
+        )
         resolved[str(name)] = PlanFingerprint(
             plan_fingerprint=str(plan_fingerprint),
+            plan_task_signature=signature_value,
         )
     return resolved
 
@@ -303,6 +310,7 @@ def _plan_fingerprint_entries(
         {
             "plan_name": name,
             "plan_fingerprint": fingerprint.plan_fingerprint,
+            "plan_task_signature": fingerprint.plan_task_signature or fingerprint.plan_fingerprint,
         }
         for name, fingerprint in sorted(plan_fingerprints.items())
     ]
@@ -347,10 +355,15 @@ def _coerce_plan_fingerprint_entries(value: object) -> dict[str, PlanFingerprint
             continue
         name = entry.get("plan_name")
         plan_fingerprint = entry.get("plan_fingerprint")
+        plan_task_signature = entry.get("plan_task_signature")
         if name is None or plan_fingerprint is None:
             continue
+        signature_value = (
+            str(plan_task_signature) if plan_task_signature else str(plan_fingerprint)
+        )
         resolved[str(name)] = PlanFingerprint(
             plan_fingerprint=str(plan_fingerprint),
+            plan_task_signature=signature_value,
         )
     return resolved
 

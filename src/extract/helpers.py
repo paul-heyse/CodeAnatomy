@@ -865,7 +865,11 @@ def _record_extract_view_artifact(
         return
     from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
     from datafusion_engine.runtime import record_view_definition
-    from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
+    from datafusion_engine.view_artifacts import (
+        ViewArtifactLineage,
+        ViewArtifactRequest,
+        build_view_artifact_from_bundle,
+    )
 
     required_udfs = plan_bundle.required_udfs
     referenced_tables = tuple(
@@ -873,10 +877,14 @@ def _record_extract_view_artifact(
     )
     artifact = build_view_artifact_from_bundle(
         plan_bundle,
-        name=name,
-        schema=schema,
-        required_udfs=required_udfs,
-        referenced_tables=referenced_tables,
+        request=ViewArtifactRequest(
+            name=name,
+            schema=schema,
+            lineage=ViewArtifactLineage(
+                required_udfs=required_udfs,
+                referenced_tables=referenced_tables,
+            ),
+        ),
     )
     record_view_definition(profile, artifact=artifact)
 

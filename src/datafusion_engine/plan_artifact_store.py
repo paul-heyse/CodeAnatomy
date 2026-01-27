@@ -20,14 +20,7 @@ from datafusion_engine.dataset_registry import (
 )
 from datafusion_engine.diagnostics import record_artifact
 from serde_msgspec import dumps_json, to_builtins
-from storage.deltalake import (
-    DeltaWriteOptions,
-    delta_table_version,
-    enable_delta_features,
-    idempotent_commit_properties,
-    write_delta_table,
-)
-from storage.deltalake.delta import DEFAULT_DELTA_FEATURE_PROPERTIES
+from storage.deltalake import delta_table_version
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -269,7 +262,7 @@ def ensure_plan_artifacts_table(
     table_path = Path(location.path)
     existing_version = delta_table_version(str(table_path))
     if existing_version is None:
-        _bootstrap_plan_artifacts_table(profile, table_path)
+        _bootstrap_plan_artifacts_table(ctx, profile, table_path)
     _refresh_plan_artifacts_registration(ctx, profile, location)
     return location
 
@@ -291,7 +284,7 @@ def ensure_hamilton_events_table(
     table_path = Path(location.path)
     existing_version = delta_table_version(str(table_path))
     if existing_version is None:
-        _bootstrap_hamilton_events_table(profile, table_path)
+        _bootstrap_hamilton_events_table(ctx, profile, table_path)
     _refresh_hamilton_events_registration(ctx, profile, location)
     return location
 
@@ -648,6 +641,71 @@ def persist_write_artifact(
     return row
 
 
+@dataclass(frozen=True)
+class _ArtifactTableWriteRequest:
+    """Request payload for artifact table writes."""
+
+    table_path: Path
+    arrow_table: pa.Table
+    commit_metadata: Mapping[str, str]
+    mode: str
+    schema_mode: str | None
+    operation_id: str
+
+
+def _write_artifact_table(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+    *,
+    request: _ArtifactTableWriteRequest,
+) -> int | None:
+    """Write an artifact table via the unified write pipeline.
+
+    Returns
+    -------
+    int | None
+        Resolved Delta table version when available.
+
+    Raises
+    ------
+    ValueError
+        Raised when the requested write mode is unsupported.
+    """
+    from datafusion_engine.diagnostics import recorder_for_profile
+    from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
+
+    if request.mode == "append":
+        write_mode = WriteMode.APPEND
+    elif request.mode == "overwrite":
+        write_mode = WriteMode.OVERWRITE
+    else:
+        msg = f"Unsupported write mode for artifacts: {request.mode!r}."
+        raise ValueError(msg)
+    format_options: dict[str, object] = {"commit_metadata": dict(request.commit_metadata)}
+    if request.schema_mode is not None:
+        format_options["schema_mode"] = request.schema_mode
+    df = ctx.from_arrow(request.arrow_table)
+    recorder = recorder_for_profile(profile, operation_id=request.operation_id)
+    pipeline = WritePipeline(
+        ctx,
+        sql_options=profile.sql_options(),
+        recorder=recorder,
+        runtime_profile=profile,
+    )
+    result = pipeline.write(
+        WriteRequest(
+            source=df,
+            destination=str(request.table_path),
+            format=WriteFormat.DELTA,
+            mode=write_mode,
+            format_options=format_options,
+        )
+    )
+    if result.delta_result is not None and result.delta_result.version is not None:
+        return result.delta_result.version
+    return delta_table_version(str(request.table_path))
+
+
 def persist_plan_artifact_rows(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
@@ -678,45 +736,21 @@ def persist_plan_artifact_rows(
         schema=_plan_artifacts_schema(),
     )
     commit_metadata = _commit_metadata_for_rows(rows)
-    commit_key = str(table_path)
-    commit_options, commit_run = profile.reserve_delta_commit(
-        key=commit_key,
-        metadata=commit_metadata,
-        commit_metadata=commit_metadata,
+    final_version = _write_artifact_table(
+        ctx,
+        profile,
+        request=_ArtifactTableWriteRequest(
+            table_path=table_path,
+            arrow_table=arrow_table,
+            commit_metadata=commit_metadata,
+            mode="append",
+            schema_mode="merge",
+            operation_id="plan_artifacts_store",
+        ),
     )
-    commit_properties = idempotent_commit_properties(
-        operation="plan_artifacts_store",
-        mode="append",
-        idempotent=commit_options,
-        extra_metadata=commit_metadata,
-    )
-    options = DeltaWriteOptions(
-        mode="append",
-        schema_mode="merge",
-        configuration=DEFAULT_DELTA_FEATURE_PROPERTIES,
-        commit_metadata=commit_metadata,
-        commit_properties=commit_properties,
-    )
-    write_result = write_delta_table(
-        arrow_table,
-        str(table_path),
-        options=options,
-    )
-    final_version = delta_table_version(str(table_path))
-    if final_version is None:
-        final_version = write_result.version
     if final_version is None:
         msg = f"Failed to resolve Delta version for plan artifacts: {table_path}."
         raise RuntimeError(msg)
-    profile.finalize_delta_commit(
-        key=commit_key,
-        run=commit_run,
-        metadata={
-            "operation": "plan_artifacts_store",
-            "row_count": len(rows),
-            "delta_version": final_version,
-        },
-    )
     _refresh_plan_artifacts_registration(ctx, profile, resolved_location)
     _record_plan_artifact_summary(profile, rows=rows, path=str(table_path), version=final_version)
     return tuple(rows)
@@ -807,45 +841,21 @@ def persist_hamilton_event_rows(
         schema=_hamilton_events_schema(),
     )
     commit_metadata = _commit_metadata_for_hamilton_events(rows)
-    commit_key = str(table_path)
-    commit_options, commit_run = profile.reserve_delta_commit(
-        key=commit_key,
-        metadata=commit_metadata,
-        commit_metadata=commit_metadata,
+    final_version = _write_artifact_table(
+        ctx,
+        profile,
+        request=_ArtifactTableWriteRequest(
+            table_path=table_path,
+            arrow_table=arrow_table,
+            commit_metadata=commit_metadata,
+            mode="append",
+            schema_mode="merge",
+            operation_id="hamilton_events_store",
+        ),
     )
-    commit_properties = idempotent_commit_properties(
-        operation="hamilton_events_store",
-        mode="append",
-        idempotent=commit_options,
-        extra_metadata=commit_metadata,
-    )
-    options = DeltaWriteOptions(
-        mode="append",
-        schema_mode="merge",
-        configuration=DEFAULT_DELTA_FEATURE_PROPERTIES,
-        commit_metadata=commit_metadata,
-        commit_properties=commit_properties,
-    )
-    write_result = write_delta_table(
-        arrow_table,
-        str(table_path),
-        options=options,
-    )
-    final_version = delta_table_version(str(table_path))
-    if final_version is None:
-        final_version = write_result.version
     if final_version is None:
         msg = f"Failed to resolve Delta version for Hamilton events: {table_path}."
         raise RuntimeError(msg)
-    profile.finalize_delta_commit(
-        key=commit_key,
-        run=commit_run,
-        metadata={
-            "operation": "hamilton_events_store",
-            "row_count": len(rows),
-            "delta_version": final_version,
-        },
-    )
     _refresh_hamilton_events_registration(ctx, profile, resolved_location)
     _record_hamilton_events_summary(profile, rows=rows, path=str(table_path), version=final_version)
     return tuple(rows)
@@ -991,7 +1001,8 @@ def _plan_artifacts_schema() -> pa.Schema:
 
 
 def _bootstrap_plan_artifacts_table(
-    _profile: DataFusionRuntimeProfile,
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
     table_path: Path,
 ) -> None:
     schema = _plan_artifacts_schema()
@@ -1001,23 +1012,17 @@ def _bootstrap_plan_artifacts_table(
         "mode": "overwrite",
         "table": PLAN_ARTIFACTS_TABLE_NAME,
     }
-    commit_properties = idempotent_commit_properties(
-        operation="plan_artifacts_bootstrap",
-        mode="overwrite",
-        extra_metadata=commit_metadata,
-    )
-    options = DeltaWriteOptions(
-        mode="overwrite",
-        schema_mode="overwrite",
-        configuration=DEFAULT_DELTA_FEATURE_PROPERTIES,
-        commit_metadata=commit_metadata,
-        commit_properties=commit_properties,
-    )
-    write_delta_table(empty_table, str(table_path), options=options)
-    enable_delta_features(
-        str(table_path),
-        features=DEFAULT_DELTA_FEATURE_PROPERTIES,
-        commit_metadata=commit_metadata,
+    _write_artifact_table(
+        ctx,
+        profile,
+        request=_ArtifactTableWriteRequest(
+            table_path=table_path,
+            arrow_table=empty_table,
+            commit_metadata=commit_metadata,
+            mode="overwrite",
+            schema_mode="overwrite",
+            operation_id="plan_artifacts_bootstrap",
+        ),
     )
 
 
@@ -1073,7 +1078,8 @@ def _hamilton_events_schema() -> pa.Schema:
 
 
 def _bootstrap_hamilton_events_table(
-    _profile: DataFusionRuntimeProfile,
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
     table_path: Path,
 ) -> None:
     schema = _hamilton_events_schema()
@@ -1083,23 +1089,17 @@ def _bootstrap_hamilton_events_table(
         "mode": "overwrite",
         "table": HAMILTON_EVENTS_TABLE_NAME,
     }
-    commit_properties = idempotent_commit_properties(
-        operation="hamilton_events_bootstrap",
-        mode="overwrite",
-        extra_metadata=commit_metadata,
-    )
-    options = DeltaWriteOptions(
-        mode="overwrite",
-        schema_mode="overwrite",
-        configuration=DEFAULT_DELTA_FEATURE_PROPERTIES,
-        commit_metadata=commit_metadata,
-        commit_properties=commit_properties,
-    )
-    write_delta_table(empty_table, str(table_path), options=options)
-    enable_delta_features(
-        str(table_path),
-        features=DEFAULT_DELTA_FEATURE_PROPERTIES,
-        commit_metadata=commit_metadata,
+    _write_artifact_table(
+        ctx,
+        profile,
+        request=_ArtifactTableWriteRequest(
+            table_path=table_path,
+            arrow_table=empty_table,
+            commit_metadata=commit_metadata,
+            mode="overwrite",
+            schema_mode="overwrite",
+            operation_id="hamilton_events_bootstrap",
+        ),
     )
 
 

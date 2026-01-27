@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import pyarrow as pa
-from datafusion import SessionContext
 
 from arrowdsl.schema.build import empty_table
 from datafusion_engine.io_adapter import DataFusionIOAdapter
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_registry import (
     LIBCST_FILES_SCHEMA,
     SCIP_DOCUMENT_SYMBOLS_SCHEMA,
@@ -30,15 +30,16 @@ def _to_arrow_schema(value: object) -> pa.Schema:
 
 def test_nested_schema_for_cst_parse_manifest() -> None:
     """Ensure nested schema derivation for LibCST parse manifest."""
-    ctx = SessionContext()
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     adapter.register_arrow_table(
         "libcst_files_v1",
         empty_table(LIBCST_FILES_SCHEMA),
         overwrite=True,
     )
     view_spec = nested_view_spec(ctx, "cst_parse_manifest")
-    view_spec.register(ctx, validate=False)
+    view_spec.register(ctx, runtime_profile=profile, validate=False)
     schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert schema.names[:2] == ("file_id", "path")
     assert "module_name" in schema.names
@@ -47,15 +48,16 @@ def test_nested_schema_for_cst_parse_manifest() -> None:
 
 def test_nested_schema_for_cst_refs() -> None:
     """Ensure nested schema derivation for LibCST references."""
-    ctx = SessionContext()
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     adapter.register_arrow_table(
         "libcst_files_v1",
         empty_table(LIBCST_FILES_SCHEMA),
         overwrite=True,
     )
     view_spec = nested_view_spec(ctx, "cst_refs")
-    view_spec.register(ctx, validate=False)
+    view_spec.register(ctx, runtime_profile=profile, validate=False)
     schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert "ref_id" in schema.names
     assert "ref_kind" in schema.names
@@ -64,15 +66,16 @@ def test_nested_schema_for_cst_refs() -> None:
 
 def test_nested_schema_for_cst_call_args() -> None:
     """Ensure nested schema derivation for LibCST call arguments."""
-    ctx = SessionContext()
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     adapter.register_arrow_table(
         "libcst_files_v1",
         empty_table(LIBCST_FILES_SCHEMA),
         overwrite=True,
     )
     view_spec = nested_view_spec(ctx, "cst_call_args")
-    view_spec.register(ctx, validate=False)
+    view_spec.register(ctx, runtime_profile=profile, validate=False)
     schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert "call_id" in schema.names
     assert "arg_index" in schema.names

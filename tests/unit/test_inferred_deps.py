@@ -25,18 +25,19 @@ def test_inferred_deps_creation() -> None:
 
 def test_infer_deps_from_plan_bundle() -> None:
     """Infer dependencies from DataFusion plan bundle."""
-    from datafusion import SessionContext
-
     from datafusion_engine.plan_bundle import build_plan_bundle
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     # Create a test DataFusion plan
-    ctx = SessionContext()
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    session_runtime = profile.session_runtime()
     ctx.register_csv("table_a", "tests/fixtures/test.csv", has_header=True)
     ctx.register_csv("table_b", "tests/fixtures/test2.csv", has_header=True)
 
     # Build a simple query
     df = ctx.sql("SELECT a.x, b.y FROM table_a a JOIN table_b b ON a.id = b.id")
-    plan_bundle = build_plan_bundle(ctx, df)
+    plan_bundle = build_plan_bundle(ctx, df, session_runtime=session_runtime)
 
     # Infer dependencies using the plan bundle
     deps = infer_deps_from_plan_bundle(

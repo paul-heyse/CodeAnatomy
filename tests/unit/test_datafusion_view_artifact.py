@@ -10,6 +10,8 @@ import pytest
 from datafusion_engine.plan_bundle import DataFusionPlanBundle, PlanArtifacts
 from datafusion_engine.view_artifacts import (
     DataFusionViewArtifact,
+    ViewArtifactLineage,
+    ViewArtifactRequest,
     build_view_artifact_from_bundle,
 )
 
@@ -21,6 +23,7 @@ def test_datafusion_view_artifact_creation() -> None:
     artifact = DataFusionViewArtifact(
         name="test_view",
         plan_fingerprint="test_fingerprint_123",
+        plan_task_signature="sig:test_fingerprint_123",
         schema=schema,
         required_udfs=("udf_a", "udf_b"),
         referenced_tables=("table1", "table2"),
@@ -28,6 +31,7 @@ def test_datafusion_view_artifact_creation() -> None:
 
     assert artifact.name == "test_view"
     assert artifact.plan_fingerprint == "test_fingerprint_123"
+    assert artifact.plan_task_signature == "sig:test_fingerprint_123"
     assert artifact.schema == schema
     assert artifact.required_udfs == ("udf_a", "udf_b")
     assert artifact.referenced_tables == ("table1", "table2")
@@ -40,6 +44,7 @@ def test_datafusion_view_artifact_payload() -> None:
     artifact = DataFusionViewArtifact(
         name="test_view",
         plan_fingerprint="test_fp",
+        plan_task_signature="sig:test_fp",
         schema=schema,
         required_udfs=("udf_x",),
         referenced_tables=("table_y",),
@@ -49,6 +54,7 @@ def test_datafusion_view_artifact_payload() -> None:
 
     assert payload["name"] == "test_view"
     assert payload["plan_fingerprint"] == "test_fp"
+    assert payload["plan_task_signature"] == "sig:test_fp"
     assert "schema" in payload
     assert payload["required_udfs"] == ["udf_x"]
     assert payload["referenced_tables"] == ["table_y"]
@@ -61,6 +67,7 @@ def test_datafusion_view_artifact_diagnostics_payload() -> None:
     artifact = DataFusionViewArtifact(
         name="test_view",
         plan_fingerprint="test_fp",
+        plan_task_signature="sig:test_fp",
         schema=schema,
         required_udfs=(),
         referenced_tables=(),
@@ -72,6 +79,7 @@ def test_datafusion_view_artifact_diagnostics_payload() -> None:
     assert payload["event_time_unix_ms"] == event_time
     assert payload["name"] == "test_view"
     assert payload["plan_fingerprint"] == "test_fp"
+    assert payload["plan_task_signature"] == "sig:test_fp"
     assert "schema_fingerprint" in payload
     assert "schema_msgpack" in payload
     assert payload["required_udfs"] == []
@@ -90,15 +98,21 @@ def test_build_view_artifact_from_bundle(mock_plan_bundle: DataFusionPlanBundle)
 
     artifact = build_view_artifact_from_bundle(
         mock_plan_bundle,
-        name="test_view",
-        schema=schema,
-        required_udfs=("udf_a",),
-        referenced_tables=("table1",),
+        request=ViewArtifactRequest(
+            name="test_view",
+            schema=schema,
+            lineage=ViewArtifactLineage(
+                required_udfs=("udf_a",),
+                referenced_tables=("table1",),
+            ),
+        ),
     )
 
     assert isinstance(artifact, DataFusionViewArtifact)
     assert artifact.name == "test_view"
     assert artifact.plan_fingerprint == mock_plan_bundle.plan_fingerprint
+    assert isinstance(artifact.plan_task_signature, str)
+    assert artifact.plan_task_signature
     assert artifact.schema == schema
     assert artifact.required_udfs == ("udf_a",)
     assert artifact.referenced_tables == ("table1",)

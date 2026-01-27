@@ -256,6 +256,33 @@ def _lineage_rows_from_logs(
     return rows, error_count
 
 
+def _nodes_from_run_meta(run_meta: object) -> Mapping[str, object] | None:
+    nodes = getattr(run_meta, "nodes", None)
+    if isinstance(nodes, Mapping):
+        return nodes
+    if isinstance(run_meta, Mapping):
+        candidate = run_meta.get("nodes")
+        if isinstance(candidate, Mapping):
+            return candidate
+    if isinstance(run_meta, Sequence) and not isinstance(run_meta, (str, bytes)):
+        mapped: dict[str, object] = {}
+        for entry in run_meta:
+            if not isinstance(entry, Mapping):
+                continue
+            node_name = entry.get("node_name")
+            if isinstance(node_name, str) and node_name:
+                mapped[node_name] = entry
+        if mapped:
+            return mapped
+    return None
+
+
+def _meta_attr(meta: object, name: str) -> object | None:
+    if isinstance(meta, Mapping):
+        return meta.get(name)
+    return getattr(meta, name, None)
+
+
 def _lineage_rows_from_metadata_store(
     *,
     cache: object,
@@ -270,20 +297,20 @@ def _lineage_rows_from_metadata_store(
         run_meta = get_run(run_id)
     except (KeyError, TypeError, ValueError):
         return [], 0
-    nodes = getattr(run_meta, "nodes", None)
-    if not isinstance(nodes, Mapping):
+    nodes = _nodes_from_run_meta(run_meta)
+    if nodes is None:
         return [], 0
     rows: list[dict[str, object]] = []
     error_count = 0
     for node_name, meta in sorted(nodes.items(), key=lambda item: str(item[0])):
         if not isinstance(node_name, str):
             continue
-        task_id_value = getattr(meta, "task_id", None)
+        task_id_value = _meta_attr(meta, "task_id")
         task_id = task_id_value if isinstance(task_id_value, str) else None
-        cache_key_value = getattr(meta, "cache_key", None)
+        cache_key_value = _meta_attr(meta, "cache_key")
         cache_key_str = cache_key_value if isinstance(cache_key_value, str) else None
-        data_version_value = _stringify(getattr(meta, "data_version", None))
-        code_version_value = _stringify(getattr(meta, "code_version", None))
+        data_version_value = _stringify(_meta_attr(meta, "data_version"))
+        code_version_value = _stringify(_meta_attr(meta, "code_version"))
         error_value: str | None = None
         try:
             dependencies = _cache_key_dependencies(cache_key_str)

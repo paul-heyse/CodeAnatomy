@@ -2864,13 +2864,19 @@ def registry_view_nodes(
     -------
     tuple[ViewNode, ...]
         Registry view nodes with DataFusion plan bundles.
+
+    Raises
+    ------
+    ValueError
+        Raised when the runtime profile is unavailable.
     """
     excluded = set(exclude or ())
     from datafusion_engine.plan_bundle import build_plan_bundle
 
-    session_runtime = (
-        runtime_profile.session_runtime() if runtime_profile is not None else None
-    )
+    if runtime_profile is None:
+        msg = "Runtime profile is required for view planning."
+        raise ValueError(msg)
+    session_runtime = runtime_profile.session_runtime()
     nodes: list[ViewNode] = []
     for name in sorted(VIEW_SELECT_EXPRS):
         if name in excluded:
@@ -2919,14 +2925,22 @@ def ensure_view_graph(
     -------
     Mapping[str, object]
         Rust UDF snapshot used for view registration.
+
+    Raises
+    ------
+    ValueError
+        Raised when the runtime profile is unavailable.
     """
+    if runtime_profile is None:
+        msg = "Runtime profile is required for view registration."
+        raise ValueError(msg)
     from datafusion_engine.udf_platform import install_rust_udf_platform
     from datafusion_engine.udf_runtime import rust_udf_snapshot
 
     options = _platform_options(runtime_profile)
     platform = install_rust_udf_platform(ctx, options=options)
     snapshot = platform.snapshot or rust_udf_snapshot(ctx)
-    if scan_units and runtime_profile is not None:
+    if scan_units:
         from datafusion_engine.scan_overrides import apply_scan_unit_overrides
 
         apply_scan_unit_overrides(

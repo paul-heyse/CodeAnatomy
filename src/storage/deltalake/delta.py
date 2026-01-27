@@ -19,6 +19,7 @@ from storage.ipc import ipc_bytes
 if TYPE_CHECKING:
     from arro3.core.types import ArrowArrayExportable
     from datafusion import SessionContext
+    from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
 
 type StorageOptions = Mapping[str, str]
 
@@ -471,15 +472,16 @@ def read_delta_cdf(
         If CDF is not enabled on the Delta table.
     """
     resolved_options = cdf_options or DeltaCdfOptions()
-    provider = _delta_cdf_table_provider(
+    bundle = _delta_cdf_table_provider(
         table_path,
         storage_options=storage_options,
         log_storage_options=log_storage_options,
         options=resolved_options,
     )
-    if provider is None:
-        msg = "Delta CDF provider requires datafusion_ext.delta_cdf_table_provider."
+    if bundle is None:
+        msg = "Delta CDF provider requires Rust control-plane support."
         raise ValueError(msg)
+    provider = bundle.provider
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     ctx = DataFusionRuntimeProfile().session_context()
@@ -621,6 +623,10 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
         request.timestamp,
         payload,
         constraints_payload,
+        None,
+        None,
+        None,
+        None,
     )
     if result is None:
         return []
@@ -748,28 +754,22 @@ def _delta_cdf_table_provider(
     storage_options: StorageOptions | None,
     log_storage_options: StorageOptions | None,
     options: DeltaCdfOptions | None,
-) -> object | None:
-    try:
-        module = importlib.import_module("datafusion_ext")
-    except ImportError:
-        return None
-    provider_factory = getattr(module, "delta_cdf_table_provider", None)
-    options_type = getattr(module, "DeltaCdfOptions", None)
-    if not callable(provider_factory) or options_type is None:
-        return None
-    resolved = options or DeltaCdfOptions()
-    ext_options = options_type()
-    ext_options.starting_version = resolved.starting_version
-    if resolved.ending_version is not None:
-        ext_options.ending_version = resolved.ending_version
-    if resolved.starting_timestamp is not None:
-        ext_options.starting_timestamp = resolved.starting_timestamp
-    if resolved.ending_timestamp is not None:
-        ext_options.ending_timestamp = resolved.ending_timestamp
-    ext_options.allow_out_of_range = resolved.allow_out_of_range
+) -> DeltaCdfProviderBundle | None:
     storage = _log_storage_dict(storage_options, log_storage_options)
-    storage_payload = list(storage.items()) if storage else None
-    return provider_factory(table_path, storage_payload, ext_options)
+    try:
+        from datafusion_engine.delta_control_plane import DeltaCdfRequest, delta_cdf_provider
+
+        return delta_cdf_provider(
+            request=DeltaCdfRequest(
+                table_uri=table_path,
+                storage_options=storage or None,
+                version=None,
+                timestamp=None,
+                options=options,
+            )
+        )
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 __all__ = [

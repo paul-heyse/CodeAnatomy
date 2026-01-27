@@ -179,7 +179,7 @@ def install_rust_udf_platform(
     3. Function rewrites are applied via FunctionFactory
     4. Table functions and relation planners are available
 
-    This replaces SQLGlot/Ibis UDF enforcement paths with DataFusion-native
+    This replaces legacy UDF enforcement paths with DataFusion-native
     extension points.
 
     Parameters

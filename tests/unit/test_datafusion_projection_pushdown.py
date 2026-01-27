@@ -15,6 +15,7 @@ def test_dynamic_projection_reduces_columns() -> None:
     """Ensure projection pushdown removes unused columns."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
+    session_runtime = profile.session_runtime()
     ctx.register_record_batches(
         "events",
         [
@@ -28,7 +29,13 @@ def test_dynamic_projection_reduces_columns() -> None:
         ],
     )
     df = ctx.sql("SELECT events.id FROM events")
-    bundle = build_plan_bundle(ctx, df, compute_execution_plan=False, compute_substrait=False)
+    bundle = build_plan_bundle(
+        ctx,
+        df,
+        compute_execution_plan=False,
+        compute_substrait=False,
+        session_runtime=session_runtime,
+    )
     plan_text = bundle.display_optimized_plan() or bundle.display_logical_plan() or ""
     assert "label" not in plan_text
     assert "extra" not in plan_text

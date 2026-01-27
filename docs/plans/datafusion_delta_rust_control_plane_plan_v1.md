@@ -105,6 +105,12 @@ impl DeltaControlPlane {
 
 - Ad-hoc Delta helpers in Rust that duplicate control-plane responsibilities after the control plane is installed and adopted.
 
+### Status (2026-01-27)
+
+- Rust control-plane modules now exist and are wired into `datafusion_ext`: `rust/datafusion_ext/src/delta_control_plane.rs`, `rust/datafusion_ext/src/delta_protocol.rs`, `rust/datafusion_ext/src/delta_mutations.rs`, `rust/datafusion_ext/src/delta_maintenance.rs`, and `rust/datafusion_ext/src/delta_observability.rs`.
+- The PyO3 surface now exposes control-plane entrypoints including snapshot info, add actions, session-derived providers, mutations, and maintenance in `rust/datafusion_ext/src/lib.rs`.
+- Delta providers and scan planning now depend on the control plane in Python via `src/datafusion_engine/delta_control_plane.py`, but legacy `DeltaTableBuilder` usage still exists in `rust/datafusion_ext/src/lib.rs` and Python delta-rs usage still exists in `src/storage/deltalake/delta.py`.
+
 ### Implementation checklist
 
 - [ ] Introduce a Rust `DeltaControlPlane` module and make it the only place where `DeltaTableBuilder` is used.
@@ -261,6 +267,12 @@ def attach_delta_pins(
 
 - Any scan planning or plan fingerprinting logic that does not account for pinned Delta versions/timestamps.
 
+### Status (2026-01-27)
+
+- The two-pass planning pipeline exists in `src/datafusion_engine/planning_pipeline.py` and is used by `src/relspec/execution_plan.py` to pin Delta inputs before scheduling.
+- Plan bundles now include Delta pins and hash them into the plan fingerprint in `src/datafusion_engine/plan_bundle.py`.
+- Plan-cache keys incorporate Delta pins when present in `src/datafusion_engine/execution_helpers.py` and `src/engine/plan_cache.py`, but many ad-hoc planning flows still bypass the pinning pipeline.
+
 ### Implementation checklist
 
 - [ ] Resolve pinned snapshots for all Delta datasets used by a plan.
@@ -337,12 +349,18 @@ def register_delta_dataset(
 - `datafusion_ext.delta_table_provider(...)` Python entrypoints after all call sites use `delta_table_provider_from_session(...)` or `..._with_files(...)`.
 - Any Arrow Dataset fallback registration paths for Delta tables.
 
+### Status (2026-01-27)
+
+- Delta provider construction now routes through the control-plane adapter in `src/datafusion_engine/delta_control_plane.py`.
+- Canonical registration paths now use session-derived providers in `src/datafusion_engine/registry_bridge.py`, file-restricted providers in `src/datafusion_engine/scan_overrides.py`, and session-derived temporary providers in `src/datafusion_engine/write_pipeline.py`.
+- Effective scan configuration and scan-file restrictions are recorded via provider artifacts in `src/datafusion_engine/registry_bridge.py` and scan-override artifacts in `src/datafusion_engine/scan_overrides.py`.
+
 ### Implementation checklist
 
-- [ ] Route all Delta provider construction through session-derived scan config.
-- [ ] Use file-restricted providers whenever scan units provide file sets.
+- [x] Route all Delta provider construction through session-derived scan config.
+- [x] Use file-restricted providers whenever scan units provide file sets.
 - [ ] Remove non-session provider entrypoints once call sites are migrated.
-- [ ] Record effective scan config and file restrictions in artifacts.
+- [x] Record effective scan config and file restrictions in artifacts.
 
 ---
 
@@ -390,10 +408,15 @@ pub async fn delta_write_append(
 
 - Python-first Delta mutation paths that bypass Rust and delta-rs operations once Rust mutation APIs are wired in.
 
+### Status (2026-01-27)
+
+- Rust mutation entrypoints now exist in `rust/datafusion_ext/src/delta_mutations.rs` and are exposed through `rust/datafusion_ext/src/lib.rs`.
+- The Rust mutation surface accepts commit options including idempotent app-transaction inputs, but Python call sites still use delta-rs directly in `src/storage/deltalake/delta.py` and `src/datafusion_engine/write_pipeline.py`.
+
 ### Implementation checklist
 
-- [ ] Add Rust mutation entrypoints for append, overwrite, merge, update, and delete.
-- [ ] Ensure mutations accept explicit idempotent app transaction inputs.
+- [x] Add Rust mutation entrypoints for append, overwrite, merge, update, and delete.
+- [x] Ensure mutations accept explicit idempotent app transaction inputs.
 - [ ] Run Delta constraint checking before mutation commits.
 - [ ] Record mutation metadata (operation, mode, version, protocol/features) into plan artifacts.
 
@@ -449,6 +472,11 @@ def enforce_delta_constraints(
 ### Code and modules to delete
 
 - Constraint enforcement paths that run only as best-effort diagnostics instead of a hard pre-commit gate.
+
+### Status (2026-01-27)
+
+- A Rust-backed Delta data checker is available via `datafusion_ext.delta_data_checker` and is wrapped in `src/storage/deltalake/delta.py`.
+- Constraint enforcement is still SQL-first in `src/datafusion_engine/write_pipeline.py` and is not yet a hard Rust-side pre-commit gate.
 
 ### Implementation checklist
 
@@ -589,9 +617,14 @@ pub async fn delta_set_properties(
 
 - Maintenance flows that exist only as implicit side effects during writes instead of explicit, policy-driven operations.
 
+### Status (2026-01-27)
+
+- Rust maintenance entrypoints now exist in `rust/datafusion_ext/src/delta_maintenance.rs` and are exposed through `rust/datafusion_ext/src/lib.rs`.
+- Current maintenance call sites remain Python-first in `src/engine/delta_tools.py` and `src/storage/deltalake/delta.py`.
+
 ### Implementation checklist
 
-- [ ] Add Rust maintenance entrypoints: optimize/compact, vacuum, restore, feature enablement, and table property updates.
+- [x] Add Rust maintenance entrypoints: optimize/compact, vacuum, restore, feature enablement, and table property updates.
 - [ ] Define dataset-level maintenance policies and wire them into runtime hooks or explicit maintenance jobs.
 - [ ] Enforce retention guardrails for vacuum and restore.
 - [ ] Record maintenance metrics and resulting versions into plan artifacts.
@@ -681,11 +714,18 @@ def plan_scan_units_with_delta_stats(
 
 - Delta scan pruning logic that does not consider log-level Add actions and stats when those are available.
 
+### Status (2026-01-27)
+
+- The Rust control plane now exposes snapshot-aware add actions in `rust/datafusion_ext/src/delta_control_plane.rs` and `rust/datafusion_ext/src/lib.rs`.
+- Scan planning now resolves add actions via the control plane in `src/datafusion_engine/scan_planner.py` and builds pruning indexes from those add actions in `src/storage/deltalake/file_index.py`.
+- File-restricted provider registration now flows from pruned add actions through `src/datafusion_engine/scan_overrides.py`.
+- Stats-aware pruning and scan-planning artifact metrics are not yet implemented.
+
 ### Implementation checklist
 
-- [ ] Expose Add actions and relevant stats from Rust control plane.
+- [x] Expose Add actions and relevant stats from Rust control plane.
 - [ ] Introduce stats-aware pruning that operates over Add actions.
-- [ ] Use file-restricted Delta providers derived from the pruned Add actions.
+- [x] Use file-restricted Delta providers derived from the pruned Add actions.
 - [ ] Record scan planning statistics (candidate vs pruned files) into plan artifacts.
 
 ---
@@ -859,4 +899,3 @@ def resolve_delta_store_policy(
 - [ ] Remove Python-first mutation and maintenance flows once Rust control-plane operations are adopted.
 - [ ] Remove Delta scan fallbacks that bypass providers and pinned snapshots.
 - [ ] Verify that all plan artifacts include Delta pins, protocol gates, and Delta snapshot metadata before deleting transitional surfaces.
-

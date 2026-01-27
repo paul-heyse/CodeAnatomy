@@ -209,7 +209,7 @@ def _register_delta_override(
 
 
 def _delta_table_provider_with_files(
-    _ctx: SessionContext,
+    ctx: SessionContext,
     *,
     location: DatasetLocation,
     scan_files: Sequence[str],
@@ -218,62 +218,40 @@ def _delta_table_provider_with_files(
     if not _DELTA_PROVIDER_AVAILABLE:
         msg = "datafusion_ext.delta_table_provider_with_files is unavailable."
         raise TypeError(msg)
-    module = importlib.import_module("datafusion_ext")
-    provider_factory = getattr(module, "delta_table_provider_with_files", None)
-    if not callable(provider_factory):
-        msg = "datafusion_ext.delta_table_provider_with_files is unavailable."
-        raise TypeError(msg)
+    from datafusion_engine.delta_control_plane import (
+        DeltaProviderRequest,
+        delta_provider_with_files,
+    )
+
     delta_scan = resolve_delta_scan_options(location)
     if delta_scan is not None and delta_scan.schema_force_view_types is None:
         enable_view_types = _schema_hardening_view_types(runtime_profile)
         delta_scan = replace(delta_scan, schema_force_view_types=enable_view_types)
-    schema_ipc = _schema_ipc_payload(delta_scan.schema) if delta_scan else None
     storage_options = _delta_storage_options(location)
-    return provider_factory(
-        str(location.path),
-        storage_options,
-        location.delta_version,
-        location.delta_timestamp,
-        list(scan_files),
-        delta_scan.file_column_name if delta_scan else None,
-        delta_scan.enable_parquet_pushdown if delta_scan else None,
-        delta_scan.schema_force_view_types if delta_scan else None,
-        delta_scan.wrap_partition_values if delta_scan else None,
-        schema_ipc,
+    bundle = delta_provider_with_files(
+        ctx,
+        files=scan_files,
+        request=DeltaProviderRequest(
+            table_uri=str(location.path),
+            storage_options=storage_options,
+            version=location.delta_version,
+            timestamp=location.delta_timestamp,
+            delta_scan=delta_scan,
+        ),
     )
+    return bundle.provider
 
 
-def _delta_storage_options(location: DatasetLocation) -> list[tuple[str, str]] | None:
-    storage = dict(location.storage_options)
+def _delta_storage_options(location: DatasetLocation) -> dict[str, str] | None:
+    storage: dict[str, str] = {
+        key: str(value) for key, value in dict(location.storage_options).items()
+    }
     log_storage = resolve_delta_log_storage_options(location)
     if log_storage:
         storage.update({key: str(value) for key, value in log_storage.items()})
     if not storage:
         return None
-    return list(storage.items())
-
-
-def _schema_ipc_payload(schema: object | None) -> bytes | None:
-    if schema is None:
-        return None
-    serialize = getattr(schema, "serialize", None)
-    if not callable(serialize):
-        msg = "Delta scan schema does not support serialize()."
-        raise TypeError(msg)
-    buffer = serialize()
-    to_bytes = getattr(buffer, "to_pybytes", None)
-    if not callable(to_bytes):
-        msg = "Delta scan schema serialize() did not return a compatible buffer."
-        raise TypeError(msg)
-    raw = to_bytes()
-    if isinstance(raw, bytes):
-        return raw
-    if isinstance(raw, bytearray):
-        return bytes(raw)
-    if isinstance(raw, memoryview):
-        return raw.tobytes()
-    msg = "Delta scan schema serialize() returned unsupported buffer type."
-    raise TypeError(msg)
+    return storage
 
 
 def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile) -> bool:

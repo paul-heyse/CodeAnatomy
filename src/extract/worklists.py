@@ -195,7 +195,8 @@ def _execute_expr_stream(
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    result = facade.execute_builder(builder)
+    bundle = facade.compile_to_bundle(builder)
+    result = facade.execute_plan_bundle(bundle)
     if result.dataframe is None:
         msg = "Worklist execution did not return a DataFusion DataFrame."
         raise ValueError(msg)

@@ -37,7 +37,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlparse
 
 import pyarrow as pa
@@ -99,6 +99,7 @@ from schema_spec.system import (
 from storage.deltalake import DeltaCdfOptions
 
 if TYPE_CHECKING:
+    from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
@@ -694,15 +695,30 @@ def register_dataset_df(
     datafusion.dataframe.DataFrame
         DataFusion DataFrame for the registered dataset.
 
+    Raises
+    ------
+    ValueError
+        Raised when runtime profile or schema resolution is unavailable.
+
     """
-    context = _build_registration_context(
-        ctx,
-        name=name,
-        location=location,
-        cache_policy=cache_policy,
-        runtime_profile=runtime_profile,
+    if runtime_profile is None:
+        msg = "Runtime profile is required for dataset registration."
+        raise ValueError(msg)
+    schema = resolve_dataset_schema(location)
+    if schema is None:
+        msg = f"Schema required for dataset registration: {name!r}."
+        raise ValueError(msg)
+    from datafusion_engine.provider_registry import ProviderRegistry
+    from datafusion_engine.table_spec import table_spec_from_location
+
+    spec = table_spec_from_location(
+        name,
+        location,
+        schema=cast("pa.Schema", schema),
+        required_udfs=(),
     )
-    return _register_dataset_with_context(context)
+    registry = ProviderRegistry(ctx=ctx, runtime_profile=runtime_profile)
+    return registry.register_df(spec, cache_policy=cache_policy)
 
 
 @dataclass(frozen=True)
@@ -983,94 +999,25 @@ def _register_delta_cdf(context: DataFusionRegistrationContext) -> DataFrame:
 def _delta_table_provider_from_session(
     request: _DeltaProviderRequest,
 ) -> _DeltaProviderResponse:
-    try:
-        module = importlib.import_module("datafusion_ext")
-    except ImportError as exc:
-        msg = "Delta table providers require datafusion_ext."
-        raise RuntimeError(msg) from exc
-    provider_factory = getattr(module, "delta_table_provider_from_session", None)
-    if not callable(provider_factory):
-        msg = "datafusion_ext.delta_table_provider_from_session is unavailable."
-        raise TypeError(msg)
-    schema_ipc = _schema_ipc_payload(request.delta_scan.schema) if request.delta_scan else None
-    storage_payload = (
-        list(request.log_storage_options.items()) if request.log_storage_options else None
+    from datafusion_engine.delta_control_plane import (
+        DeltaProviderRequest,
+        delta_provider_from_session,
     )
-    provider = provider_factory(
+
+    bundle = delta_provider_from_session(
         request.ctx,
-        request.path,
-        storage_payload,
-        request.version,
-        request.timestamp,
-        request.delta_scan.file_column_name if request.delta_scan else None,
-        request.delta_scan.enable_parquet_pushdown if request.delta_scan else None,
-        request.delta_scan.schema_force_view_types if request.delta_scan else None,
-        request.delta_scan.wrap_partition_values if request.delta_scan else None,
-        schema_ipc,
+        request=DeltaProviderRequest(
+            table_uri=request.path,
+            storage_options=request.log_storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            delta_scan=request.delta_scan,
+        ),
     )
-    effective_scan = _delta_scan_effective_from_session(
-        module,
-        ctx=request.ctx,
-        delta_scan=request.delta_scan,
-        schema_ipc=schema_ipc,
+    return _DeltaProviderResponse(
+        provider=bundle.provider,
+        delta_scan_effective=bundle.scan_effective,
     )
-    return _DeltaProviderResponse(provider=provider, delta_scan_effective=effective_scan)
-
-
-def _schema_ipc_payload(schema: pa.Schema | None) -> bytes | None:
-    if schema is None:
-        return None
-    buffer = schema.serialize()
-    return buffer.to_pybytes()
-
-
-def _delta_scan_effective_from_session(
-    module: object,
-    *,
-    ctx: SessionContext,
-    delta_scan: DeltaScanOptions | None,
-    schema_ipc: bytes | None,
-) -> Mapping[str, object] | None:
-    config_factory = getattr(module, "delta_scan_config_from_session", None)
-    if not callable(config_factory):
-        msg = "datafusion_ext.delta_scan_config_from_session is unavailable."
-        raise TypeError(msg)
-    payload = config_factory(
-        ctx,
-        delta_scan.file_column_name if delta_scan else None,
-        delta_scan.enable_parquet_pushdown if delta_scan else None,
-        delta_scan.schema_force_view_types if delta_scan else None,
-        delta_scan.wrap_partition_values if delta_scan else None,
-        schema_ipc,
-    )
-    if not isinstance(payload, Mapping):
-        msg = "delta_scan_config_from_session returned invalid payload."
-        raise TypeError(msg)
-    return _delta_scan_effective_payload(payload)
-
-
-def _delta_scan_effective_payload(
-    payload: Mapping[str, object],
-) -> dict[str, object]:
-    schema_payload = None
-    schema_ipc = payload.get("schema_ipc")
-    if isinstance(schema_ipc, (bytes, bytearray)):
-        schema_payload = schema_to_dict(_decode_schema_ipc(bytes(schema_ipc)))
-    return {
-        "file_column_name": payload.get("file_column_name"),
-        "enable_parquet_pushdown": payload.get("enable_parquet_pushdown"),
-        "schema_force_view_types": payload.get("schema_force_view_types"),
-        "wrap_partition_values": payload.get("wrap_partition_values"),
-        "schema": schema_payload,
-    }
-
-
-def _decode_schema_ipc(payload: bytes) -> pa.Schema:
-    try:
-        return pa.ipc.read_schema(pa.BufferReader(payload))
-    except (pa.ArrowInvalid, TypeError, ValueError) as exc:
-        msg = "Invalid Delta scan schema IPC payload."
-        raise ValueError(msg) from exc
 
 
 def _delta_provider_artifact_payload(
@@ -1507,8 +1454,12 @@ def _apply_projection_exprs(
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     adapter.register_view(table_name, projected, overwrite=True, temporary=False)
     if runtime_profile is not None:
-        from datafusion_engine.runtime import record_view_definition
-        from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
+        from datafusion_engine.runtime import record_view_definition, session_runtime_hash
+        from datafusion_engine.view_artifacts import (
+            ViewArtifactLineage,
+            ViewArtifactRequest,
+            build_view_artifact_from_bundle,
+        )
 
         schema = _schema_from_df(projected)
         session_runtime = runtime_profile.session_runtime()
@@ -1519,12 +1470,18 @@ def _apply_projection_exprs(
         )
         required_udfs = bundle.required_udfs
         referenced_tables = referenced_tables_from_plan(bundle.optimized_logical_plan)
+        runtime_hash = session_runtime_hash(session_runtime)
         artifact = build_view_artifact_from_bundle(
             bundle,
-            name=table_name,
-            schema=schema,
-            required_udfs=required_udfs,
-            referenced_tables=referenced_tables,
+            request=ViewArtifactRequest(
+                name=table_name,
+                schema=schema,
+                lineage=ViewArtifactLineage(
+                    required_udfs=required_udfs,
+                    referenced_tables=referenced_tables,
+                ),
+                runtime_hash=runtime_hash,
+            ),
         )
         record_view_definition(runtime_profile, artifact=artifact)
         _invalidate_information_schema_cache(runtime_profile, ctx)
@@ -2241,14 +2198,15 @@ def register_delta_cdf_df(
     cdf_options = resolved.cdf_options
     storage_options = resolved.log_storage_options or resolved.storage_options
     runtime_profile = resolved.runtime_profile
-    provider = _delta_cdf_table_provider(
+    bundle = _delta_cdf_table_provider(
         path=path,
         storage_options=storage_options,
         options=cdf_options,
     )
-    if provider is None:
-        msg = "Delta CDF provider requires datafusion_ext.delta_cdf_table_provider."
+    if bundle is None:
+        msg = "Delta CDF provider requires Rust control-plane support."
         raise ValueError(msg)
+    provider = bundle.provider
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
@@ -2261,6 +2219,14 @@ def register_delta_cdf_df(
             provider=provider,
             provider_kind="cdf_table_provider",
             source=None,
+            details={
+                "path": path,
+                "delta_log_storage_options": (
+                    dict(storage_options) if storage_options is not None else None
+                ),
+                "delta_snapshot": bundle.snapshot,
+                "cdf_options": _cdf_options_payload(cdf_options),
+            },
         ),
     )
     _update_table_provider_capabilities(
@@ -2287,28 +2253,21 @@ def _delta_cdf_table_provider(
     path: str,
     storage_options: Mapping[str, str] | None,
     options: DeltaCdfOptions | None,
-) -> object | None:
+) -> DeltaCdfProviderBundle | None:
     try:
-        module = importlib.import_module("datafusion_ext")
-    except ImportError:
+        from datafusion_engine.delta_control_plane import DeltaCdfRequest, delta_cdf_provider
+
+        return delta_cdf_provider(
+            request=DeltaCdfRequest(
+                table_uri=path,
+                storage_options=storage_options,
+                version=None,
+                timestamp=None,
+                options=options,
+            )
+        )
+    except (ImportError, RuntimeError, TypeError, ValueError):
         return None
-    provider_factory = getattr(module, "delta_cdf_table_provider", None)
-    options_type = getattr(module, "DeltaCdfOptions", None)
-    if not callable(provider_factory) or options_type is None:
-        return None
-    resolved = options or DeltaCdfOptions()
-    ext_options = options_type()
-    if resolved.starting_version is not None:
-        ext_options.starting_version = resolved.starting_version
-    if resolved.ending_version is not None:
-        ext_options.ending_version = resolved.ending_version
-    if resolved.starting_timestamp is not None:
-        ext_options.starting_timestamp = resolved.starting_timestamp
-    if resolved.ending_timestamp is not None:
-        ext_options.ending_timestamp = resolved.ending_timestamp
-    ext_options.allow_out_of_range = resolved.allow_out_of_range
-    storage = list(storage_options.items()) if storage_options else None
-    return provider_factory(path, storage, ext_options)
 
 
 def _record_delta_cdf_artifact(

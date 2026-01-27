@@ -1,10 +1,6 @@
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    config::ConfigOptions,
-    tree_node::Transformed,
-    utils::list_ndims,
-    DFSchema,
-    Result,
+    config::ConfigOptions, tree_node::Transformed, utils::list_ndims, DFSchema, Result,
 };
 use datafusion_expr::expr::{BinaryExpr, ScalarFunction};
 use datafusion_expr::expr_rewriter::FunctionRewrite;
@@ -65,10 +61,7 @@ impl FunctionRewrite for CodeAnatomyOperatorRewrite {
 fn is_arrow_operator(op: Operator) -> bool {
     matches!(
         op,
-        Operator::Arrow
-            | Operator::LongArrow
-            | Operator::HashArrow
-            | Operator::HashLongArrow
+        Operator::Arrow | Operator::LongArrow | Operator::HashArrow | Operator::HashLongArrow
     )
 }
 
@@ -83,9 +76,9 @@ fn can_use_get_field(expr: &Expr, schema: &DFSchema) -> Result<bool> {
 mod tests {
     use super::*;
     use arrow::datatypes::{Field, Schema};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::expr::BinaryExpr;
     use datafusion_expr::expr_fn::col;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn rewrite_arrow_to_get_field() -> Result<()> {

@@ -48,9 +48,12 @@ def build_task_execution_module(
     outputs = {node.name: node for node in plan.view_nodes}
     scan_units_by_task = dict(plan.scan_task_units_by_name)
     plan_fingerprints = dict(plan.plan_fingerprints)
+    plan_task_signatures = dict(plan.plan_task_signatures)
     schedule_metadata = dict(plan.schedule_metadata)
     for scan_task_name in sorted(scan_units_by_task):
         scan_unit = scan_units_by_task[scan_task_name]
+        plan_fingerprint = plan_fingerprints.get(scan_task_name, "")
+        plan_task_signature = plan_task_signatures.get(scan_task_name, plan_fingerprint)
         task_spec = TaskNodeSpec(
             name=scan_task_name,
             output=scan_task_name,
@@ -63,7 +66,8 @@ def build_task_execution_module(
                 task=task_spec,
                 output_name=scan_task_name,
                 dependencies=tuple(dependency_map.get(scan_task_name, ())),
-                plan_fingerprint=plan_fingerprints.get(scan_task_name, ""),
+                plan_fingerprint=plan_fingerprint,
+                plan_task_signature=plan_task_signature,
                 plan_signature=plan.plan_signature,
                 schedule_metadata=schedule_metadata.get(scan_task_name),
                 scan_unit_key=scan_unit.key,
@@ -74,12 +78,15 @@ def build_task_execution_module(
         all_names.append(scan_task_name)
     for output_name, view_node in outputs.items():
         spec = _task_spec_from_view_node(view_node)
+        plan_fingerprint = plan_fingerprints.get(spec.name, "")
+        plan_task_signature = plan_task_signatures.get(spec.name, plan_fingerprint)
         task_node = _build_task_node(
             TaskNodeContext(
                 task=spec,
                 output_name=output_name,
                 dependencies=tuple(dependency_map.get(output_name, ())),
-                plan_fingerprint=plan_fingerprints.get(spec.name, ""),
+                plan_fingerprint=plan_fingerprint,
+                plan_task_signature=plan_task_signature,
                 plan_signature=plan.plan_signature,
                 schedule_metadata=schedule_metadata.get(spec.name),
                 scan_unit_key=None,
@@ -99,6 +106,7 @@ class TaskNodeContext:
     output_name: str
     dependencies: Sequence[str]
     plan_fingerprint: str
+    plan_task_signature: str
     plan_signature: str
     schedule_metadata: TaskScheduleMetadata | None
     scan_unit_key: str | None
@@ -162,6 +170,7 @@ def _decorate_task_node(
         task_name=task.name,
         task_output=context.output_name,
         plan_fingerprint=context.plan_fingerprint,
+        plan_task_signature=context.plan_task_signature,
         task_kind=task.kind,
         scan_unit_key=context.scan_unit_key,
     )
@@ -200,6 +209,7 @@ def _decorate_task_node(
             priority=str(task.priority),
             plan_signature=context.plan_signature,
             plan_fingerprint=context.plan_fingerprint,
+            plan_task_signature=context.plan_task_signature,
             schedule_index=schedule_tags["schedule_index"],
             generation_index=schedule_tags["generation_index"],
             generation_order=schedule_tags["generation_order"],
@@ -216,6 +226,7 @@ def _decorate_task_node(
         priority=str(task.priority),
         plan_signature=context.plan_signature,
         plan_fingerprint=context.plan_fingerprint,
+        plan_task_signature=context.plan_task_signature,
     )(node_fn)
 
 

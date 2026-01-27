@@ -309,7 +309,10 @@ class StreamingExecutor:
         --------
         >>> from datafusion_engine.execution_facade import DataFusionExecutionFacade
         >>> from datafusion_engine.dataset_registry import DatasetLocation
-        >>> facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=None)
+        >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
+        >>> profile = DataFusionRuntimeProfile()
+        >>> ctx = profile.session_context()
+        >>> facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
         >>> facade.register_dataset(
         ...     name="events",
         ...     location=DatasetLocation(path="/data/events", format="delta"),

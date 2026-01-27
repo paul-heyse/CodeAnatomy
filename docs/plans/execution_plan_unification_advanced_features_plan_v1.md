@@ -45,16 +45,43 @@ What is already landed and still relevant under the pivot:
 - [x] Plan-vs-runtime drift now emits a `hamilton_plan_drift_v1` artifact.
 - [x] UI identity now keeps `dag_name` stable and pushes plan identity into tags.
 - [x] ExecutionPlan test stubs were updated to the expanded contract.
+- [x] `SessionRuntime` is now a first-class planning surface that captures
+      UDF identity, rewrite tags, domain planners, and `df_settings`.
+- [x] `DataFusionPlanBundle` now carries plan artifacts, runtime artifacts,
+      function-registry identity, Delta input pins, and required UDF/tag sets.
+- [x] Plan cache keys now include plan fingerprint, UDF snapshot hash,
+      function registry hash, required UDF/tag hashes, `df_settings` hash,
+      and Delta input pins.
+- [x] Delta-aware scan planning now pins versions, applies scan overrides,
+      and promotes scan units to scan tasks in the scheduling graph.
+- [x] Hamilton task admission/grouping/drift artifacts are now backed by
+      explicit schemas in the registry.
+- [x] Plan signatures now incorporate runtime/session identity via
+      per-task `plan_task_signatures` plus a `session_runtime_hash`.
+- [x] Plan snapshots, incremental diffs, and invalidation snapshots now persist
+      `plan_task_signature` as the runtime-aware task identity
+      (`PLAN_FINGERPRINTS_VERSION = 5`, `INVALIDATION_SNAPSHOT_VERSION = 2`).
+- [x] Runtime artifacts and task execution specs now propagate
+      `plan_task_signature` across view references, materializations, and
+      execution artifacts.
+- [x] Plan artifacts now expose `plan_task_signatures` as a first-class node,
+      and driver tags include `plan_task_signature_count` plus
+      `session_runtime_hash` when available.
+- [x] Cache-lineage metadata export now handles list-shaped
+      `metadata_store.get_run()` payloads and is covered by deterministic tests.
+- [x] View artifacts now emit a runtime-aware `plan_task_signature`
+      under `datafusion_view_artifacts_v2`.
 
-Pivot-critical gaps that remain:
+Pivot-critical gaps previously identified (now resolved):
 
-- [ ] Session/runtime identity is not yet an explicit planning object.
-- [ ] `DataFusionPlanBundle` is not yet enriched with settings, UDF identity,
-      rewrite tags, Delta pins, and plan artifacts as first-class fields.
-- [ ] Lineage and UDF extraction still rely heavily on display-string parsing.
-- [ ] No Delta-aware scan planner/scan units are modeled in the DAG.
-- [ ] Plan identity and cache keys do not yet include runtime settings, UDF
-      snapshot hash, rewrite tags, or Delta pins.
+- [x] Plan signatures and driver cache identity now incorporate runtime/session
+      identity beyond plan fingerprints.
+- [x] Lineage and UDF extraction now use structured `to_variant()` plus
+      `rex_call_*` operator/operand traversal for expression-level facts.
+- [x] Scan units and plan bundles now unify task identity via
+      `plan_task_signatures` that fold in scan-unit signatures.
+
+Remaining cleanup scope is captured in Scope 7 (deferred deletions).
 
 ---
 
@@ -145,10 +172,10 @@ def lineage_rows_from_metadata_store(cache, *, run_id: str) -> list[dict[str, ob
   - [x] `dependencies_data_versions` via `decode_key(cache_key)`.
 - [x] Record lineage facts as a first-class artifact (for example,
       `hamilton_cache_lineage_v2`) and include the plan signature.
-- [ ] Add targeted tests that assert:
-  - [ ] external reads are recomputed even when cached,
+- [x] Add targeted tests that assert:
+  - [x] external reads are recomputed even when cached,
   - [x] `plan_signature` participates in dependency data versions,
-  - [ ] metadata-store lineage rows are deterministic and decode cleanly.
+  - [x] metadata-store lineage rows are deterministic and decode cleanly.
 
 ---
 
@@ -290,7 +317,8 @@ class PlanTaskGroupingHook(lifecycle_api.TaskGroupingHook):
 
 - [x] Implement `PlanTaskSubmissionHook` that:
   - [x] filters out tasks not in `active_task_names`,
-  - [ ] enforces plan-native ordering via criticality,
+  - [x] enforces plan-native ordering via criticality (now applied in
+        `PlanGroupingStrategy`),
   - [x] is explicit about fallback behavior for unknown tasks.
 - [x] Implement (or stub) a `PlanTaskGroupingHook` that:
   - [x] records actual groupings,
@@ -392,21 +420,22 @@ class DataFusionPlanBundle:
 
 - [x] Runtime profiles already enforce `information_schema=True`.
 - [x] Introduce `SessionRuntime` and require it across planning boundaries.
-- [ ] Snapshot:
-  - [ ] `df_settings`,
-  - [ ] `udf_snapshot_hash`,
-  - [ ] `rewrite_tags`,
-  - [ ] enabled planners/rewrites.
-- [ ] Enrich `DataFusionPlanBundle` with:
-  - [ ] plan artifacts (display/graphviz/pgjson where available),
-  - [ ] runtime artifacts,
-  - [ ] Delta input pins,
-  - [ ] `required_udfs` and `required_rewrite_tags`.
-- [ ] Update plan signatures and cache keys to incorporate:
-  - [ ] plan fingerprint,
-  - [ ] runtime/session hash,
-  - [ ] UDF snapshot hash + rewrite tags,
-  - [ ] Delta pins.
+- [x] Snapshot:
+  - [x] `df_settings`,
+  - [x] `udf_snapshot_hash`,
+  - [x] `rewrite_tags`,
+  - [x] enabled planners/rewrites (for example, domain planners).
+- [x] Enrich `DataFusionPlanBundle` with:
+  - [x] plan artifacts (display/graphviz/pgjson where available),
+  - [x] runtime artifacts,
+  - [x] Delta input pins,
+  - [x] `required_udfs` and `required_rewrite_tags`.
+- [x] Update plan signatures and cache keys to incorporate:
+  - [x] plan fingerprint,
+  - [x] UDF snapshot hash + rewrite tags,
+  - [x] Delta pins,
+  - [x] runtime/session hash as a first-class signature input via
+        `plan_task_signatures` + `session_runtime_hash`.
 
 ---
 
@@ -491,15 +520,20 @@ def plan_scan_unit(*, delta_table, lineage) -> ScanUnit:
 
 ### Implementation checklist
 
-- [ ] Implement structured logical-plan traversal and lineage extraction.
-- [ ] Emit lineage that includes:
-  - [ ] scans, joins, predicates, projections,
-  - [ ] required columns per dataset,
-  - [ ] required UDFs,
-  - [ ] required rewrite tags.
+- [x] Implement structured logical-plan traversal and lineage extraction.
+- [x] Emit lineage that includes:
+  - [x] scans, joins, predicates, projections,
+  - [x] required columns per dataset,
+  - [x] required UDFs,
+  - [x] required rewrite tags.
 - [x] Introduce scan units with pinned Delta versions.
-- [ ] Derive scan units from lineage plus Delta metadata and pruning policy.
-- [ ] Bind scan units into plan signatures and cache keys.
+- [x] Derive scan units from lineage plus Delta metadata and pruning policy.
+- [x] Bind scan units into plan signatures and cache keys.
+
+Structured traversal is now in place via `to_variant()` + `inputs()` plus
+`rex_call_operator()` / `rex_call_operands()` for expression-level UDF and
+column extraction. String rendering is retained only for human-readable fields
+such as filter and aggregation text.
 
 ---
 
@@ -589,8 +623,8 @@ def plan_artifacts(execution_plan) -> dict[str, object]:
 ### Implementation checklist
 
 - [x] rustworkx reduction + critical-path artifacts are already plan-native.
-- [ ] Unify the DAG around scan units plus plan bundles (scan + view nodes).
-- [ ] Ensure all edges come from structured lineage and scan planning only.
+- [x] Unify the DAG around scan units plus plan bundles (scan + view nodes).
+- [x] Ensure all edges come from structured lineage and scan planning only.
 - [x] Promote plan artifacts to Hamilton nodes via `@extract_fields`.
 - [x] Enforce required semantic tags in registry compilation.
 - [x] Remove suppression comments by structurally routing hook inputs.

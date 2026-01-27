@@ -15,12 +15,20 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile
 @pytest.mark.integration
 def test_substrait_cross_validation_match() -> None:
     """Compare PyArrow Substrait output to DataFusion results."""
-    ctx = DataFusionRuntimeProfile().session_context()
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    session_runtime = profile.session_runtime()
     table = pa.table({"id": [1, 2, 3], "label": ["alpha", "beta", "gamma"]})
     ctx.register_record_batches("input_table", [table.to_batches()])
     sql = "SELECT * FROM input_table"
     df = ctx.sql(sql)
-    bundle = build_plan_bundle(ctx, df, compute_execution_plan=False, compute_substrait=True)
+    bundle = build_plan_bundle(
+        ctx,
+        df,
+        compute_execution_plan=False,
+        compute_substrait=True,
+        session_runtime=session_runtime,
+    )
     if bundle.substrait_bytes is None:
         pytest.skip("Substrait serialization unavailable.")
     validation = validate_substrait_plan(bundle.substrait_bytes, df=df)

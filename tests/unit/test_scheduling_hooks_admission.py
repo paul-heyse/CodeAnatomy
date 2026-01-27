@@ -102,9 +102,13 @@ def _plan_for_tests() -> ExecutionPlan:
     )
     schedule_metadata = task_schedule_metadata(schedule)
     plan_fingerprints = {name: f"fp:{name}" for name in ordered_tasks}
+    plan_task_signatures = {name: f"sig:{name}" for name in ordered_tasks}
     plan_snapshots = {
-        name: PlanFingerprintSnapshot(plan_fingerprint=fingerprint)
-        for name, fingerprint in plan_fingerprints.items()
+        name: PlanFingerprintSnapshot(
+            plan_fingerprint=plan_fingerprints[name],
+            plan_task_signature=plan_task_signatures[name],
+        )
+        for name in ordered_tasks
     }
     empty_graph = rx.PyDiGraph(multigraph=False, check_cycle=False)
     task_graph = TaskGraph(
@@ -122,6 +126,7 @@ def _plan_for_tests() -> ExecutionPlan:
         task_schedule=schedule,
         schedule_metadata=schedule_metadata,
         plan_fingerprints=plan_fingerprints,
+        plan_task_signatures=plan_task_signatures,
         plan_snapshots=plan_snapshots,
         output_contracts={},
         plan_signature="plan:test",

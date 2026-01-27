@@ -42,6 +42,15 @@ class PlanningPipelineResult:
     session_runtime: SessionRuntime | None
 
 
+@dataclass(frozen=True)
+class _ScanPlanning:
+    scan_units: tuple[ScanUnit, ...]
+    scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_task_name_by_key: Mapping[str, str]
+    scan_task_units_by_name: Mapping[str, ScanUnit]
+    scan_task_names_by_task: Mapping[str, tuple[str, ...]]
+
+
 def plan_with_delta_pins(
     ctx: SessionContext,
     *,
@@ -55,25 +64,75 @@ def plan_with_delta_pins(
     -------
     PlanningPipelineResult
         Planning outputs with scan units promoted to schedulable tasks.
+
+    Raises
+    ------
+    ValueError
+        Raised when the runtime profile is unavailable.
     """
-    session_runtime = runtime_profile.session_runtime() if runtime_profile is not None else None
+    if runtime_profile is None:
+        msg = "Runtime profile is required for planning with Delta pins."
+        raise ValueError(msg)
+    session_runtime = runtime_profile.session_runtime()
     # Baseline registration ensures UDF platform and registry views exist.
-    if runtime_profile is not None:
-        ensure_view_graph(ctx, runtime_profile=runtime_profile, include_registry_views=True)
+    ensure_view_graph(ctx, runtime_profile=runtime_profile, include_registry_views=True)
     baseline_nodes = _plan_view_nodes(
         ctx,
         view_nodes=view_nodes,
         session_runtime=session_runtime,
         scan_units=(),
     )
-    baseline_snapshot = snapshot or (
-        session_runtime.udf_snapshot if session_runtime is not None else None
+    snapshot = snapshot or (session_runtime.udf_snapshot if session_runtime is not None else None)
+    baseline_inferred = infer_deps_from_view_nodes(baseline_nodes, snapshot=snapshot)
+    scan_planning = _scan_planning(
+        ctx,
+        runtime_profile=runtime_profile,
+        inferred=baseline_inferred,
     )
-    baseline_inferred = infer_deps_from_view_nodes(baseline_nodes, snapshot=baseline_snapshot)
-    scans_by_task = {dep.task_name: dep.scans for dep in baseline_inferred if dep.scans}
-    scan_units: tuple[ScanUnit, ...]
-    scan_keys_by_task: Mapping[str, tuple[str, ...]]
-    if scans_by_task and runtime_profile is not None:
+    if scan_planning.scan_units:
+        apply_scan_unit_overrides(
+            ctx,
+            scan_units=scan_planning.scan_units,
+            runtime_profile=runtime_profile,
+        )
+        ensure_view_graph(
+            ctx,
+            runtime_profile=runtime_profile,
+            include_registry_views=True,
+            scan_units=scan_planning.scan_units,
+        )
+    pinned_nodes = _plan_view_nodes(
+        ctx,
+        view_nodes=view_nodes,
+        session_runtime=session_runtime,
+        scan_units=scan_planning.scan_units,
+    )
+    pinned_inferred = infer_deps_from_view_nodes(pinned_nodes, snapshot=snapshot)
+    lineage_by_view = _lineage_by_view(pinned_nodes)
+    scan_inferred = _scan_inferred_deps(scan_planning.scan_task_units_by_name)
+    inferred_all = (*pinned_inferred, *scan_inferred)
+    return PlanningPipelineResult(
+        view_nodes=pinned_nodes,
+        inferred=tuple(inferred_all),
+        scan_units=scan_planning.scan_units,
+        scan_keys_by_task=scan_planning.scan_keys_by_task,
+        scan_task_name_by_key=scan_planning.scan_task_name_by_key,
+        scan_task_units_by_name=scan_planning.scan_task_units_by_name,
+        scan_task_names_by_task=scan_planning.scan_task_names_by_task,
+        scan_units_by_evidence_name=scan_planning.scan_task_units_by_name,
+        lineage_by_view=lineage_by_view,
+        session_runtime=session_runtime,
+    )
+
+
+def _scan_planning(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    inferred: Sequence[InferredDeps],
+) -> _ScanPlanning:
+    scans_by_task = {dep.task_name: dep.scans for dep in inferred if dep.scans}
+    if scans_by_task:
         scan_units, scan_keys_by_task = plan_scan_units(
             ctx,
             dataset_locations=_dataset_location_map(runtime_profile),
@@ -82,22 +141,6 @@ def plan_with_delta_pins(
     else:
         scan_units = ()
         scan_keys_by_task = dict[str, tuple[str, ...]]()
-    if scan_units and runtime_profile is not None:
-        apply_scan_unit_overrides(ctx, scan_units=scan_units, runtime_profile=runtime_profile)
-        ensure_view_graph(
-            ctx,
-            runtime_profile=runtime_profile,
-            include_registry_views=True,
-            scan_units=scan_units,
-        )
-    pinned_nodes = _plan_view_nodes(
-        ctx,
-        view_nodes=view_nodes,
-        session_runtime=session_runtime,
-        scan_units=scan_units,
-    )
-    pinned_inferred = infer_deps_from_view_nodes(pinned_nodes, snapshot=baseline_snapshot)
-    lineage_by_view = _lineage_by_view(pinned_nodes)
     scan_task_name_by_key = _scan_task_name_map(scan_units)
     scan_task_units_by_name = {
         scan_task_name_by_key[unit.key]: unit
@@ -112,19 +155,12 @@ def plan_with_delta_pins(
         )
         for task, keys in scan_keys_by_task.items()
     }
-    scan_inferred = _scan_inferred_deps(scan_task_units_by_name)
-    inferred_all = (*pinned_inferred, *scan_inferred)
-    return PlanningPipelineResult(
-        view_nodes=pinned_nodes,
-        inferred=tuple(inferred_all),
+    return _ScanPlanning(
         scan_units=scan_units,
         scan_keys_by_task=scan_keys_by_task,
         scan_task_name_by_key=scan_task_name_by_key,
         scan_task_units_by_name=scan_task_units_by_name,
         scan_task_names_by_task=scan_task_names_by_task,
-        scan_units_by_evidence_name=scan_task_units_by_name,
-        lineage_by_view=lineage_by_view,
-        session_runtime=session_runtime,
     )
 
 

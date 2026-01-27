@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -108,6 +108,103 @@ def build_delta_file_index(dt: DeltaTable) -> pa.Table:
 
     # Normalize column names and structure
     return _normalize_file_index(index_table)
+
+
+def _coerce_int_field(value: object, *, field: str) -> int:
+    """Coerce optional numeric payloads into integer values.
+
+    Parameters
+    ----------
+    value
+        Raw payload value that should represent an integer.
+    field
+        Field label used in error messages.
+
+    Returns
+    -------
+    int
+        Integer value with ``None`` mapped to ``0``.
+
+    Raises
+    ------
+    TypeError
+        Raised when the payload is not numeric or string-like.
+    ValueError
+        Raised when a string payload cannot be parsed as an integer.
+    """
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError as exc:
+            msg = f"Delta add action field {field} was not an integer: {value!r}"
+            raise ValueError(msg) from exc
+    msg = f"Delta add action field {field} had unsupported type: {type(value).__name__}"
+    raise TypeError(msg)
+
+
+def build_delta_file_index_from_add_actions(
+    add_actions: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build a file index table from Rust control-plane add actions.
+
+    Parameters
+    ----------
+    add_actions
+        Add action payloads returned by the Rust Delta control plane.
+
+    Returns
+    -------
+    pa.Table
+        Normalized file index table compatible with pruning utilities.
+
+    Raises
+    ------
+    ValueError
+        Raised when required add action fields are missing.
+    """
+    if not add_actions:
+        return _empty_file_index_table()
+    paths: list[str] = []
+    sizes: list[int] = []
+    modification_times: list[int] = []
+    partition_values: list[dict[str, str | None]] = []
+    stats_values: list[str | None] = []
+    for action in add_actions:
+        path_value = action.get("path")
+        if path_value is None:
+            msg = "Delta add action missing required path field."
+            raise ValueError(msg)
+        paths.append(str(path_value))
+        sizes.append(_coerce_int_field(action.get("size"), field="size"))
+        modification_times.append(
+            _coerce_int_field(action.get("modification_time"), field="modification_time")
+        )
+        partitions_raw = action.get("partition_values")
+        partitions: dict[str, str | None] = {}
+        if isinstance(partitions_raw, Mapping):
+            for key, value in partitions_raw.items():
+                name = str(key)
+                partitions[name] = None if value is None else str(value)
+        partition_values.append(partitions)
+        stats_raw = action.get("stats")
+        stats_values.append(None if stats_raw is None else str(stats_raw))
+    map_type = pa.map_(pa.string(), pa.string())
+    raw_table = pa.table(
+        {
+            "path": pa.array(paths, type=pa.string()),
+            "size": pa.array(sizes, type=pa.int64()),
+            "modificationTime": pa.array(modification_times, type=pa.int64()),
+            "partitionValues": pa.array(partition_values, type=map_type),
+            "stats": pa.array(stats_values, type=pa.string()),
+        }
+    )
+    return _normalize_file_index(raw_table)
 
 
 def _normalize_file_index(raw_table: pa.Table) -> pa.Table:
@@ -328,4 +425,5 @@ def _empty_file_index_table() -> pa.Table:
 __all__ = [
     "FileIndexEntry",
     "build_delta_file_index",
+    "build_delta_file_index_from_add_actions",
 ]

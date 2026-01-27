@@ -9,6 +9,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "EdgeValidationResult": ("relspec.graph_edge_validation", "EdgeValidationResult"),
     "EvidenceCatalog": ("relspec.evidence", "EvidenceCatalog"),
     "EvidenceNode": ("relspec.rustworkx_graph", "EvidenceNode"),
+    "ExecutionPlan": ("relspec.execution_plan", "ExecutionPlan"),
     "GraphDiagnostics": ("relspec.rustworkx_graph", "GraphDiagnostics"),
     "GraphEdge": ("relspec.rustworkx_graph", "GraphEdge"),
     "GraphNode": ("relspec.rustworkx_graph", "GraphNode"),
@@ -20,9 +21,15 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "TaskValidationResult": ("relspec.graph_edge_validation", "TaskValidationResult"),
     "TaskGraph": ("relspec.graph_inference", "TaskGraph"),
     "build_task_graph_from_views": ("relspec.graph_inference", "build_task_graph_from_views"),
+    "bottom_level_costs": ("relspec.execution_plan", "bottom_level_costs"),
+    "compile_execution_plan": ("relspec.execution_plan", "compile_execution_plan"),
+    "dependency_map_from_inferred": ("relspec.execution_plan", "dependency_map_from_inferred"),
+    "downstream_task_closure": ("relspec.execution_plan", "downstream_task_closure"),
     "impacted_tasks": ("relspec.rustworkx_schedule", "impacted_tasks"),
     "impacted_tasks_for_evidence": ("relspec.rustworkx_schedule", "impacted_tasks_for_evidence"),
     "provenance_for_task": ("relspec.rustworkx_schedule", "provenance_for_task"),
+    "priority_for_task": ("relspec.execution_plan", "priority_for_task"),
+    "upstream_task_closure": ("relspec.execution_plan", "upstream_task_closure"),
     "ready_tasks_with_column_validation": (
         "relspec.graph_edge_validation",
         "ready_tasks_with_column_validation",
@@ -49,6 +56,7 @@ if TYPE_CHECKING:
     EdgeValidationResult: Any
     EvidenceCatalog: Any
     EvidenceNode: Any
+    ExecutionPlan: Any
     GraphDiagnostics: Any
     GraphEdge: Any
     GraphNode: Any
@@ -60,9 +68,15 @@ if TYPE_CHECKING:
     TaskValidationResult: Any
     TaskGraph: Any
     build_task_graph_from_views: Any
+    bottom_level_costs: Any
+    compile_execution_plan: Any
+    dependency_map_from_inferred: Any
+    downstream_task_closure: Any
     impacted_tasks: Any
     impacted_tasks_for_evidence: Any
     provenance_for_task: Any
+    priority_for_task: Any
+    upstream_task_closure: Any
     ready_tasks_with_column_validation: Any
     task_graph_diagnostics: Any
     task_graph_impact_subgraph: Any
@@ -97,6 +111,7 @@ __all__ = (
     "EdgeValidationResult",
     "EvidenceCatalog",
     "EvidenceNode",
+    "ExecutionPlan",
     "GraphDiagnostics",
     "GraphEdge",
     "GraphNode",
@@ -107,9 +122,14 @@ __all__ = (
     "TaskNode",
     "TaskSchedule",
     "TaskValidationResult",
+    "bottom_level_costs",
     "build_task_graph_from_views",
+    "compile_execution_plan",
+    "dependency_map_from_inferred",
+    "downstream_task_closure",
     "impacted_tasks",
     "impacted_tasks_for_evidence",
+    "priority_for_task",
     "provenance_for_task",
     "ready_tasks_with_column_validation",
     "schedule_tasks",
@@ -122,6 +142,7 @@ __all__ = (
     "task_graph_snapshot",
     "task_graph_subgraph",
     "task_schedule_metadata",
+    "upstream_task_closure",
     "validate_edge_requirements",
     "validate_edge_requirements_detailed",
     "validate_graph_edges",

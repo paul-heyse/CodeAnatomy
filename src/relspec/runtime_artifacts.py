@@ -48,12 +48,15 @@ class ViewReference:
         Hash of the view schema for validation.
     plan_fingerprint : str | None
         Hash of the plan that created this view.
+    plan_signature : str | None
+        Signature of the execution plan for the run.
     """
 
     name: str
     source_task: str
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
+    plan_signature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,8 @@ class MaterializedTable:
         Hash of the table schema.
     plan_fingerprint : str | None
         Hash of the plan that created this table.
+    plan_signature : str | None
+        Signature of the execution plan for the run.
     storage_path : str | None
         Path if persisted to disk.
     """
@@ -81,6 +86,7 @@ class MaterializedTable:
     row_count: int = 0
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
+    plan_signature: str | None = None
     storage_path: str | None = None
 
 
@@ -91,6 +97,7 @@ class MaterializedTableSpec:
     source_task: str
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
+    plan_signature: str | None = None
     storage_path: str | None = None
 
 
@@ -100,6 +107,7 @@ class ExecutionArtifactSpec:
 
     source_task: str
     plan_fingerprint: str | None = None
+    plan_signature: str | None = None
     schema_fingerprint: str | None = None
     storage_path: str | None = None
 
@@ -113,6 +121,7 @@ class ExecutionArtifact:
     result: ExecutionResult
     schema_fingerprint: str | None = None
     plan_fingerprint: str | None = None
+    plan_signature: str | None = None
     storage_path: str | None = None
 
 
@@ -186,6 +195,7 @@ class RuntimeArtifacts:
         source_task: str,
         schema_fingerprint: str | None = None,
         plan_fingerprint: str | None = None,
+        plan_signature: str | None = None,
     ) -> ViewReference:
         """Register a view reference.
 
@@ -199,6 +209,8 @@ class RuntimeArtifacts:
             Schema hash for validation.
         plan_fingerprint : str | None
             Plan hash for cache invalidation.
+        plan_signature : str | None
+            Plan signature for cross-run identity.
 
         Returns
         -------
@@ -210,6 +222,7 @@ class RuntimeArtifacts:
             source_task=source_task,
             schema_fingerprint=schema_fingerprint,
             plan_fingerprint=plan_fingerprint,
+            plan_signature=plan_signature,
         )
         self.view_references[name] = ref
         return ref
@@ -255,6 +268,7 @@ class RuntimeArtifacts:
             row_count=row_count,
             schema_fingerprint=spec.schema_fingerprint,
             plan_fingerprint=spec.plan_fingerprint,
+            plan_signature=spec.plan_signature,
             storage_path=spec.storage_path,
         )
         self.table_metadata[name] = metadata
@@ -301,6 +315,7 @@ class RuntimeArtifacts:
             result=result,
             schema_fingerprint=schema_fp,
             plan_fingerprint=spec.plan_fingerprint,
+            plan_signature=spec.plan_signature,
             storage_path=spec.storage_path,
         )
         self.execution_artifacts[name] = artifact
@@ -312,6 +327,7 @@ class RuntimeArtifacts:
                     source_task=spec.source_task,
                     schema_fingerprint=schema_fp,
                     plan_fingerprint=spec.plan_fingerprint,
+                    plan_signature=spec.plan_signature,
                     storage_path=spec.storage_path,
                 ),
             )

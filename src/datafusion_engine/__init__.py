@@ -68,6 +68,8 @@ if TYPE_CHECKING:
     )
     from datafusion_engine.schema_introspection import SchemaIntrospector
     from datafusion_engine.schema_registry import (
+        extract_nested_dataset_names,
+        extract_nested_schema_names,
         nested_base_df,
         nested_dataset_names,
         nested_schema_names,
@@ -155,6 +157,8 @@ __all__ = [
     "compile_sql_policy",
     "compute_rebuild_needed",
     "execute_with_policy",
+    "extract_nested_dataset_names",
+    "extract_nested_schema_names",
     "nested_base_df",
     "nested_dataset_names",
     "nested_schema_names",
@@ -196,6 +200,14 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "nested_base_df": ("datafusion_engine.schema_registry", "nested_base_df"),
     "nested_dataset_names": ("datafusion_engine.schema_registry", "nested_dataset_names"),
     "nested_schema_names": ("datafusion_engine.schema_registry", "nested_schema_names"),
+    "extract_nested_dataset_names": (
+        "datafusion_engine.schema_registry",
+        "extract_nested_dataset_names",
+    ),
+    "extract_nested_schema_names": (
+        "datafusion_engine.schema_registry",
+        "extract_nested_schema_names",
+    ),
     "register_registry_delta_tables": (
         "datafusion_engine.registry_loader",
         "register_registry_delta_tables",

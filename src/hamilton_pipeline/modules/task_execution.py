@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from hamilton.function_modifiers import pipe_input, source, step, tag
-from hamilton.htypes import Collect, Parallelizable
 
 from arrowdsl.core.interop import TableLike as ArrowTableLike
 from arrowdsl.schema.abi import schema_fingerprint
@@ -16,20 +15,16 @@ from core_types import JsonDict
 from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.finalize import Contract, normalize_only
 from datafusion_engine.view_registry import ensure_view_graph
-from relspec.evidence import EvidenceCatalog, initial_evidence_from_views, known_dataset_specs
-from relspec.inferred_deps import infer_deps_from_view_nodes
+from relspec.evidence import EvidenceCatalog
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
 from relspec.rustworkx_graph import task_graph_impact_subgraph
 
 if TYPE_CHECKING:
-    from datafusion import SessionContext
 
     from arrowdsl.core.execution_context import ExecutionContext
-    from datafusion_engine.view_graph_registry import ViewNode
     from ibis_engine.execution import IbisExecutionContext
     from relspec.graph_inference import TaskGraph
     from relspec.incremental import IncrementalDiff
-    from schema_spec.system import DatasetSpec
 
 
 @dataclass(frozen=True)
@@ -38,7 +33,17 @@ class TaskExecutionInputs:
 
     runtime: RuntimeArtifacts
     evidence: EvidenceCatalog
-    plan_fingerprints: Mapping[str, str]
+    plan_signature: str
+    active_task_names: frozenset[str]
+
+
+@dataclass(frozen=True)
+class TaskExecutionSpec:
+    """Describe a task execution request."""
+
+    task_name: str
+    task_output: str
+    plan_fingerprint: str
 
 
 def _finalize_cpg_table(
@@ -69,47 +74,27 @@ def _finalize_cpg_props_stage(table: TableLike, ctx: ExecutionContext) -> TableL
     return _finalize_cpg_table(table, name="cpg_props_v1", ctx=ctx)
 
 
-def _initial_evidence(
-    nodes: Sequence[ViewNode],
-    *,
-    ctx: SessionContext | None = None,
-    task_names: set[str] | None = None,
-    dataset_specs: Sequence[DatasetSpec] | None = None,
-) -> EvidenceCatalog:
-    return initial_evidence_from_views(
-        nodes,
-        ctx=ctx,
-        task_names=task_names,
-        dataset_specs=dataset_specs,
-    )
-
-
-def _plan_fingerprints(nodes: Sequence[ViewNode]) -> dict[str, str]:
-    inferred = infer_deps_from_view_nodes(nodes)
-    return {dep.task_name: dep.plan_fingerprint for dep in inferred}
-
-
 def _record_output(
     *,
     inputs: TaskExecutionInputs,
-    task_name: str,
-    task_output: str,
-    plan_fingerprint: str | None,
+    spec: TaskExecutionSpec,
+    plan_signature: str,
     table: TableLike,
 ) -> None:
     evidence = inputs.evidence
     runtime = inputs.runtime
     schema = table.schema
-    evidence.register_schema(task_output, schema)
-    if task_output in runtime.execution_artifacts:
+    evidence.register_schema(spec.task_output, schema)
+    if spec.task_output in runtime.execution_artifacts:
         return
     runtime.register_execution(
-        task_output,
+        spec.task_output,
         ExecutionResult.from_table(cast("ArrowTableLike", table)),
         spec=ExecutionArtifactSpec(
-            source_task=task_name,
+            source_task=spec.task_name,
             schema_fingerprint=schema_fingerprint(schema),
-            plan_fingerprint=plan_fingerprint,
+            plan_fingerprint=spec.plan_fingerprint,
+            plan_signature=plan_signature,
         ),
     )
 
@@ -134,9 +119,10 @@ def runtime_artifacts(
 
 @tag(layer="execution", artifact="task_execution_inputs", kind="context")
 def task_execution_inputs(
-    view_nodes: tuple[ViewNode, ...],
     runtime_artifacts: RuntimeArtifacts,
     evidence_catalog: EvidenceCatalog,
+    plan_signature: str,
+    active_task_names: frozenset[str],
 ) -> TaskExecutionInputs:
     """Bundle shared execution inputs for per-task nodes.
 
@@ -148,67 +134,9 @@ def task_execution_inputs(
     return TaskExecutionInputs(
         runtime=runtime_artifacts,
         evidence=evidence_catalog,
-        plan_fingerprints=_plan_fingerprints(view_nodes),
+        plan_signature=plan_signature,
+        active_task_names=active_task_names,
     )
-
-
-@tag(layer="execution", artifact="evidence_catalog", kind="catalog")
-def evidence_catalog(
-    view_nodes: tuple[ViewNode, ...],
-    ibis_execution: IbisExecutionContext,
-) -> EvidenceCatalog:
-    """Return an initialized EvidenceCatalog for task execution.
-
-    Returns
-    -------
-    EvidenceCatalog
-    Evidence catalog seeded from view requirements.
-    """
-    df_profile = ibis_execution.ctx.runtime.datafusion
-    session = df_profile.session_context() if df_profile is not None else None
-    if df_profile is not None and session is not None:
-        ensure_view_graph(
-            session,
-            runtime_profile=df_profile,
-            include_registry_views=True,
-        )
-    dataset_specs = known_dataset_specs(ctx=session)
-    evidence = _initial_evidence(view_nodes, ctx=session, dataset_specs=dataset_specs)
-    if df_profile is not None and evidence.contract_violations_by_dataset:
-        from datafusion_engine.diagnostics import record_artifact
-
-        payload = [
-            {
-                "dataset": name,
-                "violations": [str(item) for item in violations],
-            }
-            for name, violations in evidence.contract_violations_by_dataset.items()
-        ]
-        record_artifact(
-            df_profile,
-            "evidence_contract_violations_v1",
-            {"violations": payload},
-        )
-    if df_profile is not None:
-        from datafusion_engine.diagnostics import record_artifact
-        from datafusion_engine.udf_parity import udf_parity_report
-        from datafusion_engine.udf_runtime import register_rust_udfs
-
-        session = df_profile.session_context()
-        async_timeout_ms = None
-        async_batch_size = None
-        if df_profile.enable_async_udfs:
-            async_timeout_ms = df_profile.async_udf_timeout_ms
-            async_batch_size = df_profile.async_udf_batch_size
-        registry_snapshot = register_rust_udfs(
-            session,
-            enable_async=df_profile.enable_async_udfs,
-            async_udf_timeout_ms=async_timeout_ms,
-            async_udf_batch_size=async_batch_size,
-        )
-        report = udf_parity_report(session, snapshot=registry_snapshot)
-        record_artifact(df_profile, "udf_parity_v1", report.payload())
-    return evidence
 
 
 def task_graph_for_diff(
@@ -260,9 +188,9 @@ def _execute_view(
 def execute_task_from_catalog(
     *,
     inputs: TaskExecutionInputs,
-    task_name: str,
-    task_output: str,
     dependencies: Sequence[TableLike],
+    plan_signature: str,
+    spec: TaskExecutionSpec,
 ) -> TableLike:
     """Execute a single view task from a catalog.
 
@@ -270,97 +198,59 @@ def execute_task_from_catalog(
     -------
     TableLike
         Materialized table output.
+
+    Raises
+    ------
+    ValueError
+        Raised when the plan signature is inconsistent or the view is missing.
     """
     _touch_dependencies(dependencies)
     runtime = inputs.runtime
     evidence = inputs.evidence
-    plan_fingerprint = inputs.plan_fingerprints.get(task_name)
-    existing_artifact = runtime.execution_artifacts.get(task_output)
+    if plan_signature != inputs.plan_signature:
+        msg = "Plan signature mismatch between injected task inputs."
+        raise ValueError(msg)
+    existing_artifact = runtime.execution_artifacts.get(spec.task_output)
     if existing_artifact is not None and existing_artifact.result.table is not None:
         existing = existing_artifact.result.table
     else:
-        existing = runtime.materialized_tables.get(task_output)
+        existing = runtime.materialized_tables.get(spec.task_output)
     if existing is not None:
-        if task_output not in evidence.sources:
-            evidence.register_schema(task_output, existing.schema)
+        if spec.task_output not in evidence.sources:
+            evidence.register_schema(spec.task_output, existing.schema)
         return existing
-    result = _execute_view(runtime, view_name=task_output)
-    table = result.require_table()
-    _record_output(
+    inactive = spec.task_name not in inputs.active_task_names
+    return _execute_and_record(
         inputs=inputs,
-        task_name=task_name,
-        task_output=task_output,
-        plan_fingerprint=plan_fingerprint,
-        table=table,
+        spec=spec,
+        plan_signature=plan_signature,
+        inactive=inactive,
     )
-    return table
 
 
 def _touch_dependencies(dependencies: Sequence[TableLike]) -> int:
     return len(dependencies)
 
 
-@tag(layer="execution", artifact="task_generation_wave", kind="parallel")
-def task_generation_wave(
-    task_generations: tuple[tuple[str, ...], ...],
-) -> Parallelizable[tuple[str, ...]]:
-    """Yield task generations for dynamic execution.
-
-    Yields
-    ------
-    tuple[str, ...]
-        Task names for a single generation wave.
-    """
-    yield from task_generations
-
-
-@tag(layer="execution", artifact="generation_outputs", kind="parallel")
-def generation_outputs(
-    task_generation_wave: tuple[str, ...],
-    task_execution_inputs: TaskExecutionInputs,
-) -> list[TableLike]:
-    """Execute a generation of tasks sequentially and return outputs.
-
-    Returns
-    -------
-    list[TableLike]
-        Outputs produced for the generation.
-    """
-    return [
-        execute_task_from_catalog(
-            inputs=task_execution_inputs,
-            task_name=task_name,
-            task_output=task_name,
-            dependencies=(),
-        )
-        for task_name in task_generation_wave
-    ]
-
-
-@tag(layer="execution", artifact="generation_outputs_all", kind="parallel")
-def generation_outputs_all(
-    generation_outputs: Collect[list[TableLike]],
-) -> list[list[TableLike]]:
-    """Collect outputs from all generations.
-
-    Returns
-    -------
-    list[list[TableLike]]
-        Outputs grouped by generation.
-    """
-    return list(generation_outputs)
-
-
-@tag(layer="execution", artifact="generation_execution_gate", kind="gate")
-def generation_execution_gate(generation_outputs_all: list[list[TableLike]]) -> int:
-    """Return the total count of generation outputs executed.
-
-    Returns
-    -------
-    int
-        Count of outputs executed across generations.
-    """
-    return sum(len(outputs) for outputs in generation_outputs_all)
+def _execute_and_record(
+    *,
+    inputs: TaskExecutionInputs,
+    spec: TaskExecutionSpec,
+    plan_signature: str,
+    inactive: bool,
+) -> TableLike:
+    runtime = inputs.runtime
+    task_name = spec.task_name
+    runtime.record_execution(task_name if not inactive else f"{task_name}:inactive")
+    result = _execute_view(runtime, view_name=spec.task_output)
+    table = result.require_table()
+    _record_output(
+        inputs=inputs,
+        spec=spec,
+        plan_signature=plan_signature,
+        table=table,
+    )
+    return table
 
 
 @pipe_input(
@@ -416,19 +306,15 @@ def cpg_props_final(cpg_props_v1: TableLike) -> TableLike:
 
 __all__ = [
     "TaskExecutionInputs",
+    "TaskExecutionSpec",
     "_finalize_cpg_edges_stage",
     "_finalize_cpg_nodes_stage",
     "_finalize_cpg_props_stage",
     "cpg_edges_final",
     "cpg_nodes_final",
     "cpg_props_final",
-    "evidence_catalog",
     "execute_task_from_catalog",
-    "generation_execution_gate",
-    "generation_outputs",
-    "generation_outputs_all",
     "runtime_artifacts",
     "task_execution_inputs",
-    "task_generation_wave",
     "task_graph_for_diff",
 ]

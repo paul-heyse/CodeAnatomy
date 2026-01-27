@@ -177,7 +177,7 @@ def sqlglot_diagnostics(
             policy=resolved_policy,
             read_dialect=resolved_policy.read_dialect,
             write_dialect=resolved_policy.write_dialect,
-            optimizer_rules=options.rules,
+            optimizer_rules=None,
         )
         optimized, artifacts = compile_sql_policy(
             compiled,

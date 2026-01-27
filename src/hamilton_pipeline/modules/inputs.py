@@ -62,31 +62,7 @@ def _env_bool(name: str) -> bool | None:
     return None
 
 
-@tag(layer="inputs", kind="runtime")
-def runtime_profile_name() -> str:
-    """Return the runtime profile name for execution.
-
-    Returns
-    -------
-    str
-        Runtime profile name (defaults to "default").
-    """
-    return os.environ.get("CODEANATOMY_RUNTIME_PROFILE", "").strip() or "default"
-
-
-@tag(layer="inputs", kind="runtime")
-def determinism_override() -> DeterminismTier | None:
-    """Return an optional determinism tier override.
-
-    Returns
-    -------
-    DeterminismTier | None
-        Override tier when requested, otherwise ``None``.
-    """
-    force_flag = os.environ.get("CODEANATOMY_FORCE_TIER2", "").strip().lower()
-    if force_flag in {"1", "true", "yes", "y"}:
-        return DeterminismTier.CANONICAL
-    tier = os.environ.get("CODEANATOMY_DETERMINISM_TIER", "").strip().lower()
+def _determinism_from_str(value: str) -> DeterminismTier | None:
     mapping: dict[str, DeterminismTier] = {
         "tier2": DeterminismTier.CANONICAL,
         "canonical": DeterminismTier.CANONICAL,
@@ -97,7 +73,46 @@ def determinism_override() -> DeterminismTier | None:
         "fast": DeterminismTier.BEST_EFFORT,
         "best_effort": DeterminismTier.BEST_EFFORT,
     }
-    return mapping.get(tier)
+    return mapping.get(value.strip().lower())
+
+
+@tag(layer="inputs", kind="runtime")
+def runtime_profile_name(runtime_profile_name_override: str | None = None) -> str:
+    """Return the runtime profile name for execution.
+
+    Returns
+    -------
+    str
+        Runtime profile name (defaults to "default").
+    """
+    if isinstance(runtime_profile_name_override, str) and runtime_profile_name_override.strip():
+        return runtime_profile_name_override.strip()
+    return os.environ.get("CODEANATOMY_RUNTIME_PROFILE", "").strip() or "default"
+
+
+@tag(layer="inputs", kind="runtime")
+def determinism_override(
+    determinism_override_override: DeterminismTier | str | None = None,
+) -> DeterminismTier | None:
+    """Return an optional determinism tier override.
+
+    Returns
+    -------
+    DeterminismTier | None
+        Override tier when requested, otherwise ``None``.
+    """
+    override = determinism_override_override
+    if isinstance(override, DeterminismTier):
+        return override
+    if isinstance(override, str):
+        resolved = _determinism_from_str(override)
+        if resolved is not None:
+            return resolved
+    force_flag = os.environ.get("CODEANATOMY_FORCE_TIER2", "").strip().lower()
+    if force_flag in {"1", "true", "yes", "y"}:
+        return DeterminismTier.CANONICAL
+    tier = os.environ.get("CODEANATOMY_DETERMINISM_TIER", "").strip().lower()
+    return _determinism_from_str(tier)
 
 
 @tag(layer="inputs", kind="runtime")

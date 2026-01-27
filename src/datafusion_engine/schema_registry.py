@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import pyarrow as pa
 from datafusion import SessionContext, col
@@ -41,6 +41,9 @@ from datafusion_engine.schema_introspection import SchemaIntrospector, table_nam
 from datafusion_engine.sql_options import sql_options_for_profile
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 from sqlglot_tools.compat import exp
+
+if TYPE_CHECKING:
+    from datafusion_engine.schema_contracts import SchemaContract
 
 BYTE_SPAN_T = byte_span_type()
 SPAN_T = span_type()
@@ -2178,32 +2181,63 @@ CST_VIEW_NAMES: tuple[str, ...] = (
 )
 
 
-def nested_dataset_names() -> tuple[str, ...]:
-    """Return nested dataset names in sorted order.
+def extract_base_schema_names() -> tuple[str, ...]:
+    """Return extract base schema names in sorted order.
 
     Returns
     -------
     tuple[str, ...]
-        Sorted nested dataset name tuple.
+        Sorted extract base schema name tuple.
+    """
+    return tuple(sorted(_BASE_EXTRACT_SCHEMA_BY_NAME))
+
+
+def extract_base_schema_for(name: str) -> pa.Schema:
+    """Return the static extract base schema for a dataset name.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Arrow schema for the extract dataset.
+
+    Raises
+    ------
+    KeyError
+        Raised when the dataset name is not registered.
+    """
+    schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(name)
+    if schema is None:
+        msg = f"Unknown extract base schema: {name!r}."
+        raise KeyError(msg)
+    return schema
+
+
+def extract_nested_dataset_names() -> tuple[str, ...]:
+    """Return extract-derived nested dataset names in sorted order.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted extract nested dataset name tuple.
     """
     return tuple(sorted(NESTED_DATASET_INDEX))
 
 
-def nested_schema_names() -> tuple[str, ...]:
-    """Return intrinsic nested dataset names in sorted order.
+def extract_nested_schema_names() -> tuple[str, ...]:
+    """Return intrinsic extract nested dataset names in sorted order.
 
     Returns
     -------
     tuple[str, ...]
-        Sorted intrinsic nested dataset name tuple.
+        Sorted intrinsic extract nested dataset name tuple.
     """
     return tuple(
         sorted(name for name, spec in NESTED_DATASET_INDEX.items() if spec["role"] == "intrinsic")
     )
 
 
-def nested_spec_for(name: str) -> NestedDatasetSpec:
-    """Return the nested dataset spec for a name.
+def extract_nested_spec_for(name: str) -> NestedDatasetSpec:
+    """Return the extract nested dataset spec for a name.
 
     Returns
     -------
@@ -2217,18 +2251,18 @@ def nested_spec_for(name: str) -> NestedDatasetSpec:
     """
     spec = NESTED_DATASET_INDEX.get(name)
     if spec is None:
-        msg = f"Unknown nested dataset: {name!r}."
+        msg = f"Unknown extract nested dataset: {name!r}."
         raise KeyError(msg)
     return spec
 
 
-def datasets_for_path(root: str, path: str) -> tuple[str, ...]:
-    """Return dataset names registered for a root/path pair.
+def extract_datasets_for_path(root: str, path: str) -> tuple[str, ...]:
+    """Return extract nested dataset names for a root/path pair.
 
     Returns
     -------
     tuple[str, ...]
-        Sorted dataset name tuple for the path.
+        Sorted extract nested dataset name tuple for the path.
     """
     return tuple(
         sorted(
@@ -2239,42 +2273,42 @@ def datasets_for_path(root: str, path: str) -> tuple[str, ...]:
     )
 
 
-def nested_path_for(name: str) -> tuple[str, str]:
-    """Return the root schema name and path for a nested dataset.
+def extract_nested_path_for(name: str) -> tuple[str, str]:
+    """Return the root schema name and path for an extract nested dataset.
 
     Returns
     -------
     tuple[str, str]
         Root schema name and nested path.
     """
-    spec = nested_spec_for(name)
+    spec = extract_nested_spec_for(name)
     return spec["root"], spec["path"]
 
 
-def nested_context_for(name: str) -> Mapping[str, str]:
-    """Return the context fields for a nested dataset.
+def extract_nested_context_for(name: str) -> Mapping[str, str]:
+    """Return the context fields for an extract nested dataset.
 
     Returns
     -------
     Mapping[str, str]
         Mapping of output column name to nested context path.
     """
-    return nested_spec_for(name)["context"]
+    return extract_nested_spec_for(name)["context"]
 
 
-def nested_role_for(name: str) -> Literal["intrinsic", "derived"]:
-    """Return the nested dataset role for a name.
+def extract_nested_role_for(name: str) -> Literal["intrinsic", "derived"]:
+    """Return the nested role for an extract nested dataset.
 
     Returns
     -------
     Literal["intrinsic", "derived"]
         Dataset role label.
     """
-    return nested_spec_for(name)["role"]
+    return extract_nested_spec_for(name)["role"]
 
 
-def is_nested_dataset(name: str) -> bool:
-    """Return whether a name is a known nested dataset.
+def is_extract_nested_dataset(name: str) -> bool:
+    """Return whether a name is a known extract nested dataset.
 
     Returns
     -------
@@ -2284,8 +2318,8 @@ def is_nested_dataset(name: str) -> bool:
     return name in NESTED_DATASET_INDEX
 
 
-def is_intrinsic_nested_dataset(name: str) -> bool:
-    """Return whether a nested dataset is intrinsic.
+def is_extract_intrinsic_nested_dataset(name: str) -> bool:
+    """Return whether an extract nested dataset is intrinsic.
 
     Returns
     -------
@@ -2294,6 +2328,105 @@ def is_intrinsic_nested_dataset(name: str) -> bool:
     """
     spec = NESTED_DATASET_INDEX.get(name)
     return spec is not None and spec["role"] == "intrinsic"
+
+
+def nested_dataset_names() -> tuple[str, ...]:
+    """Return extract-derived nested dataset names in sorted order.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted extract nested dataset name tuple.
+    """
+    return extract_nested_dataset_names()
+
+
+def nested_schema_names() -> tuple[str, ...]:
+    """Return intrinsic extract nested dataset names in sorted order.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted intrinsic extract nested dataset name tuple.
+    """
+    return extract_nested_schema_names()
+
+
+def nested_spec_for(name: str) -> NestedDatasetSpec:
+    """Return the extract nested dataset spec for a name.
+
+    Returns
+    -------
+    NestedDatasetSpec
+        Nested dataset specification mapping.
+    """
+    return extract_nested_spec_for(name)
+
+
+def datasets_for_path(root: str, path: str) -> tuple[str, ...]:
+    """Return extract nested dataset names registered for a root/path pair.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted extract nested dataset name tuple for the path.
+    """
+    return extract_datasets_for_path(root, path)
+
+
+def nested_path_for(name: str) -> tuple[str, str]:
+    """Return the root schema name and path for an extract nested dataset.
+
+    Returns
+    -------
+    tuple[str, str]
+        Root schema name and nested path.
+    """
+    return extract_nested_path_for(name)
+
+
+def nested_context_for(name: str) -> Mapping[str, str]:
+    """Return the context fields for an extract nested dataset.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Mapping of output column name to nested context path.
+    """
+    return extract_nested_context_for(name)
+
+
+def nested_role_for(name: str) -> Literal["intrinsic", "derived"]:
+    """Return the nested role for an extract nested dataset.
+
+    Returns
+    -------
+    Literal["intrinsic", "derived"]
+        Dataset role label.
+    """
+    return extract_nested_role_for(name)
+
+
+def is_nested_dataset(name: str) -> bool:
+    """Return whether a name is a known extract nested dataset.
+
+    Returns
+    -------
+    bool
+        ``True`` when the dataset name is registered.
+    """
+    return is_extract_nested_dataset(name)
+
+
+def is_intrinsic_nested_dataset(name: str) -> bool:
+    """Return whether an extract nested dataset is intrinsic.
+
+    Returns
+    -------
+    bool
+        ``True`` when the dataset is intrinsic.
+    """
+    return is_extract_intrinsic_nested_dataset(name)
 
 
 def _is_list_type(dtype: pa.DataType) -> bool:
@@ -2340,6 +2473,98 @@ def struct_for_path(schema: pa.Schema, path: str) -> pa.StructType:
         return current
     msg = f"Nested path {path!r} did not resolve to a struct."
     raise TypeError(msg)
+
+
+def _field_for_path(schema: pa.Schema, path: str) -> pa.Field:
+    if not path:
+        msg = "Nested schema path cannot be empty."
+        raise ValueError(msg)
+    prefix, sep, field_name = path.rpartition(".")
+    if not sep:
+        return _field_from_container(schema, field_name)
+    struct_type = struct_for_path(schema, prefix)
+    return _field_from_container(struct_type, field_name)
+
+
+def _clone_field(field: pa.Field, *, name: str | None = None) -> pa.Field:
+    resolved_name = field.name if name is None else name
+    return pa.field(
+        resolved_name,
+        field.type,
+        nullable=field.nullable,
+        metadata=field.metadata,
+    )
+
+
+def _append_schema_field(
+    selections: list[pa.Field],
+    selected_names: set[str],
+    *,
+    field: pa.Field,
+) -> None:
+    if field.name in selected_names:
+        return
+    selections.append(field)
+    selected_names.add(field.name)
+
+
+def extract_nested_schema_for(name: str) -> pa.Schema:
+    """Return the static schema for an extract nested dataset.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Arrow schema derived from the extract base schema.
+    """
+    root, path = extract_nested_path_for(name)
+    root_schema = extract_base_schema_for(root)
+    row_struct = struct_for_path(root_schema, path)
+    selections: list[pa.Field] = []
+    selected_names: set[str] = set()
+    for field_name in identity_fields_for(name, root_schema, row_struct):
+        field = _field_from_container(root_schema, field_name)
+        _append_schema_field(selections, selected_names, field=field)
+    for alias, ctx_path in extract_nested_context_for(name).items():
+        field = _field_for_path(root_schema, ctx_path)
+        _append_schema_field(selections, selected_names, field=_clone_field(field, name=alias))
+    for field in row_struct:
+        _append_schema_field(selections, selected_names, field=field)
+    return pa.schema(selections)
+
+
+def extract_schema_for(name: str) -> pa.Schema:
+    """Return the static schema for an extract base or nested dataset.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Arrow schema for the extract dataset.
+
+    Raises
+    ------
+    KeyError
+        Raised when the dataset name is not registered.
+    """
+    if name in _BASE_EXTRACT_SCHEMA_BY_NAME:
+        return extract_base_schema_for(name)
+    if name in NESTED_DATASET_INDEX:
+        return extract_nested_schema_for(name)
+    msg = f"Unknown extract schema name: {name!r}."
+    raise KeyError(msg)
+
+
+def extract_schema_contract_for(name: str) -> SchemaContract:
+    """Return the SchemaContract for an extract base or nested dataset.
+
+    Returns
+    -------
+    SchemaContract
+        Schema contract derived from the static extract schema.
+    """
+    from datafusion_engine.schema_contracts import SchemaContract
+
+    schema = extract_schema_for(name)
+    return SchemaContract.from_arrow_schema(name, schema)
 
 
 def _context_fields_for(name: str, root_schema: pa.Schema) -> tuple[pa.Field, ...]:
@@ -3586,7 +3811,21 @@ __all__ = [
     "TREE_SITTER_VIEW_NAMES",
     "datasets_for_path",
     "default_attrs_value",
+    "extract_base_schema_for",
+    "extract_base_schema_names",
+    "extract_datasets_for_path",
+    "extract_nested_context_for",
+    "extract_nested_dataset_names",
+    "extract_nested_path_for",
+    "extract_nested_role_for",
+    "extract_nested_schema_for",
+    "extract_nested_schema_names",
+    "extract_nested_spec_for",
+    "extract_schema_contract_for",
+    "extract_schema_for",
     "identity_fields_for",
+    "is_extract_intrinsic_nested_dataset",
+    "is_extract_nested_dataset",
     "is_intrinsic_nested_dataset",
     "is_nested_dataset",
     "missing_schema_names",

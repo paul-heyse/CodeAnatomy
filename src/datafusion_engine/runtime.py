@@ -67,8 +67,8 @@ from datafusion_engine.schema_registry import (
     CST_VIEW_NAMES,
     TREE_SITTER_CHECK_VIEWS,
     TREE_SITTER_VIEW_NAMES,
+    extract_nested_dataset_names,
     missing_schema_names,
-    nested_dataset_names,
     nested_view_specs,
     validate_nested_types,
     validate_required_engine_functions,
@@ -4369,7 +4369,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 validator(ctx)
             except (RuntimeError, TypeError, ValueError) as exc:
                 view_errors[label] = str(exc)
-        for name in nested_dataset_names():
+        for name in extract_nested_dataset_names():
             if not ctx.table_exist(name):
                 continue
             try:

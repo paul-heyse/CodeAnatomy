@@ -37,7 +37,7 @@ from arrowdsl.schema.schema import (
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from datafusion_engine.finalize import Contract, FinalizeContext
 from datafusion_engine.schema_introspection import SchemaIntrospector
-from datafusion_engine.schema_registry import nested_dataset_names
+from datafusion_engine.schema_registry import extract_nested_dataset_names
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from schema_spec.dataset_handle import DatasetHandle
@@ -1311,7 +1311,7 @@ SCHEMA_EVOLUTION_PRESETS: Mapping[str, SchemaEvolutionSpec] = {
         allow_extra=True,
         allow_casts=True,
     )
-    for name in (*nested_dataset_names(), "symtable_files_v1")
+    for name in (*extract_nested_dataset_names(), "symtable_files_v1")
 }
 
 

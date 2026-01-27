@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, TypedDict, cast
 
 import pyarrow as pa
 from hamilton import driver
-from hamilton.execution import executors, grouping
+from hamilton.execution import executors
 from hamilton.lifecycle import FunctionInputOutputTypeChecker
 from hamilton.lifecycle import base as lifecycle_base
 
@@ -20,33 +20,28 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from core_types import JsonValue
-from cpg.kind_catalog import validate_edge_kind_requirements
-from datafusion_engine.view_registry import ensure_view_graph
-from datafusion_engine.view_registry_specs import view_graph_nodes
 from engine.runtime_profile import resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
 from hamilton_pipeline.lifecycle import (
     DiagnosticsNodeHook,
+    PlanDiagnosticsHook,
     set_hamilton_diagnostics_collector,
 )
+from hamilton_pipeline.modules.execution_plan import build_execution_plan_module
 from hamilton_pipeline.task_module_builder import (
     TaskExecutionModuleOptions,
     build_task_execution_module,
 )
 from obs.diagnostics import DiagnosticsCollector
-from relspec.evidence import initial_evidence_from_views, known_dataset_specs
-from relspec.graph_inference import build_task_graph_from_views
-from relspec.inferred_deps import infer_deps_from_view_nodes
-from relspec.rustworkx_graph import task_graph_signature, task_graph_snapshot
-from relspec.rustworkx_schedule import schedule_tasks, task_schedule_metadata
 from relspec.view_defs import RELATION_OUTPUT_NAME
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
     from hamilton.io.materialization import MaterializerFactory
 
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.view_graph_registry import ViewNode
-    from relspec.schedule_events import TaskScheduleMetadata
+    from relspec.execution_plan import ExecutionPlan
 from storage.ipc import ipc_hash
 
 try:
@@ -64,6 +59,25 @@ def default_modules() -> list[ModuleType]:
         Default module list for the pipeline.
     """
     return hamilton_modules.load_all_modules()
+
+
+_LEGACY_MODULE_NAMES: frozenset[str] = frozenset(
+    {
+        "hamilton_pipeline.modules.incremental_plan",
+        "hamilton_pipeline.modules.task_graph",
+    }
+)
+
+
+def _filter_legacy_modules(modules: Sequence[ModuleType]) -> list[ModuleType]:
+    """Drop legacy schedule modules superseded by plan injection.
+
+    Returns
+    -------
+    list[ModuleType]
+        Filtered modules without legacy scheduling layers.
+    """
+    return [module for module in modules if module.__name__ not in _LEGACY_MODULE_NAMES]
 
 
 def config_fingerprint(config: Mapping[str, JsonValue]) -> str:
@@ -122,24 +136,18 @@ def _determinism_override(config: Mapping[str, JsonValue]) -> DeterminismTier | 
     return mapping.get(tier)
 
 
-def _build_dependency_map(
-    config: Mapping[str, JsonValue],
-) -> tuple[
-    Mapping[str, tuple[str, ...]],
-    tuple[ViewNode, ...],
-    Mapping[str, str],
-    str,
-    Mapping[str, TaskScheduleMetadata],
-]:
-    ctx, nodes_with_ast = _view_graph_context(config)
-    dependency_map, plan_fingerprints = _dependency_payloads(nodes_with_ast)
-    signature, schedule_metadata = _task_graph_metadata(nodes_with_ast, ctx=ctx)
-    return dependency_map, nodes_with_ast, plan_fingerprints, signature, schedule_metadata
+@dataclass(frozen=True)
+class ViewGraphContext:
+    """Runtime context needed to compile the execution plan."""
+
+    ctx: ExecutionContext
+    profile: DataFusionRuntimeProfile
+    session: SessionContext
+    snapshot: Mapping[str, object]
+    view_nodes: tuple[ViewNode, ...]
 
 
-def _view_graph_context(
-    config: Mapping[str, JsonValue],
-) -> tuple[ExecutionContext, tuple[ViewNode, ...]]:
+def _view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContext:
     runtime_profile_spec = resolve_runtime_profile(
         _runtime_profile_name(config),
         determinism=_determinism_override(config),
@@ -150,6 +158,10 @@ def _view_graph_context(
     if profile is None:
         msg = "DataFusion runtime profile is required for view graph scheduling."
         raise ValueError(msg)
+    from cpg.kind_catalog import validate_edge_kind_requirements
+    from datafusion_engine.view_registry import ensure_view_graph
+    from datafusion_engine.view_registry_specs import view_graph_nodes
+
     session = profile.session_context()
     snapshot = ensure_view_graph(
         session,
@@ -158,46 +170,43 @@ def _view_graph_context(
     )
     validate_edge_kind_requirements(_relation_output_schema(session))
     nodes = view_graph_nodes(session, snapshot=snapshot)
-    nodes_with_ast = tuple(node for node in nodes if node.sqlglot_ast is not None)
-    return ctx, nodes_with_ast
-
-
-def _dependency_payloads(
-    nodes: Sequence[ViewNode],
-) -> tuple[dict[str, tuple[str, ...]], dict[str, str]]:
-    outputs = {node.name for node in nodes}
-    dependency_map: dict[str, tuple[str, ...]] = {}
-    plan_fingerprints: dict[str, str] = {}
-    inferred = infer_deps_from_view_nodes(nodes)
-    for dep in inferred:
-        inputs = tuple(sorted(name for name in dep.inputs if name in outputs))
-        dependency_map[dep.output] = inputs
-        plan_fingerprints[dep.task_name] = dep.plan_fingerprint
-    return dependency_map, plan_fingerprints
-
-
-def _task_graph_metadata(
-    nodes: Sequence[ViewNode],
-    *,
-    ctx: ExecutionContext | None = None,
-) -> tuple[str, Mapping[str, TaskScheduleMetadata]]:
-    inferred = infer_deps_from_view_nodes(nodes)
-    task_signatures = {dep.task_name: dep.plan_fingerprint for dep in inferred}
-    session = None
-    if ctx is not None and ctx.runtime.datafusion is not None:
-        session = ctx.runtime.datafusion.session_context()
-    dataset_specs = known_dataset_specs(ctx=session)
-    graph = build_task_graph_from_views(nodes, datasets=dataset_specs)
-    snapshot = task_graph_snapshot(
-        graph,
-        label="hamilton_pipeline",
-        task_signatures=task_signatures,
+    return ViewGraphContext(
+        ctx=ctx,
+        profile=profile,
+        session=session,
+        snapshot=snapshot,
+        view_nodes=tuple(nodes),
     )
-    signature = task_graph_signature(snapshot)
-    evidence = initial_evidence_from_views(nodes, ctx=session, dataset_specs=dataset_specs)
-    schedule = schedule_tasks(graph, evidence=evidence, allow_partial=True)
-    schedule_metadata = task_schedule_metadata(schedule)
-    return signature, schedule_metadata
+
+
+def _task_name_list_from_config(
+    config: Mapping[str, JsonValue],
+    *,
+    key: str,
+) -> tuple[str, ...] | None:
+    value = config.get(key)
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return None
+    names = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    if not names:
+        return None
+    return tuple(sorted(set(names)))
+
+
+def _compile_plan(view_ctx: ViewGraphContext, config: Mapping[str, JsonValue]) -> ExecutionPlan:
+    from relspec.execution_plan import ExecutionPlanRequest, compile_execution_plan
+
+    requested = _task_name_list_from_config(config, key="plan_requested_tasks")
+    impacted = _task_name_list_from_config(config, key="plan_impacted_tasks")
+    allow_partial = bool(config.get("plan_allow_partial", False))
+    request = ExecutionPlanRequest(
+        view_nodes=view_ctx.view_nodes,
+        snapshot=view_ctx.snapshot,
+        requested_task_names=requested,
+        impacted_task_names=impacted,
+        allow_partial=allow_partial,
+    )
+    return compile_execution_plan(session=view_ctx.session, request=request)
 
 
 def _maybe_build_tracker_adapter(
@@ -288,6 +297,7 @@ def _apply_dynamic_execution(
     builder: driver.Builder,
     *,
     config: Mapping[str, JsonValue],
+    plan: ExecutionPlan,
 ) -> driver.Builder:
     if not bool(config.get("enable_dynamic_execution", False)):
         return builder
@@ -295,11 +305,13 @@ def _apply_dynamic_execution(
     max_tasks = 4
     if isinstance(max_tasks_value, int) and not isinstance(max_tasks_value, bool):
         max_tasks = max_tasks_value
+    from hamilton_pipeline.scheduling_hooks import plan_grouping_strategy
+
     return (
         builder.enable_dynamic_execution(allow_experimental_mode=True)
         .with_local_executor(executors.SynchronousLocalTaskExecutor())
         .with_remote_executor(executors.MultiProcessingExecutor(max_tasks=max_tasks))
-        .with_grouping_strategy(grouping.GroupNodesByLevel())
+        .with_grouping_strategy(plan_grouping_strategy(plan))
     )
 
 
@@ -376,14 +388,32 @@ def _apply_cache(
     cache_path = config.get("cache_path")
     if not isinstance(cache_path, str) or not cache_path:
         return builder
+    from hamilton.caching.stores.file import FileResultStore
+    from hamilton.caching.stores.sqlite import SQLiteMetadataStore
+
+    base_path = Path(cache_path).expanduser()
+    base_path.mkdir(parents=True, exist_ok=True)
+    metadata_store = SQLiteMetadataStore(path=str(base_path / "meta.sqlite"))
+    results_path = base_path / "results"
+    results_path.mkdir(parents=True, exist_ok=True)
+    result_store = FileResultStore(path=str(results_path))
     cache_opt_in = bool(config.get("cache_opt_in", True))
     if cache_opt_in:
         # cache only nodes annotated for caching
         return builder.with_cache(
-            path=str(cache_path), default_behavior="disable", log_to_file=True
+            path=str(base_path),
+            metadata_store=metadata_store,
+            result_store=result_store,
+            default_behavior="disable",
+            log_to_file=True,
         )
     # cache everything (aggressive)
-    return builder.with_cache(path=str(cache_path), log_to_file=True)
+    return builder.with_cache(
+        path=str(base_path),
+        metadata_store=metadata_store,
+        result_store=result_store,
+        log_to_file=True,
+    )
 
 
 def _apply_adapters(
@@ -391,6 +421,8 @@ def _apply_adapters(
     *,
     config: Mapping[str, JsonValue],
     diagnostics: DiagnosticsCollector,
+    plan: ExecutionPlan,
+    profile: DataFusionRuntimeProfile,
 ) -> driver.Builder:
     tracker = _maybe_build_tracker_adapter(config)
     if tracker is not None:
@@ -399,6 +431,8 @@ def _apply_adapters(
         builder = builder.with_adapters(FunctionInputOutputTypeChecker())
     if bool(config.get("enable_hamilton_node_diagnostics", True)):
         builder = builder.with_adapters(DiagnosticsNodeHook(diagnostics))
+    if bool(config.get("enable_plan_diagnostics", True)):
+        builder = builder.with_adapters(PlanDiagnosticsHook(plan=plan, profile=profile))
     return builder
 
 
@@ -421,36 +455,37 @@ def build_driver(
         Built Hamilton driver instance.
     """
     modules = list(modules) if modules is not None else default_modules()
-    (
-        dependency_map,
-        view_nodes,
-        plan_fingerprints,
-        graph_signature,
-        schedule_metadata,
-    ) = _build_dependency_map(config)
-    enable_dynamic_execution = bool(config.get("enable_dynamic_execution", False))
-    modules.append(
-        build_task_execution_module(
-            dependency_map=dependency_map,
-            view_nodes=view_nodes,
-            options=TaskExecutionModuleOptions(
-                plan_fingerprints=plan_fingerprints,
-                schedule_metadata=schedule_metadata,
-                use_generation_gate=enable_dynamic_execution,
-            ),
-        )
-    )
+    modules = _filter_legacy_modules(modules)
+    view_ctx = _view_graph_context(config)
+    plan = _compile_plan(view_ctx, config)
+    modules.append(build_execution_plan_module(plan))
+    modules.append(build_task_execution_module(plan=plan, options=TaskExecutionModuleOptions()))
 
-    config_payload = _with_graph_tags(config, graph_signature=graph_signature)
+    config_payload = _with_graph_tags(config, graph_signature=plan.plan_signature)
+    config_payload.setdefault("runtime_profile_name_override", _runtime_profile_name(config))
+    determinism_override = _determinism_override(config)
+    if determinism_override is not None:
+        config_payload.setdefault("determinism_override_override", determinism_override.value)
 
     diagnostics = DiagnosticsCollector()
     set_hamilton_diagnostics_collector(diagnostics)
 
-    builder = driver.Builder().with_modules(*modules).with_config(config_payload)
-    builder = _apply_dynamic_execution(builder, config=config_payload)
+    builder = (
+        driver.Builder()
+        .allow_module_overrides()
+        .with_modules(*modules)
+        .with_config(config_payload)
+    )
+    builder = _apply_dynamic_execution(builder, config=config_payload, plan=plan)
     builder = _apply_cache(builder, config=config_payload)
     builder = _apply_materializers(builder, config=config_payload)
-    builder = _apply_adapters(builder, config=config_payload, diagnostics=diagnostics)
+    builder = _apply_adapters(
+        builder,
+        config=config_payload,
+        diagnostics=diagnostics,
+        plan=plan,
+        profile=view_ctx.profile,
+    )
     return builder.build()
 
 

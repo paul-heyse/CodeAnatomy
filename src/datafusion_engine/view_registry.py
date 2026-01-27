@@ -12,7 +12,11 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from datafusion_engine.schema_registry import nested_base_df, nested_dataset_names
+from datafusion_engine.schema_registry import (
+    SCIP_VIEW_NAMES,
+    extract_nested_dataset_names,
+    nested_base_df,
+)
 from datafusion_engine.view_graph_registry import ViewNode
 from datafusion_ext import (
     arrow_metadata,
@@ -2309,7 +2313,7 @@ VIEW_BASE_TABLE: Final[dict[str, str]] = {
     "ts_stats": "tree_sitter_files_v1",
 }
 
-NESTED_VIEW_NAMES: Final[frozenset[str]] = frozenset(nested_dataset_names())
+NESTED_VIEW_NAMES: Final[frozenset[str]] = frozenset(extract_nested_dataset_names())
 
 ATTRS_VIEW_BASE: Final[dict[str, str]] = {
     "ast_call_attrs": "ast_calls",
@@ -2699,7 +2703,7 @@ def _view_df(ctx: SessionContext, name: str) -> DataFrame:
     if builder is not None:
         return builder(ctx)
     base_df = _base_df(ctx, name)
-    if name in NESTED_VIEW_NAMES:
+    if name in NESTED_VIEW_NAMES and name not in SCIP_VIEW_NAMES:
         return base_df
     exprs = VIEW_SELECT_EXPRS.get(name, ())
     if _should_skip_exprs(exprs):

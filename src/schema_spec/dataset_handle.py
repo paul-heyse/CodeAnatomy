@@ -10,7 +10,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from arrowdsl.core.interop import SchemaLike
-from datafusion_engine.schema_registry import is_nested_dataset
+from datafusion_engine.schema_registry import is_extract_nested_dataset
 from schema_spec.specs import ExternalTableConfigOverrides
 
 if TYPE_CHECKING:
@@ -98,7 +98,7 @@ class DatasetHandle:
                 f"name {name!r} implies v{name_version} but spec has v{spec_version}."
             )
             raise ValueError(msg)
-        if is_nested_dataset(name):
+        if is_extract_nested_dataset(name):
             return
         if spec_version is None and name_version is None:
             msg = (
@@ -237,11 +237,11 @@ class DatasetHandle:
         views = self.spec.resolved_view_specs()
         if not views:
             from datafusion_engine.schema_registry import (
-                is_nested_dataset,
+                is_extract_nested_dataset,
                 nested_view_spec,
             )
 
-            if is_nested_dataset(self.spec.name):
+            if is_extract_nested_dataset(self.spec.name):
                 views = (nested_view_spec(ctx, self.spec.name),)
         for view in views:
             view.register(ctx, validate=validate)

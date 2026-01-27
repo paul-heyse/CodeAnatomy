@@ -736,7 +736,7 @@ def _scip_index_row(
             has_index_symbols=has_index_symbols,
         )
     )
-    signature_occurrences = []
+    signature_occurrences: list[Row] = []
     if options.include_signature_occurrences:
         signature_occurrences = list(
             _iter_scip_signature_occurrences(

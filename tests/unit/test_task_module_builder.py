@@ -33,6 +33,8 @@ class ViewNode:
 
 
 if not TYPE_CHECKING:
+    from relspec.schedule_events import TaskScheduleMetadata
+
     RegistryViewNode = ViewNode
 
 
@@ -41,10 +43,23 @@ def _install_introspection_stub() -> None:
         return
     stub = ModuleType("datafusion_engine.introspection")
 
-    class _IntrospectionCache:
-        snapshot: object | None = None
+    class _Snapshot:
+        routines: object | None = None
+        settings: object | None = None
+        tables: object | None = None
+        providers: object | None = None
+        constraints: object | None = None
+        parameters: object | None = None
 
-    def introspection_cache_for_ctx(_ctx: object) -> _IntrospectionCache:
+    class _IntrospectionCache:
+        snapshot: _Snapshot = _Snapshot()
+
+    def introspection_cache_for_ctx(
+        _ctx: object,
+        *,
+        sql_options: object | None = None,
+    ) -> _IntrospectionCache:
+        _ = sql_options
         return _IntrospectionCache()
 
     def invalidate_introspection_cache(_ctx: object | None = None) -> None:

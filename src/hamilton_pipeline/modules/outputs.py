@@ -1,12 +1,10 @@
 """Hamilton output nodes for inference-driven pipeline."""
 
-from __future__ import annotations
-
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import pyarrow as pa
 from hamilton.function_modifiers import (
@@ -65,6 +63,16 @@ class SemanticTagSpec:
 
 
 F = TypeVar("F", bound=Callable[..., object])
+
+
+
+
+if TYPE_CHECKING:
+    from core_types import JsonValue
+
+    type DataSaverDict = dict[str, JsonValue]
+else:
+    DataSaverDict = dict
 
 
 def _semantic_tag(*, artifact: str, spec: SemanticTagSpec) -> Callable[[F], F]:
@@ -250,7 +258,7 @@ def cpg_props(cpg_props_final: TableLike) -> TableLike:
 def write_cpg_nodes_delta(
     cpg_nodes: TableLike,
     output_config: OutputConfig,
-) -> JsonDict:
+) -> DataSaverDict:
     """Return stub metadata for CPG nodes output.
 
     Returns
@@ -270,7 +278,7 @@ def write_cpg_nodes_delta(
 def write_cpg_edges_delta(
     cpg_edges: TableLike,
     output_config: OutputConfig,
-) -> JsonDict:
+) -> DataSaverDict:
     """Return stub metadata for CPG edges output.
 
     Returns
@@ -290,7 +298,7 @@ def write_cpg_edges_delta(
 def write_cpg_props_delta(
     cpg_props: TableLike,
     output_config: OutputConfig,
-) -> JsonDict:
+) -> DataSaverDict:
     """Return stub metadata for CPG properties output.
 
     Returns
@@ -310,7 +318,7 @@ def write_cpg_props_delta(
 def write_cpg_nodes_quality_delta(
     cpg_nodes: TableLike,
     output_config: OutputConfig,
-) -> JsonDict:
+) -> DataSaverDict:
     """Return stub metadata for CPG node quality output.
 
     Returns
@@ -330,7 +338,7 @@ def write_cpg_nodes_quality_delta(
 def write_cpg_props_quality_delta(
     cpg_props: TableLike,
     output_config: OutputConfig,
-) -> JsonDict:
+) -> DataSaverDict:
     """Return stub metadata for CPG prop quality output.
 
     Returns
@@ -350,7 +358,7 @@ def write_cpg_props_quality_delta(
 def write_cpg_props_json_delta(
     cpg_props: TableLike,
     output_config: OutputConfig,
-) -> JsonDict:
+) -> DataSaverDict:
     """Return stub metadata for CPG props JSON output.
 
     Returns
@@ -367,7 +375,7 @@ def write_cpg_props_json_delta(
 
 @datasaver()
 @tag(layer="outputs", artifact="write_normalize_outputs_delta", kind="delta")
-def write_normalize_outputs_delta(output_config: OutputConfig) -> JsonDict:
+def write_normalize_outputs_delta(output_config: OutputConfig) -> DataSaverDict:
     """Return stub metadata for normalize outputs.
 
     Returns
@@ -393,7 +401,7 @@ def write_normalize_outputs_delta(output_config: OutputConfig) -> JsonDict:
 
 @datasaver()
 @tag(layer="outputs", artifact="write_extract_error_artifacts_delta", kind="delta")
-def write_extract_error_artifacts_delta(output_config: OutputConfig) -> JsonDict:
+def write_extract_error_artifacts_delta(output_config: OutputConfig) -> DataSaverDict:
     """Return stub metadata for extract error artifacts.
 
     Returns
@@ -419,7 +427,7 @@ def write_extract_error_artifacts_delta(output_config: OutputConfig) -> JsonDict
 
 @datasaver()
 @tag(layer="outputs", artifact="write_run_manifest_delta", kind="delta")
-def write_run_manifest_delta(output_config: OutputConfig) -> JsonDict:
+def write_run_manifest_delta(output_config: OutputConfig) -> DataSaverDict:
     """Return stub metadata for run manifest.
 
     Returns
@@ -443,7 +451,7 @@ def write_run_manifest_delta(output_config: OutputConfig) -> JsonDict:
 
 @datasaver()
 @tag(layer="outputs", artifact="write_run_bundle_dir", kind="bundle")
-def write_run_bundle_dir(output_config: OutputConfig) -> JsonDict:
+def write_run_bundle_dir(output_config: OutputConfig) -> DataSaverDict:
     """Return stub metadata for run bundle directory.
 
     Returns

@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from schema_spec.system import DatasetSpec
 
 
@@ -119,9 +120,18 @@ def _bundle_deps_and_udfs(
     snapshot: Mapping[str, object],
     *,
     label: str,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> tuple[DataFusionPlanBundle, tuple[str, ...], tuple[str, ...]]:
     df = builder(ctx)
-    bundle = build_plan_bundle(ctx, df, compute_execution_plan=False)
+    session_runtime = (
+        runtime_profile.session_runtime() if runtime_profile is not None else None
+    )
+    bundle = build_plan_bundle(
+        ctx,
+        df,
+        compute_execution_plan=False,
+        session_runtime=session_runtime,
+    )
     try:
         lineage = extract_lineage(
             bundle.optimized_logical_plan,
@@ -164,6 +174,7 @@ def view_graph_nodes(
     ctx: SessionContext,
     *,
     snapshot: Mapping[str, object],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
     stage: Literal["all", "pre_cpg", "cpg"] = "all",
 ) -> tuple[ViewNode, ...]:
     """Return view graph nodes for normalize + relspec + CPG outputs.
@@ -184,12 +195,43 @@ def view_graph_nodes(
     validate_rust_udf_snapshot(snapshot)
     nodes: list[ViewNode] = []
     if stage in {"all", "pre_cpg"}:
-        nodes.extend(_normalize_view_nodes(ctx, snapshot=snapshot))
-        nodes.extend(_relspec_view_nodes(ctx, snapshot=snapshot))
-        nodes.extend(_symtable_view_nodes(ctx, snapshot=snapshot))
+        nodes.extend(
+            _normalize_view_nodes(
+                ctx,
+                snapshot=snapshot,
+                runtime_profile=runtime_profile,
+            )
+        )
+        nodes.extend(
+            _relspec_view_nodes(
+                ctx,
+                snapshot=snapshot,
+                runtime_profile=runtime_profile,
+            )
+        )
+        nodes.extend(
+            _symtable_view_nodes(
+                ctx,
+                snapshot=snapshot,
+                runtime_profile=runtime_profile,
+            )
+        )
     if stage in {"all", "cpg"}:
-        nodes.extend(_cpg_view_nodes(ctx, snapshot=snapshot))
-    nodes.extend(_alias_nodes(nodes, ctx=ctx, snapshot=snapshot))
+        nodes.extend(
+            _cpg_view_nodes(
+                ctx,
+                snapshot=snapshot,
+                runtime_profile=runtime_profile,
+            )
+        )
+    nodes.extend(
+        _alias_nodes(
+            nodes,
+            ctx=ctx,
+            snapshot=snapshot,
+            runtime_profile=runtime_profile,
+        )
+    )
     return tuple(nodes)
 
 
@@ -197,6 +239,7 @@ def _normalize_view_nodes(
     ctx: SessionContext,
     *,
     snapshot: Mapping[str, object],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> list[ViewNode]:
     from normalize.dataset_rows import DATASET_ROWS
     from normalize.dataset_specs import dataset_contract_schema, dataset_spec
@@ -213,7 +256,13 @@ def _normalize_view_nodes(
         dataset = dataset_spec(row.name)
         metadata = _metadata_from_dataset_spec(dataset)
         expected_schema = _arrow_schema_from_contract(dataset_contract_schema(row.name))
-        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=row.name)
+        bundle, deps, required = _bundle_deps_and_udfs(
+            ctx,
+            builder,
+            snapshot,
+            label=row.name,
+            runtime_profile=runtime_profile,
+        )
         metadata = _metadata_with_required_udfs(metadata, required)
         nodes.append(
             ViewNode(
@@ -237,6 +286,7 @@ def _relspec_view_nodes(
     ctx: SessionContext,
     *,
     snapshot: Mapping[str, object],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> list[ViewNode]:
     from relspec.contracts import (
         rel_callsite_qname_metadata_spec,
@@ -320,7 +370,13 @@ def _relspec_view_nodes(
 
     nodes: list[ViewNode] = []
     for name, builder, metadata in view_specs:
-        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=name)
+        bundle, deps, required = _bundle_deps_and_udfs(
+            ctx,
+            builder,
+            snapshot,
+            label=name,
+            runtime_profile=runtime_profile,
+        )
         metadata_with_udfs = _metadata_with_required_udfs(metadata, required)
         nodes.append(
             ViewNode(
@@ -339,6 +395,7 @@ def _symtable_view_nodes(
     ctx: SessionContext,
     *,
     snapshot: Mapping[str, object],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> list[ViewNode]:
     from datafusion_engine.symtable_views import (
         symtable_binding_resolutions_df,
@@ -360,7 +417,13 @@ def _symtable_view_nodes(
 
     nodes: list[ViewNode] = []
     for name, builder in view_specs:
-        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=name)
+        bundle, deps, required = _bundle_deps_and_udfs(
+            ctx,
+            builder,
+            snapshot,
+            label=name,
+            runtime_profile=runtime_profile,
+        )
         metadata = _metadata_with_required_udfs(None, required)
         nodes.append(
             ViewNode(
@@ -379,6 +442,7 @@ def _cpg_view_nodes(
     ctx: SessionContext,
     *,
     snapshot: Mapping[str, object],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> list[ViewNode]:
     from cpg.view_builders_df import build_cpg_edges_df, build_cpg_nodes_df, build_cpg_props_df
 
@@ -394,7 +458,13 @@ def _cpg_view_nodes(
 
     nodes: list[ViewNode] = []
     for name, builder in view_specs:
-        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=name)
+        bundle, deps, required = _bundle_deps_and_udfs(
+            ctx,
+            builder,
+            snapshot,
+            label=name,
+            runtime_profile=runtime_profile,
+        )
         metadata = _metadata_with_required_udfs(None, required)
         schema = _arrow_schema_from_df(bundle.df)
         nodes.append(
@@ -420,6 +490,7 @@ def _alias_nodes(
     *,
     ctx: SessionContext,
     snapshot: Mapping[str, object],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> list[ViewNode]:
     registered = {node.name for node in nodes}
     alias_nodes: list[ViewNode] = []
@@ -428,7 +499,13 @@ def _alias_nodes(
         if alias == name or alias in registered:
             continue
         builder = _alias_builder(source=name)
-        bundle, deps, required = _bundle_deps_and_udfs(ctx, builder, snapshot, label=alias)
+        bundle, deps, required = _bundle_deps_and_udfs(
+            ctx,
+            builder,
+            snapshot,
+            label=alias,
+            runtime_profile=runtime_profile,
+        )
         alias_nodes.append(
             ViewNode(
                 name=alias,

@@ -9,13 +9,14 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import rustworkx as rx
 
+from datafusion_engine.planning_pipeline import plan_with_delta_pins
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import (
     EvidenceCatalog,
     initial_evidence_from_views,
     known_dataset_specs,
 )
-from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
+from relspec.inferred_deps import InferredDeps
 from relspec.rustworkx_graph import (
     GraphDiagnostics,
     TaskDependencyReduction,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.lineage_datafusion import LineageReport
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.schema_contracts import SchemaContract
@@ -101,9 +103,14 @@ class ExecutionPlan:
     dependency_map: Mapping[str, tuple[str, ...]]
     dataset_specs: Mapping[str, DatasetSpec]
     active_tasks: frozenset[str]
+    runtime_profile: DataFusionRuntimeProfile | None = None
     scan_units: tuple[ScanUnit, ...] = ()
     scan_unit_delta_pins: Mapping[str, int] = field(default_factory=dict)
     scan_keys_by_task: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    scan_task_units_by_name: Mapping[str, ScanUnit] = field(default_factory=dict)
+    scan_task_name_by_key: Mapping[str, str] = field(default_factory=dict)
+    scan_task_names_by_task: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    lineage_by_view: Mapping[str, LineageReport] = field(default_factory=dict)
     requested_task_names: tuple[str, ...] = ()
     impacted_task_names: tuple[str, ...] = ()
     allow_partial: bool = False
@@ -134,8 +141,13 @@ class _PlanBuildContext:
     output_contracts: Mapping[str, OutputContract]
     evidence: EvidenceCatalog
     dataset_spec_map: Mapping[str, DatasetSpec]
+    runtime_profile: DataFusionRuntimeProfile | None
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_task_units_by_name: Mapping[str, ScanUnit]
+    scan_task_name_by_key: Mapping[str, str]
+    scan_task_names_by_task: Mapping[str, tuple[str, ...]]
+    lineage_by_view: Mapping[str, LineageReport]
     requested_task_names: tuple[str, ...]
     impacted_task_names: tuple[str, ...]
     allow_partial: bool
@@ -148,6 +160,10 @@ class _PruneInputs:
     inferred: Sequence[InferredDeps]
     scan_units: Sequence[ScanUnit]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_task_units_by_name: Mapping[str, ScanUnit]
+    scan_task_name_by_key: Mapping[str, str]
+    scan_task_names_by_task: Mapping[str, tuple[str, ...]]
+    lineage_by_view: Mapping[str, LineageReport]
 
 
 @dataclass(frozen=True)
@@ -160,6 +176,10 @@ class _PrunedPlanBundle:
     inferred: tuple[InferredDeps, ...]
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_task_units_by_name: Mapping[str, ScanUnit]
+    scan_task_name_by_key: Mapping[str, str]
+    scan_task_names_by_task: Mapping[str, tuple[str, ...]]
+    lineage_by_view: Mapping[str, LineageReport]
 
 
 @dataclass(frozen=True)
@@ -182,6 +202,10 @@ class _PrunedPlanComponents:
     dependency_map: Mapping[str, tuple[str, ...]]
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_task_units_by_name: Mapping[str, ScanUnit]
+    scan_task_name_by_key: Mapping[str, str]
+    scan_task_names_by_task: Mapping[str, tuple[str, ...]]
+    lineage_by_view: Mapping[str, LineageReport]
     requested_task_names: tuple[str, ...]
     impacted_task_names: tuple[str, ...]
     incremental_diff: IncrementalDiff | None
@@ -195,6 +219,8 @@ def priority_for_task(task_name: str) -> int:
     int
         Priority value used by the scheduler.
     """
+    if task_name.startswith("scan_unit_"):
+        return 10
     if task_name in _RELSPEC_OUTPUTS:
         return DEFAULT_REL_TASK_PRIORITY
     if task_name.startswith("cpg_"):
@@ -276,6 +302,7 @@ def compile_execution_plan(
     dependency_map = dependency_map_from_inferred(
         context.inferred,
         active_tasks=context.active_tasks,
+        scan_task_names_by_task=context.scan_task_names_by_task,
     )
     scan_delta_pins = _scan_unit_delta_pins(context.scan_units)
     return ExecutionPlan(
@@ -302,9 +329,14 @@ def compile_execution_plan(
         dependency_map=dependency_map,
         dataset_specs=context.dataset_spec_map,
         active_tasks=frozenset(context.active_tasks),
+        runtime_profile=context.runtime_profile,
         scan_units=context.scan_units,
         scan_unit_delta_pins=scan_delta_pins,
         scan_keys_by_task=context.scan_keys_by_task,
+        scan_task_units_by_name=context.scan_task_units_by_name,
+        scan_task_name_by_key=context.scan_task_name_by_key,
+        scan_task_names_by_task=context.scan_task_names_by_task,
+        lineage_by_view=context.lineage_by_view,
         requested_task_names=context.requested_task_names,
         impacted_task_names=context.impacted_task_names,
         allow_partial=context.allow_partial,
@@ -353,6 +385,26 @@ def _pruned_plan_bundle(
         scan_keys_by_task=inputs.scan_keys_by_task,
         active_tasks=active_tasks,
     )
+    pruned_scan_task_units = {
+        name: unit
+        for name, unit in inputs.scan_task_units_by_name.items()
+        if name in active_tasks
+    }
+    pruned_scan_task_name_by_key = {
+        key: name
+        for key, name in inputs.scan_task_name_by_key.items()
+        if name in pruned_scan_task_units
+    }
+    pruned_scan_task_names_by_task = {
+        task: tuple(name for name in names if name in active_tasks)
+        for task, names in inputs.scan_task_names_by_task.items()
+        if task in active_tasks
+    }
+    pruned_lineage_by_view = {
+        node.name: inputs.lineage_by_view[node.name]
+        for node in pruned_nodes
+        if node.name in inputs.lineage_by_view
+    }
     return _PrunedPlanBundle(
         task_graph=pruned_graph,
         active_tasks=active_tasks,
@@ -360,6 +412,10 @@ def _pruned_plan_bundle(
         inferred=pruned_inferred,
         scan_units=pruned_scan_units,
         scan_keys_by_task=pruned_scan_keys_by_task,
+        scan_task_units_by_name=pruned_scan_task_units,
+        scan_task_name_by_key=pruned_scan_task_name_by_key,
+        scan_task_names_by_task=pruned_scan_task_names_by_task,
+        lineage_by_view=pruned_lineage_by_view,
     )
 
 
@@ -368,7 +424,6 @@ def _contracts_and_evidence(
     session: SessionContext,
     pruned: _PrunedPlanBundle,
     dataset_spec_map: Mapping[str, DatasetSpec],
-    scan_keys: Iterable[str] = (),
 ) -> _ContractsEvidence:
     output_contracts = _output_contract_map(
         session,
@@ -382,9 +437,6 @@ def _contracts_and_evidence(
         task_names=set(pruned.active_tasks),
         dataset_specs=dataset_specs,
     )
-    for scan_key in scan_keys:
-        if scan_key:
-            evidence.sources.add(scan_key)
     return _ContractsEvidence(output_contracts=output_contracts, evidence=evidence)
 
 
@@ -394,40 +446,48 @@ def _prepare_plan_context(
 ) -> _PlanBuildContext:
     requested = set(request.requested_task_names or ())
     nodes_with_ast = _validated_view_nodes(request.view_nodes, requested=requested)
-    inferred = infer_deps_from_view_nodes(nodes_with_ast, snapshot=request.snapshot)
-    priorities = _priority_map(inferred)
     dataset_spec_map = _dataset_spec_map(session)
-    scan_units, scan_keys_by_task = _scan_units_for_inferred(
+    planned = plan_with_delta_pins(
         session,
-        inferred,
+        view_nodes=nodes_with_ast,
         runtime_profile=request.runtime_profile,
+        snapshot=request.snapshot,
     )
+    priorities = _priority_map(planned.inferred)
     graph = build_task_graph_from_inferred_deps(
-        inferred,
+        planned.inferred,
         options=TaskGraphBuildOptions(
             priorities=priorities,
             extra_evidence=tuple(sorted(dataset_spec_map)),
-            scan_units=scan_units,
-            scan_keys_by_task=scan_keys_by_task,
+            scan_units_by_evidence_name=planned.scan_units_by_evidence_name,
+            scan_task_names_by_task=planned.scan_task_names_by_task,
         ),
     )
     pruned = _pruned_plan_bundle(
         inputs=_PruneInputs(
             graph=graph,
             nodes_with_ast=nodes_with_ast,
-            inferred=inferred,
-            scan_units=scan_units,
-            scan_keys_by_task=scan_keys_by_task,
+            inferred=planned.inferred,
+            scan_units=planned.scan_units,
+            scan_keys_by_task=planned.scan_keys_by_task,
+            scan_task_units_by_name=planned.scan_task_units_by_name,
+            scan_task_name_by_key=planned.scan_task_name_by_key,
+            scan_task_names_by_task=planned.scan_task_names_by_task,
+            lineage_by_view=planned.lineage_by_view,
         ),
         request=request,
         requested=requested,
     )
-    scan_keys = _scan_keys_from_mapping(pruned.scan_keys_by_task)
+    pruned_lineage_by_view = {
+        node.name: planned.lineage_by_view[node.name]
+        for node in pruned.view_nodes
+        if node.name in planned.lineage_by_view
+    }
     if request.runtime_profile is not None:
-            from datafusion_engine.plan_artifact_store import (
-                PlanArtifactsForViewsRequest,
-                persist_plan_artifacts_for_views,
-            )
+        from datafusion_engine.plan_artifact_store import (
+            PlanArtifactsForViewsRequest,
+            persist_plan_artifacts_for_views,
+        )
 
         try:
             persist_plan_artifacts_for_views(
@@ -437,6 +497,7 @@ def _prepare_plan_context(
                     view_nodes=pruned.view_nodes,
                     scan_units=pruned.scan_units,
                     scan_keys_by_view=pruned.scan_keys_by_task,
+                    lineage_by_view=pruned_lineage_by_view,
                 ),
             )
         except (RuntimeError, ValueError, OSError, KeyError, ImportError, TypeError) as exc:
@@ -456,7 +517,6 @@ def _prepare_plan_context(
         session=session,
         pruned=pruned,
         dataset_spec_map=dataset_spec_map,
-        scan_keys=scan_keys,
     )
     requested_task_names = tuple(sorted(requested))
     impacted_task_names = tuple(sorted(set(request.impacted_task_names or ())))
@@ -467,9 +527,14 @@ def _prepare_plan_context(
         active_tasks=pruned.active_tasks,
         scan_units=pruned.scan_units,
         scan_keys_by_task=pruned.scan_keys_by_task,
+        scan_task_units_by_name=pruned.scan_task_units_by_name,
+        scan_task_name_by_key=pruned.scan_task_name_by_key,
+        scan_task_names_by_task=pruned.scan_task_names_by_task,
+        lineage_by_view=pruned.lineage_by_view,
         output_contracts=contracts_evidence.output_contracts,
         evidence=contracts_evidence.evidence,
         dataset_spec_map=dataset_spec_map,
+        runtime_profile=request.runtime_profile,
         requested_task_names=requested_task_names,
         impacted_task_names=impacted_task_names,
         allow_partial=bool(request.allow_partial),
@@ -598,6 +663,7 @@ def dependency_map_from_inferred(
     inferred: Sequence[InferredDeps],
     *,
     active_tasks: Iterable[str],
+    scan_task_names_by_task: Mapping[str, tuple[str, ...]],
 ) -> dict[str, tuple[str, ...]]:
     """Build a task-to-task dependency map from inferred dependencies.
 
@@ -609,8 +675,10 @@ def dependency_map_from_inferred(
     outputs = set(active_tasks)
     dependency_map: dict[str, tuple[str, ...]] = {}
     for dep in inferred:
-        inputs = tuple(sorted(name for name in dep.inputs if name in outputs))
-        dependency_map[dep.output] = inputs
+        inputs_from_outputs = {name for name in dep.inputs if name in outputs}
+        scan_dependencies = set(scan_task_names_by_task.get(dep.task_name, ()))
+        combined = tuple(sorted(inputs_from_outputs | scan_dependencies))
+        dependency_map[dep.output] = combined
     return dependency_map
 
 
@@ -858,6 +926,26 @@ def _pruned_plan_components(
         scan_keys_by_task=plan.scan_keys_by_task,
         active_tasks=active_tasks,
     )
+    pruned_scan_task_units = {
+        name: unit
+        for name, unit in plan.scan_task_units_by_name.items()
+        if name in active_tasks
+    }
+    pruned_scan_task_name_by_key = {
+        key: name
+        for key, name in plan.scan_task_name_by_key.items()
+        if name in pruned_scan_task_units
+    }
+    pruned_scan_task_names_by_task = {
+        task: tuple(name for name in names if name in active_tasks)
+        for task, names in plan.scan_task_names_by_task.items()
+        if task in active_tasks
+    }
+    pruned_lineage_by_view = {
+        node.name: plan.lineage_by_view[node.name]
+        for node in pruned_view_nodes
+        if node.name in plan.lineage_by_view
+    }
     pruned_fingerprints = {
         name: plan.plan_fingerprints[name]
         for name in sorted(active_tasks)
@@ -893,6 +981,10 @@ def _pruned_plan_components(
         dependency_map=pruned_dependency_map,
         scan_units=pruned_scan_units,
         scan_keys_by_task=pruned_scan_keys_by_task,
+        scan_task_units_by_name=pruned_scan_task_units,
+        scan_task_name_by_key=pruned_scan_task_name_by_key,
+        scan_task_names_by_task=pruned_scan_task_names_by_task,
+        lineage_by_view=pruned_lineage_by_view,
         requested_task_names=pruned_requested,
         impacted_task_names=pruned_impacted,
         incremental_diff=pruned_diff,
@@ -929,11 +1021,7 @@ def prune_execution_plan(
         components.plan_fingerprints,
     )
     output_schema_for = _output_schema_lookup(components.output_contracts)
-    scan_keys = _scan_keys_from_mapping(components.scan_keys_by_task)
     evidence_for_schedule = plan.evidence.clone()
-    for scan_key in scan_keys:
-        if scan_key:
-            evidence_for_schedule.sources.add(scan_key)
     schedule = schedule_tasks(
         components.task_graph,
         evidence=evidence_for_schedule,
@@ -973,9 +1061,14 @@ def prune_execution_plan(
         dependency_map=components.dependency_map,
         dataset_specs=plan.dataset_specs,
         active_tasks=frozenset(target_active),
+        runtime_profile=plan.runtime_profile,
         scan_units=components.scan_units,
         scan_unit_delta_pins=scan_delta_pins,
         scan_keys_by_task=components.scan_keys_by_task,
+        scan_task_units_by_name=components.scan_task_units_by_name,
+        scan_task_name_by_key=components.scan_task_name_by_key,
+        scan_task_names_by_task=components.scan_task_names_by_task,
+        lineage_by_view=components.lineage_by_view,
         requested_task_names=components.requested_task_names,
         impacted_task_names=components.impacted_task_names,
         allow_partial=plan.allow_partial if allow_partial is None else allow_partial,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -24,6 +24,91 @@ if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 _REGISTERED_OBJECT_STORES: dict[int, set[tuple[str, str | None]]] = {}
+
+
+def _storage_type(data_type: pa.DataType) -> pa.DataType:
+    if isinstance(data_type, pa.ExtensionType):
+        return _storage_type(data_type.storage_type)
+    if pa.types.is_struct(data_type):
+        fields = [_storage_field(field) for field in data_type]
+        return pa.struct(fields)
+    if pa.types.is_list(data_type):
+        value_field = data_type.value_field
+        value = _storage_type(value_field.type)
+        return pa.list_(pa.field(value_field.name, value, nullable=value_field.nullable))
+    if pa.types.is_large_list(data_type):
+        value_field = data_type.value_field
+        value = _storage_type(value_field.type)
+        return pa.large_list(pa.field(value_field.name, value, nullable=value_field.nullable))
+    if pa.types.is_map(data_type):
+        key_type = _storage_type(data_type.key_type)
+        item_type = _storage_type(data_type.item_type)
+        return pa.map_(key_type, item_type, keys_sorted=data_type.keys_sorted)
+    return data_type
+
+
+def _storage_field(field: pa.Field) -> pa.Field:
+    return pa.field(field.name, _storage_type(field.type), nullable=field.nullable)
+
+
+def _storage_schema(schema: pa.Schema) -> pa.Schema:
+    fields = [_storage_field(field) for field in schema]
+    return pa.schema(fields)
+
+
+def _convert_struct_array(array: pa.StructArray, target_type: pa.StructType) -> pa.StructArray:
+    arrays = [
+        _convert_array_to_storage(array.field(index), field.type)
+        for index, field in enumerate(target_type)
+    ]
+    fields = list(target_type)
+    return pa.StructArray.from_arrays(arrays, fields=fields)
+
+
+def _convert_list_array(array: pa.Array, target_type: pa.DataType) -> pa.Array:
+    values = _convert_array_to_storage(array.values, target_type.value_type)
+    offsets = array.offsets
+    if pa.types.is_list(target_type):
+        return pa.ListArray.from_arrays(offsets, values, type=cast("pa.ListType", target_type))
+    return pa.LargeListArray.from_arrays(
+        offsets,
+        values,
+        type=cast("pa.LargeListType", target_type),
+    )
+
+
+def _convert_map_array(array: pa.MapArray, target_type: pa.MapType) -> pa.MapArray:
+    keys = _convert_array_to_storage(array.keys, target_type.key_type)
+    items = _convert_array_to_storage(array.items, target_type.item_type)
+    return pa.MapArray.from_arrays(array.offsets, keys, items, type=target_type)
+
+
+def _convert_array_to_storage(array: pa.Array, target_type: pa.DataType) -> pa.Array:
+    if isinstance(array, pa.ExtensionArray):
+        return _convert_array_to_storage(array.storage, target_type)
+    if pa.types.is_struct(target_type):
+        return _convert_struct_array(cast("pa.StructArray", array), cast("pa.StructType", target_type))
+    if pa.types.is_list(target_type) or pa.types.is_large_list(target_type):
+        return _convert_list_array(array, target_type)
+    if pa.types.is_map(target_type):
+        return _convert_map_array(cast("pa.MapArray", array), cast("pa.MapType", target_type))
+    if array.type != target_type:
+        return array.cast(target_type)
+    return array
+
+
+def _convert_chunked_array(column: pa.ChunkedArray, target_type: pa.DataType) -> pa.ChunkedArray:
+    chunks = [_convert_array_to_storage(chunk, target_type) for chunk in column.chunks]
+    return pa.chunked_array(chunks, type=target_type)
+
+
+def _datafusion_compatible_table(table: pa.Table) -> pa.Table:
+    target_schema = _storage_schema(table.schema)
+    arrays = [
+        _convert_chunked_array(table.column(field.name), field.type)
+        for field in target_schema
+    ]
+    return pa.Table.from_arrays(arrays, schema=target_schema)
 
 
 @dataclass(frozen=True)
@@ -128,7 +213,9 @@ class DataFusionIOAdapter:
         """
         if overwrite and self.ctx.table_exist(name):
             self._deregister_table(name)
-        self.ctx.register_table(name, table)
+        compatible_table = _datafusion_compatible_table(table)
+        table_to_register: pa.Table | ds.Dataset = ds.dataset(compatible_table)
+        self.ctx.register_table(name, table_to_register)
         invalidate_introspection_cache(self.ctx)
 
     def register_record_batches(

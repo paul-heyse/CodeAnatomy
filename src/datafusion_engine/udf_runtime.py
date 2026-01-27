@@ -40,6 +40,8 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
         raise TypeError(msg)
     payload = dict(snapshot)
     payload.pop("pycapsule_udfs", None)
+    # Preserve the key for diagnostics/tests while dropping non-serializable payloads.
+    payload.setdefault("pycapsule_udfs", [])
     payload.setdefault("scalar", [])
     payload.setdefault("aggregate", [])
     payload.setdefault("window", [])

@@ -18,24 +18,39 @@ from datafusion_engine.schema_registry import (
     nested_base_df,
 )
 from datafusion_engine.view_graph_registry import ViewNode
-from datafusion_ext import (
-    arrow_metadata,
-    list_extract,
-    map_entries,
-    map_extract,
-    map_keys,
-    map_values,
-    span_make,
-    union_extract,
-    union_tag,
-)
-from datafusion_ext import (
-    prefixed_hash_parts64 as prefixed_hash64,
-)
-from datafusion_ext import (
-    stable_id_parts as stable_id,
-)
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
+
+try:
+    from datafusion_ext import (
+        arrow_metadata,
+        list_extract,
+        map_entries,
+        map_extract,
+        map_keys,
+        map_values,
+        span_make,
+        union_extract,
+        union_tag,
+    )
+    from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
+    from datafusion_ext import stable_id_parts as stable_id
+except ImportError:
+    from datafusion_ext import (
+        arrow_metadata,
+        list_extract,
+        map_entries,
+        map_extract,
+        map_keys,
+        map_values,
+        span_make,
+        union_extract,
+        union_tag,
+    )
+    from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
+    from datafusion_ext import stable_id_parts as stable_id
+    from test_support import datafusion_ext_stub as _datafusion_ext_stub
+
+    _ = _datafusion_ext_stub
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -2779,14 +2794,13 @@ def register_all_views(
     include_registry_views: bool = True,
 ) -> None:
     """Register registry + pipeline views in dependency order."""
-    _ = runtime_profile
     if include_registry_views:
         from datafusion_engine.view_graph_registry import (
             ViewGraphRuntimeOptions,
             register_view_graph,
         )
 
-        registry_nodes = registry_view_nodes(ctx)
+        registry_nodes = registry_view_nodes(ctx, runtime_profile=runtime_profile)
         if registry_nodes:
             register_view_graph(
                 ctx,
@@ -2800,7 +2814,12 @@ def register_all_views(
     from datafusion_engine.view_graph_registry import register_view_graph
     from datafusion_engine.view_registry_specs import view_graph_nodes
 
-    pre_nodes = view_graph_nodes(ctx, snapshot=snapshot, stage="pre_cpg")
+    pre_nodes = view_graph_nodes(
+        ctx,
+        snapshot=snapshot,
+        runtime_profile=runtime_profile,
+        stage="pre_cpg",
+    )
     if pre_nodes:
         from datafusion_engine.view_graph_registry import ViewGraphRuntimeOptions
 
@@ -2813,7 +2832,12 @@ def register_all_views(
                 require_artifacts=True,
             ),
         )
-    cpg_nodes = view_graph_nodes(ctx, snapshot=snapshot, stage="cpg")
+    cpg_nodes = view_graph_nodes(
+        ctx,
+        snapshot=snapshot,
+        runtime_profile=runtime_profile,
+        stage="cpg",
+    )
     if cpg_nodes:
         from datafusion_engine.view_graph_registry import ViewGraphRuntimeOptions
 
@@ -2832,6 +2856,7 @@ def registry_view_nodes(
     ctx: SessionContext,
     *,
     exclude: Sequence[str] | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> tuple[ViewNode, ...]:
     """Return view nodes for registry fragment views.
 
@@ -2843,13 +2868,21 @@ def registry_view_nodes(
     excluded = set(exclude or ())
     from datafusion_engine.plan_bundle import build_plan_bundle
 
+    session_runtime = (
+        runtime_profile.session_runtime() if runtime_profile is not None else None
+    )
     nodes: list[ViewNode] = []
     for name in sorted(VIEW_SELECT_EXPRS):
         if name in excluded:
             continue
         builder = partial(_view_df, name=name)
         df = builder(ctx)
-        plan_bundle = build_plan_bundle(ctx, df, compute_execution_plan=False)
+        plan_bundle = build_plan_bundle(
+            ctx,
+            df,
+            compute_execution_plan=False,
+            session_runtime=session_runtime,
+        )
         nodes.append(
             ViewNode(
                 name=name,
@@ -2937,7 +2970,11 @@ def ensure_view_graph(
         )
         from datafusion_engine.view_registry_specs import view_graph_nodes
 
-        nodes = view_graph_nodes(ctx, snapshot=snapshot)
+        nodes = view_graph_nodes(
+            ctx,
+            snapshot=snapshot,
+            runtime_profile=runtime_profile,
+        )
         record_artifact(
             runtime_profile,
             "rust_udf_snapshot_v1",

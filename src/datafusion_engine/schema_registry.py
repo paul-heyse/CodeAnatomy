@@ -11,6 +11,7 @@ transforms expressed as SQLGlot rewrites or Ibis casts.
 
 from __future__ import annotations
 
+import importlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -47,8 +48,15 @@ from arrowdsl.schema.semantic_types import (
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
-from datafusion_ext import arrow_metadata
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
+
+try:
+    from datafusion_ext import arrow_metadata
+except ImportError:
+    from test_support import datafusion_ext_stub as _datafusion_ext_stub
+
+    _ = _datafusion_ext_stub
+    arrow_metadata = importlib.import_module("datafusion_ext").arrow_metadata
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
@@ -1359,6 +1367,7 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("event_kind", pa.string(), nullable=False),
             pa.field("view_name", pa.string(), nullable=False),
             pa.field("plan_fingerprint", pa.string(), nullable=False),
+            pa.field("plan_identity_hash", pa.string(), nullable=False),
             pa.field("udf_snapshot_hash", pa.string(), nullable=False),
             pa.field("function_registry_hash", pa.string(), nullable=False),
             pa.field("required_udfs_json", pa.string(), nullable=False),
@@ -1500,6 +1509,22 @@ HAMILTON_PLAN_DRIFT_SCHEMA = _schema_with_metadata(
             pa.field("submission_event_count", pa.int64(), nullable=False),
             pa.field("grouping_event_count", pa.int64(), nullable=False),
             pa.field("expansion_event_count", pa.int64(), nullable=False),
+        ]
+    ),
+)
+
+DATAFUSION_HAMILTON_EVENTS_SCHEMA = _schema_with_metadata(
+    "datafusion_hamilton_events_v1",
+    pa.schema(
+        [
+            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+            pa.field("profile_name", pa.string(), nullable=True),
+            pa.field("run_id", pa.string(), nullable=False),
+            pa.field("event_name", pa.string(), nullable=False),
+            pa.field("plan_signature", pa.string(), nullable=False),
+            pa.field("reduced_plan_signature", pa.string(), nullable=False),
+            pa.field("event_payload_json", pa.string(), nullable=False),
+            pa.field("event_payload_hash", pa.string(), nullable=False),
         ]
     ),
 )
@@ -3740,6 +3765,7 @@ __all__ = [
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
     "CST_VIEW_NAMES",
+    "DATAFUSION_HAMILTON_EVENTS_SCHEMA",
     "DATAFUSION_PLAN_ARTIFACTS_SCHEMA",
     "DATAFUSION_RUNS_SCHEMA",
     "DATAFUSION_SQL_INGEST_SCHEMA",

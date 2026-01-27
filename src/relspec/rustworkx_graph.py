@@ -32,8 +32,10 @@ _TASK_GRAPH_NODE_SCHEMA = pa.struct(
         pa.field("kind", pa.string(), nullable=False),
         pa.field("name", pa.string(), nullable=False),
         pa.field("output", pa.string(), nullable=True),
+        pa.field("task_kind", pa.string(), nullable=True),
         pa.field("priority", pa.int32(), nullable=True),
         pa.field("signature", pa.string(), nullable=True),
+        pa.field("scan_unit_key", pa.string(), nullable=True),
         pa.field("scan_dataset_name", pa.string(), nullable=True),
         pa.field("scan_delta_version", pa.int64(), nullable=True),
         pa.field("scan_candidate_file_count", pa.int64(), nullable=True),
@@ -85,6 +87,7 @@ _TASK_DEPENDENCY_NODE_SCHEMA = pa.struct(
     [
         pa.field("id", pa.int32(), nullable=False),
         pa.field("name", pa.string(), nullable=False),
+        pa.field("task_kind", pa.string(), nullable=False),
         pa.field("priority", pa.int32(), nullable=False),
         pa.field("signature", pa.string(), nullable=True),
     ]
@@ -126,6 +129,7 @@ class TaskNode:
     inputs: tuple[str, ...]
     sources: tuple[str, ...]
     priority: int
+    task_kind: str
 
 
 @dataclass(frozen=True)
@@ -239,6 +243,8 @@ class TaskGraphBuildOptions:
     extra_evidence: Iterable[str] | None = None
     scan_units: Sequence[ScanUnit] = ()
     scan_keys_by_task: Mapping[str, tuple[str, ...]] | None = None
+    scan_units_by_evidence_name: Mapping[str, ScanUnit] | None = None
+    scan_task_names_by_task: Mapping[str, tuple[str, ...]] | None = None
 
 
 @dataclass(frozen=True)
@@ -249,7 +255,7 @@ class InferredGraphConfig:
     fingerprints: Mapping[str, str]
     requirements: TaskEdgeRequirements
     extra_evidence: Iterable[str] | None = None
-    scan_units: Mapping[str, ScanUnit] | None = None
+    scan_units_by_evidence_name: Mapping[str, ScanUnit] | None = None
 
 
 def build_task_graph_from_inferred_deps(
@@ -266,8 +272,17 @@ def build_task_graph_from_inferred_deps(
     """
     resolved = options or TaskGraphBuildOptions()
     priority_map = resolved.priorities or {}
-    scan_unit_map = {unit.key: unit for unit in resolved.scan_units}
-    scan_key_map = dict(resolved.scan_keys_by_task or {})
+    if resolved.scan_units_by_evidence_name is not None:
+        scan_unit_map = dict(resolved.scan_units_by_evidence_name)
+    else:
+        scan_unit_map = {unit.key: unit for unit in resolved.scan_units}
+    if resolved.scan_task_names_by_task is not None:
+        scan_name_map = {
+            name: tuple(values)
+            for name, values in resolved.scan_task_names_by_task.items()
+        }
+    else:
+        scan_name_map = dict(resolved.scan_keys_by_task or {})
     task_nodes = tuple(
         TaskNode(
             name=dep.task_name,
@@ -277,11 +292,12 @@ def build_task_graph_from_inferred_deps(
                 dict.fromkeys(
                     (
                         *dep.inputs,
-                        *scan_key_map.get(dep.task_name, ()),
+                        *scan_name_map.get(dep.task_name, ()),
                     )
                 )
             ),
             priority=priority_map.get(dep.task_name, resolved.priority),
+            task_kind="scan" if dep.task_name in scan_unit_map else "view",
         )
         for dep in deps
     )
@@ -301,7 +317,7 @@ def build_task_graph_from_inferred_deps(
             fingerprints=fingerprints,
             requirements=requirements,
             extra_evidence=extra_evidence_all,
-            scan_units=scan_unit_map,
+            scan_units_by_evidence_name=scan_unit_map,
         ),
     )
 
@@ -942,6 +958,7 @@ def _dependency_node_payload(
     return {
         "id": node_id,
         "name": node.name,
+        "task_kind": node.task_kind,
         "priority": int(node.priority),
         "signature": signatures.get(node.name),
     }
@@ -967,7 +984,7 @@ def _build_task_graph_inferred(
         tasks,
         evidence_names=evidence_names,
         output_policy=config.output_policy,
-        scan_units=config.scan_units,
+        scan_units_by_evidence_name=config.scan_units_by_evidence_name,
     )
     _add_inferred_task_edges(
         graph,
@@ -992,7 +1009,7 @@ def _seed_inferred_task_graph(
     *,
     evidence_names: set[str],
     output_policy: OutputPolicy,
-    scan_units: Mapping[str, ScanUnit] | None = None,
+    scan_units_by_evidence_name: Mapping[str, ScanUnit] | None = None,
 ) -> tuple[rx.PyDiGraph, dict[str, int], dict[str, int], list[TaskNode]]:
     if output_policy != "all_producers":
         msg = f"Unsupported output policy: {output_policy!r}."
@@ -1000,7 +1017,7 @@ def _seed_inferred_task_graph(
     _validate_task_names(tasks)
     evidence_names_sorted = sorted(evidence_names)
     tasks_sorted = sorted(tasks, key=lambda item: item.name)
-    scan_unit_map = dict(scan_units or {})
+    scan_unit_map = dict(scan_units_by_evidence_name or {})
     node_count_hint = len(evidence_names_sorted) + len(tasks_sorted)
     edge_count_hint = sum(len(task.sources) + 1 for task in tasks_sorted)
     graph = rx.PyDiGraph(
@@ -1159,8 +1176,10 @@ def _node_payload(
             "kind": node.kind,
             "name": payload.name,
             "output": None,
+            "task_kind": None,
             "priority": None,
             "signature": None,
+            "scan_unit_key": payload.scan_unit_key,
             "scan_dataset_name": payload.scan_dataset_name,
             "scan_delta_version": payload.scan_delta_version,
             "scan_candidate_file_count": payload.scan_candidate_file_count,
@@ -1174,8 +1193,10 @@ def _node_payload(
         "kind": node.kind,
         "name": payload.name,
         "output": payload.output,
+        "task_kind": payload.task_kind,
         "priority": payload.priority,
         "signature": signatures.get(payload.name),
+        "scan_unit_key": None,
         "scan_dataset_name": None,
         "scan_delta_version": None,
         "scan_candidate_file_count": None,
@@ -1218,6 +1239,8 @@ def _evidence_node_attrs(evidence: EvidenceNode) -> dict[str, str]:
         "kind": "evidence",
         "name": evidence.name,
     }
+    if evidence.scan_unit_key is not None:
+        attrs["scan_unit_key"] = evidence.scan_unit_key
     if evidence.scan_dataset_name is not None:
         attrs["scan_dataset_name"] = evidence.scan_dataset_name
     if evidence.scan_delta_version is not None:
@@ -1232,6 +1255,7 @@ def _task_node_attrs(task: TaskNode) -> dict[str, str]:
         "kind": "task",
         "name": task.name,
         "output": task.output,
+        "task_kind": task.task_kind,
         "priority": str(task.priority),
         "inputs": json.dumps(list(task.inputs)),
         "sources": json.dumps(list(task.sources)),

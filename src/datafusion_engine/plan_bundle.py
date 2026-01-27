@@ -248,13 +248,15 @@ def build_plan_bundle(  # noqa: PLR0913
     components = _bundle_components(
         ctx,
         df,
-        compute_execution_plan=compute_execution_plan,
-        compute_substrait=compute_substrait,
-        validate_udfs=validate_udfs,
-        registry_snapshot=registry_snapshot,
-        delta_inputs=delta_inputs,
-        session_runtime=session_runtime,
-        scan_units=scan_units,
+        options=PlanBundleOptions(
+            compute_execution_plan=compute_execution_plan,
+            compute_substrait=compute_substrait,
+            validate_udfs=validate_udfs,
+            registry_snapshot=registry_snapshot,
+            delta_inputs=delta_inputs,
+            session_runtime=session_runtime,
+            scan_units=scan_units,
+        ),
     )
 
     return DataFusionPlanBundle(
@@ -276,9 +278,9 @@ def build_plan_bundle(  # noqa: PLR0913
 class _BundleComponents:
     """Bundle derived artifacts and plan metadata."""
 
-    logical: LogicalPlan
-    optimized: LogicalPlan | None
-    execution: ExecutionPlan | None
+    logical: DataFusionLogicalPlan
+    optimized: DataFusionLogicalPlan | None
+    execution: object | None
     substrait_bytes: bytes | None
     fingerprint: str
     artifacts: PlanArtifacts
@@ -292,41 +294,34 @@ def _bundle_components(
     ctx: SessionContext,
     df: DataFrame,
     *,
-    compute_execution_plan: bool,
-    compute_substrait: bool,
-    validate_udfs: bool,
-    registry_snapshot: Mapping[str, object] | None,
-    delta_inputs: Sequence[DeltaInputPin],
-    session_runtime: SessionRuntime | None,
-    scan_units: Sequence[ScanUnit],
+    options: PlanBundleOptions,
 ) -> _BundleComponents:
-    logical = _safe_logical_plan(df)
-    optimized = _safe_optimized_logical_plan(df)
-    execution = _safe_execution_plan(df) if compute_execution_plan else None
+    logical = cast("DataFusionLogicalPlan", _safe_logical_plan(df))
+    optimized = cast("DataFusionLogicalPlan | None", _safe_optimized_logical_plan(df))
+    execution = _safe_execution_plan(df) if options.compute_execution_plan else None
     substrait_bytes = (
-        _to_substrait_bytes(ctx, optimized) if compute_substrait and optimized is not None else None
+        _to_substrait_bytes(ctx, optimized)
+        if options.compute_substrait and optimized is not None
+        else None
     )
     fingerprint = _hash_plan(substrait_bytes=substrait_bytes, optimized=optimized)
-    snapshot, snapshot_hash, rewrite_tags, domain_planner_names = _udf_artifacts(
+    udf_artifacts = _udf_artifacts(
         ctx,
-        registry_snapshot=registry_snapshot,
-        session_runtime=session_runtime,
+        registry_snapshot=options.registry_snapshot,
+        session_runtime=options.session_runtime,
     )
-    function_registry_hash, function_registry_snapshot = _function_registry_artifacts(ctx)
-    df_settings = _df_settings_snapshot(ctx, session_runtime=session_runtime)
-    required_udfs, required_rewrite_tags = _required_udf_artifacts(
-        optimized or logical,
-        snapshot=snapshot,
-    )
+    registry_artifacts = _function_registry_artifacts(ctx)
+    df_settings = _df_settings_snapshot(ctx, session_runtime=options.session_runtime)
+    required = _required_udf_artifacts(optimized or logical, snapshot=udf_artifacts.snapshot)
 
-    if validate_udfs:
+    if options.validate_udfs:
         from datafusion_engine.udf_runtime import validate_required_udfs
 
-        if required_udfs:
-            validate_required_udfs(snapshot, required=required_udfs)
+        if required.required_udfs:
+            validate_required_udfs(udf_artifacts.snapshot, required=required.required_udfs)
 
-    scan_unit_pins = _delta_inputs_from_scan_units(scan_units)
-    merged_delta_inputs = _merge_delta_inputs(delta_inputs, scan_unit_pins)
+    scan_unit_pins = _delta_inputs_from_scan_units(options.scan_units)
+    merged_delta_inputs = _merge_delta_inputs(options.delta_inputs, scan_unit_pins)
 
     artifacts = PlanArtifacts(
         logical_plan_display=_plan_display(logical, method="display_indent_schema"),
@@ -335,12 +330,12 @@ def _bundle_components(
         optimized_plan_pgjson=_plan_pgjson(optimized),
         execution_plan_display=_plan_display(execution, method="display_indent"),
         df_settings=df_settings,
-        udf_snapshot_hash=snapshot_hash,
-        function_registry_hash=function_registry_hash,
-        function_registry_snapshot=function_registry_snapshot,
-        rewrite_tags=rewrite_tags,
-        domain_planner_names=domain_planner_names,
-        udf_snapshot=snapshot,
+        udf_snapshot_hash=udf_artifacts.snapshot_hash,
+        function_registry_hash=registry_artifacts.registry_hash,
+        function_registry_snapshot=registry_artifacts.registry_snapshot,
+        rewrite_tags=udf_artifacts.rewrite_tags,
+        domain_planner_names=udf_artifacts.domain_planner_names,
+        udf_snapshot=udf_artifacts.snapshot,
     )
 
     return _BundleComponents(
@@ -351,10 +346,36 @@ def _bundle_components(
         fingerprint=fingerprint,
         artifacts=artifacts,
         merged_delta_inputs=merged_delta_inputs,
-        required_udfs=required_udfs,
-        required_rewrite_tags=required_rewrite_tags,
+        required_udfs=required.required_udfs,
+        required_rewrite_tags=required.required_rewrite_tags,
         plan_details=_plan_details(df, logical=logical, optimized=optimized, execution=execution),
     )
+
+
+@dataclass(frozen=True)
+class _UdfArtifacts:
+    """UDF snapshot and metadata for planning."""
+
+    snapshot: Mapping[str, object]
+    snapshot_hash: str
+    rewrite_tags: tuple[str, ...]
+    domain_planner_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _RegistryArtifacts:
+    """Function registry snapshot metadata."""
+
+    registry_hash: str
+    registry_snapshot: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class _RequiredUdfArtifacts:
+    """Required UDFs and rewrite tags for a plan."""
+
+    required_udfs: tuple[str, ...]
+    required_rewrite_tags: tuple[str, ...]
 
 
 def _merge_delta_inputs(
@@ -668,7 +689,7 @@ def _function_registry_hash(snapshot: Mapping[str, object]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _function_registry_artifacts(ctx: SessionContext) -> tuple[str, Mapping[str, object]]:
+def _function_registry_artifacts(ctx: SessionContext) -> _RegistryArtifacts:
     from datafusion_engine.schema_introspection import SchemaIntrospector
 
     functions: Sequence[Mapping[str, object]] = ()
@@ -678,7 +699,10 @@ def _function_registry_artifacts(ctx: SessionContext) -> tuple[str, Mapping[str,
     except (RuntimeError, TypeError, ValueError):
         functions = ()
     snapshot: Mapping[str, object] = {"functions": list(functions)}
-    return _function_registry_hash(snapshot), snapshot
+    return _RegistryArtifacts(
+        registry_hash=_function_registry_hash(snapshot),
+        registry_snapshot=snapshot,
+    )
 
 
 def _udf_artifacts(
@@ -686,13 +710,13 @@ def _udf_artifacts(
     *,
     registry_snapshot: Mapping[str, object] | None,
     session_runtime: SessionRuntime | None,
-) -> tuple[Mapping[str, object], str, tuple[str, ...], tuple[str, ...]]:
+) -> _UdfArtifacts:
     if session_runtime is not None and session_runtime.ctx is ctx:
-        return (
-            session_runtime.udf_snapshot,
-            session_runtime.udf_snapshot_hash,
-            session_runtime.udf_rewrite_tags,
-            session_runtime.domain_planner_names,
+        return _UdfArtifacts(
+            snapshot=session_runtime.udf_snapshot,
+            snapshot_hash=session_runtime.udf_snapshot_hash,
+            rewrite_tags=session_runtime.udf_rewrite_tags,
+            domain_planner_names=session_runtime.domain_planner_names,
         )
     if registry_snapshot is not None:
         snapshot = registry_snapshot
@@ -709,20 +733,28 @@ def _udf_artifacts(
     tag_index = rewrite_tag_index(snapshot)
     rewrite_tags = tuple(sorted(tag_index))
     planner_names = domain_planner_names_from_snapshot(snapshot)
-    return snapshot, snapshot_hash, rewrite_tags, planner_names
+    return _UdfArtifacts(
+        snapshot=snapshot,
+        snapshot_hash=snapshot_hash,
+        rewrite_tags=rewrite_tags,
+        domain_planner_names=planner_names,
+    )
 
 
 def _required_udf_artifacts(
     plan: object | None,
     *,
     snapshot: Mapping[str, object],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
+) -> _RequiredUdfArtifacts:
     if plan is None:
-        return (), ()
+        return _RequiredUdfArtifacts(required_udfs=(), required_rewrite_tags=())
     from datafusion_engine.lineage_datafusion import extract_lineage
 
     lineage = extract_lineage(plan, udf_snapshot=snapshot)
-    return lineage.required_udfs, lineage.required_rewrite_tags
+    return _RequiredUdfArtifacts(
+        required_udfs=lineage.required_udfs,
+        required_rewrite_tags=lineage.required_rewrite_tags,
+    )
 
 
 __all__ = [

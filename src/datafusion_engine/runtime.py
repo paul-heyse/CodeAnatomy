@@ -1184,9 +1184,7 @@ def _build_view_nodes(
     if runtime_profile is None:
         msg = "Runtime profile is required for view planning."
         raise ValueError(msg)
-    session_runtime = (
-        runtime_profile.session_runtime()
-    )
+    session_runtime = runtime_profile.session_runtime()
     nodes: list[ViewNode] = []
     for view in views:
         builder = _resolve_view_builder(ctx, view=view)
@@ -5923,17 +5921,33 @@ def read_delta_as_reader(
     pyarrow.RecordBatchReader
         Streaming reader for the Delta table via DataFusion's Delta table provider.
     """
-    from storage.deltalake.delta import open_delta_table
-
-    _ = delta_scan
-    table = open_delta_table(
-        path,
-        storage_options=dict(storage_options or {}),
-        log_storage_options=dict(log_storage_options or {}),
+    storage: dict[str, str] = dict(storage_options or {})
+    log_storage: dict[str, str] = dict(log_storage_options or {})
+    if log_storage:
+        storage.update(log_storage)
+    from datafusion_engine.delta_control_plane import (
+        DeltaProviderRequest,
+        delta_provider_from_session,
     )
-    dataset = table.to_pyarrow_dataset()
-    scanner = dataset.scanner()
-    return scanner.to_reader()
+
+    ctx = DataFusionRuntimeProfile().session_context()
+    bundle = delta_provider_from_session(
+        ctx,
+        request=DeltaProviderRequest(
+            table_uri=path,
+            storage_options=storage or None,
+            version=None,
+            timestamp=None,
+            delta_scan=delta_scan,
+        ),
+    )
+    df = ctx.read_table(bundle.provider)
+    to_reader = getattr(df, "to_arrow_reader", None)
+    if callable(to_reader):
+        reader = to_reader()
+        if isinstance(reader, pa.RecordBatchReader):
+            return reader
+    return df.to_arrow_table().to_reader()
 
 
 def dataset_spec_from_context(name: str) -> DatasetSpec:

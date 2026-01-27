@@ -6,6 +6,8 @@ from datafusion import functions as f
 from datafusion import lit
 from datafusion.expr import Expr
 
+from datafusion_ext import utf8_normalize, utf8_null_if_blank
+
 
 def expr_context_value(value: object) -> str | None:
     """Normalize expression context strings.
@@ -48,11 +50,11 @@ def expr_context_expr(expr: Expr) -> Expr:
     datafusion.expr.Expr
         Expression for normalized context values.
     """
-    text = f.trim(f.arrow_cast(expr, lit("Utf8")))
-    last = f.regexp_replace(text, lit(r".*\\."), lit(""))
+    normalized = utf8_null_if_blank(utf8_normalize(expr, collapse_ws=True))
+    last = f.regexp_replace(normalized, lit(r".*\\."), lit(""))
     upper = f.upper(last)
-    empty = f.length(upper) == lit(0)
-    return f.when(empty, f.arrow_cast(lit(None), lit("Utf8"))).otherwise(upper)
+    null_expr = f.arrow_cast(lit(None), lit("Utf8"))
+    return f.when(normalized.is_null(), null_expr).otherwise(upper)
 
 
 def flag_to_bool_expr(expr: Expr) -> Expr:

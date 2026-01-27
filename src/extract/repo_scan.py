@@ -14,7 +14,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.abi import schema_fingerprint
 from core_types import PathLike, ensure_path
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
-from datafusion_engine.plan import DataFusionPlan
+from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.query_spec import QuerySpec
 from extract.cache_utils import (
     cache_for_kind_optional,
@@ -416,13 +416,13 @@ def scan_repo_plan(
     *,
     options: RepoScanOptions,
     session: ExtractSession,
-) -> DataFusionPlan:
+) -> DataFusionPlanBundle:
     """Build the plan for repository scanning.
 
     Returns
     -------
-    DataFusionPlan
-        DataFusion plan emitting repo file metadata.
+    DataFusionPlanBundle
+        DataFusion plan bundle emitting repo file metadata.
     """
     repo_root_path = ensure_path(repo_root).resolve()
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)

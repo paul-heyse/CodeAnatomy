@@ -14,8 +14,6 @@ from storage.deltalake import (
     delta_history_snapshot,
     delta_protocol_snapshot,
     delta_table_version,
-    query_builder_available,
-    query_delta_via_querybuilder,
     vacuum_delta,
 )
 
@@ -69,7 +67,7 @@ class DeltaVacuumRequest:
 
 @dataclass(frozen=True)
 class DeltaQueryRequest:
-    """Inputs for Delta QueryBuilder SQL execution."""
+    """Inputs for Delta SQL execution via DataFusion."""
 
     path: str
     sql: str
@@ -173,7 +171,7 @@ def _record_maintenance(
 
 
 def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
-    """Execute SQL against a Delta table using QueryBuilder.
+    """Execute SQL against a Delta table using DataFusion.
 
     Returns
     -------
@@ -183,26 +181,40 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     Raises
     ------
     ValueError
-        Raised when QueryBuilder execution is disabled or unavailable.
+        Raised when SQL execution is disabled in the runtime profile.
     """
-    if (
-        request.runtime_profile is not None
-        and not request.runtime_profile.enable_delta_querybuilder
-    ):
-        msg = "Delta QueryBuilder execution is disabled in the runtime profile."
+    profile = request.runtime_profile
+    if profile is None:
+        from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+        profile = DataFusionRuntimeProfile()
+    if not profile.sql_policy.allow_statements:
+        msg = "Delta SQL execution is disabled by the runtime SQL policy."
         raise ValueError(msg)
-    if not query_builder_available():
-        msg = "deltalake.QueryBuilder is unavailable."
-        raise ValueError(msg)
-    storage = request.log_storage_options or request.storage_options
-    reader = query_delta_via_querybuilder(
-        request.path,
-        request.sql,
-        table_name=request.table_name,
-        storage_options=storage,
+    from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.registry_bridge import register_dataset_df
+
+    ctx = profile.session_context()
+    location = DatasetLocation(
+        path=request.path,
+        format="delta",
+        storage_options=request.storage_options or {},
+        delta_log_storage_options=request.log_storage_options or {},
     )
-    _record_querybuilder(
-        request.runtime_profile,
+    register_dataset_df(
+        ctx,
+        name=request.table_name,
+        location=location,
+        runtime_profile=profile,
+    )
+    df = ctx.sql(request.sql)
+    to_reader = getattr(df, "to_arrow_reader", None)
+    if callable(to_reader):
+        reader = to_reader()
+    else:
+        reader = df.to_arrow_table().to_reader()
+    _record_delta_query(
+        profile,
         payload={
             "event_time_unix_ms": int(time.time() * 1000),
             "path": request.path,
@@ -213,16 +225,16 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     return reader
 
 
-def _record_querybuilder(
-    runtime_profile: DataFusionRuntimeProfile | None,
+def _record_delta_query(
+    runtime_profile: DataFusionRuntimeProfile,
     *,
     payload: Mapping[str, object],
 ) -> None:
-    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+    if runtime_profile.diagnostics_sink is None:
         return
     from datafusion_engine.diagnostics import record_artifact
 
-    record_artifact(runtime_profile, "delta_querybuilder_v1", payload)
+    record_artifact(runtime_profile, "delta_query_v1", payload)
 
 
 __all__ = [

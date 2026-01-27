@@ -16,7 +16,6 @@ from datafusion.dataframe import DataFrame
 from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, ScalarLike, TableLike
-from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import (
     record_batch_reader_from_row_batches as schema_record_batch_reader_from_row_batches,
 )
@@ -34,7 +33,7 @@ from datafusion_engine.extract_extractors import (
 )
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
 from datafusion_engine.finalize import FinalizeContext, FinalizeOptions, normalize_only
-from datafusion_engine.plan import DataFusionPlan
+from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundle
 from datafusion_engine.query_spec import apply_query_spec
 from datafusion_engine.schema_contracts import SchemaContract
 from datafusion_engine.view_graph_registry import _validate_schema_contract
@@ -52,6 +51,7 @@ from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.runtime import SessionRuntime
 
 
 @dataclass(frozen=True)
@@ -312,8 +312,30 @@ def iter_contexts(
     yield from file_contexts
 
 
-def _empty_plan_from_table(table: DataFrame) -> DataFusionPlan:
-    return DataFusionPlan(df=table.limit(0), ordering=Ordering.unordered())
+def _build_plan_bundle_from_df(
+    df: DataFrame,
+    *,
+    session_runtime: SessionRuntime,
+) -> DataFusionPlanBundle:
+    return build_plan_bundle(
+        session_runtime.ctx,
+        df,
+        compute_execution_plan=False,
+        compute_substrait=True,
+        validate_udfs=True,
+        session_runtime=session_runtime,
+    )
+
+
+def _empty_plan_from_table(
+    table: DataFrame,
+    *,
+    session_runtime: SessionRuntime,
+) -> DataFusionPlanBundle:
+    return _build_plan_bundle_from_df(
+        table.limit(0),
+        session_runtime=session_runtime,
+    )
 
 
 def record_batch_reader_from_row_batches(
@@ -351,16 +373,16 @@ def datafusion_plan_from_reader(
     reader: RecordBatchReaderLike,
     *,
     session: ExtractSession,
-) -> DataFusionPlan:
-    """Return a DataFusion plan for a RecordBatchReader.
+) -> DataFusionPlanBundle:
+    """Return a DataFusion plan bundle for a RecordBatchReader.
 
     Returns
     -------
-    DataFusionPlan
-        DataFusion plan backed by the registered reader.
+    DataFusionPlanBundle
+        DataFusion plan bundle backed by the registered reader.
     """
-    df = datafusion_from_arrow(session.df_ctx, name=name, value=reader)
-    return DataFusionPlan(df=df, ordering=Ordering.unordered())
+    df = datafusion_from_arrow(session.session_runtime.ctx, name=name, value=reader)
+    return _build_plan_bundle_from_df(df, session_runtime=session.session_runtime)
 
 
 @dataclass(frozen=True)
@@ -392,19 +414,20 @@ def extract_plan_from_reader(
     *,
     session: ExtractSession,
     options: ExtractPlanOptions | None = None,
-) -> DataFusionPlan:
-    """Return an extract plan for a RecordBatchReader.
+) -> DataFusionPlanBundle:
+    """Return an extract plan bundle for a RecordBatchReader.
 
     Returns
     -------
-    DataFusionPlan
-        Extract plan with registry query and evidence projection applied.
+    DataFusionPlanBundle
+        Extract plan bundle with registry query and evidence projection applied.
     """
     resolved = options or ExtractPlanOptions()
     raw_plan = datafusion_plan_from_reader(name, reader, session=session)
     return apply_query_and_project(
         name,
         raw_plan.df,
+        session=session,
         normalize=resolved.normalize,
         evidence_plan=resolved.evidence_plan,
         repo_id=resolved.resolved_repo_id(),
@@ -416,13 +439,13 @@ def raw_plan_from_rows(
     rows: Iterable[Mapping[str, object]],
     *,
     session: ExtractSession,
-) -> DataFusionPlan:
-    """Return a raw plan for a row iterator.
+) -> DataFusionPlanBundle:
+    """Return a raw plan bundle for a row iterator.
 
     Returns
     -------
-    DataFusionPlan
-        Extract plan without registry query or evidence projection applied.
+    DataFusionPlanBundle
+        Extract plan bundle without registry query or evidence projection applied.
     """
     reader = record_batch_reader_from_rows(name, rows)
     return datafusion_plan_from_reader(name, reader, session=session)
@@ -434,13 +457,13 @@ def extract_plan_from_rows(
     *,
     session: ExtractSession,
     options: ExtractPlanOptions | None = None,
-) -> DataFusionPlan:
-    """Return an extract plan for a row iterator.
+) -> DataFusionPlanBundle:
+    """Return an extract plan bundle for a row iterator.
 
     Returns
     -------
-    DataFusionPlan
-        Extract plan with registry query and evidence projection applied.
+    DataFusionPlanBundle
+        Extract plan bundle with registry query and evidence projection applied.
     """
     reader = record_batch_reader_from_rows(name, rows)
     return extract_plan_from_reader(
@@ -457,13 +480,13 @@ def extract_plan_from_row_batches(
     *,
     session: ExtractSession,
     options: ExtractPlanOptions | None = None,
-) -> DataFusionPlan:
-    """Return an extract plan for row batches.
+) -> DataFusionPlanBundle:
+    """Return an extract plan bundle for row batches.
 
     Returns
     -------
-    DataFusionPlan
-        Extract plan with registry query and evidence projection applied.
+    DataFusionPlanBundle
+        Extract plan bundle with registry query and evidence projection applied.
     """
     reader = record_batch_reader_from_row_batches(name, row_batches)
     return extract_plan_from_reader(
@@ -478,24 +501,25 @@ def apply_query_and_project(
     name: str,
     table: DataFrame,
     *,
+    session: ExtractSession,
     normalize: ExtractNormalizeOptions | None = None,
     evidence_plan: EvidencePlan | None = None,
     repo_id: str | None = None,
-) -> DataFusionPlan:
+) -> DataFusionPlanBundle:
     """Apply registry query and evidence projection to a DataFusion table.
 
     Returns
     -------
-    DataFusionPlan
-        Plan with query and evidence projection applied.
+    DataFusionPlanBundle
+        Plan bundle with query and evidence projection applied.
     """
     row = extract_metadata(name)
     if evidence_plan is not None and not plan_requires_row(evidence_plan, row):
-        return _empty_plan_from_table(table)
+        return _empty_plan_from_table(table, session_runtime=session.session_runtime)
     overrides = _options_overrides(normalize.options if normalize else None)
     execution = rule_execution_options(row.template or name, evidence_plan, overrides=overrides)
     if row.enabled_when is not None and not _stage_enabled(row.enabled_when, execution):
-        return _empty_plan_from_table(table)
+        return _empty_plan_from_table(table, session_runtime=session.session_runtime)
     projection: tuple[str, ...] = ()
     if evidence_plan is not None:
         required = set(evidence_plan.required_columns_for(name))
@@ -512,12 +536,12 @@ def apply_query_and_project(
         projection=projection if projection else None,
     )
     df = apply_query_spec(table, spec=spec)
-    return DataFusionPlan(df=df, ordering=Ordering.unordered())
+    return _build_plan_bundle_from_df(df, session_runtime=session.session_runtime)
 
 
 @dataclass(frozen=True)
 class ExtractMaterializeOptions:
-    """Options for materializing Ibis extract plans."""
+    """Options for materializing extract plans."""
 
     normalize: ExtractNormalizeOptions | None = None
     prefer_reader: bool = False
@@ -633,12 +657,12 @@ def _streaming_supported_for_extract(
 
 def materialize_extract_plan(
     name: str,
-    plan: DataFusionPlan,
+    plan: DataFusionPlanBundle,
     *,
     ctx: ExecutionContext,
     options: ExtractMaterializeOptions | None = None,
 ) -> TableLike | pa.RecordBatchReader:
-    """Materialize an extract plan and normalize at the Arrow boundary.
+    """Materialize an extract plan bundle and normalize at the Arrow boundary.
 
     Returns
     -------
@@ -661,9 +685,49 @@ def materialize_extract_plan(
         finalize_ctx=finalize_ctx,
         apply_post_kernels=resolved.apply_post_kernels,
     )
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        msg = "DataFusion runtime profile is required for extract materialization."
+        raise ValueError(msg)
+    session_runtime = runtime_profile.session_runtime()
+    from datafusion_engine.lineage_datafusion import extract_lineage
+    from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+    from datafusion_engine.scan_planner import plan_scan_unit
+
+    scan_units = tuple(
+        plan_scan_unit(
+            session_runtime.ctx,
+            dataset_name=scan.dataset_name,
+            location=runtime_profile.dataset_location(scan.dataset_name),
+            lineage=scan,
+        )
+        for scan in extract_lineage(
+            plan.optimized_logical_plan,
+            udf_snapshot=plan.artifacts.udf_snapshot,
+        ).scans
+        if runtime_profile.dataset_location(scan.dataset_name) is not None
+    )
+    if scan_units:
+        apply_scan_unit_overrides(
+            session_runtime.ctx,
+            scan_units=scan_units,
+            runtime_profile=runtime_profile,
+        )
+    scan_keys = tuple(unit.key for unit in scan_units)
+    facade = DataFusionExecutionFacade(
+        ctx=session_runtime.ctx,
+        runtime_profile=runtime_profile,
+    )
+    result = facade.execute_plan_bundle(
+        plan,
+        view_name=name,
+        scan_units=scan_units,
+        scan_keys=scan_keys,
+    )
+    df = result.require_dataframe()
     wrote_streaming = False
     if streaming_supported:
-        reader = plan.to_reader()
+        reader = df.execute_stream()
         reader_result = ExecutionResult.from_reader(reader)
         reader_for_write = _normalize_reader(normalization_ctx, reader)
         write_extract_outputs(name, reader_for_write, ctx=ctx)
@@ -681,7 +745,7 @@ def materialize_extract_plan(
         )
         wrote_streaming = True
         if resolved.prefer_reader:
-            reader = plan.to_reader()
+            reader = df.execute_stream()
             reader_result = ExecutionResult.from_reader(reader)
             normalized_reader = _normalize_reader(
                 normalization_ctx,
@@ -689,7 +753,7 @@ def materialize_extract_plan(
             )
             _record_extract_execution(name, reader_result, ctx=ctx)
             return normalized_reader
-    table = plan.to_table()
+    table = df.to_arrow_table()
     table_result = ExecutionResult.from_table(table)
     normalized = _normalize_table(normalization_ctx, table)
     if not wrote_streaming:
@@ -785,7 +849,7 @@ def _record_extract_execution(
 
 def _record_extract_compile(
     name: str,
-    plan: DataFusionPlan,
+    plan: DataFusionPlanBundle,
     *,
     ctx: ExecutionContext,
 ) -> None:
@@ -800,19 +864,11 @@ def _record_extract_compile(
     if profile is None:
         msg = "DataFusion runtime profile is required for extract diagnostics."
         raise ValueError(msg)
-    facade = DataFusionExecutionFacade(
-        ctx=profile.session_context(),
-        runtime_profile=profile,
-    )
-    try:
-        bundle = facade.build_plan_bundle(plan.df)
-    except (RuntimeError, TypeError, ValueError):
-        return
     from datafusion_engine.diagnostics import record_artifact
 
     payload = {
         "dataset": name,
-        "plan_fingerprint": bundle.plan_fingerprint,
+        "plan_fingerprint": plan.plan_fingerprint,
     }
     record_artifact(profile, "extract_plan_compile_v1", payload)
 
@@ -830,8 +886,9 @@ def _register_extract_view(name: str, *, ctx: ExecutionContext) -> None:
         msg = "DataFusion runtime profile is required for extract view registration."
         raise ValueError(msg)
     location = extract_dataset_location_or_raise(name, ctx=ctx)
+    session_runtime = runtime_profile.session_runtime()
     facade = DataFusionExecutionFacade(
-        ctx=runtime_profile.session_context(),
+        ctx=session_runtime.ctx,
         runtime_profile=runtime_profile,
     )
     facade.register_dataset(name=name, location=location)
@@ -839,7 +896,7 @@ def _register_extract_view(name: str, *, ctx: ExecutionContext) -> None:
 
 def _record_extract_view_artifact(
     name: str,
-    plan: DataFusionPlan,
+    plan: DataFusionPlanBundle,
     *,
     schema: pa.Schema,
     ctx: ExecutionContext,
@@ -855,28 +912,23 @@ def _record_extract_view_artifact(
     if profile is None:
         msg = "DataFusion runtime profile is required for extract diagnostics."
         raise ValueError(msg)
-    facade = DataFusionExecutionFacade(
-        ctx=profile.session_context(),
-        runtime_profile=profile,
-    )
-    try:
-        plan_bundle = facade.build_plan_bundle(plan.df)
-    except (RuntimeError, TypeError, ValueError):
-        return
-    from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
-    from datafusion_engine.runtime import record_view_definition
+    from datafusion_engine.lineage_datafusion import extract_lineage
+    from datafusion_engine.runtime import record_view_definition, session_runtime_hash
     from datafusion_engine.view_artifacts import (
         ViewArtifactLineage,
         ViewArtifactRequest,
         build_view_artifact_from_bundle,
     )
 
-    required_udfs = plan_bundle.required_udfs
-    referenced_tables = tuple(
-        sorted(referenced_tables_from_plan(plan_bundle.optimized_logical_plan))
+    lineage = extract_lineage(
+        plan.optimized_logical_plan,
+        udf_snapshot=plan.artifacts.udf_snapshot,
     )
+    required_udfs = plan.required_udfs
+    referenced_tables = lineage.referenced_tables
+    runtime_hash = session_runtime_hash(profile.session_runtime())
     artifact = build_view_artifact_from_bundle(
-        plan_bundle,
+        plan,
         request=ViewArtifactRequest(
             name=name,
             schema=schema,
@@ -884,6 +936,7 @@ def _record_extract_view_artifact(
                 required_udfs=required_udfs,
                 referenced_tables=referenced_tables,
             ),
+            runtime_hash=runtime_hash,
         ),
     )
     record_view_definition(profile, artifact=artifact)
@@ -913,8 +966,9 @@ def _validate_extract_schema_contract(
         msg = f"Expected schema unavailable for extract dataset {name!r}."
         raise TypeError(msg)
     contract = SchemaContract.from_arrow_schema(name, expected)
+    session_runtime = runtime_profile.session_runtime()
     _validate_schema_contract(
-        runtime_profile.session_context(),
+        session_runtime.ctx,
         contract,
         schema=schema,
     )
@@ -953,21 +1007,9 @@ def _record_extract_udf_parity(
         raise ValueError(msg)
     from datafusion_engine.diagnostics import record_artifact
     from datafusion_engine.udf_parity import udf_parity_report
-    from datafusion_engine.udf_runtime import register_rust_udfs
 
-    session = profile.session_context()
-    async_timeout_ms = None
-    async_batch_size = None
-    if profile.enable_async_udfs:
-        async_timeout_ms = profile.async_udf_timeout_ms
-        async_batch_size = profile.async_udf_batch_size
-    registry_snapshot = register_rust_udfs(
-        session,
-        enable_async=profile.enable_async_udfs,
-        async_udf_timeout_ms=async_timeout_ms,
-        async_udf_batch_size=async_batch_size,
-    )
-    report = udf_parity_report(session, snapshot=registry_snapshot)
+    session_runtime = profile.session_runtime()
+    report = udf_parity_report(session_runtime.ctx, snapshot=session_runtime.udf_snapshot)
     payload = report.payload()
     payload["dataset"] = name
     record_artifact(profile, "extract_udf_parity_v1", payload)
@@ -1051,13 +1093,17 @@ def template_outputs(plan: EvidencePlan | None, template: str) -> tuple[str, ...
     return outputs_for_template(template)
 
 
-def ast_def_nodes_plan(plan: DataFusionPlan) -> DataFusionPlan:
-    """Return a plan filtered to AST definition nodes.
+def ast_def_nodes_plan(
+    plan: DataFusionPlanBundle,
+    *,
+    session_runtime: SessionRuntime,
+) -> DataFusionPlanBundle:
+    """Return a plan bundle filtered to AST definition nodes.
 
     Returns
     -------
-    DataFusionPlan
-        Plan filtered to function/class definitions.
+    DataFusionPlanBundle
+        Plan bundle filtered to function/class definitions.
     """
     values = [
         "FunctionDef",
@@ -1065,7 +1111,7 @@ def ast_def_nodes_plan(plan: DataFusionPlan) -> DataFusionPlan:
         "ClassDef",
     ]
     filtered = plan.df.filter(f.in_list(col("kind"), [lit(value) for value in values]))
-    return DataFusionPlan(df=filtered, ordering=plan.ordering)
+    return _build_plan_bundle_from_df(filtered, session_runtime=session_runtime)
 
 
 def _options_overrides(options: object | None) -> Mapping[str, object]:

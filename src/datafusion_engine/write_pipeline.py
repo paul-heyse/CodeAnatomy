@@ -29,10 +29,8 @@ Pattern
 
 from __future__ import annotations
 
-import contextlib
 import shutil
 import time
-import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -284,6 +282,7 @@ class DeltaWriteSpec:
     commit_run: DataFusionRun | None = None
     storage_options: Mapping[str, str] | None = None
     log_storage_options: Mapping[str, str] | None = None
+    extra_constraints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -396,29 +395,6 @@ class WritePipeline:
                     return name, loc
         return None
 
-    def _validate_constraints(
-        self,
-        *,
-        df: DataFrame,
-        constraints: tuple[str, ...],
-    ) -> None:
-        if not constraints:
-            return
-        view_name = f"__write_constraints_{uuid.uuid4().hex}"
-        self.ctx.register_table(view_name, df)
-        try:
-            for constraint in constraints:
-                if not constraint.strip():
-                    continue
-                query = f"SELECT 1 FROM {view_name} WHERE NOT ({constraint}) LIMIT 1"
-                constraint_df = self._execute_sql(query)
-                if self._df_has_rows(constraint_df):
-                    msg = f"Delta constraint violated: {constraint}"
-                    raise ValueError(msg)
-        finally:
-            with contextlib.suppress(Exception):
-                self.ctx.deregister_table(view_name)
-
     def write_via_streaming(
         self,
         request: WriteRequest,
@@ -456,14 +432,6 @@ class WritePipeline:
         dataset_binding = self._dataset_location_for_destination(request.destination)
         dataset_name = dataset_binding[0] if dataset_binding is not None else None
         dataset_location = dataset_binding[1] if dataset_binding is not None else None
-        dataset_constraints = (
-            resolve_delta_constraints(dataset_location)
-            if dataset_location is not None and request.format == WriteFormat.DELTA
-            else ()
-        )
-        combined_constraints = _merge_constraints(request.constraints, dataset_constraints)
-        if combined_constraints:
-            self._validate_constraints(df=df, constraints=combined_constraints)
         result = StreamingExecutionResult(df=df)
 
         table_target = self._table_target(request)
@@ -479,40 +447,9 @@ class WritePipeline:
             self._record_write_artifact(write_result)
             return write_result
 
-        delta_outcome: DeltaWriteOutcome | None = None
-        if (
-            request.format == WriteFormat.DELTA
-            and not request.partition_by
-            and request.mode != WriteMode.ERROR
-        ):
-            provider_spec = self._delta_write_spec(
-                request,
-                method_label="provider_insert",
-                dataset_name=dataset_name,
-                dataset_location=dataset_location,
-            )
-            delta_outcome = self._try_write_delta_provider(
-                df,
-                request=request,
-                spec=provider_spec,
-            )
-            if delta_outcome is not None:
-                duration_ms = (time.perf_counter() - start) * 1000.0
-                write_result = WriteResult(
-                    request=request,
-                    method=WriteMethod.INSERT,
-                    sql=None,
-                    duration_ms=duration_ms,
-                    delta_result=delta_outcome.delta_result,
-                    delta_features=delta_outcome.enabled_features,
-                    commit_app_id=delta_outcome.commit_app_id,
-                    commit_version=delta_outcome.commit_version,
-                )
-                self._record_write_artifact(write_result)
-                return write_result
-
         # Write based on format
         if request.format == WriteFormat.DELTA:
+            delta_outcome: DeltaWriteOutcome | None
             streaming_spec = self._delta_write_spec(
                 request,
                 method_label="delta_writer",
@@ -723,6 +660,10 @@ class WritePipeline:
             options=options,
             dataset_location=dataset_location,
         )
+        dataset_constraints = (
+            resolve_delta_constraints(dataset_location) if dataset_location else ()
+        )
+        extra_constraints = _merge_constraints(request.constraints, dataset_constraints)
         commit_metadata = _delta_commit_metadata(
             request,
             options,
@@ -733,6 +674,8 @@ class WritePipeline:
                 dataset_location=dataset_location,
             ),
         )
+        if extra_constraints:
+            commit_metadata["delta_constraints"] = " AND ".join(extra_constraints)
         commit_key = dataset_name or request.destination
         commit_run: DataFusionRun | None = None
         idempotent = _delta_idempotent_options(options)
@@ -775,6 +718,7 @@ class WritePipeline:
             commit_run=commit_run,
             storage_options=policy_ctx.storage_options,
             log_storage_options=policy_ctx.log_storage_options,
+            extra_constraints=extra_constraints,
         )
 
     def _reserve_runtime_commit(
@@ -910,7 +854,9 @@ class WritePipeline:
             storage_options=spec.storage_options,
             log_storage_options=spec.log_storage_options,
         )
-        if request.mode == WriteMode.ERROR and (local_path.exists() or existing_version is not None):
+        if request.mode == WriteMode.ERROR and (
+            local_path.exists() or existing_version is not None
+        ):
             msg = f"Delta destination already exists: {spec.table_uri}"
             raise ValueError(msg)
         delta_options = DeltaWriteOptions(
@@ -923,11 +869,13 @@ class WritePipeline:
             target_file_size=spec.target_file_size,
             storage_options=spec.storage_options,
             log_storage_options=spec.log_storage_options,
+            extra_constraints=spec.extra_constraints,
         )
         delta_result = write_delta_table(
             result.to_arrow_stream(),
             spec.table_uri,
             options=delta_options,
+            ctx=self.ctx,
         )
         enabled_features = enable_delta_features(
             spec.table_uri,
@@ -947,96 +895,6 @@ class WritePipeline:
             final_version = delta_result.version
         if final_version is None:
             msg = f"Failed to resolve Delta version after write: {spec.table_uri}"
-            raise RuntimeError(msg)
-        self._finalize_delta_commit(
-            self._DeltaCommitFinalizeContext(
-                spec=spec,
-                delta_version=final_version,
-            )
-        )
-        return DeltaWriteOutcome(
-            delta_result=DeltaWriteResult(path=spec.table_uri, version=final_version),
-            enabled_features=enabled_features,
-            commit_app_id=spec.commit_app_id,
-            commit_version=spec.commit_version,
-        )
-
-    def _try_write_delta_provider(
-        self,
-        df: DataFrame,
-        *,
-        request: WriteRequest,
-        spec: DeltaWriteSpec,
-    ) -> DeltaWriteOutcome | None:
-        if request.partition_by:
-            return None
-        if request.mode == WriteMode.ERROR:
-            return None
-        existing_version = delta_table_version(
-            spec.table_uri,
-            storage_options=spec.storage_options,
-            log_storage_options=spec.log_storage_options,
-        )
-        if existing_version is None:
-            return None
-        try:
-            from datafusion_engine.delta_control_plane import (
-                DeltaProviderRequest,
-                delta_provider_from_session,
-            )
-        except ImportError:
-            return None
-        temp_name = request.table_name or f"__delta_write_{uuid.uuid4().hex}"
-        storage_options = _delta_storage_payload(
-            spec.storage_options,
-            log_storage_options=spec.log_storage_options,
-        )
-        try:
-            bundle = delta_provider_from_session(
-                self.ctx,
-                request=DeltaProviderRequest(
-                    table_uri=spec.table_uri,
-                    storage_options=storage_options,
-                    version=existing_version,
-                    timestamp=None,
-                    delta_scan=None,
-                ),
-            )
-        except (RuntimeError, TypeError, ValueError):
-            return None
-        provider = bundle.provider
-        from datafusion_engine.io_adapter import DataFusionIOAdapter
-        from datafusion_engine.table_provider_capsule import TableProviderCapsule
-
-        adapter = DataFusionIOAdapter(ctx=self.ctx, profile=self.runtime_profile)
-        adapter.register_delta_table_provider(
-            temp_name,
-            TableProviderCapsule(provider),
-            overwrite=True,
-        )
-        try:
-            self._write_table(df, request=request, table_name=temp_name)
-        finally:
-            deregister = getattr(self.ctx, "deregister_table", None)
-            if callable(deregister):
-                with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                    deregister(temp_name)
-        enabled_features = enable_delta_features(
-            spec.table_uri,
-            storage_options=spec.storage_options,
-            log_storage_options=spec.log_storage_options,
-            features=spec.table_properties,
-            commit_metadata=spec.commit_metadata,
-        )
-        if not enabled_features:
-            enabled_features = dict(spec.table_properties)
-        final_version = delta_table_version(
-            spec.table_uri,
-            storage_options=spec.storage_options,
-            log_storage_options=spec.log_storage_options,
-        )
-        if final_version is None:
-            msg = f"Failed to resolve Delta version after provider write: {spec.table_uri}"
             raise RuntimeError(msg)
         self._finalize_delta_commit(
             self._DeltaCommitFinalizeContext(
@@ -1258,21 +1116,6 @@ def _string_mapping(value: object | None) -> dict[str, str] | None:
         return None
     resolved = {str(key): str(item) for key, item in value.items() if item is not None}
     return resolved or None
-
-
-def _delta_storage_payload(
-    storage_options: Mapping[str, str] | None,
-    *,
-    log_storage_options: Mapping[str, str] | None,
-) -> dict[str, str] | None:
-    merged: dict[str, str] = {}
-    if storage_options:
-        merged.update(storage_options)
-    if log_storage_options:
-        merged.update(log_storage_options)
-    if not merged:
-        return None
-    return merged
 
 
 def _delta_mode(mode: WriteMode) -> Literal["append", "overwrite"]:

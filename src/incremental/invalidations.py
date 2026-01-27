@@ -293,9 +293,7 @@ def _plan_fingerprints_from_artifacts(
         plan_task_signature = payload.get("plan_task_signature")
         if not name or not plan_fingerprint:
             continue
-        signature_value = (
-            str(plan_task_signature) if plan_task_signature else str(plan_fingerprint)
-        )
+        signature_value = str(plan_task_signature) if plan_task_signature else str(plan_fingerprint)
         resolved[str(name)] = PlanFingerprint(
             plan_fingerprint=str(plan_fingerprint),
             plan_task_signature=signature_value,
@@ -358,9 +356,7 @@ def _coerce_plan_fingerprint_entries(value: object) -> dict[str, PlanFingerprint
         plan_task_signature = entry.get("plan_task_signature")
         if name is None or plan_fingerprint is None:
             continue
-        signature_value = (
-            str(plan_task_signature) if plan_task_signature else str(plan_fingerprint)
-        )
+        signature_value = str(plan_task_signature) if plan_task_signature else str(plan_fingerprint)
         resolved[str(name)] = PlanFingerprint(
             plan_fingerprint=str(plan_fingerprint),
             plan_task_signature=signature_value,

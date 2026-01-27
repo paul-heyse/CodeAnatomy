@@ -148,11 +148,7 @@ def _scan_planning(
         if unit.key in scan_task_name_by_key
     }
     scan_task_names_by_task = {
-        task: tuple(
-            scan_task_name_by_key[key]
-            for key in keys
-            if key in scan_task_name_by_key
-        )
+        task: tuple(scan_task_name_by_key[key] for key in keys if key in scan_task_name_by_key)
         for task, keys in scan_keys_by_task.items()
     }
     return _ScanPlanning(

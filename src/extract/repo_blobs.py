@@ -14,7 +14,7 @@ from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
-from datafusion_engine.plan import DataFusionPlan
+from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.query_spec import QuerySpec
 from extract.cache_utils import (
     CacheSetOptions,
@@ -261,13 +261,13 @@ def scan_repo_blobs_plan(
     *,
     options: RepoBlobOptions,
     session: ExtractSession,
-) -> DataFusionPlan:
+) -> DataFusionPlanBundle:
     """Build the plan for repo blob extraction.
 
     Returns
     -------
-    DataFusionPlan
-        DataFusion plan emitting repo file blobs.
+    DataFusionPlanBundle
+        DataFusion plan bundle emitting repo file blobs.
     """
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
 

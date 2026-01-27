@@ -17,9 +17,9 @@ from normalize.registry_runtime import dataset_name_from_alias
 from storage.deltalake import (
     DeltaWriteOptions,
     coerce_delta_table,
+    delta_delete_where,
     enable_delta_features,
     idempotent_commit_properties,
-    open_delta_table,
     write_delta_table,
 )
 
@@ -369,12 +369,16 @@ def _delete_delta_partitions(
         idempotent=commit_options,
         extra_metadata=commit_metadata,
     )
-    table = open_delta_table(
-        base_dir,
+    ctx = context.runtime.session_context()
+    delta_delete_where(
+        ctx,
+        path=base_dir,
+        predicate=predicate,
         storage_options=context.storage.storage_options,
         log_storage_options=context.storage.log_storage_options,
+        commit_properties=commit_properties,
+        commit_metadata=commit_metadata,
     )
-    table.delete(predicate, commit_properties=commit_properties)
     context.runtime.profile.finalize_delta_commit(
         key=base_dir,
         run=commit_run,

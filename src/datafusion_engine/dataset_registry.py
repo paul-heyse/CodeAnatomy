@@ -10,6 +10,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict
 from core_types import PathLike
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
     DataFusionScanOptions,
@@ -39,6 +40,7 @@ class DatasetLocation:
     delta_cdf_options: DeltaCdfOptions | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
+    delta_feature_gate: DeltaFeatureGate | None = None
     delta_constraints: tuple[str, ...] = ()
     filesystem: object | None = None
     files: tuple[str, ...] | None = None
@@ -192,6 +194,14 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "schema_mode": loc.delta_schema_policy.schema_mode,
                 "column_mapping_mode": loc.delta_schema_policy.column_mapping_mode,
             }
+        delta_feature_gate = None
+        if loc.delta_feature_gate is not None:
+            delta_feature_gate = {
+                "min_reader_version": loc.delta_feature_gate.min_reader_version,
+                "min_writer_version": loc.delta_feature_gate.min_writer_version,
+                "required_reader_features": list(loc.delta_feature_gate.required_reader_features),
+                "required_writer_features": list(loc.delta_feature_gate.required_writer_features),
+            }
         provider = resolve_datafusion_provider(loc)
         snapshot.append(
             {
@@ -207,6 +217,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "delta_scan": delta_scan,
                 "delta_write_policy": delta_write_policy,
                 "delta_schema_policy": delta_schema_policy,
+                "delta_feature_gate": delta_feature_gate,
                 "delta_constraints": list(loc.delta_constraints) if loc.delta_constraints else None,
                 "delta_version": loc.delta_version,
                 "delta_timestamp": loc.delta_timestamp,
@@ -324,6 +335,21 @@ def resolve_delta_schema_policy(location: DatasetLocation) -> DeltaSchemaPolicy 
     return None
 
 
+def resolve_delta_feature_gate(location: DatasetLocation) -> DeltaFeatureGate | None:
+    """Return Delta protocol/feature gate requirements for a dataset location.
+
+    Returns
+    -------
+    DeltaFeatureGate | None
+        Feature gate requirements for the dataset when configured.
+    """
+    if location.delta_feature_gate is not None:
+        return location.delta_feature_gate
+    if location.dataset_spec is not None:
+        return location.dataset_spec.delta_feature_gate
+    return None
+
+
 def resolve_delta_constraints(location: DatasetLocation) -> tuple[str, ...]:
     """Return Delta constraint expressions for a dataset location.
 
@@ -366,6 +392,7 @@ def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
             log_storage_options=location.delta_log_storage_options or None,
             version=location.delta_version,
             timestamp=location.delta_timestamp,
+            gate=resolve_delta_feature_gate(location),
         )
         if schema is None:
             msg = f"Delta schema unavailable for dataset at {location.path!r}."
@@ -390,6 +417,7 @@ __all__ = [
     "resolve_datafusion_scan_options",
     "resolve_dataset_schema",
     "resolve_delta_constraints",
+    "resolve_delta_feature_gate",
     "resolve_delta_log_storage_options",
     "resolve_delta_scan_options",
     "resolve_delta_schema_policy",

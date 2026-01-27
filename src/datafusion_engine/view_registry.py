@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from uuid import uuid4
 from typing import TYPE_CHECKING, Final
+from uuid import uuid4
 
 import pyarrow as pa
 from datafusion import SessionContext, col, lit
@@ -14,12 +14,12 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
+from datafusion_engine.schema_introspection import table_names_snapshot
 from datafusion_engine.schema_registry import (
     SCIP_VIEW_NAMES,
     extract_nested_dataset_names,
     nested_base_df,
 )
-from datafusion_engine.schema_introspection import table_names_snapshot
 from datafusion_engine.view_graph_registry import ViewNode
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 
@@ -2550,26 +2550,29 @@ def _symtable_namespace_edges_df(ctx: SessionContext) -> DataFrame:
     )
 
 
+def _empty_ts_ast_check_df(ctx: SessionContext) -> DataFrame:
+    empty_schema = pa.schema(
+        [
+            pa.field("file_id", pa.string(), nullable=False),
+            pa.field("path", pa.string(), nullable=False),
+            pa.field("ts_start_byte", pa.int64(), nullable=True),
+            pa.field("ts_end_byte", pa.int64(), nullable=True),
+            pa.field("ast_start_byte", pa.int64(), nullable=True),
+            pa.field("ast_end_byte", pa.int64(), nullable=True),
+        ]
+    )
+    empty_table = pa.Table.from_arrays(
+        [pa.array([], type=field.type) for field in empty_schema],
+        schema=empty_schema,
+    )
+    empty_name = f"__ts_ast_check_empty_{uuid4().hex}"
+    ctx.from_arrow(empty_table, name=empty_name)
+    return ctx.table(empty_name)
+
+
 def _ts_ast_check_df(ctx: SessionContext, *, ts_view: str, ast_view: str, label: str) -> DataFrame:
-    table_names = table_names_snapshot(ctx)
-    if "file_line_index_v1" not in table_names:
-        empty_schema = pa.schema(
-            [
-                pa.field("file_id", pa.string(), nullable=False),
-                pa.field("path", pa.string(), nullable=False),
-                pa.field("ts_start_byte", pa.int64(), nullable=True),
-                pa.field("ts_end_byte", pa.int64(), nullable=True),
-                pa.field("ast_start_byte", pa.int64(), nullable=True),
-                pa.field("ast_end_byte", pa.int64(), nullable=True),
-            ]
-        )
-        empty_table = pa.Table.from_arrays(
-            [pa.array([], type=field.type) for field in empty_schema],
-            schema=empty_schema,
-        )
-        empty_name = f"__ts_ast_check_empty_{uuid4().hex}"
-        ctx.from_arrow(empty_table, name=empty_name)
-        return ctx.table(empty_name)
+    if "file_line_index_v1" not in table_names_snapshot(ctx):
+        return _empty_ts_ast_check_df(ctx)
     ts = _view_df(ctx, ts_view).select(
         col("file_id"),
         col("path"),

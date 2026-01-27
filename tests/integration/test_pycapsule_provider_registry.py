@@ -11,9 +11,10 @@ from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from obs.diagnostics import DiagnosticsCollector
+from storage.deltalake import DeltaWriteOptions, write_delta_table
 
 pytest.importorskip("datafusion")
-deltalake = pytest.importorskip("deltalake")
+pytest.importorskip("deltalake")
 
 EXPECTED_ROW_COUNT = 2
 
@@ -23,11 +24,16 @@ def test_table_provider_registry_records_delta_capsule(tmp_path: Path) -> None:
     """Record table provider capabilities for Delta-backed tables."""
     table = pa.table({"id": [1, 2], "value": ["a", "b"]})
     delta_path = tmp_path / "delta_table"
-    deltalake.write_deltalake(str(delta_path), table)
 
     sink = DiagnosticsCollector()
     profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
     ctx = profile.session_context()
+    write_delta_table(
+        table,
+        str(delta_path),
+        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+        ctx=ctx,
+    )
     register_dataset_df(
         ctx,
         name="delta_tbl",

@@ -341,9 +341,7 @@ def persist_plan_artifacts_for_views(
         if bundle is None:
             continue
         scan_keys = (
-            tuple(request.scan_keys_by_view.get(node.name, ()))
-            if request.scan_keys_by_view
-            else ()
+            tuple(request.scan_keys_by_view.get(node.name, ())) if request.scan_keys_by_view else ()
         )
         lineage = request.lineage_by_view.get(node.name) if request.lineage_by_view else None
         rows.append(
@@ -1255,6 +1253,9 @@ def _scan_units_payload(
                 "key": unit.key,
                 "dataset_name": unit.dataset_name,
                 "delta_version": unit.delta_version,
+                "delta_timestamp": unit.delta_timestamp,
+                "snapshot_timestamp": unit.snapshot_timestamp,
+                "delta_feature_gate": _delta_gate_payload(unit.delta_feature_gate),
                 "candidate_files": [str(path) for path in unit.candidate_files],
                 "pushed_filters": list(unit.pushed_filters),
                 "projected_columns": list(unit.projected_columns),
@@ -1270,11 +1271,27 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, objec
             "dataset_name": pin.dataset_name,
             "version": pin.version,
             "timestamp": pin.timestamp,
+            "feature_gate": _delta_gate_payload(pin.feature_gate),
         }
         for pin in bundle.delta_inputs
     ]
     payloads.sort(key=lambda item: str(item["dataset_name"]))
     return tuple(payloads)
+
+
+def _delta_gate_payload(gate: object | None) -> dict[str, object] | None:
+    if gate is None:
+        return None
+    min_reader_version = getattr(gate, "min_reader_version", None)
+    min_writer_version = getattr(gate, "min_writer_version", None)
+    required_reader_features = getattr(gate, "required_reader_features", ())
+    required_writer_features = getattr(gate, "required_writer_features", ())
+    return {
+        "min_reader_version": min_reader_version,
+        "min_writer_version": min_writer_version,
+        "required_reader_features": list(required_reader_features),
+        "required_writer_features": list(required_writer_features),
+    }
 
 
 def _plan_identity_payload(

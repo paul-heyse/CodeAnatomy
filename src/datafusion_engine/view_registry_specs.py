@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
     from schema_spec.system import DatasetSpec
 
 
@@ -131,6 +131,7 @@ def _bundle_deps_and_udfs(
         ctx,
         df,
         compute_execution_plan=False,
+        validate_udfs=True,
         session_runtime=session_runtime,
     )
     try:
@@ -144,6 +145,25 @@ def _bundle_deps_and_udfs(
     deps = lineage.referenced_tables
     required = _required_udfs_from_plan_bundle(bundle, snapshot)
     return bundle, deps, required
+
+
+def _deps_and_udfs_from_bundle(
+    bundle: DataFusionPlanBundle,
+    snapshot: Mapping[str, object],
+    *,
+    label: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    try:
+        lineage = extract_lineage(
+            bundle.optimized_logical_plan,
+            udf_snapshot=bundle.artifacts.udf_snapshot,
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Failed to extract lineage for view {label!r}."
+        raise ValueError(msg) from exc
+    deps = lineage.referenced_tables
+    required = _required_udfs_from_plan_bundle(bundle, snapshot)
+    return deps, required
 
 
 def _arrow_schema_from_df(df: DataFrame) -> pa.Schema:
@@ -244,7 +264,7 @@ def _normalize_view_nodes(
 ) -> list[ViewNode]:
     from normalize.dataset_rows import DATASET_ROWS
     from normalize.dataset_specs import dataset_contract_schema, dataset_spec
-    from normalize.df_view_builders import VIEW_BUILDERS
+    from normalize.df_view_builders import VIEW_BUILDERS, VIEW_BUNDLE_BUILDERS
 
     nodes: list[ViewNode] = []
     for row in DATASET_ROWS:
@@ -254,15 +274,21 @@ def _normalize_view_nodes(
         if builder is None:
             msg = f"Missing DataFusion builder for normalize view {row.name!r}."
             raise KeyError(msg)
+        bundle_builder = VIEW_BUNDLE_BUILDERS.get(row.name)
+        if bundle_builder is None:
+            msg = f"Missing DataFusion bundle builder for normalize view {row.name!r}."
+            raise KeyError(msg)
+        if runtime_profile is None:
+            msg = f"Runtime profile is required for view planning: {row.name!r}."
+            raise ValueError(msg)
+        bundle = bundle_builder(runtime_profile.session_runtime())
         dataset = dataset_spec(row.name)
         metadata = _metadata_from_dataset_spec(dataset)
         expected_schema = _arrow_schema_from_contract(dataset_contract_schema(row.name))
-        bundle, deps, required = _bundle_deps_and_udfs(
-            ctx,
-            builder,
+        deps, required = _deps_and_udfs_from_bundle(
+            bundle,
             snapshot,
             label=row.name,
-            runtime_profile=runtime_profile,
         )
         metadata = _metadata_with_required_udfs(metadata, required)
         nodes.append(
@@ -447,14 +473,25 @@ def _cpg_view_nodes(
 ) -> list[ViewNode]:
     from cpg.view_builders_df import build_cpg_edges_df, build_cpg_nodes_df, build_cpg_props_df
 
+    if runtime_profile is None:
+        msg = "Runtime profile is required for CPG view planning."
+        raise ValueError(msg)
+    session_runtime = runtime_profile.session_runtime()
+
+    def _wrap(builder: Callable[[SessionRuntime], DataFrame]) -> DataFrameBuilder:
+        def _build(_ctx: SessionContext) -> DataFrame:
+            return builder(session_runtime)
+
+        return _build
+
     priority = 100
     nodes_identity = TaskIdentity(name="cpg.nodes", priority=priority)
     props_identity = TaskIdentity(name="cpg.props", priority=priority)
 
     view_specs: tuple[tuple[str, DataFrameBuilder], ...] = (
-        ("cpg_nodes_v1", partial(build_cpg_nodes_df, task_identity=nodes_identity)),
-        ("cpg_edges_v1", build_cpg_edges_df),
-        ("cpg_props_v1", partial(build_cpg_props_df, task_identity=props_identity)),
+        ("cpg_nodes_v1", _wrap(partial(build_cpg_nodes_df, task_identity=nodes_identity))),
+        ("cpg_edges_v1", _wrap(build_cpg_edges_df)),
+        ("cpg_props_v1", _wrap(partial(build_cpg_props_df, task_identity=props_identity))),
     )
 
     nodes: list[ViewNode] = []

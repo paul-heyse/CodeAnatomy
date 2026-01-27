@@ -11,7 +11,7 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
-from datafusion import SessionContext, col, lit
+from datafusion import col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
@@ -24,10 +24,15 @@ from cpg.spec_registry import (
     scip_role_flag_prop_spec,
 )
 from cpg.specs import NodeEmitSpec, PropFieldSpec, PropTableSpec, TaskIdentity
-from datafusion_ext import stable_id_parts
+from datafusion_engine.runtime import SessionRuntime
+from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_ext import span_id, stable_id_parts
 from relspec.view_defs import RELATION_OUTPUT_NAME
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
+
     from cpg.specs import PropOptions
 
 
@@ -103,14 +108,14 @@ def _stable_id_from_parts(prefix: str, parts: Sequence[Expr]) -> Expr:
 
 
 def build_cpg_nodes_df(
-    ctx: SessionContext, *, task_identity: TaskIdentity | None = None
+    session_runtime: SessionRuntime, *, task_identity: TaskIdentity | None = None
 ) -> DataFrame:
     """Build CPG nodes DataFrame from view specs using DataFusion.
 
     Parameters
     ----------
-    ctx
-        DataFusion SessionContext with registered views.
+    session_runtime
+        DataFusion SessionRuntime with registered views.
     task_identity
         Optional task identity metadata for CPG outputs.
 
@@ -124,6 +129,7 @@ def build_cpg_nodes_df(
     ValueError
         Raised when required source tables are missing or no plans are produced.
     """
+    ctx = session_runtime.ctx
     specs = node_plan_specs()
     task_name = task_identity.name if task_identity is not None else None
     task_priority = task_identity.priority if task_identity is not None else None
@@ -223,13 +229,13 @@ def _prepare_id_columns_df(
     return tuple(columns), _
 
 
-def build_cpg_edges_df(ctx: SessionContext) -> DataFrame:
+def build_cpg_edges_df(session_runtime: SessionRuntime) -> DataFrame:
     """Build CPG edges DataFrame from relation outputs using DataFusion.
 
     Parameters
     ----------
-    ctx
-        DataFusion SessionContext with registered views.
+    session_runtime
+        DataFusion SessionRuntime with registered views.
 
     Returns
     -------
@@ -241,6 +247,7 @@ def build_cpg_edges_df(ctx: SessionContext) -> DataFrame:
     ValueError
         Raised when the relation output table is missing.
     """
+    ctx = session_runtime.ctx
     try:
         relation_df = ctx.table(RELATION_OUTPUT_NAME)
     except KeyError as exc:
@@ -270,15 +277,12 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
     base_id_parts = [edge_kind, col("src"), col("dst")]
     base_id = _stable_id_from_parts("edge", base_id_parts)
 
-    span_id_parts = [edge_kind, col("src"), col("dst"), col("path"), col("bstart"), col("bend")]
-    span_id = _stable_id_from_parts("edge", span_id_parts)
-
-    has_span = col("path").is_not_null() & col("bstart").is_not_null() & col("bend").is_not_null()
     valid_nodes = col("src").is_not_null() & col("dst").is_not_null()
+    span_id_expr = span_id("edge", col("path"), col("bstart"), col("bend"), edge_kind)
 
     edge_id = (
         f.case(valid_nodes)
-        .when(lit(value=True), f.case(has_span).when(lit(value=True), span_id).otherwise(base_id))
+        .when(lit(value=True), f.coalesce(span_id_expr, base_id))
         .otherwise(_null_expr("Utf8"))
     )
 
@@ -317,7 +321,7 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:  # noqa: PLR0914
 
 
 def build_cpg_props_df(
-    ctx: SessionContext,
+    session_runtime: SessionRuntime,
     *,
     options: PropOptions | None = None,
     task_identity: TaskIdentity | None = None,
@@ -326,8 +330,8 @@ def build_cpg_props_df(
 
     Parameters
     ----------
-    ctx
-        DataFusion SessionContext with registered views.
+    session_runtime
+        DataFusion SessionRuntime with registered views.
     options
         Optional property options for filtering.
     task_identity
@@ -343,8 +347,9 @@ def build_cpg_props_df(
     ValueError
         Raised when required source tables are missing.
     """
+    ctx = session_runtime.ctx
     resolved_options = options or CpgPropOptions()
-    source_columns_lookup = _source_columns_lookup_df(ctx)
+    source_columns_lookup = _source_columns_lookup_df(session_runtime)
     prop_specs = list(prop_table_specs(source_columns_lookup=source_columns_lookup))
     prop_specs.append(scip_role_flag_prop_spec())
     prop_specs.append(edge_prop_spec())
@@ -619,35 +624,50 @@ def _empty_props_df(ctx: SessionContext) -> DataFrame:
     """)
 
 
-def _source_columns_lookup_df(ctx: SessionContext) -> Callable[[str], Sequence[str] | None]:
-    """Build a columns lookup function from registered tables.
+def _source_columns_lookup_df(
+    session_runtime: SessionRuntime,
+) -> Callable[[str], Sequence[str] | None]:
+    """Build a columns lookup function from information_schema when available.
 
     Parameters
     ----------
-    ctx
-        DataFusion SessionContext.
+    session_runtime
+        DataFusion SessionRuntime.
 
     Returns
     -------
     Callable[[str], Sequence[str] | None]
         Lookup function for table columns.
     """
-    columns_by_table: dict[str, tuple[str, ...]] = {}
-
-    catalog = ctx.catalog()
-    for schema_name in catalog.names():
-        schema = catalog.schema(schema_name)
-        for table_name in schema.names():
-            try:
-                table_provider = schema.table(table_name)
-                arrow_schema = table_provider.schema()
-                columns_by_table[table_name] = tuple(sorted(arrow_schema.names))
-            except Exception:  # noqa: BLE001
-                # Skip tables that can't be introspected
+    columns_by_table: dict[str, set[str]] = {}
+    sql_options = sql_options_for_profile(session_runtime.profile)
+    introspector = SchemaIntrospector(session_runtime.ctx, sql_options=sql_options)
+    snapshot = introspector.snapshot
+    if snapshot is not None:
+        for row in snapshot.columns.to_pylist():
+            table_name = row.get("table_name")
+            column_name = row.get("column_name")
+            if not isinstance(table_name, str) or not isinstance(column_name, str):
                 continue
+            columns_by_table.setdefault(table_name, set()).add(column_name)
+    if not columns_by_table:
+        catalog = session_runtime.ctx.catalog()
+        for schema_name in catalog.names():
+            schema = catalog.schema(schema_name)
+            for table_name in schema.names():
+                try:
+                    table_provider = schema.table(table_name)
+                    arrow_schema = table_provider.schema()
+                    columns_by_table.setdefault(table_name, set()).update(arrow_schema.names)
+                except Exception:  # noqa: BLE001
+                    # Skip tables that can't be introspected
+                    continue
 
     def _lookup(table_name: str) -> Sequence[str] | None:
-        return columns_by_table.get(table_name)
+        columns = columns_by_table.get(table_name)
+        if not columns:
+            return None
+        return tuple(sorted(columns))
 
     return _lookup
 

@@ -146,10 +146,11 @@ def _worklist_stream(
     if runtime_profile is None:
         msg = "Worklist streaming requires a DataFusion runtime profile."
         raise ValueError(msg)
-    df_ctx = runtime_profile.session_context()
+    session_runtime = runtime_profile.session_runtime()
+    df_ctx = session_runtime.ctx
     repo_name = f"__repo_files_{uuid.uuid4().hex}"
     output_exists = _table_exists(df_ctx, output_table)
-    output_location = None if output_exists else runtime_profile.dataset_location(output_table)
+    output_location = runtime_profile.dataset_location(output_table)
     use_output = output_exists or output_location is not None
     output_name = output_table if use_output else None
     builder = worklist_builder(
@@ -157,6 +158,25 @@ def _worklist_stream(
         repo_table=repo_name,
         output_table_name=output_name,
     )
+    if output_location is not None and output_location.format == "delta":
+        from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+        from datafusion_engine.scan_planner import ScanLineage, plan_scan_unit
+
+        scan_unit = plan_scan_unit(
+            df_ctx,
+            dataset_name=output_table,
+            location=output_location,
+            lineage=ScanLineage(
+                dataset_name=output_table,
+                projected_columns=(),
+                pushed_filters=(),
+            ),
+        )
+        apply_scan_unit_overrides(
+            df_ctx,
+            scan_units=(scan_unit,),
+            runtime_profile=runtime_profile,
+        )
     with (
         _registered_table(df_ctx, name=repo_name, table=repo_files),
         _registered_output_table(

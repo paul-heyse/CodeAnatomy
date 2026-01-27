@@ -20,7 +20,6 @@ __all__ = (
     "StatsFilter",
     "StorageOptions",
     "build_commit_properties",
-    "build_delta_file_index",
     "build_delta_file_index_from_add_actions",
     "build_delta_scan_config",
     "cleanup_delta_log",
@@ -29,7 +28,9 @@ __all__ = (
     "delta_cdf_enabled",
     "delta_commit_metadata",
     "delta_data_checker",
+    "delta_delete_where",
     "delta_history_snapshot",
+    "delta_merge_arrow",
     "delta_protocol_snapshot",
     "delta_schema_configuration",
     "delta_table_features",
@@ -40,9 +41,6 @@ __all__ = (
     "evaluate_and_select_files",
     "evaluate_filters_against_index",
     "idempotent_commit_properties",
-    "open_delta_table",
-    "query_builder_available",
-    "query_delta_via_querybuilder",
     "read_delta_cdf",
     "select_candidate_files",
     "vacuum_delta",
@@ -69,23 +67,18 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "delta_cdf_enabled": ("storage.deltalake.delta", "delta_cdf_enabled"),
     "delta_commit_metadata": ("storage.deltalake.delta", "delta_commit_metadata"),
     "delta_data_checker": ("storage.deltalake.delta", "delta_data_checker"),
+    "delta_delete_where": ("storage.deltalake.delta", "delta_delete_where"),
     "delta_history_snapshot": ("storage.deltalake.delta", "delta_history_snapshot"),
+    "delta_merge_arrow": ("storage.deltalake.delta", "delta_merge_arrow"),
     "delta_protocol_snapshot": ("storage.deltalake.delta", "delta_protocol_snapshot"),
     "delta_table_features": ("storage.deltalake.delta", "delta_table_features"),
     "delta_table_schema": ("storage.deltalake.delta", "delta_table_schema"),
     "delta_table_version": ("storage.deltalake.delta", "delta_table_version"),
     "enable_delta_features": ("storage.deltalake.delta", "enable_delta_features"),
-    "open_delta_table": ("storage.deltalake.delta", "open_delta_table"),
-    "query_builder_available": ("storage.deltalake.query_builder", "query_builder_available"),
-    "query_delta_via_querybuilder": (
-        "storage.deltalake.query_builder",
-        "query_delta_via_querybuilder",
-    ),
     "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
     "write_delta_table": ("storage.deltalake.delta", "write_delta_table"),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
     "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
-    "build_delta_file_index": ("storage.deltalake.file_index", "build_delta_file_index"),
     "build_delta_file_index_from_add_actions": (
         "storage.deltalake.file_index",
         "build_delta_file_index_from_add_actions",
@@ -107,7 +100,6 @@ if TYPE_CHECKING:
     import storage.deltalake.delta as _delta_io
     import storage.deltalake.file_index as _file_index
     import storage.deltalake.file_pruning as _file_pruning
-    import storage.deltalake.query_builder as _query_builder
     import storage.deltalake.scan_profile as _scan_profile
 
     DeltaSchemaPolicy = _delta_config.DeltaSchemaPolicy
@@ -128,24 +120,20 @@ if TYPE_CHECKING:
     create_delta_checkpoint = _delta_io.create_delta_checkpoint
     delta_commit_metadata = _delta_io.delta_commit_metadata
     delta_data_checker = _delta_io.delta_data_checker
+    delta_delete_where = _delta_io.delta_delete_where
     delta_history_snapshot = _delta_io.delta_history_snapshot
+    delta_merge_arrow = _delta_io.delta_merge_arrow
     delta_protocol_snapshot = _delta_io.delta_protocol_snapshot
     delta_cdf_enabled = _delta_io.delta_cdf_enabled
     delta_table_features = _delta_io.delta_table_features
     delta_table_schema = _delta_io.delta_table_schema
     delta_table_version = _delta_io.delta_table_version
     enable_delta_features = _delta_io.enable_delta_features
-    open_delta_table = _delta_io.open_delta_table
-    query_builder_available = _query_builder.query_builder_available
-    query_delta_via_querybuilder = _query_builder.query_delta_via_querybuilder
     read_delta_cdf = _delta_io.read_delta_cdf
     write_delta_table = _delta_io.write_delta_table
     vacuum_delta = _delta_io.vacuum_delta
     FileIndexEntry = _file_index.FileIndexEntry
-    build_delta_file_index = _file_index.build_delta_file_index
-    build_delta_file_index_from_add_actions = (
-        _file_index.build_delta_file_index_from_add_actions
-    )
+    build_delta_file_index_from_add_actions = _file_index.build_delta_file_index_from_add_actions
     PartitionFilter = _file_pruning.PartitionFilter
     StatsFilter = _file_pruning.StatsFilter
     FilePruningPolicy = _file_pruning.FilePruningPolicy

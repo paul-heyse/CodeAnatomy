@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -13,9 +14,10 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
+from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.dataset_locations import resolve_dataset_location
 from datafusion_engine.dataset_registry import resolve_delta_log_storage_options
-from datafusion_engine.diagnostics import record_artifact, record_events
+from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
 from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.param_tables import scalar_param_signature
@@ -24,6 +26,7 @@ from datafusion_engine.runtime import (
     DataFusionRuntimeProfile,
 )
 from datafusion_engine.streaming_executor import StreamingExecutionResult
+from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
 from storage.deltalake import DeltaWriteOptions, DeltaWriteResult, write_delta_table
@@ -454,13 +457,43 @@ def write_extract_outputs(
     if location.format.lower() != "delta":
         msg = f"Delta-only extract writes are enforced; got {location.format!r}."
         raise ValueError(msg)
-    _write_delta(
-        reader,
-        context=_DeltaWriteContext(
+    session_runtime = runtime_profile.session_runtime()
+    df = datafusion_from_arrow(
+        session_runtime.ctx,
+        name=f"__extract_output_{uuid.uuid4().hex}",
+        value=reader,
+    )
+    commit_metadata = {
+        "operation": "extract_output",
+        "dataset": name,
+        "row_count": str(rows) if rows is not None else "unknown",
+    }
+    pipeline = WritePipeline(
+        session_runtime.ctx,
+        sql_options=runtime_profile.sql_options(),
+        recorder=recorder_for_profile(runtime_profile, operation_id=f"extract_write::{name}"),
+        runtime_profile=runtime_profile,
+    )
+    write_result = pipeline.write(
+        WriteRequest(
+            source=df,
+            destination=str(location.path),
+            format=WriteFormat.DELTA,
+            mode=WriteMode.APPEND,
+            format_options={"commit_metadata": commit_metadata},
+        )
+    )
+    _record_extract_write(
+        runtime_profile,
+        record=_ExtractWriteRecord(
             dataset=name,
-            runtime_profile=runtime_profile,
-            location=location,
+            mode="append",
+            path=str(location.path),
+            file_format="delta",
             rows=rows,
+            copy_sql=None,
+            copy_options=None,
+            delta_result=write_result.delta_result,
         ),
     )
     _record_diskcache_stats(runtime_profile)

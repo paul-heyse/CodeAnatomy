@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
-from deltalake import CommitProperties, DeltaTable, Transaction, WriterProperties
-from deltalake.writer.writer import write_deltalake
+from deltalake import CommitProperties, Transaction, WriterProperties
 
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
@@ -17,11 +18,11 @@ from arrowdsl.schema.schema import SchemaTransform
 from storage.ipc import ipc_bytes
 
 if TYPE_CHECKING:
-    from arro3.core.types import ArrowArrayExportable
     from datafusion import SessionContext
-    from datafusion_engine.delta_control_plane import DeltaCdfProviderBundle
+
     from datafusion_engine.delta_control_plane import (
         DeltaAppTransaction,
+        DeltaCdfProviderBundle,
         DeltaCommitOptions,
         DeltaFeatureGate,
     )
@@ -44,32 +45,55 @@ def _runtime_ctx(ctx: SessionContext | None) -> SessionContext:
     return DataFusionRuntimeProfile().session_context()
 
 
-def _snapshot_info(
-    path: str,
-    *,
-    storage_options: StorageOptions | None,
-    log_storage_options: StorageOptions | None,
-    version: int | None = None,
-    timestamp: str | None = None,
-    gate: DeltaFeatureGate | None = None,
-) -> Mapping[str, object] | None:
-    storage = _log_storage_dict(storage_options, log_storage_options)
+@dataclass(frozen=True)
+class DeltaSnapshotLookup:
+    """Inputs for Delta snapshot retrieval."""
+
+    path: str
+    storage_options: StorageOptions | None
+    log_storage_options: StorageOptions | None
+    version: int | None = None
+    timestamp: str | None = None
+    gate: DeltaFeatureGate | None = None
+
+
+def _snapshot_info(request: DeltaSnapshotLookup) -> Mapping[str, object] | None:
+    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
     try:
         from datafusion_engine.delta_control_plane import (
             DeltaSnapshotRequest,
             delta_snapshot_info,
         )
 
-        request = DeltaSnapshotRequest(
-            table_uri=path,
+        snapshot_request = DeltaSnapshotRequest(
+            table_uri=request.path,
             storage_options=storage or None,
-            version=version,
-            timestamp=timestamp,
-            gate=gate,
+            version=request.version,
+            timestamp=request.timestamp,
+            gate=request.gate,
         )
-        return delta_snapshot_info(request)
+        return delta_snapshot_info(snapshot_request)
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
+
+
+def _register_temp_table(ctx: SessionContext, table: pa.Table) -> str:
+    name = f"__delta_temp_{uuid.uuid4().hex}"
+    batches = table.to_batches()
+    register = getattr(ctx, "register_record_batches", None)
+    if not callable(register):
+        msg = "SessionContext.register_record_batches is unavailable."
+        raise TypeError(msg)
+    register(name, batches)
+    return name
+
+
+def _deregister_table(ctx: SessionContext, name: str) -> None:
+    deregister = getattr(ctx, "deregister_table", None)
+    if not callable(deregister):
+        return
+    with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+        deregister(name)
 
 
 @dataclass(frozen=True)
@@ -97,6 +121,7 @@ class DeltaWriteOptions:
     version: int | None = None
     storage_options: StorageOptions | None = None
     log_storage_options: StorageOptions | None = None
+    extra_constraints: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -157,43 +182,12 @@ class DeltaDataCheckRequest:
     extra_constraints: Sequence[str] | None = None
 
 
-def open_delta_table(
-    path: str,
-    *,
-    storage_options: StorageOptions | None = None,
-    log_storage_options: StorageOptions | None = None,
-    version: int | None = None,
-    timestamp: str | None = None,
-) -> DeltaTable:
-    """Open a DeltaTable with optional time travel.
-
-    Returns
-    -------
-    deltalake.DeltaTable
-        Delta table instance for the path.
-
-    Raises
-    ------
-    ValueError
-        Raised when both version and timestamp are provided.
-    """
-    if version is not None and timestamp is not None:
-        msg = "Specify either version or timestamp, not both."
-        raise ValueError(msg)
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    table = DeltaTable(path, storage_options=storage)
-    if version is not None:
-        table.load_as_version(version)
-    elif timestamp is not None:
-        table.load_as_version(timestamp)
-    return table
-
-
 def delta_table_version(
     path: str,
     *,
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
+    gate: DeltaFeatureGate | None = None,
 ) -> int | None:
     """Return the latest Delta table version when the table exists.
 
@@ -203,9 +197,12 @@ def delta_table_version(
         Latest Delta table version, or None if not a Delta table.
     """
     snapshot = _snapshot_info(
-        path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
+        DeltaSnapshotLookup(
+            path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            gate=gate,
+        )
     )
     if snapshot is None:
         return None
@@ -227,6 +224,7 @@ def delta_table_schema(
     log_storage_options: StorageOptions | None = None,
     version: int | None = None,
     timestamp: str | None = None,
+    gate: DeltaFeatureGate | None = None,
 ) -> pa.Schema | None:
     """Return the Delta table schema when the table exists.
 
@@ -245,14 +243,15 @@ def delta_table_schema(
 
         bundle = delta_provider_from_session(
             ctx,
-            request=DeltaProviderRequest(
-                table_uri=path,
-                storage_options=storage or None,
-                version=version,
-                timestamp=timestamp,
-                delta_scan=None,
-            ),
-        )
+        request=DeltaProviderRequest(
+            table_uri=path,
+            storage_options=storage or None,
+            version=version,
+            timestamp=timestamp,
+            delta_scan=None,
+            gate=gate,
+        ),
+    )
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
     df = ctx.read_table(bundle.provider)
@@ -272,6 +271,7 @@ def delta_table_features(
     *,
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
+    gate: DeltaFeatureGate | None = None,
 ) -> dict[str, str] | None:
     """Return Delta table feature configuration values when present.
 
@@ -281,9 +281,12 @@ def delta_table_features(
         Feature configuration values or ``None`` if no features are set.
     """
     snapshot = _snapshot_info(
-        path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
+        DeltaSnapshotLookup(
+            path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            gate=gate,
+        )
     )
     if snapshot is None:
         return None
@@ -346,6 +349,7 @@ def delta_commit_metadata(
     *,
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
+    gate: DeltaFeatureGate | None = None,
 ) -> dict[str, str] | None:
     """Return custom commit metadata for the latest Delta table version.
 
@@ -355,9 +359,12 @@ def delta_commit_metadata(
         Custom commit metadata or ``None`` when not present.
     """
     snapshot = _snapshot_info(
-        path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
+        DeltaSnapshotLookup(
+            path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            gate=gate,
+        )
     )
     if snapshot is None:
         return None
@@ -370,6 +377,7 @@ def delta_history_snapshot(
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
     limit: int = 1,
+    gate: DeltaFeatureGate | None = None,
 ) -> dict[str, object] | None:
     """Return the latest Delta history entry.
 
@@ -379,9 +387,12 @@ def delta_history_snapshot(
         History entry payload or ``None`` when unavailable.
     """
     snapshot = _snapshot_info(
-        path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
+        DeltaSnapshotLookup(
+            path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            gate=gate,
+        )
     )
     if snapshot is None:
         return None
@@ -404,6 +415,7 @@ def delta_protocol_snapshot(
     *,
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
+    gate: DeltaFeatureGate | None = None,
 ) -> dict[str, object] | None:
     """Return Delta protocol versions and active feature flags.
 
@@ -413,9 +425,12 @@ def delta_protocol_snapshot(
         Protocol payload or ``None`` when unavailable.
     """
     snapshot = _snapshot_info(
-        path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
+        DeltaSnapshotLookup(
+            path=path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            gate=gate,
+        )
     )
     if snapshot is None:
         return None
@@ -441,20 +456,48 @@ def enable_delta_features(
     -------
     dict[str, str]
         Properties applied to the Delta table.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Rust control-plane property update fails.
     """
     storage = _log_storage_dict(storage_options, log_storage_options)
-    if not DeltaTable.is_deltatable(path, storage_options=storage):
+    if (
+        delta_table_version(
+            path,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+        )
+        is None
+    ):
         return {}
     resolved = features or DEFAULT_DELTA_FEATURE_PROPERTIES
     properties = {key: str(value) for key, value in resolved.items() if value is not None}
     if not properties:
         return {}
-    table = DeltaTable(path, storage_options=storage)
-    table.alter.set_table_properties(
-        properties,
-        raise_if_not_exists=False,
-        commit_properties=build_commit_properties(commit_metadata=commit_metadata),
-    )
+    ctx = _runtime_ctx(None)
+    try:
+        from datafusion_engine.delta_control_plane import (
+            DeltaCommitOptions,
+            DeltaSetPropertiesRequest,
+            delta_set_properties,
+        )
+
+        delta_set_properties(
+            ctx,
+            request=DeltaSetPropertiesRequest(
+                table_uri=path,
+                storage_options=storage or None,
+                version=None,
+                timestamp=None,
+                properties=properties,
+                commit_options=DeltaCommitOptions(metadata=dict(commit_metadata or {})),
+            ),
+        )
+    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Failed to set Delta table properties via Rust control plane: {exc}"
+        raise RuntimeError(msg) from exc
     return properties
 
 
@@ -471,18 +514,45 @@ def vacuum_delta(
     -------
     list[str]
         Files eligible for deletion (or removed when ``dry_run`` is False).
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Rust control-plane vacuum call fails.
     """
     options = options or DeltaVacuumOptions()
     storage = _log_storage_dict(storage_options, log_storage_options)
-    table = DeltaTable(path, storage_options=storage)
-    return table.vacuum(
-        retention_hours=options.retention_hours,
-        dry_run=options.dry_run,
-        enforce_retention_duration=options.enforce_retention_duration,
-        commit_properties=build_commit_properties(commit_metadata=options.commit_metadata),
-        full=options.full,
-        keep_versions=list(options.keep_versions) if options.keep_versions is not None else None,
-    )
+    ctx = _runtime_ctx(None)
+    try:
+        from datafusion_engine.delta_control_plane import (
+            DeltaCommitOptions,
+            DeltaVacuumRequest,
+            delta_vacuum,
+        )
+
+        report = delta_vacuum(
+            ctx,
+            request=DeltaVacuumRequest(
+                table_uri=path,
+                storage_options=storage or None,
+                version=None,
+                timestamp=None,
+                retention_hours=options.retention_hours,
+                dry_run=options.dry_run,
+                enforce_retention_duration=options.enforce_retention_duration,
+                commit_options=DeltaCommitOptions(metadata=dict(options.commit_metadata or {})),
+            ),
+        )
+    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Delta vacuum failed via Rust control plane: {exc}"
+        raise RuntimeError(msg) from exc
+    metrics = report.get("metrics")
+    if isinstance(metrics, Mapping):
+        for key in ("files", "removed_files", "deleted_files"):
+            value = metrics.get(key)
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                return [str(item) for item in value]
+    return []
 
 
 def create_delta_checkpoint(
@@ -492,8 +562,8 @@ def create_delta_checkpoint(
     log_storage_options: StorageOptions | None = None,
 ) -> None:
     """Create a checkpoint for a Delta table."""
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    DeltaTable(path, storage_options=storage).create_checkpoint()
+    msg = "create_delta_checkpoint is not supported in the Rust control-plane surface."
+    raise NotImplementedError(msg)
 
 
 def cleanup_delta_log(
@@ -503,8 +573,8 @@ def cleanup_delta_log(
     log_storage_options: StorageOptions | None = None,
 ) -> None:
     """Delete expired Delta log files."""
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    DeltaTable(path, storage_options=storage).cleanup_metadata()
+    msg = "cleanup_delta_log is not supported in the Rust control-plane surface."
+    raise NotImplementedError(msg)
 
 
 def coerce_delta_table(
@@ -594,6 +664,7 @@ def write_delta_table(
     path: str,
     *,
     options: DeltaWriteOptions | None = None,
+    ctx: SessionContext | None = None,
 ) -> DeltaWriteResult:
     """Write an Arrow table or stream to a Delta table path.
 
@@ -615,50 +686,150 @@ def write_delta_table(
     storage = dict(resolved.storage_options or {})
     if resolved.log_storage_options is not None:
         storage.update(dict(resolved.log_storage_options))
+    if isinstance(data, RecordBatchReaderLike):
+        table = cast("pa.Table", data.read_all())
+    else:
+        table = cast("pa.Table", data)
+    data_ipc = ipc_bytes(table)
+    ctx = _runtime_ctx(ctx)
+    try:
+        from datafusion_engine.delta_control_plane import (
+            DeltaCommitOptions,
+            DeltaWriteRequest,
+            delta_write_ipc,
+        )
+    except ImportError as exc:
+        msg = "Rust Delta control-plane adapters are required for Delta writes."
+        raise RuntimeError(msg) from exc
     commit_properties = resolved.commit_properties or build_commit_properties(
         app_id=resolved.app_id,
         version=resolved.version,
         commit_metadata=resolved.commit_metadata,
     )
-    if isinstance(data, RecordBatchReaderLike):
-        table = cast("pa.Table", data.read_all())
-    else:
-        table = cast("pa.Table", data)
-    resolved_data: Sequence[ArrowArrayExportable] = [cast("ArrowArrayExportable", table)]
-    writer_properties = resolved.writer_properties or WriterProperties()
-    if resolved.mode == "overwrite":
-        write_deltalake(
-            path,
-            resolved_data,
-            mode="overwrite",
-            schema_mode=resolved.schema_mode,
-            predicate=resolved.predicate,
-            partition_by=list(resolved.partition_by) if resolved.partition_by else None,
-            configuration=resolved.configuration,
+    commit_options = _delta_commit_options(
+        commit_properties=commit_properties,
+        commit_metadata=resolved.commit_metadata,
+        app_id=resolved.app_id,
+        app_version=resolved.version,
+    )
+    report = delta_write_ipc(
+        ctx,
+        request=DeltaWriteRequest(
+            table_uri=path,
             storage_options=storage or None,
-            target_file_size=resolved.target_file_size,
-            writer_properties=writer_properties,
-            commit_properties=commit_properties,
-        )
-    else:
-        write_deltalake(
-            path,
-            resolved_data,
+            version=resolved.version,
+            timestamp=None,
+            data_ipc=data_ipc,
             mode=resolved.mode,
             schema_mode=resolved.schema_mode,
-            partition_by=list(resolved.partition_by) if resolved.partition_by else None,
-            configuration=resolved.configuration,
-            storage_options=storage or None,
+            partition_columns=resolved.partition_by,
             target_file_size=resolved.target_file_size,
-            writer_properties=writer_properties,
-            commit_properties=commit_properties,
-        )
-    version = delta_table_version(
-        path,
-        storage_options=resolved.storage_options,
-        log_storage_options=resolved.log_storage_options,
+            extra_constraints=resolved.extra_constraints,
+            commit_options=commit_options,
+        ),
     )
+    version = _mutation_version(report)
     return DeltaWriteResult(path=path, version=version)
+
+
+def delta_delete_where(
+    ctx: SessionContext,
+    *,
+    path: str,
+    predicate: str | None,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
+    commit_properties: CommitProperties | None = None,
+    commit_metadata: Mapping[str, str] | None = None,
+    extra_constraints: Sequence[str] | None = None,
+) -> Mapping[str, object]:
+    """Delete rows from a Delta table via the Rust control plane."""
+    storage = _log_storage_dict(storage_options, log_storage_options)
+    commit_options = _delta_commit_options(
+        commit_properties=commit_properties,
+        commit_metadata=commit_metadata,
+        app_id=None,
+        app_version=None,
+    )
+    from datafusion_engine.delta_control_plane import delta_delete
+
+    return delta_delete(
+        ctx,
+        table_uri=path,
+        storage_options=storage or None,
+        version=None,
+        timestamp=None,
+        predicate=predicate,
+        extra_constraints=extra_constraints,
+        commit_options=commit_options,
+    )
+
+
+def delta_merge_arrow(
+    ctx: SessionContext,
+    *,
+    path: str,
+    source: pa.Table,
+    predicate: str,
+    storage_options: StorageOptions | None = None,
+    log_storage_options: StorageOptions | None = None,
+    source_alias: str | None = "source",
+    target_alias: str | None = "target",
+    matched_predicate: str | None = None,
+    matched_updates: Mapping[str, str] | None = None,
+    not_matched_predicate: str | None = None,
+    not_matched_inserts: Mapping[str, str] | None = None,
+    not_matched_by_source_predicate: str | None = None,
+    delete_not_matched_by_source: bool = False,
+    update_all: bool = False,
+    insert_all: bool = False,
+    commit_properties: CommitProperties | None = None,
+    commit_metadata: Mapping[str, str] | None = None,
+    extra_constraints: Sequence[str] | None = None,
+) -> Mapping[str, object]:
+    """Merge Arrow data into a Delta table via the Rust control plane."""
+    storage = _log_storage_dict(storage_options, log_storage_options)
+    resolved_source_alias = source_alias or "source"
+    resolved_target_alias = target_alias or "target"
+    resolved_updates = dict(matched_updates or {})
+    resolved_inserts = dict(not_matched_inserts or {})
+    if update_all:
+        for name in source.schema.names:
+            resolved_updates.setdefault(name, f"{resolved_source_alias}.{name}")
+    if insert_all:
+        for name in source.schema.names:
+            resolved_inserts.setdefault(name, f"{resolved_source_alias}.{name}")
+    source_table = _register_temp_table(ctx, source)
+    commit_options = _delta_commit_options(
+        commit_properties=commit_properties,
+        commit_metadata=commit_metadata,
+        app_id=None,
+        app_version=None,
+    )
+    from datafusion_engine.delta_control_plane import delta_merge
+
+    try:
+        return delta_merge(
+            ctx,
+            table_uri=path,
+            storage_options=storage or None,
+            version=None,
+            timestamp=None,
+            source_table=source_table,
+            predicate=predicate,
+            source_alias=resolved_source_alias,
+            target_alias=resolved_target_alias,
+            matched_predicate=matched_predicate,
+            matched_updates=resolved_updates,
+            not_matched_predicate=not_matched_predicate,
+            not_matched_inserts=resolved_inserts,
+            not_matched_by_source_predicate=not_matched_by_source_predicate,
+            delete_not_matched_by_source=delete_not_matched_by_source,
+            extra_constraints=extra_constraints,
+            commit_options=commit_options,
+        )
+    finally:
+        _deregister_table(ctx, source_table)
 
 
 def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
@@ -819,6 +990,62 @@ def idempotent_commit_properties(
     return commit_properties
 
 
+def _delta_commit_options(
+    *,
+    commit_properties: CommitProperties | None,
+    commit_metadata: Mapping[str, str] | None,
+    app_id: str | None,
+    app_version: int | None,
+) -> DeltaCommitOptions:
+    metadata: dict[str, str] = {}
+    app_transaction: DeltaAppTransaction | None = None
+    if commit_properties is not None:
+        custom_metadata = getattr(commit_properties, "custom_metadata", None)
+        if isinstance(custom_metadata, Mapping):
+            metadata.update({str(key): str(value) for key, value in custom_metadata.items()})
+        transactions = getattr(commit_properties, "app_transactions", None)
+        if isinstance(transactions, Sequence) and not isinstance(
+            transactions, (str, bytes, bytearray)
+        ):
+            first = next(iter(transactions), None)
+            if first is not None:
+                txn_app_id = getattr(first, "app_id", None)
+                txn_version = getattr(first, "version", None)
+                txn_last_updated = getattr(first, "last_updated", None)
+                if isinstance(txn_app_id, str) and isinstance(txn_version, int):
+                    from datafusion_engine.delta_control_plane import DeltaAppTransaction
+
+                    app_transaction = DeltaAppTransaction(
+                        app_id=txn_app_id,
+                        version=txn_version,
+                        last_updated=txn_last_updated
+                        if isinstance(txn_last_updated, int)
+                        else None,
+                    )
+    if commit_metadata:
+        metadata.update({str(key): str(value) for key, value in commit_metadata.items()})
+    if app_transaction is None and app_id is not None and app_version is not None:
+        from datafusion_engine.delta_control_plane import DeltaAppTransaction
+
+        app_transaction = DeltaAppTransaction(app_id=app_id, version=app_version)
+    from datafusion_engine.delta_control_plane import DeltaCommitOptions
+
+    return DeltaCommitOptions(metadata=metadata, app_transaction=app_transaction)
+
+
+def _mutation_version(report: Mapping[str, object]) -> int | None:
+    for key in ("mutation_version", "maintenance_version", "version"):
+        value = report.get(key)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                return int(value)
+            except ValueError:
+                continue
+    return None
+
+
 def _delta_json_value(value: object) -> dict[str, object]:
     if isinstance(value, dict):
         return {str(key): _delta_json_scalar(item) for key, item in value.items()}
@@ -884,7 +1111,6 @@ __all__ = [
     "delta_table_version",
     "enable_delta_features",
     "idempotent_commit_properties",
-    "open_delta_table",
     "read_delta_cdf",
     "vacuum_delta",
     "write_delta_table",

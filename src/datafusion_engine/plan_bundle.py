@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, cast
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
+from datafusion_engine.delta_protocol import DeltaFeatureGate
 from serde_msgspec import dumps_msgpack
 
 if TYPE_CHECKING:
@@ -57,6 +58,7 @@ class DeltaInputPin:
     dataset_name: str
     version: int | None
     timestamp: str | None
+    feature_gate: DeltaFeatureGate | None = None
 
 
 @dataclass(frozen=True)
@@ -181,19 +183,25 @@ def _delta_inputs_from_scan_units(
     """
     pins: dict[str, DeltaInputPin] = {}
     for unit in scan_units:
-        if unit.delta_version is None:
+        timestamp = unit.delta_timestamp
+        if timestamp is None and unit.snapshot_timestamp is not None:
+            timestamp = str(unit.snapshot_timestamp)
+        gate = unit.delta_feature_gate
+        if unit.delta_version is None and timestamp is None:
             continue
         existing = pins.get(unit.dataset_name)
-        if existing is not None and existing.version != unit.delta_version:
-            msg = (
-                f"Conflicting Delta versions for dataset {unit.dataset_name!r}: "
-                f"{existing.version} vs {unit.delta_version}"
-            )
+        if existing is not None and (
+            existing.version != unit.delta_version
+            or existing.timestamp != timestamp
+            or existing.feature_gate != gate
+        ):
+            msg = f"Conflicting Delta pins for dataset {unit.dataset_name!r}: {(existing.version, existing.timestamp, existing.feature_gate)} vs {(unit.delta_version, timestamp, gate)}"
             raise ValueError(msg)
         pins[unit.dataset_name] = DeltaInputPin(
             dataset_name=unit.dataset_name,
             version=unit.delta_version,
-            timestamp=None,
+            timestamp=timestamp,
+            feature_gate=gate,
         )
     return tuple(pins[name] for name in sorted(pins))
 
@@ -415,7 +423,6 @@ def _merge_delta_inputs(
     return tuple(pins[name] for name in sorted(pins))
 
 
-
 def _safe_logical_plan(df: DataFrame) -> object | None:
     """Safely extract the logical plan from a DataFrame.
 
@@ -538,7 +545,12 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
     delta_payload = tuple(
         sorted(
             (
-                (pin.dataset_name, pin.version, pin.timestamp)
+                (
+                    pin.dataset_name,
+                    pin.version,
+                    pin.timestamp,
+                    _delta_gate_payload(pin.feature_gate),
+                )
                 for pin in inputs.delta_inputs
             ),
             key=lambda item: item[0],
@@ -553,6 +565,19 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
         ("delta_inputs", delta_payload),
     )
     return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+
+
+def _delta_gate_payload(
+    gate: DeltaFeatureGate | None,
+) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
+    if gate is None:
+        return None
+    return (
+        gate.min_reader_version,
+        gate.min_writer_version,
+        tuple(gate.required_reader_features),
+        tuple(gate.required_writer_features),
+    )
 
 
 def _plan_display(plan: object | None, *, method: str) -> str | None:

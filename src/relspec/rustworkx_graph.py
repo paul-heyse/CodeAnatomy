@@ -278,8 +278,7 @@ def build_task_graph_from_inferred_deps(
         scan_unit_map = {unit.key: unit for unit in resolved.scan_units}
     if resolved.scan_task_names_by_task is not None:
         scan_name_map = {
-            name: tuple(values)
-            for name, values in resolved.scan_task_names_by_task.items()
+            name: tuple(values) for name, values in resolved.scan_task_names_by_task.items()
         }
     else:
         scan_name_map = dict(resolved.scan_keys_by_task or {})

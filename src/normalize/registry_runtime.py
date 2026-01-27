@@ -16,9 +16,10 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from core_types import PathLike, ensure_path
+from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.introspection import introspection_cache_for_ctx
 from datafusion_engine.query_spec import QuerySpec
-from datafusion_engine.registry_bridge import DatasetRegistration, register_dataset_spec
+from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.schema_contracts import (
     SchemaContract,
     SchemaViolation,
@@ -106,15 +107,14 @@ def register_normalize_output_tables(
     locations = normalize_output_locations(output_dir, datasets=datasets)
     for name, location in locations.items():
         spec = static_dataset_specs.dataset_spec(name)
-        registration = DatasetRegistration(
-            name=name,
-            spec=spec,
-            location=location,
-            file_format="delta",
-        )
-        register_dataset_spec(
+        register_dataset_df(
             ctx,
-            registration,
+            name=name,
+            location=DatasetLocation(
+                path=location,
+                format="delta",
+                dataset_spec=spec,
+            ),
             runtime_profile=runtime_profile,
         )
     return locations

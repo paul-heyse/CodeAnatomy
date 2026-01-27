@@ -19,7 +19,7 @@ from arrowdsl.core.execution_context import ExecutionContext, execution_context_
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import align_table, encode_table
 from datafusion_engine.extract_registry import normalize_options
-from datafusion_engine.plan import DataFusionPlan
+from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.span_utils import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from extract.helpers import (
     ExtractMaterializeOptions,
@@ -1239,7 +1239,7 @@ def _build_scip_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
-) -> DataFusionPlan:
+) -> DataFusionPlanBundle:
     return extract_plan_from_row_batches(
         name,
         row_batches,

@@ -15,7 +15,12 @@ import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
 from incremental.delta_context import read_delta_table_via_facade
-from storage.deltalake import delta_table_version, enable_delta_features
+from storage.deltalake import (
+    DeltaWriteOptions,
+    delta_table_version,
+    enable_delta_features,
+    write_delta_table,
+)
 
 if TYPE_CHECKING:
     from incremental.delta_context import DeltaAccessContext
@@ -128,6 +133,7 @@ def write_plan_snapshots(
     state_store: StateStore,
     snapshots: Mapping[str, PlanFingerprintSnapshot],
     *,
+    context: DeltaAccessContext,
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
 ) -> str:
@@ -161,26 +167,25 @@ def write_plan_snapshots(
             },
             num_rows=len(names),
         )
-    from deltalake import CommitProperties, write_deltalake
-
-    resolved_storage = _resolve_storage_options(
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
-    )
-    write_deltalake(
-        str(path),
+    resolved_storage = storage_options or context.storage.storage_options
+    resolved_log_storage = log_storage_options or context.storage.log_storage_options
+    ctx = context.runtime.session_context()
+    write_delta_table(
         cast("pa.Table", table),
-        mode="overwrite",
-        schema_mode="overwrite",
-        storage_options=resolved_storage,
-        commit_properties=CommitProperties(
-            custom_metadata={"snapshot_kind": "plan_fingerprints"},
+        str(path),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            storage_options=resolved_storage,
+            log_storage_options=resolved_log_storage,
+            commit_metadata={"snapshot_kind": "plan_fingerprints"},
         ),
+        ctx=ctx,
     )
     enable_delta_features(
         str(path),
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
+        storage_options=resolved_storage,
+        log_storage_options=resolved_log_storage,
     )
     return str(path)
 
@@ -189,6 +194,7 @@ def write_plan_fingerprints(
     state_store: StateStore,
     fingerprints: Mapping[str, str],
     *,
+    context: DeltaAccessContext,
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
 ) -> str:
@@ -209,6 +215,7 @@ def write_plan_fingerprints(
     return write_plan_snapshots(
         state_store,
         snapshots,
+        context=context,
         storage_options=storage_options,
         log_storage_options=log_storage_options,
     )
@@ -221,19 +228,6 @@ def _read_delta_table(
     name: str,
 ) -> pa.Table:
     return read_delta_table_via_facade(context, path=path, name=name)
-
-
-def _resolve_storage_options(
-    *,
-    storage_options: StorageOptions | None,
-    log_storage_options: StorageOptions | None,
-) -> dict[str, str] | None:
-    if storage_options is None and log_storage_options is None:
-        return None
-    resolved = dict(storage_options or {})
-    if log_storage_options is not None:
-        resolved.update(dict(log_storage_options))
-    return resolved or None
 
 
 __all__ = [

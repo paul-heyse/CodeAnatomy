@@ -37,10 +37,9 @@ from obs.diagnostics import DiagnosticsCollector
 from relspec.view_defs import RELATION_OUTPUT_NAME
 
 if TYPE_CHECKING:
-    from datafusion import SessionContext
     from hamilton.io.materialization import MaterializerFactory
 
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.view_graph_registry import ViewNode
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.semantic_registry import SemanticRegistryHook
@@ -152,7 +151,7 @@ class ViewGraphContext:
 
     ctx: ExecutionContext
     profile: DataFusionRuntimeProfile
-    session: SessionContext
+    session_runtime: SessionRuntime
     snapshot: Mapping[str, object]
     view_nodes: tuple[ViewNode, ...]
 
@@ -172,22 +171,22 @@ def _view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContext:
     from datafusion_engine.view_registry import ensure_view_graph
     from datafusion_engine.view_registry_specs import view_graph_nodes
 
-    session = profile.session_context()
+    session_runtime = profile.session_runtime()
     snapshot = ensure_view_graph(
-        session,
+        session_runtime.ctx,
         runtime_profile=profile,
         include_registry_views=True,
     )
-    validate_edge_kind_requirements(_relation_output_schema(session))
+    validate_edge_kind_requirements(_relation_output_schema(session_runtime))
     nodes = view_graph_nodes(
-        session,
+        session_runtime.ctx,
         snapshot=snapshot,
         runtime_profile=profile,
     )
     return ViewGraphContext(
         ctx=ctx,
         profile=profile,
-        session=session,
+        session_runtime=session_runtime,
         snapshot=snapshot,
         view_nodes=tuple(nodes),
     )
@@ -224,7 +223,7 @@ def _compile_plan(
         impacted_task_names=impacted,
         allow_partial=allow_partial,
     )
-    return compile_execution_plan(session=view_ctx.session, request=request)
+    return compile_execution_plan(session_runtime=view_ctx.session_runtime, request=request)
 
 
 def _incremental_enabled(config: Mapping[str, JsonValue]) -> bool:
@@ -776,11 +775,11 @@ def build_driver(
     return driver_instance
 
 
-def _relation_output_schema(session: SessionContext) -> SchemaLike:
-    if not session.table_exist(RELATION_OUTPUT_NAME):
+def _relation_output_schema(session_runtime: SessionRuntime) -> SchemaLike:
+    if not session_runtime.ctx.table_exist(RELATION_OUTPUT_NAME):
         msg = f"Relation output view {RELATION_OUTPUT_NAME!r} is not registered."
         raise ValueError(msg)
-    schema = session.table(RELATION_OUTPUT_NAME).schema()
+    schema = session_runtime.ctx.table(RELATION_OUTPUT_NAME).schema()
     return cast("SchemaLike", schema)
 
 

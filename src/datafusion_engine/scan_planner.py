@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 
 from datafusion import SessionContext
 
@@ -19,40 +20,60 @@ from storage.deltalake import build_delta_file_index_from_add_actions
 from storage.deltalake.file_pruning import (
     FilePruningPolicy,
     PartitionFilter,
+    StatsFilter,
     evaluate_and_select_files,
 )
 
 _EQUALS_FILTER_PATTERN = re.compile(
     r"([A-Za-z_][A-Za-z0-9_.]*)\s*(?:=|==)\s*['\"]?([^'\"\s]+)['\"]?"
 )
+_COMPARISON_FILTER_PATTERN = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_.]*)\s*(==|!=|>=|<=|=|>|<)\s*['\"]?([^'\"\s]+)['\"]?"
+)
+_COMPARISON_OPS: tuple[Literal["!=", "<", "<=", "=", ">", ">="], ...] = (
+    "!=",
+    "<",
+    "<=",
+    "=",
+    ">",
+    ">=",
+)
 _MIN_QUALIFIED_PARTS = 2
 
 
-def _scan_unit_key(
-    dataset_name: str,
-    *,
-    delta_version: int | None,
-    delta_timestamp: str | None,
-    delta_feature_gate: DeltaFeatureGate | None,
-    projected_columns: tuple[str, ...],
-    pushed_filters: tuple[str, ...],
-) -> str:
+@dataclass(frozen=True)
+class _ScanUnitKeyRequest:
+    """Inputs required to build a scan-unit key."""
+
+    dataset_name: str
+    delta_version: int | None
+    delta_timestamp: str | None
+    delta_feature_gate: DeltaFeatureGate | None
+    delta_protocol: Mapping[str, object] | None
+    storage_options_hash: str | None
+    projected_columns: tuple[str, ...]
+    pushed_filters: tuple[str, ...]
+
+
+def _scan_unit_key(request: _ScanUnitKeyRequest) -> str:
     payload = {
-        "dataset_name": dataset_name,
-        "delta_version": delta_version,
-        "delta_timestamp": delta_timestamp,
-        "delta_feature_gate": _gate_payload(delta_feature_gate),
-        "projected_columns": projected_columns,
-        "pushed_filters": pushed_filters,
+        "dataset_name": request.dataset_name,
+        "delta_version": request.delta_version,
+        "delta_timestamp": request.delta_timestamp,
+        "delta_feature_gate": _gate_payload(request.delta_feature_gate),
+        "delta_protocol": request.delta_protocol,
+        "storage_options_hash": request.storage_options_hash,
+        "projected_columns": request.projected_columns,
+        "pushed_filters": request.pushed_filters,
     }
     digest = hashlib.sha256(dumps_msgpack(payload)).hexdigest()[:16]
-    if delta_version is not None:
-        version_token = str(delta_version)
-    elif delta_timestamp:
-        version_token = delta_timestamp
+    if request.delta_version is not None:
+        version_token = str(request.delta_version)
+    elif request.delta_timestamp:
+        version_token = request.delta_timestamp
     else:
         version_token = "latest"
-    return f"scan::{dataset_name}::{version_token}::{digest}"
+    return f"scan::{request.dataset_name}::{version_token}::{digest}"
 
 
 @dataclass(frozen=True)
@@ -65,6 +86,11 @@ class ScanUnit:
     delta_timestamp: str | None
     snapshot_timestamp: int | None
     delta_feature_gate: DeltaFeatureGate | None
+    delta_protocol: Mapping[str, object] | None
+    storage_options_hash: str | None
+    total_files: int
+    candidate_file_count: int
+    pruned_file_count: int
     candidate_files: tuple[Path, ...]
     pushed_filters: tuple[str, ...]
     projected_columns: tuple[str, ...]
@@ -76,6 +102,7 @@ def plan_scan_unit(
     dataset_name: str,
     location: DatasetLocation | None,
     lineage: ScanLineage,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> ScanUnit:
     """Plan a deterministic scan unit for a dataset lineage entry.
 
@@ -89,21 +116,40 @@ def plan_scan_unit(
     if location is not None and delta_version is None:
         delta_timestamp = location.delta_timestamp
     delta_feature_gate = resolve_delta_feature_gate(location) if location is not None else None
+    storage_options_hash = _storage_options_hash(location)
     candidate_files: tuple[Path, ...] = ()
+    total_files = 0
+    candidate_file_count = 0
+    pruned_file_count = 0
     snapshot_timestamp: int | None = None
+    delta_protocol: Mapping[str, object] | None = None
     if location is not None and location.format == "delta":
-        candidate_files, delta_version, snapshot_timestamp = _delta_scan_candidates(
+        (
+            candidate_files,
+            delta_version,
+            snapshot_timestamp,
+            delta_protocol,
+            total_files,
+            candidate_file_count,
+            pruned_file_count,
+        ) = _delta_scan_candidates(
             ctx,
             location=location,
             lineage=lineage,
+            dataset_name=dataset_name,
+            runtime_profile=runtime_profile,
         )
     key = _scan_unit_key(
-        dataset_name,
-        delta_version=delta_version,
-        delta_timestamp=delta_timestamp,
-        delta_feature_gate=delta_feature_gate,
-        projected_columns=lineage.projected_columns,
-        pushed_filters=lineage.pushed_filters,
+        _ScanUnitKeyRequest(
+            dataset_name=dataset_name,
+            delta_version=delta_version,
+            delta_timestamp=delta_timestamp,
+            delta_feature_gate=delta_feature_gate,
+            delta_protocol=delta_protocol,
+            storage_options_hash=storage_options_hash,
+            projected_columns=lineage.projected_columns,
+            pushed_filters=lineage.pushed_filters,
+        )
     )
     return ScanUnit(
         key=key,
@@ -112,6 +158,11 @@ def plan_scan_unit(
         delta_timestamp=delta_timestamp,
         snapshot_timestamp=snapshot_timestamp,
         delta_feature_gate=delta_feature_gate,
+        delta_protocol=delta_protocol,
+        storage_options_hash=storage_options_hash,
+        total_files=total_files,
+        candidate_file_count=candidate_file_count,
+        pruned_file_count=pruned_file_count,
         candidate_files=candidate_files,
         pushed_filters=lineage.pushed_filters,
         projected_columns=lineage.projected_columns,
@@ -123,6 +174,7 @@ def plan_scan_units(
     *,
     dataset_locations: Mapping[str, DatasetLocation],
     scans_by_task: Mapping[str, Sequence[ScanLineage]],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> tuple[tuple[ScanUnit, ...], dict[str, tuple[str, ...]]]:
     """Plan scan units for each task based on structured lineage scans.
 
@@ -142,6 +194,7 @@ def plan_scan_units(
                 dataset_name=scan.dataset_name,
                 location=location,
                 lineage=scan,
+                runtime_profile=runtime_profile,
             )
             scan_units.setdefault(unit.key, unit)
             scan_keys.append(unit.key)
@@ -155,18 +208,52 @@ def _delta_scan_candidates(
     *,
     location: DatasetLocation,
     lineage: ScanLineage,
-) -> tuple[tuple[Path, ...], int | None, int | None]:
+    dataset_name: str,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> tuple[
+    tuple[Path, ...],
+    int | None,
+    int | None,
+    Mapping[str, object] | None,
+    int,
+    int,
+    int,
+]:
     request = _delta_snapshot_request(location)
     payload = _delta_add_actions_payload(request=request)
     if not payload.add_actions:
-        return (), payload.delta_version, payload.snapshot_timestamp
+        return (
+            (),
+            payload.delta_version,
+            payload.snapshot_timestamp,
+            payload.delta_protocol,
+            0,
+            0,
+            0,
+        )
     index = build_delta_file_index_from_add_actions(payload.add_actions)
     policy = _policy_from_lineage(location=location, lineage=lineage)
     pruning = evaluate_and_select_files(index, policy, ctx=ctx)
     candidate_files = tuple(
         Path(str(location.path)) / Path(path) for path in pruning.candidate_paths
     )
-    return candidate_files, payload.delta_version, payload.snapshot_timestamp
+    _record_scan_plan_artifact(
+        runtime_profile=runtime_profile,
+        dataset_name=dataset_name,
+        location=location,
+        payload=payload,
+        pruning=pruning,
+        lineage=lineage,
+    )
+    return (
+        candidate_files,
+        payload.delta_version,
+        payload.snapshot_timestamp,
+        payload.delta_protocol,
+        pruning.total_files,
+        pruning.candidate_count,
+        pruning.pruned_count,
+    )
 
 
 @dataclass(frozen=True)
@@ -175,6 +262,7 @@ class _DeltaAddActionsPayload:
 
     delta_version: int | None
     snapshot_timestamp: int | None
+    delta_protocol: Mapping[str, object] | None
     add_actions: tuple[Mapping[str, object], ...]
 
 
@@ -233,10 +321,12 @@ def _delta_add_actions_payload(
         raise TypeError(msg)
     delta_version = _resolve_delta_version(snapshot, pinned_version=request.version)
     snapshot_timestamp = _resolve_snapshot_timestamp(snapshot)
+    delta_protocol = _delta_protocol_payload(snapshot)
     add_actions = _coerce_add_actions(response.get("add_actions"))
     return _DeltaAddActionsPayload(
         delta_version=delta_version,
         snapshot_timestamp=snapshot_timestamp,
+        delta_protocol=delta_protocol,
         add_actions=add_actions,
     )
 
@@ -265,7 +355,15 @@ def _resolve_delta_version(
 
 
 def _resolve_snapshot_timestamp(snapshot: Mapping[str, object]) -> int | None:
-    """Resolve a snapshot timestamp from snapshot metadata."""
+    """Resolve a snapshot timestamp from snapshot metadata.
+
+    Returns
+    -------
+    int | None
+        Snapshot timestamp as an integer when available.
+    """
+    if not snapshot:
+        return None
     timestamp = snapshot.get("snapshot_timestamp")
     if isinstance(timestamp, int):
         return timestamp
@@ -277,6 +375,47 @@ def _resolve_snapshot_timestamp(snapshot: Mapping[str, object]) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _delta_protocol_payload(snapshot: Mapping[str, object]) -> dict[str, object] | None:
+    min_reader_version = _coerce_int(snapshot.get("min_reader_version"))
+    min_writer_version = _coerce_int(snapshot.get("min_writer_version"))
+    reader_features = _coerce_str_list(snapshot.get("reader_features"))
+    writer_features = _coerce_str_list(snapshot.get("writer_features"))
+    if (
+        min_reader_version is None
+        and min_writer_version is None
+        and not reader_features
+        and not writer_features
+    ):
+        return None
+    return {
+        "min_reader_version": min_reader_version,
+        "min_writer_version": min_writer_version,
+        "reader_features": reader_features,
+        "writer_features": writer_features,
+    }
+
+
+def _coerce_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_str_list(value: object) -> list[str]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [str(item) for item in value if str(item)]
+    return []
 
 
 def _coerce_add_actions(add_actions_raw: object) -> tuple[Mapping[str, object], ...]:
@@ -313,18 +452,76 @@ def _delta_storage_options(location: DatasetLocation) -> Mapping[str, str] | Non
     return storage_options
 
 
+def _storage_options_hash(location: DatasetLocation | None) -> str | None:
+    if location is None:
+        return None
+    storage_options = {
+        str(key): str(value) for key, value in dict(location.storage_options).items()
+    }
+    log_storage = {
+        str(key): str(value) for key, value in dict(location.delta_log_storage_options).items()
+    }
+    if log_storage:
+        storage_options.update(log_storage)
+    if not storage_options:
+        return None
+    payload = tuple(sorted(storage_options.items()))
+    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+
+
+def _record_scan_plan_artifact(
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    dataset_name: str,
+    location: DatasetLocation,
+    payload: _DeltaAddActionsPayload,
+    pruning: object,
+    lineage: ScanLineage,
+) -> None:
+    if runtime_profile is None:
+        return
+    from datafusion_engine.delta_observability import (
+        DeltaScanPlanArtifact,
+        record_delta_scan_plan,
+    )
+
+    total_files = getattr(pruning, "total_files", 0)
+    candidate_files = getattr(pruning, "candidate_count", 0)
+    pruned_files = getattr(pruning, "pruned_count", 0)
+    record_delta_scan_plan(
+        runtime_profile,
+        artifact=DeltaScanPlanArtifact(
+            dataset_name=dataset_name,
+            table_uri=str(location.path),
+            delta_version=payload.delta_version,
+            snapshot_timestamp=payload.snapshot_timestamp,
+            total_files=int(total_files),
+            candidate_files=int(candidate_files),
+            pruned_files=int(pruned_files),
+            pushed_filters=lineage.pushed_filters,
+            projected_columns=lineage.projected_columns,
+            delta_protocol=payload.delta_protocol,
+            delta_feature_gate=resolve_delta_feature_gate(location),
+            storage_options_hash=_storage_options_hash(location),
+        ),
+    )
+
+
 def _policy_from_lineage(
     *,
     location: DatasetLocation,
     lineage: ScanLineage,
 ) -> FilePruningPolicy:
     partition_filters: list[PartitionFilter] = []
+    stats_filters: list[StatsFilter] = []
     partition_columns = _partition_column_names(location)
     if partition_columns and lineage.pushed_filters:
         partition_filters.extend(
             _partition_filters_from_strings(lineage.pushed_filters, partition_columns)
         )
-    return FilePruningPolicy(partition_filters=partition_filters, stats_filters=[])
+    if lineage.pushed_filters:
+        stats_filters.extend(_stats_filters_from_strings(lineage.pushed_filters, partition_columns))
+    return FilePruningPolicy(partition_filters=partition_filters, stats_filters=stats_filters)
 
 
 def _partition_column_names(location: DatasetLocation) -> set[str]:
@@ -349,6 +546,57 @@ def _partition_filters_from_strings(
         value = match.group(2)
         resolved.append(PartitionFilter(column=column, op="=", value=value))
     return resolved
+
+
+def _stats_filters_from_strings(
+    filters: Sequence[str],
+    partition_columns: set[str],
+) -> list[StatsFilter]:
+    resolved: list[StatsFilter] = []
+    for filter_text in filters:
+        match = _COMPARISON_FILTER_PATTERN.search(filter_text)
+        if match is None:
+            continue
+        column = match.group(1).split(".")[-1]
+        if column in partition_columns:
+            continue
+        op = _normalize_stats_op(match.group(2))
+        if op is None:
+            continue
+        value_text = match.group(3)
+        value, cast_type = _parse_filter_value(value_text)
+        resolved.append(
+            StatsFilter(
+                column=column,
+                op=op,
+                value=value,
+                cast_type=cast_type,
+            )
+        )
+    return resolved
+
+
+def _normalize_stats_op(value: str) -> Literal["!=", "<", "<=", "=", ">", ">="] | None:
+    normalized = value
+    if normalized == "==":
+        normalized = "="
+    if normalized in _COMPARISON_OPS:
+        return cast("Literal['!=', '<', '<=', '=', '>', '>=']", normalized)
+    return None
+
+
+def _parse_filter_value(value: str) -> tuple[object, str | None]:
+    lowered = value.strip().lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true", "Boolean"
+    try:
+        return int(value), "Int64"
+    except ValueError:
+        pass
+    try:
+        return float(value), "Float64"
+    except ValueError:
+        return value, None
 
 
 def _resolve_dataset_location(

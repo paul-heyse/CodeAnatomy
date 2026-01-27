@@ -19,7 +19,7 @@ from schema_spec.system import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
 )
-from storage.deltalake import DeltaCdfOptions, delta_table_schema
+from storage.deltalake import DeltaCdfOptions, DeltaSchemaRequest, delta_table_schema
 from storage.deltalake.scan_profile import build_delta_scan_config
 
 type DatasetFormat = str
@@ -387,12 +387,14 @@ def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
         return location.dataset_spec.schema()
     if location.format == "delta":
         schema = delta_table_schema(
-            str(location.path),
-            storage_options=location.storage_options or None,
-            log_storage_options=location.delta_log_storage_options or None,
-            version=location.delta_version,
-            timestamp=location.delta_timestamp,
-            gate=resolve_delta_feature_gate(location),
+            DeltaSchemaRequest(
+                path=str(location.path),
+                storage_options=location.storage_options or None,
+                log_storage_options=location.delta_log_storage_options or None,
+                version=location.delta_version,
+                timestamp=location.delta_timestamp,
+                gate=resolve_delta_feature_gate(location),
+            )
         )
         if schema is None:
             msg = f"Delta schema unavailable for dataset at {location.path!r}."

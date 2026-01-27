@@ -257,7 +257,7 @@ def view_graph_nodes(
 
 
 def _normalize_view_nodes(
-    ctx: SessionContext,
+    _ctx: SessionContext,
     *,
     snapshot: Mapping[str, object],
     runtime_profile: DataFusionRuntimeProfile | None = None,

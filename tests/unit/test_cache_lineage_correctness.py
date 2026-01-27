@@ -116,7 +116,11 @@ def test_metadata_store_lineage_rows_are_deterministic_and_decodable(
     assert errors_b == 0
     assert rows_a
     assert rows_a == rows_b
-    node_names = [row["node_name"] for row in rows_a if isinstance(row.get("node_name"), str)]
+    node_names: list[str] = []
+    for row in rows_a:
+        node_name = row.get("node_name")
+        if isinstance(node_name, str):
+            node_names.append(node_name)
     assert node_names == sorted(node_names)
     for row in rows_a:
         dependencies = row.get("dependencies_data_versions")

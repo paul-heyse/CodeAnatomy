@@ -137,6 +137,7 @@ def _scan_planning(
             ctx,
             dataset_locations=_dataset_location_map(runtime_profile),
             scans_by_task=scans_by_task,
+            runtime_profile=runtime_profile,
         )
     else:
         scan_units = ()

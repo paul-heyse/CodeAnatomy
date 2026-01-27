@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from arrowdsl.core.interop import RecordBatchReaderLike
 from storage.deltalake import (
@@ -188,7 +190,8 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
         from datafusion_engine.runtime import DataFusionRuntimeProfile
 
         profile = DataFusionRuntimeProfile()
-    if not profile.sql_policy.allow_statements:
+    sql_policy = profile.sql_policy
+    if sql_policy is None or not sql_policy.allow_statements:
         msg = "Delta SQL execution is disabled by the runtime SQL policy."
         raise ValueError(msg)
     from datafusion_engine.dataset_registry import DatasetLocation
@@ -209,10 +212,10 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     )
     df = ctx.sql(request.sql)
     to_reader = getattr(df, "to_arrow_reader", None)
-    if callable(to_reader):
-        reader = to_reader()
-    else:
-        reader = df.to_arrow_table().to_reader()
+    reader = cast(
+        "RecordBatchReaderLike",
+        to_reader() if callable(to_reader) else df.to_arrow_table().to_reader(),
+    )
     _record_delta_query(
         profile,
         payload={

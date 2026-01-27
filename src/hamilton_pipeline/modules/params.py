@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,8 +12,11 @@ import pyarrow as pa
 from datafusion.dataframe import DataFrame
 from hamilton.function_modifiers import tag
 
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.schema.abi import schema_fingerprint
 from core_types import JsonDict
+from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.diagnostics import recorder_for_profile
 from datafusion_engine.param_tables import (
     ListParamSpec,
     ParamTableArtifact,
@@ -28,6 +32,7 @@ from datafusion_engine.param_tables import (
     scalar_param_signature as build_scalar_param_signature,
 )
 from datafusion_engine.runtime import read_delta_as_reader
+from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import (
     ActiveParamSet,
@@ -37,12 +42,7 @@ from hamilton_pipeline.pipeline_types import (
 )
 from relspec.inferred_deps import infer_deps_from_view_nodes
 from relspec.pipeline_policy import PipelinePolicy
-from storage.deltalake import (
-    DeltaWriteOptions,
-    delta_schema_configuration,
-    delta_write_configuration,
-    write_delta_table,
-)
+from storage.deltalake import delta_schema_configuration, delta_write_configuration
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
@@ -301,6 +301,7 @@ def param_tables_datafusion(
 @tag(layer="params", artifact="param_table_delta", kind="side_effect")
 def write_param_tables_delta(
     param_table_artifacts: Mapping[str, ParamTableArtifact],
+    ctx: ExecutionContext,
     output_config: OutputConfig,
 ) -> Mapping[str, JsonDict] | None:
     """Write param tables as Delta tables when enabled.
@@ -320,6 +321,11 @@ def write_param_tables_delta(
     write_policy = output_config.delta_write_policy
     schema_policy = output_config.delta_schema_policy
     storage_options = output_config.delta_storage_options
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        msg = "DataFusion runtime profile is required for param table writes."
+        raise ValueError(msg)
+    session_runtime = runtime_profile.session_runtime()
     output: dict[str, JsonDict] = {}
     for logical_name, artifact in param_table_artifacts.items():
         target_dir = base_dir / logical_name
@@ -327,23 +333,46 @@ def write_param_tables_delta(
         configuration: dict[str, str] = {}
         configuration.update(delta_write_configuration(write_policy) or {})
         configuration.update(delta_schema_configuration(schema_policy) or {})
-        result = write_delta_table(
-            artifact.table,
-            str(target_dir),
-            options=DeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={
-                    "dataset_name": logical_name,
-                    "schema_fingerprint": artifact.schema_fingerprint,
-                },
-                configuration=configuration or None,
-                storage_options=storage_options,
+        df = datafusion_from_arrow(
+            session_runtime.ctx,
+            name=f"__param_table_{logical_name}_{uuid.uuid4().hex}",
+            value=artifact.table,
+        )
+        format_options: dict[str, object] = {
+            "commit_metadata": {
+                "dataset_name": logical_name,
+                "schema_fingerprint": artifact.schema_fingerprint,
+            },
+            "table_properties": configuration or None,
+            "schema_mode": "overwrite",
+        }
+        if storage_options is not None:
+            format_options["storage_options"] = dict(storage_options)
+        if write_policy is not None:
+            format_options["target_file_size"] = write_policy.target_file_size
+        pipeline = WritePipeline(
+            session_runtime.ctx,
+            sql_options=runtime_profile.sql_options(),
+            recorder=recorder_for_profile(
+                runtime_profile,
+                operation_id=f"hamilton_params::{logical_name}",
             ),
+            runtime_profile=runtime_profile,
+        )
+        write_result = pipeline.write(
+            WriteRequest(
+                source=df,
+                destination=str(target_dir),
+                format=WriteFormat.DELTA,
+                mode=WriteMode.OVERWRITE,
+                format_options=format_options,
+            )
         )
         output[logical_name] = {
             "path": str(target_dir),
-            "delta_version": result.version,
+            "delta_version": write_result.delta_result.version
+            if write_result.delta_result is not None
+            else None,
             "rows": int(artifact.rows),
             "delta_write_policy": _delta_write_policy_payload(write_policy),
             "delta_schema_policy": _delta_schema_policy_payload(schema_policy),

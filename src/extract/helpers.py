@@ -51,7 +51,8 @@ from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.runtime import SessionRuntime
+    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.scan_planner import ScanUnit
 
 
 @dataclass(frozen=True)
@@ -425,12 +426,14 @@ def extract_plan_from_reader(
     resolved = options or ExtractPlanOptions()
     raw_plan = datafusion_plan_from_reader(name, reader, session=session)
     return apply_query_and_project(
-        name,
-        raw_plan.df,
-        session=session,
-        normalize=resolved.normalize,
-        evidence_plan=resolved.evidence_plan,
-        repo_id=resolved.resolved_repo_id(),
+        _ExtractProjectionRequest(
+            name=name,
+            table=raw_plan.df,
+            session=session,
+            normalize=resolved.normalize,
+            evidence_plan=resolved.evidence_plan,
+            repo_id=resolved.resolved_repo_id(),
+        )
     )
 
 
@@ -497,15 +500,19 @@ def extract_plan_from_row_batches(
     )
 
 
-def apply_query_and_project(
-    name: str,
-    table: DataFrame,
-    *,
-    session: ExtractSession,
-    normalize: ExtractNormalizeOptions | None = None,
-    evidence_plan: EvidencePlan | None = None,
-    repo_id: str | None = None,
-) -> DataFusionPlanBundle:
+@dataclass(frozen=True)
+class _ExtractProjectionRequest:
+    """Inputs required to apply query and evidence projection."""
+
+    name: str
+    table: DataFrame
+    session: ExtractSession
+    normalize: ExtractNormalizeOptions | None = None
+    evidence_plan: EvidencePlan | None = None
+    repo_id: str | None = None
+
+
+def apply_query_and_project(request: _ExtractProjectionRequest) -> DataFusionPlanBundle:
     """Apply registry query and evidence projection to a DataFusion table.
 
     Returns
@@ -513,30 +520,38 @@ def apply_query_and_project(
     DataFusionPlanBundle
         Plan bundle with query and evidence projection applied.
     """
-    row = extract_metadata(name)
-    if evidence_plan is not None and not plan_requires_row(evidence_plan, row):
-        return _empty_plan_from_table(table, session_runtime=session.session_runtime)
-    overrides = _options_overrides(normalize.options if normalize else None)
-    execution = rule_execution_options(row.template or name, evidence_plan, overrides=overrides)
+    row = extract_metadata(request.name)
+    if request.evidence_plan is not None and not plan_requires_row(request.evidence_plan, row):
+        return _empty_plan_from_table(
+            request.table, session_runtime=request.session.session_runtime
+        )
+    overrides = _options_overrides(request.normalize.options if request.normalize else None)
+    execution = rule_execution_options(
+        row.template or request.name,
+        request.evidence_plan,
+        overrides=overrides,
+    )
     if row.enabled_when is not None and not _stage_enabled(row.enabled_when, execution):
-        return _empty_plan_from_table(table, session_runtime=session.session_runtime)
+        return _empty_plan_from_table(
+            request.table, session_runtime=request.session.session_runtime
+        )
     projection: tuple[str, ...] = ()
-    if evidence_plan is not None:
-        required = set(evidence_plan.required_columns_for(name))
+    if request.evidence_plan is not None:
+        required = set(request.evidence_plan.required_columns_for(request.name))
         required.update(row.join_keys)
         required.update(spec.name for spec in row.derived)
         if row.evidence_required_columns:
             required.update(row.evidence_required_columns)
         if required:
-            schema = dataset_schema(name)
+            schema = dataset_schema(request.name)
             projection = tuple(field.name for field in schema if field.name in required)
     spec = dataset_query(
-        name,
-        repo_id=repo_id,
+        request.name,
+        repo_id=request.repo_id,
         projection=projection if projection else None,
     )
-    df = apply_query_spec(table, spec=spec)
-    return _build_plan_bundle_from_df(df, session_runtime=session.session_runtime)
+    df = apply_query_spec(request.table, spec=spec)
+    return _build_plan_bundle_from_df(df, session_runtime=request.session.session_runtime)
 
 
 @dataclass(frozen=True)
@@ -641,10 +656,7 @@ def _streaming_supported_for_extract(
     ctx: ExecutionContext,
     normalize: ExtractNormalizeOptions | None,
 ) -> bool:
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "DataFusion runtime profile is required for extract materialization."
-        raise ValueError(msg)
+    runtime_profile = _require_datafusion_profile(ctx)
     if runtime_profile.dataset_location(name) is None:
         return False
     policy = normalized_schema_policy_for_dataset(
@@ -653,6 +665,138 @@ def _streaming_supported_for_extract(
         normalize=normalize,
     )
     return not policy.keep_extra_columns
+
+
+def _require_datafusion_profile(ctx: ExecutionContext) -> DataFusionRuntimeProfile:
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        msg = "DataFusion runtime profile is required for extract materialization."
+        raise ValueError(msg)
+    return runtime_profile
+
+
+def _build_normalization_context(
+    name: str,
+    *,
+    ctx: ExecutionContext,
+    options: ExtractMaterializeOptions,
+) -> _NormalizationContext:
+    finalize_ctx = finalize_context_for_dataset(name, ctx=ctx, normalize=options.normalize)
+    return _NormalizationContext(
+        name=name,
+        exec_ctx=ctx,
+        finalize_ctx=finalize_ctx,
+        apply_post_kernels=options.apply_post_kernels,
+    )
+
+
+def _plan_scan_units_for_extract(
+    plan: DataFusionPlanBundle,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
+    from datafusion_engine.lineage_datafusion import extract_lineage
+    from datafusion_engine.scan_planner import plan_scan_unit
+
+    session_runtime = runtime_profile.session_runtime()
+    scan_units: dict[str, ScanUnit] = {}
+    for scan in extract_lineage(
+        plan.optimized_logical_plan,
+        udf_snapshot=plan.artifacts.udf_snapshot,
+    ).scans:
+        location = runtime_profile.dataset_location(scan.dataset_name)
+        if location is None:
+            continue
+        unit = plan_scan_unit(
+            session_runtime.ctx,
+            dataset_name=scan.dataset_name,
+            location=location,
+            lineage=scan,
+        )
+        scan_units[unit.key] = unit
+    units = tuple(sorted(scan_units.values(), key=lambda unit: unit.key))
+    return units, tuple(unit.key for unit in units)
+
+
+def _execute_extract_plan_bundle(
+    name: str,
+    plan: DataFusionPlanBundle,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> tuple[ExecutionResult, tuple[ScanUnit, ...], tuple[str, ...]]:
+    from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+
+    session_runtime = runtime_profile.session_runtime()
+    scan_units, scan_keys = _plan_scan_units_for_extract(plan, runtime_profile=runtime_profile)
+    if scan_units:
+        apply_scan_unit_overrides(
+            session_runtime.ctx,
+            scan_units=scan_units,
+            runtime_profile=runtime_profile,
+        )
+    facade = DataFusionExecutionFacade(
+        ctx=session_runtime.ctx,
+        runtime_profile=runtime_profile,
+    )
+    result = facade.execute_plan_bundle(
+        plan,
+        view_name=name,
+        scan_units=scan_units,
+        scan_keys=scan_keys,
+    )
+    return result, scan_units, scan_keys
+
+
+def _write_and_record_extract_output(
+    name: str,
+    plan: DataFusionPlanBundle,
+    output: TableLike | pa.RecordBatchReader,
+    *,
+    ctx: ExecutionContext,
+) -> None:
+    write_extract_outputs(name, output, ctx=ctx)
+    _register_extract_view(name, ctx=ctx)
+    _record_extract_view_artifact(
+        name,
+        plan,
+        schema=_arrow_schema_from_output(output),
+        ctx=ctx,
+    )
+    _validate_extract_schema_contract(
+        name,
+        schema=_arrow_schema_from_output(output),
+        ctx=ctx,
+    )
+
+
+@dataclass(frozen=True)
+class _StreamingMaterializeRequest:
+    """Inputs required to materialize streaming extract output."""
+
+    name: str
+    df: DataFrame
+    plan: DataFusionPlanBundle
+    ctx: ExecutionContext
+    normalization_ctx: _NormalizationContext
+    options: ExtractMaterializeOptions
+    streaming_supported: bool
+
+
+def _materialize_streaming_output(
+    request: _StreamingMaterializeRequest,
+) -> pa.RecordBatchReader | None:
+    if not request.streaming_supported:
+        return None
+    reader = cast("RecordBatchReaderLike", request.df.execute_stream())
+    reader_for_write = _normalize_reader(request.normalization_ctx, reader)
+    _write_and_record_extract_output(request.name, request.plan, reader_for_write, ctx=request.ctx)
+    if not request.options.prefer_reader:
+        return None
+    reader = cast("RecordBatchReaderLike", request.df.execute_stream())
+    reader_result = ExecutionResult.from_reader(reader)
+    normalized_reader = _normalize_reader(request.normalization_ctx, reader)
+    _record_extract_execution(request.name, reader_result, ctx=request.ctx)
+    return normalized_reader
 
 
 def materialize_extract_plan(
@@ -668,108 +812,42 @@ def materialize_extract_plan(
     -------
     TableLike | pyarrow.RecordBatchReader
         Materialized and normalized extract output.
+
     """
     resolved = options or ExtractMaterializeOptions()
     _record_extract_compile(name, plan, ctx=ctx)
     _record_extract_udf_parity(name, ctx=ctx)
-    normalize = resolved.normalize
+    runtime_profile = _require_datafusion_profile(ctx)
     streaming_supported = _streaming_supported_for_extract(
         name,
         ctx=ctx,
-        normalize=normalize,
+        normalize=resolved.normalize,
     )
-    finalize_ctx = finalize_context_for_dataset(name, ctx=ctx, normalize=normalize)
-    normalization_ctx = _NormalizationContext(
-        name=name,
-        exec_ctx=ctx,
-        finalize_ctx=finalize_ctx,
-        apply_post_kernels=resolved.apply_post_kernels,
-    )
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "DataFusion runtime profile is required for extract materialization."
-        raise ValueError(msg)
-    session_runtime = runtime_profile.session_runtime()
-    from datafusion_engine.lineage_datafusion import extract_lineage
-    from datafusion_engine.scan_overrides import apply_scan_unit_overrides
-    from datafusion_engine.scan_planner import plan_scan_unit
-
-    scan_units = tuple(
-        plan_scan_unit(
-            session_runtime.ctx,
-            dataset_name=scan.dataset_name,
-            location=runtime_profile.dataset_location(scan.dataset_name),
-            lineage=scan,
-        )
-        for scan in extract_lineage(
-            plan.optimized_logical_plan,
-            udf_snapshot=plan.artifacts.udf_snapshot,
-        ).scans
-        if runtime_profile.dataset_location(scan.dataset_name) is not None
-    )
-    if scan_units:
-        apply_scan_unit_overrides(
-            session_runtime.ctx,
-            scan_units=scan_units,
-            runtime_profile=runtime_profile,
-        )
-    scan_keys = tuple(unit.key for unit in scan_units)
-    facade = DataFusionExecutionFacade(
-        ctx=session_runtime.ctx,
+    normalization_ctx = _build_normalization_context(name, ctx=ctx, options=resolved)
+    result, _scan_units, _scan_keys = _execute_extract_plan_bundle(
+        name,
+        plan,
         runtime_profile=runtime_profile,
     )
-    result = facade.execute_plan_bundle(
-        plan,
-        view_name=name,
-        scan_units=scan_units,
-        scan_keys=scan_keys,
-    )
     df = result.require_dataframe()
-    wrote_streaming = False
-    if streaming_supported:
-        reader = df.execute_stream()
-        reader_result = ExecutionResult.from_reader(reader)
-        reader_for_write = _normalize_reader(normalization_ctx, reader)
-        write_extract_outputs(name, reader_for_write, ctx=ctx)
-        _register_extract_view(name, ctx=ctx)
-        _record_extract_view_artifact(
-            name,
-            plan,
-            schema=_arrow_schema_from_output(reader_for_write),
+    streaming_reader = _materialize_streaming_output(
+        _StreamingMaterializeRequest(
+            name=name,
+            df=df,
+            plan=plan,
             ctx=ctx,
+            normalization_ctx=normalization_ctx,
+            options=resolved,
+            streaming_supported=streaming_supported,
         )
-        _validate_extract_schema_contract(
-            name,
-            schema=_arrow_schema_from_output(reader_for_write),
-            ctx=ctx,
-        )
-        wrote_streaming = True
-        if resolved.prefer_reader:
-            reader = df.execute_stream()
-            reader_result = ExecutionResult.from_reader(reader)
-            normalized_reader = _normalize_reader(
-                normalization_ctx,
-                reader,
-            )
-            _record_extract_execution(name, reader_result, ctx=ctx)
-            return normalized_reader
+    )
+    if streaming_reader is not None:
+        return streaming_reader
     table = df.to_arrow_table()
     table_result = ExecutionResult.from_table(table)
     normalized = _normalize_table(normalization_ctx, table)
-    if not wrote_streaming:
-        write_extract_outputs(name, normalized, ctx=ctx)
-        _register_extract_view(name, ctx=ctx)
-        _record_extract_view_artifact(
-            name,
-            plan,
-            schema=_arrow_schema_from_output(normalized),
-            ctx=ctx,
-        )
-        _validate_extract_schema_contract(
-            name,
-            schema=_arrow_schema_from_output(normalized),
-            ctx=ctx,
-        )
+    if not streaming_supported:
+        _write_and_record_extract_output(name, plan, normalized, ctx=ctx)
     if resolved.prefer_reader:
         if isinstance(normalized, pa.Table):
             resolved_table = cast("pa.Table", normalized)

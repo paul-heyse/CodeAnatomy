@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
+    from datafusion_engine.runtime import SessionRuntime
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,7 @@ class ViewSpec:
 
     def register(
         self,
-        ctx: SessionContext,
+        session_runtime: SessionRuntime,
         *,
         validate: bool = True,
         sql_options: object | None = None,
@@ -54,10 +55,10 @@ class ViewSpec:
             raise ValueError(msg)
         from datafusion_engine.io_adapter import DataFusionIOAdapter
 
-        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        adapter = DataFusionIOAdapter(ctx=session_runtime.ctx, profile=None)
         adapter.register_view(
             self.name,
-            self.builder(ctx),
+            self.builder(session_runtime.ctx),
             overwrite=True,
             temporary=True,
         )

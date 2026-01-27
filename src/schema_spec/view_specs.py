@@ -14,7 +14,7 @@ from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.schema_introspection import SchemaIntrospector
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.runtime import SessionRuntime
     from datafusion_engine.schema_contracts import (
         SchemaContract,
         SchemaViolation,
@@ -70,7 +70,7 @@ class ViewSpec:
 
     def describe(
         self,
-        ctx: SessionContext,
+        session_runtime: SessionRuntime,
         introspector: SchemaIntrospector | None = None,
         *,
         sql_options: SQLOptions | None = None,
@@ -79,8 +79,8 @@ class ViewSpec:
 
         Parameters
         ----------
-        ctx:
-            DataFusion session context used for DESCRIBE execution.
+        session_runtime:
+            DataFusion SessionRuntime used for DESCRIBE execution.
         introspector:
             Optional schema introspector to reuse existing context state.
         sql_options:
@@ -96,6 +96,7 @@ class ViewSpec:
         ValueError
             Raised when the view lacks a builder and is not registered.
         """
+        ctx = session_runtime.ctx
         if self.builder is None:
             if introspector is None:
                 introspector = SchemaIntrospector(ctx, sql_options=sql_options)
@@ -118,43 +119,44 @@ class ViewSpec:
 
     def register(
         self,
-        ctx: SessionContext,
+        session_runtime: SessionRuntime,
         *,
         validate: bool = True,
         sql_options: SQLOptions | None = None,
-        runtime_profile: DataFusionRuntimeProfile,
     ) -> None:
-        """Register the view definition on a SessionContext.
+        """Register the view definition on a SessionRuntime.
 
         Parameters
         ----------
-        ctx:
-            DataFusion session context used for registration.
+        session_runtime:
+            DataFusion SessionRuntime used for registration.
         validate:
             Whether to validate the resulting schema after registration.
         sql_options:
             Optional SQL options to enforce SQL execution policy.
-        runtime_profile:
-            Runtime profile for deterministic view registration.
-
         """
         from datafusion_engine.runtime import register_view_specs
 
         _ = sql_options
         register_view_specs(
-            ctx,
+            session_runtime.ctx,
             views=(self,),
-            runtime_profile=runtime_profile,
+            runtime_profile=session_runtime.profile,
             validate=validate,
         )
 
-    def validate(self, ctx: SessionContext, *, sql_options: SQLOptions | None = None) -> None:
+    def validate(
+        self,
+        session_runtime: SessionRuntime,
+        *,
+        sql_options: SQLOptions | None = None,
+    ) -> None:
         """Validate that the view schema matches the spec.
 
         Parameters
         ----------
-        ctx:
-            DataFusion session context used for validation.
+        session_runtime:
+            DataFusion SessionRuntime used for validation.
         sql_options:
             Optional SQL options to enforce SQL execution policy.
 
@@ -167,7 +169,8 @@ class ViewSpec:
         """
         if self.schema is None:
             return
-        actual = self._resolve_schema(ctx, sql_options=sql_options)
+        ctx = session_runtime.ctx
+        actual = self._resolve_schema(session_runtime, sql_options=sql_options)
         from datafusion_engine.schema_contracts import SchemaContract
 
         contract = SchemaContract.from_arrow_schema(self.name, self.schema)
@@ -182,8 +185,14 @@ class ViewSpec:
             msg = f"View schema mismatch for {self.name!r}."
             raise ViewSchemaMismatchError(msg)
 
-    def _resolve_schema(self, ctx: SessionContext, *, sql_options: SQLOptions | None) -> pa.Schema:
+    def _resolve_schema(
+        self,
+        session_runtime: SessionRuntime,
+        *,
+        sql_options: SQLOptions | None,
+    ) -> pa.Schema:
         _ = sql_options
+        ctx = session_runtime.ctx
         try:
             return _arrow_schema_from_df(ctx.table(self.name))
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:

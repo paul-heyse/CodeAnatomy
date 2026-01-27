@@ -1043,7 +1043,7 @@ def _constraint_drift_entries(
 
 
 def _relationship_constraint_errors(
-    ctx: SessionContext,
+    session_runtime: SessionRuntime,
     *,
     sql_options: SQLOptions,
 ) -> Mapping[str, object] | None:
@@ -1055,7 +1055,7 @@ def _relationship_constraint_errors(
     if not callable(errors):
         return None
     try:
-        result = errors(ctx, sql_options=sql_options)
+        result = errors(session_runtime, sql_options=sql_options)
     except (RuntimeError, TypeError, ValueError):
         return None
     if isinstance(result, Mapping) and result:
@@ -3617,7 +3617,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             schemas=expected_schemas,
         )
         relationship_errors = _relationship_constraint_errors(
-            ctx,
+            self.session_runtime(),
             sql_options=self._sql_options(),
         )
         result = SchemaRegistryValidationResult(
@@ -4012,6 +4012,20 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "unbounded": scan.unbounded if scan is not None else None,
             "delta_version": location.delta_version,
             "delta_timestamp": location.delta_timestamp,
+            "delta_feature_gate": (
+                {
+                    "min_reader_version": location.delta_feature_gate.min_reader_version,
+                    "min_writer_version": location.delta_feature_gate.min_writer_version,
+                    "required_reader_features": list(
+                        location.delta_feature_gate.required_reader_features
+                    ),
+                    "required_writer_features": list(
+                        location.delta_feature_gate.required_writer_features
+                    ),
+                }
+                if location.delta_feature_gate is not None
+                else None
+            ),
             "delta_constraints": list(location.delta_constraints),
         }
         self.record_artifact("datafusion_ast_dataset_v1", payload)
@@ -4048,6 +4062,20 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "unbounded": scan.unbounded if scan is not None else None,
             "delta_version": location.delta_version,
             "delta_timestamp": location.delta_timestamp,
+            "delta_feature_gate": (
+                {
+                    "min_reader_version": location.delta_feature_gate.min_reader_version,
+                    "min_writer_version": location.delta_feature_gate.min_writer_version,
+                    "required_reader_features": list(
+                        location.delta_feature_gate.required_reader_features
+                    ),
+                    "required_writer_features": list(
+                        location.delta_feature_gate.required_writer_features
+                    ),
+                }
+                if location.delta_feature_gate is not None
+                else None
+            ),
             "delta_constraints": list(location.delta_constraints),
         }
         self.record_artifact("datafusion_bytecode_dataset_v1", payload)

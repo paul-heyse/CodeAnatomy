@@ -76,8 +76,9 @@ class EngineSession:
         """
         if self.engine_runtime.datafusion_profile is None:
             return None
+        session_runtime = self.engine_runtime.datafusion_profile.session_runtime()
         return DataFusionExecutionFacade(
-            ctx=self.engine_runtime.datafusion_profile.session_context(),
+            ctx=session_runtime.ctx,
             runtime_profile=self.engine_runtime.datafusion_profile,
         )
 

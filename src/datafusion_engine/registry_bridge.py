@@ -978,6 +978,20 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             ),
         ),
     )
+    if response.snapshot is not None:
+        from datafusion_engine.delta_observability import (
+            DeltaSnapshotArtifact,
+            record_delta_snapshot,
+        )
+
+        record_delta_snapshot(
+            context.runtime_profile,
+            artifact=DeltaSnapshotArtifact(
+                table_uri=str(location.path),
+                snapshot=response.snapshot,
+                dataset_name=context.name,
+            ),
+        )
     _update_table_provider_capabilities(
         context.ctx,
         name=context.name,

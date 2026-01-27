@@ -20,6 +20,7 @@ from serde_msgspec import dumps_msgpack
 if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
 
+    from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.runtime import SessionRuntime
     from datafusion_engine.scan_planner import ScanUnit
 
@@ -59,6 +60,8 @@ class DeltaInputPin:
     version: int | None
     timestamp: str | None
     feature_gate: DeltaFeatureGate | None = None
+    protocol: Mapping[str, object] | None = None
+    storage_options_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -187,23 +190,83 @@ def _delta_inputs_from_scan_units(
         if timestamp is None and unit.snapshot_timestamp is not None:
             timestamp = str(unit.snapshot_timestamp)
         gate = unit.delta_feature_gate
+        protocol = unit.delta_protocol
+        storage_hash = unit.storage_options_hash
         if unit.delta_version is None and timestamp is None:
             continue
         existing = pins.get(unit.dataset_name)
-        if existing is not None and (
-            existing.version != unit.delta_version
-            or existing.timestamp != timestamp
-            or existing.feature_gate != gate
+        if existing is not None and _delta_pin_state_from_pin(
+            existing,
+        ) != _delta_pin_state_from_values(
+            version=unit.delta_version,
+            timestamp=timestamp,
+            gate=gate,
+            protocol=protocol,
+            storage_options_hash=storage_hash,
         ):
-            msg = f"Conflicting Delta pins for dataset {unit.dataset_name!r}: {(existing.version, existing.timestamp, existing.feature_gate)} vs {(unit.delta_version, timestamp, gate)}"
+            msg = (
+                "Conflicting Delta pins for dataset "
+                f"{unit.dataset_name!r}: "
+                f"{(existing.version, existing.timestamp, existing.feature_gate, existing.protocol, existing.storage_options_hash)} "
+                f"vs {(unit.delta_version, timestamp, gate, protocol, storage_hash)}"
+            )
             raise ValueError(msg)
         pins[unit.dataset_name] = DeltaInputPin(
             dataset_name=unit.dataset_name,
             version=unit.delta_version,
             timestamp=timestamp,
             feature_gate=gate,
+            protocol=protocol,
+            storage_options_hash=storage_hash,
         )
     return tuple(pins[name] for name in sorted(pins))
+
+
+def _delta_pin_state_from_pin(
+    pin: DeltaInputPin,
+) -> tuple[
+    int | None, str | None, DeltaFeatureGate | None, Mapping[str, object] | None, str | None
+]:
+    """Build a comparable state tuple from a Delta pin.
+
+    Returns
+    -------
+    tuple[int | None, str | None, DeltaFeatureGate | None, Mapping[str, object] | None, str | None]
+        Tuple of comparable pin fields used for conflict detection.
+    """
+    return (
+        pin.version,
+        pin.timestamp,
+        pin.feature_gate,
+        pin.protocol,
+        pin.storage_options_hash,
+    )
+
+
+def _delta_pin_state_from_values(
+    *,
+    version: int | None,
+    timestamp: str | None,
+    gate: DeltaFeatureGate | None,
+    protocol: Mapping[str, object] | None,
+    storage_options_hash: str | None,
+) -> tuple[
+    int | None, str | None, DeltaFeatureGate | None, Mapping[str, object] | None, str | None
+]:
+    """Build a comparable state tuple from Delta pin values.
+
+    Returns
+    -------
+    tuple[int | None, str | None, DeltaFeatureGate | None, Mapping[str, object] | None, str | None]
+        Tuple of comparable pin fields used for conflict detection.
+    """
+    return (
+        version,
+        timestamp,
+        gate,
+        protocol,
+        storage_options_hash,
+    )
 
 
 def build_plan_bundle(  # noqa: PLR0913
@@ -334,7 +397,14 @@ def _bundle_components(
         if required.required_udfs:
             validate_required_udfs(udf_artifacts.snapshot, required=required.required_udfs)
 
-    scan_unit_pins = _delta_inputs_from_scan_units(options.scan_units)
+    scan_units = options.scan_units
+    if not scan_units:
+        scan_units = _scan_units_for_bundle(
+            ctx,
+            plan=optimized or logical,
+            session_runtime=options.session_runtime,
+        )
+    scan_unit_pins = _delta_inputs_from_scan_units(scan_units)
     merged_delta_inputs = _merge_delta_inputs(options.delta_inputs, scan_unit_pins)
     fingerprint = _hash_plan(
         PlanFingerprintInputs(
@@ -550,6 +620,8 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
                     pin.version,
                     pin.timestamp,
                     _delta_gate_payload(pin.feature_gate),
+                    _delta_protocol_payload(pin.protocol),
+                    pin.storage_options_hash,
                 )
                 for pin in inputs.delta_inputs
             ),
@@ -578,6 +650,73 @@ def _delta_gate_payload(
         tuple(gate.required_reader_features),
         tuple(gate.required_writer_features),
     )
+
+
+def _delta_protocol_payload(
+    protocol: Mapping[str, object] | None,
+) -> tuple[tuple[str, object], ...] | None:
+    if not isinstance(protocol, Mapping):
+        return None
+    items: list[tuple[str, object]] = []
+    for key, value in protocol.items():
+        if isinstance(value, (str, int, float)) or value is None:
+            items.append((str(key), value))
+            continue
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            items.append((str(key), tuple(str(item) for item in value)))
+            continue
+        items.append((str(key), str(value)))
+    return tuple(sorted(items, key=lambda item: item[0]))
+
+
+def _scan_units_for_bundle(
+    ctx: SessionContext,
+    *,
+    plan: object,
+    session_runtime: SessionRuntime | None,
+) -> tuple[ScanUnit, ...]:
+    scan_units: tuple[ScanUnit, ...] = ()
+    if session_runtime is not None and plan is not None:
+        try:
+            from datafusion_engine.lineage_datafusion import extract_lineage
+            from datafusion_engine.scan_planner import plan_scan_units
+        except ImportError:
+            pass
+        else:
+            lineage = extract_lineage(plan)
+            if lineage.scans:
+                locations = _dataset_location_map(session_runtime)
+                if locations:
+                    try:
+                        scan_units, _ = plan_scan_units(
+                            ctx,
+                            dataset_locations=locations,
+                            scans_by_task={"plan_bundle": lineage.scans},
+                            runtime_profile=session_runtime.profile,
+                        )
+                    except (RuntimeError, TypeError, ValueError):
+                        scan_units = ()
+    return scan_units
+
+
+def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str, DatasetLocation]:
+    locations: dict[str, DatasetLocation] = {}
+    runtime_profile = getattr(session_runtime, "profile", None)
+    if runtime_profile is None:
+        return locations
+    for name, location in runtime_profile.extract_dataset_locations.items():
+        locations.setdefault(name, cast("DatasetLocation", location))
+    for name, location in runtime_profile.scip_dataset_locations.items():
+        locations.setdefault(name, cast("DatasetLocation", location))
+    for catalog in runtime_profile.registry_catalogs.values():
+        for name in catalog.names():
+            if name in locations:
+                continue
+            try:
+                locations[name] = cast("DatasetLocation", catalog.get(name))
+            except KeyError:
+                continue
+    return locations
 
 
 def _plan_display(plan: object | None, *, method: str) -> str | None:

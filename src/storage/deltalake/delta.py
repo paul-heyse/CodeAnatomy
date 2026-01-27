@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib
+import json
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ if TYPE_CHECKING:
         DeltaCommitOptions,
         DeltaFeatureGate,
     )
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type StorageOptions = Mapping[str, str]
 
@@ -102,6 +105,7 @@ class DeltaWriteResult:
 
     path: str
     version: int | None
+    report: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +184,60 @@ class DeltaDataCheckRequest:
     version: int | None = None
     timestamp: str | None = None
     extra_constraints: Sequence[str] | None = None
+    gate: DeltaFeatureGate | None = None
+
+
+@dataclass(frozen=True)
+class DeltaSchemaRequest:
+    """Inputs required to resolve a Delta table schema."""
+
+    path: str
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+    version: int | None = None
+    timestamp: str | None = None
+    gate: DeltaFeatureGate | None = None
+
+
+@dataclass(frozen=True)
+class DeltaDeleteWhereRequest:
+    """Inputs required to delete rows from a Delta table."""
+
+    path: str
+    predicate: str | None
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+    commit_properties: CommitProperties | None = None
+    commit_metadata: Mapping[str, str] | None = None
+    extra_constraints: Sequence[str] | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    dataset_name: str | None = None
+
+
+@dataclass(frozen=True)
+class DeltaMergeArrowRequest:
+    """Inputs required to merge Arrow data into a Delta table."""
+
+    path: str
+    source: pa.Table
+    predicate: str
+    storage_options: StorageOptions | None = None
+    log_storage_options: StorageOptions | None = None
+    source_alias: str | None = "source"
+    target_alias: str | None = "target"
+    matched_predicate: str | None = None
+    matched_updates: Mapping[str, str] | None = None
+    not_matched_predicate: str | None = None
+    not_matched_inserts: Mapping[str, str] | None = None
+    not_matched_by_source_predicate: str | None = None
+    delete_not_matched_by_source: bool = False
+    update_all: bool = False
+    insert_all: bool = False
+    commit_properties: CommitProperties | None = None
+    commit_metadata: Mapping[str, str] | None = None
+    extra_constraints: Sequence[str] | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    dataset_name: str | None = None
 
 
 def delta_table_version(
@@ -217,23 +275,20 @@ def delta_table_version(
     return None
 
 
-def delta_table_schema(
-    path: str,
-    *,
-    storage_options: StorageOptions | None = None,
-    log_storage_options: StorageOptions | None = None,
-    version: int | None = None,
-    timestamp: str | None = None,
-    gate: DeltaFeatureGate | None = None,
-) -> pa.Schema | None:
+def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
     """Return the Delta table schema when the table exists.
+
+    Parameters
+    ----------
+    request
+        Schema lookup request with optional snapshot pins and feature gate.
 
     Returns
     -------
     pyarrow.Schema | None
         Arrow schema for the Delta table or ``None`` when the table does not exist.
     """
-    storage = _log_storage_dict(storage_options, log_storage_options)
+    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
     ctx = _runtime_ctx(None)
     try:
         from datafusion_engine.delta_control_plane import (
@@ -243,15 +298,15 @@ def delta_table_schema(
 
         bundle = delta_provider_from_session(
             ctx,
-        request=DeltaProviderRequest(
-            table_uri=path,
-            storage_options=storage or None,
-            version=version,
-            timestamp=timestamp,
-            delta_scan=None,
-            gate=gate,
-        ),
-    )
+            request=DeltaProviderRequest(
+                table_uri=request.path,
+                storage_options=storage or None,
+                version=request.version,
+                timestamp=request.timestamp,
+                delta_scan=None,
+                gate=request.gate,
+            ),
+        )
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
     df = ctx.read_table(bundle.provider)
@@ -676,11 +731,18 @@ def write_delta_table(
         Delta table path.
     options
         Optional Delta write options.
+    ctx
+        Optional DataFusion session context for the write.
 
     Returns
     -------
     DeltaWriteResult
         Delta write result containing path and version metadata.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when Rust control-plane adapters are unavailable.
     """
     resolved = options or DeltaWriteOptions()
     storage = dict(resolved.storage_options or {})
@@ -693,11 +755,7 @@ def write_delta_table(
     data_ipc = ipc_bytes(table)
     ctx = _runtime_ctx(ctx)
     try:
-        from datafusion_engine.delta_control_plane import (
-            DeltaCommitOptions,
-            DeltaWriteRequest,
-            delta_write_ipc,
-        )
+        from datafusion_engine.delta_control_plane import DeltaWriteRequest, delta_write_ipc
     except ImportError as exc:
         msg = "Rust Delta control-plane adapters are required for Delta writes."
         raise RuntimeError(msg) from exc
@@ -729,105 +787,146 @@ def write_delta_table(
         ),
     )
     version = _mutation_version(report)
-    return DeltaWriteResult(path=path, version=version)
+    return DeltaWriteResult(path=path, version=version, report=report)
 
 
 def delta_delete_where(
     ctx: SessionContext,
     *,
-    path: str,
-    predicate: str | None,
-    storage_options: StorageOptions | None = None,
-    log_storage_options: StorageOptions | None = None,
-    commit_properties: CommitProperties | None = None,
-    commit_metadata: Mapping[str, str] | None = None,
-    extra_constraints: Sequence[str] | None = None,
+    request: DeltaDeleteWhereRequest,
 ) -> Mapping[str, object]:
-    """Delete rows from a Delta table via the Rust control plane."""
-    storage = _log_storage_dict(storage_options, log_storage_options)
+    """Delete rows from a Delta table via the Rust control plane.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context for the delete.
+    request
+        Delete request describing target table and predicate.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Control-plane mutation report payload.
+    """
+    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
     commit_options = _delta_commit_options(
-        commit_properties=commit_properties,
-        commit_metadata=commit_metadata,
+        commit_properties=request.commit_properties,
+        commit_metadata=request.commit_metadata,
         app_id=None,
         app_version=None,
     )
-    from datafusion_engine.delta_control_plane import delta_delete
+    from datafusion_engine.delta_control_plane import DeltaDeleteRequest, delta_delete
 
-    return delta_delete(
+    report = delta_delete(
         ctx,
-        table_uri=path,
-        storage_options=storage or None,
-        version=None,
-        timestamp=None,
-        predicate=predicate,
-        extra_constraints=extra_constraints,
-        commit_options=commit_options,
+        request=DeltaDeleteRequest(
+            table_uri=request.path,
+            storage_options=storage or None,
+            version=None,
+            timestamp=None,
+            predicate=request.predicate,
+            extra_constraints=request.extra_constraints,
+            commit_options=commit_options,
+        ),
     )
+    _record_mutation_artifact(
+        request.runtime_profile,
+        report=report,
+        table_uri=request.path,
+        operation="delete",
+        mode="delete",
+        commit_metadata=request.commit_metadata,
+        commit_properties=request.commit_properties,
+        constraint_status=_constraint_status(request.extra_constraints, checked=False),
+        constraint_violations=(),
+        storage_options_hash=_storage_options_hash(
+            request.storage_options,
+            request.log_storage_options,
+        ),
+        dataset_name=request.dataset_name,
+    )
+    return report
 
 
 def delta_merge_arrow(
     ctx: SessionContext,
     *,
-    path: str,
-    source: pa.Table,
-    predicate: str,
-    storage_options: StorageOptions | None = None,
-    log_storage_options: StorageOptions | None = None,
-    source_alias: str | None = "source",
-    target_alias: str | None = "target",
-    matched_predicate: str | None = None,
-    matched_updates: Mapping[str, str] | None = None,
-    not_matched_predicate: str | None = None,
-    not_matched_inserts: Mapping[str, str] | None = None,
-    not_matched_by_source_predicate: str | None = None,
-    delete_not_matched_by_source: bool = False,
-    update_all: bool = False,
-    insert_all: bool = False,
-    commit_properties: CommitProperties | None = None,
-    commit_metadata: Mapping[str, str] | None = None,
-    extra_constraints: Sequence[str] | None = None,
+    request: DeltaMergeArrowRequest,
 ) -> Mapping[str, object]:
-    """Merge Arrow data into a Delta table via the Rust control plane."""
-    storage = _log_storage_dict(storage_options, log_storage_options)
-    resolved_source_alias = source_alias or "source"
-    resolved_target_alias = target_alias or "target"
-    resolved_updates = dict(matched_updates or {})
-    resolved_inserts = dict(not_matched_inserts or {})
-    if update_all:
-        for name in source.schema.names:
+    """Merge Arrow data into a Delta table via the Rust control plane.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context for the merge.
+    request
+        Merge request describing source data and predicates.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Control-plane mutation report payload.
+    """
+    storage = _log_storage_dict(request.storage_options, request.log_storage_options)
+    resolved_source_alias = request.source_alias or "source"
+    resolved_target_alias = request.target_alias or "target"
+    resolved_updates = dict(request.matched_updates or {})
+    resolved_inserts = dict(request.not_matched_inserts or {})
+    if request.update_all:
+        for name in request.source.schema.names:
             resolved_updates.setdefault(name, f"{resolved_source_alias}.{name}")
-    if insert_all:
-        for name in source.schema.names:
+    if request.insert_all:
+        for name in request.source.schema.names:
             resolved_inserts.setdefault(name, f"{resolved_source_alias}.{name}")
-    source_table = _register_temp_table(ctx, source)
+    source_table = _register_temp_table(ctx, request.source)
     commit_options = _delta_commit_options(
-        commit_properties=commit_properties,
-        commit_metadata=commit_metadata,
+        commit_properties=request.commit_properties,
+        commit_metadata=request.commit_metadata,
         app_id=None,
         app_version=None,
     )
-    from datafusion_engine.delta_control_plane import delta_merge
+    from datafusion_engine.delta_control_plane import DeltaMergeRequest, delta_merge
 
     try:
-        return delta_merge(
+        report = delta_merge(
             ctx,
-            table_uri=path,
-            storage_options=storage or None,
-            version=None,
-            timestamp=None,
-            source_table=source_table,
-            predicate=predicate,
-            source_alias=resolved_source_alias,
-            target_alias=resolved_target_alias,
-            matched_predicate=matched_predicate,
-            matched_updates=resolved_updates,
-            not_matched_predicate=not_matched_predicate,
-            not_matched_inserts=resolved_inserts,
-            not_matched_by_source_predicate=not_matched_by_source_predicate,
-            delete_not_matched_by_source=delete_not_matched_by_source,
-            extra_constraints=extra_constraints,
-            commit_options=commit_options,
+            request=DeltaMergeRequest(
+                table_uri=request.path,
+                storage_options=storage or None,
+                version=None,
+                timestamp=None,
+                source_table=source_table,
+                predicate=request.predicate,
+                source_alias=resolved_source_alias,
+                target_alias=resolved_target_alias,
+                matched_predicate=request.matched_predicate,
+                matched_updates=resolved_updates,
+                not_matched_predicate=request.not_matched_predicate,
+                not_matched_inserts=resolved_inserts,
+                not_matched_by_source_predicate=request.not_matched_by_source_predicate,
+                delete_not_matched_by_source=request.delete_not_matched_by_source,
+                extra_constraints=request.extra_constraints,
+                commit_options=commit_options,
+            ),
         )
+        _record_mutation_artifact(
+            request.runtime_profile,
+            report=report,
+            table_uri=request.path,
+            operation="merge",
+            mode="merge",
+            commit_metadata=request.commit_metadata,
+            commit_properties=request.commit_properties,
+            constraint_status=_constraint_status(request.extra_constraints, checked=True),
+            constraint_violations=(),
+            storage_options_hash=_storage_options_hash(
+                request.storage_options,
+                request.log_storage_options,
+            ),
+            dataset_name=request.dataset_name,
+        )
+        return report
     finally:
         _deregister_table(ctx, source_table)
 
@@ -875,6 +974,7 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
         if request.extra_constraints
         else None
     )
+    gate = request.gate
     result = checker(
         request.ctx,
         request.table_path,
@@ -883,10 +983,10 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
         request.timestamp,
         payload,
         constraints_payload,
-        None,
-        None,
-        None,
-        None,
+        gate.min_reader_version if gate is not None else None,
+        gate.min_writer_version if gate is not None else None,
+        list(gate.required_reader_features) if gate is not None else None,
+        list(gate.required_writer_features) if gate is not None else None,
     )
     if result is None:
         return []
@@ -914,6 +1014,79 @@ def _storage_dict(storage_options: StorageOptions | None) -> dict[str, str] | No
     if storage_options is None:
         return None
     return dict(storage_options)
+
+
+def _storage_options_hash(
+    storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
+) -> str | None:
+    storage = _log_storage_dict(storage_options, log_storage_options)
+    if not storage:
+        return None
+    payload = json.dumps(sorted(storage.items()), sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _constraint_status(
+    extra_constraints: Sequence[str] | None,
+    *,
+    checked: bool,
+) -> str:
+    if not extra_constraints:
+        return "skipped"
+    return "passed" if checked else "not_applicable"
+
+
+def _record_mutation_artifact(
+    profile: DataFusionRuntimeProfile | None,
+    *,
+    report: Mapping[str, object],
+    table_uri: str,
+    operation: str,
+    mode: str | None,
+    commit_metadata: Mapping[str, str] | None,
+    commit_properties: CommitProperties | None,
+    constraint_status: str,
+    constraint_violations: Sequence[str],
+    storage_options_hash: str | None,
+    dataset_name: str | None,
+) -> None:
+    if profile is None:
+        return
+    from datafusion_engine.delta_observability import (
+        DeltaMutationArtifact,
+        record_delta_mutation,
+    )
+
+    commit_app_id: str | None = None
+    commit_version: int | None = None
+    commit_run_id: str | None = None
+    if commit_properties is not None:
+        commit_payload = _commit_metadata_from_properties(commit_properties)
+        commit_app_id = commit_payload.get("commit_app_id")
+        commit_version_value = commit_payload.get("commit_version")
+        commit_run_id = commit_payload.get("commit_run_id")
+        if isinstance(commit_version_value, str) and commit_version_value.isdigit():
+            commit_version = int(commit_version_value)
+    if commit_metadata is None and commit_properties is not None:
+        commit_metadata = _commit_metadata_from_properties(commit_properties)
+    record_delta_mutation(
+        profile,
+        artifact=DeltaMutationArtifact(
+            table_uri=table_uri,
+            operation=operation,
+            report=report,
+            dataset_name=dataset_name,
+            mode=mode,
+            commit_metadata=commit_metadata,
+            commit_app_id=commit_app_id,
+            commit_version=commit_version,
+            commit_run_id=commit_run_id,
+            constraint_status=constraint_status,
+            constraint_violations=constraint_violations,
+            storage_options_hash=storage_options_hash,
+        ),
+    )
 
 
 def build_commit_properties(
@@ -1092,6 +1265,9 @@ __all__ = [
     "DEFAULT_DELTA_FEATURE_PROPERTIES",
     "DeltaCdfOptions",
     "DeltaDataCheckRequest",
+    "DeltaDeleteWhereRequest",
+    "DeltaMergeArrowRequest",
+    "DeltaSchemaRequest",
     "DeltaVacuumOptions",
     "DeltaWriteOptions",
     "DeltaWriteResult",

@@ -207,6 +207,7 @@ class DeltaRestoreRequest:
     timestamp: str | None
     restore_version: int | None
     restore_timestamp: str | None
+    allow_unsafe_restore: bool = False
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
@@ -864,7 +865,7 @@ def _validate_update_constraints(ctx: SessionContext, request: DeltaUpdateReques
         try:
             predicate_expr = df.parse_sql_expr(request.predicate)
         except (RuntimeError, TypeError, ValueError) as exc:
-            msg = f"Delta update predicate parse failed: {exc}"
+            msg = "Delta update predicate parse failed."
             raise ValueError(msg) from exc
         df = df.filter(predicate_expr)
     schema = df.schema()
@@ -874,7 +875,7 @@ def _validate_update_constraints(ctx: SessionContext, request: DeltaUpdateReques
             try:
                 expr = df.parse_sql_expr(request.updates[name]).alias(name)
             except (RuntimeError, TypeError, ValueError) as exc:
-                msg = f"Delta update expression parse failed for {name!r}: {exc}"
+                msg = "Delta update expression parse failed."
                 raise ValueError(msg) from exc
             exprs.append(expr)
         else:
@@ -894,7 +895,7 @@ def _validate_update_constraints(ctx: SessionContext, request: DeltaUpdateReques
     )
     if violations:
         msg = "Delta update constraint check failed."
-        raise ValueError(f"{msg} Violations: {violations}")
+        raise ValueError(msg)
 
 
 def delta_update(

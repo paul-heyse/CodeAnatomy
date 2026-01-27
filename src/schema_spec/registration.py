@@ -15,6 +15,8 @@ from schema_spec.system import (
     ContractSpec,
     DatasetKind,
     DatasetSpec,
+    DeltaCdfPolicy,
+    DeltaMaintenancePolicy,
     make_dataset_spec,
     make_table_spec,
 )
@@ -28,6 +30,8 @@ class DatasetRegistration:
     dataset_kind: DatasetKind | None = None
     query_spec: QuerySpec | None = None
     contract_spec: ContractSpec | None = None
+    delta_cdf_policy: DeltaCdfPolicy | None = None
+    delta_maintenance_policy: DeltaMaintenancePolicy | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_constraints: Sequence[str] = ()
@@ -86,6 +90,8 @@ def register_dataset(
         dataset_kind=registration.dataset_kind or "primary",
         query_spec=registration.query_spec,
         contract_spec=registration.contract_spec,
+        delta_cdf_policy=registration.delta_cdf_policy,
+        delta_maintenance_policy=registration.delta_maintenance_policy,
         delta_write_policy=registration.delta_write_policy,
         delta_schema_policy=registration.delta_schema_policy,
         delta_constraints=registration.delta_constraints,

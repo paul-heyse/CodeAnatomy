@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from datafusion_engine.write_pipeline import WriteMode
 from engine.runtime_profile import runtime_profile_snapshot
 from incremental.delta_context import read_delta_table_via_facade
-from storage.deltalake import (
-    DeltaWriteOptions,
-    delta_table_version,
-    enable_delta_features,
-    write_delta_table,
+from incremental.write_helpers import (
+    IncrementalDeltaWriteRequest,
+    write_delta_table_via_pipeline,
 )
+from storage.deltalake import delta_table_version
 from storage.ipc import payload_hash
 
 INVALIDATION_SNAPSHOT_VERSION = 2
@@ -137,11 +137,11 @@ def read_invalidation_snapshot(
     path = state_store.invalidation_snapshot_path()
     if not path.exists():
         return None
-    storage = context.storage
+    resolved = context.resolve_storage(table_uri=str(path))
     version = delta_table_version(
         str(path),
-        storage_options=storage.storage_options,
-        log_storage_options=storage.log_storage_options,
+        storage_options=resolved.storage_options,
+        log_storage_options=resolved.log_storage_options,
     )
     if version is None:
         return None
@@ -174,23 +174,21 @@ def write_invalidation_snapshot(
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = snapshot.to_payload()
     table = pa.Table.from_pylist([payload], schema=_INVALIDATION_SCHEMA)
-    result = write_delta_table(
-        table,
-        str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    resolved_storage = context.resolve_storage(table_uri=str(path))
+    write_delta_table_via_pipeline(
+        runtime=context.runtime,
+        table=table,
+        request=IncrementalDeltaWriteRequest(
+            destination=str(path),
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
             commit_metadata={"snapshot_kind": "incremental_invalidation_snapshot"},
-            storage_options=context.storage.storage_options,
-            log_storage_options=context.storage.log_storage_options,
+            storage_options=resolved_storage.storage_options,
+            log_storage_options=resolved_storage.log_storage_options,
+            operation_id="incremental_invalidation_snapshot",
         ),
     )
-    enable_delta_features(
-        result.path,
-        storage_options=context.storage.storage_options,
-        log_storage_options=context.storage.log_storage_options,
-    )
-    return result.path
+    return str(path)
 
 
 def diff_invalidation_snapshots(
@@ -270,11 +268,11 @@ def _incremental_plan_fingerprints(
     path = state_store.view_artifacts_path()
     if not path.exists():
         return {}
-    storage = context.storage
+    resolved = context.resolve_storage(table_uri=str(path))
     version = delta_table_version(
         str(path),
-        storage_options=storage.storage_options,
-        log_storage_options=storage.log_storage_options,
+        storage_options=resolved.storage_options,
+        log_storage_options=resolved.log_storage_options,
     )
     if version is None:
         return {}

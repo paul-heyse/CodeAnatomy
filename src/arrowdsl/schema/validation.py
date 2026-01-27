@@ -138,11 +138,8 @@ def _ensure_execution_context(ctx: ExecutionContext | None) -> ExecutionContext:
 
 
 def _session_context(ctx: ExecutionContext) -> SessionContext:
-    runtime = ctx.runtime.datafusion
-    if runtime is None:
-        msg = "DataFusion runtime is required for schema validation."
-        raise ValueError(msg)
-    return runtime.session_context()
+    session_runtime = ctx.session_runtime
+    return session_runtime.ctx
 
 
 def _expr_table(df: DataFrame) -> ArrowTable:

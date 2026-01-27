@@ -19,6 +19,8 @@ from storage.deltalake import (
     vacuum_delta,
 )
 
+_DELTA_MIN_RETENTION_HOURS = 168
+
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
@@ -109,6 +111,16 @@ def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
         history=history,
         protocol=protocol,
     )
+    _record_delta_snapshot_table(
+        request.runtime_profile,
+        table_uri=request.path,
+        snapshot=history or {},
+        dataset_name=request.dataset,
+        storage_hash=_storage_options_hash(
+            request.storage_options,
+            request.log_storage_options,
+        ),
+    )
     _record_maintenance(
         request.runtime_profile,
         payload={
@@ -131,8 +143,22 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
     -------
     DeltaVacuumResult
         Vacuum result payload.
+
+    Raises
+    ------
+    ValueError
+        Raised when the retention guardrail is violated.
     """
     resolved = request.options or DeltaVacuumOptions()
+    if resolved.enforce_retention_duration and (
+        resolved.retention_hours is None
+        or resolved.retention_hours < _DELTA_MIN_RETENTION_HOURS
+    ):
+        msg = (
+            "Delta vacuum retention_hours must be at least "
+            f"{_DELTA_MIN_RETENTION_HOURS} when enforcement is enabled."
+        )
+        raise ValueError(msg)
     removed = vacuum_delta(
         request.path,
         options=resolved,
@@ -144,6 +170,21 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
         removed_files=tuple(removed),
         dry_run=resolved.dry_run,
         retention_hours=resolved.retention_hours,
+    )
+    _record_delta_maintenance_table(
+        _DeltaMaintenanceRecordRequest(
+            profile=request.runtime_profile,
+            table_uri=request.path,
+            operation="vacuum",
+            report={"metrics": {"removed_files": list(removed)}},
+            dataset_name=request.dataset,
+            retention_hours=resolved.retention_hours,
+            dry_run=resolved.dry_run,
+            storage_hash=_storage_options_hash(
+                request.storage_options,
+                request.log_storage_options,
+            ),
+        )
     )
     _record_maintenance(
         request.runtime_profile,
@@ -238,6 +279,81 @@ def _record_delta_query(
     from datafusion_engine.diagnostics import record_artifact
 
     record_artifact(runtime_profile, "delta_query_v1", payload)
+
+
+def _storage_options_hash(
+    storage_options: StorageOptions | None,
+    log_storage_options: StorageOptions | None,
+) -> str | None:
+    storage = dict(storage_options or {})
+    if log_storage_options:
+        storage.update({str(key): str(value) for key, value in log_storage_options.items()})
+    if not storage:
+        return None
+    payload = json.dumps(sorted(storage.items()), sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _record_delta_snapshot_table(
+    profile: DataFusionRuntimeProfile | None,
+    *,
+    table_uri: str,
+    snapshot: Mapping[str, object],
+    dataset_name: str | None,
+    storage_hash: str | None,
+) -> None:
+    if profile is None or not snapshot:
+        return
+    from datafusion_engine.delta_observability import (
+        DeltaSnapshotArtifact,
+        record_delta_snapshot,
+    )
+
+    record_delta_snapshot(
+        profile,
+        artifact=DeltaSnapshotArtifact(
+            table_uri=table_uri,
+            snapshot=snapshot,
+            dataset_name=dataset_name,
+            storage_options_hash=storage_hash,
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _DeltaMaintenanceRecordRequest:
+    """Inputs required to record a Delta maintenance artifact."""
+
+    profile: DataFusionRuntimeProfile | None
+    table_uri: str
+    operation: str
+    report: Mapping[str, object]
+    dataset_name: str | None
+    retention_hours: int | None
+    dry_run: bool | None
+    storage_hash: str | None
+
+
+def _record_delta_maintenance_table(request: _DeltaMaintenanceRecordRequest) -> None:
+    if request.profile is None:
+        return
+    from datafusion_engine.delta_observability import (
+        DeltaMaintenanceArtifact,
+        record_delta_maintenance,
+    )
+
+    record_delta_maintenance(
+        request.profile,
+        artifact=DeltaMaintenanceArtifact(
+            table_uri=request.table_uri,
+            operation=request.operation,
+            report=request.report,
+            dataset_name=request.dataset_name,
+            retention_hours=request.retention_hours,
+            dry_run=request.dry_run,
+            storage_options_hash=request.storage_hash,
+        ),
+    )
 
 
 __all__ = [

@@ -18,7 +18,7 @@ def incremental_dataset_specs() -> tuple[DatasetSpec, ...]:
     tuple[object, ...]
         Dataset specs for incremental datasets.
     """
-    ctx = DataFusionRuntimeProfile().session_context()
+    ctx = DataFusionRuntimeProfile().session_runtime().ctx
     specs: list[DatasetSpec] = []
     for name in sorted(registered_table_names(ctx)):
         try:

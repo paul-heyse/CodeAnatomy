@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ordering import OrderingEffect
+
+if TYPE_CHECKING:
+    from datafusion.dataframe import DataFrame
+
+    from datafusion_engine.plan_bundle import DataFusionPlanBundle
+    from datafusion_engine.runtime import SessionRuntime
 
 
 def scan_ordering_effect(ctx: ExecutionContext) -> OrderingEffect:
@@ -20,6 +27,38 @@ def scan_ordering_effect(ctx: ExecutionContext) -> OrderingEffect:
     if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output:
         return OrderingEffect.IMPLICIT
     return OrderingEffect.UNORDERED
+
+
+type DataFrameBuilder = Callable[[SessionRuntime], DataFrame]
+type PlanBundleBuilder = Callable[[SessionRuntime], DataFusionPlanBundle]
+
+
+def plan_bundle_builder_from_df(
+    builder: DataFrameBuilder,
+) -> PlanBundleBuilder:
+    """Wrap a DataFrame builder with a plan bundle compiler.
+
+    Parameters
+    ----------
+    builder:
+        Builder that produces a DataFusion DataFrame for the session runtime.
+
+    Returns
+    -------
+    PlanBundleBuilder
+        Builder that returns a DataFusion plan bundle.
+    """
+    from datafusion_engine.plan_bundle import build_plan_bundle
+
+    def _build(session_runtime: SessionRuntime) -> DataFusionPlanBundle:
+        df = builder(session_runtime)
+        return build_plan_bundle(
+            session_runtime.ctx,
+            df,
+            session_runtime=session_runtime,
+        )
+
+    return _build
 
 
 @dataclass(frozen=True)
@@ -123,11 +162,14 @@ class JoinSpec:
 
 __all__ = [
     "AsofJoinSpec",
+    "DataFrameBuilder",
     "DedupeSpec",
     "DedupeStrategy",
     "IntervalAlignOptions",
     "JoinSpec",
     "JoinType",
+    "PlanBundleBuilder",
     "SortKey",
+    "plan_bundle_builder_from_df",
     "scan_ordering_effect",
 ]

@@ -11,7 +11,7 @@ import pyarrow as pa
 from arrowdsl.core.determinism import DeterminismTier
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
 
 
 type ExecutionProfileName = Literal[
@@ -27,7 +27,7 @@ type ExecutionProfileName = Literal[
 
 @dataclass(frozen=True)
 class ScanProfile:
-    """Dataset scan policy for Arrow scanners and Acero scans."""
+    """Dataset scan policy for Arrow scanners."""
 
     name: str
     batch_size: int | None = None
@@ -63,7 +63,7 @@ class ScanProfile:
         return kw
 
     def scan_node_kwargs(self) -> dict[str, object]:
-        """Return kwargs for ``acero.ScanNodeOptions``.
+        """Return kwargs for scan node options.
 
         Returns
         -------
@@ -241,6 +241,24 @@ class RuntimeProfile:
 
     determinism: DeterminismTier = DeterminismTier.BEST_EFFORT
     datafusion: DataFusionRuntimeProfile | None = field(default_factory=_default_datafusion_profile)
+
+    def session_runtime(self) -> SessionRuntime:
+        """Return the DataFusion SessionRuntime for this profile.
+
+        Returns
+        -------
+        SessionRuntime
+            SessionRuntime for DataFusion planning and execution.
+
+        Raises
+        ------
+        ValueError
+            Raised when the DataFusion runtime profile is unavailable.
+        """
+        if self.datafusion is None:
+            msg = "DataFusion runtime profile is required for SessionRuntime access."
+            raise ValueError(msg)
+        return self.datafusion.session_runtime()
 
     def apply_global_thread_pools(self) -> None:
         """Set Arrow CPU + IO thread pools."""

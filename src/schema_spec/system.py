@@ -310,6 +310,26 @@ class DeltaScanOptions:
     schema: pa.Schema | None = None
 
 
+@dataclass(frozen=True)
+class DeltaCdfPolicy:
+    """Policy describing Delta CDF requirements."""
+
+    required: bool = False
+    allow_out_of_range: bool = False
+
+
+@dataclass(frozen=True)
+class DeltaMaintenancePolicy:
+    """Policy describing Delta maintenance expectations."""
+
+    optimize_on_write: bool = False
+    optimize_target_size: int | None = None
+    vacuum_on_write: bool = False
+    vacuum_retention_hours: int | None = None
+    vacuum_dry_run: bool = False
+    enforce_retention_duration: bool = True
+
+
 type DatasetKind = Literal["primary", "delta_cdf"]
 
 
@@ -416,6 +436,8 @@ class DatasetSpec:
     view_specs: tuple[ViewSpec, ...] = ()
     datafusion_scan: DataFusionScanOptions | None = None
     delta_scan: DeltaScanOptions | None = None
+    delta_cdf_policy: DeltaCdfPolicy | None = None
+    delta_maintenance_policy: DeltaMaintenancePolicy | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_feature_gate: DeltaFeatureGate | None = None
@@ -732,6 +754,8 @@ class DatasetSpecKwargs(TypedDict, total=False):
     view_specs: Sequence[ViewSpec]
     datafusion_scan: DataFusionScanOptions | None
     delta_scan: DeltaScanOptions | None
+    delta_cdf_policy: DeltaCdfPolicy | None
+    delta_maintenance_policy: DeltaMaintenancePolicy | None
     delta_write_policy: DeltaWritePolicy | None
     delta_schema_policy: DeltaSchemaPolicy | None
     delta_feature_gate: DeltaFeatureGate | None
@@ -902,6 +926,8 @@ def make_dataset_spec(
         view_specs=tuple(kwargs.get("view_specs", ())),
         datafusion_scan=kwargs.get("datafusion_scan"),
         delta_scan=kwargs.get("delta_scan"),
+        delta_cdf_policy=kwargs.get("delta_cdf_policy"),
+        delta_maintenance_policy=kwargs.get("delta_maintenance_policy"),
         delta_write_policy=kwargs.get("delta_write_policy"),
         delta_schema_policy=kwargs.get("delta_schema_policy"),
         delta_feature_gate=kwargs.get("delta_feature_gate"),
@@ -1291,6 +1317,8 @@ __all__ = [
     "DatasetSpec",
     "DatasetSpecKwargs",
     "DedupeSpecSpec",
+    "DeltaCdfPolicy",
+    "DeltaMaintenancePolicy",
     "DeltaScanOptions",
     "DeltaSchemaPolicy",
     "DeltaWritePolicy",

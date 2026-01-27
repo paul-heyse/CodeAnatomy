@@ -16,6 +16,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table, empty_table
 from incremental.delta_context import DeltaAccessContext, register_delta_df
+from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from incremental.types import IncrementalFileChanges
@@ -37,7 +38,7 @@ def _df_from_arrow(
     prefix: str,
 ) -> DataFrame:
     name = registry.register_table(table, prefix=prefix)
-    return runtime.session_context().table(name)
+    return runtime.session_runtime().ctx.table(name)
 
 
 def _df_from_delta(
@@ -131,7 +132,7 @@ def impacted_callers_from_changed_exports(
         if not pieces:
             return empty_table(schema)
         combined = _union_all_frames(pieces).distinct()
-        result = combined.to_arrow_table()
+        result = execute_df_to_table(runtime, combined, view_name="incremental_impacted_callers")
     return align_table(result, schema=schema, safe_cast=True)
 
 
@@ -200,7 +201,7 @@ def impacted_importers_from_changed_exports(
         pieces.append(by_star)
 
         combined = _union_all_frames(pieces).distinct()
-        result = combined.to_arrow_table()
+        result = execute_df_to_table(runtime, combined, view_name="incremental_impacted_importers")
     return align_table(result, schema=schema, safe_cast=True)
 
 
@@ -272,7 +273,7 @@ def import_closure_only_from_changed_exports(
         pieces.append(star_hits)
 
         combined = _union_all_frames(pieces).distinct()
-        result = combined.to_arrow_table()
+        result = execute_df_to_table(runtime, combined, view_name="incremental_impacted_exports")
     return align_table(result, schema=schema, safe_cast=True)
 
 
@@ -330,7 +331,7 @@ def merge_impacted_files(
         if not frames:
             return empty_table(schema)
         combined = _union_all_frames(frames).distinct()
-        result = combined.to_arrow_table()
+        result = execute_df_to_table(runtime, combined, view_name="incremental_impacted_defs")
     return align_table(result, schema=schema, safe_cast=True)
 
 

@@ -310,6 +310,11 @@ def write_param_tables_delta(
     -------
     Mapping[str, JsonDict] | None
         Mapping of logical names to Delta table reports, or ``None`` when disabled.
+
+    Raises
+    ------
+    ValueError
+        Raised when the DataFusion runtime profile is unavailable.
     """
     if not output_config.materialize_param_tables:
         return None

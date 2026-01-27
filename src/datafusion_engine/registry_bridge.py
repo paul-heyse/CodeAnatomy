@@ -58,10 +58,12 @@ from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_datafusion_scan_options,
     resolve_dataset_schema,
+    resolve_delta_cdf_policy,
     resolve_delta_feature_gate,
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.introspection import (
     introspection_cache_for_ctx,
@@ -509,9 +511,18 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     schema = resolve_dataset_schema(location)
     provider = location.datafusion_provider
     format_name = location.format or "delta"
+    cdf_policy = resolve_delta_cdf_policy(location)
     if provider == "dataset":
         msg = "DataFusion dataset providers are not supported; use listing or native formats."
         raise ValueError(msg)
+    if cdf_policy is not None and cdf_policy.required:
+        if format_name != "delta":
+            msg = "Delta CDF policy requires delta-format datasets."
+            raise ValueError(msg)
+        if location.delta_cdf_options is None:
+            msg = "Delta CDF policy requires delta_cdf_options to be configured."
+            raise ValueError(msg)
+        provider = "delta_cdf"
     if provider == "delta_cdf" and format_name != "delta":
         msg = "Delta CDF provider requires delta-format datasets."
         raise ValueError(msg)
@@ -706,6 +717,7 @@ def register_dataset_df(
     if runtime_profile is None:
         msg = "Runtime profile is required for dataset registration."
         raise ValueError(msg)
+    location = apply_delta_store_policy(location, policy=runtime_profile.delta_store_policy)
     schema = resolve_dataset_schema(location)
     if schema is None:
         msg = f"Schema required for dataset registration: {name!r}."

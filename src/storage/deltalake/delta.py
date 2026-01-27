@@ -831,20 +831,22 @@ def delta_delete_where(
         ),
     )
     _record_mutation_artifact(
-        request.runtime_profile,
-        report=report,
-        table_uri=request.path,
-        operation="delete",
-        mode="delete",
-        commit_metadata=request.commit_metadata,
-        commit_properties=request.commit_properties,
-        constraint_status=_constraint_status(request.extra_constraints, checked=False),
-        constraint_violations=(),
-        storage_options_hash=_storage_options_hash(
-            request.storage_options,
-            request.log_storage_options,
-        ),
-        dataset_name=request.dataset_name,
+        _MutationArtifactRequest(
+            profile=request.runtime_profile,
+            report=report,
+            table_uri=request.path,
+            operation="delete",
+            mode="delete",
+            commit_metadata=request.commit_metadata,
+            commit_properties=request.commit_properties,
+            constraint_status=_constraint_status(request.extra_constraints, checked=False),
+            constraint_violations=(),
+            storage_options_hash=_storage_options_hash(
+                request.storage_options,
+                request.log_storage_options,
+            ),
+            dataset_name=request.dataset_name,
+        )
     )
     return report
 
@@ -911,20 +913,22 @@ def delta_merge_arrow(
             ),
         )
         _record_mutation_artifact(
-            request.runtime_profile,
-            report=report,
-            table_uri=request.path,
-            operation="merge",
-            mode="merge",
-            commit_metadata=request.commit_metadata,
-            commit_properties=request.commit_properties,
-            constraint_status=_constraint_status(request.extra_constraints, checked=True),
-            constraint_violations=(),
-            storage_options_hash=_storage_options_hash(
-                request.storage_options,
-                request.log_storage_options,
-            ),
-            dataset_name=request.dataset_name,
+            _MutationArtifactRequest(
+                profile=request.runtime_profile,
+                report=report,
+                table_uri=request.path,
+                operation="merge",
+                mode="merge",
+                commit_metadata=request.commit_metadata,
+                commit_properties=request.commit_properties,
+                constraint_status=_constraint_status(request.extra_constraints, checked=True),
+                constraint_violations=(),
+                storage_options_hash=_storage_options_hash(
+                    request.storage_options,
+                    request.log_storage_options,
+                ),
+                dataset_name=request.dataset_name,
+            )
         )
         return report
     finally:
@@ -1037,21 +1041,32 @@ def _constraint_status(
     return "passed" if checked else "not_applicable"
 
 
-def _record_mutation_artifact(
-    profile: DataFusionRuntimeProfile | None,
-    *,
-    report: Mapping[str, object],
-    table_uri: str,
-    operation: str,
-    mode: str | None,
-    commit_metadata: Mapping[str, str] | None,
-    commit_properties: CommitProperties | None,
-    constraint_status: str,
-    constraint_violations: Sequence[str],
-    storage_options_hash: str | None,
-    dataset_name: str | None,
-) -> None:
-    if profile is None:
+@dataclass(frozen=True)
+class _MutationArtifactRequest:
+    """Inputs required to record a Delta mutation artifact."""
+
+    profile: DataFusionRuntimeProfile | None
+    report: Mapping[str, object]
+    table_uri: str
+    operation: str
+    mode: str | None
+    commit_metadata: Mapping[str, str] | None
+    commit_properties: CommitProperties | None
+    constraint_status: str
+    constraint_violations: Sequence[str]
+    storage_options_hash: str | None
+    dataset_name: str | None
+
+
+def _commit_metadata_from_properties(commit_properties: CommitProperties) -> dict[str, str]:
+    custom_metadata = getattr(commit_properties, "custom_metadata", None)
+    if not isinstance(custom_metadata, Mapping):
+        return {}
+    return {str(key): str(value) for key, value in custom_metadata.items()}
+
+
+def _record_mutation_artifact(request: _MutationArtifactRequest) -> None:
+    if request.profile is None:
         return
     from datafusion_engine.delta_observability import (
         DeltaMutationArtifact,
@@ -1061,30 +1076,31 @@ def _record_mutation_artifact(
     commit_app_id: str | None = None
     commit_version: int | None = None
     commit_run_id: str | None = None
-    if commit_properties is not None:
-        commit_payload = _commit_metadata_from_properties(commit_properties)
+    if request.commit_properties is not None:
+        commit_payload = _commit_metadata_from_properties(request.commit_properties)
         commit_app_id = commit_payload.get("commit_app_id")
         commit_version_value = commit_payload.get("commit_version")
         commit_run_id = commit_payload.get("commit_run_id")
         if isinstance(commit_version_value, str) and commit_version_value.isdigit():
             commit_version = int(commit_version_value)
-    if commit_metadata is None and commit_properties is not None:
-        commit_metadata = _commit_metadata_from_properties(commit_properties)
+    commit_metadata = request.commit_metadata
+    if commit_metadata is None and request.commit_properties is not None:
+        commit_metadata = _commit_metadata_from_properties(request.commit_properties)
     record_delta_mutation(
-        profile,
+        request.profile,
         artifact=DeltaMutationArtifact(
-            table_uri=table_uri,
-            operation=operation,
-            report=report,
-            dataset_name=dataset_name,
-            mode=mode,
+            table_uri=request.table_uri,
+            operation=request.operation,
+            report=request.report,
+            dataset_name=request.dataset_name,
+            mode=request.mode,
             commit_metadata=commit_metadata,
             commit_app_id=commit_app_id,
             commit_version=commit_version,
             commit_run_id=commit_run_id,
-            constraint_status=constraint_status,
-            constraint_violations=constraint_violations,
-            storage_options_hash=storage_options_hash,
+            constraint_status=request.constraint_status,
+            constraint_violations=request.constraint_violations,
+            storage_options_hash=request.storage_options_hash,
         ),
     )
 

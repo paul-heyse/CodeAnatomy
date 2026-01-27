@@ -5,16 +5,18 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
+
     from datafusion_engine.runtime import SessionRuntime
+    from schema_spec.view_specs import ViewSpec as RuntimeViewSpec
 
 
 @dataclass(frozen=True)
@@ -42,25 +44,25 @@ class ViewSpec:
         validate: bool = True,
         sql_options: object | None = None,
     ) -> None:
-        """Register the view using the DataFusion IO adapter.
+        """Register the view using the DataFusion view registry pipeline.
 
         Raises
         ------
         ValueError
             Raised when the view specification lacks a builder.
         """
-        _ = validate, sql_options
+        _ = sql_options
         if self.builder is None:
             msg = f"View {self.name!r} missing builder."
             raise ValueError(msg)
-        from datafusion_engine.io_adapter import DataFusionIOAdapter
+        from datafusion_engine.runtime import register_view_specs
 
-        adapter = DataFusionIOAdapter(ctx=session_runtime.ctx, profile=None)
-        adapter.register_view(
-            self.name,
-            self.builder(session_runtime.ctx),
-            overwrite=True,
-            temporary=True,
+        views = cast("Sequence[RuntimeViewSpec]", (self,))
+        register_view_specs(
+            session_runtime.ctx,
+            views=views,
+            runtime_profile=session_runtime.profile,
+            validate=validate,
         )
 
 

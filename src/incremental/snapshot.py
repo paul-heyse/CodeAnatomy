@@ -9,16 +9,20 @@ import pyarrow as pa
 
 from arrowdsl.schema.abi import schema_fingerprint
 from arrowdsl.schema.build import column_or_null, table_from_arrays
+from datafusion_engine.dataset_registry import resolve_delta_constraints
 from datafusion_engine.runtime import dataset_schema_from_context
+from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import DeltaAccessContext, read_delta_table_via_facade
+from incremental.write_helpers import (
+    IncrementalDeltaWriteRequest,
+    write_delta_table_via_pipeline,
+)
 from storage.deltalake import (
-    DeltaWriteOptions,
     DeltaWriteResult,
     delta_merge_arrow,
     delta_table_version,
     enable_delta_features,
     idempotent_commit_properties,
-    write_delta_table,
 )
 
 if TYPE_CHECKING:
@@ -71,7 +75,7 @@ def read_repo_snapshot(
     path = store.repo_snapshot_path()
     if not path.exists():
         return None
-    storage = context.storage
+    storage = context.resolve_storage(table_uri=str(path))
     version = delta_table_version(
         str(path),
         storage_options=storage.storage_options,
@@ -92,8 +96,13 @@ def write_repo_snapshot(
 
     Returns
     -------
-    str
-        Path to the written snapshot Delta table.
+    DeltaWriteResult
+        Delta write result for the snapshot table.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Delta write result is unavailable.
     """
     store.ensure_dirs()
     target = store.repo_snapshot_path()
@@ -103,7 +112,7 @@ def write_repo_snapshot(
         "schema_fingerprint": schema_fingerprint(snapshot.schema),
         "dataset": str(target),
     }
-    storage = context.storage
+    storage = context.resolve_storage(table_uri=str(target))
     existing_version = delta_table_version(
         str(target),
         storage_options=storage.storage_options,
@@ -115,29 +124,23 @@ def write_repo_snapshot(
             "operation": "snapshot_overwrite",
             "mode": "overwrite",
         }
-        commit_properties = idempotent_commit_properties(
-            operation="snapshot_overwrite",
-            mode="overwrite",
-            extra_metadata=commit_metadata,
-        )
-        result = write_delta_table(
-            snapshot,
-            str(target),
-            options=DeltaWriteOptions(
-                mode="overwrite",
+        write_result = write_delta_table_via_pipeline(
+            runtime=context.runtime,
+            table=snapshot,
+            request=IncrementalDeltaWriteRequest(
+                destination=str(target),
+                mode=WriteMode.OVERWRITE,
                 schema_mode="overwrite",
                 commit_metadata=commit_metadata,
-                commit_properties=commit_properties,
                 storage_options=storage.storage_options,
                 log_storage_options=storage.log_storage_options,
+                operation_id="incremental_snapshot::repo_snapshot",
             ),
         )
-        enable_delta_features(
-            result.path,
-            storage_options=storage.storage_options,
-            log_storage_options=storage.log_storage_options,
-        )
-        return result
+        if write_result.delta_result is None:
+            msg = "Repo snapshot Delta write did not return a result."
+            raise RuntimeError(msg)
+        return write_result.delta_result
     commit_key = str(target)
     commit_metadata = {
         **metadata,
@@ -161,7 +164,9 @@ def write_repo_snapshot(
         "source.size_bytes <> target.size_bytes OR "
         "source.mtime_ns <> target.mtime_ns"
     )
-    ctx = context.runtime.session_context()
+    ctx = context.runtime.session_runtime().ctx
+    dataset_location = context.runtime.profile.dataset_location("repo_snapshot")
+    extra_constraints = resolve_delta_constraints(dataset_location) if dataset_location else ()
     from storage.deltalake import DeltaMergeArrowRequest
 
     delta_merge_arrow(
@@ -180,6 +185,7 @@ def write_repo_snapshot(
             delete_not_matched_by_source=True,
             commit_properties=commit_properties,
             commit_metadata=commit_metadata,
+            extra_constraints=extra_constraints,
             runtime_profile=context.runtime.profile,
             dataset_name="repo_snapshot",
         ),

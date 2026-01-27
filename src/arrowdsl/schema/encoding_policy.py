@@ -140,7 +140,7 @@ def _datafusion_context() -> SessionContext:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
     profile = DataFusionRuntimeProfile()
-    return profile.session_context()
+    return profile.session_runtime().ctx
 
 
 def _ensure_table(value: TableLike) -> pa.Table:

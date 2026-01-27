@@ -8,17 +8,17 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from arrowdsl.schema.abi import schema_fingerprint
+from datafusion_engine.write_pipeline import WriteMode
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.cdf_runtime import CdfReadResult, read_cdf_changes
 from incremental.delta_context import DeltaAccessContext
 from incremental.state_store import StateStore
-from storage.deltalake import (
-    DeltaWriteOptions,
-    delta_table_version,
-    enable_delta_features,
-    write_delta_table,
+from incremental.write_helpers import (
+    IncrementalDeltaWriteRequest,
+    write_delta_table_via_pipeline,
 )
+from storage.deltalake import delta_table_version
 
 if TYPE_CHECKING:
     from storage.deltalake import DeltaWriteResult
@@ -61,12 +61,12 @@ def diff_snapshots_with_delta_cdf(
         return None
 
     # Check if it's a Delta table
-    storage = context.storage
+    resolved = context.resolve_storage(table_uri=dataset_path)
     if (
         delta_table_version(
             dataset_path,
-            storage_options=storage.storage_options,
-            log_storage_options=storage.log_storage_options,
+            storage_options=resolved.storage_options,
+            log_storage_options=resolved.log_storage_options,
         )
         is None
     ):
@@ -101,6 +101,11 @@ def write_incremental_diff(
     -------
     str
         Path to the written diff Delta table.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Delta write result is unavailable.
     """
     store.ensure_dirs()
     target = store.incremental_diff_path()
@@ -109,23 +114,24 @@ def write_incremental_diff(
         "snapshot_kind": "incremental_diff",
         "schema_fingerprint": schema_fingerprint(diff.schema),
     }
-    result = write_delta_table(
-        diff,
-        str(target),
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    resolved_storage = context.resolve_storage(table_uri=str(target))
+    write_result = write_delta_table_via_pipeline(
+        runtime=context.runtime,
+        table=diff,
+        request=IncrementalDeltaWriteRequest(
+            destination=str(target),
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
             commit_metadata=commit_metadata,
-            storage_options=context.storage.storage_options,
-            log_storage_options=context.storage.log_storage_options,
+            storage_options=resolved_storage.storage_options,
+            log_storage_options=resolved_storage.log_storage_options,
+            operation_id="incremental_diff",
         ),
     )
-    enable_delta_features(
-        result.path,
-        storage_options=context.storage.storage_options,
-        log_storage_options=context.storage.log_storage_options,
-    )
-    return result
+    if write_result.delta_result is None:
+        msg = "Incremental diff Delta write did not return a result."
+        raise RuntimeError(msg)
+    return write_result.delta_result
 
 
 __all__ = [

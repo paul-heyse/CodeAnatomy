@@ -13,7 +13,9 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
+from datafusion_engine.delta_store_policy import resolve_delta_store_policy
 from datafusion_engine.registry_bridge import register_dataset_df
+from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from storage.deltalake import StorageOptions
 
@@ -46,6 +48,28 @@ class DeltaAccessContext:
             "log_storage_options": self.storage.log_storage_options,
         }
 
+    def resolve_storage(self, *, table_uri: str) -> DeltaStorageOptions:
+        """Return effective storage options merged with runtime policy.
+
+        Returns
+        -------
+        DeltaStorageOptions
+            Storage option bundle after applying policy overrides.
+        """
+        policy = self.runtime.profile.delta_store_policy
+        if policy is None:
+            return self.storage
+        storage, log_storage = resolve_delta_store_policy(
+            table_uri=table_uri,
+            policy=policy,
+            storage_options=self.storage.storage_options,
+            log_storage_options=self.storage.log_storage_options,
+        )
+        return DeltaStorageOptions(
+            storage_options=storage or None,
+            log_storage_options=log_storage or None,
+        )
+
 
 def read_delta_table_via_facade(
     context: DeltaAccessContext,
@@ -71,7 +95,11 @@ def read_delta_table_via_facade(
             timestamp=timestamp,
         )
         registry.track(name)
-        return df.to_arrow_table()
+        return execute_df_to_table(
+            context.runtime,
+            df,
+            view_name=f"incremental_delta_read::{name}",
+        )
 
 
 def register_delta_df(
@@ -90,8 +118,9 @@ def register_delta_df(
         DataFusion DataFrame for the registered Delta table.
     """
     profile_location = context.runtime.profile.dataset_location(name)
-    resolved_storage = context.storage.storage_options or {}
-    resolved_log_storage = context.storage.log_storage_options or {}
+    resolved_store = context.resolve_storage(table_uri=str(path))
+    resolved_storage = resolved_store.storage_options or {}
+    resolved_log_storage = resolved_store.log_storage_options or {}
     resolved_scan = None
     resolved_version = version
     resolved_timestamp = timestamp
@@ -116,7 +145,7 @@ def register_delta_df(
         delta_scan=resolved_scan,
     )
     return register_dataset_df(
-        context.runtime.session_context(),
+        context.runtime.session_runtime().ctx,
         name=name,
         location=location,
         runtime_profile=context.runtime.profile,

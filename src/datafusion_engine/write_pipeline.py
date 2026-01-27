@@ -46,9 +46,11 @@ from datafusion.dataframe import DataFrame
 from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_delta_constraints,
+    resolve_delta_maintenance_policy,
     resolve_delta_schema_policy,
     resolve_delta_write_policy,
 )
+from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
@@ -94,6 +96,9 @@ class WriteMethod(Enum):
     COPY = auto()
     STREAMING = auto()
     INSERT = auto()
+
+
+_DELTA_MIN_RETENTION_HOURS = 168
 
 
 def _merge_constraints(
@@ -288,6 +293,7 @@ class DeltaWriteSpec:
     commit_properties: CommitProperties
     commit_metadata: Mapping[str, str]
     commit_key: str
+    dataset_location: DatasetLocation | None = None
     partition_by: tuple[str, ...] = ()
     table_properties: Mapping[str, str] = field(default_factory=dict)
     target_file_size: int | None = None
@@ -398,14 +404,19 @@ class WritePipeline:
             return destination, location
         normalized_destination = str(destination)
         for name, loc in sorted(self.runtime_profile.extract_dataset_locations.items()):
-            if str(loc.path) == normalized_destination:
-                return name, loc
+            resolved = apply_delta_store_policy(loc, policy=self.runtime_profile.delta_store_policy)
+            if str(resolved.path) == normalized_destination:
+                return name, resolved
         for name, loc in sorted(self.runtime_profile.scip_dataset_locations.items()):
-            if str(loc.path) == normalized_destination:
-                return name, loc
+            resolved = apply_delta_store_policy(loc, policy=self.runtime_profile.delta_store_policy)
+            if str(resolved.path) == normalized_destination:
+                return name, resolved
         for catalog in self.runtime_profile.registry_catalogs.values():
             for name in catalog.names():
-                loc = catalog.get(name)
+                loc = apply_delta_store_policy(
+                    catalog.get(name),
+                    policy=self.runtime_profile.delta_store_policy,
+                )
                 if str(loc.path) == normalized_destination:
                     return name, loc
         return None
@@ -724,6 +735,7 @@ class WritePipeline:
             commit_properties=commit_properties,
             commit_metadata=commit_metadata,
             commit_key=commit_key,
+            dataset_location=dataset_location,
             partition_by=request.partition_by,
             table_properties=policy_ctx.table_properties,
             target_file_size=policy_ctx.target_file_size,
@@ -871,6 +883,95 @@ class WritePipeline:
             ),
         )
 
+    def _run_post_write_maintenance(
+        self,
+        *,
+        spec: DeltaWriteSpec,
+        delta_version: int,
+    ) -> None:
+        if self.runtime_profile is None:
+            return
+        policy = (
+            resolve_delta_maintenance_policy(spec.dataset_location)
+            if spec.dataset_location is not None
+            else None
+        )
+        if policy is None:
+            return
+        from datafusion_engine.delta_control_plane import (
+            DeltaCommitOptions,
+            DeltaOptimizeRequest,
+            DeltaVacuumRequest,
+            delta_optimize_compact,
+            delta_vacuum,
+        )
+        from datafusion_engine.delta_observability import (
+            DeltaMaintenanceArtifact,
+            record_delta_maintenance,
+        )
+
+        storage_options_hash = _storage_options_hash(
+            spec.storage_options,
+            spec.log_storage_options,
+        )
+        if policy.optimize_on_write:
+            report = delta_optimize_compact(
+                self.ctx,
+                request=DeltaOptimizeRequest(
+                    table_uri=spec.table_uri,
+                    storage_options=spec.storage_options,
+                    version=delta_version,
+                    timestamp=None,
+                    target_size=policy.optimize_target_size,
+                    commit_options=DeltaCommitOptions(metadata={"operation": "optimize"}),
+                ),
+            )
+            record_delta_maintenance(
+                self.runtime_profile,
+                artifact=DeltaMaintenanceArtifact(
+                    table_uri=spec.table_uri,
+                    operation="optimize",
+                    report=report,
+                    dataset_name=spec.commit_key,
+                    storage_options_hash=storage_options_hash,
+                ),
+            )
+        if policy.vacuum_on_write:
+            retention_hours = policy.vacuum_retention_hours
+            if policy.enforce_retention_duration and (
+                retention_hours is None or retention_hours < _DELTA_MIN_RETENTION_HOURS
+            ):
+                msg = (
+                    "Delta vacuum retention_hours must be at least "
+                    f"{_DELTA_MIN_RETENTION_HOURS} when enforcement is enabled."
+                )
+                raise ValueError(msg)
+            report = delta_vacuum(
+                self.ctx,
+                request=DeltaVacuumRequest(
+                    table_uri=spec.table_uri,
+                    storage_options=spec.storage_options,
+                    version=delta_version,
+                    timestamp=None,
+                    retention_hours=retention_hours,
+                    dry_run=policy.vacuum_dry_run,
+                    enforce_retention_duration=policy.enforce_retention_duration,
+                    commit_options=DeltaCommitOptions(metadata={"operation": "vacuum"}),
+                ),
+            )
+            record_delta_maintenance(
+                self.runtime_profile,
+                artifact=DeltaMaintenanceArtifact(
+                    table_uri=spec.table_uri,
+                    operation="vacuum",
+                    report=report,
+                    dataset_name=spec.commit_key,
+                    retention_hours=retention_hours,
+                    dry_run=policy.vacuum_dry_run,
+                    storage_options_hash=storage_options_hash,
+                ),
+            )
+
     def _write_delta(
         self,
         result: StreamingExecutionResult,
@@ -961,8 +1062,13 @@ class WritePipeline:
                 delta_version=final_version,
             )
         )
+        self._run_post_write_maintenance(spec=spec, delta_version=final_version)
         return DeltaWriteOutcome(
-            delta_result=DeltaWriteResult(path=spec.table_uri, version=final_version),
+            delta_result=DeltaWriteResult(
+                path=spec.table_uri,
+                version=final_version,
+                report=delta_result.report,
+            ),
             enabled_features=enabled_features,
             commit_app_id=spec.commit_app_id,
             commit_version=spec.commit_version,

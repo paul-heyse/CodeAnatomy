@@ -6,12 +6,36 @@ import contextlib
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import pyarrow as pa
-from datafusion import SessionContext
+from datafusion import SessionContext, col, lit
+from datafusion import functions as f
 
 from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_ext import list_extract, map_extract
+
+if TYPE_CHECKING:
+    from datafusion.expr import Expr
+
+
+@dataclass(frozen=True)
+class PartitionFilter:
+    """Partition-value filter for file pruning."""
+
+    column: str
+    op: Literal["=", "!=", "in", "not in"]
+    value: str | Sequence[str]
+
+
+@dataclass(frozen=True)
+class StatsFilter:
+    """Statistics range filter for file pruning."""
+
+    column: str
+    op: Literal["=", "!=", ">", ">=", "<", "<="]
+    value: Any
+    cast_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -20,14 +44,14 @@ class FilePruningPolicy:
 
     Attributes
     ----------
-    partition_filters : list[str]
-        SQL predicates for partition column filtering (e.g., ["year = '2024'", "month = '01'"]).
-    stats_filters : list[str]
-        SQL predicates for statistics-based filtering (e.g., ["id >= 100", "id <= 500"]).
+    partition_filters : list[PartitionFilter]
+        Partition-value filters applied to partition values.
+    stats_filters : list[StatsFilter]
+        Range filters applied to stats_min/stats_max metadata.
     """
 
-    partition_filters: list[str]
-    stats_filters: list[str]
+    partition_filters: list[PartitionFilter]
+    stats_filters: list[StatsFilter]
 
     def __post_init__(self) -> None:
         """Validate policy values.
@@ -38,10 +62,10 @@ class FilePruningPolicy:
             Raised when partition or stats filters are not lists.
         """
         if not isinstance(self.partition_filters, list):
-            msg = "partition_filters must be a list of SQL predicates"
+            msg = "partition_filters must be a list of PartitionFilter entries"
             raise TypeError(msg)
         if not isinstance(self.stats_filters, list):
-            msg = "stats_filters must be a list of SQL predicates"
+            msg = "stats_filters must be a list of StatsFilter entries"
             raise TypeError(msg)
 
     def has_filters(self) -> bool:
@@ -54,18 +78,25 @@ class FilePruningPolicy:
         """
         return bool(self.partition_filters) or bool(self.stats_filters)
 
-    def to_sql_predicate(self) -> str | None:
-        """Convert policy to a SQL WHERE clause predicate.
+    def to_predicate(self) -> Expr | None:
+        """Convert policy filters to a DataFusion predicate expression.
 
         Returns
         -------
-        str | None
-            Combined SQL predicate, or None if no filters are defined.
+        Expr | None
+            Combined predicate expression, or None if no filters are defined.
         """
-        all_filters = list(self.partition_filters) + list(self.stats_filters)
+        all_filters: list[Expr] = []
+        all_filters.extend(
+            _partition_filter_expr(filter_spec) for filter_spec in self.partition_filters
+        )
+        all_filters.extend(_stats_filter_expr(filter_spec) for filter_spec in self.stats_filters)
         if not all_filters:
             return None
-        return " AND ".join(f"({f})" for f in all_filters)
+        combined = all_filters[0]
+        for expr in all_filters[1:]:
+            combined &= expr
+        return combined
 
 
 @dataclass(frozen=True)
@@ -119,10 +150,11 @@ def evaluate_filters_against_index(
     policy: FilePruningPolicy,
     ctx: SessionContext,
 ) -> pa.Table:
-    """Evaluate pruning filters against the file index using DataFusion SQL.
+    """Evaluate pruning filters against the file index using DataFusion.
 
     This function registers the file index as a temporary table in DataFusion,
-    executes SQL predicates to filter files, and returns the filtered index.
+    applies DataFusion predicate expressions to filter files, and returns the
+    filtered index.
 
     Parameters
     ----------
@@ -131,23 +163,17 @@ def evaluate_filters_against_index(
     policy : FilePruningPolicy
         Pruning policy with partition and statistics filters.
     ctx : SessionContext
-        DataFusion session context for SQL evaluation.
+        DataFusion session context for predicate evaluation.
 
     Returns
     -------
     pa.Table
         Filtered file index table with only candidate files.
-
-    Raises
-    ------
-    ValueError
-        Raised when SQL execution does not return a DataFusion DataFrame.
     """
     if not policy.has_filters():
         return index
 
-    # Convert policy to SQL predicate
-    predicate = policy.to_sql_predicate()
+    predicate = policy.to_predicate()
     if predicate is None:
         return index
 
@@ -159,11 +185,7 @@ def evaluate_filters_against_index(
         adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
         adapter.register_record_batches(temp_table_name, [list(index.to_batches())])
 
-        # Construct and execute filter expression
-        sql = _build_filter_sql(temp_table_name, policy)
-        from datafusion_engine.sql_options import sql_options_for_profile
-
-        df = ctx.sql_with_options(sql, sql_options_for_profile(None))
+        df = ctx.table(temp_table_name).filter(predicate)
         return df.to_arrow_table()
     finally:
         # Deregister temporary table
@@ -174,10 +196,10 @@ def select_candidate_files(
     index: pa.Table,
     policy: FilePruningPolicy,
 ) -> list[str]:
-    """Select candidate file paths from the index using simple Python filtering.
+    """Select candidate file paths from the index using Python filtering.
 
     This is a lightweight alternative to evaluate_filters_against_index that
-    doesn't require DataFusion for simple partition equality checks.
+    evaluates filters against partition values and statistics maps.
 
     Parameters
     ----------
@@ -196,13 +218,12 @@ def select_candidate_files(
         path_col = index.column("path")
         return [str(p) for p in path_col.to_pylist()]
 
-    # Parse partition filters for simple equality checks
-    partition_constraints = _parse_partition_filters(policy.partition_filters)
-
     # Filter files based on partition values
     candidate_paths: list[str] = []
     path_col = index.column("path")
     partition_values_col = index.column("partition_values")
+    stats_min_col = index.column("stats_min")
+    stats_max_col = index.column("stats_max")
 
     for i in range(index.num_rows):
         path = str(path_col[i].as_py())
@@ -211,9 +232,19 @@ def select_candidate_files(
         if partition_values is None:
             partition_values = {}
 
-        # Check partition constraints
-        if _matches_partition_constraints(partition_values, partition_constraints):
-            candidate_paths.append(path)
+        stats_min: dict[str, Any] | None = stats_min_col[i].as_py()
+        stats_max: dict[str, Any] | None = stats_max_col[i].as_py()
+        if stats_min is None:
+            stats_min = {}
+        if stats_max is None:
+            stats_max = {}
+
+        if not _matches_partition_filters(partition_values, policy.partition_filters):
+            continue
+        if not _matches_stats_filters(stats_min, stats_max, policy.stats_filters):
+            continue
+
+        candidate_paths.append(path)
 
     return candidate_paths
 
@@ -232,8 +263,8 @@ def evaluate_and_select_files(
     policy : FilePruningPolicy
         Pruning policy with partition and statistics filters.
     ctx : SessionContext | None
-        Optional DataFusion session context for SQL-based filtering.
-        If None, uses simple Python filtering.
+        Optional DataFusion session context for predicate-based filtering.
+        If None, uses Python filtering.
 
     Returns
     -------
@@ -242,12 +273,10 @@ def evaluate_and_select_files(
     """
     total_files = index.num_rows
 
-    if ctx is not None and policy.stats_filters:
-        # Use DataFusion for complex stats filtering
+    if ctx is not None and policy.has_filters():
         filtered_index = evaluate_filters_against_index(index, policy, ctx)
         candidate_paths = [str(p) for p in filtered_index.column("path").to_pylist()]
     else:
-        # Use simple Python filtering
         candidate_paths = select_candidate_files(index, policy)
 
     candidate_count = len(candidate_paths)
@@ -261,92 +290,130 @@ def evaluate_and_select_files(
     )
 
 
-def _build_filter_sql(table_name: str, policy: FilePruningPolicy) -> str:
-    """Build SQL filter query for file index.
-
-    Parameters
-    ----------
-    table_name : str
-        Name of the registered file index table.
-    policy : FilePruningPolicy
-        Pruning policy with filters.
-
-    Returns
-    -------
-    str
-        SQL query string for filtering the file index.
-    """
-    predicate = _combine_predicates((*policy.partition_filters, *policy.stats_filters))
-    select_sql = f"SELECT * FROM {table_name}"
-    if predicate is None:
-        return select_sql
-    return f"{select_sql} WHERE {predicate}"
+def _map_value_expr(map_col: str, key: str, *, cast_type: str | None = None) -> Expr:
+    value_expr = list_extract(map_extract(col(map_col), key), 1)
+    if cast_type is None:
+        return value_expr
+    return f.arrow_cast(value_expr, lit(cast_type))
 
 
-def _combine_predicates(filters: Sequence[str]) -> str | None:
-    predicates: list[str] = []
-    for raw in filters:
-        text = str(raw).strip()
-        if not text:
-            continue
-        predicates.append(f"({text})")
-    if not predicates:
-        return None
-    if len(predicates) == 1:
-        return predicates[0]
-    return " AND ".join(predicates)
+def _partition_filter_expr(filter_spec: PartitionFilter) -> Expr:
+    value_expr = _map_value_expr("partition_values", filter_spec.column, cast_type="Utf8")
+    if filter_spec.op in {"in", "not in"}:
+        if isinstance(filter_spec.value, str):
+            values = [filter_spec.value]
+        else:
+            values = list(filter_spec.value)
+        value_exprs = [lit(str(value)) for value in values]
+        return f.in_list(value_expr, value_exprs, negated=filter_spec.op == "not in")
+    expected = str(filter_spec.value)
+    if filter_spec.op == "=":
+        return value_expr == lit(expected)
+    if filter_spec.op == "!=":
+        return value_expr != lit(expected)
+    msg = f"Unsupported partition filter op: {filter_spec.op}"
+    raise ValueError(msg)
 
 
-def _parse_partition_filters(filters: list[str]) -> dict[str, str]:
-    """Parse simple partition equality filters into a constraint map.
+def _stats_filter_expr(filter_spec: StatsFilter) -> Expr:
+    min_expr = _map_value_expr("stats_min", filter_spec.column, cast_type=filter_spec.cast_type)
+    max_expr = _map_value_expr("stats_max", filter_spec.column, cast_type=filter_spec.cast_type)
+    value_expr = (
+        f.arrow_cast(lit(filter_spec.value), lit(filter_spec.cast_type))
+        if filter_spec.cast_type is not None
+        else lit(filter_spec.value)
+    )
+    if filter_spec.op == ">":
+        return max_expr > value_expr
+    if filter_spec.op == ">=":
+        return max_expr >= value_expr
+    if filter_spec.op == "<":
+        return min_expr < value_expr
+    if filter_spec.op == "<=":
+        return min_expr <= value_expr
+    if filter_spec.op == "=":
+        return (min_expr <= value_expr) & (max_expr >= value_expr)
+    if filter_spec.op == "!=":
+        return ~((min_expr == value_expr) & (max_expr == value_expr))
+    msg = f"Unsupported stats filter op: {filter_spec.op}"
+    raise ValueError(msg)
 
-    Parameters
-    ----------
-    filters : list[str]
-        List of partition filter predicates (e.g., ["year = '2024'", "month = '01'"]).
 
-    Returns
-    -------
-    dict[str, str]
-        Map of partition column names to required values.
-    """
-    constraints: dict[str, str] = {}
-    expected_parts = 2
-    for filter_expr in filters:
-        # Simple parser for "column = 'value'" format
-        parts = filter_expr.split("=")
-        if len(parts) == expected_parts:
-            col = parts[0].strip()
-            val = parts[1].strip().strip("'\"")
-            constraints[col] = val
-    return constraints
+def _coerce_value(value: Any, cast_type: str | None) -> Any:
+    if value is None or cast_type is None:
+        return value
+    if cast_type in {"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"}:
+        with contextlib.suppress(TypeError, ValueError):
+            return int(value)
+    if cast_type in {"Float32", "Float64"}:
+        with contextlib.suppress(TypeError, ValueError):
+            return float(value)
+    if cast_type == "Boolean":
+        if isinstance(value, str):
+            return value.lower() == "true"
+        return bool(value)
+    return str(value)
 
 
-def _matches_partition_constraints(
+def _matches_partition_filters(
     partition_values: dict[str, Any],
-    constraints: dict[str, str],
+    filters: Sequence[PartitionFilter],
 ) -> bool:
-    """Check if partition values match the constraints.
-
-    Parameters
-    ----------
-    partition_values : dict[str, Any]
-        Partition values from the file index.
-    constraints : dict[str, str]
-        Required partition values.
-
-    Returns
-    -------
-    bool
-        True if all constraints are satisfied.
-    """
-    for col, required_val in constraints.items():
-        actual_val = partition_values.get(col)
-        if actual_val is None:
+    for filter_spec in filters:
+        actual = partition_values.get(filter_spec.column)
+        if actual is None:
             return False
-        if str(actual_val) != str(required_val):
+        actual_text = str(actual)
+        if filter_spec.op == "=" and actual_text != str(filter_spec.value):
             return False
+        if filter_spec.op == "!=" and actual_text == str(filter_spec.value):
+            return False
+        if filter_spec.op in {"in", "not in"}:
+            values = (
+                [filter_spec.value]
+                if isinstance(filter_spec.value, str)
+                else list(filter_spec.value)
+            )
+            value_set = {str(value) for value in values}
+            matches = actual_text in value_set
+            if filter_spec.op == "in" and not matches:
+                return False
+            if filter_spec.op == "not in" and matches:
+                return False
     return True
+
+
+def _matches_stats_filters(
+    stats_min: dict[str, Any],
+    stats_max: dict[str, Any],
+    filters: Sequence[StatsFilter],
+) -> bool:
+    matched = True
+    for filter_spec in filters:
+        min_value = _coerce_value(stats_min.get(filter_spec.column), filter_spec.cast_type)
+        max_value = _coerce_value(stats_max.get(filter_spec.column), filter_spec.cast_type)
+        target = _coerce_value(filter_spec.value, filter_spec.cast_type)
+        if min_value is None or max_value is None or target is None:
+            continue
+        if filter_spec.op == ">" and not (max_value > target):
+            matched = False
+            continue
+        if filter_spec.op == ">=" and not (max_value >= target):
+            matched = False
+            continue
+        if filter_spec.op == "<" and not (min_value < target):
+            matched = False
+            continue
+        if filter_spec.op == "<=" and not (min_value <= target):
+            matched = False
+            continue
+        if filter_spec.op == "=" and not (min_value <= target <= max_value):
+            matched = False
+            continue
+        if filter_spec.op == "!=" and min_value == target and max_value == target:
+            matched = False
+            continue
+    return matched
 
 
 def _deregister_table(ctx: SessionContext, table_name: str) -> None:
@@ -369,6 +436,8 @@ def _deregister_table(ctx: SessionContext, table_name: str) -> None:
 __all__ = [
     "FilePruningPolicy",
     "FilePruningResult",
+    "PartitionFilter",
+    "StatsFilter",
     "evaluate_and_select_files",
     "evaluate_filters_against_index",
     "select_candidate_files",

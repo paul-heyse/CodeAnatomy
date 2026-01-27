@@ -17,7 +17,6 @@ from incremental.delta_updates import OverwriteDatasetSpec, write_overwrite_data
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from obs.diagnostics import DiagnosticsCollector
-from sqlglot_tools.optimizer import default_sqlglot_policy
 
 EXPECTED_ROW_COUNT = 2
 
@@ -32,7 +31,7 @@ def test_streaming_write_records_metrics(
     runtime_profile = runtime_profile_factory("default")
     runtime_profile = replace(runtime_profile, datafusion=profile)
     exec_ctx = ExecutionContext(runtime=runtime_profile)
-    runtime = IncrementalRuntime.build(ctx=exec_ctx, sqlglot_policy=default_sqlglot_policy())
+    runtime = IncrementalRuntime.build(ctx=exec_ctx)
     monkeypatch.setattr(incremental.delta_updates, "_STREAMING_ROW_THRESHOLD", 1)
 
     schema = pa.schema([("file_id", pa.string()), ("value", pa.int64())])

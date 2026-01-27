@@ -8,17 +8,17 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from arrowdsl.schema.abi import schema_fingerprint
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.cdf_runtime import CdfReadResult, read_cdf_changes
 from incremental.delta_context import DeltaAccessContext
 from incremental.state_store import StateStore
-from storage.deltalake import delta_table_version, enable_delta_features
+from storage.deltalake import (
+    DeltaWriteOptions,
+    delta_table_version,
+    enable_delta_features,
+    write_delta_table,
+)
 
 if TYPE_CHECKING:
     from storage.deltalake import DeltaWriteResult
@@ -109,19 +109,15 @@ def write_incremental_diff(
         "snapshot_kind": "incremental_diff",
         "schema_fingerprint": schema_fingerprint(diff.schema),
     }
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         diff,
         str(target),
-        options=IbisDatasetWriteOptions(
-            execution=context.runtime.ibis_execution(),
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata=commit_metadata,
-                storage_options=context.storage.storage_options,
-                log_storage_options=context.storage.log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata=commit_metadata,
+            storage_options=context.storage.storage_options,
+            log_storage_options=context.storage.log_storage_options,
         ),
     )
     enable_delta_features(

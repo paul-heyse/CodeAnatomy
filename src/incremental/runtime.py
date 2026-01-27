@@ -5,39 +5,24 @@ from __future__ import annotations
 import contextlib
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Self
+from typing import Self
 
 import pyarrow as pa
 from datafusion import SessionContext
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.ordering import Ordering
 from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.execution_factory import ibis_backend_from_ctx, ibis_execution_from_ctx
-from ibis_engine.sources import (
-    SourceToIbisOptions,
-    register_ibis_record_batches,
-    register_ibis_table,
-)
-from sqlglot_tools.optimizer import SqlGlotPolicy, resolve_sqlglot_policy
-
-if TYPE_CHECKING:
-    from ibis.backends import BaseBackend
-
-    from ibis_engine.execution import IbisExecutionContext
 
 
 @dataclass
 class IncrementalRuntime:
-    """Runtime container for DataFusion/Ibis/SQLGlot integration."""
+    """Runtime container for DataFusion incremental execution."""
 
     execution_ctx: ExecutionContext
     profile: DataFusionRuntimeProfile
-    sqlglot_policy: SqlGlotPolicy
     _ctx: SessionContext | None = None
-    _ibis_backend: BaseBackend | None = None
-    _ibis_execution: IbisExecutionContext | None = None
 
     @classmethod
     def build(
@@ -45,9 +30,8 @@ class IncrementalRuntime:
         *,
         ctx: ExecutionContext | None = None,
         profile: str = "default",
-        sqlglot_policy: SqlGlotPolicy | None = None,
     ) -> IncrementalRuntime:
-        """Create a runtime with default DataFusion profile and SQLGlot policy.
+        """Create a runtime with default DataFusion profile.
 
         Returns
         -------
@@ -64,11 +48,9 @@ class IncrementalRuntime:
         if runtime_profile is None:
             msg = "Incremental runtime requires a DataFusion profile."
             raise ValueError(msg)
-        policy = resolve_sqlglot_policy(name="datafusion_compile", policy=sqlglot_policy)
         return cls(
             execution_ctx=exec_ctx,
             profile=runtime_profile,
-            sqlglot_policy=policy,
         )
 
     def session_context(self) -> SessionContext:
@@ -83,20 +65,6 @@ class IncrementalRuntime:
             self._ctx = self.profile.session_context()
         return self._ctx
 
-    def ibis_backend(self) -> BaseBackend:
-        """Return the cached Ibis backend bound to this runtime.
-
-        Returns
-        -------
-        ibis.backends.BaseBackend
-            Cached or newly created Ibis backend.
-        """
-        backend = self._ibis_backend
-        if backend is None:
-            backend = ibis_backend_from_ctx(self.execution_ctx)
-            self._ibis_backend = backend
-        return backend
-
     def execution_context(self) -> ExecutionContext:
         """Return the cached ExecutionContext for incremental work.
 
@@ -107,22 +75,15 @@ class IncrementalRuntime:
         """
         return self.execution_ctx
 
-    def ibis_execution(self) -> IbisExecutionContext:
-        """Return the cached Ibis execution context.
+    def io_adapter(self) -> DataFusionIOAdapter:
+        """Return a DataFusion IO adapter bound to this runtime.
 
         Returns
         -------
-        IbisExecutionContext
-            Cached or newly created Ibis execution context.
+        DataFusionIOAdapter
+            IO adapter bound to the runtime session.
         """
-        execution = self._ibis_execution
-        if execution is None:
-            execution = ibis_execution_from_ctx(
-                self.execution_ctx,
-                backend=self.ibis_backend(),
-            )
-            self._ibis_execution = execution
-        return execution
+        return DataFusionIOAdapter(ctx=self.session_context(), profile=self.profile)
 
 
 class TempTableRegistry:
@@ -142,15 +103,7 @@ class TempTableRegistry:
             Registered table name.
         """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
-        register_ibis_table(
-            table,
-            options=SourceToIbisOptions(
-                backend=self._runtime.ibis_backend(),
-                name=name,
-                ordering=Ordering.unordered(),
-                runtime_profile=self._runtime.profile,
-            ),
-        )
+        self._runtime.io_adapter().register_arrow_table(name, table, overwrite=True)
         self._names.append(name)
         return name
 
@@ -163,15 +116,7 @@ class TempTableRegistry:
             Registered table name.
         """
         name = f"__incremental_{prefix}_{uuid.uuid4().hex}"
-        register_ibis_record_batches(
-            batches,
-            options=SourceToIbisOptions(
-                backend=self._runtime.ibis_backend(),
-                name=name,
-                ordering=Ordering.unordered(),
-                runtime_profile=self._runtime.profile,
-            ),
-        )
+        self._runtime.io_adapter().register_record_batches(name, batches, overwrite=True)
         self._names.append(name)
         return name
 

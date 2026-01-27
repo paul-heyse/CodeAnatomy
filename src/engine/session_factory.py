@@ -16,7 +16,6 @@ from engine.runtime_profile import (
     runtime_profile_snapshot,
 )
 from engine.session import EngineSession
-from ibis_engine.execution_factory import ibis_backend_from_ctx
 from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import DiagnosticsPolicy
 
@@ -61,7 +60,6 @@ def build_engine_session(
             runtime_profile=df_profile,
         )
         diagnostics.record_events("feature_state_v1", [snapshot.to_row()])
-    backend = ibis_backend_from_ctx(ctx)
     datasets = DatasetCatalog()
     input_plugin_names: list[str] = []
     if df_profile is not None:
@@ -92,7 +90,6 @@ def build_engine_session(
     return EngineSession(
         ctx=ctx,
         engine_runtime=engine_runtime,
-        ibis_backend=backend,
         datasets=datasets,
         diagnostics=diagnostics,
         surface_policy=surface_policy or ExecutionSurfacePolicy(),

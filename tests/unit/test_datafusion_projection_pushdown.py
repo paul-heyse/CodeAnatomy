@@ -5,10 +5,8 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.compile_options import DataFusionCompileOptions
-from datafusion_engine.execution_helpers import collect_plan_artifacts, df_from_sqlglot_or_sql
+from datafusion_engine.plan_bundle import build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from sqlglot_tools.optimizer import parse_sql_strict
 
 datafusion = pytest.importorskip("datafusion")
 
@@ -29,10 +27,8 @@ def test_dynamic_projection_reduces_columns() -> None:
             ).to_batches()
         ],
     )
-    expr = parse_sql_strict("SELECT events.id FROM events", dialect="datafusion")
-    options = DataFusionCompileOptions(dynamic_projection=True, runtime_profile=profile)
-    df = df_from_sqlglot_or_sql(ctx, expr, options=options)
-    artifacts = collect_plan_artifacts(ctx, expr, options=options, df=df)
-    plan_text = artifacts.optimized_plan or artifacts.logical_plan or ""
+    df = ctx.sql("SELECT events.id FROM events")
+    bundle = build_plan_bundle(ctx, df, compute_execution_plan=False, compute_substrait=False)
+    plan_text = bundle.display_optimized_plan() or bundle.display_logical_plan() or ""
     assert "label" not in plan_text
     assert "extra" not in plan_text

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ibis_engine.hashing import HashExprSpec, HashExprSpecOptions
-from ibis_engine.hashing import hash_expr_spec_factory as hash_spec_factory
+from datafusion_engine.hashing import HashExprSpec, HashExprSpecOptions
+from datafusion_engine.hashing import hash_expr_spec_factory as hash_spec_factory
 
 _HASH_SPECS: Mapping[str, HashExprSpec] = {
     "span_id": hash_spec_factory(

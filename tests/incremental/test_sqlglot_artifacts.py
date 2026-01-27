@@ -5,16 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-import ibis
 import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from datafusion_engine.diagnostics import DiagnosticsSink
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
+from datafusion_engine.plan_bundle import build_plan_bundle
+from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
+from datafusion_engine.runtime import DataFusionRuntimeProfile, record_view_definition
+from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
 from incremental.runtime import IncrementalRuntime
-from incremental.sqlglot_artifacts import record_view_artifact
-from sqlglot_tools.optimizer import ast_policy_fingerprint
 
 
 @dataclass
@@ -51,25 +52,39 @@ def _runtime_with_sink() -> tuple[IncrementalRuntime, _DiagnosticsSink]:
     return runtime, sink
 
 
-def test_record_view_artifact_payload_has_ast_policy_fingerprint() -> None:
-    """Ensure view artifacts yield stable AST/policy fingerprints."""
+def _record_view_artifact(
+    runtime: IncrementalRuntime,
+    *,
+    name: str,
+    table: pa.Table,
+) -> None:
+    ctx = runtime.session_context()
+    ctx.register_record_batches(name, [table.to_batches()])
+    df = ctx.table(name)
+    bundle = build_plan_bundle(ctx, df, compute_execution_plan=False, compute_substrait=True)
+    required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(bundle)))
+    referenced_tables = referenced_tables_from_plan(bundle.optimized_logical_plan)
+    artifact = build_view_artifact_from_bundle(
+        bundle,
+        name=name,
+        schema=df.schema(),
+        required_udfs=required_udfs,
+        referenced_tables=referenced_tables,
+    )
+    record_view_definition(runtime.profile, artifact=artifact)
+
+
+def test_record_view_artifact_payload_has_plan_fingerprint() -> None:
+    """Ensure view artifacts yield stable plan fingerprints."""
     runtime, _ = _runtime_with_sink()
-    expr = ibis.memtable({"a": [1, 2]})
-    schema = pa.schema([pa.field("a", pa.int64(), nullable=True)])
+    table = pa.table({"a": [1, 2]})
 
-    artifact_one = record_view_artifact(runtime, name="test_plan", expr=expr, schema=schema)
-    artifact_two = record_view_artifact(runtime, name="test_plan", expr=expr, schema=schema)
+    _record_view_artifact(runtime, name="test_plan", table=table)
+    _record_view_artifact(runtime, name="test_plan", table=table)
 
-    fingerprint_one = ast_policy_fingerprint(
-        ast_fingerprint=artifact_one.ast_fingerprint,
-        policy_hash=artifact_one.policy_hash,
-    )
-    fingerprint_two = ast_policy_fingerprint(
-        ast_fingerprint=artifact_two.ast_fingerprint,
-        policy_hash=artifact_two.policy_hash,
-    )
-    assert fingerprint_one
-    assert fingerprint_one == fingerprint_two
     snapshot = runtime.profile.view_registry_snapshot()
     assert snapshot is not None
     assert len(snapshot) == 1
+    plan_fingerprint = snapshot[0].get("plan_fingerprint")
+    assert isinstance(plan_fingerprint, str)
+    assert plan_fingerprint

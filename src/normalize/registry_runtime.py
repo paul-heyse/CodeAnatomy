@@ -17,6 +17,7 @@ from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_pol
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from core_types import PathLike, ensure_path
 from datafusion_engine.introspection import introspection_cache_for_ctx
+from datafusion_engine.query_spec import QuerySpec
 from datafusion_engine.registry_bridge import DatasetRegistration, register_dataset_spec
 from datafusion_engine.schema_contracts import (
     SchemaContract,
@@ -26,7 +27,6 @@ from datafusion_engine.schema_contracts import (
 from datafusion_engine.schema_introspection import table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
 from datafusion_engine.table_provider_metadata import TableProviderMetadata, table_provider_metadata
-from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec
 
@@ -396,8 +396,8 @@ def dataset_input_columns(name: str) -> tuple[str, ...]:
     return static_dataset_specs.dataset_input_columns(name)
 
 
-def dataset_query(name: str, *, ctx: SessionContext | None = None) -> IbisQuerySpec:
-    """Return the IbisQuerySpec for the dataset name.
+def dataset_query(name: str, *, ctx: SessionContext | None = None) -> QuerySpec:
+    """Return the QuerySpec for the dataset name.
 
     Parameters
     ----------
@@ -408,7 +408,7 @@ def dataset_query(name: str, *, ctx: SessionContext | None = None) -> IbisQueryS
 
     Returns
     -------
-    IbisQuerySpec
+    QuerySpec
         Query specification for the dataset.
     """
     return dataset_spec(name, ctx=ctx).query()

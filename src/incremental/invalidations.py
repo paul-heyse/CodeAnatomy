@@ -11,7 +11,6 @@ import pyarrow as pa
 
 from engine.runtime_profile import runtime_profile_snapshot
 from incremental.delta_context import read_delta_table_via_facade
-from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
 from storage.deltalake import (
     DeltaWriteOptions,
     delta_table_version,
@@ -24,8 +23,7 @@ INVALIDATION_SNAPSHOT_VERSION = 1
 _PLAN_FINGERPRINT_ENTRY = pa.struct(
     [
         pa.field("plan_name", pa.string(), nullable=False),
-        pa.field("ast_fingerprint", pa.string(), nullable=False),
-        pa.field("policy_hash", pa.string(), nullable=False),
+        pa.field("plan_fingerprint", pa.string(), nullable=False),
     ]
 )
 _INVALIDATION_SCHEMA = pa.schema(
@@ -44,7 +42,6 @@ _INCREMENTAL_METADATA_SCHEMA = pa.schema(
     [
         pa.field("datafusion_settings_hash", pa.string(), nullable=False),
         pa.field("runtime_profile_hash", pa.string(), nullable=False),
-        pa.field("sqlglot_policy_hash", pa.string(), nullable=False),
     ]
 )
 
@@ -58,8 +55,7 @@ if TYPE_CHECKING:
 class PlanFingerprint:
     """Fingerprint fields for a compiled plan."""
 
-    ast_fingerprint: str
-    policy_hash: str
+    plan_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -247,11 +243,9 @@ def check_state_store_invalidation(
 
 def _incremental_metadata_hash(runtime: IncrementalRuntime) -> str | None:
     runtime_snapshot = runtime_profile_snapshot(runtime.execution_ctx.runtime)
-    policy_snapshot = sqlglot_policy_snapshot_for(runtime.sqlglot_policy)
     payload = {
         "datafusion_settings_hash": runtime.profile.settings_hash(),
         "runtime_profile_hash": runtime_snapshot.profile_hash,
-        "sqlglot_policy_hash": policy_snapshot.policy_hash,
     }
     return payload_hash(payload, _INCREMENTAL_METADATA_SCHEMA)
 
@@ -293,13 +287,11 @@ def _plan_fingerprints_from_artifacts(
     resolved: dict[str, PlanFingerprint] = {}
     for payload in artifacts:
         name = payload.get("name")
-        ast_fingerprint = payload.get("ast_fingerprint")
-        policy_hash = payload.get("policy_hash")
-        if not name or not ast_fingerprint or not policy_hash:
+        plan_fingerprint = payload.get("plan_fingerprint")
+        if not name or not plan_fingerprint:
             continue
         resolved[str(name)] = PlanFingerprint(
-            ast_fingerprint=str(ast_fingerprint),
-            policy_hash=str(policy_hash),
+            plan_fingerprint=str(plan_fingerprint),
         )
     return resolved
 
@@ -310,8 +302,7 @@ def _plan_fingerprint_entries(
     return [
         {
             "plan_name": name,
-            "ast_fingerprint": fingerprint.ast_fingerprint,
-            "policy_hash": fingerprint.policy_hash,
+            "plan_fingerprint": fingerprint.plan_fingerprint,
         }
         for name, fingerprint in sorted(plan_fingerprints.items())
     ]
@@ -355,13 +346,11 @@ def _coerce_plan_fingerprint_entries(value: object) -> dict[str, PlanFingerprint
         if not isinstance(entry, Mapping):
             continue
         name = entry.get("plan_name")
-        ast_fingerprint = entry.get("ast_fingerprint")
-        policy_hash = entry.get("policy_hash")
-        if name is None or ast_fingerprint is None or policy_hash is None:
+        plan_fingerprint = entry.get("plan_fingerprint")
+        if name is None or plan_fingerprint is None:
             continue
         resolved[str(name)] = PlanFingerprint(
-            ast_fingerprint=str(ast_fingerprint),
-            policy_hash=str(policy_hash),
+            plan_fingerprint=str(plan_fingerprint),
         )
     return resolved
 

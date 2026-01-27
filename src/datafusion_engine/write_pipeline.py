@@ -30,6 +30,7 @@ Pattern
 from __future__ import annotations
 
 import contextlib
+import importlib
 import shutil
 import time
 import uuid
@@ -314,6 +315,19 @@ class WritePipeline:
             self._record_write_artifact(write_result)
             return write_result
 
+        if request.format == WriteFormat.DELTA and self._try_write_delta_provider(
+            df, request=request
+        ):
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            write_result = WriteResult(
+                request=request,
+                method=WriteMethod.INSERT,
+                sql=None,
+                duration_ms=duration_ms,
+            )
+            self._record_write_artifact(write_result)
+            return write_result
+
         # Write based on format
         if request.format == WriteFormat.DELTA:
             self._write_delta(result, request=request)
@@ -514,6 +528,45 @@ class WritePipeline:
             partition_by=list(request.partition_by) if request.partition_by else None,
             configuration=_delta_configuration(request.format_options),
         )
+
+    def _try_write_delta_provider(self, df: DataFrame, *, request: WriteRequest) -> bool:
+        if request.partition_by:
+            return False
+        if request.mode == WriteMode.ERROR:
+            return False
+        try:
+            module = importlib.import_module("datafusion_ext")
+        except ImportError:
+            return False
+        provider_factory = getattr(module, "delta_table_provider_from_session", None)
+        if not callable(provider_factory):
+            return False
+        temp_name = request.table_name or f"__delta_write_{uuid.uuid4().hex}"
+        storage_payload = None
+        provider = provider_factory(
+            self.ctx,
+            request.destination,
+            storage_payload,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+        adapter = DataFusionIOAdapter(ctx=self.ctx, profile=self.runtime_profile)
+        adapter.register_delta_table_provider(temp_name, provider, overwrite=True)
+        try:
+            self._write_table(df, request=request, table_name=temp_name)
+        finally:
+            deregister = getattr(self.ctx, "deregister_table", None)
+            if callable(deregister):
+                with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                    deregister(temp_name)
+        return True
 
     def _write_csv(self, df: DataFrame, *, request: WriteRequest) -> None:
         """Write CSV via DataFusion-native DataFrame writer.

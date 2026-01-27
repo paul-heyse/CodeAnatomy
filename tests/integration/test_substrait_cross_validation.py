@@ -7,10 +7,9 @@ from collections.abc import Mapping
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.compile_options import DataFusionCompileOptions
-from datafusion_engine.execution_helpers import collect_plan_artifacts
+from datafusion_engine.execution_helpers import validate_substrait_plan
+from datafusion_engine.plan_bundle import build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from sqlglot_tools.optimizer import parse_sql_strict
 
 
 @pytest.mark.integration
@@ -20,11 +19,11 @@ def test_substrait_cross_validation_match() -> None:
     table = pa.table({"id": [1, 2, 3], "label": ["alpha", "beta", "gamma"]})
     ctx.register_record_batches("input_table", [table.to_batches()])
     sql = "SELECT * FROM input_table"
-    options = DataFusionCompileOptions(substrait_validation=True)
-    expr = parse_sql_strict(sql, dialect=options.dialect)
     df = ctx.sql(sql)
-    artifacts = collect_plan_artifacts(ctx, expr, options=options, df=df)
-    validation = artifacts.substrait_validation
+    bundle = build_plan_bundle(ctx, df, compute_execution_plan=False, compute_substrait=True)
+    if bundle.substrait_bytes is None:
+        pytest.skip("Substrait serialization unavailable.")
+    validation = validate_substrait_plan(bundle.substrait_bytes, df=df)
     if not isinstance(validation, Mapping):
         pytest.skip("Substrait validation unavailable.")
     if validation.get("status") in {"unavailable", "missing_plan"}:

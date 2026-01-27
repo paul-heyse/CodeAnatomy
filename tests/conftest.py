@@ -72,8 +72,6 @@ def _collect_versions() -> dict[str, str]:
         "hamilton",
         "numpy",
         "pandas",
-        "ibis-framework",
-        "sqlglot",
         "pytest",
         "ruff",
         "pyrefly",

@@ -14,6 +14,8 @@ from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
+from datafusion_engine.plan import DataFusionPlan
+from datafusion_engine.query_spec import QuerySpec
 from extract.cache_utils import (
     CacheSetOptions,
     cache_for_extract,
@@ -35,8 +37,6 @@ from extract.helpers import (
 from extract.repo_blobs_git import open_repo_for_path, read_blob_at_ref
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.session import ExtractSession
-from ibis_engine.plan import IbisPlan
-from ibis_engine.query_compiler import IbisQuerySpec
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
@@ -67,13 +67,13 @@ def default_repo_blob_options() -> RepoBlobOptions:
     return RepoBlobOptions()
 
 
-def repo_file_blobs_query(repo_id: str | None) -> IbisQuerySpec:
-    """Return the IbisQuerySpec for repo blob extraction.
+def repo_file_blobs_query(repo_id: str | None) -> QuerySpec:
+    """Return the QuerySpec for repo blob extraction.
 
     Returns
     -------
-    IbisQuerySpec
-        IbisQuerySpec for repo blob projection.
+    QuerySpec
+        QuerySpec for repo blob projection.
     """
     return dataset_query("repo_file_blobs_v1", repo_id=repo_id)
 
@@ -261,13 +261,13 @@ def scan_repo_blobs_plan(
     *,
     options: RepoBlobOptions,
     session: ExtractSession,
-) -> IbisPlan:
+) -> DataFusionPlan:
     """Build the plan for repo blob extraction.
 
     Returns
     -------
-    IbisPlan
-        Ibis plan emitting repo file blobs.
+    DataFusionPlan
+        DataFusion plan emitting repo file blobs.
     """
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
 

@@ -8,9 +8,6 @@ from typing import TYPE_CHECKING
 from datafusion import SQLOptions
 
 from datafusion_engine.compile_options import DataFusionSqlPolicy
-from datafusion_engine.sql_safety import (
-    statement_sql_options_for_profile as safe_statement_sql_options_for_profile,
-)
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -58,7 +55,7 @@ def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) 
     return _resolve_runtime_helper(
         "statement_sql_options_for_profile",
         profile=profile,
-        fallback=safe_statement_sql_options_for_profile(profile),
+        fallback=DataFusionSqlPolicy(allow_statements=True).to_sql_options(),
     )
 
 

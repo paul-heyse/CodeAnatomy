@@ -2,23 +2,18 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from uuid import uuid4
 
-import ibis
 import pyarrow as pa
+from datafusion import SessionContext, col, functions as f, lit
+from datafusion.dataframe import DataFrame
 
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
-from ibis_engine.sources import read_delta_ibis
-from incremental.ibis_exec import ibis_expr_to_table
-from incremental.ibis_utils import ibis_table_from_arrow
+from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.registry_specs import dataset_schema
-from incremental.runtime import IncrementalRuntime
-
-if TYPE_CHECKING:
-    from ibis.backends import BaseBackend
-    from ibis.expr.types import Value
+from incremental.runtime import IncrementalRuntime, TempTableRegistry
 
 
 def compute_changed_exports(
@@ -35,54 +30,121 @@ def compute_changed_exports(
     pa.Table
         Export delta table with added/removed rows.
     """
-    backend = runtime.ibis_backend()
-    prev = _load_prev_exports(backend, prev_exports)
-    curr = ibis_table_from_arrow(backend, curr_exports)
-    changed = ibis_table_from_arrow(backend, changed_files)
-    out = _export_delta_expr(curr, prev, changed)
-    select_exprs = _select_delta_columns(out)
-    result = ibis_expr_to_table(
-        out.select(*select_exprs),
-        runtime=runtime,
-        name="changed_exports",
-    )
     schema = dataset_schema("inc_changed_exports_v1")
+    curr_table = _ensure_table(curr_exports)
+    changed_table = _ensure_table(changed_files)
+    key_cols = _export_key_columns(curr_table.schema)
+    with TempTableRegistry(runtime) as registry:
+        ctx = runtime.session_context()
+        curr_name = registry.register_table(curr_table, prefix="curr_exports")
+        changed_name = registry.register_table(changed_table, prefix="changed_files")
+        prev_name = _register_prev_exports(
+            ctx,
+            registry=registry,
+            runtime=runtime,
+            prev_exports=prev_exports,
+        )
+        curr_df = _prefixed_df(ctx.table(curr_name), prefix="curr")
+        prev_df = _prefixed_df(ctx.table(prev_name), prefix="prev")
+        changed_df = _prefixed_df(
+            ctx.table(changed_name).select(col("file_id")),
+            prefix="changed",
+        )
+        curr_changed = curr_df.join(
+            changed_df,
+            join_keys=(["curr_file_id"], ["changed_file_id"]),
+            how="inner",
+        )
+        join_keys_left = [f"curr_{col_name}" for col_name in key_cols]
+        join_keys_right = [f"prev_{col_name}" for col_name in key_cols]
+        added_joined = curr_changed.join(
+            prev_df,
+            join_keys=(join_keys_left, join_keys_right),
+            how="left",
+        )
+        added = added_joined.filter(col("prev_file_id").is_null())
+        added_symbol = (
+            col("curr_symbol")
+            if "symbol" in key_cols
+            else f.arrow_cast(lit(None), lit("Utf8"))
+        )
+        added_df = added.select(
+            lit("added").alias("delta_kind"),
+            col("curr_file_id").alias("file_id"),
+            col("curr_path").alias("path"),
+            col("curr_qname_id").alias("qname_id"),
+            col("curr_qname").alias("qname"),
+            added_symbol.alias("symbol"),
+        )
+        prev_changed = prev_df.join(
+            changed_df,
+            join_keys=(["prev_file_id"], ["changed_file_id"]),
+            how="inner",
+        )
+        join_keys_left = [f"prev_{col_name}" for col_name in key_cols]
+        join_keys_right = [f"curr_{col_name}" for col_name in key_cols]
+        removed_joined = prev_changed.join(
+            curr_df,
+            join_keys=(join_keys_left, join_keys_right),
+            how="left",
+        )
+        removed = removed_joined.filter(col("curr_file_id").is_null())
+        removed_symbol = (
+            col("prev_symbol")
+            if "symbol" in key_cols
+            else f.arrow_cast(lit(None), lit("Utf8"))
+        )
+        removed_df = removed.select(
+            lit("removed").alias("delta_kind"),
+            col("prev_file_id").alias("file_id"),
+            col("prev_path").alias("path"),
+            col("prev_qname_id").alias("qname_id"),
+            col("prev_qname").alias("qname"),
+            removed_symbol.alias("symbol"),
+        )
+        result = added_df.union(removed_df).to_arrow_table()
     return align_table(result, schema=schema, safe_cast=True)
 
 
-def _load_prev_exports(backend: BaseBackend, prev_exports: str | None) -> ibis.Table:
+def _register_prev_exports(
+    ctx: SessionContext,
+    *,
+    registry: TempTableRegistry,
+    runtime: IncrementalRuntime,
+    prev_exports: str | None,
+) -> str:
     if prev_exports is None:
         empty = table_from_arrays(dataset_schema("dim_exported_defs_v1"), columns={}, num_rows=0)
-        return ibis_table_from_arrow(backend, empty)
-    return read_delta_ibis(backend, prev_exports)
-
-
-def _export_delta_expr(
-    curr: ibis.Table,
-    prev: ibis.Table,
-    changed: ibis.Table,
-) -> ibis.Table:
-    prev_f = prev.inner_join(changed, predicates=[prev.file_id == changed.file_id])
-    curr_f = curr.inner_join(changed, predicates=[curr.file_id == changed.file_id])
-    key_cols = _export_key_columns(prev, curr)
-    predicates = [curr_f[col] == prev_f[col] for col in key_cols]
-    added = curr_f.anti_join(prev_f, predicates=predicates).mutate(delta_kind=ibis.literal("added"))
-    removed = prev_f.anti_join(curr_f, predicates=predicates).mutate(
-        delta_kind=ibis.literal("removed")
+        return registry.register_table(empty, prefix="prev_exports")
+    name = f"__incremental_prev_exports_{uuid4().hex}"
+    register_delta_df(
+        DeltaAccessContext(runtime=runtime),
+        path=prev_exports,
+        name=name,
     )
-    return ibis.union(added, removed, distinct=False)
+    registry.track(name)
+    return name
 
 
-def _export_key_columns(prev: ibis.Table, curr: ibis.Table) -> list[str]:
+def _export_key_columns(schema: pa.Schema) -> list[str]:
     key_cols = ["file_id", "qname_id"]
-    if "symbol" in prev.columns and "symbol" in curr.columns:
+    if "symbol" in schema.names:
         key_cols.append("symbol")
     return key_cols
 
 
-def _select_delta_columns(out: ibis.Table) -> list[Value]:
-    output_cols = ["delta_kind", "file_id", "path", "qname_id", "qname", "symbol"]
-    return [out[col] if col in out.columns else ibis.literal(None).name(col) for col in output_cols]
+def _prefixed_df(df: DataFrame, *, prefix: str) -> DataFrame:
+    names = df.schema().names
+    return df.select(*(col(name).alias(f"{prefix}_{name}") for name in names))
+
+
+def _ensure_table(value: TableLike) -> pa.Table:
+    resolved = coerce_table_like(value, requested_schema=None)
+    if isinstance(resolved, RecordBatchReaderLike):
+        resolved = resolved.read_all()
+    if isinstance(resolved, pa.Table):
+        return resolved
+    return pa.Table.from_pydict(resolved.to_pydict())
 
 
 __all__ = ["compute_changed_exports"]

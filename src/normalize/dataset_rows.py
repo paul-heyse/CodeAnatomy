@@ -8,6 +8,12 @@ from dataclasses import dataclass, field
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.schema.metadata import metadata_map_bytes, metadata_scalar_map_bytes
 from arrowdsl.schema.validation import ArrowValidationOptions
+from datafusion_engine.expr_spec import ExprIR, ExprSpec
+from datafusion_engine.hashing import (
+    masked_stable_id_expr_ir,
+    stable_id_expr_ir,
+    stable_id_expr_ir_from_parts,
+)
 from datafusion_engine.normalize_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -15,15 +21,9 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from ibis_engine.hashing import (
-    masked_stable_id_expr_ir,
-    stable_id_expr_ir,
-    stable_id_expr_ir_from_parts,
-)
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 from schema_spec.specs import DerivedFieldSpec
 from schema_spec.system import DedupeSpecSpec, SortKeySpec
-from sqlglot_tools.expr_spec import ExprIR, SqlExprSpec
 
 SCHEMA_VERSION = 1
 _DEF_USE_PREFIXES = ("STORE_", "DELETE_")
@@ -72,8 +72,8 @@ def _or_exprs(exprs: Sequence[ExprIR]) -> ExprIR:
     return out
 
 
-def _sql_spec(expr: ExprIR) -> SqlExprSpec:
-    return SqlExprSpec(expr_ir=expr)
+def _sql_spec(expr: ExprIR) -> ExprSpec:
+    return ExprSpec(expr_ir=expr)
 
 
 @dataclass(frozen=True)

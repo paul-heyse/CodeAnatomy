@@ -16,8 +16,7 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from cpg.emit_nodes_ibis import _NODE_OUTPUT_COLUMNS
-from cpg.emit_props_ibis import _PROP_OUTPUT_COLUMNS, CpgPropOptions
+from cpg.emit_specs import _NODE_OUTPUT_COLUMNS, _PROP_OUTPUT_COLUMNS, CpgPropOptions
 from cpg.spec_registry import (
     edge_prop_spec,
     node_plan_specs,

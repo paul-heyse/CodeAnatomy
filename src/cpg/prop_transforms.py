@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import ibis
-import pyarrow as pa
-from ibis.expr.types import StringValue, Value
-
-from ibis_engine.schema_utils import ibis_null_literal
+from datafusion import functions as f
+from datafusion import lit
+from datafusion.expr import Expr
 
 
 def expr_context_value(value: object) -> str | None:
@@ -42,33 +40,33 @@ def flag_to_bool(value: object | None) -> bool | None:
     return None
 
 
-def expr_context_expr(expr: Value) -> Value:
-    """Return an Ibis expression for expr-context normalization.
+def expr_context_expr(expr: Expr) -> Expr:
+    """Return a DataFusion expression for expr-context normalization.
 
     Returns
     -------
-    ibis.expr.types.Value
-        Ibis expression for normalized context values.
+    datafusion.expr.Expr
+        Expression for normalized context values.
     """
-    text: StringValue = expr.cast("string").strip()
-    parts = text.split(".")
-    last = parts[-1].cast("string")
-    upper = last.upper()
-    empty = upper.length() == 0
-    return ibis.ifelse(empty, ibis_null_literal(pa.string()), upper)
+    text = f.trim(f.arrow_cast(expr, lit("Utf8")))
+    last = f.regexp_replace(text, lit(r".*\\."), lit(""))
+    upper = f.upper(last)
+    empty = f.length(upper) == lit(0)
+    return f.when(empty, f.arrow_cast(lit(None), lit("Utf8"))).otherwise(upper)
 
 
-def flag_to_bool_expr(expr: Value) -> Value:
-    """Return an Ibis expression for optional boolean flags.
+def flag_to_bool_expr(expr: Expr) -> Expr:
+    """Return a DataFusion expression for optional boolean flags.
 
     Returns
     -------
-    ibis.expr.types.Value
-        Ibis expression returning True or NULL.
+    datafusion.expr.Expr
+        Expression returning True or NULL.
     """
-    casted = expr.cast("int64")
-    hit = casted == ibis.literal(1)
-    return ibis.ifelse(hit, ibis.literal(value=True), ibis_null_literal(pa.bool_()))
+    casted = f.arrow_cast(expr, lit("Int64"))
+    hit = casted == lit(1)
+    null_bool = f.arrow_cast(lit(None), lit("Boolean"))
+    return f.when(hit, lit(True)).otherwise(null_bool)
 
 
 __all__ = [

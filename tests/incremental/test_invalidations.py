@@ -6,13 +6,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import ibis
 import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from datafusion_engine.diagnostics import DiagnosticsSink
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
+from datafusion_engine.plan_bundle import build_plan_bundle
+from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
+from datafusion_engine.runtime import DataFusionRuntimeProfile, record_view_definition
+from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
 from incremental.delta_context import DeltaAccessContext
 from incremental.invalidations import (
     build_invalidation_snapshot,
@@ -20,7 +23,6 @@ from incremental.invalidations import (
     write_invalidation_snapshot,
 )
 from incremental.runtime import IncrementalRuntime
-from incremental.sqlglot_artifacts import record_view_artifact
 from incremental.state_store import StateStore
 
 
@@ -58,12 +60,33 @@ def _runtime_with_sink() -> tuple[IncrementalRuntime, _DiagnosticsSink]:
     return runtime, sink
 
 
+def _record_view_artifact(
+    runtime: IncrementalRuntime,
+    *,
+    name: str,
+    table: pa.Table,
+) -> None:
+    ctx = runtime.session_context()
+    ctx.register_record_batches(name, [table.to_batches()])
+    df = ctx.table(name)
+    bundle = build_plan_bundle(ctx, df, compute_execution_plan=False, compute_substrait=True)
+    required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(bundle)))
+    referenced_tables = referenced_tables_from_plan(bundle.optimized_logical_plan)
+    artifact = build_view_artifact_from_bundle(
+        bundle,
+        name=name,
+        schema=df.schema(),
+        required_udfs=required_udfs,
+        referenced_tables=referenced_tables,
+    )
+    record_view_definition(runtime.profile, artifact=artifact)
+
+
 def test_invalidation_snapshot_round_trip(tmp_path: Path) -> None:
     """Persist and reload invalidation snapshots from Delta."""
     runtime, _sink = _runtime_with_sink()
-    expr = ibis.memtable({"a": [1, 2]})
-    schema = pa.schema([pa.field("a", pa.int64(), nullable=True)])
-    record_view_artifact(runtime, name="test_plan", expr=expr, schema=schema)
+    table = pa.table({"a": [1, 2]})
+    _record_view_artifact(runtime, name="test_plan", table=table)
 
     context = DeltaAccessContext(runtime=runtime)
     store = StateStore(tmp_path)

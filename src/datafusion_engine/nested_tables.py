@@ -8,11 +8,9 @@ from typing import Protocol, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
-from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from ibis_engine.datafusion_context import datafusion_context
 
 
 @dataclass(frozen=True)
@@ -27,15 +25,14 @@ class _DatafusionContext(Protocol):
 
 
 def register_nested_table(
-    backend: BaseBackend | None,
+    ctx: SessionContext | None,
     *,
     name: str,
     table: TableLike | RecordBatchReaderLike | None,
 ) -> None:
     """Register a nested Arrow table in a DataFusion context, if available."""
-    if backend is None or table is None:
+    if ctx is None or table is None:
         return
-    ctx = datafusion_context(backend)
     df_ctx = cast("_DatafusionContext", ctx)
     resolved = coerce_table_like(table, requested_schema=None)
     if isinstance(resolved, RecordBatchReaderLike):
@@ -47,14 +44,12 @@ def register_nested_table(
     resolved_table = cast("pa.Table", resolved_table)
     with suppress(KeyError, ValueError):
         df_ctx.deregister_table(name)
-    if not isinstance(ctx, SessionContext):
-        return
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_record_batches(name, [resolved_table.to_batches()])
 
 
 def materialize_view_reference(
-    backend: BaseBackend | None,
+    ctx: SessionContext | None,
     view: ViewReference,
 ) -> pa.Table:
     """Materialize a DataFusion view into a pyarrow table.
@@ -71,13 +66,9 @@ def materialize_view_reference(
     TypeError
         Raised when the backend lacks a DataFusion session context.
     """
-    if backend is None:
-        msg = f"View {view.name!r} requires an Ibis backend."
-        raise ValueError(msg)
-    ctx = datafusion_context(backend)
-    if not isinstance(ctx, SessionContext):
+    if ctx is None:
         msg = f"View {view.name!r} requires a DataFusion session context."
-        raise TypeError(msg)
+        raise ValueError(msg)
     df = ctx.table(view.name)
     batches = df.collect()
     return pa.Table.from_batches(batches)

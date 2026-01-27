@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, Protocol
 
-from datafusion import SessionContext
+from datafusion import DataFrame, SessionContext, col
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
@@ -16,7 +16,6 @@ from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
 from extract.helpers import FileContext
-from sqlglot_tools.compat import Expression, exp
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -32,55 +31,46 @@ class _ArrowBatch(Protocol):
         ...
 
 
-def _is_null(expr: Expression) -> Expression:
-    return exp.Is(this=expr, expression=exp.null())
-
-
-def _is_not_null(expr: Expression) -> Expression:
-    return exp.Not(this=_is_null(expr))
-
-
-def _is_distinct(left: Expression, right: Expression) -> Expression:
-    return exp.or_(
-        exp.and_(_is_null(left), _is_not_null(right)),
-        exp.and_(_is_not_null(left), _is_null(right)),
-        exp.NEQ(this=left, expression=right),
-    )
-
-
-def worklist_expr(
+def worklist_builder(
     output_table: str | None,
     *,
     repo_table: str,
     output_table_name: str | None = None,
-) -> Expression:
-    """Return a SQLGlot expression for a dataset worklist.
+) -> Callable[[SessionContext], DataFrame]:
+    """Return a DataFusion DataFrame builder for a dataset worklist.
 
     Returns
     -------
-    sqlglot.expressions.Expression
-        SQLGlot expression representing the worklist query.
+    Callable[[SessionContext], datafusion.DataFrame]
+        DataFrame builder representing the worklist query.
     """
-    repo_tbl = exp.to_table(repo_table)
-    if output_table is None:
-        return exp.select("*").from_(repo_tbl)
-    output_name = output_table_name or output_table
-    output_tbl = exp.to_table(output_name)
-    repo_alias = repo_tbl.alias_or_name
-    output_alias = output_tbl.alias_or_name
-    join_on = exp.EQ(
-        this=exp.column("file_id", table=repo_alias),
-        expression=exp.column("file_id", table=output_alias),
-    )
-    output_file_id = exp.column("file_id", table=output_alias)
-    output_sha = exp.column("file_sha256", table=output_alias)
-    repo_sha = exp.column("file_sha256", table=repo_alias)
-    return (
-        exp.select("*")
-        .from_(repo_tbl)
-        .join(output_tbl, on=join_on, join_type="left")
-        .where(exp.or_(_is_null(output_file_id), _is_distinct(output_sha, repo_sha)))
-    )
+
+    def _builder(ctx: SessionContext) -> DataFrame:
+        repo_df = ctx.table(repo_table)
+        if output_table is None:
+            return repo_df
+        output_name = output_table_name or output_table
+        output_df = ctx.table(output_name).select(
+            col("file_id").alias("output_file_id"),
+            col("file_sha256").alias("output_sha"),
+        )
+        joined = repo_df.join(
+            output_df,
+            join_keys=(["file_id"], ["output_file_id"]),
+            how="left",
+            coalesce_duplicate_keys=True,
+        )
+        output_missing = col("output_file_id").is_null()
+        output_sha = col("output_sha")
+        repo_sha = col("file_sha256")
+        sha_distinct = (
+            (output_sha.is_null() & repo_sha.is_not_null())
+            | (output_sha.is_not_null() & repo_sha.is_null())
+            | (output_sha != repo_sha)
+        )
+        return joined.filter(output_missing | sha_distinct)
+
+    return _builder
 
 
 def iter_worklist_contexts(
@@ -162,7 +152,7 @@ def _worklist_stream(
     output_location = None if output_exists else runtime_profile.dataset_location(output_table)
     use_output = output_exists or output_location is not None
     output_name = output_table if use_output else None
-    expr = worklist_expr(
+    builder = worklist_builder(
         output_table if use_output else None,
         repo_table=repo_name,
         output_table_name=output_name,
@@ -176,7 +166,7 @@ def _worklist_stream(
             runtime_profile=runtime_profile,
         ),
     ):
-        stream = _execute_expr_stream(df_ctx, expr, runtime_profile=runtime_profile)
+        stream = _execute_expr_stream(df_ctx, builder, runtime_profile=runtime_profile)
         for batch in stream:
             arrow_batch = batch.to_pyarrow()
             rows = arrow_batch.to_pylist()
@@ -198,15 +188,14 @@ def _table_exists(ctx: SessionContext, name: str) -> bool:
 
 def _execute_expr_stream(
     ctx: SessionContext,
-    expr: Expression,
+    builder: Callable[[SessionContext], DataFrame],
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> Iterator[_ArrowBatch]:
     from datafusion_engine.execution_facade import DataFusionExecutionFacade
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    plan = facade.compile(expr)
-    result = facade.execute(plan)
+    result = facade.execute_builder(builder)
     if result.dataframe is None:
         msg = "Worklist execution did not return a DataFusion DataFrame."
         raise ValueError(msg)
@@ -294,4 +283,4 @@ def _registered_output_table(
                 deregister(name)
 
 
-__all__ = ["iter_worklist_contexts", "worklist_expr", "worklist_queue_name"]
+__all__ = ["iter_worklist_contexts", "worklist_builder", "worklist_queue_name"]

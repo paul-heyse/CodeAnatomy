@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from datafusion import SessionContext
-from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
 from engine.session import EngineSession
@@ -22,11 +21,6 @@ class ExtractSession:
     def exec_ctx(self) -> ExecutionContext:
         """Return the ExecutionContext for extract workloads."""
         return self.engine_session.ctx
-
-    @property
-    def ibis_backend(self) -> BaseBackend:
-        """Return the Ibis backend for extract workloads."""
-        return self.engine_session.ibis_backend
 
     @property
     def df_ctx(self) -> SessionContext:
@@ -50,7 +44,7 @@ def build_extract_session(ctx: ExecutionContext) -> ExtractSession:
     Returns
     -------
     ExtractSession
-        DataFusion SessionContext plus Ibis backend bound to the runtime profile.
+        DataFusion SessionContext bound to the runtime profile.
     """
     engine_session = build_engine_session(ctx=ctx)
     return ExtractSession(engine_session=engine_session)

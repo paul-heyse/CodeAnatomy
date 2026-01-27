@@ -168,12 +168,8 @@ def udf_names_from_snapshot(snapshot: Mapping[str, object]) -> frozenset[str]:
     return _snapshot_names(snapshot)
 
 
-def _notify_ibis_snapshot(snapshot: Mapping[str, object]) -> None:
-    try:
-        from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
-    except ImportError:
-        return
-    register_ibis_udf_snapshot(snapshot)
+def _notify_udf_snapshot(snapshot: Mapping[str, object]) -> None:
+    _ = snapshot
 
 
 def _build_docs_snapshot(ctx: SessionContext) -> Mapping[str, object]:
@@ -212,7 +208,7 @@ def rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
         snapshot["documentation"] = docs
     validate_rust_udf_snapshot(snapshot)
     _RUST_UDF_VALIDATED.add(ctx)
-    _notify_ibis_snapshot(snapshot)
+    _notify_udf_snapshot(snapshot)
     _RUST_UDF_SNAPSHOTS[ctx] = snapshot
     return snapshot
 

@@ -19,8 +19,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import pyarrow as pa
 from datafusion import SessionContext, col
-from datafusion.dataframe import DataFrame
-from datafusion.expr import Expr
+from datafusion import functions as f
 
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.core.schema_constants import (
@@ -48,9 +47,13 @@ from arrowdsl.schema.semantic_types import (
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_ext import arrow_metadata
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 
 if TYPE_CHECKING:
+    from datafusion.dataframe import DataFrame
+    from datafusion.expr import Expr
+
     from datafusion_engine.schema_contracts import SchemaContract
 
 BYTE_SPAN_T = byte_span_type()
@@ -87,28 +90,6 @@ _STRING_TYPE_TOKENS = frozenset({"char", "string", "text", "utf8", "varchar"})
 _INT_TYPE_TOKENS = frozenset({"int", "integer", "bigint", "smallint", "tinyint", "uint"})
 _LIST_TYPE_TOKENS = frozenset({"array", "list"})
 _MAP_TYPE_TOKENS = frozenset({"map"})
-
-SQLGLOT_PARSE_ERROR_DETAIL_STRUCT = struct_type(
-    {
-        "description": pa.string(),
-        "message": pa.string(),
-        "line": pa.int64(),
-        "col": pa.int64(),
-        "start_context": pa.string(),
-        "highlight": pa.string(),
-        "end_context": pa.string(),
-        "into_expression": pa.string(),
-    }
-)
-SQLGLOT_PARSE_ERROR_DETAILS_TYPE = list_view_type(
-    SQLGLOT_PARSE_ERROR_DETAIL_STRUCT,
-    large=True,
-)
-
-
-def _sql_with_options(ctx: SessionContext, sql: str) -> DataFrame:
-    options = sql_options_for_profile(None)
-    return ctx.sql_with_options(sql, options)
 
 
 def _attrs_field(name: str = "attrs") -> pa.Field:
@@ -1343,10 +1324,8 @@ DATAFUSION_SEMANTIC_DIFF_SCHEMA = _schema_with_metadata(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
             pa.field("run_id", pa.string(), nullable=True),
-            pa.field("ast_fingerprint", pa.string(), nullable=True),
-            pa.field("policy_hash", pa.string(), nullable=True),
-            pa.field("base_ast_fingerprint", pa.string(), nullable=True),
-            pa.field("base_policy_hash", pa.string(), nullable=True),
+            pa.field("plan_fingerprint", pa.string(), nullable=True),
+            pa.field("base_plan_fingerprint", pa.string(), nullable=True),
             pa.field("category", pa.string(), nullable=False),
             pa.field("changed", pa.bool_(), nullable=False),
             pa.field("breaking", pa.bool_(), nullable=False),
@@ -1377,42 +1356,18 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
             pa.field("run_id", pa.string(), nullable=True),
-            pa.field("policy_hash", pa.string(), nullable=True),
-            pa.field("ast_fingerprint", pa.string(), nullable=True),
-            pa.field("sql", pa.string(), nullable=False),
-            pa.field("normalized_sql", pa.string(), nullable=True),
-            pa.field("explain_rows_artifact_path", pa.string(), nullable=True),
-            pa.field("explain_rows_artifact_format", pa.string(), nullable=True),
-            pa.field("explain_rows_schema_fingerprint", pa.string(), nullable=True),
-            pa.field("explain_analyze_artifact_path", pa.string(), nullable=True),
-            pa.field("explain_analyze_artifact_format", pa.string(), nullable=True),
+            pa.field("plan_fingerprint", pa.string(), nullable=True),
             pa.field("substrait_b64", pa.string(), nullable=True),
             pa.field("substrait_validation_status", pa.string(), nullable=True),
-            pa.field("sqlglot_ast", pa.binary(), nullable=True),
-            pa.field("ibis_decompile", pa.string(), nullable=True),
-            pa.field("ibis_sql", pa.string(), nullable=True),
-            pa.field("ibis_sql_pretty", pa.string(), nullable=True),
-            pa.field("ibis_graphviz", pa.string(), nullable=True),
-            pa.field("ibis_compiled_sql", pa.string(), nullable=True),
-            pa.field("ibis_compiled_sql_hash", pa.string(), nullable=True),
-            pa.field("ibis_compile_params", pa.string(), nullable=True),
-            pa.field("ibis_compile_limit", pa.int64(), nullable=True),
-            pa.field("read_dialect", pa.string(), nullable=True),
-            pa.field("write_dialect", pa.string(), nullable=True),
-            pa.field("canonical_fingerprint", pa.string(), nullable=True),
-            pa.field("lineage_tables", pa.list_(pa.string()), nullable=True),
-            pa.field("lineage_columns", pa.list_(pa.string()), nullable=True),
-            pa.field("lineage_scopes", pa.list_(pa.string()), nullable=True),
-            pa.field("param_signature", pa.string(), nullable=True),
-            pa.field("projection_map", pa.binary(), nullable=True),
-            pa.field("unparsed_sql", pa.string(), nullable=True),
-            pa.field("unparse_error", pa.string(), nullable=True),
             pa.field("logical_plan", pa.string(), nullable=True),
             pa.field("optimized_plan", pa.string(), nullable=True),
             pa.field("physical_plan", pa.string(), nullable=True),
             pa.field("graphviz", pa.string(), nullable=True),
             pa.field("partition_count", pa.int64(), nullable=True),
-            pa.field("join_operators", pa.list_(pa.string()), nullable=True),
+            pa.field("schema_names", pa.list_(pa.string()), nullable=True),
+            pa.field("lineage_tables", pa.list_(pa.string()), nullable=True),
+            pa.field("lineage_columns", pa.list_(pa.string()), nullable=True),
+            pa.field("lineage_scopes", pa.list_(pa.string()), nullable=True),
         ]
     ),
 )
@@ -1424,50 +1379,24 @@ DATAFUSION_VIEW_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
             pa.field("name", pa.string(), nullable=False),
             pa.field("plan_fingerprint", pa.string(), nullable=False),
-            pa.field("ast_fingerprint", pa.string(), nullable=False),
-            pa.field("policy_hash", pa.string(), nullable=False),
             pa.field("schema_fingerprint", pa.string(), nullable=False),
             pa.field("schema_msgpack", pa.binary(), nullable=False),
             pa.field("required_udfs", pa.list_(pa.string()), nullable=True),
-            pa.field("lineage_msgpack", pa.binary(), nullable=False),
-            pa.field("sql", pa.string(), nullable=True),
-            pa.field("serde_payload_msgpack", pa.binary(), nullable=False),
+            pa.field("referenced_tables", pa.list_(pa.string()), nullable=True),
         ]
     ),
 )
 
-IBIS_SQL_INGEST_SCHEMA = _schema_with_metadata(
-    "ibis_sql_ingest_v1",
+DATAFUSION_SQL_INGEST_SCHEMA = _schema_with_metadata(
+    "datafusion_sql_ingest_v1",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
             pa.field("ingest_kind", pa.string(), nullable=False),
             pa.field("source_name", pa.string(), nullable=True),
             pa.field("sql", pa.string(), nullable=False),
-            pa.field("decompiled_sql", pa.string(), nullable=True),
             pa.field("schema", pa.map_(pa.string(), pa.string()), nullable=True),
             pa.field("dialect", pa.string(), nullable=True),
-            pa.field("parse_errors", SQLGLOT_PARSE_ERROR_DETAILS_TYPE, nullable=True),
-            pa.field("sqlglot_sql", pa.string(), nullable=True),
-            pa.field("normalized_sql", pa.string(), nullable=True),
-            pa.field("sqlglot_ast", pa.binary(), nullable=True),
-            pa.field("ibis_sqlglot_ast", pa.binary(), nullable=True),
-            pa.field("sqlglot_policy_hash", pa.string(), nullable=True),
-            pa.field("sqlglot_policy_snapshot", pa.binary(), nullable=True),
-        ]
-    ),
-)
-
-SQLGLOT_PARSE_ERRORS_SCHEMA = _schema_with_metadata(
-    "sqlglot_parse_errors_v1",
-    pa.schema(
-        [
-            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
-            pa.field("source", pa.string(), nullable=True),
-            pa.field("sql", pa.string(), nullable=True),
-            pa.field("dialect", pa.string(), nullable=True),
-            pa.field("error", pa.string(), nullable=True),
-            pa.field("parse_errors", SQLGLOT_PARSE_ERROR_DETAILS_TYPE, nullable=True),
         ]
     ),
 )
@@ -1481,8 +1410,6 @@ ENGINE_RUNTIME_SCHEMA = _schema_with_metadata(
             pa.field("determinism_tier", pa.string(), nullable=False),
             pa.field("runtime_profile_hash", pa.string(), nullable=False),
             pa.field("runtime_profile_snapshot", pa.binary(), nullable=False),
-            pa.field("sqlglot_policy_hash", pa.string(), nullable=True),
-            pa.field("sqlglot_policy_snapshot", pa.binary(), nullable=True),
             pa.field("function_registry_hash", pa.string(), nullable=True),
             pa.field("function_registry_snapshot", pa.binary(), nullable=True),
             pa.field("datafusion_settings_hash", pa.string(), nullable=True),
@@ -1583,8 +1510,7 @@ DATASET_FINGERPRINT_SCHEMA = _schema_with_metadata(
     pa.schema(
         [
             pa.field("version", pa.int32(), nullable=False),
-            pa.field("ast_fingerprint", pa.string(), nullable=False),
-            pa.field("policy_hash", pa.string(), nullable=False),
+            pa.field("plan_fingerprint", pa.string(), nullable=False),
             pa.field("schema_fingerprint", pa.string(), nullable=False),
             pa.field("profile_hash", pa.string(), nullable=False),
             pa.field("writer_strategy", pa.string(), nullable=False),
@@ -2822,8 +2748,11 @@ def validate_schema_metadata(schema: pa.Schema) -> None:
 
 def validate_nested_types(ctx: SessionContext, name: str) -> None:
     """Validate nested dataset types using DataFusion arrow_typeof."""
-    sql = f"SELECT arrow_typeof(*) AS row_type FROM {name} LIMIT 1"
-    _sql_with_options(ctx, sql).collect()
+    df = ctx.table(name)
+    exprs = [f.arrow_typeof(col(field.name)).alias(f"{field.name}_type") for field in df.schema()]
+    if not exprs:
+        return
+    df.select(*exprs).limit(1).collect()
 
 
 def _require_semantic_type(
@@ -2834,11 +2763,10 @@ def _require_semantic_type(
     expected: str,
 ) -> None:
     meta_key = SEMANTIC_TYPE_META.decode("utf-8")
-    sql = (
-        f"SELECT arrow_metadata({column_name}, '{meta_key}') AS semantic_type "
-        f"FROM {table_name} LIMIT 1"
+    df = ctx.table(table_name).select(
+        arrow_metadata(col(column_name), meta_key).alias("semantic_type")
     )
-    rows = _sql_with_options(ctx, sql).to_arrow_table().to_pylist()
+    rows = df.limit(1).to_arrow_table().to_pylist()
     semantic_type = rows[0].get("semantic_type") if rows else None
     if semantic_type is None:
         msg = f"Missing semantic type metadata on {table_name}.{column_name}."
@@ -2871,19 +2799,19 @@ def _validate_ast_view_outputs_all(
 
 
 def _validate_ast_file_types(ctx: SessionContext, errors: dict[str, str]) -> None:
-    exprs = (
-        "SELECT arrow_typeof(nodes) AS nodes_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(edges) AS edges_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(errors) AS errors_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(docstrings) AS docstrings_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(imports) AS imports_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(defs) AS defs_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(calls) AS calls_type FROM ast_files_v1 LIMIT 1",
-        "SELECT arrow_typeof(type_ignores) AS type_ignores_type FROM ast_files_v1 LIMIT 1",
-    )
     try:
-        for sql in exprs:
-            _sql_with_options(ctx, sql).collect()
+        df = ctx.table("ast_files_v1")
+        exprs = [
+            f.arrow_typeof(col("nodes")).alias("nodes_type"),
+            f.arrow_typeof(col("edges")).alias("edges_type"),
+            f.arrow_typeof(col("errors")).alias("errors_type"),
+            f.arrow_typeof(col("docstrings")).alias("docstrings_type"),
+            f.arrow_typeof(col("imports")).alias("imports_type"),
+            f.arrow_typeof(col("defs")).alias("defs_type"),
+            f.arrow_typeof(col("calls")).alias("calls_type"),
+            f.arrow_typeof(col("type_ignores")).alias("type_ignores_type"),
+        ]
+        df.select(*exprs).limit(1).collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ast_files_v1"] = str(exc)
 
@@ -3209,7 +3137,7 @@ def _ts_span_expected_meta() -> dict[str, str]:
 def _validate_ast_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> None:
     expected = _ast_span_expected_meta()
     try:
-        table = _sql_with_options(ctx, "SELECT * FROM ast_span_metadata").to_arrow_table()
+        table = ctx.table("ast_span_metadata").to_arrow_table()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ast_span_metadata"] = str(exc)
         return
@@ -3243,7 +3171,7 @@ def _validate_ast_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> 
 def _validate_ts_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> None:
     expected = _ts_span_expected_meta()
     try:
-        table = _sql_with_options(ctx, "SELECT * FROM ts_span_metadata").to_arrow_table()
+        table = ctx.table("ts_span_metadata").to_arrow_table()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ts_span_metadata"] = str(exc)
         return
@@ -3310,12 +3238,11 @@ def _validate_ast_view_outputs(
     errors: dict[str, str],
 ) -> None:
     try:
-        sql = f"SELECT * FROM {name}"
-        rows = introspector.describe_query(sql)
+        schema = introspector.table_schema(name)
     except (RuntimeError, TypeError, ValueError) as exc:
         errors[name] = str(exc)
         return
-    columns = _describe_column_names(rows)
+    columns = [field.name for field in schema]
     invalid = _invalid_output_names(columns)
     if invalid:
         errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
@@ -3347,12 +3274,11 @@ def _validate_ts_view_outputs(
     errors: dict[str, str],
 ) -> None:
     try:
-        sql = f"SELECT * FROM {name}"
-        rows = introspector.describe_query(sql)
+        schema = introspector.table_schema(name)
     except (RuntimeError, TypeError, ValueError) as exc:
         errors[name] = str(exc)
         return
-    columns = _describe_column_names(rows)
+    columns = [field.name for field in schema]
     invalid = _invalid_output_names(columns)
     if invalid:
         errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
@@ -3442,12 +3368,11 @@ def _validate_cst_view_outputs(
     errors: dict[str, str],
 ) -> None:
     try:
-        sql = f"SELECT * FROM {name}"
-        rows = introspector.describe_query(sql)
+        schema = introspector.table_schema(name)
     except (RuntimeError, TypeError, ValueError) as exc:
         errors[name] = str(exc)
         return
-    columns = _describe_column_names(rows)
+    columns = [field.name for field in schema]
     invalid = _invalid_output_names(columns)
     if invalid:
         errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
@@ -3497,7 +3422,7 @@ def validate_cst_views(ctx: SessionContext) -> None:
             errors=errors,
         )
     try:
-        _sql_with_options(ctx, "SELECT * FROM cst_schema_diagnostics").collect()
+        ctx.table("cst_schema_diagnostics").collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["cst_schema_diagnostics"] = str(exc)
     if errors:
@@ -3698,10 +3623,10 @@ __all__ = [
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
     "CST_VIEW_NAMES",
+    "DATAFUSION_SQL_INGEST_SCHEMA",
     "DIAG_DETAILS_TYPE",
     "DIAG_DETAIL_STRUCT",
     "DIAG_TAGS_TYPE",
-    "IBIS_SQL_INGEST_SCHEMA",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
     "SCIP_DIAGNOSTICS_SCHEMA",
@@ -3717,7 +3642,6 @@ __all__ = [
     "SCIP_SYMBOL_INFORMATION_SCHEMA",
     "SCIP_SYMBOL_RELATIONSHIPS_SCHEMA",
     "SCIP_VIEW_NAMES",
-    "SQLGLOT_PARSE_ERRORS_SCHEMA",
     "SYMTABLE_FILES_SCHEMA",
     "SYMTABLE_VIEW_NAMES",
     "TREE_SITTER_CHECK_VIEWS",

@@ -30,7 +30,7 @@ from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTr
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
 if TYPE_CHECKING:
-    from sqlglot_tools.expr_spec import SqlExprSpec
+    from datafusion_engine.expr_spec import ExprSpec
 
 
 def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:
@@ -170,7 +170,7 @@ class DerivedFieldSpec:
     """Specification for a derived column."""
 
     name: str
-    expr: SqlExprSpec
+    expr: ExprSpec
 
 
 @dataclass(frozen=True)

@@ -5,19 +5,19 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
+from uuid import uuid4
 
-import ibis
 import pyarrow as pa
+from datafusion import col, lit
+from datafusion.dataframe import DataFrame
 
 from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table, empty_table
-from ibis_engine.sources import read_delta_ibis
-from incremental.ibis_exec import ibis_expr_to_table
-from incremental.ibis_utils import ibis_table_from_arrow
+from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.registry_specs import dataset_schema
-from incremental.runtime import IncrementalRuntime
+from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from incremental.types import IncrementalFileChanges
 
 _EXPORT_KEY_SCHEMA = pa.schema(
@@ -27,6 +27,44 @@ _EXPORT_KEY_SCHEMA = pa.schema(
         pa.field("qname", pa.string()),
     ]
 )
+
+
+def _df_from_arrow(
+    runtime: IncrementalRuntime,
+    table: pa.Table,
+    *,
+    registry: TempTableRegistry,
+    prefix: str,
+) -> DataFrame:
+    name = registry.register_table(table, prefix=prefix)
+    return runtime.session_context().table(name)
+
+
+def _df_from_delta(
+    runtime: IncrementalRuntime,
+    path: str,
+    *,
+    registry: TempTableRegistry,
+    prefix: str,
+) -> DataFrame:
+    name = f"__incremental_{prefix}_{uuid4().hex}"
+    df = register_delta_df(
+        DeltaAccessContext(runtime=runtime),
+        path=path,
+        name=name,
+    )
+    registry.track(name)
+    return df
+
+
+def _union_all_frames(frames: Sequence[DataFrame]) -> DataFrame:
+    if not frames:
+        msg = "At least one DataFrame is required to build a union."
+        raise ValueError(msg)
+    combined = frames[0]
+    for frame in frames[1:]:
+        combined = combined.union(frame)
+    return combined
 
 
 def impacted_callers_from_changed_exports(
@@ -43,52 +81,57 @@ def impacted_callers_from_changed_exports(
     pa.Table
         Impacted callers table derived from callsite relationships.
     """
-    backend = runtime.ibis_backend()
     schema = dataset_schema("inc_impacted_callers_v1")
     changed = cast("pa.Table", changed_exports)
     if changed.num_rows == 0:
         return empty_table(schema)
 
-    pieces: list[ibis.Table] = []
-    changed_table = ibis_table_from_arrow(backend, changed)
-    if prev_rel_callsite_qname is not None:
-        rel_qname = read_delta_ibis(backend, prev_rel_callsite_qname)
-        changed_qname = changed_table.filter(changed_table.qname_id.notnull())
-        qname_hits = rel_qname.inner_join(
-            changed_qname,
-            predicates=[rel_qname.qname_id == changed_qname.qname_id],
+    pieces: list[DataFrame] = []
+    with TempTableRegistry(runtime) as registry:
+        changed_table = _df_from_arrow(
+            runtime,
+            changed,
+            registry=registry,
+            prefix="changed_exports",
         )
-        qname_hits = qname_hits.select(
-            file_id=rel_qname.edge_owner_file_id,
-            path=rel_qname.path,
-            reason_kind=ibis.literal("callsite_qname"),
-            reason_ref=rel_qname.qname_id,
-        )
-        pieces.append(qname_hits)
+        if prev_rel_callsite_qname is not None:
+            rel_qname = _df_from_delta(
+                runtime,
+                prev_rel_callsite_qname,
+                registry=registry,
+                prefix="rel_callsite_qname",
+            )
+            changed_qname = changed_table.filter(col("qname_id").is_not_null())
+            qname_hits = rel_qname.join(changed_qname, "qname_id", how="inner")
+            qname_hits = qname_hits.select(
+                col("edge_owner_file_id").alias("file_id"),
+                col("path"),
+                lit("callsite_qname").alias("reason_kind"),
+                col("qname_id").alias("reason_ref"),
+            )
+            pieces.append(qname_hits)
 
-    if prev_rel_callsite_symbol is not None:
-        rel_symbol = read_delta_ibis(backend, prev_rel_callsite_symbol)
-        changed_symbol = changed_table.filter(changed_table.symbol.notnull())
-        symbol_hits = rel_symbol.inner_join(
-            changed_symbol,
-            predicates=[rel_symbol.symbol == changed_symbol.symbol],
-        )
-        symbol_hits = symbol_hits.select(
-            file_id=rel_symbol.edge_owner_file_id,
-            path=rel_symbol.path,
-            reason_kind=ibis.literal("callsite_symbol"),
-            reason_ref=rel_symbol.symbol,
-        )
-        pieces.append(symbol_hits)
+        if prev_rel_callsite_symbol is not None:
+            rel_symbol = _df_from_delta(
+                runtime,
+                prev_rel_callsite_symbol,
+                registry=registry,
+                prefix="rel_callsite_symbol",
+            )
+            changed_symbol = changed_table.filter(col("symbol").is_not_null())
+            symbol_hits = rel_symbol.join(changed_symbol, "symbol", how="inner")
+            symbol_hits = symbol_hits.select(
+                col("edge_owner_file_id").alias("file_id"),
+                col("path"),
+                lit("callsite_symbol").alias("reason_kind"),
+                col("symbol").alias("reason_ref"),
+            )
+            pieces.append(symbol_hits)
 
-    if not pieces:
-        return empty_table(schema)
-    combined = _union_all_tables(pieces).distinct()
-    result = ibis_expr_to_table(
-        combined,
-        runtime=runtime,
-        name="impacted_callers",
-    )
+        if not pieces:
+            return empty_table(schema)
+        combined = _union_all_frames(pieces).distinct()
+        result = combined.to_arrow_table()
     return align_table(result, schema=schema, safe_cast=True)
 
 
@@ -105,7 +148,6 @@ def impacted_importers_from_changed_exports(
     pa.Table
         Impacted importers table derived from resolved imports.
     """
-    backend = runtime.ibis_backend()
     schema = dataset_schema("inc_impacted_importers_v1")
     if prev_imports_resolved is None:
         return empty_table(schema)
@@ -116,40 +158,49 @@ def impacted_importers_from_changed_exports(
     if exports.num_rows == 0:
         return empty_table(schema)
 
-    imports_resolved = read_delta_ibis(backend, prev_imports_resolved)
-    exports_table = ibis_table_from_arrow(backend, exports)
-    by_name = imports_resolved.inner_join(
-        exports_table,
-        predicates=[
-            imports_resolved.imported_module_fqn == exports_table.module_fqn,
-            imports_resolved.imported_name == exports_table.name,
-        ],
-    )
-    by_name = by_name.select(
-        file_id=imports_resolved.importer_file_id,
-        path=imports_resolved.importer_path,
-        reason_kind=ibis.literal("import_name"),
-        reason_ref=exports_table.qname,
-    )
+    pieces: list[DataFrame] = []
+    with TempTableRegistry(runtime) as registry:
+        imports_resolved = _df_from_delta(
+            runtime,
+            prev_imports_resolved,
+            registry=registry,
+            prefix="imports_resolved",
+        )
+        exports_table = _df_from_arrow(
+            runtime,
+            exports,
+            registry=registry,
+            prefix="export_keys",
+        )
+        by_name = imports_resolved.join(
+            exports_table,
+            ["imported_module_fqn", "imported_name"],
+            how="inner",
+        )
+        by_name = by_name.select(
+            col("importer_file_id").alias("file_id"),
+            col("importer_path").alias("path"),
+            lit("import_name").alias("reason_kind"),
+            col("qname").alias("reason_ref"),
+        )
+        pieces.append(by_name)
 
-    star = imports_resolved.filter(imports_resolved.is_star == ibis.literal(value=True))
-    by_star = star.inner_join(
-        exports_table,
-        predicates=[star.imported_module_fqn == exports_table.module_fqn],
-    )
-    by_star = by_star.select(
-        file_id=star.importer_file_id,
-        path=star.importer_path,
-        reason_kind=ibis.literal("import_star"),
-        reason_ref=exports_table.qname,
-    )
+        star = imports_resolved.filter(col("is_star") == lit(True))
+        by_star = star.join(
+            exports_table,
+            "imported_module_fqn",
+            how="inner",
+        )
+        by_star = by_star.select(
+            col("importer_file_id").alias("file_id"),
+            col("importer_path").alias("path"),
+            lit("import_star").alias("reason_kind"),
+            col("qname").alias("reason_ref"),
+        )
+        pieces.append(by_star)
 
-    combined = _union_all_tables([by_name, by_star]).distinct()
-    result = ibis_expr_to_table(
-        combined,
-        runtime=runtime,
-        name="impacted_importers",
-    )
+        combined = _union_all_frames(pieces).distinct()
+        result = combined.to_arrow_table()
     return align_table(result, schema=schema, safe_cast=True)
 
 
@@ -166,7 +217,6 @@ def import_closure_only_from_changed_exports(
     pa.Table
         Impacted importers table for module-level imports.
     """
-    backend = runtime.ibis_backend()
     schema = dataset_schema("inc_impacted_importers_v1")
     if prev_imports_resolved is None:
         return empty_table(schema)
@@ -177,41 +227,52 @@ def import_closure_only_from_changed_exports(
     if exports.num_rows == 0:
         return empty_table(schema)
 
-    imports_resolved = read_delta_ibis(backend, prev_imports_resolved)
-    exports_table = ibis_table_from_arrow(backend, exports)
-    module_imports = imports_resolved.filter(
-        imports_resolved.imported_name.isnull()
-        & (imports_resolved.is_star == ibis.literal(value=False))
-    )
-    module_hits = module_imports.inner_join(
-        exports_table,
-        predicates=[module_imports.imported_module_fqn == exports_table.module_fqn],
-    )
-    module_hits = module_hits.select(
-        file_id=module_imports.importer_file_id,
-        path=module_imports.importer_path,
-        reason_kind=ibis.literal("import_module"),
-        reason_ref=exports_table.qname,
-    )
+    pieces: list[DataFrame] = []
+    with TempTableRegistry(runtime) as registry:
+        imports_resolved = _df_from_delta(
+            runtime,
+            prev_imports_resolved,
+            registry=registry,
+            prefix="imports_resolved",
+        )
+        exports_table = _df_from_arrow(
+            runtime,
+            exports,
+            registry=registry,
+            prefix="export_keys",
+        )
+        module_imports = imports_resolved.filter(
+            col("imported_name").is_null() & (col("is_star") == lit(False))
+        )
+        module_hits = module_imports.join(
+            exports_table,
+            "imported_module_fqn",
+            how="inner",
+        )
+        module_hits = module_hits.select(
+            col("importer_file_id").alias("file_id"),
+            col("importer_path").alias("path"),
+            lit("import_module").alias("reason_kind"),
+            col("qname").alias("reason_ref"),
+        )
+        pieces.append(module_hits)
 
-    star = imports_resolved.filter(imports_resolved.is_star == ibis.literal(value=True))
-    star_hits = star.inner_join(
-        exports_table,
-        predicates=[star.imported_module_fqn == exports_table.module_fqn],
-    )
-    star_hits = star_hits.select(
-        file_id=star.importer_file_id,
-        path=star.importer_path,
-        reason_kind=ibis.literal("import_star"),
-        reason_ref=exports_table.qname,
-    )
+        star = imports_resolved.filter(col("is_star") == lit(True))
+        star_hits = star.join(
+            exports_table,
+            "imported_module_fqn",
+            how="inner",
+        )
+        star_hits = star_hits.select(
+            col("importer_file_id").alias("file_id"),
+            col("importer_path").alias("path"),
+            lit("import_star").alias("reason_kind"),
+            col("qname").alias("reason_ref"),
+        )
+        pieces.append(star_hits)
 
-    combined = _union_all_tables([module_hits, star_hits]).distinct()
-    result = ibis_expr_to_table(
-        combined,
-        runtime=runtime,
-        name="import_closure_only",
-    )
+        combined = _union_all_frames(pieces).distinct()
+        result = combined.to_arrow_table()
     return align_table(result, schema=schema, safe_cast=True)
 
 
@@ -238,7 +299,6 @@ def merge_impacted_files(
     pa.Table
         Impacted files table aligned to ``inc_impacted_files_v2``.
     """
-    backend = runtime.ibis_backend()
     schema = dataset_schema("inc_impacted_files_v2")
     tables: list[pa.Table] = [align_table(cast("pa.Table", inputs.changed_files), schema=schema)]
 
@@ -254,15 +314,23 @@ def merge_impacted_files(
             )
         )
 
-    ibis_tables = [ibis_table_from_arrow(backend, table) for table in tables if table.num_rows > 0]
-    if not ibis_tables:
-        return empty_table(schema)
-    combined = _union_all_tables(ibis_tables).distinct()
-    result = ibis_expr_to_table(
-        combined,
-        runtime=runtime,
-        name="impacted_files",
-    )
+    frames: list[DataFrame] = []
+    with TempTableRegistry(runtime) as registry:
+        for idx, table in enumerate(tables):
+            if table.num_rows == 0:
+                continue
+            frames.append(
+                _df_from_arrow(
+                    runtime,
+                    table,
+                    registry=registry,
+                    prefix=f"impacted_{idx}",
+                )
+            )
+        if not frames:
+            return empty_table(schema)
+        combined = _union_all_frames(frames).distinct()
+        result = combined.to_arrow_table()
     return align_table(result, schema=schema, safe_cast=True)
 
 
@@ -412,15 +480,6 @@ def _optional_tables(
         out.append(align_table(casted, schema=schema, safe_cast=True))
     return out
 
-
-def _union_all_tables(tables: Sequence[ibis.Table]) -> ibis.Table:
-    if not tables:
-        msg = "Expected at least one table to union."
-        raise ValueError(msg)
-    combined: ibis.Table = tables[0]
-    for table in tables[1:]:
-        combined = ibis.union(combined, table, distinct=False)
-    return combined
 
 
 __all__ = [

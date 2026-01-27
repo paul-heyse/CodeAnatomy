@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pyarrow.types as patypes
-from datafusion import SessionContext, SQLOptions
+from datafusion import SessionContext, col, lit
+from datafusion import functions as f
 
 from arrowdsl.core.interop import (
     DataTypeLike,
@@ -19,7 +20,7 @@ from arrowdsl.core.interop import (
 from datafusion_engine.introspection import invalidate_introspection_cache
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion.expr import Expr
 
 DEFAULT_DICTIONARY_INDEX_TYPE = pa.int32()
 
@@ -91,13 +92,14 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     adapter = DataFusionIOAdapter(ctx=df_ctx, profile=None)
     adapter.register_record_batches(table_name, [resolved.to_batches()])
     try:
-        sql = _encoding_select_expr(
+        selections = _encoding_select_expr(
             schema=resolved.schema,
             policy=policy,
             ctx=df_ctx,
             table_name=table_name,
         )
-        return _expr_table(df_ctx, sql)
+        df = df_ctx.table(table_name).select(*selections)
+        return df.to_arrow_table()
     finally:
         deregister = getattr(df_ctx, "deregister_table", None)
         if callable(deregister):
@@ -111,15 +113,16 @@ def _encoding_select_expr(
     policy: EncodingPolicy,
     ctx: SessionContext,
     table_name: str,
-) -> str:
-    selections: list[str] = []
+) -> list[Expr]:
+    _ = table_name
+    selections: list[Expr] = []
     for schema_field in schema:
         name = schema_field.name
         if name not in policy.dictionary_cols:
-            selections.append(name)
+            selections.append(col(name))
             continue
         if patypes.is_dictionary(schema_field.type):
-            selections.append(name)
+            selections.append(col(name))
             continue
         index_type = policy.dictionary_index_types.get(name, policy.dictionary_index_type)
         ordered = policy.dictionary_ordered_flags.get(name, policy.dictionary_ordered)
@@ -129,8 +132,8 @@ def _encoding_select_expr(
             schema_field.type,
             ordered=ordered,
         )
-        selections.append(f"arrow_cast({name}, '{dict_type}') AS {name}")
-    return f"SELECT {', '.join(selections)} FROM {table_name}"
+        selections.append(f.arrow_cast(col(name), lit(dict_type)).alias(name))
+    return selections
 
 
 def _datafusion_context() -> SessionContext:
@@ -138,17 +141,6 @@ def _datafusion_context() -> SessionContext:
 
     profile = DataFusionRuntimeProfile()
     return profile.session_context()
-
-
-def _sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
-    from datafusion_engine.sql_options import sql_options_for_profile
-
-    return sql_options_for_profile(profile)
-
-
-def _expr_table(ctx: SessionContext, sql: str) -> pa.Table:
-    df = ctx.sql_with_options(sql, _sql_options_for_profile(None))
-    return df.to_arrow_table()
 
 
 def _ensure_table(value: TableLike) -> pa.Table:
@@ -168,9 +160,8 @@ def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
     adapter.register_record_batches(temp_name, [list(table.to_batches())])
     try:
-        sql = f"SELECT arrow_typeof(value) AS dtype FROM {temp_name} LIMIT 1"
-        result_table = _expr_table(ctx, sql)
-        value = result_table["dtype"][0].as_py()
+        df = ctx.table(temp_name).select(f.arrow_typeof(col("value")).alias("dtype")).limit(1)
+        value = df.to_arrow_table()["dtype"][0].as_py()
     finally:
         deregister = getattr(ctx, "deregister_table", None)
         if callable(deregister):

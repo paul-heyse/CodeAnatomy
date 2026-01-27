@@ -1,16 +1,11 @@
-"""Execution session model for the compute engine.
-
-DEPRECATION NOTICE: Ibis backend coupling in EngineSession and DataFusionExecutionFacade
-is deprecated. Use DataFusion-native builder functions instead.
-"""
+"""Execution session model for the compute engine."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
-from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
 from datafusion_engine.execution_facade import DataFusionExecutionFacade
@@ -20,7 +15,6 @@ from engine.runtime import EngineRuntime
 if TYPE_CHECKING:
     from arrowdsl.core.runtime_profiles import RuntimeProfile
     from datafusion_engine.runtime import DataFusionRuntimeProfile
-    from sqlglot_tools.bridge import IbisCompilerBackend
 from datafusion_engine.dataset_registry import DatasetCatalog
 from obs.diagnostics import DiagnosticsCollector
 
@@ -31,7 +25,6 @@ class EngineSession:
 
     ctx: ExecutionContext
     engine_runtime: EngineRuntime
-    ibis_backend: BaseBackend
     datasets: DatasetCatalog
     diagnostics: DiagnosticsCollector | None = None
     surface_policy: ExecutionSurfacePolicy = field(default_factory=ExecutionSurfacePolicy)
@@ -63,21 +56,16 @@ class EngineSession:
     def datafusion_facade(self) -> DataFusionExecutionFacade | None:
         """Return a DataFusion execution facade when configured.
 
-        DEPRECATION NOTICE: The ibis_backend parameter passed to DataFusionExecutionFacade
-        is deprecated. Future versions will not require Ibis backend configuration.
-
         Returns
         -------
         DataFusionExecutionFacade | None
-            Facade bound to the DataFusion session when available.
+            Execution facade when available.
         """
         if self.engine_runtime.datafusion_profile is None:
             return None
-        # DEPRECATED: ibis_backend parameter is deprecated, will be removed in future version
         return DataFusionExecutionFacade(
             ctx=self.engine_runtime.datafusion_profile.session_context(),
             runtime_profile=self.engine_runtime.datafusion_profile,
-            ibis_backend=cast("IbisCompilerBackend", self.ibis_backend),  # DEPRECATED
         )
 
 

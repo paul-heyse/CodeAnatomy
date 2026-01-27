@@ -19,6 +19,7 @@ from arrowdsl.core.execution_context import ExecutionContext, execution_context_
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import align_table, encode_table
 from datafusion_engine.extract_registry import normalize_options
+from datafusion_engine.plan import DataFusionPlan
 from datafusion_engine.span_utils import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from extract.helpers import (
     ExtractMaterializeOptions,
@@ -29,7 +30,6 @@ from extract.helpers import (
 from extract.schema_ops import ExtractNormalizeOptions, schema_policy_for_dataset
 from extract.session import ExtractSession, build_extract_session
 from extract.string_utils import normalize_string_items
-from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from arrowdsl.schema.policy import SchemaPolicy
@@ -1239,7 +1239,7 @@ def _build_scip_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
-) -> IbisPlan:
+) -> DataFusionPlan:
     return extract_plan_from_row_batches(
         name,
         row_batches,

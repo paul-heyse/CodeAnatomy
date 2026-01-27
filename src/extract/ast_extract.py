@@ -17,6 +17,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
+from datafusion_engine.plan import DataFusionPlan
 from extract.cache_utils import (
     CacheSetOptions,
     cache_for_extract,
@@ -44,7 +45,6 @@ from extract.helpers import (
 from extract.parallel import parallel_map, resolve_max_workers
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.worklists import iter_worklist_contexts, worklist_queue_name
-from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
@@ -1021,12 +1021,12 @@ def extract_ast_plans(
     options: ASTExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, IbisPlan]:
+) -> dict[str, DataFusionPlan]:
     """Extract AST plans for nested file records.
 
     Returns
     -------
-    dict[str, IbisPlan]
+    dict[str, DataFusionPlan]
         Ibis plan bundle keyed by ``ast_files``.
     """
     normalized_options = normalize_options("ast", options, ASTExtractOptions)
@@ -1176,7 +1176,7 @@ def _build_ast_plan(
     *,
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None,
     plan_context: _AstPlanContext,
-) -> IbisPlan:
+) -> DataFusionPlan:
     plan_options = ExtractPlanOptions(
         normalize=plan_context.normalize,
         evidence_plan=plan_context.evidence_plan,

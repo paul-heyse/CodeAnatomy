@@ -84,7 +84,6 @@ from datafusion_engine.schema_registry import (
     validate_required_engine_functions,
     validate_udf_info_schema_parity,
 )
-from datafusion_engine.sql_safety import execution_policy_for_profile
 from datafusion_engine.table_provider_metadata import table_provider_metadata
 from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.udf_runtime import register_rust_udfs
@@ -115,7 +114,6 @@ from schema_spec.system import (
 from schema_spec.view_specs import ViewSpec
 
 if TYPE_CHECKING:
-
     ExplainRows = TableLike | RecordBatchReaderLike
 else:
     ExplainRows = object
@@ -1493,7 +1491,9 @@ def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) 
     datafusion.SQLOptions
         SQL options that allow statements, with fallback defaults.
     """
-    return execution_policy_for_profile(profile, allow_statements=True).to_sql_options()
+    if profile is None:
+        return _read_only_sql_options().with_allow_statements(allow=True)
+    return profile.sql_options().with_allow_statements(allow=True)
 
 
 def settings_snapshot_for_profile(
@@ -1874,7 +1874,7 @@ def diagnostics_sql_ingest_hook(
 
     def _hook(payload: Mapping[str, object]) -> None:
         recorder_sink = ensure_recorder_sink(sink, session_id="runtime")
-        recorder_sink.record_artifact("ibis_sql_ingest_v1", payload)
+        recorder_sink.record_artifact("datafusion_sql_ingest_v1", payload)
 
     return _hook
 
@@ -3180,10 +3180,10 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             catalog = get_strict_udf_catalog(introspector=introspector)
         else:
             catalog = get_default_udf_catalog(introspector=introspector)
-        self._validate_ibis_udf_specs(catalog, introspector=introspector)
+        self._validate_udf_specs(catalog, introspector=introspector)
         self.udf_catalog_cache[id(ctx)] = catalog
 
-    def _validate_ibis_udf_specs(
+    def _validate_udf_specs(
         self,
         catalog: UdfCatalog,
         *,
@@ -4940,7 +4940,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         datafusion.SQLOptions
             SQL options derived from the profile policy.
         """
-        return execution_policy_for_profile(self).to_sql_options()
+        return self._resolved_sql_policy().to_sql_options()
 
     def sql_options(self) -> SQLOptions:
         """Return SQLOptions derived from the resolved SQL policy.
@@ -4960,7 +4960,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         datafusion.SQLOptions
             SQL options with statement execution enabled.
         """
-        return execution_policy_for_profile(self, allow_statements=True).to_sql_options()
+        options = self._resolved_sql_policy().to_sql_options()
+        return options.with_allow_statements(allow=True)
 
     def _diskcache(self, kind: DiskCacheKind) -> Cache | FanoutCache | None:
         """Return a DiskCache instance for the requested kind.
@@ -5687,23 +5688,17 @@ def read_delta_as_reader(
     pyarrow.RecordBatchReader
         Streaming reader for the Delta table via DataFusion's Delta table provider.
     """
-    from ibis_engine.execution_factory import ibis_backend_from_profile
-    from ibis_engine.io_bridge import ibis_table_to_reader
-    from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
+    from storage.deltalake.delta import open_delta_table
 
-    runtime_profile = DataFusionRuntimeProfile()
-    backend = ibis_backend_from_profile(runtime_profile)
-    table = read_delta_ibis(
-        backend,
+    _ = delta_scan
+    table = open_delta_table(
         path,
-        options=IbisDeltaReadOptions(
-            table_name=None,
-            storage_options=dict(storage_options or {}),
-            log_storage_options=dict(log_storage_options or {}),
-            delta_scan=delta_scan,
-        ),
+        storage_options=dict(storage_options or {}),
+        log_storage_options=dict(log_storage_options or {}),
     )
-    return ibis_table_to_reader(table)
+    dataset = table.to_pyarrow_dataset()
+    scanner = dataset.scanner()
+    return scanner.to_reader()
 
 
 def dataset_spec_from_context(name: str) -> DatasetSpec:

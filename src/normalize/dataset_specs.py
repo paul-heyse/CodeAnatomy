@@ -8,7 +8,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from ibis_engine.query_compiler import IbisQuerySpec
+from datafusion_engine.query_spec import QuerySpec
 from normalize.dataset_builders import build_dataset_spec, build_input_schema
 from normalize.dataset_rows import DATASET_ROWS, DatasetRow
 from schema_spec.specs import TableSchemaSpec
@@ -173,13 +173,13 @@ def dataset_contract_schema(name: str) -> SchemaLike:
     return dataset_contract(name).to_contract().schema
 
 
-def dataset_query(name: str) -> IbisQuerySpec:
-    """Return the IbisQuerySpec for a dataset.
+def dataset_query(name: str) -> QuerySpec:
+    """Return the QuerySpec for a dataset.
 
     Returns
     -------
-    IbisQuerySpec
-        Ibis query specification for the dataset.
+    QuerySpec
+        DataFusion query specification for the dataset.
     """
     return dataset_spec(name).query()
 

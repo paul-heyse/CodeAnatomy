@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ibis_engine.hashing import HashExprSpec
-from ibis_engine.hashing import hash_expr_spec_factory as hash_spec_factory
+from datafusion_engine.hashing import HashExprSpec
+from datafusion_engine.hashing import hash_expr_spec_factory as hash_spec_factory
 
 TYPE_EXPR_ID_SPEC = hash_spec_factory(
     prefix="cst_type_expr",

@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from arrowdsl.core.interop import TableLike
     from datafusion_engine.nested_tables import ViewReference
     from engine.plan_policy import WriterStrategy
-    from ibis_engine.sources import DatasetSource
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
     from storage.ipc import IpcWriteConfig
 
@@ -196,42 +195,42 @@ class ScipIdentityOverrides:
 class CstBuildInputs:
     """CST inputs required for CPG node/property building."""
 
-    cst_refs: TableLike | DatasetSource | ViewReference
-    cst_imports_norm: TableLike | DatasetSource | ViewReference
-    cst_callsites: TableLike | DatasetSource | ViewReference
-    cst_defs_norm: TableLike | DatasetSource | ViewReference
+    cst_refs: TableLike | ViewReference
+    cst_imports_norm: TableLike | ViewReference
+    cst_callsites: TableLike | ViewReference
+    cst_defs_norm: TableLike | ViewReference
 
 
 @dataclass(frozen=True)
 class ScipBuildInputs:
     """SCIP inputs required for CPG node/property building."""
 
-    scip_symbol_information: TableLike | DatasetSource | ViewReference
-    scip_occurrences_norm: TableLike | DatasetSource | ViewReference
-    scip_symbol_relationships: TableLike | DatasetSource | ViewReference
-    scip_external_symbol_information: TableLike | DatasetSource | ViewReference
+    scip_symbol_information: TableLike | ViewReference
+    scip_occurrences_norm: TableLike | ViewReference
+    scip_symbol_relationships: TableLike | ViewReference
+    scip_external_symbol_information: TableLike | ViewReference
 
 
 @dataclass(frozen=True)
 class SymtableBuildInputs:
     """Symtable inputs required for CPG node/property building."""
 
-    symtable_scopes: TableLike | DatasetSource | ViewReference
-    symtable_symbols: TableLike | DatasetSource | ViewReference
-    symtable_scope_edges: TableLike | DatasetSource | ViewReference
-    symtable_bindings: TableLike | DatasetSource | ViewReference
-    symtable_def_sites: TableLike | DatasetSource | ViewReference
-    symtable_use_sites: TableLike | DatasetSource | ViewReference
-    symtable_type_params: TableLike | DatasetSource | ViewReference
-    symtable_type_param_edges: TableLike | DatasetSource | ViewReference
+    symtable_scopes: TableLike | ViewReference
+    symtable_symbols: TableLike | ViewReference
+    symtable_scope_edges: TableLike | ViewReference
+    symtable_bindings: TableLike | ViewReference
+    symtable_def_sites: TableLike | ViewReference
+    symtable_use_sites: TableLike | ViewReference
+    symtable_type_params: TableLike | ViewReference
+    symtable_type_param_edges: TableLike | ViewReference
 
 
 @dataclass(frozen=True)
 class CpgBaseInputs:
     """Shared inputs for CPG nodes and properties."""
 
-    repo_files: TableLike | DatasetSource | ViewReference
-    dim_qualified_names: TableLike | DatasetSource | ViewReference
+    repo_files: TableLike | ViewReference
+    dim_qualified_names: TableLike | ViewReference
     cst_build_inputs: CstBuildInputs
     scip_build_inputs: ScipBuildInputs
     symtable_build_inputs: SymtableBuildInputs
@@ -241,36 +240,36 @@ class CpgBaseInputs:
 class TreeSitterInputs:
     """Tree-sitter tables used in CPG build steps."""
 
-    ts_nodes: TableLike | DatasetSource | ViewReference
-    ts_errors: TableLike | DatasetSource | ViewReference
-    ts_missing: TableLike | DatasetSource | ViewReference
+    ts_nodes: TableLike | ViewReference
+    ts_errors: TableLike | ViewReference
+    ts_missing: TableLike | ViewReference
 
 
 @dataclass(frozen=True)
 class TypeInputs:
     """Type tables used in CPG build steps."""
 
-    type_exprs_norm: TableLike | DatasetSource | ViewReference
-    types_norm: TableLike | DatasetSource | ViewReference
+    type_exprs_norm: TableLike | ViewReference
+    types_norm: TableLike | ViewReference
 
 
 @dataclass(frozen=True)
 class DiagnosticsInputs:
     """Diagnostics tables used in CPG build steps."""
 
-    diagnostics_norm: TableLike | DatasetSource | ViewReference
+    diagnostics_norm: TableLike | ViewReference
 
 
 @dataclass(frozen=True)
 class CpgExtraInputs:
     """Optional inputs for CPG nodes/props/edges."""
 
-    ts_nodes: TableLike | DatasetSource | ViewReference
-    ts_errors: TableLike | DatasetSource | ViewReference
-    ts_missing: TableLike | DatasetSource | ViewReference
-    type_exprs_norm: TableLike | DatasetSource | ViewReference
-    types_norm: TableLike | DatasetSource | ViewReference
-    diagnostics_norm: TableLike | DatasetSource | ViewReference
+    ts_nodes: TableLike | ViewReference
+    ts_errors: TableLike | ViewReference
+    ts_missing: TableLike | ViewReference
+    type_exprs_norm: TableLike | ViewReference
+    types_norm: TableLike | ViewReference
+    diagnostics_norm: TableLike | ViewReference
 
 
 @dataclass(frozen=True)

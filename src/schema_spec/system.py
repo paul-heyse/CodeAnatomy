@@ -42,9 +42,9 @@ from arrowdsl.schema.schema import (
 )
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from datafusion_engine.finalize import Contract, FinalizeContext
+from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import extract_nested_dataset_names
-from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.specs import (
     ArrowFieldSpec,
@@ -62,8 +62,8 @@ from storage.deltalake import delta_table_schema
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
+    from datafusion_engine.expr_spec import ExprSpec
     from schema_spec.view_specs import ViewSpec
-    from sqlglot_tools.expr_spec import SqlExprSpec
 
 
 def validate_arrow_table(
@@ -411,7 +411,7 @@ class DatasetSpec:
     table_spec: TableSchemaSpec
     dataset_kind: DatasetKind = "primary"
     contract_spec: ContractSpec | None = None
-    query_spec: IbisQuerySpec | None = None
+    query_spec: QuerySpec | None = None
     view_specs: tuple[ViewSpec, ...] = ()
     datafusion_scan: DataFusionScanOptions | None = None
     delta_scan: DeltaScanOptions | None = None
@@ -419,8 +419,8 @@ class DatasetSpec:
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_constraints: tuple[str, ...] = ()
     derived_fields: tuple[DerivedFieldSpec, ...] = ()
-    predicate: SqlExprSpec | None = None
-    pushdown_predicate: SqlExprSpec | None = None
+    predicate: ExprSpec | None = None
+    pushdown_predicate: ExprSpec | None = None
     evolution_spec: SchemaEvolutionSpec = field(default_factory=SchemaEvolutionSpec)
     metadata_spec: SchemaMetadataSpec = field(default_factory=SchemaMetadataSpec)
     validation: ArrowValidationOptions | None = None
@@ -467,20 +467,20 @@ class DatasetSpec:
             return Ordering.implicit()
         return Ordering.unordered()
 
-    def query(self) -> IbisQuerySpec:
+    def query(self) -> QuerySpec:
         """Return the query spec, deriving it from the table spec if needed.
 
         Returns
         -------
-        IbisQuerySpec
+        QuerySpec
             Query spec for scanning.
         """
         if self.query_spec is not None:
             return self.query_spec
         cols = tuple(field.name for field in self.table_spec.fields)
         derived = {spec.name: spec.expr for spec in self.derived_fields}
-        return IbisQuerySpec(
-            projection=IbisProjectionSpec(base=cols, derived=derived),
+        return QuerySpec(
+            projection=ProjectionSpec(base=cols, derived=derived),
             predicate=self.predicate,
             pushdown_predicate=self.pushdown_predicate,
         )
@@ -726,7 +726,7 @@ class DatasetSpecKwargs(TypedDict, total=False):
 
     dataset_kind: DatasetKind
     contract_spec: ContractSpec | None
-    query_spec: IbisQuerySpec | None
+    query_spec: QuerySpec | None
     view_specs: Sequence[ViewSpec]
     datafusion_scan: DataFusionScanOptions | None
     delta_scan: DeltaScanOptions | None
@@ -734,8 +734,8 @@ class DatasetSpecKwargs(TypedDict, total=False):
     delta_schema_policy: DeltaSchemaPolicy | None
     delta_constraints: Sequence[str]
     derived_fields: Sequence[DerivedFieldSpec]
-    predicate: SqlExprSpec | None
-    pushdown_predicate: SqlExprSpec | None
+    predicate: ExprSpec | None
+    pushdown_predicate: ExprSpec | None
     evolution_spec: SchemaEvolutionSpec | None
     metadata_spec: SchemaMetadataSpec | None
     validation: ArrowValidationOptions | None

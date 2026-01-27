@@ -1,8 +1,4 @@
-"""Engine runtime composition helpers.
-
-DEPRECATED: SQLGlot policy support in EngineRuntime is deprecated. Use
-DataFusion-native planning with SQLOptions for SQL ingress gating.
-"""
+"""Engine runtime composition helpers."""
 
 from __future__ import annotations
 
@@ -10,10 +6,6 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.execution_context import ExecutionContext
-from ibis_engine.config import IbisBackendConfig
-
-# DEPRECATED: SQLGlot policy replaced by DataFusion-native planning
-from sqlglot_tools.optimizer import SqlGlotPolicy, default_sqlglot_policy
 
 if TYPE_CHECKING:
     from arrowdsl.core.runtime_profiles import RuntimeProfile
@@ -24,17 +16,10 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class EngineRuntime:
-    """Unified runtime settings for engine execution surfaces.
-
-    DEPRECATED: sqlglot_policy field is deprecated. Use DataFusion SQLOptions
-    for SQL ingress gating instead. Internal execution should use builder/plan-based
-    approaches only.
-    """
+    """Unified runtime settings for engine execution surfaces."""
 
     runtime_profile: RuntimeProfile
     datafusion_profile: DataFusionRuntimeProfile | None
-    ibis_config: IbisBackendConfig
-    sqlglot_policy: SqlGlotPolicy  # DEPRECATED: Replaced by DataFusion SQLOptions
 
     def with_datafusion_profile(
         self,
@@ -47,11 +32,9 @@ class EngineRuntime:
         EngineRuntime
             Updated engine runtime bundle.
         """
-        ibis_config = replace(self.ibis_config, datafusion_profile=profile)
         return replace(
             self,
             datafusion_profile=profile,
-            ibis_config=ibis_config,
         )
 
 
@@ -63,8 +46,6 @@ def build_engine_runtime(
     diagnostics_policy: DiagnosticsPolicy | None = None,
 ) -> EngineRuntime:
     """Build the unified runtime bundle for engine execution.
-
-    DEPRECATED: SQLGlot policy support is deprecated. Prefer DataFusion-native planning.
 
     Returns
     -------
@@ -82,18 +63,9 @@ def build_engine_runtime(
     if datafusion_profile is not None and diagnostics is not None:
         datafusion_profile = replace(datafusion_profile, diagnostics_sink=diagnostics)
         runtime = runtime.with_datafusion(datafusion_profile)
-    ibis_config = IbisBackendConfig(
-        datafusion_profile=datafusion_profile,
-        fuse_selects=runtime.ibis_fuse_selects,
-        default_limit=runtime.ibis_default_limit,
-        default_dialect=runtime.ibis_default_dialect,
-        interactive=runtime.ibis_interactive,
-    )
     return EngineRuntime(
         runtime_profile=runtime,
         datafusion_profile=datafusion_profile,
-        ibis_config=ibis_config,
-        sqlglot_policy=default_sqlglot_policy(),
     )
 
 

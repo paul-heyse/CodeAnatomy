@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pyarrow as pa
-from ibis.expr.types import Table
+from datafusion import col, functions as f, lit
 
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import TableLike, coerce_table_like
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
-from ibis_engine.sources import SourceToIbisOptions, source_to_ibis
-from incremental.ibis_exec import ibis_expr_to_table
 from incremental.registry_specs import dataset_schema
-from incremental.runtime import IncrementalRuntime
-
-if TYPE_CHECKING:
-    from ibis.backends import BaseBackend
+from datafusion_ext import prefixed_hash64
+from incremental.runtime import IncrementalRuntime, TempTableRegistry
 
 
 def build_exported_defs_index(
@@ -33,102 +29,73 @@ def build_exported_defs_index(
     pa.Table
         Exported definitions table with qname and optional symbol bindings.
     """
-    backend = runtime.ibis_backend()
-    _require_datafusion_backend(backend)
     schema = dataset_schema("dim_exported_defs_v1")
-    plan = source_to_ibis(
-        cst_defs_norm,
-        options=SourceToIbisOptions(backend=backend, name="cst_defs_norm"),
-    )
-    schema_names = cast("Sequence[str]", plan.expr.schema().names)
+    cst_table = coerce_table_like(cst_defs_norm, requested_schema=None)
+    schema_names = cast("Sequence[str]", cst_table.schema.names)
     if "qnames" not in schema_names:
         return _empty_exported_defs(schema)
-    if rel_def_symbol is not None:
-        source_to_ibis(
-            rel_def_symbol,
-            options=SourceToIbisOptions(backend=backend, name="rel_def_symbol_v1"),
+    with TempTableRegistry(runtime) as registry:
+        cst_name = registry.register_table(cst_table, prefix="cst_defs_norm")
+        rel_name = None
+        if rel_def_symbol is not None:
+            rel_table = coerce_table_like(rel_def_symbol, requested_schema=None)
+            rel_name = registry.register_table(rel_table, prefix="rel_def_symbol")
+        result = _build_exported_defs_base(
+            runtime,
+            cst_table_name=cst_name,
+            rel_table_name=rel_name,
+            has_container_def_id="container_def_id" in schema_names,
         )
-    result = _build_exported_defs_base(
-        runtime,
-        backend=backend,
-        has_rel_def_symbol=rel_def_symbol is not None,
-        has_container_def_id="container_def_id" in schema_names,
-    )
     return align_table(result, schema=schema, safe_cast=True)
 
 
 def _build_exported_defs_base(
     runtime: IncrementalRuntime,
     *,
-    backend: BaseBackend,
-    has_rel_def_symbol: bool,
+    cst_table_name: str,
+    rel_table_name: str | None,
     has_container_def_id: bool,
 ) -> pa.Table:
-    sql = _build_exported_defs_sql(
-        has_rel_def_symbol=has_rel_def_symbol,
-        has_container_def_id=has_container_def_id,
+    ctx = runtime.session_context()
+    base_df = ctx.table(cst_table_name)
+    if has_container_def_id:
+        base_df = base_df.filter(col("container_def_id").is_null())
+    symbol_expr = f.arrow_cast(lit(None), lit("Utf8"))
+    symbol_roles_expr = f.arrow_cast(lit(None), lit("Int32"))
+    if rel_table_name is not None:
+        rel_df = ctx.table(rel_table_name).select(
+            col("def_id").alias("rel_def_id"),
+            col("path").alias("rel_path"),
+            col("symbol").alias("rel_symbol"),
+            col("symbol_roles").alias("rel_symbol_roles"),
+        )
+        base_df = base_df.join(
+            rel_df,
+            join_keys=(["def_id", "path"], ["rel_def_id", "rel_path"]),
+            how="left",
+        )
+        symbol_expr = col("rel_symbol")
+        symbol_roles_expr = col("rel_symbol_roles")
+    df = base_df.unnest_columns("qnames", preserve_nulls=False)
+    qname_expr = col("qnames")
+    qname_name = qname_expr["name"]
+    qname_source = qname_expr["source"]
+    df = df.select(
+        col("file_id").alias("file_id"),
+        col("path").alias("path"),
+        col("def_id").alias("def_id"),
+        f.coalesce(col("def_kind_norm"), col("kind")).alias("def_kind_norm"),
+        col("name").alias("name"),
+        prefixed_hash64("qname", qname_name).alias("qname_id"),
+        qname_name.alias("qname"),
+        qname_source.alias("qname_source"),
+        symbol_expr.alias("symbol"),
+        symbol_roles_expr.alias("symbol_roles"),
     )
-    table = ibis_expr_to_table(
-        _sql_expr(backend, sql),
-        runtime=runtime,
-        name="exported_defs_index",
-    )
+    table = df.to_arrow_table()
     if table.num_rows == 0:
         return _empty_exported_defs(dataset_schema("dim_exported_defs_v1"))
     return table
-
-
-def _build_exported_defs_sql(
-    *,
-    has_rel_def_symbol: bool,
-    has_container_def_id: bool,
-) -> str:
-    container_clause = "WHERE base.container_def_id IS NULL" if has_container_def_id else ""
-    join_clause = ""
-    symbol_expr = "CAST(NULL AS STRING) AS symbol"
-    symbol_roles_expr = "CAST(NULL AS INT) AS symbol_roles"
-    if has_rel_def_symbol:
-        join_clause = (
-            "LEFT JOIN rel_def_symbol_v1 rel ON rel.def_id = base.def_id AND rel.path = base.path"
-        )
-        symbol_expr = "rel.symbol AS symbol"
-        symbol_roles_expr = "rel.symbol_roles AS symbol_roles"
-    return f"""
-    WITH base AS (
-      SELECT * FROM cst_defs_norm
-      {container_clause}
-    )
-    SELECT
-      base.file_id AS file_id,
-      base.path AS path,
-      base.def_id AS def_id,
-      COALESCE(base.def_kind_norm, base.kind) AS def_kind_norm,
-      base.name AS name,
-      prefixed_hash64('qname', get_field(qname, 'name')) AS qname_id,
-      get_field(qname, 'name') AS qname,
-      get_field(qname, 'source') AS qname_source,
-      {symbol_expr},
-      {symbol_roles_expr}
-    FROM base
-    CROSS JOIN unnest(base.qnames) AS qname
-    {join_clause}
-    """
-
-
-def _sql_expr(backend: BaseBackend, sql: str) -> Table:
-    sql_method = getattr(backend, "sql", None)
-    if not callable(sql_method):
-        msg = "Ibis backend does not support SQL queries."
-        raise TypeError(msg)
-    return cast("Table", sql_method(sql))
-
-
-def _require_datafusion_backend(backend: BaseBackend) -> None:
-    name = getattr(backend, "name", "")
-    if str(name).lower() == "datafusion":
-        return
-    msg = "Exported definition indexing requires a DataFusion Ibis backend."
-    raise ValueError(msg)
 
 
 def _empty_exported_defs(schema: pa.Schema) -> pa.Table:

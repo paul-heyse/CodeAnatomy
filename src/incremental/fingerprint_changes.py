@@ -9,20 +9,18 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.registry_specs import dataset_schema
-from storage.deltalake import delta_table_version, enable_delta_features
+from storage.deltalake import (
+    DeltaWriteOptions,
+    delta_table_version,
+    enable_delta_features,
+    write_delta_table,
+)
 
 if TYPE_CHECKING:
-    from ibis_engine.execution import IbisExecutionContext
     from incremental.delta_context import DeltaAccessContext
     from incremental.state_store import StateStore
-    from storage.deltalake import StorageOptions
 
 FINGERPRINTS_VERSION = 1
 _FINGERPRINTS_SCHEMA = pa.schema(
@@ -86,9 +84,7 @@ def write_dataset_fingerprints(
     state_store: StateStore,
     fingerprints: Mapping[str, str],
     *,
-    execution: IbisExecutionContext,
-    storage_options: StorageOptions | None = None,
-    log_storage_options: StorageOptions | None = None,
+    context: DeltaAccessContext,
 ) -> None:
     """Persist dataset fingerprints to the state store."""
     state_store.ensure_dirs()
@@ -108,25 +104,21 @@ def write_dataset_fingerprints(
             },
             num_rows=len(names),
         )
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         table,
         str(path),
-        options=IbisDatasetWriteOptions(
-            execution=execution,
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata={"snapshot_kind": "dataset_fingerprints"},
-                storage_options=storage_options,
-                log_storage_options=log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"snapshot_kind": "dataset_fingerprints"},
+            storage_options=context.storage.storage_options,
+            log_storage_options=context.storage.log_storage_options,
         ),
     )
     enable_delta_features(
         result.path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
+        storage_options=context.storage.storage_options,
+        log_storage_options=context.storage.log_storage_options,
     )
 
 

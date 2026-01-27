@@ -72,7 +72,7 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
 def _runtime_or_skip() -> IncrementalRuntime:
     try:
         runtime = IncrementalRuntime.build()
-        _ = runtime.ibis_backend()
+        _ = runtime.session_context()
     except ImportError as exc:
         pytest.skip(str(exc))
     else:

@@ -16,7 +16,6 @@ from incremental.cdf_cursors import CdfCursorStore
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
 from serde_msgspec import to_builtins
-from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
 from storage.deltalake import (
     DeltaWriteOptions,
     StorageOptions,
@@ -39,7 +38,7 @@ def write_incremental_metadata(
     storage_options: StorageOptions | None = None,
     log_storage_options: StorageOptions | None = None,
 ) -> str:
-    """Persist runtime + SQLGlot policy metadata to the state store.
+    """Persist runtime metadata to the state store.
 
     Returns
     -------
@@ -48,13 +47,10 @@ def write_incremental_metadata(
     """
     state_store.ensure_dirs()
     runtime_snapshot = runtime_profile_snapshot(runtime.execution_ctx.runtime)
-    snapshot = sqlglot_policy_snapshot_for(runtime.sqlglot_policy)
     payload = {
         "datafusion_settings_hash": runtime.profile.settings_hash(),
         "runtime_profile_hash": runtime_snapshot.profile_hash,
         "runtime_profile": runtime_snapshot.payload(),
-        "sqlglot_policy_hash": snapshot.policy_hash,
-        "sqlglot_policy": snapshot.payload(),
     }
     table = pa.Table.from_pylist([payload])
     path = state_store.incremental_metadata_path()

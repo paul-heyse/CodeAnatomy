@@ -20,7 +20,7 @@ from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, T
 
 if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
-    from ibis_engine.execution import IbisExecutionContext
+    from engine.session import EngineSession
 
 
 @dataclass(frozen=True)
@@ -97,7 +97,7 @@ def _record_output(
 
 @tag(layer="execution", artifact="runtime_artifacts", kind="context")
 def runtime_artifacts(
-    ibis_execution: IbisExecutionContext,
+    engine_session: EngineSession,
     relspec_param_values: JsonDict,
 ) -> RuntimeArtifacts:
     """Return the runtime artifacts container for task execution.
@@ -108,7 +108,7 @@ def runtime_artifacts(
         Runtime artifacts container.
     """
     return RuntimeArtifacts(
-        execution=ibis_execution,
+        execution=engine_session.ctx,
         rulepack_param_values=relspec_param_values,
     )
 
@@ -144,7 +144,7 @@ def _execute_view(
     if exec_ctx is None:
         msg = "RuntimeArtifacts.execution must be configured for view execution."
         raise ValueError(msg)
-    profile = exec_ctx.ctx.runtime.datafusion
+    profile = exec_ctx.runtime.datafusion
     if profile is None:
         msg = "DataFusion runtime profile is required for view execution."
         raise ValueError(msg)

@@ -12,7 +12,7 @@ from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import merge_metadata_specs, ordering_metadata_spec
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from arrowdsl.schema.semantic_types import SPAN_STORAGE
-from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
+from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
 from normalize.dataset_bundles import bundle
 from normalize.dataset_rows import ContractRow, DatasetRow
 from normalize.dataset_templates import template
@@ -221,19 +221,19 @@ def normalize_metadata_spec(
     return SchemaMetadataSpec(schema_metadata=meta)
 
 
-def build_query_spec(row: DatasetRow) -> IbisQuerySpec:
-    """Build the IbisQuerySpec for a dataset row.
+def build_query_spec(row: DatasetRow) -> QuerySpec:
+    """Build the QuerySpec for a dataset row.
 
     Returns
     -------
-    IbisQuerySpec
-        Ibis query specification for the dataset.
+    QuerySpec
+        DataFusion query specification for the dataset.
     """
     base_cols = _base_field_keys(row)
     derived_map = {spec.name: spec.expr for spec in row.derived}
     if not derived_map:
-        return IbisQuerySpec.simple(*base_cols)
-    return IbisQuerySpec(projection=IbisProjectionSpec(base=tuple(base_cols), derived=derived_map))
+        return QuerySpec.simple(*base_cols)
+    return QuerySpec(projection=ProjectionSpec(base=tuple(base_cols), derived=derived_map))
 
 
 def build_input_schema(row: DatasetRow) -> SchemaLike:

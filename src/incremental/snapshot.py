@@ -10,18 +10,15 @@ import pyarrow as pa
 from arrowdsl.schema.abi import schema_fingerprint
 from arrowdsl.schema.build import column_or_null, table_from_arrays
 from datafusion_engine.runtime import dataset_schema_from_context
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
 from incremental.delta_context import DeltaAccessContext, read_delta_table_via_facade
 from storage.deltalake import (
+    DeltaWriteOptions,
     DeltaWriteResult,
     build_commit_properties,
     delta_table_version,
     enable_delta_features,
     open_delta_table,
+    write_delta_table,
 )
 
 if TYPE_CHECKING:
@@ -112,19 +109,15 @@ def write_repo_snapshot(
         log_storage_options=storage.log_storage_options,
     )
     if existing_version is None:
-        result = write_ibis_dataset_delta(
+        result = write_delta_table(
             snapshot,
             str(target),
-            options=IbisDatasetWriteOptions(
-                execution=context.runtime.ibis_execution(),
-                writer_strategy="datafusion",
-                delta_options=IbisDeltaWriteOptions(
-                    mode="overwrite",
-                    schema_mode="overwrite",
-                    commit_metadata=metadata,
-                    storage_options=storage.storage_options,
-                    log_storage_options=storage.log_storage_options,
-                ),
+            options=DeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata=metadata,
+                storage_options=storage.storage_options,
+                log_storage_options=storage.log_storage_options,
             ),
         )
         enable_delta_features(

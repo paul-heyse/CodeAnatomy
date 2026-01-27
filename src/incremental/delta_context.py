@@ -6,14 +6,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pyarrow as pa
+from datafusion.dataframe import DataFrame
 
 from datafusion_engine.dataset_registry import (
     DatasetLocation,
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
-from ibis_engine.sources import IbisDeltaReadOptions, read_delta_ibis
-from incremental.ibis_exec import ibis_expr_to_table
+from datafusion_engine.registry_bridge import register_dataset_df
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from storage.deltalake import StorageOptions
 
@@ -62,6 +62,33 @@ def read_delta_table_via_facade(
     pyarrow.Table
         Materialized table from the Delta provider.
     """
+    with TempTableRegistry(context.runtime) as registry:
+        df = register_delta_df(
+            context,
+            path=path,
+            name=name,
+            version=version,
+            timestamp=timestamp,
+        )
+        registry.track(name)
+        return df.to_arrow_table()
+
+
+def register_delta_df(
+    context: DeltaAccessContext,
+    *,
+    path: str | Path,
+    name: str,
+    version: int | None = None,
+    timestamp: str | None = None,
+) -> DataFrame:
+    """Register a Delta table in DataFusion and return a DataFrame.
+
+    Returns
+    -------
+    DataFrame
+        DataFusion DataFrame for the registered Delta table.
+    """
     profile_location = context.runtime.profile.dataset_location(name)
     resolved_storage = context.storage.storage_options or {}
     resolved_log_storage = context.storage.log_storage_options or {}
@@ -88,25 +115,18 @@ def read_delta_table_via_facade(
         delta_timestamp=resolved_timestamp,
         delta_scan=resolved_scan,
     )
-    with TempTableRegistry(context.runtime) as registry:
-        expr = read_delta_ibis(
-            context.runtime.ibis_backend(),
-            str(path),
-            options=IbisDeltaReadOptions(
-                table_name=name,
-                storage_options=location.storage_options,
-                log_storage_options=location.delta_log_storage_options,
-                delta_scan=location.delta_scan,
-                version=location.delta_version,
-                timestamp=location.delta_timestamp,
-            ),
-        )
-        registry.track(name)
-        return ibis_expr_to_table(expr, runtime=context.runtime, name=name)
+    df = register_dataset_df(
+        context.runtime.session_context(),
+        name=name,
+        location=location,
+        runtime_profile=context.runtime.profile,
+    )
+    return df
 
 
 __all__ = [
     "DeltaAccessContext",
     "DeltaStorageOptions",
     "read_delta_table_via_facade",
+    "register_delta_df",
 ]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ibis_engine.param_tables import ParamTablePolicy
+from datafusion_engine.param_tables import ParamTablePolicy
 
 
 @dataclass(frozen=True)

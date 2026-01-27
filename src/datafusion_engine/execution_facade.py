@@ -549,6 +549,7 @@ class DataFusionExecutionFacade:
             compute_substrait=compute_substrait,
         )
 
+
 __all__ = [
     "DataFrameBuilder",
     "DataFusionExecutionFacade",

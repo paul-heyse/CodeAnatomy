@@ -21,7 +21,6 @@ from datafusion_engine.io_adapter import DataFusionIOAdapter
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
-    from ibis.expr.types import Value
 
 
 @dataclass(frozen=True)
@@ -96,7 +95,7 @@ def validate_param_name(name: str) -> None:
 
 
 def resolve_param_bindings(
-    values: Mapping[str, Any] | Mapping[Value, Any] | None,
+    values: Mapping[str, Any] | Mapping[object, Any] | None,
     *,
     validate_names: bool = True,
     allowlist: Sequence[str] | None = None,
@@ -104,13 +103,12 @@ def resolve_param_bindings(
     """Resolve parameter bindings into scalar vs table-like lanes.
 
     This function separates scalar parameters (for SQL substitution) from
-    table-like parameters (for context registration). It supports both
-    string keys and Ibis scalar parameter expressions.
+    table-like parameters (for context registration).
 
     Parameters
     ----------
     values
-        Mapping of parameter names/expressions to values.
+        Mapping of parameter names to values.
         - Scalar values (int, str, float, etc.) → param_values
         - Table-like values (DataFrame, Table) → named_tables
     validate_names
@@ -135,7 +133,6 @@ def resolve_param_bindings(
     named_tables: dict[str, Any] = {}
 
     for key, value in values.items():
-        # Extract name from Ibis scalar param or use string key
         name = str(key)
         get_name = getattr(key, "get_name", None)
         if callable(get_name):

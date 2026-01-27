@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol
 
-from ibis.expr.types import Value
+from datafusion.expr import Expr
 
 from cpg.kind_catalog import EntityKind
 from cpg.prop_transforms import (
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 type PropValueType = Literal["string", "int", "float", "bool", "json"]
 type PropTransformFn = Callable[[object | None], object | None]
-type PropTransformExprFn = Callable[[Value], Value]
+type PropTransformExprFn = Callable[[Expr], Expr]
 type PropIncludeFn = Callable[[PropOptions], bool]
 
 TRANSFORM_EXPR_CONTEXT = "expr_context"

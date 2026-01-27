@@ -9,21 +9,18 @@ from typing import TYPE_CHECKING
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from datafusion_engine.extract_bundles import dataset_name_for_output
-from ibis_engine.io_bridge import (
-    IbisDatasetWriteOptions,
-    IbisDeltaWriteOptions,
-    write_ibis_dataset_delta,
-)
 from incremental.delta_context import DeltaAccessContext
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
 from normalize.registry_runtime import dataset_name_from_alias
 from storage.deltalake import (
+    DeltaWriteOptions,
     build_commit_properties,
     coerce_delta_table,
     enable_delta_features,
     open_delta_table,
+    write_delta_table,
 )
 
 if TYPE_CHECKING:
@@ -85,19 +82,15 @@ def upsert_partitioned_dataset(
         encoding_policy=encoding_policy_from_schema(schema),
     )
     _delete_delta_partitions(base_dir, delete_partitions=delete_partitions, context=context)
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         data,
         base_dir,
-        options=IbisDatasetWriteOptions(
-            execution=context.runtime.ibis_execution(),
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="append",
-                schema_mode="merge",
-                partition_by=(spec.partition_column,),
-                storage_options=context.storage.storage_options,
-                log_storage_options=context.storage.log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="append",
+            schema_mode="merge",
+            partition_by=(spec.partition_column,),
+            storage_options=context.storage.storage_options,
+            log_storage_options=context.storage.log_storage_options,
         ),
     )
     return result.path
@@ -124,19 +117,15 @@ def write_overwrite_dataset(
         encoding_policy=encoding_policy_from_schema(spec.schema),
     )
     target = str(state_store.dataset_dir(spec.name))
-    result = write_ibis_dataset_delta(
+    result = write_delta_table(
         data,
         target,
-        options=IbisDatasetWriteOptions(
-            execution=context.runtime.ibis_execution(),
-            writer_strategy="datafusion",
-            delta_options=IbisDeltaWriteOptions(
-                mode="overwrite",
-                schema_mode="overwrite",
-                commit_metadata=dict(metadata) if metadata else None,
-                storage_options=context.storage.storage_options,
-                log_storage_options=context.storage.log_storage_options,
-            ),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata=dict(metadata) if metadata else None,
+            storage_options=context.storage.storage_options,
+            log_storage_options=context.storage.log_storage_options,
         ),
     )
     enable_delta_features(

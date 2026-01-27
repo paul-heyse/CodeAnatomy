@@ -250,9 +250,6 @@ def _engine_versions() -> dict[str, str]:
     pyarrow_version = _resolve_version(["pyarrow"])
     if pyarrow_version is not None:
         versions["pyarrow"] = pyarrow_version
-    ibis_version = _resolve_version(["ibis-framework", "ibis"])
-    if ibis_version is not None:
-        versions["ibis"] = ibis_version
     datafusion_version = _resolve_version(["datafusion", "datafusion-python"])
     if datafusion_version is not None:
         versions["datafusion"] = datafusion_version

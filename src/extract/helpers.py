@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-import ibis
 import msgspec
 import pyarrow as pa
+from datafusion import col, lit
+from datafusion import functions as f
+from datafusion.dataframe import DataFrame
 
 from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
@@ -22,7 +24,8 @@ from arrowdsl.schema.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
 from arrowdsl.schema.policy import SchemaPolicy
-from datafusion_engine.execution_facade import ExecutionResult
+from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.extract_extractors import (
     ExtractorSpec,
     extractor_specs,
@@ -31,6 +34,8 @@ from datafusion_engine.extract_extractors import (
 )
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
 from datafusion_engine.finalize import FinalizeContext, FinalizeOptions, normalize_only
+from datafusion_engine.plan import DataFusionPlan
+from datafusion_engine.query_spec import apply_query_spec
 from datafusion_engine.schema_contracts import SchemaContract
 from datafusion_engine.view_graph_registry import _validate_schema_contract
 from engine.materialize_pipeline import write_extract_outputs
@@ -43,17 +48,9 @@ from extract.schema_ops import (
 )
 from extract.session import ExtractSession, build_extract_session
 from extract.spec_helpers import ExtractExecutionOptions, plan_requires_row, rule_execution_options
-from ibis_engine.dataset_reads import ReadDatasetParams, read_dataset
-from ibis_engine.execution import execute_ibis_plan
-from ibis_engine.execution_factory import datafusion_facade_from_ctx, ibis_execution_from_ctx
-from ibis_engine.plan import IbisPlan
-from ibis_engine.query_compiler import apply_query_spec
-from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
-    from ibis.expr.types import Table as IbisTable
-
     from datafusion_engine.dataset_registry import DatasetLocation
 
 
@@ -315,8 +312,8 @@ def iter_contexts(
     yield from file_contexts
 
 
-def _empty_plan_from_table(table: IbisTable) -> IbisPlan:
-    return IbisPlan(expr=table.limit(0), ordering=Ordering.unordered())
+def _empty_plan_from_table(table: DataFrame) -> DataFusionPlan:
+    return DataFusionPlan(df=table.limit(0), ordering=Ordering.unordered())
 
 
 def record_batch_reader_from_row_batches(
@@ -349,31 +346,21 @@ def record_batch_reader_from_rows(
     return schema_record_batch_reader_from_rows(schema, rows)
 
 
-def ibis_plan_from_reader(
+def datafusion_plan_from_reader(
     name: str,
     reader: RecordBatchReaderLike,
     *,
     session: ExtractSession,
-) -> IbisPlan:
-    """Return an Ibis plan for a RecordBatchReader.
+) -> DataFusionPlan:
+    """Return a DataFusion plan for a RecordBatchReader.
 
     Returns
     -------
-    IbisPlan
-        Ibis plan backed by the registered reader.
-
-    Raises
-    ------
-    TypeError
-        Raised when the DataFusion SessionContext lacks ``from_arrow`` support.
+    DataFusionPlan
+        DataFusion plan backed by the registered reader.
     """
-    from_arrow = getattr(session.df_ctx, "from_arrow", None)
-    if not callable(from_arrow):
-        msg = "DataFusion SessionContext missing from_arrow."
-        raise TypeError(msg)
-    from_arrow(reader, name=name)
-    table = session.ibis_backend.table(name)
-    return IbisPlan(expr=table, ordering=Ordering.unordered())
+    df = datafusion_from_arrow(session.df_ctx, name=name, value=reader)
+    return DataFusionPlan(df=df, ordering=Ordering.unordered())
 
 
 @dataclass(frozen=True)
@@ -405,19 +392,19 @@ def extract_plan_from_reader(
     *,
     session: ExtractSession,
     options: ExtractPlanOptions | None = None,
-) -> IbisPlan:
+) -> DataFusionPlan:
     """Return an extract plan for a RecordBatchReader.
 
     Returns
     -------
-    IbisPlan
+    DataFusionPlan
         Extract plan with registry query and evidence projection applied.
     """
     resolved = options or ExtractPlanOptions()
-    raw_plan = ibis_plan_from_reader(name, reader, session=session)
+    raw_plan = datafusion_plan_from_reader(name, reader, session=session)
     return apply_query_and_project(
         name,
-        raw_plan.expr,
+        raw_plan.df,
         normalize=resolved.normalize,
         evidence_plan=resolved.evidence_plan,
         repo_id=resolved.resolved_repo_id(),
@@ -429,16 +416,16 @@ def raw_plan_from_rows(
     rows: Iterable[Mapping[str, object]],
     *,
     session: ExtractSession,
-) -> IbisPlan:
-    """Return a raw Ibis plan for a row iterator.
+) -> DataFusionPlan:
+    """Return a raw plan for a row iterator.
 
     Returns
     -------
-    IbisPlan
+    DataFusionPlan
         Extract plan without registry query or evidence projection applied.
     """
     reader = record_batch_reader_from_rows(name, rows)
-    return ibis_plan_from_reader(name, reader, session=session)
+    return datafusion_plan_from_reader(name, reader, session=session)
 
 
 def extract_plan_from_rows(
@@ -447,12 +434,12 @@ def extract_plan_from_rows(
     *,
     session: ExtractSession,
     options: ExtractPlanOptions | None = None,
-) -> IbisPlan:
+) -> DataFusionPlan:
     """Return an extract plan for a row iterator.
 
     Returns
     -------
-    IbisPlan
+    DataFusionPlan
         Extract plan with registry query and evidence projection applied.
     """
     reader = record_batch_reader_from_rows(name, rows)
@@ -470,12 +457,12 @@ def extract_plan_from_row_batches(
     *,
     session: ExtractSession,
     options: ExtractPlanOptions | None = None,
-) -> IbisPlan:
+) -> DataFusionPlan:
     """Return an extract plan for row batches.
 
     Returns
     -------
-    IbisPlan
+    DataFusionPlan
         Extract plan with registry query and evidence projection applied.
     """
     reader = record_batch_reader_from_row_batches(name, row_batches)
@@ -489,18 +476,18 @@ def extract_plan_from_row_batches(
 
 def apply_query_and_project(
     name: str,
-    table: IbisTable,
+    table: DataFrame,
     *,
     normalize: ExtractNormalizeOptions | None = None,
     evidence_plan: EvidencePlan | None = None,
     repo_id: str | None = None,
-) -> IbisPlan:
-    """Apply registry query and evidence projection to an Ibis table.
+) -> DataFusionPlan:
+    """Apply registry query and evidence projection to a DataFusion table.
 
     Returns
     -------
-    IbisPlan
-        Ibis plan with query and evidence projection applied.
+    DataFusionPlan
+        Plan with query and evidence projection applied.
     """
     row = extract_metadata(name)
     if evidence_plan is not None and not plan_requires_row(evidence_plan, row):
@@ -524,8 +511,8 @@ def apply_query_and_project(
         repo_id=repo_id,
         projection=projection if projection else None,
     )
-    expr = apply_query_spec(table, spec=spec)
-    return IbisPlan(expr=expr, ordering=Ordering.unordered())
+    df = apply_query_spec(table, spec=spec)
+    return DataFusionPlan(df=df, ordering=Ordering.unordered())
 
 
 @dataclass(frozen=True)
@@ -646,12 +633,12 @@ def _streaming_supported_for_extract(
 
 def materialize_extract_plan(
     name: str,
-    plan: IbisPlan,
+    plan: DataFusionPlan,
     *,
     ctx: ExecutionContext,
     options: ExtractMaterializeOptions | None = None,
 ) -> TableLike | pa.RecordBatchReader:
-    """Materialize an extract Ibis plan and normalize at the Arrow boundary.
+    """Materialize an extract plan and normalize at the Arrow boundary.
 
     Returns
     -------
@@ -674,11 +661,11 @@ def materialize_extract_plan(
         finalize_ctx=finalize_ctx,
         apply_post_kernels=resolved.apply_post_kernels,
     )
-    execution = ibis_execution_from_ctx(ctx)
     wrote_streaming = False
     if streaming_supported:
-        reader_result = execute_ibis_plan(plan, execution=execution, streaming=True)
-        reader_for_write = _normalize_reader(normalization_ctx, reader_result.require_reader())
+        reader = plan.to_reader()
+        reader_result = ExecutionResult.from_reader(reader)
+        reader_for_write = _normalize_reader(normalization_ctx, reader)
         write_extract_outputs(name, reader_for_write, ctx=ctx)
         _register_extract_view(name, ctx=ctx)
         _record_extract_view_artifact(
@@ -694,15 +681,17 @@ def materialize_extract_plan(
         )
         wrote_streaming = True
         if resolved.prefer_reader:
-            reader_result = execute_ibis_plan(plan, execution=execution, streaming=True)
+            reader = plan.to_reader()
+            reader_result = ExecutionResult.from_reader(reader)
             normalized_reader = _normalize_reader(
                 normalization_ctx,
-                reader_result.require_reader(),
+                reader,
             )
             _record_extract_execution(name, reader_result, ctx=ctx)
             return normalized_reader
-    table_result = execute_ibis_plan(plan, execution=execution, streaming=False)
-    normalized = _normalize_table(normalization_ctx, table_result.require_table())
+    table = plan.to_table()
+    table_result = ExecutionResult.from_table(table)
+    normalized = _normalize_table(normalization_ctx, table)
     if not wrote_streaming:
         write_extract_outputs(name, normalized, ctx=ctx)
         _register_extract_view(name, ctx=ctx)
@@ -796,7 +785,7 @@ def _record_extract_execution(
 
 def _record_extract_compile(
     name: str,
-    plan: IbisPlan,
+    plan: DataFusionPlan,
     *,
     ctx: ExecutionContext,
 ) -> None:
@@ -807,21 +796,23 @@ def _record_extract_compile(
     ValueError
         Raised when the DataFusion runtime profile is unavailable.
     """
-    facade = datafusion_facade_from_ctx(ctx)
-    try:
-        compiled = facade.compile(plan.expr)
-    except (RuntimeError, TypeError, ValueError):
-        return
     profile = ctx.runtime.datafusion
     if profile is None:
         msg = "DataFusion runtime profile is required for extract diagnostics."
         raise ValueError(msg)
+    facade = DataFusionExecutionFacade(
+        ctx=profile.session_context(),
+        runtime_profile=profile,
+    )
+    try:
+        bundle = facade.build_plan_bundle(plan.df)
+    except (RuntimeError, TypeError, ValueError):
+        return
     from datafusion_engine.diagnostics import record_artifact
 
     payload = {
         "dataset": name,
-        "plan_fingerprint": compiled.compiled.fingerprint,
-        "ast_type": compiled.compiled.sqlglot_ast.__class__.__name__,
+        "plan_fingerprint": bundle.plan_fingerprint,
     }
     record_artifact(profile, "extract_plan_compile_v1", payload)
 
@@ -839,35 +830,16 @@ def _register_extract_view(name: str, *, ctx: ExecutionContext) -> None:
         msg = "DataFusion runtime profile is required for extract view registration."
         raise ValueError(msg)
     location = extract_dataset_location_or_raise(name, ctx=ctx)
-    ibis_backend = ibis.datafusion.connect(runtime_profile.session_context())
-    params = ReadDatasetParams(
-        path=location.path,
-        dataset_format=location.format,
-        read_options=location.read_options or None,
-        storage_options=location.storage_options or None,
-        delta_log_storage_options=location.delta_log_storage_options or None,
-        filesystem=location.filesystem,
-        partitioning=location.partitioning,
-        table_name=None,
-        dataset_spec=location.dataset_spec,
-        datafusion_scan=location.datafusion_scan,
-        datafusion_provider=location.datafusion_provider,
+    facade = DataFusionExecutionFacade(
+        ctx=runtime_profile.session_context(),
+        runtime_profile=runtime_profile,
     )
-    expr = read_dataset(ibis_backend, params=params)
-    register_ibis_view(
-        expr,
-        options=SourceToIbisOptions(
-            backend=ibis_backend,
-            name=name,
-            overwrite=True,
-            runtime_profile=runtime_profile,
-        ),
-    )
+    facade.register_dataset(name=name, location=location)
 
 
 def _record_extract_view_artifact(
     name: str,
-    plan: IbisPlan,
+    plan: DataFusionPlan,
     *,
     schema: pa.Schema,
     ctx: ExecutionContext,
@@ -883,24 +855,25 @@ def _record_extract_view_artifact(
     if profile is None:
         msg = "DataFusion runtime profile is required for extract diagnostics."
         raise ValueError(msg)
-    facade = datafusion_facade_from_ctx(ctx)
+    facade = DataFusionExecutionFacade(
+        ctx=profile.session_context(),
+        runtime_profile=profile,
+    )
     try:
-        result = facade.execute_expr(plan.expr)
+        plan_bundle = facade.build_plan_bundle(plan.df)
     except (RuntimeError, TypeError, ValueError):
-        return
-    if result.plan_bundle is None:
         return
     from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
     from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
     from datafusion_engine.runtime import record_view_definition
     from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
 
-    required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(result.plan_bundle)))
+    required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(plan_bundle)))
     referenced_tables = tuple(
-        sorted(referenced_tables_from_plan(result.plan_bundle.optimized_logical_plan))
+        sorted(referenced_tables_from_plan(plan_bundle.optimized_logical_plan))
     )
     artifact = build_view_artifact_from_bundle(
-        result.plan_bundle,
+        plan_bundle,
         name=name,
         schema=schema,
         required_udfs=required_udfs,
@@ -1071,22 +1044,21 @@ def template_outputs(plan: EvidencePlan | None, template: str) -> tuple[str, ...
     return outputs_for_template(template)
 
 
-def ast_def_nodes_plan(plan: IbisPlan) -> IbisPlan:
-    """Return an Ibis plan filtered to AST definition nodes.
+def ast_def_nodes_plan(plan: DataFusionPlan) -> DataFusionPlan:
+    """Return a plan filtered to AST definition nodes.
 
     Returns
     -------
-    IbisPlan
-        Ibis plan filtered to function/class definitions.
+    DataFusionPlan
+        Plan filtered to function/class definitions.
     """
-    expr = plan.expr
     values = [
-        ibis.literal("FunctionDef"),
-        ibis.literal("AsyncFunctionDef"),
-        ibis.literal("ClassDef"),
+        "FunctionDef",
+        "AsyncFunctionDef",
+        "ClassDef",
     ]
-    filtered = expr.filter(expr["kind"].isin(values))
-    return IbisPlan(expr=filtered, ordering=plan.ordering)
+    filtered = plan.df.filter(f.in_list(col("kind"), [lit(value) for value in values]))
+    return DataFusionPlan(df=filtered, ordering=plan.ordering)
 
 
 def _options_overrides(options: object | None) -> Mapping[str, object]:
@@ -1126,12 +1098,12 @@ __all__ = [
     "attrs_map",
     "byte_span_dict",
     "bytes_from_file_ctx",
+    "datafusion_plan_from_reader",
     "extract_dataset_location_or_raise",
     "extract_plan_from_reader",
     "extract_plan_from_row_batches",
     "extract_plan_from_rows",
     "file_identity_row",
-    "ibis_plan_from_reader",
     "iter_contexts",
     "iter_file_contexts",
     "materialize_extract_plan",

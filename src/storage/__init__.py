@@ -23,8 +23,6 @@ __all__ = (
     "read_delta_cdf",
     "read_table_ipc_file",
     "vacuum_delta",
-    "write_ibis_dataset_delta",
-    "write_ibis_named_datasets_delta",
     "write_table_ipc_file",
     "write_table_ipc_stream",
 )
@@ -51,8 +49,6 @@ if TYPE_CHECKING:
     read_delta_cdf = _storage_io.read_delta_cdf
     read_table_ipc_file = _storage_io.read_table_ipc_file
     vacuum_delta = _storage_io.vacuum_delta
-    write_ibis_dataset_delta = _storage_io.write_ibis_dataset_delta
-    write_ibis_named_datasets_delta = _storage_io.write_ibis_named_datasets_delta
     write_table_ipc_file = _storage_io.write_table_ipc_file
     write_table_ipc_stream = _storage_io.write_table_ipc_stream
 

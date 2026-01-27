@@ -15,12 +15,10 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
 from arrowdsl.schema.abi import schema_to_msgpack
 from serde_msgspec import dumps_msgpack, to_builtins
-from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
-    from sqlglot_tools.optimizer import SqlGlotPolicySnapshot
 
 
 def _cpu_count() -> int:
@@ -48,10 +46,6 @@ class RuntimeProfileSpec:
 
     name: str
     runtime: RuntimeProfile
-    ibis_fuse_selects: bool
-    ibis_default_limit: int | None
-    ibis_default_dialect: str | None
-    ibis_interactive: bool | None
 
     @property
     def datafusion_settings_hash(self) -> str | None:
@@ -91,9 +85,7 @@ class RuntimeProfileSnapshot:
     determinism_tier: str
     scan_profile: dict[str, object]
     plan_use_threads: bool
-    ibis_options: dict[str, object]
     arrow_resources: dict[str, object]
-    sqlglot_policy: dict[str, object] | None
     datafusion: dict[str, object] | None
     function_registry_hash: str
     profile_hash: str
@@ -113,9 +105,7 @@ class RuntimeProfileSnapshot:
             "determinism_tier": self.determinism_tier,
             "scan_profile": self.scan_profile,
             "plan_use_threads": self.plan_use_threads,
-            "ibis_options": self.ibis_options,
             "arrow_resources": self.arrow_resources,
-            "sqlglot_policy": self.sqlglot_policy,
             "datafusion": self.datafusion,
             "function_registry_hash": self.function_registry_hash,
             "profile_hash": self.profile_hash,
@@ -138,14 +128,6 @@ _SCAN_PROFILE_SCHEMA = pa.struct(
         pa.field("scan_provenance_columns", pa.list_(pa.string())),
     ]
 )
-_IBIS_OPTIONS_SCHEMA = pa.struct(
-    [
-        pa.field("fuse_selects", pa.bool_()),
-        pa.field("default_limit", pa.int64()),
-        pa.field("default_dialect", pa.string()),
-        pa.field("interactive", pa.bool_()),
-    ]
-)
 _ARROW_RESOURCES_SCHEMA = pa.struct(
     [
         pa.field("pyarrow_version", pa.string()),
@@ -163,9 +145,7 @@ _PROFILE_HASH_SCHEMA = pa.schema(
         pa.field("determinism_tier", pa.string()),
         pa.field("scan_profile", _SCAN_PROFILE_SCHEMA),
         pa.field("plan_use_threads", pa.bool_()),
-        pa.field("ibis_options", _IBIS_OPTIONS_SCHEMA),
         pa.field("arrow_resources", _ARROW_RESOURCES_SCHEMA),
-        pa.field("sqlglot_policy_hash", pa.string()),
         pa.field("datafusion_hash", pa.string()),
         pa.field("function_registry_hash", pa.string()),
     ]
@@ -181,9 +161,7 @@ class _RegistryContext:
 @dataclass(frozen=True)
 class _RuntimePayloads:
     scan_payload: dict[str, object]
-    ibis_payload: dict[str, object]
     arrow_payload: dict[str, object]
-    sqlglot_snapshot: SqlGlotPolicySnapshot | None
     function_registry_hash: str
 
 
@@ -197,20 +175,15 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     """
     scan_payload = dict(_scan_profile_payload(runtime.scan))
     arrow_payload = dict(runtime.arrow_resource_snapshot().to_payload())
-    ibis_payload = dict(runtime.ibis_options_payload())
-    sqlglot_snapshot = sqlglot_policy_snapshot()
     registry_context = _build_registry_context(runtime)
     payloads = _RuntimePayloads(
         scan_payload=scan_payload,
-        ibis_payload=ibis_payload,
         arrow_payload=arrow_payload,
-        sqlglot_snapshot=sqlglot_snapshot,
         function_registry_hash=_function_registry_hash(registry_context),
     )
     snapshot_payload = _runtime_snapshot_payload(runtime, payloads)
     hash_payload = _runtime_hash_payload(runtime, payloads)
     profile_hash = payload_hash(hash_payload, _PROFILE_HASH_SCHEMA)
-    sqlglot_policy = snapshot_payload["sqlglot_policy"]
     datafusion_payload = snapshot_payload["datafusion"]
     return RuntimeProfileSnapshot(
         version=1,
@@ -218,9 +191,7 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         determinism_tier=runtime.determinism.value,
         scan_profile=payloads.scan_payload,
         plan_use_threads=runtime.plan_use_threads,
-        ibis_options=payloads.ibis_payload,
         arrow_resources=payloads.arrow_payload,
-        sqlglot_policy=cast("dict[str, object] | None", sqlglot_policy),
         datafusion=cast("dict[str, object] | None", datafusion_payload),
         function_registry_hash=payloads.function_registry_hash,
         profile_hash=profile_hash,
@@ -277,11 +248,7 @@ def _runtime_snapshot_payload(
         "determinism_tier": runtime.determinism.value,
         "scan_profile": payloads.scan_payload,
         "plan_use_threads": runtime.plan_use_threads,
-        "ibis_options": payloads.ibis_payload,
         "arrow_resources": payloads.arrow_payload,
-        "sqlglot_policy": payloads.sqlglot_snapshot.payload()
-        if payloads.sqlglot_snapshot is not None
-        else None,
         "datafusion": runtime.datafusion.telemetry_payload_v1()
         if runtime.datafusion is not None
         else None,
@@ -299,11 +266,7 @@ def _runtime_hash_payload(
         "determinism_tier": runtime.determinism.value,
         "scan_profile": payloads.scan_payload,
         "plan_use_threads": runtime.plan_use_threads,
-        "ibis_options": payloads.ibis_payload,
         "arrow_resources": payloads.arrow_payload,
-        "sqlglot_policy_hash": payloads.sqlglot_snapshot.policy_hash
-        if payloads.sqlglot_snapshot is not None
-        else None,
         "datafusion_hash": runtime.datafusion.telemetry_payload_hash()
         if runtime.datafusion is not None
         else None,
@@ -320,7 +283,6 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
         Diagnostics payload for engine runtime settings.
     """
     snapshot = runtime_profile_snapshot(runtime)
-    policy_snapshot = sqlglot_policy_snapshot()
     from datafusion_engine.udf_runtime import (
         register_rust_udfs,
         rust_udf_snapshot_bytes,
@@ -364,12 +326,6 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
         "determinism_tier": runtime.determinism.value,
         "runtime_profile_hash": snapshot.profile_hash,
         "runtime_profile_snapshot": dumps_msgpack(snapshot.payload()),
-        "sqlglot_policy_hash": (
-            policy_snapshot.policy_hash if policy_snapshot is not None else None
-        ),
-        "sqlglot_policy_snapshot": (
-            dumps_msgpack(policy_snapshot.payload()) if policy_snapshot is not None else None
-        ),
         "function_registry_hash": registry_hash,
         "function_registry_snapshot": registry_payload,
         "datafusion_settings_hash": (
@@ -531,14 +487,7 @@ def resolve_runtime_profile(
     if determinism is not None:
         runtime = runtime.with_determinism(determinism)
     runtime = _apply_profile_overrides(profile, runtime)
-    return RuntimeProfileSpec(
-        name=profile,
-        runtime=runtime,
-        ibis_fuse_selects=runtime.ibis_fuse_selects,
-        ibis_default_limit=runtime.ibis_default_limit,
-        ibis_default_dialect=runtime.ibis_default_dialect,
-        ibis_interactive=runtime.ibis_interactive,
-    )
+    return RuntimeProfileSpec(name=profile, runtime=runtime)
 
 
 __all__ = [

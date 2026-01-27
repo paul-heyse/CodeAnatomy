@@ -6,10 +6,9 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
+from typing import Literal, TypedDict, Unpack
 
 from hamilton.function_modifiers import cache, tag
-from ibis.backends import BaseBackend
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
@@ -31,16 +30,11 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
     TreeSitterConfig,
 )
-from ibis_engine.config import IbisBackendConfig
-from ibis_engine.execution_factory import ibis_execution_from_ctx
 from incremental.types import IncrementalConfig
 from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from storage.ipc import IpcWriteConfig
-
-if TYPE_CHECKING:
-    from ibis_engine.execution import IbisExecutionContext
 
 
 def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:
@@ -181,51 +175,6 @@ def engine_session(
         diagnostics=diagnostics_collector,
         surface_policy=execution_surface_policy,
         diagnostics_policy=pipeline_policy.diagnostics,
-    )
-
-
-@tag(layer="inputs", kind="runtime")
-def ibis_backend_config(engine_session: EngineSession) -> IbisBackendConfig:
-    """Return the default Ibis backend configuration.
-
-    Returns
-    -------
-    IbisBackendConfig
-        Backend configuration for Ibis execution.
-    """
-    return engine_session.engine_runtime.ibis_config
-
-
-@cache(behavior="ignore")
-@tag(layer="inputs", kind="runtime")
-def ibis_backend(engine_session: EngineSession) -> BaseBackend:
-    """Return a configured Ibis backend for pipeline execution.
-
-    Returns
-    -------
-    ibis.backends.BaseBackend
-        Backend instance for Ibis execution.
-    """
-    return engine_session.ibis_backend
-
-
-@cache(behavior="ignore")
-@tag(layer="inputs", kind="runtime")
-def ibis_execution(
-    engine_session: EngineSession,
-    adapter_execution_policy: AdapterExecutionPolicy,
-) -> IbisExecutionContext:
-    """Bundle execution settings for Ibis plans.
-
-    Returns
-    -------
-    IbisExecutionContext
-        Execution context used for Ibis materialization.
-    """
-    return ibis_execution_from_ctx(
-        engine_session.ctx,
-        backend=engine_session.ibis_backend,
-        execution_policy=adapter_execution_policy,
     )
 
 

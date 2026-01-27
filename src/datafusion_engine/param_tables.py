@@ -12,14 +12,12 @@ from functools import cache
 from typing import cast
 
 import pyarrow as pa
-from ibis.backends import BaseBackend
-from ibis.expr.types import Table
+from datafusion import SessionContext
+from datafusion.dataframe import DataFrame
 
 from arrowdsl.core.interop import pc
 from arrowdsl.schema.abi import schema_fingerprint
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from ibis_engine.datafusion_context import datafusion_context
-from ibis_engine.schema_utils import ibis_schema_from_arrow
 from storage.ipc import payload_hash
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
@@ -109,7 +107,7 @@ class ParamTableRegistry:
         Returns
         -------
         ParamTableArtifact
-            Arrow table plus signature metadata.
+            Materialized param table artifact.
 
         Raises
         ------
@@ -146,31 +144,20 @@ class ParamTableRegistry:
         self.artifacts[logical_name] = artifact
         return artifact
 
-    def ibis_tables(self, backend: BaseBackend) -> dict[str, Table]:
-        """Return Ibis table handles for registered param tables.
+    def datafusion_tables(self, ctx: SessionContext) -> dict[str, DataFrame]:
+        """Return DataFusion DataFrames for registered param tables.
 
         Returns
         -------
-        dict[str, ibis.expr.types.Table]
-            Ibis table expressions keyed by logical name.
+        dict[str, datafusion.dataframe.DataFrame]
+            DataFrames keyed by logical name.
         """
-        tables: dict[str, Table] = {}
+        adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+        tables: dict[str, DataFrame] = {}
         for logical_name, artifact in self.artifacts.items():
             physical_name = _param_table_physical_name(self.policy, logical_name, self.scope_key)
-            if not _register_param_table_via_datafusion(
-                backend,
-                name=physical_name,
-                table=artifact.table,
-            ):
-                schema = ibis_schema_from_arrow(artifact.table.schema)
-                backend.create_table(
-                    physical_name,
-                    obj=artifact.table,
-                    schema=schema,
-                    temp=True,
-                    overwrite=True,
-                )
-            tables[logical_name] = backend.table(physical_name)
+            adapter.register_arrow_table(physical_name, artifact.table, overwrite=True)
+            tables[logical_name] = ctx.table(physical_name)
         return tables
 
 
@@ -184,12 +171,12 @@ def param_table_name(policy: ParamTablePolicy, logical_name: str) -> str:
     Returns
     -------
     str
-        Fully qualified parameter table name suffix.
+        Physical table name.
 
     Raises
     ------
     ValueError
-        Raised when the logical name is not a valid identifier.
+        Raised when the logical name is invalid.
     """
     if not _IDENT_RE.match(logical_name):
         msg = f"Invalid param logical name: {logical_name!r}."
@@ -208,21 +195,6 @@ def _param_table_physical_name(
     return f"{base}_{scope_key}"
 
 
-def _register_param_table_via_datafusion(
-    backend: BaseBackend,
-    *,
-    name: str,
-    table: pa.Table,
-) -> bool:
-    try:
-        ctx = datafusion_context(backend)
-    except ValueError:
-        return False
-    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_arrow_table(name, table, overwrite=True)
-    return True
-
-
 def param_signature_from_array(
     *,
     logical_name: str,
@@ -233,7 +205,7 @@ def param_signature_from_array(
     Returns
     -------
     str
-        Hex-encoded signature string.
+        Deterministic parameter signature.
     """
     normalized = values.combine_chunks() if isinstance(values, pa.ChunkedArray) else values
     resolved = cast("pa.Array", normalized)
@@ -255,7 +227,7 @@ def scalar_param_signature(values: Mapping[str, object]) -> str:
     Returns
     -------
     str
-        Hex-encoded signature string.
+        Deterministic signature for scalar parameters.
     """
     entries = [{"key": str(key), "value": str(value)} for key, value in sorted(values.items())]
     payload = {"version": SCALAR_PARAM_SIGNATURE_VERSION, "entries": entries}
@@ -279,7 +251,7 @@ def build_param_table(spec: ParamTableSpec, values: Sequence[object]) -> pa.Tabl
     Returns
     -------
     pyarrow.Table
-        Arrow table with optional distinct enforcement.
+        Arrow table with parameter values.
 
     Raises
     ------
@@ -299,7 +271,7 @@ def unique_values(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedAr
     Returns
     -------
     pyarrow.Array | pyarrow.ChunkedArray
-        Unique values for the input array-like.
+        Array with unique values preserved.
     """
     return pc.unique(values)
 

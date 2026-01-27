@@ -29,6 +29,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ids import span_id
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
+from datafusion_engine.plan import DataFusionPlan
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -46,7 +47,6 @@ from extract.schema_ops import ExtractNormalizeOptions
 from extract.tree_sitter_cache import TreeSitterCache, TreeSitterParseResult
 from extract.tree_sitter_queries import TreeSitterQueryPack, compile_query_pack
 from extract.worklists import iter_worklist_contexts, worklist_queue_name
-from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
@@ -959,12 +959,12 @@ def extract_ts_plans(
     *,
     options: TreeSitterExtractOptions | None = None,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, IbisPlan]:
+) -> dict[str, DataFusionPlan]:
     """Extract tree-sitter plans for nested file records.
 
     Returns
     -------
-    dict[str, IbisPlan]
+    dict[str, DataFusionPlan]
         Ibis plan bundle keyed by ``tree_sitter_files``.
     """
     normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
@@ -1434,7 +1434,7 @@ def _build_ts_plan(
     *,
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None,
     plan_context: _TreeSitterPlanContext,
-) -> IbisPlan:
+) -> DataFusionPlan:
     plan_options = ExtractPlanOptions(
         normalize=plan_context.normalize,
         evidence_plan=plan_context.evidence_plan,

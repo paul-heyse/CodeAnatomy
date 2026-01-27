@@ -25,7 +25,6 @@ from extract.scip_indexer import (
     write_scip_environment_json,
 )
 from hamilton_pipeline.pipeline_types import RepoScanConfig, ScipIdentityOverrides, ScipIndexConfig
-from ibis_engine.catalog import IbisPlanSource
 from incremental.types import IncrementalConfig
 
 
@@ -183,15 +182,15 @@ def scip_tables(
 def source_catalog_inputs(
     repo_files: TableLike,
     scip_tables: Mapping[str, TableLike],
-) -> Mapping[str, IbisPlanSource]:
+) -> Mapping[str, TableLike]:
     """Bundle source tables for plan compilation.
 
     Returns
     -------
-    Mapping[str, IbisPlanSource]
+    Mapping[str, TableLike]
         Mapping of source names to table-like inputs.
     """
-    sources: dict[str, IbisPlanSource] = {"repo_files": repo_files}
+    sources: dict[str, TableLike] = {"repo_files": repo_files}
     sources.update(scip_tables)
     return sources
 

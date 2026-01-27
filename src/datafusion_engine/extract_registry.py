@@ -13,7 +13,7 @@ from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_pol
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata_by_name
 from datafusion_engine.extract_templates import config
-from ibis_engine.query_compiler import IbisQuerySpec
+from datafusion_engine.query_spec import QuerySpec
 from schema_spec.system import DatasetSpec, dataset_spec_from_schema
 
 
@@ -121,12 +121,12 @@ def dataset_query(
     *,
     repo_id: str | None = None,
     projection: Sequence[str] | None = None,
-) -> IbisQuerySpec:
+) -> QuerySpec:
     """Return a simple query spec for extract datasets.
 
     Returns
     -------
-    IbisQuerySpec
+    QuerySpec
         Query spec projecting all declared columns.
     """
     _ = repo_id
@@ -141,7 +141,7 @@ def dataset_query(
         filtered = [field.name for field in schema if field.name in projection_set]
         if filtered:
             columns = filtered
-    return IbisQuerySpec.simple(*columns)
+    return QuerySpec.simple(*columns)
 
 
 def normalize_options[T](name: str, options: object | None, options_type: type[T]) -> T:

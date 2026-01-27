@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
-from datafusion import SQLOptions
+from datafusion import col
 
 if TYPE_CHECKING:
     from datafusion import SessionContext, SQLOptions
@@ -78,34 +78,51 @@ class IntrospectionSnapshot:
         ctx : SessionContext
             DataFusion session to introspect
         sql_options : SQLOptions | None
-            SQL options applied to information_schema queries when provided.
+            Reserved for compatibility; DataFrame API ignores SQL options.
 
         Returns
         -------
         IntrospectionSnapshot
             Snapshot containing all available catalog metadata
         """
-
-        def _table(sql: str) -> pa.Table:
-            options = sql_options or SQLOptions()
-            df = ctx.sql_with_options(sql, options)
-            return df.to_arrow_table()
-
-        tables = _table(
-            "SELECT table_catalog, table_schema, table_name, table_type "
-            "FROM information_schema.tables"
+        _ = sql_options
+        tables = (
+            ctx.table("information_schema.tables")
+            .select(
+                col("table_catalog"),
+                col("table_schema"),
+                col("table_name"),
+                col("table_type"),
+            )
+            .to_arrow_table()
         )
 
-        columns = _table(
-            "SELECT table_catalog, table_schema, table_name, column_name, "
-            "ordinal_position, data_type, is_nullable, column_default "
-            "FROM information_schema.columns "
-            "ORDER BY table_catalog, table_schema, table_name, ordinal_position"
+        columns = (
+            ctx.table("information_schema.columns")
+            .select(
+                col("table_catalog"),
+                col("table_schema"),
+                col("table_name"),
+                col("column_name"),
+                col("ordinal_position"),
+                col("data_type"),
+                col("is_nullable"),
+                col("column_default"),
+            )
+            .sort(
+                col("table_catalog"),
+                col("table_schema"),
+                col("table_name"),
+                col("ordinal_position"),
+            )
+            .to_arrow_table()
         )
 
         try:
-            schemata = _table(
-                "SELECT catalog_name, schema_name FROM information_schema.schemata"
+            schemata = (
+                ctx.table("information_schema.schemata")
+                .select(col("catalog_name"), col("schema_name"))
+                .to_arrow_table()
             )
         except (ValueError, TypeError, RuntimeError):
             schemata = pa.Table.from_arrays(
@@ -113,21 +130,42 @@ class IntrospectionSnapshot:
                 names=["catalog_name", "schema_name"],
             )
 
-        settings = _table("SELECT name, value FROM information_schema.df_settings")
+        settings = (
+            ctx.table("information_schema.df_settings")
+            .select(col("name"), col("value"))
+            .to_arrow_table()
+        )
 
         # Routines may not be available in all configurations
         try:
-            routines = _table(
-                "SELECT specific_catalog, specific_schema, specific_name, "
-                "routine_catalog, routine_schema, routine_name, routine_type, data_type "
-                "FROM information_schema.routines"
+            routines = (
+                ctx.table("information_schema.routines")
+                .select(
+                    col("specific_catalog"),
+                    col("specific_schema"),
+                    col("specific_name"),
+                    col("routine_catalog"),
+                    col("routine_schema"),
+                    col("routine_name"),
+                    col("routine_type"),
+                    col("data_type"),
+                )
+                .to_arrow_table()
             )
 
-            parameters = _table(
-                "SELECT specific_catalog, specific_schema, specific_name, "
-                "ordinal_position, parameter_mode, parameter_name, data_type "
-                "FROM information_schema.parameters "
-                "ORDER BY specific_name, ordinal_position"
+            parameters = (
+                ctx.table("information_schema.parameters")
+                .select(
+                    col("specific_catalog"),
+                    col("specific_schema"),
+                    col("specific_name"),
+                    col("ordinal_position"),
+                    col("parameter_mode"),
+                    col("parameter_name"),
+                    col("data_type"),
+                )
+                .sort(col("specific_name"), col("ordinal_position"))
+                .to_arrow_table()
             )
         except (ValueError, TypeError, RuntimeError):
             # DataFusion versions may not expose routines/parameters views
@@ -136,8 +174,8 @@ class IntrospectionSnapshot:
 
         # Constraints may not be available in all configurations
         try:
-            table_constraints = _table("SELECT * FROM information_schema.table_constraints")
-            key_column_usage = _table("SELECT * FROM information_schema.key_column_usage")
+            table_constraints = ctx.table("information_schema.table_constraints").to_arrow_table()
+            key_column_usage = ctx.table("information_schema.key_column_usage").to_arrow_table()
         except (ValueError, TypeError, RuntimeError):
             table_constraints = None
             key_column_usage = None
@@ -460,9 +498,7 @@ def _cache_snapshot_from_table(
 
 
 def _cache_snapshot_table(ctx: SessionContext, *, table_name: str) -> pa.Table:
-    sql = f"SELECT * FROM {table_name}"
-    df = ctx.sql_with_options(sql, sql_options_for_profile(None))
-    return df.to_arrow_table()
+    return ctx.table(table_name).to_arrow_table()
 
 
 def _settings_snapshot(ctx: SessionContext) -> list[dict[str, object]]:

@@ -10,7 +10,6 @@ from arrowdsl.core.streaming import to_reader
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 datafusion = pytest.importorskip("datafusion")
-ibis = pytest.importorskip("ibis")
 
 
 class _StreamWrapper:
@@ -38,15 +37,6 @@ def test_to_reader_datafusion_dataframe() -> None:
     assert result.num_rows == table.num_rows
 
 
-def test_to_reader_ibis_table() -> None:
-    """Convert Ibis tables into a RecordBatchReader."""
-    table = _simple_table()
-    expr = ibis.memtable(table)
-    reader = to_reader(expr)
-    result = reader.read_all()
-    assert result.num_rows == table.num_rows
-
-
 def test_to_reader_scanner() -> None:
     """Convert dataset scanners into a RecordBatchReader."""
     table = _simple_table()
@@ -69,7 +59,6 @@ def test_to_reader_arrow_c_stream_wrapper() -> None:
 def test_to_reader_rejects_schema_for_batches() -> None:
     """Reject schema overrides for batch-backed sources."""
     table = _simple_table()
-    expr = ibis.memtable(table)
     other_schema = pa.schema([("id", pa.int64())])
     with pytest.raises(ValueError, match="Schema negotiation is not supported"):
-        _ = to_reader(expr, schema=other_schema)
+        _ = to_reader(table, schema=other_schema)

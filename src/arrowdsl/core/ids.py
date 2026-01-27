@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from functools import reduce
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 import pyarrow as pa
-from datafusion import SessionContext
+from datafusion import SessionContext, col, lit
+from datafusion import functions as f
 
 import arrowdsl.core.interop as arrow_pa
 from arrowdsl.core.array_iter import iter_array_values, iter_arrays, iter_table_rows
@@ -20,7 +23,19 @@ from datafusion_engine.hash_utils import (
 )
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_ext import (
+    prefixed_hash64 as df_prefixed_hash64,
+)
+from datafusion_ext import (
+    stable_hash64,
+    stable_hash128,
+)
+from datafusion_ext import (
+    stable_id as df_stable_id,
+)
+
+if TYPE_CHECKING:
+    from datafusion.expr import Expr
 
 type MissingPolicy = Literal["raise", "null"]
 
@@ -29,16 +44,12 @@ type ArrayOrScalar = arrow_pa.ArrayLike | arrow_pa.ChunkedArrayLike | arrow_pa.S
 
 
 _NULL_SEPARATOR = "\x1f"
+_TRUE_LITERAL = True
 
 
 def _datafusion_context() -> SessionContext:
     profile = DataFusionRuntimeProfile()
     return profile.ephemeral_context()
-
-
-def _expr_table(ctx: SessionContext, sql: str) -> pa.Table:
-    df = ctx.sql_with_options(sql, sql_options_for_profile(None))
-    return df.to_arrow_table()
 
 
 def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
@@ -57,19 +68,14 @@ def _deregister_table(ctx: SessionContext, name: str) -> None:
         invalidate_introspection_cache(ctx)
 
 
-def _string_literal(value: str) -> str:
-    escaped = value.replace("'", "''")
-    return f"'{escaped}'"
+def _coalesce_cast(expr: Expr, *, null_sentinel: str) -> Expr:
+    return f.coalesce(f.arrow_cast(expr, lit("Utf8")), lit(null_sentinel))
 
 
-def _coalesce_cast(expr: str, *, null_sentinel: str) -> str:
-    return f"coalesce(cast({expr} as string), {_string_literal(null_sentinel)})"
-
-
-def _concat_ws(parts: Sequence[str]) -> str:
+def _concat_ws(parts: Sequence[Expr]) -> Expr:
     if len(parts) == 1:
         return parts[0]
-    return f"concat_ws({_string_literal(_NULL_SEPARATOR)}, {', '.join(parts)})"
+    return f.concat_ws(_NULL_SEPARATOR, *parts)
 
 
 def _hash_expression(
@@ -79,15 +85,14 @@ def _hash_expression(
     null_sentinel: str,
     use_128: bool,
     extra_literals: Sequence[str] = (),
-) -> str:
-    parts: list[str] = []
+) -> Expr:
+    parts: list[Expr] = []
     if prefix is not None:
-        parts.append(_string_literal(prefix))
-    parts.extend(_string_literal(value) for value in extra_literals)
-    parts.extend(_coalesce_cast(name, null_sentinel=null_sentinel) for name in column_names)
+        parts.append(lit(prefix))
+    parts.extend(lit(value) for value in extra_literals)
+    parts.extend(_coalesce_cast(col(name), null_sentinel=null_sentinel) for name in column_names)
     joined = _concat_ws(parts)
-    func = "stable_hash128" if use_128 else "stable_hash64"
-    return f"{func}({joined})"
+    return stable_hash128(joined) if use_128 else stable_hash64(joined)
 
 
 def _prefixed_hash_expression(
@@ -97,7 +102,7 @@ def _prefixed_hash_expression(
     null_sentinel: str,
     use_128: bool,
     extra_literals: Sequence[str] = (),
-) -> str:
+) -> Expr:
     hash_expr = _hash_expression(
         column_names,
         prefix=prefix,
@@ -105,23 +110,21 @@ def _prefixed_hash_expression(
         use_128=use_128,
         extra_literals=extra_literals,
     )
-    return (
-        "concat_ws(':', "
-        f"{_string_literal(prefix)}, "
-        f"cast({hash_expr} as string))"
-    )
+    if use_128:
+        return df_stable_id(prefix, hash_expr)
+    return df_prefixed_hash64(prefix, hash_expr)
 
 
-def _is_not_null(expr: str) -> str:
-    return f"{expr} IS NOT NULL"
+def _is_not_null(expr: Expr) -> Expr:
+    return expr.is_not_null()
 
 
-def _and_expressions(expressions: Sequence[str]) -> str | None:
+def _and_expressions(expressions: Sequence[Expr]) -> Expr | None:
     if not expressions:
         return None
     if len(expressions) == 1:
         return expressions[0]
-    return " AND ".join(expressions)
+    return reduce(operator.and_, expressions)
 
 
 def _ensure_table(value: arrow_pa.TableLike) -> pa.Table:
@@ -213,8 +216,7 @@ def _hash_from_arrays(
             null_sentinel=null_sentinel,
             use_128=use_128,
         )
-        select_sql = f"SELECT {hash_expr} AS hash_value FROM {name}"
-        result = _expr_table(ctx, select_sql)
+        result = ctx.table(name).select(hash_expr.alias("hash_value")).to_arrow_table()
     finally:
         _deregister_table(ctx, name)
     return result["hash_value"]
@@ -303,8 +305,7 @@ def prefixed_hash_id(
             null_sentinel=null_sentinel,
             use_128=use_128,
         )
-        select_sql = f"SELECT {hash_expr} AS hash_value FROM {name}"
-        result = _expr_table(ctx, select_sql)
+        result = ctx.table(name).select(hash_expr.alias("hash_value")).to_arrow_table()
     finally:
         _deregister_table(ctx, name)
     return result["hash_value"]
@@ -317,14 +318,14 @@ def _arrays_from_columns(
     missing: MissingPolicy,
 ) -> list[arrow_pa.ArrayLike]:
     arrays: list[arrow_pa.ArrayLike] = []
-    for col in cols:
-        if col in table.column_names:
-            arrays.append(table[col])
+    for column_name in cols:
+        if column_name in table.column_names:
+            arrays.append(table[column_name])
             continue
         if missing == "null":
             arrays.append(pa.nulls(table.num_rows, type=pa.string()))
             continue
-        msg = f"Missing column for hash: {col!r}."
+        msg = f"Missing column for hash: {column_name!r}."
         raise KeyError(msg)
     return arrays
 
@@ -421,10 +422,10 @@ def masked_prefixed_hash(
             null_sentinel="None",
             use_128=True,
         )
-        mask_expr = _and_expressions([_is_not_null(col) for col in required_names]) or "TRUE"
-        case_expr = f"CASE WHEN {mask_expr} THEN {hash_expr} ELSE NULL END"
-        select_sql = f"SELECT {case_expr} AS hash_value FROM {name}"
-        result = _expr_table(ctx, select_sql)
+        mask_expr = _and_expressions([_is_not_null(col(name)) for name in required_names])
+        resolved_mask = mask_expr if mask_expr is not None else lit(_TRUE_LITERAL)
+        case_expr = f.when(resolved_mask, hash_expr).otherwise(lit(None))
+        result = ctx.table(name).select(case_expr.alias("hash_value")).to_arrow_table()
     finally:
         _deregister_table(ctx, name)
     return result["hash_value"]
@@ -518,10 +519,13 @@ def add_span_id_column(
             use_128=True,
             extra_literals=(spec.kind,) if spec.kind is not None else (),
         )
-        mask_expr = _and_expressions([_is_not_null(col) for col in columns]) or "TRUE"
-        span_expr = f"CASE WHEN {mask_expr} THEN {hash_expr} ELSE NULL END"
-        select_sql = f"SELECT *, {span_expr} AS {spec.out_col} FROM {name}"
-        result = _expr_table(ctx, select_sql)
+        mask_expr = _and_expressions([_is_not_null(col(name)) for name in columns])
+        resolved_mask = mask_expr if mask_expr is not None else lit(_TRUE_LITERAL)
+        span_expr = f.when(resolved_mask, hash_expr).otherwise(lit(None))
+        base_df = ctx.table(name)
+        selections = [col(field.name) for field in base_df.schema().fields]
+        selections.append(span_expr.alias(spec.out_col))
+        result = base_df.select(*selections).to_arrow_table()
     finally:
         _deregister_table(ctx, name)
     return result

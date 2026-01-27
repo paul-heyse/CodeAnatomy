@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.abi import schema_fingerprint
 from cache.diskcache_factory import (
@@ -24,8 +25,6 @@ from datafusion_engine.execution_facade import ExecutionResult, ExecutionResultK
 if TYPE_CHECKING:
     import pyarrow as pa
     from diskcache import Cache, FanoutCache
-
-    from ibis_engine.execution import IbisExecutionContext
 
 
 class TableLike(Protocol):
@@ -134,8 +133,8 @@ class RuntimeArtifacts:
 
     Attributes
     ----------
-    execution : IbisExecutionContext | None
-        Ibis execution context for materialization.
+    execution : ExecutionContext | None
+        Execution context for materialization.
     materialized_tables : dict[str, TableLike]
         Materialized PyArrow tables keyed by dataset name.
     view_references : dict[str, ViewReference]
@@ -152,7 +151,7 @@ class RuntimeArtifacts:
         Parameter values for parameterized rulepack execution.
     """
 
-    execution: IbisExecutionContext | None = None
+    execution: ExecutionContext | None = None
     materialized_tables: dict[str, TableLike] = field(default_factory=dict)
     view_references: dict[str, ViewReference] = field(default_factory=dict)
     schema_cache: dict[str, SchemaLike] = field(default_factory=dict)
@@ -166,7 +165,7 @@ class RuntimeArtifacts:
     def __post_init__(self) -> None:
         """Resolve DiskCache profile defaults after initialization."""
         if self.diskcache_profile is None and self.execution is not None:
-            runtime = self.execution.ctx.runtime
+            runtime = self.execution.runtime
             if runtime.datafusion is not None:
                 self.diskcache_profile = runtime.datafusion.diskcache_profile
 

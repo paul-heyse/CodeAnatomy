@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 from datafusion_engine.semantic_diff import ChangeCategory, SemanticDiff
-from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
 
 def _category(old_sql: str, new_sql: str) -> ChangeCategory:
-    register_datafusion_dialect()
-    old_ast = parse_sql_strict(old_sql, dialect="datafusion")
-    new_ast = parse_sql_strict(new_sql, dialect="datafusion")
-    diff = SemanticDiff.compute(old_ast, new_ast)
+    diff = SemanticDiff.compute(old_sql, new_sql)
     return diff.overall_category
 
 

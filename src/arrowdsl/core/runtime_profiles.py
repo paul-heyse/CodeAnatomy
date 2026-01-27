@@ -238,10 +238,6 @@ class RuntimeProfile:
 
     scan: ScanProfile = field(default_factory=lambda: ScanProfile(name="DEFAULT"))
     plan_use_threads: bool = True
-    ibis_fuse_selects: bool = True
-    ibis_default_limit: int | None = None
-    ibis_default_dialect: str | None = None
-    ibis_interactive: bool | None = None
 
     determinism: DeterminismTier = DeterminismTier.BEST_EFFORT
     datafusion: DataFusionRuntimeProfile | None = field(default_factory=_default_datafusion_profile)
@@ -272,21 +268,6 @@ class RuntimeProfile:
             bytes_allocated=pool.bytes_allocated(),
             max_memory=pool.max_memory(),
         )
-
-    def ibis_options_payload(self) -> dict[str, object]:
-        """Return Ibis options payload for diagnostics.
-
-        Returns
-        -------
-        dict[str, object]
-            Ibis options payload.
-        """
-        return {
-            "fuse_selects": self.ibis_fuse_selects,
-            "default_limit": self.ibis_default_limit,
-            "default_dialect": self.ibis_default_dialect,
-            "interactive": self.ibis_interactive,
-        }
 
     def with_determinism(self, tier: DeterminismTier) -> RuntimeProfile:
         """Return a copy with the specified determinism tier.
@@ -358,8 +339,6 @@ def runtime_profile_factory(profile: str) -> RuntimeProfile:
         name=name,
         scan=scan,
         plan_use_threads=plan_use_threads,
-        ibis_fuse_selects=profile_key != "dev_debug",
-        ibis_interactive=profile_key == "dev_debug",
         determinism=determinism,
     )
     if determinism in {DeterminismTier.CANONICAL, DeterminismTier.STABLE_SET}:

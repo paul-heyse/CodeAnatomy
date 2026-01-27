@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
@@ -18,14 +18,11 @@ from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
 from incremental.delta_context import DeltaAccessContext
-from incremental.ibis_exec import ibis_expr_to_table
 from incremental.runtime import TempTableRegistry
 from schema_spec.system import DeltaScanOptions
 from storage.deltalake import DeltaCdfOptions, StorageOptions, delta_table_version
 
 if TYPE_CHECKING:
-    from ibis.expr.types import BooleanValue
-
     from incremental.runtime import IncrementalRuntime
 
 
@@ -91,12 +88,12 @@ def _read_cdf_table(
     table_name: str,
     filter_policy: CdfFilterPolicy | None,
 ) -> pa.Table:
-    backend = runtime.ibis_backend()
-    expr = backend.table(table_name)
-    predicate = (filter_policy or CdfFilterPolicy.include_all()).to_ibis_predicate(expr)
+    ctx = runtime.session_context()
+    df = ctx.table(table_name)
+    predicate = (filter_policy or CdfFilterPolicy.include_all()).to_datafusion_predicate()
     if predicate is not None:
-        expr = expr.filter(cast("BooleanValue", predicate))
-    return ibis_expr_to_table(expr, runtime=runtime, name="cdf_changes")
+        df = df.filter(predicate)
+    return df.to_arrow_table()
 
 
 def read_cdf_changes(

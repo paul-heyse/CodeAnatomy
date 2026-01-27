@@ -8,7 +8,8 @@ from typing import TypedDict, Unpack
 
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from arrowdsl.schema.validation import ArrowValidationOptions
-from ibis_engine.query_compiler import IbisQuerySpec
+from datafusion_engine.expr_spec import ExprSpec
+from datafusion_engine.query_spec import QuerySpec
 from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle, TableSchemaSpec
 from schema_spec.system import (
     ContractSpec,
@@ -17,7 +18,6 @@ from schema_spec.system import (
     make_dataset_spec,
     make_table_spec,
 )
-from sqlglot_tools.expr_spec import SqlExprSpec
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 
@@ -26,14 +26,14 @@ class DatasetRegistration:
     """Optional registration settings for dataset specs."""
 
     dataset_kind: DatasetKind | None = None
-    query_spec: IbisQuerySpec | None = None
+    query_spec: QuerySpec | None = None
     contract_spec: ContractSpec | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_constraints: Sequence[str] = ()
     derived_fields: Sequence[DerivedFieldSpec] = ()
-    predicate: SqlExprSpec | None = None
-    pushdown_predicate: SqlExprSpec | None = None
+    predicate: ExprSpec | None = None
+    pushdown_predicate: ExprSpec | None = None
     evolution_spec: SchemaEvolutionSpec | None = None
     metadata_spec: SchemaMetadataSpec | None = None
     validation: ArrowValidationOptions | None = None

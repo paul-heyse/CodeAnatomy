@@ -32,6 +32,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
+from datafusion_engine.plan import DataFusionPlan
 from datafusion_engine.schema_introspection import find_struct_field_keys
 from datafusion_engine.schema_registry import default_attrs_value
 from extract.helpers import (
@@ -52,7 +53,6 @@ from extract.parallel import parallel_map, resolve_max_workers, supports_fork
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
 from extract.worklists import iter_worklist_contexts, worklist_queue_name
-from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
@@ -1498,7 +1498,7 @@ def _build_cst_file_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
-) -> IbisPlan:
+) -> DataFusionPlan:
     plan_options = ExtractPlanOptions(
         normalize=normalize,
         evidence_plan=evidence_plan,
@@ -1683,12 +1683,12 @@ def extract_cst_plans(
     options: CSTExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, IbisPlan]:
+) -> dict[str, DataFusionPlan]:
     """Extract CST plans for nested file records.
 
     Returns
     -------
-    dict[str, IbisPlan]
+    dict[str, DataFusionPlan]
         Ibis plan bundle keyed by ``libcst_files``.
     """
     normalized_options = normalize_options("cst", options, CSTExtractOptions)

@@ -22,7 +22,6 @@ if TYPE_CHECKING:
         InMemoryDiagnosticsSink,
     )
     from datafusion_engine.execution_facade import (
-        CompiledPlan,
         DataFusionExecutionFacade,
         ExecutionResult,
         ExecutionResultKind,
@@ -101,19 +100,6 @@ if TYPE_CHECKING:
         SemanticDiff,
         compute_rebuild_needed,
     )
-    from datafusion_engine.sql_policy_engine import (
-        CompilationArtifacts,
-        SQLPolicyProfile,
-        compile_sql_policy,
-        render_for_execution,
-    )
-    from datafusion_engine.sql_safety import (
-        ExecutionContext,
-        ExecutionPolicy,
-        SafeExecutor,
-        execute_with_policy,
-        validate_sql_safety,
-    )
     from datafusion_engine.streaming_executor import StreamingExecutionResult
     from datafusion_engine.udf_platform import (
         RustUdfPlatform,
@@ -133,8 +119,6 @@ __all__ = [
     "AdapterExecutionPolicy",
     "ChangeCategory",
     "ColumnContract",
-    "CompilationArtifacts",
-    "CompiledPlan",
     "ContractRegistry",
     "DataFusionCompileOptions",
     "DataFusionConfigPolicy",
@@ -148,9 +132,7 @@ __all__ = [
     "DiagnosticsRecorder",
     "DiagnosticsSink",
     "EvolutionPolicy",
-    "ExecutionContext",
     "ExecutionLabel",
-    "ExecutionPolicy",
     "ExecutionResult",
     "ExecutionResultKind",
     "InMemoryDiagnosticsSink",
@@ -164,8 +146,6 @@ __all__ = [
     "RegistryTarget",
     "RustUdfPlatform",
     "RustUdfPlatformOptions",
-    "SQLPolicyProfile",
-    "SafeExecutor",
     "ScanLineage",
     "SchemaContract",
     "SchemaHardeningProfile",
@@ -183,11 +163,9 @@ __all__ = [
     "apply_execution_label",
     "apply_execution_policy",
     "build_plan_bundle",
-    "compile_sql_policy",
     "compute_rebuild_needed",
     "derive_required_udfs_from_plans",
     "ensure_plan_udfs_available",
-    "execute_with_policy",
     "extract_lineage",
     "extract_nested_dataset_names",
     "extract_nested_schema_names",
@@ -205,13 +183,11 @@ __all__ = [
     "register_view_specs",
     "registry_delta_table_paths",
     "registry_output_dir",
-    "render_for_execution",
     "required_columns_by_table",
     "resolve_param_bindings",
     "snapshot_plans",
     "validate_required_udfs_from_bundle",
     "validate_required_udfs_from_plan",
-    "validate_sql_safety",
 ]
 
 _EXPORTS: dict[str, tuple[str, str]] = {
@@ -264,10 +240,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "RegistryTarget": ("datafusion_engine.registry_loader", "RegistryTarget"),
     "SchemaIntrospector": ("datafusion_engine.schema_introspection", "SchemaIntrospector"),
     # Bridge and execution
-    "CompilationArtifacts": ("datafusion_engine.sql_policy_engine", "CompilationArtifacts"),
-    "SQLPolicyProfile": ("datafusion_engine.sql_policy_engine", "SQLPolicyProfile"),
-    "compile_sql_policy": ("datafusion_engine.sql_policy_engine", "compile_sql_policy"),
-    "render_for_execution": ("datafusion_engine.sql_policy_engine", "render_for_execution"),
     # Streaming Execution
     "StreamingExecutionResult": (
         "datafusion_engine.streaming_executor",

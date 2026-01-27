@@ -1,4 +1,4 @@
-"""ExprIR helpers for UDF-backed hash identifiers."""
+"""ExprIR helpers for DataFusion-backed hash identifiers."""
 
 from __future__ import annotations
 
@@ -6,28 +6,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from arrowdsl.core.expr_types import ScalarValue
-from sqlglot_tools.expr_spec import ExprIR, SqlExprSpec
+from datafusion_engine.expr_spec import ExprIR, ExprSpec
 
 
 @dataclass(frozen=True)
 class HashExprSpec:
-    """Define a stable hash expression specification.
-
-    Parameters
-    ----------
-    prefix:
-        Prefix for the hashed identifier.
-    cols:
-        Column names included in the hash input.
-    extra_literals:
-        Literal values injected into the hash input.
-    as_string:
-        Whether to emit a prefixed string hash (True) or int64 hash (False).
-    null_sentinel:
-        Value used to represent nulls in the hash input.
-    out_col:
-        Optional output column name for derived identifiers.
-    """
+    """Define a stable hash expression specification."""
 
     prefix: str
     cols: tuple[str, ...]
@@ -39,19 +23,7 @@ class HashExprSpec:
 
 @dataclass(frozen=True)
 class HashExprSpecOptions:
-    """Options for building hash expression specs.
-
-    Parameters
-    ----------
-    extra_literals:
-        Literal values injected into the hash input.
-    as_string:
-        Whether to emit a prefixed string hash (True) or int64 hash (False).
-    null_sentinel:
-        Value used to represent nulls in the hash input.
-    out_col:
-        Optional output column name for derived identifiers.
-    """
+    """Options for building hash expression specs."""
 
     extra_literals: tuple[str, ...] = ()
     as_string: bool = True
@@ -69,23 +41,10 @@ def hash_expr_spec_factory(
 ) -> HashExprSpec:
     """Return a HashExprSpec from normalized inputs.
 
-    Parameters
-    ----------
-    prefix:
-        Prefix for the hashed identifier.
-    cols:
-        Column names included in the hash input.
-    options:
-        Hash expression options for literals, null handling, and output shape.
-    out_col:
-        Optional override for the output column name.
-    null_sentinel:
-        Optional override for the null sentinel value.
-
     Returns
     -------
     HashExprSpec
-        Stable hash expression specification.
+        Normalized hash expression specification.
     """
     resolved = options or HashExprSpecOptions()
     if out_col is not None:
@@ -115,26 +74,26 @@ def hash_expr_spec_factory(
 _NULL_SEPARATOR = "\x1f"
 
 
-def hash_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> SqlExprSpec:
+def hash_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> ExprSpec:
     """Return an expression spec for a HashExprSpec.
 
     Returns
     -------
-    SqlExprSpec
-        Expression spec that compiles to DataFusion hash UDFs.
+    ExprSpec
+        Expression spec for the hash identifier.
     """
-    return SqlExprSpec(expr_ir=_hash_expr_ir(spec, use_128=use_128))
+    return ExprSpec(expr_ir=_hash_expr_ir(spec, use_128=use_128))
 
 
-def stable_id_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> SqlExprSpec:
-    """Return an expression spec for stable_id UDF identifiers.
+def stable_id_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> ExprSpec:
+    """Return an expression spec for stable_id identifiers.
 
     Returns
     -------
-    SqlExprSpec
-        Expression spec that compiles to a stable_id UDF call.
+    ExprSpec
+        Expression spec for stable_id identifiers.
     """
-    return SqlExprSpec(expr_ir=_stable_id_expr_ir(spec, use_128=use_128))
+    return ExprSpec(expr_ir=_stable_id_expr_ir(spec, use_128=use_128))
 
 
 def masked_stable_id_expr_ir(
@@ -142,20 +101,20 @@ def masked_stable_id_expr_ir(
     spec: HashExprSpec,
     required: Sequence[str],
     use_128: bool | None = None,
-) -> SqlExprSpec:
+) -> ExprSpec:
     """Return a stable_id expression spec with required-column masking.
 
     Returns
     -------
-    SqlExprSpec
-        Expression spec that yields null when required inputs are missing.
+    ExprSpec
+        Masked expression spec for stable_id identifiers.
     """
     if not required:
         return stable_id_expr_ir(spec=spec, use_128=use_128)
     mask_expr = _required_mask_expr(required)
     stable_expr = _stable_id_expr_ir(spec, use_128=use_128)
     masked = _call_expr("if_else", mask_expr, stable_expr, _literal_expr(None))
-    return SqlExprSpec(expr_ir=masked)
+    return ExprSpec(expr_ir=masked)
 
 
 def masked_hash_expr_ir(
@@ -163,38 +122,37 @@ def masked_hash_expr_ir(
     spec: HashExprSpec,
     required: Sequence[str],
     use_128: bool | None = None,
-) -> SqlExprSpec:
+) -> ExprSpec:
     """Return an expression spec with required-column masking.
 
     Returns
     -------
-    SqlExprSpec
-        Expression spec that yields null when required inputs are missing.
+    ExprSpec
+        Masked expression spec for hash identifiers.
     """
     if not required:
         return hash_expr_ir(spec=spec, use_128=use_128)
     mask_expr = _required_mask_expr(required)
     hashed_expr = _hash_expr_ir(spec, use_128=use_128)
     masked = _call_expr("if_else", mask_expr, hashed_expr, _literal_expr(None))
-    return SqlExprSpec(expr_ir=masked)
+    return ExprSpec(expr_ir=masked)
 
 
 def hash_expr_ir_from_parts(
     *,
     prefix: str,
-    parts: Sequence[SqlExprSpec],
+    parts: Sequence[ExprSpec],
     null_sentinel: str,
     as_string: bool,
     use_128: bool | None = None,
-) -> SqlExprSpec:
+) -> ExprSpec:
     """Return an expression spec for expression parts.
 
     Returns
     -------
-    SqlExprSpec
-        Expression spec that hashes expression parts with a prefix.
+    ExprSpec
+        Expression spec for hashing the provided parts.
     """
-    policy_name, dialect = _resolve_parts_policy(parts)
     prepared = [_coalesced_expr(_require_expr_ir(spec), null_sentinel) for spec in parts]
     if prefix:
         prepared.insert(0, _literal_expr(prefix))
@@ -202,25 +160,25 @@ def hash_expr_ir_from_parts(
     hash_name = _hash_name_from_flags(as_string=as_string, use_128=use_128)
     hashed = _call_expr(hash_name, joined)
     if not as_string:
-        return SqlExprSpec(expr_ir=hashed, policy_name=policy_name, dialect=dialect)
+        return ExprSpec(expr_ir=hashed)
     prefixed = _prefixed_hash_expr(hashed, prefix=prefix)
-    return SqlExprSpec(expr_ir=prefixed, policy_name=policy_name, dialect=dialect)
+    return ExprSpec(expr_ir=prefixed)
 
 
 def stable_id_expr_ir_from_parts(
     *,
     prefix: str,
-    parts: Sequence[SqlExprSpec],
+    parts: Sequence[ExprSpec],
     null_sentinel: str,
     as_string: bool,
     use_128: bool | None = None,
-) -> SqlExprSpec:
+) -> ExprSpec:
     """Return a stable_id expression spec for expression parts.
 
     Returns
     -------
-    SqlExprSpec
-        Expression spec that compiles to a stable_id UDF call.
+    ExprSpec
+        Expression spec for stable_id identifiers.
     """
     if not as_string:
         return hash_expr_ir_from_parts(
@@ -230,27 +188,10 @@ def stable_id_expr_ir_from_parts(
             as_string=as_string,
             use_128=use_128,
         )
-    policy_name, dialect = _resolve_parts_policy(parts)
     prepared = [_coalesced_expr(_require_expr_ir(spec), null_sentinel) for spec in parts]
     joined = _join_parts_expr(prepared)
     stable_id_expr = _call_expr("stable_id", _literal_expr(prefix), joined)
-    return SqlExprSpec(expr_ir=stable_id_expr, policy_name=policy_name, dialect=dialect)
-
-
-def _resolve_parts_policy(parts: Sequence[SqlExprSpec]) -> tuple[str, str | None]:
-    if not parts:
-        return "datafusion_compile", None
-    policy_names = {spec.policy_name for spec in parts}
-    if len(policy_names) > 1:
-        msg = f"Mixed SQL policy names in hash expression parts: {sorted(policy_names)}."
-        raise ValueError(msg)
-    dialects = {spec.dialect for spec in parts if spec.dialect is not None}
-    if len(dialects) > 1:
-        msg = f"Mixed SQL dialects in hash expression parts: {sorted(dialects)}."
-        raise ValueError(msg)
-    policy_name = next(iter(policy_names))
-    dialect = next(iter(dialects)) if dialects else None
-    return policy_name, dialect
+    return ExprSpec(expr_ir=stable_id_expr)
 
 
 def _hash_expr_ir(spec: HashExprSpec, *, use_128: bool | None) -> ExprIR:
@@ -352,16 +293,17 @@ def _call_expr(name: str, *args: ExprIR) -> ExprIR:
     return ExprIR(op="call", name=name, args=tuple(args))
 
 
-def _require_expr_ir(spec: SqlExprSpec) -> ExprIR:
+def _require_expr_ir(spec: ExprSpec) -> ExprIR:
     expr_ir = spec.expr_ir
     if expr_ir is None:
-        msg = "SqlExprSpec missing expr_ir; SQL execution is not supported."
+        msg = "ExprSpec missing expr_ir; SQL execution is not supported."
         raise ValueError(msg)
     return expr_ir
 
 
 __all__ = [
     "HashExprSpec",
+    "HashExprSpecOptions",
     "hash_expr_ir",
     "hash_expr_ir_from_parts",
     "hash_expr_spec_factory",

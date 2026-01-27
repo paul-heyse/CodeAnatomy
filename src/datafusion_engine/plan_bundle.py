@@ -15,6 +15,10 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.delta_protocol import DeltaFeatureGate
+from datafusion_engine.delta_store_policy import (
+    apply_delta_store_policy,
+    delta_store_policy_hash,
+)
 from serde_msgspec import dumps_msgpack
 
 if TYPE_CHECKING:
@@ -75,6 +79,14 @@ class PlanBundleOptions:
     delta_inputs: Sequence[DeltaInputPin] = ()
     session_runtime: SessionRuntime | None = None
     scan_units: Sequence[ScanUnit] = ()
+
+
+@dataclass(frozen=True)
+class PlanDetailContext:
+    """Optional inputs for plan detail diagnostics."""
+
+    cdf_windows: Sequence[Mapping[str, object]] = ()
+    delta_store_policy_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -406,6 +418,12 @@ def _bundle_components(
         )
     scan_unit_pins = _delta_inputs_from_scan_units(scan_units)
     merged_delta_inputs = _merge_delta_inputs(options.delta_inputs, scan_unit_pins)
+    cdf_windows = _cdf_window_snapshot(options.session_runtime)
+    store_policy_hash = None
+    if options.session_runtime is not None:
+        store_policy_hash = delta_store_policy_hash(
+            options.session_runtime.profile.delta_store_policy
+        )
     fingerprint = _hash_plan(
         PlanFingerprintInputs(
             substrait_bytes=substrait_bytes,
@@ -414,6 +432,7 @@ def _bundle_components(
             required_udfs=required.required_udfs,
             required_rewrite_tags=required.required_rewrite_tags,
             delta_inputs=merged_delta_inputs,
+            delta_store_policy_hash=store_policy_hash,
         )
     )
 
@@ -442,7 +461,16 @@ def _bundle_components(
         merged_delta_inputs=merged_delta_inputs,
         required_udfs=required.required_udfs,
         required_rewrite_tags=required.required_rewrite_tags,
-        plan_details=_plan_details(df, logical=logical, optimized=optimized, execution=execution),
+        plan_details=_plan_details(
+            df,
+            logical=logical,
+            optimized=optimized,
+            execution=execution,
+            detail_context=PlanDetailContext(
+                cdf_windows=cdf_windows,
+                delta_store_policy_hash=store_policy_hash,
+            ),
+        ),
     )
 
 
@@ -588,6 +616,7 @@ class PlanFingerprintInputs:
     required_udfs: Sequence[str]
     required_rewrite_tags: Sequence[str]
     delta_inputs: Sequence[DeltaInputPin]
+    delta_store_policy_hash: str | None
 
 
 def _hash_plan(inputs: PlanFingerprintInputs) -> str:
@@ -635,6 +664,7 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
         ("required_udfs", tuple(sorted(inputs.required_udfs))),
         ("required_rewrite_tags", tuple(sorted(inputs.required_rewrite_tags))),
         ("delta_inputs", delta_payload),
+        ("delta_store_policy_hash", inputs.delta_store_policy_hash),
     )
     return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
 
@@ -705,18 +735,58 @@ def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str,
     if runtime_profile is None:
         return locations
     for name, location in runtime_profile.extract_dataset_locations.items():
-        locations.setdefault(name, cast("DatasetLocation", location))
+        locations.setdefault(
+            name,
+            apply_delta_store_policy(
+                cast("DatasetLocation", location),
+                policy=runtime_profile.delta_store_policy,
+            ),
+        )
     for name, location in runtime_profile.scip_dataset_locations.items():
-        locations.setdefault(name, cast("DatasetLocation", location))
+        locations.setdefault(
+            name,
+            apply_delta_store_policy(
+                cast("DatasetLocation", location),
+                policy=runtime_profile.delta_store_policy,
+            ),
+        )
     for catalog in runtime_profile.registry_catalogs.values():
         for name in catalog.names():
             if name in locations:
                 continue
             try:
-                locations[name] = cast("DatasetLocation", catalog.get(name))
+                locations[name] = apply_delta_store_policy(
+                    cast("DatasetLocation", catalog.get(name)),
+                    policy=runtime_profile.delta_store_policy,
+                )
             except KeyError:
                 continue
     return locations
+
+
+def _cdf_window_snapshot(
+    session_runtime: SessionRuntime | None,
+) -> tuple[dict[str, object], ...]:
+    if session_runtime is None:
+        return ()
+    locations = _dataset_location_map(session_runtime)
+    payloads: list[dict[str, object]] = []
+    for name, location in sorted(locations.items(), key=lambda item: item[0]):
+        options = location.delta_cdf_options
+        if options is None:
+            continue
+        payloads.append(
+            {
+                "dataset_name": name,
+                "table_uri": str(location.path),
+                "starting_version": options.starting_version,
+                "ending_version": options.ending_version,
+                "starting_timestamp": options.starting_timestamp,
+                "ending_timestamp": options.ending_timestamp,
+                "allow_out_of_range": options.allow_out_of_range,
+            }
+        )
+    return tuple(payloads)
 
 
 def _plan_display(plan: object | None, *, method: str) -> str | None:
@@ -767,6 +837,7 @@ def _plan_details(
     logical: object | None,
     optimized: object | None,
     execution: object | None,
+    detail_context: PlanDetailContext | None = None,
 ) -> dict[str, object]:
     """Collect plan details for diagnostics.
 
@@ -775,6 +846,7 @@ def _plan_details(
     dict[str, object]
         Diagnostic plan metadata.
     """
+    context = detail_context or PlanDetailContext()
     details: dict[str, object] = {}
     details["logical_plan"] = _plan_display(logical, method="display_indent_schema")
     details["optimized_plan"] = _plan_display(optimized, method="display_indent_schema")
@@ -784,6 +856,10 @@ def _plan_details(
     details["partition_count"] = _plan_partition_count(execution)
     schema_names: list[str] = list(df.schema().names) if hasattr(df.schema(), "names") else []
     details["schema_names"] = schema_names
+    if context.cdf_windows:
+        details["cdf_windows"] = [dict(window) for window in context.cdf_windows]
+    if context.delta_store_policy_hash is not None:
+        details["delta_store_policy_hash"] = context.delta_store_policy_hash
     return details
 
 

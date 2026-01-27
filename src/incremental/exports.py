@@ -13,6 +13,7 @@ from arrowdsl.core.interop import TableLike, coerce_table_like
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
 from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
+from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 
@@ -57,7 +58,7 @@ def _build_exported_defs_base(
     rel_table_name: str | None,
     has_container_def_id: bool,
 ) -> pa.Table:
-    ctx = runtime.session_context()
+    ctx = runtime.session_runtime().ctx
     base_df = ctx.table(cst_table_name)
     if has_container_def_id:
         base_df = base_df.filter(col("container_def_id").is_null())
@@ -93,7 +94,7 @@ def _build_exported_defs_base(
         symbol_expr.alias("symbol"),
         symbol_roles_expr.alias("symbol_roles"),
     )
-    table = df.to_arrow_table()
+    table = execute_df_to_table(runtime, df, view_name="incremental_exported_defs")
     if table.num_rows == 0:
         return _empty_exported_defs(dataset_schema("dim_exported_defs_v1"))
     return table

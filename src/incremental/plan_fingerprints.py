@@ -1,8 +1,4 @@
-"""Plan fingerprint persistence for incremental scheduling.
-
-Plan fingerprints are based on DataFusion plan bundles and Substrait bytes,
-replacing SQLGlot AST-based fingerprints.
-"""
+"""Plan fingerprint persistence for incremental scheduling."""
 
 from __future__ import annotations
 
@@ -14,12 +10,14 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
+from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import read_delta_table_via_facade
+from incremental.write_helpers import (
+    IncrementalDeltaWriteRequest,
+    write_delta_table_via_pipeline,
+)
 from storage.deltalake import (
-    DeltaWriteOptions,
     delta_table_version,
-    enable_delta_features,
-    write_delta_table,
 )
 
 if TYPE_CHECKING:
@@ -87,11 +85,11 @@ def read_plan_snapshots(
     path = _plan_fingerprints_path(state_store)
     if not path.exists():
         return {}
-    storage = context.storage
+    resolved = context.resolve_storage(table_uri=str(path))
     version = delta_table_version(
         str(path),
-        storage_options=storage.storage_options,
-        log_storage_options=storage.log_storage_options,
+        storage_options=resolved.storage_options,
+        log_storage_options=resolved.log_storage_options,
     )
     if version is None:
         return {}
@@ -167,25 +165,31 @@ def write_plan_snapshots(
             },
             num_rows=len(names),
         )
-    resolved_storage = storage_options or context.storage.storage_options
-    resolved_log_storage = log_storage_options or context.storage.log_storage_options
-    ctx = context.runtime.session_context()
-    write_delta_table(
-        cast("pa.Table", table),
-        str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    resolved = context.resolve_storage(table_uri=str(path))
+    resolved_storage = {
+        str(key): str(value) for key, value in dict(resolved.storage_options or {}).items()
+    }
+    resolved_log_storage = {
+        str(key): str(value) for key, value in dict(resolved.log_storage_options or {}).items()
+    }
+    if storage_options:
+        resolved_storage.update({str(key): str(value) for key, value in storage_options.items()})
+    if log_storage_options:
+        resolved_log_storage.update(
+            {str(key): str(value) for key, value in log_storage_options.items()}
+        )
+    write_delta_table_via_pipeline(
+        runtime=context.runtime,
+        table=cast("pa.Table", table),
+        request=IncrementalDeltaWriteRequest(
+            destination=str(path),
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
+            commit_metadata={"snapshot_kind": "plan_fingerprints"},
             storage_options=resolved_storage,
             log_storage_options=resolved_log_storage,
-            commit_metadata={"snapshot_kind": "plan_fingerprints"},
+            operation_id="incremental_plan_fingerprints",
         ),
-        ctx=ctx,
-    )
-    enable_delta_features(
-        str(path),
-        storage_options=resolved_storage,
-        log_storage_options=resolved_log_storage,
     )
     return str(path)
 

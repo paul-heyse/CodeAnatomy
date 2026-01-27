@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from datafusion import SessionContext
 
@@ -23,6 +23,9 @@ from storage.deltalake.file_pruning import (
     StatsFilter,
     evaluate_and_select_files,
 )
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 _EQUALS_FILTER_PATTERN = re.compile(
     r"([A-Za-z_][A-Za-z0-9_.]*)\s*(?:=|==)\s*['\"]?([^'\"\s]+)['\"]?"
@@ -94,6 +97,18 @@ class ScanUnit:
     candidate_files: tuple[Path, ...]
     pushed_filters: tuple[str, ...]
     projected_columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ScanPlanArtifactRequest:
+    """Inputs required to record a scan plan artifact."""
+
+    runtime_profile: DataFusionRuntimeProfile | None
+    dataset_name: str
+    location: DatasetLocation
+    payload: _DeltaAddActionsPayload
+    pruning: object
+    lineage: ScanLineage
 
 
 def plan_scan_unit(
@@ -238,12 +253,14 @@ def _delta_scan_candidates(
         Path(str(location.path)) / Path(path) for path in pruning.candidate_paths
     )
     _record_scan_plan_artifact(
-        runtime_profile=runtime_profile,
-        dataset_name=dataset_name,
-        location=location,
-        payload=payload,
-        pruning=pruning,
-        lineage=lineage,
+        _ScanPlanArtifactRequest(
+            runtime_profile=runtime_profile,
+            dataset_name=dataset_name,
+            location=location,
+            payload=payload,
+            pruning=pruning,
+            lineage=lineage,
+        )
     )
     return (
         candidate_files,
@@ -469,40 +486,32 @@ def _storage_options_hash(location: DatasetLocation | None) -> str | None:
     return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
 
 
-def _record_scan_plan_artifact(
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None,
-    dataset_name: str,
-    location: DatasetLocation,
-    payload: _DeltaAddActionsPayload,
-    pruning: object,
-    lineage: ScanLineage,
-) -> None:
-    if runtime_profile is None:
+def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:
+    if request.runtime_profile is None:
         return
     from datafusion_engine.delta_observability import (
         DeltaScanPlanArtifact,
         record_delta_scan_plan,
     )
 
-    total_files = getattr(pruning, "total_files", 0)
-    candidate_files = getattr(pruning, "candidate_count", 0)
-    pruned_files = getattr(pruning, "pruned_count", 0)
+    total_files = getattr(request.pruning, "total_files", 0)
+    candidate_files = getattr(request.pruning, "candidate_count", 0)
+    pruned_files = getattr(request.pruning, "pruned_count", 0)
     record_delta_scan_plan(
-        runtime_profile,
+        request.runtime_profile,
         artifact=DeltaScanPlanArtifact(
-            dataset_name=dataset_name,
-            table_uri=str(location.path),
-            delta_version=payload.delta_version,
-            snapshot_timestamp=payload.snapshot_timestamp,
+            dataset_name=request.dataset_name,
+            table_uri=str(request.location.path),
+            delta_version=request.payload.delta_version,
+            snapshot_timestamp=request.payload.snapshot_timestamp,
             total_files=int(total_files),
             candidate_files=int(candidate_files),
             pruned_files=int(pruned_files),
-            pushed_filters=lineage.pushed_filters,
-            projected_columns=lineage.projected_columns,
-            delta_protocol=payload.delta_protocol,
-            delta_feature_gate=resolve_delta_feature_gate(location),
-            storage_options_hash=_storage_options_hash(location),
+            pushed_filters=request.lineage.pushed_filters,
+            projected_columns=request.lineage.projected_columns,
+            delta_protocol=request.payload.delta_protocol,
+            delta_feature_gate=resolve_delta_feature_gate(request.location),
+            storage_options_hash=_storage_options_hash(request.location),
         ),
     )
 

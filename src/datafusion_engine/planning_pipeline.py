@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from datafusion import SessionContext
 
 from datafusion_engine.dataset_registry import DatasetLocation
+from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.lineage_datafusion import LineageReport
 from datafusion_engine.plan_bundle import build_plan_bundle
 from datafusion_engine.scan_overrides import apply_scan_unit_overrides
@@ -191,15 +192,18 @@ def _plan_view_nodes(
 def _dataset_location_map(profile: DataFusionRuntimeProfile) -> dict[str, DatasetLocation]:
     locations: dict[str, DatasetLocation] = {}
     for name, location in profile.extract_dataset_locations.items():
-        locations.setdefault(name, location)
+        locations.setdefault(name, apply_delta_store_policy(location, policy=profile.delta_store_policy))
     for name, location in profile.scip_dataset_locations.items():
-        locations.setdefault(name, location)
+        locations.setdefault(name, apply_delta_store_policy(location, policy=profile.delta_store_policy))
     for catalog in profile.registry_catalogs.values():
         for name in catalog.names():
             if name in locations:
                 continue
             try:
-                locations[name] = catalog.get(name)
+                locations[name] = apply_delta_store_policy(
+                    catalog.get(name),
+                    policy=profile.delta_store_policy,
+                )
             except KeyError:
                 continue
     return locations

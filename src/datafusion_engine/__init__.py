@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         DataFusionCompileOptions,
         DataFusionSqlPolicy,
     )
+    from datafusion_engine.delta_store_policy import DeltaStorePolicy
     from datafusion_engine.diagnostics import (
         DiagnosticsContext,
         DiagnosticsRecorder,
@@ -128,6 +129,7 @@ __all__ = [
     "DataFusionPlanBundle",
     "DataFusionRuntimeProfile",
     "DataFusionSqlPolicy",
+    "DeltaStorePolicy",
     "DiagnosticsContext",
     "DiagnosticsRecorder",
     "DiagnosticsSink",
@@ -199,6 +201,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "DataFusionCompileOptions": ("datafusion_engine.compile_options", "DataFusionCompileOptions"),
     "DataFusionConfigPolicy": ("datafusion_engine.runtime", "DataFusionConfigPolicy"),
     "DataFusionRuntimeProfile": ("datafusion_engine.runtime", "DataFusionRuntimeProfile"),
+    "DeltaStorePolicy": ("datafusion_engine.delta_store_policy", "DeltaStorePolicy"),
     "SchemaHardeningProfile": ("datafusion_engine.runtime", "SchemaHardeningProfile"),
     "DataFusionSqlPolicy": ("datafusion_engine.compile_options", "DataFusionSqlPolicy"),
     "MemoryPool": ("datafusion_engine.runtime", "MemoryPool"),

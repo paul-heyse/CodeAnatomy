@@ -10,17 +10,20 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_schema
+from datafusion_engine.delta_store_policy import resolve_delta_store_policy
 from datafusion_engine.view_artifacts import view_artifact_payload_table
+from datafusion_engine.write_pipeline import WriteMode
 from engine.runtime_profile import runtime_profile_snapshot
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.runtime import IncrementalRuntime
 from incremental.state_store import StateStore
+from incremental.write_helpers import (
+    IncrementalDeltaWriteRequest,
+    write_delta_table_via_pipeline,
+)
 from serde_msgspec import to_builtins
 from storage.deltalake import (
-    DeltaWriteOptions,
     StorageOptions,
-    enable_delta_features,
-    write_delta_table,
 )
 
 _CDF_CURSOR_SCHEMA = pa.schema(
@@ -54,23 +57,20 @@ def write_incremental_metadata(
     }
     table = pa.Table.from_pylist([payload])
     path = state_store.incremental_metadata_path()
-    result = write_delta_table(
-        table,
-        str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    write_delta_table_via_pipeline(
+        runtime=runtime,
+        table=table,
+        request=IncrementalDeltaWriteRequest(
+            destination=str(path),
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
             commit_metadata={"snapshot_kind": "incremental_metadata"},
             storage_options=storage_options,
             log_storage_options=log_storage_options,
+            operation_id="incremental_metadata",
         ),
     )
-    enable_delta_features(
-        result.path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
-    )
-    return result.path
+    return str(path)
 
 
 def write_cdf_cursor_snapshot(
@@ -110,23 +110,20 @@ def write_cdf_cursor_snapshot(
     else:
         table = table_from_schema(_CDF_CURSOR_SCHEMA, columns={}, num_rows=0)
     path = state_store.cdf_cursor_snapshot_path()
-    result = write_delta_table(
-        table,
-        str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    write_delta_table_via_pipeline(
+        runtime=runtime,
+        table=table,
+        request=IncrementalDeltaWriteRequest(
+            destination=str(path),
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
             commit_metadata={"snapshot_kind": "cdf_cursor_snapshot"},
             storage_options=storage_options,
             log_storage_options=log_storage_options,
+            operation_id="incremental_cdf_cursor_snapshot",
         ),
     )
-    enable_delta_features(
-        result.path,
-        storage_options=storage_options,
-        log_storage_options=log_storage_options,
-    )
-    return result.path
+    return str(path)
 
 
 @dataclass(frozen=True)
@@ -136,6 +133,22 @@ class ArtifactWriteContext:
     runtime: IncrementalRuntime
     storage_options: StorageOptions | None = None
     log_storage_options: StorageOptions | None = None
+
+    def resolve_storage(self, *, table_uri: str) -> tuple[dict[str, str], dict[str, str]]:
+        """Return storage and log-store options for the artifact table.
+
+        Returns
+        -------
+        tuple[dict[str, str], dict[str, str]]
+            Resolved storage and log-store options.
+        """
+        storage, log_storage = resolve_delta_store_policy(
+            table_uri=table_uri,
+            policy=self.runtime.profile.delta_store_policy,
+            storage_options=self.storage_options,
+            log_storage_options=self.log_storage_options,
+        )
+        return storage, log_storage
 
 
 def write_incremental_artifacts(
@@ -193,23 +206,21 @@ def _write_artifact_rows(
     if not rows:
         return None
     table = _artifacts_to_table(rows)
-    result = write_delta_table(
-        table,
-        str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    storage_options, log_storage_options = context.resolve_storage(table_uri=str(path))
+    write_delta_table_via_pipeline(
+        runtime=context.runtime,
+        table=table,
+        request=IncrementalDeltaWriteRequest(
+            destination=str(path),
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
             commit_metadata={"artifact_name": name},
-            storage_options=context.storage_options,
-            log_storage_options=context.log_storage_options,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            operation_id=f"incremental_artifact::{name}",
         ),
     )
-    enable_delta_features(
-        result.path,
-        storage_options=context.storage_options,
-        log_storage_options=context.log_storage_options,
-    )
-    return result.path
+    return str(path)
 
 
 def _write_view_artifact_rows(
@@ -222,23 +233,21 @@ def _write_view_artifact_rows(
     if not rows:
         return None
     table = view_artifact_payload_table(rows)
-    result = write_delta_table(
-        table,
-        str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    storage_options, log_storage_options = context.resolve_storage(table_uri=str(path))
+    write_delta_table_via_pipeline(
+        runtime=context.runtime,
+        table=table,
+        request=IncrementalDeltaWriteRequest(
+            destination=str(path),
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
             commit_metadata={"artifact_name": name},
-            storage_options=context.storage_options,
-            log_storage_options=context.log_storage_options,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            operation_id=f"incremental_view_artifacts::{name}",
         ),
     )
-    enable_delta_features(
-        result.path,
-        storage_options=context.storage_options,
-        log_storage_options=context.log_storage_options,
-    )
-    return result.path
+    return str(path)
 
 
 def _write_artifact_table(
@@ -254,23 +263,21 @@ def _write_artifact_table(
     if not artifacts:
         return None
     table = _artifacts_to_table(artifacts)
-    result = write_delta_table(
-        table,
-        str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    storage_options, log_storage_options = context.resolve_storage(table_uri=str(path))
+    write_delta_table_via_pipeline(
+        runtime=context.runtime,
+        table=table,
+        request=IncrementalDeltaWriteRequest(
+            destination=str(path),
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
             commit_metadata={"artifact_name": name},
-            storage_options=context.storage_options,
-            log_storage_options=context.log_storage_options,
+            storage_options=storage_options,
+            log_storage_options=log_storage_options,
+            operation_id=f"incremental_artifact::{name}",
         ),
     )
-    enable_delta_features(
-        result.path,
-        storage_options=context.storage_options,
-        log_storage_options=context.log_storage_options,
-    )
-    return result.path
+    return str(path)
 
 
 def _artifacts_to_table(artifacts: Sequence[Mapping[str, object]]) -> pa.Table:

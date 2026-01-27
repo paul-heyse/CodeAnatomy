@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from datafusion.expr import Expr
 from incremental.cdf_filters import CdfChangeType
 from incremental.cdf_runtime import CdfReadResult
+from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 from incremental.types import IncrementalFileChanges
 
@@ -44,7 +45,7 @@ def file_changes_from_cdf(
     if cdf_result is None or cdf_result.table.num_rows == 0:
         return IncrementalFileChanges()
 
-    ctx = runtime.session_context()
+    ctx = runtime.session_runtime().ctx
     with TempTableRegistry(runtime) as registry:
         cdf_name = f"__cdf_changes_{uuid.uuid4().hex}"
         _ = datafusion_from_arrow(ctx, name=cdf_name, value=cdf_result.table)
@@ -52,6 +53,8 @@ def file_changes_from_cdf(
         df = ctx.table(cdf_name)
         changed = _collect_file_ids(
             df,
+            runtime=runtime,
+            view_name="incremental_cdf_changed_files",
             change_types=(
                 CdfChangeType.INSERT.to_cdf_column_value(),
                 CdfChangeType.UPDATE_POSTIMAGE.to_cdf_column_value(),
@@ -60,6 +63,8 @@ def file_changes_from_cdf(
         )
         deleted = _collect_file_ids(
             df,
+            runtime=runtime,
+            view_name="incremental_cdf_deleted_files",
             change_types=(CdfChangeType.DELETE.to_cdf_column_value(),),
             file_id_column=file_id_column,
         )
@@ -75,6 +80,8 @@ def file_changes_from_cdf(
 def _collect_file_ids(
     df: DataFrame,
     *,
+    runtime: IncrementalRuntime,
+    view_name: str,
     change_types: tuple[str, ...],
     file_id_column: str,
 ) -> tuple[str, ...]:
@@ -87,7 +94,8 @@ def _collect_file_ids(
     """
     file_id_col = col(file_id_column)
     predicate = _cdf_change_predicate(change_types) & file_id_col.is_not_null()
-    table = df.filter(predicate).select(file_id_col.alias("file_id")).distinct().to_arrow_table()
+    filtered = df.filter(predicate).select(file_id_col.alias("file_id")).distinct()
+    table = execute_df_to_table(runtime, filtered, view_name=view_name)
     values = {value for value in table["file_id"].to_pylist() if isinstance(value, str)}
     return tuple(sorted(values))
 

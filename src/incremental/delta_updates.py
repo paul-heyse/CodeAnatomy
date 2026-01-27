@@ -8,19 +8,22 @@ from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
+from datafusion_engine.dataset_registry import resolve_delta_constraints
 from datafusion_engine.extract_bundles import dataset_name_for_output
+from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import DeltaAccessContext
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
+from incremental.write_helpers import (
+    IncrementalDeltaWriteRequest,
+    write_delta_table_via_pipeline,
+)
 from normalize.registry_runtime import dataset_name_from_alias
 from storage.deltalake import (
-    DeltaWriteOptions,
     coerce_delta_table,
     delta_delete_where,
-    enable_delta_features,
     idempotent_commit_properties,
-    write_delta_table,
 )
 
 if TYPE_CHECKING:
@@ -64,6 +67,8 @@ def upsert_partitioned_dataset(
     ------
     ValueError
         Raised when required partition columns are missing.
+    RuntimeError
+        Raised when the Delta write result is unavailable.
     """
     if spec.partition_column not in table.column_names:
         msg = f"Partition column {spec.partition_column!r} is required for dataset {spec.name!r}."
@@ -87,18 +92,28 @@ def upsert_partitioned_dataset(
         context=context,
         dataset_name=spec.name,
     )
-    result = write_delta_table(
-        data,
-        base_dir,
-        options=DeltaWriteOptions(
-            mode="append",
+    dataset_location = context.runtime.profile.dataset_location(spec.name)
+    extra_constraints = resolve_delta_constraints(dataset_location) if dataset_location else ()
+    resolved_storage = context.resolve_storage(table_uri=base_dir)
+    write_result = write_delta_table_via_pipeline(
+        runtime=context.runtime,
+        table=data,
+        request=IncrementalDeltaWriteRequest(
+            destination=base_dir,
+            mode=WriteMode.APPEND,
             schema_mode="merge",
             partition_by=(spec.partition_column,),
-            storage_options=context.storage.storage_options,
-            log_storage_options=context.storage.log_storage_options,
+            storage_options=resolved_storage.storage_options,
+            log_storage_options=resolved_storage.log_storage_options,
+            constraints=extra_constraints,
+            commit_metadata={"operation": "append", "dataset": spec.name},
+            operation_id=f"incremental_partitioned::{spec.name}",
         ),
     )
-    return result.path
+    if write_result.delta_result is None:
+        msg = f"Partitioned delta write returned no result for {spec.name!r}."
+        raise RuntimeError(msg)
+    return write_result.delta_result.path
 
 
 def write_overwrite_dataset(
@@ -114,6 +129,11 @@ def write_overwrite_dataset(
     -------
     dict[str, str]
         Mapping of dataset name to dataset path.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Delta write result is unavailable.
     """
     metadata = spec.commit_metadata
     data = coerce_delta_table(
@@ -122,23 +142,27 @@ def write_overwrite_dataset(
         encoding_policy=encoding_policy_from_schema(spec.schema),
     )
     target = str(state_store.dataset_dir(spec.name))
-    result = write_delta_table(
-        data,
-        target,
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    dataset_location = context.runtime.profile.dataset_location(spec.name)
+    extra_constraints = resolve_delta_constraints(dataset_location) if dataset_location else ()
+    resolved_storage = context.resolve_storage(table_uri=target)
+    write_result = write_delta_table_via_pipeline(
+        runtime=context.runtime,
+        table=data,
+        request=IncrementalDeltaWriteRequest(
+            destination=target,
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
             commit_metadata=dict(metadata) if metadata else None,
-            storage_options=context.storage.storage_options,
-            log_storage_options=context.storage.log_storage_options,
+            storage_options=resolved_storage.storage_options,
+            log_storage_options=resolved_storage.log_storage_options,
+            constraints=extra_constraints,
+            operation_id=f"incremental_overwrite::{spec.name}",
         ),
     )
-    enable_delta_features(
-        result.path,
-        storage_options=context.storage.storage_options,
-        log_storage_options=context.storage.log_storage_options,
-    )
-    return {spec.name: result.path}
+    if write_result.delta_result is None:
+        msg = f"Overwrite delta write returned no result for {spec.name!r}."
+        raise RuntimeError(msg)
+    return {spec.name: write_result.delta_result.path}
 
 
 def upsert_cpg_nodes(
@@ -375,18 +399,24 @@ def _delete_delta_partitions(
         idempotent=commit_options,
         extra_metadata=commit_metadata,
     )
-    ctx = context.runtime.session_context()
+    ctx = context.runtime.session_runtime().ctx
     from storage.deltalake import DeltaDeleteWhereRequest
 
+    dataset_location = (
+        context.runtime.profile.dataset_location(dataset_name) if dataset_name else None
+    )
+    extra_constraints = resolve_delta_constraints(dataset_location) if dataset_location else ()
+    resolved_storage = context.resolve_storage(table_uri=base_dir)
     delta_delete_where(
         ctx,
         request=DeltaDeleteWhereRequest(
             path=base_dir,
             predicate=predicate,
-            storage_options=context.storage.storage_options,
-            log_storage_options=context.storage.log_storage_options,
+            storage_options=resolved_storage.storage_options,
+            log_storage_options=resolved_storage.log_storage_options,
             commit_properties=commit_properties,
             commit_metadata=commit_metadata,
+            extra_constraints=extra_constraints,
             runtime_profile=context.runtime.profile,
             dataset_name=dataset_name,
         ),

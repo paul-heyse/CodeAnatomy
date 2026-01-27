@@ -14,6 +14,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
 from incremental.delta_context import DeltaAccessContext, register_delta_df
+from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 
@@ -92,7 +93,8 @@ def _compute_changed_exports_table(
         )
         added_df = _added_exports_df(curr_df, prev_df, changed_df, key_cols=key_cols)
         removed_df = _removed_exports_df(curr_df, prev_df, changed_df, key_cols=key_cols)
-        return added_df.union(removed_df).to_arrow_table()
+        combined = added_df.union(removed_df)
+        return execute_df_to_table(runtime, combined, view_name="incremental_changed_exports")
 
 
 def _prefixed_sources(
@@ -103,7 +105,7 @@ def _prefixed_sources(
     curr_table: pa.Table,
     changed_table: pa.Table,
 ) -> tuple[DataFrame, DataFrame, DataFrame]:
-    ctx = runtime.session_context()
+    ctx = runtime.session_runtime().ctx
     curr_name = registry.register_table(curr_table, prefix="curr_exports")
     changed_name = registry.register_table(changed_table, prefix="changed_files")
     prev_name = _register_prev_exports(

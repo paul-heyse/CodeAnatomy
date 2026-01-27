@@ -5,15 +5,17 @@ from __future__ import annotations
 import contextlib
 import uuid
 from dataclasses import dataclass
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 import pyarrow as pa
-from datafusion import SessionContext
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
 
 
 @dataclass
@@ -22,7 +24,7 @@ class IncrementalRuntime:
 
     execution_ctx: ExecutionContext
     profile: DataFusionRuntimeProfile
-    _ctx: SessionContext | None = None
+    _session_runtime: SessionRuntime
 
     @classmethod
     def build(
@@ -51,19 +53,28 @@ class IncrementalRuntime:
         return cls(
             execution_ctx=exec_ctx,
             profile=runtime_profile,
+            _session_runtime=runtime_profile.session_runtime(),
         )
 
+    def session_runtime(self) -> SessionRuntime:
+        """Return the cached DataFusion SessionRuntime.
+
+        Returns
+        -------
+        SessionRuntime
+            Cached DataFusion session runtime.
+        """
+        return self._session_runtime
+
     def session_context(self) -> SessionContext:
-        """Return the cached DataFusion SessionContext.
+        """Return the DataFusion SessionContext for compatibility.
 
         Returns
         -------
         SessionContext
-            Cached or newly created DataFusion session.
+            Session context bound to the incremental SessionRuntime.
         """
-        if self._ctx is None:
-            self._ctx = self.profile.session_context()
-        return self._ctx
+        return self._session_runtime.ctx
 
     def execution_context(self) -> ExecutionContext:
         """Return the cached ExecutionContext for incremental work.
@@ -83,7 +94,7 @@ class IncrementalRuntime:
         DataFusionIOAdapter
             IO adapter bound to the runtime session.
         """
-        return DataFusionIOAdapter(ctx=self.session_context(), profile=self.profile)
+        return DataFusionIOAdapter(ctx=self._session_runtime.ctx, profile=self.profile)
 
 
 class TempTableRegistry:
@@ -91,7 +102,7 @@ class TempTableRegistry:
 
     def __init__(self, runtime: IncrementalRuntime) -> None:
         self._runtime = runtime
-        self._ctx = runtime.session_context()
+        self._ctx = runtime.session_runtime().ctx
         self._names: list[str] = []
 
     def register_table(self, table: pa.Table, *, prefix: str) -> str:

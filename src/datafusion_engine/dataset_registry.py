@@ -15,6 +15,8 @@ from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
     DataFusionScanOptions,
     DatasetSpec,
+    DeltaCdfPolicy,
+    DeltaMaintenancePolicy,
     DeltaScanOptions,
     DeltaSchemaPolicy,
     DeltaWritePolicy,
@@ -38,6 +40,8 @@ class DatasetLocation:
     delta_log_storage_options: Mapping[str, str] = field(default_factory=dict)
     delta_scan: DeltaScanOptions | None = None
     delta_cdf_options: DeltaCdfOptions | None = None
+    delta_cdf_policy: DeltaCdfPolicy | None = None
+    delta_maintenance_policy: DeltaMaintenancePolicy | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_feature_gate: DeltaFeatureGate | None = None
@@ -274,6 +278,9 @@ def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider
     """
     if location.datafusion_provider is not None:
         return location.datafusion_provider
+    cdf_policy = resolve_delta_cdf_policy(location)
+    if cdf_policy is not None and cdf_policy.required:
+        return "delta_cdf"
     if location.dataset_spec is not None and location.dataset_spec.dataset_kind == "delta_cdf":
         return "delta_cdf"
     return None
@@ -288,6 +295,21 @@ def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | 
         Delta scan options derived from the dataset location, when present.
     """
     return build_delta_scan_config(location)
+
+
+def resolve_delta_cdf_policy(location: DatasetLocation) -> DeltaCdfPolicy | None:
+    """Return Delta CDF policy for a dataset location.
+
+    Returns
+    -------
+    DeltaCdfPolicy | None
+        Resolved Delta CDF policy when configured.
+    """
+    if location.delta_cdf_policy is not None:
+        return location.delta_cdf_policy
+    if location.dataset_spec is not None:
+        return location.dataset_spec.delta_cdf_policy
+    return None
 
 
 def resolve_delta_log_storage_options(location: DatasetLocation) -> Mapping[str, str] | None:
@@ -332,6 +354,21 @@ def resolve_delta_schema_policy(location: DatasetLocation) -> DeltaSchemaPolicy 
         return location.delta_schema_policy
     if location.dataset_spec is not None:
         return location.dataset_spec.delta_schema_policy
+    return None
+
+
+def resolve_delta_maintenance_policy(location: DatasetLocation) -> DeltaMaintenancePolicy | None:
+    """Return Delta maintenance policy for a dataset location.
+
+    Returns
+    -------
+    DeltaMaintenancePolicy | None
+        Delta maintenance policy derived from the dataset location, when present.
+    """
+    if location.delta_maintenance_policy is not None:
+        return location.delta_maintenance_policy
+    if location.dataset_spec is not None:
+        return location.dataset_spec.delta_maintenance_policy
     return None
 
 
@@ -418,9 +455,11 @@ __all__ = [
     "resolve_datafusion_provider",
     "resolve_datafusion_scan_options",
     "resolve_dataset_schema",
+    "resolve_delta_cdf_policy",
     "resolve_delta_constraints",
     "resolve_delta_feature_gate",
     "resolve_delta_log_storage_options",
+    "resolve_delta_maintenance_policy",
     "resolve_delta_scan_options",
     "resolve_delta_schema_policy",
     "resolve_delta_write_policy",

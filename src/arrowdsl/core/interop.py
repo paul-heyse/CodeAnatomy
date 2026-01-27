@@ -9,7 +9,6 @@ from typing import Protocol, Self, cast, runtime_checkable
 import arro3.core as ac
 import pyarrow as pa
 import pyarrow.compute as _pc
-from pyarrow import acero as _acero
 
 
 @runtime_checkable
@@ -340,19 +339,6 @@ class ComputeExpression(Protocol):
 
 class UdfContext(Protocol):
     """Protocol for pyarrow.compute.UdfContext."""
-
-
-@runtime_checkable
-class DeclarationLike(Protocol):
-    """Protocol for pyarrow.acero.Declaration behavior we rely on."""
-
-    def to_table(self, *, use_threads: bool | None = None) -> TableLike:
-        """Execute the declaration and return a materialized table."""
-        ...
-
-    def to_reader(self, *, use_threads: bool | None = None) -> RecordBatchReaderLike:
-        """Execute the declaration and return a streaming reader."""
-        ...
 
 
 type ComputeOperand = ComputeExpression | ArrayLike | ChunkedArrayLike
@@ -694,19 +680,6 @@ class ComputeModule(Protocol):
     SetLookupOptions: Callable[..., object]
 
 
-class AceroModule(Protocol):
-    """Protocol for the subset of pyarrow.acero used in this repo."""
-
-    Declaration: Callable[..., DeclarationLike]
-    ScanNodeOptions: Callable[..., object]
-    FilterNodeOptions: Callable[..., object]
-    ProjectNodeOptions: Callable[..., object]
-    TableSourceNodeOptions: Callable[..., object]
-    OrderByNodeOptions: Callable[..., object]
-    AggregateNodeOptions: Callable[..., object]
-    HashJoinNodeOptions: Callable[..., object]
-
-
 Array: type[ArrayLike] = cast("type[ArrayLike]", pa.Array)
 ChunkedArray: type[ChunkedArrayLike] = cast("type[ChunkedArrayLike]", pa.ChunkedArray)
 Scalar: type[ScalarLike] = cast("type[ScalarLike]", pa.Scalar)
@@ -759,10 +732,8 @@ large_list_view: Callable[..., DataTypeLike] = pa.large_list_view
 struct: Callable[..., DataTypeLike] = pa.struct
 
 pc = cast("ComputeModule", _pc)
-acero = cast("AceroModule", _acero)
 
 __all__ = [
-    "AceroModule",
     "Array",
     "ArrayLike",
     "ArrowInvalid",
@@ -773,7 +744,6 @@ __all__ = [
     "ComputeModule",
     "DataType",
     "DataTypeLike",
-    "DeclarationLike",
     "Field",
     "FieldLike",
     "LargeListArray",
@@ -793,7 +763,6 @@ __all__ = [
     "TableGroupByLike",
     "TableLike",
     "UdfContext",
-    "acero",
     "array",
     "binary",
     "bool_",

@@ -52,6 +52,11 @@ from datafusion_engine.compile_options import (
     DataFusionSubstraitFallbackEvent,
     resolve_sql_policy,
 )
+from datafusion_engine.delta_store_policy import (
+    DeltaStorePolicy,
+    apply_delta_store_policy,
+    delta_store_policy_hash,
+)
 from datafusion_engine.diagnostics import (
     DiagnosticsSink,
     ensure_recorder_sink,
@@ -236,6 +241,13 @@ _OUTPUT_WRITES_SCHEMA = pa.struct(
         pa.field("datafusion_write_policy", _WRITE_POLICY_SCHEMA),
     ]
 )
+_DELTA_STORE_POLICY_SCHEMA = pa.struct(
+    [
+        pa.field("storage_options", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("log_storage_options", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("require_local_paths", pa.bool_()),
+    ]
+)
 _TELEMETRY_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32()),
@@ -246,6 +258,8 @@ _TELEMETRY_SCHEMA = pa.schema(
         pa.field("session_config", pa.list_(_MAP_ENTRY_SCHEMA)),
         pa.field("settings_hash", pa.string()),
         pa.field("external_table_options", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("delta_store_policy_hash", pa.string()),
+        pa.field("delta_store_policy", _DELTA_STORE_POLICY_SCHEMA),
         pa.field("sql_policy", _SQL_POLICY_SCHEMA),
         pa.field("param_identifier_allowlist", pa.list_(pa.string())),
         pa.field("write_policy", _WRITE_POLICY_SCHEMA),
@@ -1697,6 +1711,18 @@ def _datafusion_write_policy_payload(
     return policy.payload()
 
 
+def _delta_store_policy_payload(
+    policy: DeltaStorePolicy | None,
+) -> dict[str, object] | None:
+    if policy is None:
+        return None
+    return {
+        "storage_options": _map_entries(policy.storage_options),
+        "log_storage_options": _map_entries(policy.log_storage_options),
+        "require_local_paths": policy.require_local_paths,
+    }
+
+
 def _apply_builder(
     builder: RuntimeEnvBuilder,
     *,
@@ -2132,6 +2158,8 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         "external_table_options": (
             _map_entries(profile.external_table_options) if profile.external_table_options else None
         ),
+        "delta_store_policy_hash": delta_store_policy_hash(profile.delta_store_policy),
+        "delta_store_policy": _delta_store_policy_payload(profile.delta_store_policy),
         "sql_policy": sql_policy_payload,
         "param_identifier_allowlist": (
             list(profile.param_identifier_allowlist) if profile.param_identifier_allowlist else None
@@ -2344,6 +2372,8 @@ class _RuntimeDiagnosticsMixin:
             "enable_ident_normalization": _effective_ident_normalization(profile),
             "catalog_auto_load_location": profile.catalog_auto_load_location,
             "catalog_auto_load_format": profile.catalog_auto_load_format,
+            "delta_store_policy_hash": delta_store_policy_hash(profile.delta_store_policy),
+            "delta_store_policy": _delta_store_policy_payload(profile.delta_store_policy),
             "ast_catalog_location": profile.ast_catalog_location,
             "ast_catalog_format": profile.ast_catalog_format,
             "ast_external_location": profile.ast_external_location,
@@ -2835,6 +2865,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     enable_delta_plan_codecs: bool = False
     delta_plan_codec_physical: str = "delta_physical"
     delta_plan_codec_logical: str = "delta_logical"
+    delta_store_policy: DeltaStorePolicy | None = None
     enable_metrics: bool = False
     metrics_collector: Callable[[], Mapping[str, object] | None] | None = None
     enable_tracing: bool = False
@@ -3925,13 +3956,13 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         """
         location = self.extract_dataset_location(name)
         if location is not None:
-            return location
+            return apply_delta_store_policy(location, policy=self.delta_store_policy)
         mapped = self.scip_dataset_locations.get(name)
         if mapped is not None:
-            return mapped
+            return apply_delta_store_policy(mapped, policy=self.delta_store_policy)
         for catalog in self.registry_catalogs.values():
             if catalog.has(name):
-                return catalog.get(name)
+                return apply_delta_store_policy(catalog.get(name), policy=self.delta_store_policy)
         return None
 
     def dataset_location_or_raise(self, name: str) -> DatasetLocation:

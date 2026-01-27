@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import rustworkx as rx
 
+from datafusion_engine.delta_store_policy import apply_delta_store_policy
 from datafusion_engine.planning_pipeline import plan_with_delta_pins
 from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import (
@@ -587,15 +588,18 @@ def _dataset_location_map(
         return {}
     locations: dict[str, DatasetLocation] = {}
     for name, location in profile.extract_dataset_locations.items():
-        locations.setdefault(name, location)
+        locations.setdefault(name, apply_delta_store_policy(location, policy=profile.delta_store_policy))
     for name, location in profile.scip_dataset_locations.items():
-        locations.setdefault(name, location)
+        locations.setdefault(name, apply_delta_store_policy(location, policy=profile.delta_store_policy))
     for catalog in profile.registry_catalogs.values():
         for name in catalog.names():
             if name in locations:
                 continue
             try:
-                locations[name] = catalog.get(name)
+                locations[name] = apply_delta_store_policy(
+                    catalog.get(name),
+                    policy=profile.delta_store_policy,
+                )
             except KeyError:
                 continue
     return locations

@@ -58,6 +58,7 @@ def _snapshot_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
         "stable_id_parts": ["prefix", "part1"],
     }
     volatility = dict.fromkeys(scalar, "immutable")
+    rewrite_tags: dict[str, list[str]] = {name: [] for name in scalar}
     return {
         "scalar": scalar,
         "aggregate": [],
@@ -68,7 +69,8 @@ def _snapshot_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
         "signature_inputs": signature_inputs,
         "return_types": return_types,
         "volatility": volatility,
-        "rewrite_tags": {},
+        "rewrite_tags": rewrite_tags,
+        "domain_planner_names": [],
         # Maintain the key expected by diagnostics tests without requiring
         # native pycapsule payloads.
         "pycapsule_udfs": [],

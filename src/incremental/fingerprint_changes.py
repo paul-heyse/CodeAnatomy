@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
+from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.registry_specs import dataset_schema
-from storage.deltalake import (
-    DeltaWriteOptions,
-    delta_table_version,
-    enable_delta_features,
-    write_delta_table,
+from incremental.write_helpers import (
+    IncrementalDeltaWriteRequest,
+    write_delta_table_via_pipeline,
 )
+from storage.deltalake import delta_table_version
 
 if TYPE_CHECKING:
     from incremental.delta_context import DeltaAccessContext
@@ -59,11 +59,11 @@ def read_dataset_fingerprints(
     path = _fingerprints_path(state_store)
     if not path.exists():
         return {}
-    storage = context.storage
+    resolved = context.resolve_storage(table_uri=str(path))
     version = delta_table_version(
         str(path),
-        storage_options=storage.storage_options,
-        log_storage_options=storage.log_storage_options,
+        storage_options=resolved.storage_options,
+        log_storage_options=resolved.log_storage_options,
     )
     if version is None:
         return {}
@@ -104,21 +104,19 @@ def write_dataset_fingerprints(
             },
             num_rows=len(names),
         )
-    result = write_delta_table(
-        table,
-        str(path),
-        options=DeltaWriteOptions(
-            mode="overwrite",
+    resolved_storage = context.resolve_storage(table_uri=str(path))
+    write_delta_table_via_pipeline(
+        runtime=context.runtime,
+        table=table,
+        request=IncrementalDeltaWriteRequest(
+            destination=str(path),
+            mode=WriteMode.OVERWRITE,
             schema_mode="overwrite",
             commit_metadata={"snapshot_kind": "dataset_fingerprints"},
-            storage_options=context.storage.storage_options,
-            log_storage_options=context.storage.log_storage_options,
+            storage_options=resolved_storage.storage_options,
+            log_storage_options=resolved_storage.log_storage_options,
+            operation_id="incremental_dataset_fingerprints",
         ),
-    )
-    enable_delta_features(
-        result.path,
-        storage_options=context.storage.storage_options,
-        log_storage_options=context.storage.log_storage_options,
     )
 
 

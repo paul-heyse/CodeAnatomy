@@ -93,12 +93,30 @@ class DeltaMaintenanceArtifact:
     commit_metadata: Mapping[str, str] | None = None
 
 
+@dataclass(frozen=True)
+class _AppendObservabilityRequest:
+    """Inputs required to append a Delta observability row."""
+
+    ctx: SessionContext
+    location: DatasetLocation
+    schema: pa.Schema
+    payload: Mapping[str, object]
+    operation: str
+    commit_metadata: Mapping[str, str] | None
+
+
 def record_delta_snapshot(
     profile: DataFusionRuntimeProfile | None,
     *,
     artifact: DeltaSnapshotArtifact,
 ) -> int | None:
-    """Persist a Delta snapshot artifact row when enabled."""
+    """Persist a Delta snapshot artifact row when enabled.
+
+    Returns
+    -------
+    int | None
+        Delta table version for the write, or ``None`` when disabled.
+    """
     if profile is None:
         return None
     ctx = profile.session_context()
@@ -127,12 +145,14 @@ def record_delta_snapshot(
         "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
-        ctx,
-        location=location,
-        schema=_delta_snapshot_schema(),
-        payload=payload,
-        operation="delta_snapshot_artifact",
-        commit_metadata={"table_uri": artifact.table_uri},
+        _AppendObservabilityRequest(
+            ctx=ctx,
+            location=location,
+            schema=_delta_snapshot_schema(),
+            payload=payload,
+            operation="delta_snapshot_artifact",
+            commit_metadata={"table_uri": artifact.table_uri},
+        )
     )
 
 
@@ -141,7 +161,13 @@ def record_delta_mutation(
     *,
     artifact: DeltaMutationArtifact,
 ) -> int | None:
-    """Persist a Delta mutation artifact row when enabled."""
+    """Persist a Delta mutation artifact row when enabled.
+
+    Returns
+    -------
+    int | None
+        Delta table version for the write, or ``None`` when disabled.
+    """
     if profile is None:
         return None
     ctx = profile.session_context()
@@ -155,8 +181,10 @@ def record_delta_mutation(
         return None
     report = artifact.report
     snapshot = report.get("snapshot") if isinstance(report, Mapping) else None
-    if not isinstance(snapshot, Mapping):
-        snapshot = {}
+    if isinstance(snapshot, Mapping):
+        snapshot_payload = {str(key): value for key, value in dict(snapshot).items()}
+    else:
+        snapshot_payload: dict[str, object] = {}
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset_name": artifact.dataset_name,
@@ -164,10 +192,10 @@ def record_delta_mutation(
         "operation": artifact.operation,
         "mode": artifact.mode,
         "delta_version": _coerce_int(report.get("version")),
-        "min_reader_version": _coerce_int(snapshot.get("min_reader_version")),
-        "min_writer_version": _coerce_int(snapshot.get("min_writer_version")),
-        "reader_features_json": _json_text(snapshot.get("reader_features") or ()),
-        "writer_features_json": _json_text(snapshot.get("writer_features") or ()),
+        "min_reader_version": _coerce_int(snapshot_payload.get("min_reader_version")),
+        "min_writer_version": _coerce_int(snapshot_payload.get("min_writer_version")),
+        "reader_features_json": _json_text(snapshot_payload.get("reader_features") or ()),
+        "writer_features_json": _json_text(snapshot_payload.get("writer_features") or ()),
         "constraint_status": artifact.constraint_status,
         "constraint_violations_json": _json_text(list(artifact.constraint_violations)),
         "commit_app_id": artifact.commit_app_id,
@@ -178,12 +206,14 @@ def record_delta_mutation(
         "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
-        ctx,
-        location=location,
-        schema=_delta_mutation_schema(),
-        payload=payload,
-        operation=f"delta_mutation_{artifact.operation}",
-        commit_metadata=artifact.commit_metadata,
+        _AppendObservabilityRequest(
+            ctx=ctx,
+            location=location,
+            schema=_delta_mutation_schema(),
+            payload=payload,
+            operation=f"delta_mutation_{artifact.operation}",
+            commit_metadata=artifact.commit_metadata,
+        )
     )
 
 
@@ -192,7 +222,13 @@ def record_delta_scan_plan(
     *,
     artifact: DeltaScanPlanArtifact,
 ) -> int | None:
-    """Persist a Delta scan-plan artifact row when enabled."""
+    """Persist a Delta scan-plan artifact row when enabled.
+
+    Returns
+    -------
+    int | None
+        Delta table version for the write, or ``None`` when disabled.
+    """
     if profile is None:
         return None
     ctx = profile.session_context()
@@ -220,12 +256,14 @@ def record_delta_scan_plan(
         "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
-        ctx,
-        location=location,
-        schema=_delta_scan_plan_schema(),
-        payload=payload,
-        operation="delta_scan_plan",
-        commit_metadata={"dataset_name": artifact.dataset_name},
+        _AppendObservabilityRequest(
+            ctx=ctx,
+            location=location,
+            schema=_delta_scan_plan_schema(),
+            payload=payload,
+            operation="delta_scan_plan",
+            commit_metadata={"dataset_name": artifact.dataset_name},
+        )
     )
 
 
@@ -234,7 +272,13 @@ def record_delta_maintenance(
     *,
     artifact: DeltaMaintenanceArtifact,
 ) -> int | None:
-    """Persist a Delta maintenance artifact row when enabled."""
+    """Persist a Delta maintenance artifact row when enabled.
+
+    Returns
+    -------
+    int | None
+        Delta table version for the write, or ``None`` when disabled.
+    """
     if profile is None:
         return None
     ctx = profile.session_context()
@@ -260,12 +304,14 @@ def record_delta_maintenance(
         "storage_options_hash": artifact.storage_options_hash,
     }
     return _append_observability_row(
-        ctx,
-        location=location,
-        schema=_delta_maintenance_schema(),
-        payload=payload,
-        operation=f"delta_maintenance_{artifact.operation}",
-        commit_metadata=artifact.commit_metadata,
+        _AppendObservabilityRequest(
+            ctx=ctx,
+            location=location,
+            schema=_delta_maintenance_schema(),
+            payload=payload,
+            operation=f"delta_maintenance_{artifact.operation}",
+            commit_metadata=artifact.commit_metadata,
+        )
     )
 
 
@@ -317,27 +363,19 @@ def _bootstrap_observability_table(
     _ = profile
 
 
-def _append_observability_row(
-    ctx: SessionContext,
-    *,
-    location: DatasetLocation,
-    schema: pa.Schema,
-    payload: Mapping[str, object],
-    operation: str,
-    commit_metadata: Mapping[str, str] | None,
-) -> int | None:
-    table = pa.Table.from_pylist([dict(payload)], schema=schema)
+def _append_observability_row(request: _AppendObservabilityRequest) -> int | None:
+    table = pa.Table.from_pylist([dict(request.payload)], schema=request.schema)
     options = DeltaWriteOptions(
         mode="append",
         schema_mode="merge",
         commit_properties=idempotent_commit_properties(
-            operation=operation,
+            operation=request.operation,
             mode="append",
-            extra_metadata={"operation": operation},
+            extra_metadata={"operation": request.operation},
         ),
-        commit_metadata={"operation": operation, **(commit_metadata or {})},
+        commit_metadata={"operation": request.operation, **(request.commit_metadata or {})},
     )
-    result = write_delta_table(table, str(location.path), options=options, ctx=ctx)
+    result = write_delta_table(table, str(request.location.path), options=options, ctx=request.ctx)
     return result.version
 
 

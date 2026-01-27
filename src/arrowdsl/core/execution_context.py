@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.runtime_profiles import RuntimeProfile, runtime_profile_factory
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import SessionRuntime
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,17 @@ class ExecutionContext:
             Determinism tier for this context.
         """
         return self.runtime.determinism
+
+    @property
+    def session_runtime(self) -> SessionRuntime:
+        """Return the DataFusion SessionRuntime for this context.
+
+        Returns
+        -------
+        SessionRuntime
+            SessionRuntime bound to the DataFusion runtime profile.
+        """
+        return self.runtime.session_runtime()
 
     @property
     def use_threads(self) -> bool:

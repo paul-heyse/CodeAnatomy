@@ -347,10 +347,131 @@ def _rust_volatility(snapshot: Mapping[str, object]) -> dict[str, str]:
     return values
 
 
+@dataclass(frozen=True)
+class UdfSignatureConformanceReport:
+    """Report on UDF signature completeness for scheduling.
+
+    Validates that all UDFs have:
+    - return_type implementations visible to information_schema
+    - rewrite_tags coverage for planning domain classification
+    """
+
+    missing_return_type: tuple[str, ...]
+    missing_rewrite_tags: tuple[str, ...]
+    total_udf_count: int
+    covered_rewrite_tags: tuple[str, ...]
+
+    def payload(self) -> dict[str, object]:
+        """Return a diagnostics payload for signature conformance.
+
+        Returns
+        -------
+        dict[str, object]
+            Serializable diagnostics payload.
+        """
+        return {
+            "missing_return_type": list(self.missing_return_type),
+            "missing_rewrite_tags": list(self.missing_rewrite_tags),
+            "total_udf_count": self.total_udf_count,
+            "covered_rewrite_tags": list(self.covered_rewrite_tags),
+            "return_type_coverage": (
+                (self.total_udf_count - len(self.missing_return_type)) / self.total_udf_count
+                if self.total_udf_count > 0
+                else 1.0
+            ),
+            "rewrite_tags_coverage": (
+                (self.total_udf_count - len(self.missing_rewrite_tags)) / self.total_udf_count
+                if self.total_udf_count > 0
+                else 1.0
+            ),
+        }
+
+
+def udf_signature_conformance_report(
+    ctx: SessionContext,
+    *,
+    snapshot: Mapping[str, object] | None = None,
+) -> UdfSignatureConformanceReport:
+    """Build a conformance report for UDF signature completeness.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion SessionContext for information_schema queries.
+    snapshot
+        Optional Rust UDF snapshot. If None, queries the current snapshot.
+
+    Returns
+    -------
+    UdfSignatureConformanceReport
+        Report containing coverage metrics for return_type and rewrite_tags.
+    """
+    resolved_snapshot = snapshot if snapshot is not None else rust_udf_snapshot(ctx)
+    validate_rust_udf_snapshot(resolved_snapshot)
+
+    all_names = _rust_function_names(resolved_snapshot)
+    total_count = len(all_names)
+
+    # Check return_type visibility via information_schema
+    missing_return_type = _missing_return_types(ctx, all_names)
+
+    # Check rewrite_tags coverage
+    rewrite_tags = resolved_snapshot.get("rewrite_tags")
+    covered_tags = set()
+    missing_tags_names: list[str] = []
+    if isinstance(rewrite_tags, Mapping):
+        for name in all_names:
+            tags = rewrite_tags.get(name)
+            if tags is None or (isinstance(tags, Iterable) and not tags):
+                missing_tags_names.append(name)
+            elif isinstance(tags, Iterable):
+                for tag in tags:
+                    if tag is not None:
+                        covered_tags.add(str(tag))
+    else:
+        missing_tags_names = list(all_names)
+
+    return UdfSignatureConformanceReport(
+        missing_return_type=tuple(sorted(missing_return_type)),
+        missing_rewrite_tags=tuple(sorted(missing_tags_names)),
+        total_udf_count=total_count,
+        covered_rewrite_tags=tuple(sorted(covered_tags)),
+    )
+
+
+def _missing_return_types(
+    ctx: SessionContext,
+    udf_names: set[str],
+) -> list[str]:
+    """Return UDF names missing from information_schema routines.
+
+    Returns
+    -------
+    list[str]
+        Names of UDFs missing from information_schema routines.
+    """
+    try:
+        routines_df = ctx.sql("SELECT routine_name FROM information_schema.routines")
+        routines_table = routines_df.collect()
+    except (RuntimeError, ValueError, TypeError):
+        return list(udf_names)
+    if not routines_table:
+        return list(udf_names)
+    info_names = {
+        str(row.get("routine_name")).lower()
+        for batch in routines_table
+        for row in batch.to_pylist()
+        if row.get("routine_name") is not None
+    }
+    return [name for name in udf_names if name.lower() not in info_names]
+
+
 __all__ = [
     "UdfInfoSchemaParityReport",
     "UdfParityMismatch",
     "UdfParityReport",
+    "UdfSignatureConformanceReport",
     "udf_info_schema_parity_report",
     "udf_parity_report",
+    "udf_signature_conformance_report",
 ]

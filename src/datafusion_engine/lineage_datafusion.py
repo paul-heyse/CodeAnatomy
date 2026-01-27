@@ -13,9 +13,7 @@ from datafusion_engine.udf_runtime import (
 )
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_QUALIFIED_COLUMN_PATTERN = re.compile(
-    r"([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)"
-)
+_QUALIFIED_COLUMN_PATTERN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)")
 _VARIANT_COLUMN_PATTERN = re.compile(r'table: "([^"]+)"[^}]*name: "([^"]+)"')
 _PAIR_LEN = 2
 _SINGLE_DATASET_COUNT = 1
@@ -84,9 +82,7 @@ class LineageReport:
     exprs: tuple[ExprInfo, ...] = ()
     required_udfs: tuple[str, ...] = ()
     required_rewrite_tags: tuple[str, ...] = ()
-    required_columns_by_dataset: Mapping[str, tuple[str, ...]] = field(
-        default_factory=dict
-    )
+    required_columns_by_dataset: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     filters: tuple[str, ...] = ()
     aggregations: tuple[str, ...] = ()
     window_functions: tuple[str, ...] = ()
@@ -133,9 +129,7 @@ def extract_lineage(
         tag = _variant_name(node=node, variant=variant)
         scans.extend(_extract_scan_lineage(tag=tag, variant=variant))
         joins.extend(_extract_join_lineage(tag=tag, variant=variant))
-        exprs.extend(
-            _extract_expr_infos(tag=tag, variant=variant, udf_name_map=udf_name_map)
-        )
+        exprs.extend(_extract_expr_infos(tag=tag, variant=variant, udf_name_map=udf_name_map))
         stack.extend(_plan_inputs(node))
 
     required_udfs = _required_udfs(exprs)
@@ -156,25 +150,6 @@ def extract_lineage(
         aggregations=aggregations,
         window_functions=window_functions,
         referenced_udfs=required_udfs,
-    )
-
-
-def extract_lineage_from_display(plan_display: str) -> LineageReport:
-    """Extract lineage from a plan display string.
-
-    This is a compatibility fallback for environments where plan objects
-    are not available.
-
-    Returns
-    -------
-    LineageReport
-        Lineage report inferred from the display string.
-    """
-    scans = _display_scans(plan_display)
-    required_columns = _required_columns_by_dataset(scans=scans, exprs=())
-    return LineageReport(
-        scans=tuple(scans),
-        required_columns_by_dataset=required_columns,
     )
 
 
@@ -277,9 +252,7 @@ def _extract_scan_lineage(*, tag: str, variant: object | None) -> list[ScanLinea
         return []
     projection = _safe_attr(variant, "projection")
     projected_columns = _projection_names(projection)
-    filters = tuple(
-        str(expr) for expr in _normalize_exprs(_safe_attr(variant, "filters"))
-    )
+    filters = tuple(str(expr) for expr in _normalize_exprs(_safe_attr(variant, "filters")))
     return [
         ScanLineage(
             dataset_name=str(dataset_name),
@@ -330,10 +303,7 @@ def _extract_expr_infos(
     if tag == "Join":
         for left_expr, right_expr in _normalize_on_pairs(_safe_attr(variant, "on")):
             exprs.extend((left_expr, right_expr))
-    return [
-        _expr_info(expr=expr, kind=tag, udf_name_map=udf_name_map)
-        for expr in exprs
-    ]
+    return [_expr_info(expr=expr, kind=tag, udf_name_map=udf_name_map) for expr in exprs]
 
 
 def _expr_info(*, expr: object, kind: str, udf_name_map: Mapping[str, str]) -> ExprInfo:
@@ -449,9 +419,7 @@ def _required_columns_by_dataset(
     dataset_names = {scan.dataset_name for scan in scans}
     columns_by_dataset: dict[str, set[str]] = {}
     for scan in scans:
-        columns_by_dataset.setdefault(scan.dataset_name, set()).update(
-            scan.projected_columns
-        )
+        columns_by_dataset.setdefault(scan.dataset_name, set()).update(scan.projected_columns)
     for expr in exprs:
         for dataset, column in expr.referenced_columns:
             if not column:
@@ -462,10 +430,7 @@ def _required_columns_by_dataset(
             if not resolved_dataset:
                 continue
             columns_by_dataset.setdefault(resolved_dataset, set()).add(column)
-    return {
-        dataset: tuple(sorted(columns))
-        for dataset, columns in columns_by_dataset.items()
-    }
+    return {dataset: tuple(sorted(columns)) for dataset, columns in columns_by_dataset.items()}
 
 
 def _filters_from_exprs(exprs: Sequence[ExprInfo]) -> tuple[str, ...]:
@@ -491,20 +456,12 @@ def _udf_name_map(snapshot: Mapping[str, object] | None) -> dict[str, str]:
     return {name.lower(): name for name in names}
 
 
-def _display_scans(display: str) -> list[ScanLineage]:
-    pattern = re.compile(
-        r"TableScan\([^\n]*table_name:?\s*([A-Za-z0-9_.]+)"
-    )
-    return [ScanLineage(dataset_name=str(match)) for match in pattern.findall(display)]
-
-
 __all__ = [
     "ExprInfo",
     "JoinLineage",
     "LineageReport",
     "ScanLineage",
     "extract_lineage",
-    "extract_lineage_from_display",
     "referenced_tables_from_plan",
     "required_columns_by_table",
 ]

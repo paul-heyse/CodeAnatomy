@@ -25,6 +25,7 @@ from datafusion_ext import (
     map_extract,
     map_keys,
     map_values,
+    span_make,
     union_extract,
     union_tag,
 )
@@ -117,22 +118,28 @@ def _byte_span_struct(
     bend: Expr,
     *,
     col_unit: Expr | None = None,
-    end_exclusive: Expr | None = None,
+    end_exclusive: Expr | None = None,  # noqa: ARG001
 ) -> Expr:
-    null_i32 = _null_expr("Int32")
-    ok = bstart.is_not_null() & bend.is_not_null()
-    byte_start = f.when(ok, _arrow_cast(bstart, "Int32")).otherwise(null_i32)
-    byte_len_value = bend - bstart
-    byte_len = f.when(ok, _arrow_cast(byte_len_value, "Int32")).otherwise(null_i32)
+    """Build a span struct from byte offsets using span_make UDF.
+
+    Parameters
+    ----------
+    bstart
+        Byte start offset expression.
+    bend
+        Byte end offset expression.
+    col_unit
+        Optional column unit expression (defaults to "byte").
+    end_exclusive
+        Ignored; kept for backward compatibility.
+
+    Returns
+    -------
+    Expr
+        Span struct from span_make UDF.
+    """
     unit = col_unit if col_unit is not None else lit("byte")
-    return _span_struct_from_components(
-        SpanComponents(
-            col_unit=unit,
-            end_exclusive=end_exclusive,
-            byte_start=byte_start,
-            byte_len=byte_len,
-        )
-    )
+    return span_make(bstart, bend, unit)
 
 
 def _span_byte_start(span: Expr) -> Expr:

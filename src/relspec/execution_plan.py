@@ -102,6 +102,7 @@ class ExecutionPlan:
     dataset_specs: Mapping[str, DatasetSpec]
     active_tasks: frozenset[str]
     scan_units: tuple[ScanUnit, ...] = ()
+    scan_unit_delta_pins: Mapping[str, int] = field(default_factory=dict)
     scan_keys_by_task: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     requested_task_names: tuple[str, ...] = ()
     impacted_task_names: tuple[str, ...] = ()
@@ -130,8 +131,14 @@ class _PlanBuildContext:
     inferred: tuple[InferredDeps, ...]
     task_graph: TaskGraph
     active_tasks: set[str]
+    output_contracts: Mapping[str, OutputContract]
+    evidence: EvidenceCatalog
+    dataset_spec_map: Mapping[str, DatasetSpec]
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    requested_task_names: tuple[str, ...]
+    impacted_task_names: tuple[str, ...]
+    allow_partial: bool
 
 
 @dataclass(frozen=True)
@@ -141,12 +148,6 @@ class _PruneInputs:
     inferred: Sequence[InferredDeps]
     scan_units: Sequence[ScanUnit]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
-    output_contracts: Mapping[str, OutputContract]
-    evidence: EvidenceCatalog
-    dataset_spec_map: Mapping[str, DatasetSpec]
-    requested_task_names: tuple[str, ...]
-    impacted_task_names: tuple[str, ...]
-    allow_partial: bool
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,38 @@ def priority_for_task(task_name: str) -> int:
     return 100
 
 
+def _scan_unit_delta_pins(scan_units: Sequence[ScanUnit]) -> dict[str, int]:
+    """Extract Delta version pins from scan units for determinism tracking.
+
+    Parameters
+    ----------
+    scan_units
+        Sequence of scan units with optional Delta version pins.
+
+    Returns
+    -------
+    dict[str, int]
+        Mapping of dataset name to pinned Delta version.
+
+    Raises
+    ------
+    ValueError
+        When conflicting Delta versions exist for the same dataset.
+    """
+    pins: dict[str, int] = {}
+    for unit in scan_units:
+        if unit.delta_version is not None:
+            existing = pins.get(unit.dataset_name)
+            if existing is not None and existing != unit.delta_version:
+                msg = (
+                    f"Conflicting Delta versions for {unit.dataset_name!r}: "
+                    f"{existing} vs {unit.delta_version}"
+                )
+                raise ValueError(msg)
+            pins[unit.dataset_name] = unit.delta_version
+    return pins
+
+
 def compile_execution_plan(
     *,
     session: SessionContext,
@@ -244,6 +277,7 @@ def compile_execution_plan(
         context.inferred,
         active_tasks=context.active_tasks,
     )
+    scan_delta_pins = _scan_unit_delta_pins(context.scan_units)
     return ExecutionPlan(
         view_nodes=context.view_nodes,
         task_graph=context.task_graph,
@@ -269,6 +303,7 @@ def compile_execution_plan(
         dataset_specs=context.dataset_spec_map,
         active_tasks=frozenset(context.active_tasks),
         scan_units=context.scan_units,
+        scan_unit_delta_pins=scan_delta_pins,
         scan_keys_by_task=context.scan_keys_by_task,
         requested_task_names=context.requested_task_names,
         impacted_task_names=context.impacted_task_names,
@@ -300,26 +335,22 @@ def _validated_view_nodes(
 
 def _pruned_plan_bundle(
     *,
-    graph: TaskGraph,
-    nodes_with_ast: tuple[ViewNode, ...],
-    inferred: Sequence[InferredDeps],
-    scan_units: Sequence[ScanUnit],
-    scan_keys_by_task: Mapping[str, tuple[str, ...]],
+    inputs: _PruneInputs,
     request: ExecutionPlanRequest,
     requested: set[str],
 ) -> _PrunedPlanBundle:
     active_tasks = _resolve_active_tasks(
-        graph,
+        inputs.graph,
         requested_task_names=requested,
         impacted_task_names=request.impacted_task_names,
         allow_partial=request.allow_partial,
     )
-    pruned_graph = _prune_task_graph(graph, active_tasks=active_tasks)
-    pruned_nodes = _prune_view_nodes(nodes_with_ast, active_tasks=active_tasks)
-    pruned_inferred = tuple(dep for dep in inferred if dep.task_name in active_tasks)
+    pruned_graph = _prune_task_graph(inputs.graph, active_tasks=active_tasks)
+    pruned_nodes = _prune_view_nodes(inputs.nodes_with_ast, active_tasks=active_tasks)
+    pruned_inferred = tuple(dep for dep in inputs.inferred if dep.task_name in active_tasks)
     pruned_scan_units, pruned_scan_keys_by_task = _prune_scan_units(
-        scan_units=scan_units,
-        scan_keys_by_task=scan_keys_by_task,
+        scan_units=inputs.scan_units,
+        scan_keys_by_task=inputs.scan_keys_by_task,
         active_tasks=active_tasks,
     )
     return _PrunedPlanBundle(
@@ -381,15 +412,46 @@ def _prepare_plan_context(
         ),
     )
     pruned = _pruned_plan_bundle(
-        graph=graph,
-        nodes_with_ast=nodes_with_ast,
-        inferred=inferred,
-        scan_units=scan_units,
-        scan_keys_by_task=scan_keys_by_task,
+        inputs=_PruneInputs(
+            graph=graph,
+            nodes_with_ast=nodes_with_ast,
+            inferred=inferred,
+            scan_units=scan_units,
+            scan_keys_by_task=scan_keys_by_task,
+        ),
         request=request,
         requested=requested,
     )
     scan_keys = _scan_keys_from_mapping(pruned.scan_keys_by_task)
+    if request.runtime_profile is not None:
+            from datafusion_engine.plan_artifact_store import (
+                PlanArtifactsForViewsRequest,
+                persist_plan_artifacts_for_views,
+            )
+
+        try:
+            persist_plan_artifacts_for_views(
+                session,
+                request.runtime_profile,
+                request=PlanArtifactsForViewsRequest(
+                    view_nodes=pruned.view_nodes,
+                    scan_units=pruned.scan_units,
+                    scan_keys_by_view=pruned.scan_keys_by_task,
+                ),
+            )
+        except (RuntimeError, ValueError, OSError, KeyError, ImportError, TypeError) as exc:
+            from datafusion_engine.diagnostics import record_artifact
+
+            record_artifact(
+                request.runtime_profile,
+                "plan_artifacts_store_failed_v1",
+                {
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "view_count": len(pruned.view_nodes),
+                    "scan_unit_count": len(pruned.scan_units),
+                },
+            )
     contracts_evidence = _contracts_and_evidence(
         session=session,
         pruned=pruned,
@@ -512,9 +574,7 @@ def _plan_signature_and_diagnostics(
     )
     signature = task_graph_signature(snapshot_payload)
     diagnostics = task_graph_diagnostics(graph, include_node_link=True)
-    critical_path_task_names = task_dependency_critical_path_tasks(
-        reduction.reduced_graph
-    )
+    critical_path_task_names = task_dependency_critical_path_tasks(reduction.reduced_graph)
     critical_path_length_weighted = (
         task_dependency_critical_path_length(reduction.reduced_graph)
         if reduction.reduced_graph.num_nodes() > 0
@@ -818,12 +878,8 @@ def _pruned_plan_components(
         for name, deps in plan.dependency_map.items()
         if name in active_tasks
     }
-    pruned_requested = tuple(
-        name for name in plan.requested_task_names if name in active_tasks
-    )
-    pruned_impacted = tuple(
-        name for name in plan.impacted_task_names if name in active_tasks
-    )
+    pruned_requested = tuple(name for name in plan.requested_task_names if name in active_tasks)
+    pruned_impacted = tuple(name for name in plan.impacted_task_names if name in active_tasks)
     pruned_diff = _prune_incremental_diff(
         plan.incremental_diff,
         active_tasks=active_tasks,
@@ -892,6 +948,7 @@ def prune_execution_plan(
         reduction=reduction,
     )
     bottom_costs = bottom_level_costs(reduction.reduced_graph)
+    scan_delta_pins = _scan_unit_delta_pins(components.scan_units)
     return ExecutionPlan(
         view_nodes=components.view_nodes,
         task_graph=components.task_graph,
@@ -917,6 +974,7 @@ def prune_execution_plan(
         dataset_specs=plan.dataset_specs,
         active_tasks=frozenset(target_active),
         scan_units=components.scan_units,
+        scan_unit_delta_pins=scan_delta_pins,
         scan_keys_by_task=components.scan_keys_by_task,
         requested_task_names=components.requested_task_names,
         impacted_task_names=components.impacted_task_names,
@@ -938,9 +996,7 @@ def _prune_incremental_diff(
     removed = tuple(name for name in diff.removed_tasks if name in active_tasks)
     unchanged = tuple(name for name in diff.unchanged_tasks if name in active_tasks)
     semantic = {
-        name: diff.semantic_changes[name]
-        for name in changed
-        if name in diff.semantic_changes
+        name: diff.semantic_changes[name] for name in changed if name in diff.semantic_changes
     }
     from relspec.incremental import IncrementalDiff as _IncrementalDiff
 

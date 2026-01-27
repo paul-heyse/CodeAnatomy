@@ -111,6 +111,7 @@ class EvidenceNode:
     """Evidence dataset node payload."""
 
     name: str
+    scan_unit_key: str | None = None
     scan_dataset_name: str | None = None
     scan_delta_version: int | None = None
     scan_candidate_file_count: int | None = None
@@ -292,9 +293,7 @@ def build_task_graph_from_inferred_deps(
     )
     scan_keys_all = tuple(sorted(scan_unit_map))
     extra_evidence_tokens = tuple(resolved.extra_evidence or ())
-    extra_evidence_all = tuple(
-        dict.fromkeys((*extra_evidence_tokens, *scan_keys_all))
-    )
+    extra_evidence_all = tuple(dict.fromkeys((*extra_evidence_tokens, *scan_keys_all)))
     return _build_task_graph_inferred(
         task_nodes,
         config=InferredGraphConfig(
@@ -377,13 +376,9 @@ def task_graph_snapshot(
         )
         ordered_pairs = [(node_map[id(node)], node) for node in ordered_nodes]
     except ValueError:
-        ordered_pairs = [
-            (idx, graph.graph[idx])
-            for idx in sorted(graph.graph.node_indices())
-        ]
+        ordered_pairs = [(idx, graph.graph[idx]) for idx in sorted(graph.graph.node_indices())]
     nodes = tuple(
-        _node_payload(node_id, node, signatures=signatures)
-        for node_id, node in ordered_pairs
+        _node_payload(node_id, node, signatures=signatures) for node_id, node in ordered_pairs
     )
     edges = tuple(_edge_payloads(graph.graph))
     return TaskGraphSnapshot(
@@ -444,14 +439,8 @@ def _cycle_graph_diagnostics(
     node_link_json: str | None,
 ) -> GraphDiagnostics:
     cycle_sample = _cycle_sample_nodes(rx.digraph_find_cycle(graph))
-    cycles = (
-        tuple(tuple(cycle) for cycle in rx.simple_cycles(graph))
-        if include_cycles
-        else ()
-    )
-    scc = tuple(
-        tuple(component) for component in rx.strongly_connected_components(graph)
-    )
+    cycles = tuple(tuple(cycle) for cycle in rx.simple_cycles(graph)) if include_cycles else ()
+    scc = tuple(tuple(component) for component in rx.strongly_connected_components(graph))
     return GraphDiagnostics(
         status="cycle",
         cycles=cycles,
@@ -619,8 +608,7 @@ def task_graph_subgraph(
         )
     )
     edges_to_add = [
-        (node_map[source], node_map[target], payload)
-        for source, target, payload in edge_payloads
+        (node_map[source], node_map[target], payload) for source, target, payload in edge_payloads
     ]
     subgraph.add_edges_from(edges_to_add)
     evidence_idx: dict[str, int] = {}
@@ -895,9 +883,7 @@ def _task_dependency_snapshot(
 
 def _task_dependency_edge_payloads(graph: rx.PyDiGraph) -> Sequence[dict[str, object]]:
     node_names = {
-        idx: graph[idx].name
-        for idx in graph.node_indices()
-        if isinstance(graph[idx], TaskNode)
+        idx: graph[idx].name for idx in graph.node_indices() if isinstance(graph[idx], TaskNode)
     }
     edges: list[dict[str, object]] = []
     for source, target, payload in graph.weighted_edge_list():
@@ -1050,6 +1036,7 @@ def _evidence_node(name: str, *, scan_units: Mapping[str, ScanUnit]) -> Evidence
     delta_version = unit.delta_version
     return EvidenceNode(
         name=name,
+        scan_unit_key=unit.key,
         scan_dataset_name=unit.dataset_name,
         scan_delta_version=delta_version,
         scan_candidate_file_count=candidate_count,
@@ -1208,12 +1195,10 @@ def _edge_payloads(graph: rx.PyDiGraph) -> Sequence[dict[str, object]]:
                 "name": payload.name,
                 "required_columns": list(payload.required_columns),
                 "required_types": [
-                    {"name": name, "type": dtype}
-                    for name, dtype in payload.required_types
+                    {"name": name, "type": dtype} for name, dtype in payload.required_types
                 ],
                 "required_metadata": [
-                    {"key": key, "value": value}
-                    for key, value in payload.required_metadata
+                    {"key": key, "value": value} for key, value in payload.required_metadata
                 ],
             }
         )
@@ -1270,8 +1255,7 @@ def _node_link_edge_attrs(payload: object) -> dict[str, str]:
     if not isinstance(payload, GraphEdge):
         return {}
     metadata = [
-        {"key": key.hex(), "value": value.hex()}
-        for key, value in payload.required_metadata
+        {"key": key.hex(), "value": value.hex()} for key, value in payload.required_metadata
     ]
     return {
         "kind": payload.kind,

@@ -102,12 +102,12 @@ def build_session_runtime(profile: DataFusionRuntimeProfile) -> SessionRuntime:
 
 ### Implementation checklist
 
-- [ ] Introduce `SessionRuntime` as a first-class object.
-- [ ] Require `information_schema` to be enabled in all runtime profiles.
-- [ ] Require Rust UDF platform installation before any planning or lineage extraction.
-- [ ] Snapshot UDF identity (hash), rewrite tags, and enabled domain planners on the runtime.
-- [ ] Centralize object store and catalog registration behind runtime bootstrap.
-- [ ] Persist a session settings snapshot (`information_schema.df_settings`) per plan bundle.
+- [x] Introduce `SessionRuntime` as a first-class object.
+- [x] Require `information_schema` to be enabled in all runtime profiles.
+- [x] Require Rust UDF platform installation before any planning or lineage extraction.
+- [x] Snapshot UDF identity (hash), rewrite tags, and enabled domain planners on the runtime.
+- [x] Centralize object store and catalog registration behind runtime bootstrap.
+- [x] Persist a session settings snapshot (`information_schema.df_settings`) per plan bundle.
 
 ---
 
@@ -184,12 +184,14 @@ class DataFusionPlanBundle:
 
 ### Implementation checklist
 
-- [ ] Add UDF snapshot hash, rewrite tags, and function registry snapshot fields to `PlanArtifacts`.
-- [ ] Add `required_udfs` and `required_rewrite_tags` as first-class plan-bundle fields.
-- [ ] Capture EXPLAIN artifacts including pgjson and graphviz where available.
-- [ ] Snapshot session settings into the plan bundle.
+- [x] Add UDF snapshot hash, rewrite tags, and function registry snapshot fields to `PlanArtifacts`.
+- [x] Add `required_udfs` and `required_rewrite_tags` as first-class plan-bundle fields.
+- [x] Capture EXPLAIN artifacts including pgjson and graphviz where available.
+- [x] Snapshot session settings into the plan bundle.
 - [ ] Include Delta version pins for all scans.
-- [ ] Update cache keys to incorporate plan fingerprint, UDF snapshot hash, required UDFs/tags, settings hash, and Delta pins.
+- [x] Update cache keys to incorporate plan fingerprint, UDF snapshot hash, required UDFs/tags, settings hash, and Delta pins.
+
+Status note: `DeltaInputPin` exists on the bundle, but it is not yet populated from scan units.
 
 ---
 
@@ -293,13 +295,15 @@ def extract_lineage(plan: object, *, udf_snapshot: dict[str, object]) -> Lineage
 
 ### Implementation checklist
 
-- [ ] Implement structured logical-plan traversal using `to_variant()` and `inputs()`.
-- [ ] Extract scans, projections, predicates, join keys, and subqueries structurally.
-- [ ] Extract UDF references from expression trees and emit `required_udfs` as lineage output.
-- [ ] Derive required rewrite tags from the UDF registry snapshot and emit them in lineage.
-- [ ] Propagate required columns per dataset with a structured dependency model.
-- [ ] Validate that required UDFs are available before lineage is accepted as canonical.
-- [ ] Make structured lineage the only supported lineage path.
+- [x] Implement structured logical-plan traversal using `to_variant()` and `inputs()`.
+- [x] Extract scans, projections, predicates, join keys, and subqueries structurally.
+- [x] Extract UDF references from expression trees and emit `required_udfs` as lineage output.
+- [x] Derive required rewrite tags from the UDF registry snapshot and emit them in lineage.
+- [x] Propagate required columns per dataset with a structured dependency model.
+- [x] Validate that required UDFs are available before lineage is accepted as canonical.
+- [x] Make structured lineage the only supported lineage path.
+
+Status note: a display-string fallback remains for compatibility/debug and can be removed in Scope 18.
 
 ---
 
@@ -361,11 +365,11 @@ def plan_scan_unit(ctx: SessionContext, *, dataset: DatasetLocation, lineage: Sc
 
 ### Implementation checklist
 
-- [ ] Introduce `scan_planner.py` with `ScanUnit` and planning entrypoints.
-- [ ] Pin Delta versions for all scan units.
-- [ ] Prune candidate files using Delta log metadata and declared lineage filters.
-- [ ] Register restricted providers using `datafusion_ext` Delta provider surfaces when scan units are present.
-- [ ] Integrate scan units into scheduling and execution planning.
+- [x] Introduce `scan_planner.py` with `ScanUnit` and planning entrypoints.
+- [x] Pin Delta versions for all scan units.
+- [x] Prune candidate files using Delta log metadata and declared lineage filters.
+- [x] Register restricted providers using `datafusion_ext` Delta provider surfaces when scan units are present.
+- [x] Integrate scan units into scheduling and execution planning.
 
 ---
 
@@ -424,10 +428,12 @@ def build_task_graph(views: list[ViewNode], scans: list[ScanUnit]) -> rx.PyDiGra
 
 ### Implementation checklist
 
-- [ ] Extend task node models to represent scans and view computation distinctly.
+- [x] Extend task node models to represent scans and view computation distinctly.
 - [ ] Incorporate Delta version pins into task keys and cache keys.
-- [ ] Derive edges exclusively from structured plan lineage and scan units.
-- [ ] Ensure scheduling surfaces consume `DataFusionPlanBundle` and `ScanUnit` only.
+- [x] Derive edges exclusively from structured plan lineage and scan units.
+- [x] Ensure scheduling surfaces consume `DataFusionPlanBundle` and `ScanUnit` only.
+
+Status note: scan-unit keys include Delta versions, but plan-bundle Delta pins are not yet wired through.
 
 ---
 
@@ -488,11 +494,11 @@ def execute_plan_bundle(ctx: SessionContext, bundle: DataFusionPlanBundle) -> Ex
 
 ### Implementation checklist
 
-- [ ] Add `execute_plan_bundle(...)` as the primary execution entrypoint.
-- [ ] Rehydrate from Substrait when present to eliminate planner drift.
-- [ ] Require plan bundles (not builders) across scheduling and execution boundaries.
-- [ ] Validate UDF snapshot hash and required UDF coverage before execution.
-- [ ] Record executed plan artifacts and runtime settings alongside execution results.
+- [x] Add `execute_plan_bundle(...)` as the primary execution entrypoint.
+- [x] Rehydrate from Substrait when present to eliminate planner drift.
+- [x] Require plan bundles (not builders) across scheduling and execution boundaries.
+- [x] Validate UDF snapshot hash and required UDF coverage before execution.
+- [x] Record executed plan artifacts and runtime settings alongside execution results.
 
 ---
 
@@ -550,11 +556,13 @@ def write_delta(ctx: SessionContext, df: DataFrame, spec: DeltaWriteSpec) -> Wri
 
 ### Implementation checklist
 
-- [ ] Introduce a declarative `DeltaWriteSpec` that captures layout and lifecycle requirements.
-- [ ] Enable Delta features required for incremental execution and change capture.
-- [ ] Prefer provider insert for Delta when available; fall back to delta-rs writer explicitly.
-- [ ] Standardize commit properties for idempotency and reproducibility.
+- [x] Introduce a declarative `DeltaWriteSpec` that captures layout and lifecycle requirements.
+- [x] Enable Delta features required for incremental execution and change capture.
+- [x] Prefer provider insert for Delta when available; fall back to delta-rs writer explicitly.
+- [x] Standardize commit properties for idempotency and reproducibility.
 - [ ] Persist write metadata (version, timestamp, commit props) into plan artifacts.
+
+Status note: write metadata is recorded to diagnostics artifacts but not yet normalized into the plan artifact store.
 
 ---
 
@@ -629,12 +637,12 @@ def install_udf_layer(ctx: SessionContext) -> UdfPlanningSnapshot:
 
 ### Implementation checklist
 
-- [ ] Make UDF installation a prerequisite of planning.
-- [ ] Make UDF installation and snapshot validation a prerequisite of lineage extraction and scheduling.
-- [ ] Embed UDF snapshot hash, rewrite tags, and enabled domain planners into plan bundles and cache keys.
-- [ ] Ensure UDF docs and signatures are visible via `information_schema` surfaces.
-- [ ] Ensure rewrite tags are populated for all UDF families and drive domain-planner enablement from the snapshot.
-- [ ] Expand expression planning and rewrite hooks for domain-specific operators and canonical primitives.
+- [x] Make UDF installation a prerequisite of planning.
+- [x] Make UDF installation and snapshot validation a prerequisite of lineage extraction and scheduling.
+- [x] Embed UDF snapshot hash, rewrite tags, and enabled domain planners into plan bundles and cache keys.
+- [x] Ensure UDF docs and signatures are visible via `information_schema` surfaces.
+- [x] Ensure rewrite tags are populated for all UDF families and drive domain-planner enablement from the snapshot.
+- [x] Expand expression planning and rewrite hooks for domain-specific operators and canonical primitives.
 
 ---
 
@@ -689,11 +697,13 @@ class PlanArtifactRow:
 
 ### Implementation checklist
 
-- [ ] Define Delta-backed artifact schemas for plan bundles, lineage, scan units, and execution stats.
-- [ ] Persist artifacts as part of plan compilation and execution flows.
-- [ ] Persist UDF snapshot hash, function registry hash, required UDFs, rewrite tags, and enabled planner names per plan.
-- [ ] Make artifacts queryable via registered Delta tables in the session catalog.
+- [x] Define Delta-backed artifact schemas for plan bundles, lineage, scan units, and execution stats.
+- [x] Persist artifacts as part of plan compilation and execution flows.
+- [x] Persist UDF snapshot hash, function registry hash, required UDFs, rewrite tags, and enabled planner names per plan.
+- [x] Make artifacts queryable via registered Delta tables in the session catalog.
 - [ ] Use artifacts to validate determinism (plan, UDF snapshot, required UDFs/tags, settings, and Delta pins).
+
+Status note: determinism validation is partially captured (for example, UDF compatibility) but not yet enforced via artifact-table queries.
 
 ---
 
@@ -820,11 +830,13 @@ def add_identifier_columns(df: DataFrame, *, spec: IdentifierSpec) -> DataFrame:
 
 ### Implementation checklist
 
-- [ ] Add `stable_id_parts(...)`, `prefixed_hash_parts64(...)`, and `stable_hash_any(...)` as Rust scalar UDFs.
-- [ ] Enforce null-sentinel, separator, and required-field semantics inside the UDF implementations.
-- [ ] Expose Python wrappers and ExprIR mappings for the new primitives.
+- [x] Add `stable_id_parts(...)`, `prefixed_hash_parts64(...)`, and `stable_hash_any(...)` as Rust scalar UDFs.
+- [x] Enforce null-sentinel, separator, and required-field semantics inside the UDF implementations.
+- [x] Expose Python wrappers and ExprIR mappings for the new primitives.
 - [ ] Replace identifier scaffolding across view builders, normalize builders, and relationship builders.
-- [ ] Tag these UDFs with rewrite tags like `id` and `hash` in the registry snapshot.
+- [x] Tag these UDFs with rewrite tags like `id` and `hash` in the registry snapshot.
+
+Status note: these primitives are now widely available and partially adopted, but repo-wide scaffolding cleanup is still pending.
 
 ---
 
@@ -885,10 +897,12 @@ def filter_span_overlaps(df: DataFrame) -> DataFrame:
 
 ### Implementation checklist
 
-- [ ] Implement `span_make(...)`, `span_len(...)`, `span_overlaps(...)`, `span_contains(...)`, and `span_id(...)` as Rust scalar UDFs.
-- [ ] Ensure span UDFs use `return_field_from_args` and also implement `return_type` for `information_schema` visibility.
+- [x] Implement `span_make(...)`, `span_len(...)`, `span_overlaps(...)`, `span_contains(...)`, and `span_id(...)` as Rust scalar UDFs.
+- [x] Ensure span UDFs use `return_field_from_args` and also implement `return_type` for `information_schema` visibility.
 - [ ] Replace manual span struct-building logic with the span UDFs in core view builders.
-- [ ] Tag span UDFs with rewrite tags like `span` and `position_encoding`.
+- [x] Tag span UDFs with rewrite tags like `span` and `position_encoding`.
+
+Status note: span primitives are implemented and tagged; remaining work is systematic replacement of local span scaffolding.
 
 ---
 
@@ -934,11 +948,13 @@ def normalize_symbols(df: DataFrame) -> DataFrame:
 
 ### Implementation checklist
 
-- [ ] Implement `utf8_normalize(...)`, `utf8_null_if_blank(...)`, and `qname_normalize(...)` as Rust scalar UDFs.
+- [x] Implement `utf8_normalize(...)`, `utf8_null_if_blank(...)`, and `qname_normalize(...)` as Rust scalar UDFs.
 - [ ] Provide literal-fast paths and cached-regex patterns where applicable.
-- [ ] Expose ExprIR mappings so normalization can be declared in schema specs.
+- [x] Expose ExprIR mappings so normalization can be declared in schema specs.
 - [ ] Replace normalization chains in property transforms and view builders.
-- [ ] Tag normalization UDFs with rewrite tags like `string_norm` and `symbol`.
+- [x] Tag normalization UDFs with rewrite tags like `string_norm` and `symbol`.
+
+Status note: the normalization UDFs, tags, and ExprIR coverage are in place; adoption and micro-optimizations remain.
 
 ---
 
@@ -987,11 +1003,13 @@ def normalize_nested_attrs(df: DataFrame) -> DataFrame:
 
 ### Implementation checklist
 
-- [ ] Implement `map_get_default(...)`, `map_normalize(...)`, `list_compact(...)`, `list_unique_sorted(...)`, and `struct_pick(...)` as Rust scalar UDFs.
-- [ ] Ensure nested UDFs preserve metadata and nullability via `return_field_from_args`.
-- [ ] Expose these primitives in Python wrappers and ExprIR mappings.
+- [x] Implement `map_get_default(...)`, `map_normalize(...)`, `list_compact(...)`, `list_unique_sorted(...)`, and `struct_pick(...)` as Rust scalar UDFs.
+- [x] Ensure nested UDFs preserve metadata and nullability via `return_field_from_args`.
+- [x] Expose these primitives in Python wrappers and ExprIR mappings.
 - [ ] Replace nested scaffolding patterns in nested schema view registration.
-- [ ] Tag nested UDFs with rewrite tags like `nested`, `map`, `list`, and `struct`.
+- [x] Tag nested UDFs with rewrite tags like `nested`, `map`, `list`, and `struct`.
+
+Status note: nested primitives are implemented, tagged, and reachable via ExprIR; adoption work remains.
 
 ---
 
@@ -1041,11 +1059,13 @@ def canonicalize_group(df: DataFrame) -> DataFrame:
 
 ### Implementation checklist
 
-- [ ] Implement `any_value_det(...)`, `arg_max(...)`, `arg_min(...)`, `collect_set(...)`, and `count_if(...)` as Rust aggregate UDFs.
+- [x] Implement `any_value_det(...)`, `arg_max(...)`, `arg_min(...)`, `collect_set(...)`, and `count_if(...)` as Rust aggregate UDFs.
 - [ ] Ensure aggregates provide stable ordering guarantees (for example, explicit ordering keys).
 - [ ] Expose aggregate wrappers and ExprIR mappings.
 - [ ] Update dedupe and canonicalization specs to use deterministic aggregates.
-- [ ] Tag aggregate UDFs with rewrite tags like `aggregate` and `deterministic`.
+- [x] Tag aggregate UDFs with rewrite tags like `aggregate` and `deterministic`.
+
+Status note: the deterministic aggregate UDAFs and tags exist, but Python-level wrappers, ExprIR, and adoption are still open.
 
 ---
 
@@ -1092,10 +1112,12 @@ def classify_cdf_changes(df: DataFrame) -> DataFrame:
 
 ### Implementation checklist
 
-- [ ] Implement `cdf_change_rank(...)`, `cdf_is_upsert(...)`, and `cdf_is_delete(...)` as Rust scalar UDFs.
-- [ ] Ensure these UDFs encode change-type policies consistently across the engine.
+- [x] Implement `cdf_change_rank(...)`, `cdf_is_upsert(...)`, and `cdf_is_delete(...)` as Rust scalar UDFs.
+- [x] Ensure these UDFs encode change-type policies consistently across the engine.
 - [ ] Replace ad hoc change-type logic in incremental helpers.
-- [ ] Tag incremental UDFs with rewrite tags like `incremental`, `cdf`, and `delta`.
+- [x] Tag incremental UDFs with rewrite tags like `incremental`, `cdf`, and `delta`.
+
+Status note: the UDFs, tags, and ExprIR hooks are in place; incremental modules still need to pivot to them.
 
 ---
 
@@ -1168,12 +1190,14 @@ impl ScalarUDFImpl for StableIdPartsUdf {
 
 ### Implementation checklist
 
-- [ ] Ensure dynamic or metadata-sensitive UDFs implement `return_field_from_args` and also implement `return_type` for `information_schema` parity.
-- [ ] Implement `simplify(...)` hooks for high-level primitives when simplification can be schema-preserving.
-- [ ] Extend rewrite tags beyond `hash` and `position_encoding` to include `id`, `span`, `string_norm`, `nested`, `aggregate`, and `incremental`.
-- [ ] Wire rewrite tags into domain planner enablement and diagnostics.
-- [ ] Expose UDF docs through `udf_docs()` and validate parity against `information_schema`.
+- [x] Ensure dynamic or metadata-sensitive UDFs implement `return_field_from_args` and also implement `return_type` for `information_schema` parity.
+- [x] Implement `simplify(...)` hooks for high-level primitives when simplification can be schema-preserving.
+- [x] Extend rewrite tags beyond `hash` and `position_encoding` to include `id`, `span`, `string_norm`, `nested`, `aggregate`, and `incremental`.
+- [x] Wire rewrite tags into domain planner enablement and diagnostics.
+- [x] Expose UDF docs through `udf_docs()` and validate parity against `information_schema`.
 - [ ] Expand ExprIR coverage so all new primitives are reachable without SQL.
+
+Status note: ExprIR coverage now spans the new scalar primitives but not yet the new deterministic aggregate UDAFs.
 
 ---
 

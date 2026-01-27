@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
 from datafusion import col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
+
+if TYPE_CHECKING:
+    from datafusion.expr import Expr
 from incremental.cdf_filters import CdfChangeType
 from incremental.cdf_runtime import CdfReadResult
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
@@ -81,13 +85,50 @@ def _collect_file_ids(
     tuple[str, ...]
         Sorted, unique file identifiers.
     """
-    change_type_col = col("_change_type")
     file_id_col = col(file_id_column)
-    change_literals = [lit(value) for value in change_types]
-    predicate = f.in_list(change_type_col, change_literals) & file_id_col.is_not_null()
+    predicate = _cdf_change_predicate(change_types) & file_id_col.is_not_null()
     table = df.filter(predicate).select(file_id_col.alias("file_id")).distinct().to_arrow_table()
     values = {value for value in table["file_id"].to_pylist() if isinstance(value, str)}
     return tuple(sorted(values))
+
+
+def _cdf_change_predicate(change_types: tuple[str, ...]) -> Expr:
+    """Build CDF change type predicate using UDF helpers.
+
+    Uses cdf_is_upsert and cdf_is_delete UDFs for semantic clarity.
+    Falls back to in_list for mixed or custom change types.
+
+    Returns
+    -------
+    Expr
+        Filter predicate for the specified CDF change types.
+    """
+    from datafusion_ext import cdf_is_delete, cdf_is_upsert
+
+    change_type_col = col("_change_type")
+    upsert_types = {
+        CdfChangeType.INSERT.to_cdf_column_value(),
+        CdfChangeType.UPDATE_POSTIMAGE.to_cdf_column_value(),
+    }
+    delete_types = {CdfChangeType.DELETE.to_cdf_column_value()}
+    change_set = set(change_types)
+
+    if change_set == upsert_types:
+        return cdf_is_upsert(change_type_col)
+    if change_set == delete_types:
+        return cdf_is_delete(change_type_col)
+    if change_set <= upsert_types | delete_types:
+        has_upsert = bool(change_set & upsert_types)
+        has_delete = bool(change_set & delete_types)
+        if has_upsert and has_delete:
+            return cdf_is_upsert(change_type_col) | cdf_is_delete(change_type_col)
+        if has_upsert:
+            return cdf_is_upsert(change_type_col)
+        if has_delete:
+            return cdf_is_delete(change_type_col)
+    # Fallback to in_list for custom or unknown change types
+    change_literals = [lit(value) for value in change_types]
+    return f.in_list(change_type_col, change_literals)
 
 
 __all__ = ["file_changes_from_cdf"]

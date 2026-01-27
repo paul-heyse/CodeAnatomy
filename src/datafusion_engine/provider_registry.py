@@ -1,0 +1,282 @@
+"""Unified provider registry for DataFusion table management.
+
+This module provides a consolidated interface for registering tables,
+managing UDF dependencies, and tracking registration metadata.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.table_spec import TableSpec
+
+
+@dataclass(frozen=True)
+class RegistrationMetadata:
+    """Metadata for a table registration event.
+
+    Parameters
+    ----------
+    table_name
+        Name of the registered table.
+    registration_time_ms
+        Unix timestamp in milliseconds when registered.
+    table_spec_hash
+        Hash of the TableSpec used for registration.
+    udf_snapshot_hash
+        Hash of UDF registry at registration time.
+    delta_version
+        Delta version used for registration (if applicable).
+    """
+
+    table_name: str
+    registration_time_ms: int
+    table_spec_hash: str
+    udf_snapshot_hash: str | None
+    delta_version: int | None
+
+    def payload(self) -> dict[str, object]:
+        """Return a serializable diagnostics payload.
+
+        Returns
+        -------
+        dict[str, object]
+            Payload suitable for logging and persistence.
+        """
+        return {
+            "table_name": self.table_name,
+            "registration_time_ms": self.registration_time_ms,
+            "table_spec_hash": self.table_spec_hash,
+            "udf_snapshot_hash": self.udf_snapshot_hash,
+            "delta_version": self.delta_version,
+        }
+
+
+@dataclass
+class ProviderRegistry:
+    """Unified registry for DataFusion table providers.
+
+    Centralizes table registration, UDF tracking, and metadata collection.
+    Replaces fragmented registration patterns across the codebase.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion SessionContext for table registration.
+    runtime_profile
+        Optional runtime profile for configuration and diagnostics.
+    """
+
+    ctx: SessionContext
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    _registrations: dict[str, RegistrationMetadata] = field(default_factory=dict)
+    _udf_snapshot_hash: str | None = field(default=None)
+
+    def register(
+        self,
+        spec: TableSpec,
+        *,
+        overwrite: bool = False,
+    ) -> RegistrationMetadata:
+        """Register a table from a TableSpec.
+
+        Parameters
+        ----------
+        spec
+            Table specification with schema, location, and format.
+        overwrite
+            Whether to overwrite an existing registration.
+
+        Returns
+        -------
+        RegistrationMetadata
+            Metadata about the registration event.
+
+        Raises
+        ------
+        ValueError
+            When table already registered and overwrite is False.
+        """
+        if spec.name in self._registrations and not overwrite:
+            msg = f"Table {spec.name!r} already registered. Use overwrite=True."
+            raise ValueError(msg)
+
+        metadata = self._do_registration(spec)
+        self._registrations[spec.name] = metadata
+        self._emit_registration_diagnostic(metadata)
+        return metadata
+
+    def register_delta(
+        self,
+        spec: TableSpec,
+        *,
+        overwrite: bool = False,
+    ) -> RegistrationMetadata:
+        """Register a Delta table with version pinning support.
+
+        Parameters
+        ----------
+        spec
+            Table specification for a Delta table.
+        overwrite
+            Whether to overwrite an existing registration.
+
+        Returns
+        -------
+        RegistrationMetadata
+            Metadata about the registration event.
+
+        Raises
+        ------
+        ValueError
+            When spec.format is not 'delta' or when table already registered.
+        """
+        if spec.format != "delta":
+            msg = f"Expected delta format, got {spec.format!r}"
+            raise ValueError(msg)
+        return self.register(spec, overwrite=overwrite)
+
+    def udf_registry_hash(self) -> str | None:
+        """Return the current UDF registry snapshot hash.
+
+        Returns
+        -------
+        str | None
+            Hash of the UDF registry, or None if unavailable.
+        """
+        if self._udf_snapshot_hash is not None:
+            return self._udf_snapshot_hash
+        from datafusion_engine.udf_runtime import rust_udf_snapshot
+
+        try:
+            snapshot = rust_udf_snapshot(self.ctx)
+            self._udf_snapshot_hash = _compute_snapshot_hash(snapshot)
+        except (RuntimeError, TypeError, ValueError):
+            return None
+        else:
+            return self._udf_snapshot_hash
+
+    def registrations(self) -> Mapping[str, RegistrationMetadata]:
+        """Return all current registrations.
+
+        Returns
+        -------
+        Mapping[str, RegistrationMetadata]
+            Read-only view of registered tables.
+        """
+        return dict(self._registrations)
+
+    def is_registered(self, name: str) -> bool:
+        """Check if a table is registered.
+
+        Parameters
+        ----------
+        name
+            Table name to check.
+
+        Returns
+        -------
+        bool
+            True if table is registered.
+        """
+        return name in self._registrations
+
+    def _do_registration(self, spec: TableSpec) -> RegistrationMetadata:
+        """Perform the actual table registration.
+
+        This method handles the DataFusion-specific registration logic.
+
+        Returns
+        -------
+        RegistrationMetadata
+            Metadata for the registration event.
+        """
+        from datafusion_engine.dataset_registry import DatasetLocation
+        from datafusion_engine.registry_bridge import register_dataset_df
+
+        location = DatasetLocation(
+            path=spec.storage_location,
+            format=spec.format,
+            delta_version=spec.delta_version,
+            delta_timestamp=spec.delta_timestamp,
+            storage_options=spec.storage_options,
+        )
+
+        if self.runtime_profile is not None:
+            register_dataset_df(
+                self.ctx,
+                name=spec.name,
+                location=location,
+                runtime_profile=self.runtime_profile,
+            )
+        else:
+            # Fallback registration without profile
+            self._register_without_profile(spec)
+
+        return RegistrationMetadata(
+            table_name=spec.name,
+            registration_time_ms=int(time.time() * 1000),
+            table_spec_hash=spec.cache_key(),
+            udf_snapshot_hash=self.udf_registry_hash(),
+            delta_version=spec.delta_version,
+        )
+
+    def _register_without_profile(self, spec: TableSpec) -> None:
+        """Register table when runtime profile is unavailable.
+
+        Raises
+        ------
+        ValueError
+            When the format is unsupported without a runtime profile.
+        """
+        if spec.format == "delta":
+            from deltalake import DeltaTable
+
+            dt = DeltaTable(spec.storage_location, version=spec.delta_version)
+            self.ctx.register_dataset(spec.name, dt.to_pyarrow_dataset())
+        else:
+            msg = f"Unsupported format without profile: {spec.format}"
+            raise ValueError(msg)
+
+    def _emit_registration_diagnostic(
+        self,
+        metadata: RegistrationMetadata,
+    ) -> None:
+        """Emit diagnostics for registration events."""
+        if self.runtime_profile is None:
+            return
+        from datafusion_engine.diagnostics import record_artifact
+
+        record_artifact(
+            self.runtime_profile,
+            "table_provider_registered_v1",
+            metadata.payload(),
+        )
+
+
+def _compute_snapshot_hash(snapshot: Mapping[str, object]) -> str:
+    """Compute a stable hash for a UDF snapshot.
+
+    Returns
+    -------
+    str
+        Short hash for the snapshot payload.
+    """
+    from serde_msgspec import dumps_json, to_builtins
+
+    raw = dumps_json(to_builtins(snapshot))
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+__all__ = [
+    "ProviderRegistry",
+    "RegistrationMetadata",
+]

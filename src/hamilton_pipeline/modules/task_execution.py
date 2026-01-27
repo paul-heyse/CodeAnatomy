@@ -20,6 +20,7 @@ from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, T
 
 if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
+    from datafusion_engine.plan_bundle import DataFusionPlanBundle
     from datafusion_engine.scan_planner import ScanUnit
     from engine.session import EngineSession
 
@@ -32,6 +33,7 @@ class TaskExecutionInputs:
     evidence: EvidenceCatalog
     plan_signature: str
     active_task_names: frozenset[str]
+    plan_bundles_by_task: Mapping[str, DataFusionPlanBundle]
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
     scan_units_hash: str | None
@@ -44,6 +46,16 @@ class PlanScanInputs:
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
     scan_units_hash: str | None
+
+
+@dataclass(frozen=True)
+class PlanExecutionContext:
+    """Bundle execution plan context for task execution."""
+
+    plan_signature: str
+    active_task_names: frozenset[str]
+    plan_bundles_by_task: Mapping[str, DataFusionPlanBundle]
+    plan_scan_inputs: PlanScanInputs
 
 
 @dataclass(frozen=True)
@@ -154,9 +166,7 @@ def plan_scan_inputs(
 def task_execution_inputs(
     runtime_artifacts: RuntimeArtifacts,
     evidence_catalog: EvidenceCatalog,
-    plan_signature: str,
-    active_task_names: frozenset[str],
-    plan_scan_inputs: PlanScanInputs,
+    plan_context: PlanExecutionContext,
 ) -> TaskExecutionInputs:
     """Bundle shared execution inputs for per-task nodes.
 
@@ -166,14 +176,8 @@ def task_execution_inputs(
         Runtime artifact container for the execution run.
     evidence_catalog
         Evidence catalog used for scheduling and contract validation.
-    plan_signature
-        Execution-plan signature for consistency checks.
-    active_task_names
-        Active task names for the current run.
-    plan_scan_units
-        Scan units derived from the plan for deterministic inputs.
-    plan_scan_keys_by_task
-        Scan keys grouped by task name.
+    plan_context
+        Execution-plan context for signatures, tasks, and scan inputs.
 
     Returns
     -------
@@ -183,11 +187,12 @@ def task_execution_inputs(
     return TaskExecutionInputs(
         runtime=runtime_artifacts,
         evidence=evidence_catalog,
-        plan_signature=plan_signature,
-        active_task_names=active_task_names,
-        scan_units=plan_scan_inputs.scan_units,
-        scan_keys_by_task=plan_scan_inputs.scan_keys_by_task,
-        scan_units_hash=plan_scan_inputs.scan_units_hash,
+        plan_signature=plan_context.plan_signature,
+        active_task_names=plan_context.active_task_names,
+        plan_bundles_by_task=plan_context.plan_bundles_by_task,
+        scan_units=plan_context.plan_scan_inputs.scan_units,
+        scan_keys_by_task=plan_context.plan_scan_inputs.scan_keys_by_task,
+        scan_units_hash=plan_context.plan_scan_inputs.scan_units_hash,
     )
 
 
@@ -195,9 +200,12 @@ def _execute_view(
     runtime: RuntimeArtifacts,
     *,
     view_name: str,
-    scan_units: tuple[ScanUnit, ...],
-    scan_units_hash: str | None,
+    plan_bundle: DataFusionPlanBundle | None,
+    scan_context: PlanScanInputs,
 ) -> ExecutionResult:
+    if plan_bundle is None:
+        msg = f"Plan bundle is required for view execution: {view_name!r}."
+        raise ValueError(msg)
     exec_ctx = runtime.execution
     if exec_ctx is None:
         msg = "RuntimeArtifacts.execution must be configured for view execution."
@@ -208,20 +216,33 @@ def _execute_view(
         raise ValueError(msg)
     session = profile.session_context()
     refresh_requested = not session.table_exist(view_name)
-    if scan_units_hash is not None and runtime.scan_override_hash != scan_units_hash:
+    if (
+        scan_context.scan_units_hash is not None
+        and runtime.scan_override_hash != scan_context.scan_units_hash
+    ):
         refresh_requested = True
     if refresh_requested:
         ensure_view_graph(
             session,
             runtime_profile=profile,
             include_registry_views=True,
-            scan_units=scan_units,
+            scan_units=scan_context.scan_units,
         )
         if not session.table_exist(view_name):
             msg = f"View {view_name!r} is not registered; call ensure_view_graph first."
             raise ValueError(msg)
-        runtime.scan_override_hash = scan_units_hash
-    table = session.table(view_name).to_arrow_table()
+        runtime.scan_override_hash = scan_context.scan_units_hash
+    from datafusion_engine.execution_facade import DataFusionExecutionFacade
+
+    facade = DataFusionExecutionFacade(ctx=session, runtime_profile=profile)
+    execution_result = facade.execute_plan_bundle(
+        plan_bundle,
+        view_name=view_name,
+        scan_units=scan_context.scan_units,
+        scan_keys=scan_context.scan_keys_by_task.get(view_name, ()),
+    )
+    dataframe = execution_result.require_dataframe()
+    table = dataframe.to_arrow_table()
     return ExecutionResult.from_table(table)
 
 
@@ -286,11 +307,16 @@ def _execute_and_record(
     runtime = inputs.runtime
     task_name = spec.task_name
     runtime.record_execution(task_name if not inactive else f"{task_name}:inactive")
+    plan_bundle = inputs.plan_bundles_by_task.get(spec.task_output)
     result = _execute_view(
         runtime,
         view_name=spec.task_output,
-        scan_units=inputs.scan_units,
-        scan_units_hash=inputs.scan_units_hash,
+        plan_bundle=plan_bundle,
+        scan_context=PlanScanInputs(
+            scan_units=inputs.scan_units,
+            scan_keys_by_task=inputs.scan_keys_by_task,
+            scan_units_hash=inputs.scan_units_hash,
+        ),
     )
     table = result.require_table()
     _record_output(

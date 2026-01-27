@@ -10,9 +10,9 @@ from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, overload
 
-from arrowdsl.core.array_iter import iter_table_rows
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.core.array_iter import iter_table_rows
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.query_spec import QuerySpec
@@ -221,7 +221,9 @@ def scan_repo_blobs(
     normalized_options = normalize_options("repo_blobs", options, RepoBlobOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    ctx = session.exec_ctx
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
@@ -236,7 +238,8 @@ def scan_repo_blobs(
         return materialize_extract_plan(
             "repo_file_blobs_v1",
             empty_plan,
-            ctx=ctx,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
                 prefer_reader=prefer_reader,
@@ -247,7 +250,8 @@ def scan_repo_blobs(
     return materialize_extract_plan(
         "repo_file_blobs_v1",
         plan,
-        ctx=ctx,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
         options=ExtractMaterializeOptions(
             normalize=normalize,
             prefer_reader=prefer_reader,
@@ -271,7 +275,7 @@ def scan_repo_blobs_plan(
     """
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
 
-    cache_profile = diskcache_profile_from_ctx(session.exec_ctx)
+    cache_profile = diskcache_profile_from_ctx(session.engine_session.datafusion_profile)
     cache = cache_for_extract(cache_profile)
     cache_ttl = cache_ttl_seconds(cache_profile, "extract")
 

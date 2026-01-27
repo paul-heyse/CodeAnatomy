@@ -10,8 +10,8 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
-from arrowdsl.core.interop import RecordBatchReaderLike, coerce_table_like
-from arrowdsl.schema.build import table_from_row_dicts
+from arrow_utils.core.interop import RecordBatchReaderLike, coerce_table_like
+from arrow_utils.schema.build import table_from_row_dicts
 from datafusion_engine.introspection import invalidate_introspection_cache
 
 

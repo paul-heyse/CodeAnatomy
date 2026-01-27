@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from arrowdsl.schema.semantic_types import SPAN_STORAGE
+from arrow_utils.schema.semantic_types import SPAN_STORAGE
 from schema_spec.bundles import base_bundle_catalog
 from schema_spec.specs import ArrowFieldSpec, FieldBundle
 

@@ -12,8 +12,7 @@ import pyarrow as pa
 from datafusion.dataframe import DataFrame
 from hamilton.function_modifiers import tag
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.schema.abi import schema_fingerprint
 from core_types import JsonDict
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.diagnostics import recorder_for_profile
@@ -33,6 +32,7 @@ from datafusion_engine.param_tables import (
 )
 from datafusion_engine.runtime import read_delta_as_reader
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from engine.runtime_profile import RuntimeProfileSpec
 from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import (
     ActiveParamSet,
@@ -292,16 +292,13 @@ def param_tables_datafusion(
     dict[str, datafusion.dataframe.DataFrame]
         DataFusion DataFrames keyed by logical name.
     """
-    ctx = engine_session.df_ctx()
-    if ctx is None:
-        return {}
-    return param_table_registry.datafusion_tables(ctx)
+    return param_table_registry.datafusion_tables(engine_session.df_ctx())
 
 
 @tag(layer="params", artifact="param_table_delta", kind="side_effect")
 def write_param_tables_delta(
     param_table_artifacts: Mapping[str, ParamTableArtifact],
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
 ) -> Mapping[str, JsonDict] | None:
     """Write param tables as Delta tables when enabled.
@@ -310,11 +307,6 @@ def write_param_tables_delta(
     -------
     Mapping[str, JsonDict] | None
         Mapping of logical names to Delta table reports, or ``None`` when disabled.
-
-    Raises
-    ------
-    ValueError
-        Raised when the DataFusion runtime profile is unavailable.
     """
     if not output_config.materialize_param_tables:
         return None
@@ -326,10 +318,7 @@ def write_param_tables_delta(
     write_policy = output_config.delta_write_policy
     schema_policy = output_config.delta_schema_policy
     storage_options = output_config.delta_storage_options
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "DataFusion runtime profile is required for param table writes."
-        raise ValueError(msg)
+    runtime_profile = runtime_profile_spec.datafusion
     session_runtime = runtime_profile.session_runtime()
     output: dict[str, JsonDict] = {}
     for logical_name, artifact in param_table_artifacts.items():

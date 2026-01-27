@@ -17,12 +17,12 @@ from hamilton.function_modifiers import (
     tag,
 )
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrow_utils.core.interop import TableLike
 from core_types import JsonDict
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.diagnostics import recorder_for_profile
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.pipeline_types import OutputConfig
 from hamilton_pipeline.validators import NonEmptyTableValidator
 from storage.deltalake import (
@@ -96,7 +96,7 @@ def _semantic_tag(*, artifact: str, spec: SemanticTagSpec) -> Callable[[F], F]:
 def _delta_write(
     table: TableLike,
     *,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
     dataset_name: str,
 ) -> JsonDict:
@@ -106,10 +106,7 @@ def _delta_write(
         raise ValueError(msg)
     target_dir = Path(base_dir) / dataset_name
     target_dir.mkdir(parents=True, exist_ok=True)
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "DataFusion runtime profile is required for Delta materialization."
-        raise ValueError(msg)
+    runtime_profile = runtime_profile_spec.datafusion
     session_runtime = runtime_profile.session_runtime()
     configuration: dict[str, str | None] = {}
     if output_config.delta_write_policy is not None:
@@ -268,7 +265,7 @@ def cpg_props(cpg_props_final: TableLike) -> TableLike:
 @tag(layer="outputs", artifact="write_cpg_nodes_delta", kind="delta")
 def write_cpg_nodes_delta(
     cpg_nodes: TableLike,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG nodes output.
@@ -280,7 +277,7 @@ def write_cpg_nodes_delta(
     """
     return _delta_write(
         cpg_nodes,
-        ctx=ctx,
+        runtime_profile_spec=runtime_profile_spec,
         output_config=output_config,
         dataset_name="cpg_nodes",
     )
@@ -290,7 +287,7 @@ def write_cpg_nodes_delta(
 @tag(layer="outputs", artifact="write_cpg_edges_delta", kind="delta")
 def write_cpg_edges_delta(
     cpg_edges: TableLike,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG edges output.
@@ -302,7 +299,7 @@ def write_cpg_edges_delta(
     """
     return _delta_write(
         cpg_edges,
-        ctx=ctx,
+        runtime_profile_spec=runtime_profile_spec,
         output_config=output_config,
         dataset_name="cpg_edges",
     )
@@ -312,7 +309,7 @@ def write_cpg_edges_delta(
 @tag(layer="outputs", artifact="write_cpg_props_delta", kind="delta")
 def write_cpg_props_delta(
     cpg_props: TableLike,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG properties output.
@@ -324,7 +321,7 @@ def write_cpg_props_delta(
     """
     return _delta_write(
         cpg_props,
-        ctx=ctx,
+        runtime_profile_spec=runtime_profile_spec,
         output_config=output_config,
         dataset_name="cpg_props",
     )
@@ -334,7 +331,7 @@ def write_cpg_props_delta(
 @tag(layer="outputs", artifact="write_cpg_nodes_quality_delta", kind="delta")
 def write_cpg_nodes_quality_delta(
     cpg_nodes: TableLike,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG node quality output.
@@ -346,7 +343,7 @@ def write_cpg_nodes_quality_delta(
     """
     return _delta_write(
         cpg_nodes,
-        ctx=ctx,
+        runtime_profile_spec=runtime_profile_spec,
         output_config=output_config,
         dataset_name="cpg_nodes_quality",
     )
@@ -356,7 +353,7 @@ def write_cpg_nodes_quality_delta(
 @tag(layer="outputs", artifact="write_cpg_props_quality_delta", kind="delta")
 def write_cpg_props_quality_delta(
     cpg_props: TableLike,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG prop quality output.
@@ -368,7 +365,7 @@ def write_cpg_props_quality_delta(
     """
     return _delta_write(
         cpg_props,
-        ctx=ctx,
+        runtime_profile_spec=runtime_profile_spec,
         output_config=output_config,
         dataset_name="cpg_props_quality",
     )
@@ -378,7 +375,7 @@ def write_cpg_props_quality_delta(
 @tag(layer="outputs", artifact="write_cpg_props_json_delta", kind="delta")
 def write_cpg_props_json_delta(
     cpg_props: TableLike,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG props JSON output.
@@ -390,7 +387,7 @@ def write_cpg_props_json_delta(
     """
     return _delta_write(
         cpg_props,
-        ctx=ctx,
+        runtime_profile_spec=runtime_profile_spec,
         output_config=output_config,
         dataset_name="cpg_props_json",
     )

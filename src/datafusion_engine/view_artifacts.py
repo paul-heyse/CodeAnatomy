@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict, schema_to_msgpack
+from arrow_utils.schema.abi import schema_fingerprint, schema_to_dict, schema_to_msgpack
 from serde_msgspec import dumps_msgpack
 
 if TYPE_CHECKING:

@@ -9,7 +9,7 @@ from typing import Protocol, cast
 import pyarrow as pa
 from datafusion import SessionContext
 
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 
 

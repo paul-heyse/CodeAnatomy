@@ -7,10 +7,9 @@ from functools import cache
 
 import pyarrow as pa
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike
+from arrow_utils.core.interop import SchemaLike
+from arrow_utils.schema.metadata import SchemaMetadataSpec
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata_by_name
 from datafusion_engine.extract_templates import config
 from datafusion_engine.query_spec import QuerySpec
@@ -95,7 +94,6 @@ def dataset_metadata_with_options(
 def dataset_schema_policy(
     name: str,
     *,
-    ctx: ExecutionContext,
     options: object | None = None,
     repo_id: str | None = None,
     enable_encoding: bool = True,
@@ -111,7 +109,6 @@ def dataset_schema_policy(
     spec = dataset_spec(name)
     return schema_policy_factory(
         spec.table_spec,
-        ctx=ctx,
         options=SchemaPolicyOptions(encoding=spec.encoding_policy() if enable_encoding else None),
     )
 

@@ -7,13 +7,11 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
-from arrowdsl.core.execution_context import ExecutionContext
 from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.runtime import EngineRuntime
 
 if TYPE_CHECKING:
-    from arrowdsl.core.runtime_profiles import RuntimeProfile
     from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
 from datafusion_engine.dataset_registry import DatasetCatalog
 from obs.diagnostics import DiagnosticsCollector
@@ -23,7 +21,6 @@ from obs.diagnostics import DiagnosticsCollector
 class EngineSession:
     """Bundle core execution surfaces into a single session object."""
 
-    ctx: ExecutionContext
     engine_runtime: EngineRuntime
     datasets: DatasetCatalog
     diagnostics: DiagnosticsCollector | None = None
@@ -32,16 +29,11 @@ class EngineSession:
     runtime_profile_hash: str | None = None
 
     @property
-    def runtime_profile(self) -> RuntimeProfile:
-        """Return the runtime profile for the session."""
-        return self.engine_runtime.runtime_profile
-
-    @property
-    def datafusion_profile(self) -> DataFusionRuntimeProfile | None:
+    def datafusion_profile(self) -> DataFusionRuntimeProfile:
         """Return the DataFusion runtime profile when configured."""
         return self.engine_runtime.datafusion_profile
 
-    def df_ctx(self) -> SessionContext | None:
+    def df_ctx(self) -> SessionContext:
         """Return the DataFusion SessionContext when configured.
 
         Returns
@@ -49,11 +41,9 @@ class EngineSession:
         datafusion.SessionContext | None
             Session context when available.
         """
-        if self.engine_runtime.datafusion_profile is None:
-            return None
-        return self.engine_runtime.datafusion_profile.session_context()
+        return self.engine_runtime.datafusion_profile.session_runtime().ctx
 
-    def df_runtime(self) -> SessionRuntime | None:
+    def df_runtime(self) -> SessionRuntime:
         """Return the DataFusion SessionRuntime when configured.
 
         Returns
@@ -61,12 +51,9 @@ class EngineSession:
         SessionRuntime | None
             Session runtime when available.
         """
-        profile = self.engine_runtime.datafusion_profile
-        if profile is None:
-            return None
-        return profile.session_runtime()
+        return self.engine_runtime.datafusion_profile.session_runtime()
 
-    def datafusion_facade(self) -> DataFusionExecutionFacade | None:
+    def datafusion_facade(self) -> DataFusionExecutionFacade:
         """Return a DataFusion execution facade when configured.
 
         Returns
@@ -74,8 +61,6 @@ class EngineSession:
         DataFusionExecutionFacade | None
             Execution facade when available.
         """
-        if self.engine_runtime.datafusion_profile is None:
-            return None
         session_runtime = self.engine_runtime.datafusion_profile.session_runtime()
         return DataFusionExecutionFacade(
             ctx=session_runtime.ctx,

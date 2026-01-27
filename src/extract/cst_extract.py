@@ -28,11 +28,11 @@ from libcst.metadata import (
     WhitespaceInclusivePositionProvider,
 )
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.schema import schema_fingerprint
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import find_struct_field_keys
 from datafusion_engine.schema_registry import default_attrs_value
 from extract.helpers import (
@@ -1440,14 +1440,14 @@ def _collect_cst_file_rows(
     *,
     options: CSTExtractOptions,
     evidence_plan: EvidencePlan | None,
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     contexts = list(
         iter_worklist_contexts(
             repo_files,
             output_table="libcst_files_v1",
-            ctx=ctx,
+            runtime_profile=runtime_profile,
             file_contexts=file_contexts,
             queue_name=(
                 worklist_queue_name(output_table="libcst_files_v1", repo_id=options.repo_id)
@@ -1472,7 +1472,7 @@ def _collect_cst_file_rows(
                 for row in parallel_map(
                     contexts,
                     runner,
-                    max_workers=resolve_max_workers(options.max_workers, ctx=ctx, kind="cpu"),
+                    max_workers=resolve_max_workers(options.max_workers, kind="cpu"),
                 )
                 if row is not None
             )
@@ -1524,7 +1524,7 @@ class _CstBatchContext:
     file_contexts: Iterable[FileContext] | None
     options: CSTExtractOptions
     evidence_plan: EvidencePlan | None
-    ctx: ExecutionContext | None
+    runtime_profile: DataFusionRuntimeProfile | None
     batch_size: int
 
 
@@ -1535,7 +1535,7 @@ def _iter_cst_row_batches(
         iter_worklist_contexts(
             context.repo_files,
             output_table="libcst_files_v1",
-            ctx=context.ctx,
+            runtime_profile=context.runtime_profile,
             file_contexts=context.file_contexts,
             queue_name=(
                 worklist_queue_name(
@@ -1567,7 +1567,6 @@ def _iter_cst_batches_for_contexts(
     options = context.options
     evidence_plan = context.evidence_plan
     batch_size = context.batch_size
-    ctx = context.ctx
     use_parallel = options.parallel and (repo_manager is None or supports_fork())
     if use_parallel:
         _warm_cst_parser()
@@ -1577,7 +1576,7 @@ def _iter_cst_batches_for_contexts(
             for row in parallel_map(
                 contexts,
                 runner,
-                max_workers=resolve_max_workers(options.max_workers, ctx=ctx, kind="cpu"),
+                max_workers=resolve_max_workers(options.max_workers, kind="cpu"),
             ):
                 if row is None:
                     continue
@@ -1630,8 +1629,9 @@ def extract_cst(
     normalized_options = normalize_options("cst", options, CSTExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
-    exec_ctx = session.exec_ctx
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
@@ -1645,7 +1645,7 @@ def extract_cst(
             exec_context.file_contexts,
             options=normalized_options,
             evidence_plan=exec_context.evidence_plan,
-            ctx=exec_context.ctx,
+            runtime_profile=runtime_profile,
         )
     else:
         row_batches = _iter_cst_row_batches(
@@ -1654,7 +1654,7 @@ def extract_cst(
                 file_contexts=exec_context.file_contexts,
                 options=normalized_options,
                 evidence_plan=exec_context.evidence_plan,
-                ctx=exec_context.ctx,
+                runtime_profile=runtime_profile,
                 batch_size=batch_size,
             )
         )
@@ -1669,7 +1669,8 @@ def extract_cst(
         libcst_files=materialize_extract_plan(
             "libcst_files_v1",
             plan,
-            ctx=exec_ctx,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
                 apply_post_kernels=True,
@@ -1694,7 +1695,8 @@ def extract_cst_plans(
     normalized_options = normalize_options("cst", options, CSTExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
@@ -1708,7 +1710,7 @@ def extract_cst_plans(
             exec_context.file_contexts,
             options=normalized_options,
             evidence_plan=exec_context.evidence_plan,
-            ctx=exec_context.ctx,
+            runtime_profile=runtime_profile,
         )
     else:
         row_batches = _iter_cst_row_batches(
@@ -1717,7 +1719,7 @@ def extract_cst_plans(
                 file_contexts=exec_context.file_contexts,
                 options=normalized_options,
                 evidence_plan=exec_context.evidence_plan,
-                ctx=exec_context.ctx,
+                runtime_profile=runtime_profile,
                 batch_size=batch_size,
             )
         )
@@ -1738,7 +1740,6 @@ class _CstTablesKwargs(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     prefer_reader: bool
 
@@ -1749,7 +1750,6 @@ class _CstTablesKwargsTable(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     prefer_reader: Literal[False]
 
@@ -1760,7 +1760,6 @@ class _CstTablesKwargsReader(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     prefer_reader: Required[Literal[True]]
 
@@ -1802,12 +1801,13 @@ def extract_cst_tables(
     exec_context = ExtractExecutionContext(
         file_contexts=file_contexts,
         evidence_plan=evidence_plan,
-        ctx=kwargs.get("ctx"),
         session=kwargs.get("session"),
         profile=profile,
     )
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
@@ -1826,7 +1826,8 @@ def extract_cst_tables(
         "libcst_files": materialize_extract_plan(
             "libcst_files_v1",
             plans["libcst_files"],
-            ctx=session.exec_ctx,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
             options=options,
         )
     }

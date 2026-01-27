@@ -28,7 +28,7 @@ from datafusion_engine.write_pipeline import (
 )
 
 if TYPE_CHECKING:
-    from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+    from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.registry_bridge import DataFusionCachePolicy
     from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime

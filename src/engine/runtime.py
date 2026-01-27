@@ -5,10 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from arrowdsl.core.execution_context import ExecutionContext
-
 if TYPE_CHECKING:
-    from arrowdsl.core.runtime_profiles import RuntimeProfile
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from obs.diagnostics import DiagnosticsCollector
     from relspec.pipeline_policy import DiagnosticsPolicy
@@ -18,12 +15,11 @@ if TYPE_CHECKING:
 class EngineRuntime:
     """Unified runtime settings for engine execution surfaces."""
 
-    runtime_profile: RuntimeProfile
-    datafusion_profile: DataFusionRuntimeProfile | None
+    datafusion_profile: DataFusionRuntimeProfile
 
     def with_datafusion_profile(
         self,
-        profile: DataFusionRuntimeProfile | None,
+        profile: DataFusionRuntimeProfile,
     ) -> EngineRuntime:
         """Return a copy of the runtime with updated DataFusion profile.
 
@@ -40,8 +36,7 @@ class EngineRuntime:
 
 def build_engine_runtime(
     *,
-    ctx: ExecutionContext,
-    runtime_profile: RuntimeProfile | None = None,
+    runtime_profile: DataFusionRuntimeProfile,
     diagnostics: DiagnosticsCollector | None = None,
     diagnostics_policy: DiagnosticsPolicy | None = None,
 ) -> EngineRuntime:
@@ -52,19 +47,15 @@ def build_engine_runtime(
     EngineRuntime
         Bundled runtime settings for DataFusion execution.
     """
-    runtime = runtime_profile or ctx.runtime
-    runtime.apply_global_thread_pools()
-    datafusion_profile = runtime.datafusion
-    if datafusion_profile is not None and diagnostics_policy is not None:
+    datafusion_profile = runtime_profile
+    if diagnostics_policy is not None:
         datafusion_profile = _apply_diagnostics_policy(
             datafusion_profile,
             diagnostics_policy,
         )
-    if datafusion_profile is not None and diagnostics is not None:
+    if diagnostics is not None:
         datafusion_profile = replace(datafusion_profile, diagnostics_sink=diagnostics)
-        runtime = runtime.with_datafusion(datafusion_profile)
     return EngineRuntime(
-        runtime_profile=runtime,
         datafusion_profile=datafusion_profile,
     )
 

@@ -15,7 +15,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "column_stats_table": ("obs.metrics", "column_stats_table"),
     "dataset_stats_table": ("obs.metrics", "dataset_stats_table"),
     "table_summary": ("obs.metrics", "table_summary"),
-    "schema_fingerprint": ("arrowdsl.schema.abi", "schema_fingerprint"),
+    "schema_fingerprint": ("arrow_utils.schema.abi", "schema_fingerprint"),
 }
 
 

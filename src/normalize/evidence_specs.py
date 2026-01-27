@@ -6,8 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from arrowdsl.core.interop import SchemaLike
-from arrowdsl.schema.metadata import (
+from arrow_utils.core.interop import SchemaLike
+from arrow_utils.schema.metadata import (
     decode_metadata_list,
     decode_metadata_map,
     decode_metadata_scalar_map,
@@ -15,7 +15,7 @@ from arrowdsl.schema.metadata import (
 from schema_spec.literals import parse_scalar_value
 
 if TYPE_CHECKING:
-    from arrowdsl.core.expr_types import ScalarValue
+    from arrow_utils.core.expr_types import ScalarValue
 
 EVIDENCE_REQUIRED_COLUMNS_META = b"evidence_required_columns"
 EVIDENCE_REQUIRED_TYPES_META = b"evidence_required_types"

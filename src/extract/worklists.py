@@ -9,8 +9,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from datafusion import DataFrame, SessionContext, col
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrow_utils.core.interop import TableLike
 from cache.diskcache_factory import build_deque, build_index
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.schema_introspection import table_names_snapshot
@@ -77,7 +76,7 @@ def iter_worklist_contexts(
     repo_files: TableLike,
     *,
     output_table: str,
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile,
     file_contexts: Iterable[FileContext] | None = None,
     queue_name: str | None = None,
 ) -> Iterable[FileContext]:
@@ -89,8 +88,8 @@ def iter_worklist_contexts(
         Repo manifest table.
     output_table:
         Output dataset name used for worklist computation.
-    ctx:
-        Execution context used for DataFusion integration.
+    runtime_profile:
+        DataFusion runtime profile used for worklist execution.
     file_contexts:
         Optional precomputed file contexts.
     queue_name:
@@ -101,29 +100,34 @@ def iter_worklist_contexts(
     FileContext
         File contexts matching the worklist query.
 
-    Raises
-    ------
-    ValueError
-        Raised when the execution context lacks a DataFusion runtime profile.
     """
     if file_contexts is not None:
         yield from file_contexts
         return
-    if ctx is None or ctx.runtime.datafusion is None:
-        msg = "Worklist execution requires a DataFusion runtime profile."
-        raise ValueError(msg)
     if queue_name is None:
-        yield from _worklist_stream(ctx, repo_files=repo_files, output_table=output_table)
+        yield from _worklist_stream(
+            runtime_profile,
+            repo_files=repo_files,
+            output_table=output_table,
+        )
         return
-    queue_bundle = _worklist_queue(ctx, queue_name=queue_name)
+    queue_bundle = _worklist_queue(runtime_profile, queue_name=queue_name)
     if queue_bundle is None:
-        yield from _worklist_stream(ctx, repo_files=repo_files, output_table=output_table)
+        yield from _worklist_stream(
+            runtime_profile,
+            repo_files=repo_files,
+            output_table=output_table,
+        )
         return
     queue, index = queue_bundle
     if len(queue) > 0:
         yield from _drain_worklist_queue(queue, index=index)
         return
-    for file_ctx in _worklist_stream(ctx, repo_files=repo_files, output_table=output_table):
+    for file_ctx in _worklist_stream(
+        runtime_profile,
+        repo_files=repo_files,
+        output_table=output_table,
+    ):
         file_id = file_ctx.file_id
         if not file_id:
             continue
@@ -137,15 +141,11 @@ def iter_worklist_contexts(
 
 
 def _worklist_stream(
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
     *,
     repo_files: TableLike,
     output_table: str,
 ) -> Iterator[FileContext]:
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "Worklist streaming requires a DataFusion runtime profile."
-        raise ValueError(msg)
     session_runtime = runtime_profile.session_runtime()
     df_ctx = session_runtime.ctx
     repo_name = f"__repo_files_{uuid.uuid4().hex}"
@@ -238,11 +238,11 @@ def worklist_queue_name(*, output_table: str, repo_id: str | None) -> str:
 
 
 def _worklist_queue(
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
     *,
     queue_name: str,
 ) -> tuple[Deque, Index] | None:
-    profile = diskcache_profile_from_ctx(ctx)
+    profile = diskcache_profile_from_ctx(runtime_profile)
     if profile is None:
         return None
     base_name = f"worklist_{queue_name}"

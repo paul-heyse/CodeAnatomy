@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from datafusion.dataframe import DataFrame
 
-from arrowdsl.core.interop import SchemaLike
+from arrow_utils.core.interop import SchemaLike
 from datafusion_engine.schema_registry import is_extract_nested_dataset
 
 if TYPE_CHECKING:

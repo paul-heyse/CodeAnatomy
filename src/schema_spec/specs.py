@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 
-from arrowdsl.core import interop
-from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
-from arrowdsl.core.schema_constants import (
+from arrow_utils.core import interop
+from arrow_utils.core.interop import DataTypeLike, FieldLike, SchemaLike
+from arrow_utils.core.schema_constants import (
     KEY_FIELDS_META,
     PROVENANCE_COLS,
     PROVENANCE_SOURCE_FIELDS,
@@ -18,14 +18,14 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from arrowdsl.schema.build import list_view_type
-from arrowdsl.schema.encoding_metadata import (
+from arrow_utils.schema.build import list_view_type
+from arrow_utils.schema.encoding_metadata import (
     ENCODING_DICTIONARY,
     ENCODING_META,
     dict_field_metadata,
 )
-from arrowdsl.schema.metadata import metadata_list_bytes
-from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
+from arrow_utils.schema.metadata import SchemaMetadataSpec, metadata_list_bytes
+from arrowdsl.schema.schema import CastErrorPolicy, SchemaTransform
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
@@ -207,7 +207,7 @@ class TableSchemaSpec:
         TableSchemaSpec
             Table schema specification derived from the Arrow schema.
         """
-        from arrowdsl.schema.metadata import (
+        from arrow_utils.schema.metadata import (
             schema_constraints_from_metadata,
             schema_identity_from_metadata,
         )

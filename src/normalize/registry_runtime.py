@@ -11,10 +11,9 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 import normalize.dataset_specs as static_dataset_specs
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike
+from arrow_utils.core.interop import SchemaLike
+from arrow_utils.schema.metadata import SchemaMetadataSpec
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import SchemaMetadataSpec
 from core_types import PathLike, ensure_path
 from datafusion_engine.dataset_registry import DatasetLocation
 from datafusion_engine.introspection import introspection_cache_for_ctx
@@ -320,15 +319,13 @@ def dataset_contract_violations(
     return tuple(contract.validate_against_introspection(snapshot))
 
 
-def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
+def dataset_schema_policy(name: str) -> SchemaPolicy:
     """Return a schema policy derived from the dataset spec.
 
     Parameters
     ----------
     name : str
         Dataset name to resolve.
-    ctx : ExecutionContext
-        Execution context to bind policy evaluation.
 
     Returns
     -------
@@ -343,7 +340,7 @@ def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
         metadata=spec.metadata_spec,
         validation=contract.validation,
     )
-    return schema_policy_factory(spec.table_spec, ctx=ctx, options=options)
+    return schema_policy_factory(spec.table_spec, options=options)
 
 
 def dataset_metadata_spec(name: str, *, ctx: SessionContext | None = None) -> SchemaMetadataSpec:

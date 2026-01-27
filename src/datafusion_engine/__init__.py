@@ -256,7 +256,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     ),
     "resolve_param_bindings": ("datafusion_engine.param_binding", "resolve_param_bindings"),
     # SQL Safety
-    "ExecutionContext": ("datafusion_engine.sql_safety", "ExecutionContext"),
     "ExecutionPolicy": ("datafusion_engine.sql_safety", "ExecutionPolicy"),
     "SafeExecutor": ("datafusion_engine.sql_safety", "SafeExecutor"),
     "execute_with_policy": ("datafusion_engine.sql_safety", "execute_with_policy"),

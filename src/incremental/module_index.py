@@ -8,9 +8,9 @@ from typing import cast
 import pyarrow as pa
 from libcst import helpers as cst_helpers
 
-from arrowdsl.core.array_iter import iter_array_values
-from arrowdsl.core.interop import TableLike
-from arrowdsl.schema.build import table_from_arrays
+from arrow_utils.core.array_iter import iter_array_values
+from arrow_utils.core.interop import TableLike
+from arrow_utils.schema.build import table_from_arrays
 from incremental.registry_specs import dataset_schema
 
 

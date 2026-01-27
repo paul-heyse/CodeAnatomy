@@ -9,8 +9,8 @@ import pyarrow as pa
 from datafusion import col, lit
 from datafusion import functions as f
 
-from arrowdsl.core.interop import TableLike, coerce_table_like
-from arrowdsl.schema.build import table_from_arrays
+from arrow_utils.core.interop import TableLike, coerce_table_like
+from arrow_utils.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
 from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
 from incremental.plan_bundle_exec import execute_df_to_table

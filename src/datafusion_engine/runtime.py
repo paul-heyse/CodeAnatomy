@@ -31,11 +31,10 @@ from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 from datafusion.object_store import LocalFileSystem
 
-from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
-from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
-from arrowdsl.schema.abi import schema_fingerprint
-from arrowdsl.schema.metadata import schema_constraints_from_metadata
+from arrow_utils.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
+from arrow_utils.core.schema_constants import DEFAULT_VALUE_META
+from arrow_utils.schema.abi import schema_fingerprint
+from arrow_utils.schema.metadata import schema_constraints_from_metadata
 from cache.diskcache_factory import (
     DiskCacheKind,
     DiskCacheProfile,
@@ -45,6 +44,7 @@ from cache.diskcache_factory import (
     evict_cache_tag,
     run_profile_maintenance,
 )
+from core_types import DeterminismTier
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,

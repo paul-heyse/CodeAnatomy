@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrowdsl.schema.build import table_from_arrays
+from arrow_utils.schema.build import table_from_arrays
 from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.registry_specs import dataset_schema

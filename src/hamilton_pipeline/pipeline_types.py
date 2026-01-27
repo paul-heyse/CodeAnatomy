@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from arrowdsl.core.interop import TableLike
+    from arrow_utils.core.interop import TableLike
     from datafusion_engine.nested_tables import ViewReference
     from engine.plan_policy import WriterStrategy
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy

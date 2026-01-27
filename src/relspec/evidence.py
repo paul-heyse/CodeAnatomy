@@ -19,7 +19,7 @@ from datafusion_engine.schema_contracts import (
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from arrowdsl.core.interop import SchemaLike
+    from arrow_utils.core.interop import SchemaLike
     from datafusion_engine.introspection import IntrospectionSnapshot
     from datafusion_engine.view_graph_registry import ViewNode
     from schema_spec.system import ContractSpec, DatasetSpec

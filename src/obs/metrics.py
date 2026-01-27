@@ -12,7 +12,7 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pyarrow.types as patypes
 
-from arrowdsl.core.interop import (
+from arrow_utils.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
     ComputeExpression,
@@ -20,8 +20,8 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
-from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict
-from arrowdsl.schema.build import (
+from arrow_utils.schema.abi import schema_fingerprint, schema_to_dict
+from arrow_utils.schema.build import (
     const_array,
     empty_table,
     rows_to_table,

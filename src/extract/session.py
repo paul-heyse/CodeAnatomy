@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
-from arrowdsl.core.execution_context import ExecutionContext
+from engine.runtime_profile import RuntimeProfileSpec
 from engine.session import EngineSession
 from engine.session_factory import build_engine_session
 
@@ -22,24 +22,15 @@ class ExtractSession:
     engine_session: EngineSession
 
     @property
-    def exec_ctx(self) -> ExecutionContext:
-        """Return the ExecutionContext for extract workloads."""
-        return self.engine_session.ctx
-
-    @property
     def df_ctx(self) -> SessionContext:
         """Return the DataFusion SessionContext for extract workloads.
 
-        Raises
-        ------
-        ValueError
-            Raised when the DataFusion SessionContext is unavailable.
+        Returns
+        -------
+        SessionContext
+            DataFusion SessionContext for extract workloads.
         """
-        ctx = self.engine_session.df_ctx()
-        if ctx is None:
-            msg = "DataFusion SessionContext is required for extract workloads."
-            raise ValueError(msg)
-        return ctx
+        return self.engine_session.df_ctx()
 
     @property
     def session_runtime(self) -> SessionRuntime:
@@ -50,27 +41,19 @@ class ExtractSession:
         SessionRuntime
             Planning-ready DataFusion session runtime.
 
-        Raises
-        ------
-        ValueError
-            Raised when the DataFusion SessionRuntime is unavailable.
         """
-        runtime = self.engine_session.df_runtime()
-        if runtime is None:
-            msg = "DataFusion SessionRuntime is required for extract workloads."
-            raise ValueError(msg)
-        return runtime
+        return self.engine_session.df_runtime()
 
 
-def build_extract_session(ctx: ExecutionContext) -> ExtractSession:
-    """Return a shared extract session for an execution context.
+def build_extract_session(runtime_spec: RuntimeProfileSpec) -> ExtractSession:
+    """Return a shared extract session for a runtime profile spec.
 
     Returns
     -------
     ExtractSession
         DataFusion SessionContext bound to the runtime profile.
     """
-    engine_session = build_engine_session(ctx=ctx)
+    engine_session = build_engine_session(runtime_spec=runtime_spec)
     return ExtractSession(engine_session=engine_session)
 
 

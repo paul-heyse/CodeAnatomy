@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from hamilton.function_modifiers import cache, extract_fields, tag
 
+from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.modules import task_execution
 from relspec.evidence import EvidenceCatalog
 from relspec.execution_plan import (
@@ -19,7 +20,6 @@ from relspec.execution_plan import (
 )
 
 if TYPE_CHECKING:
-    from arrowdsl.core.execution_context import ExecutionContext
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.scan_planner import ScanUnit
@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     from relspec.schedule_events import TaskScheduleMetadata
     from schema_spec.system import DatasetSpec
 else:
-    ExecutionContext = object
     DataFusionPlanBundle = object
     DataFusionRuntimeProfile = object
     ScanUnit = object
@@ -224,12 +223,10 @@ def _evidence_catalog_node(options: PlanModuleOptions) -> object:
     @tag(layer="plan", artifact="evidence_catalog", kind="catalog")
     def evidence_catalog(
         execution_plan: ExecutionPlan,
-        ctx: ExecutionContext,
+        runtime_profile_spec: RuntimeProfileSpec,
     ) -> EvidenceCatalog:
         evidence = execution_plan.evidence
-        profile = ctx.runtime.datafusion
-        if profile is None:
-            return evidence
+        profile = runtime_profile_spec.datafusion
         _ensure_view_graph(profile)
         if options.record_evidence_artifacts:
             _record_evidence_contract_violations(profile, evidence)
@@ -390,7 +387,7 @@ def _incremental_plan_diff_node(options: PlanModuleOptions) -> object:
     def incremental_plan_diff(
         execution_plan: ExecutionPlan,
         incremental_config: IncrementalConfig,
-        ctx: ExecutionContext,
+        runtime_profile_spec: RuntimeProfileSpec,
     ) -> IncrementalDiff | None:
         if not incremental_config.enabled or incremental_config.state_dir is None:
             return None
@@ -403,10 +400,11 @@ def _incremental_plan_diff_node(options: PlanModuleOptions) -> object:
         from incremental.state_store import StateStore
         from relspec.incremental import diff_plan_snapshots
 
-        try:
-            runtime = IncrementalRuntime.build(ctx=ctx)
-        except ValueError:
-            return None
+        runtime_profile = runtime_profile_spec.datafusion
+        runtime = IncrementalRuntime.build(
+            profile=runtime_profile,
+            determinism_tier=runtime_profile_spec.determinism_tier,
+        )
         state_store = StateStore(root=incremental_config.state_dir)
         context = DeltaAccessContext(runtime=runtime)
         current = execution_plan.plan_snapshots
@@ -421,7 +419,7 @@ def _incremental_plan_diff_node(options: PlanModuleOptions) -> object:
         if options.record_incremental_artifacts:
             _record_plan_diff(
                 diff,
-                ctx=ctx,
+                runtime_profile=runtime_profile,
                 plan_signature=execution_plan.plan_signature,
                 total_tasks=len(current),
             )
@@ -524,13 +522,11 @@ def _record_udf_parity(profile: DataFusionRuntimeProfile) -> None:
 def _record_plan_diff(
     diff: IncrementalDiff,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
     plan_signature: str,
     total_tasks: int,
 ) -> None:
-    profile = ctx.runtime.datafusion
-    if profile is None:
-        return
+    profile = runtime_profile
     from datafusion_engine.diagnostics import record_artifact
     from datafusion_engine.semantic_diff import ChangeCategory, RebuildPolicy
 

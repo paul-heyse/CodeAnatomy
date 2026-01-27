@@ -16,11 +16,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from extract.cache_utils import (
     CacheSetOptions,
     cache_for_extract,
@@ -560,10 +560,8 @@ def _bytecode_cache_key(
 
 def _effective_max_workers(
     options: BytecodeExtractOptions,
-    *,
-    ctx: ExecutionContext | None,
 ) -> int:
-    max_workers = resolve_max_workers(options.max_workers, ctx=ctx, kind="cpu")
+    max_workers = resolve_max_workers(options.max_workers, kind="cpu")
     return max(1, min(32, max_workers))
 
 
@@ -1528,13 +1526,13 @@ def _collect_bytecode_file_rows(
     file_contexts: Iterable[FileContext] | None,
     *,
     options: BytecodeExtractOptions,
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> list[dict[str, object]]:
     contexts = list(
         iter_worklist_contexts(
             repo_files,
             output_table="bytecode_files_v1",
-            ctx=ctx,
+            runtime_profile=runtime_profile,
             file_contexts=file_contexts,
             queue_name=(
                 worklist_queue_name(output_table="bytecode_files_v1", repo_id=options.repo_id)
@@ -1545,10 +1543,10 @@ def _collect_bytecode_file_rows(
     )
     if not contexts:
         return []
-    cache_profile = diskcache_profile_from_ctx(ctx)
+    cache_profile = diskcache_profile_from_ctx(runtime_profile)
     cache = cache_for_extract(cache_profile)
     cache_ttl = cache_ttl_seconds(cache_profile, "extract")
-    max_workers = _effective_max_workers(options, ctx=ctx)
+    max_workers = _effective_max_workers(options)
     if not _should_parallelize(contexts, options=options, max_workers=max_workers):
         rows: list[dict[str, object]] = []
         for file_ctx in contexts:
@@ -1641,14 +1639,15 @@ def extract_bytecode(
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
-    exec_ctx = session.exec_ctx
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
     normalize = ExtractNormalizeOptions(options=normalized_options)
     rows = _collect_bytecode_file_rows(
         repo_files,
         exec_context.file_contexts,
         options=normalized_options,
-        ctx=exec_context.ctx,
+        runtime_profile=runtime_profile,
     )
     plan = _build_bytecode_file_plan(
         rows,
@@ -1664,7 +1663,8 @@ def extract_bytecode(
         bytecode_files=materialize_extract_plan(
             "bytecode_files_v1",
             plan,
-            ctx=exec_ctx,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
             options=materialize_options,
         )
     )
@@ -1686,14 +1686,15 @@ def extract_bytecode_plans(
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
     normalize = ExtractNormalizeOptions(options=normalized_options)
     evidence_plan = exec_context.evidence_plan
     rows = _collect_bytecode_file_rows(
         repo_files,
         exec_context.file_contexts,
         options=normalized_options,
-        ctx=exec_context.ctx,
+        runtime_profile=runtime_profile,
     )
     return {
         "bytecode_files": _build_bytecode_file_plan(
@@ -1711,7 +1712,6 @@ class _BytecodeTableKwargs(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     prefer_reader: bool
 
@@ -1722,7 +1722,6 @@ class _BytecodeTableKwargsTable(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     prefer_reader: Literal[False]
 
@@ -1733,7 +1732,6 @@ class _BytecodeTableKwargsReader(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     prefer_reader: Required[Literal[True]]
 
@@ -1779,12 +1777,13 @@ def extract_bytecode_table(
     exec_context = ExtractExecutionContext(
         file_contexts=file_contexts,
         evidence_plan=evidence_plan,
-        ctx=kwargs.get("ctx"),
         session=kwargs.get("session"),
         profile=profile,
     )
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_bytecode_plans(
         repo_files,
@@ -1794,7 +1793,8 @@ def extract_bytecode_table(
     return materialize_extract_plan(
         "bytecode_files_v1",
         plans["bytecode_files"],
-        ctx=session.exec_ctx,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
         options=ExtractMaterializeOptions(
             normalize=normalize,
             prefer_reader=prefer_reader,

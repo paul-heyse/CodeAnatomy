@@ -15,12 +15,14 @@ from typing import TYPE_CHECKING, Literal, cast, overload
 
 import pyarrow as pa
 
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import align_table, encode_table
+from core_types import DeterminismTier
 from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.span_utils import ENC_UTF8, ENC_UTF16, ENC_UTF32
+from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.helpers import (
     ExtractMaterializeOptions,
     ExtractPlanOptions,
@@ -120,23 +122,9 @@ class ScipExtractContext:
 
     scip_index_path: str | None
     repo_root: str | None
-    ctx: ExecutionContext | None = None
+    runtime_spec: RuntimeProfileSpec | None = None
     session: ExtractSession | None = None
     profile: str = "default"
-
-    def ensure_ctx(self) -> ExecutionContext:
-        """Return the effective execution context.
-
-        Returns
-        -------
-        ExecutionContext
-            Provided context or a profile-derived context when missing.
-        """
-        if self.session is not None:
-            return self.session.exec_ctx
-        if self.ctx is not None:
-            return self.ctx
-        return execution_context_factory(self.profile)
 
     def ensure_session(self) -> ExtractSession:
         """Return the effective extract session.
@@ -148,8 +136,12 @@ class ScipExtractContext:
         """
         if self.session is not None:
             return self.session
-        exec_ctx = self.ctx or execution_context_factory(self.profile)
-        return build_extract_session(exec_ctx)
+        runtime_spec = self.runtime_spec or resolve_runtime_profile(self.profile)
+        return build_extract_session(runtime_spec)
+
+    def ensure_runtime_profile(self) -> DataFusionRuntimeProfile:
+        """Return the DataFusion runtime profile for SCIP extraction."""
+        return self.ensure_session().engine_session.datafusion_profile
 
 
 @dataclass
@@ -189,7 +181,8 @@ class _ResolvedScipExtraction:
     index_path: Path
     scip_pb2: ModuleType | None
     parse_opts: SCIPParseOptions
-    exec_ctx: ExecutionContext
+    runtime_profile: DataFusionRuntimeProfile
+    determinism_tier: DeterminismTier
     normalize: ExtractNormalizeOptions
 
 
@@ -773,22 +766,19 @@ def _index_stats_row(counts: Mapping[str, int], *, index_id: str | None, index_p
 
 
 def _record_scip_index_stats(
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
     *,
     index_id: str | None,
     index_path: Path,
     counts: Mapping[str, int],
 ) -> None:
-    if ctx is None:
-        return
-    runtime = ctx.runtime.datafusion
-    if runtime is None:
+    if runtime_profile is None:
         return
     payload = _index_stats_row(counts, index_id=index_id, index_path=index_path)
     payload["event_time_unix_ms"] = int(time.time() * 1000)
     from datafusion_engine.diagnostics import record_artifact
 
-    record_artifact(runtime, "scip_index_stats_v1", payload)
+    record_artifact(runtime_profile, "scip_index_stats_v1", payload)
 
 
 def _log_scip_counts(counts: Mapping[str, int], parse_opts: SCIPParseOptions) -> None:
@@ -1119,7 +1109,7 @@ def _append_rows(batcher: _RowBatcher, dataset: str, rows: Iterable[Row]) -> Non
 def _resolve_scip_index(
     context: ScipExtractContext,
     parse_opts: SCIPParseOptions,
-    exec_ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> _ResolvedScipExtraction | None:
     scip_index_path = context.scip_index_path
     if scip_index_path is None:
@@ -1135,13 +1125,15 @@ def _resolve_scip_index(
     scip_pb2 = _load_scip_pb2(resolved_opts)
     index_id: str | None = None
     normalize = ExtractNormalizeOptions(options=resolved_opts)
+    determinism_tier = context.ensure_session().engine_session.surface_policy.determinism_tier
     return _ResolvedScipExtraction(
         index=index,
         index_id=index_id,
         index_path=index_path,
         scip_pb2=scip_pb2,
         parse_opts=resolved_opts,
-        exec_ctx=exec_ctx,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
         normalize=normalize,
     )
 
@@ -1185,13 +1177,11 @@ def _reader_from_rows(
     name: str,
     rows: Iterable[Row],
     *,
-    ctx: ExecutionContext,
     normalize: ExtractNormalizeOptions,
     batch_size: int,
 ) -> RecordBatchReaderLike:
     policy = schema_policy_for_dataset(
         name,
-        ctx=ctx,
         options=normalize.options,
         repo_id=normalize.repo_id,
         enable_encoding=normalize.enable_encoding,
@@ -1259,7 +1249,7 @@ def _extract_scip_tables_streaming(
     _log_scip_counts(counts, resolved.parse_opts)
     _ensure_scip_health(counts, resolved.parse_opts)
     _record_scip_index_stats(
-        resolved.exec_ctx,
+        resolved.runtime_profile,
         index_id=resolved.index_id,
         index_path=resolved.index_path,
         counts=counts,
@@ -1274,7 +1264,6 @@ def _extract_scip_tables_streaming(
     reader = _reader_from_rows(
         "scip_index_v1",
         (row,),
-        ctx=resolved.exec_ctx,
         normalize=resolved.normalize,
         batch_size=batch_size,
     )
@@ -1293,7 +1282,7 @@ def _extract_scip_tables_in_memory(
     _log_scip_counts(counts, resolved.parse_opts)
     _ensure_scip_health(counts, resolved.parse_opts)
     _record_scip_index_stats(
-        resolved.exec_ctx,
+        resolved.runtime_profile,
         index_id=resolved.index_id,
         index_path=resolved.index_path,
         counts=counts,
@@ -1315,7 +1304,8 @@ def _extract_scip_tables_in_memory(
     table = materialize_extract_plan(
         dataset,
         plan,
-        ctx=resolved.exec_ctx,
+        runtime_profile=resolved.runtime_profile,
+        determinism_tier=resolved.determinism_tier,
         options=ExtractMaterializeOptions(
             normalize=resolved.normalize,
             prefer_reader=prefer_reader,
@@ -1369,8 +1359,9 @@ def extract_scip_tables(
     normalized_opts = normalize_options("scip", options.parse_opts, SCIPParseOptions)
     evidence_plan = options.evidence_plan
     session = context.ensure_session()
-    exec_ctx = session.exec_ctx
-    resolved = _resolve_scip_index(context, normalized_opts, exec_ctx)
+    runtime_profile = context.ensure_runtime_profile()
+    determinism_tier = session.engine_session.surface_policy.determinism_tier
+    resolved = _resolve_scip_index(context, normalized_opts, runtime_profile)
     if resolved is not None and _should_stream_outputs(
         resolved.index_path, options=options, prefer_reader=prefer_reader
     ):
@@ -1399,7 +1390,8 @@ def extract_scip_tables(
         output: materialize_extract_plan(
             dataset,
             plans[dataset],
-            ctx=exec_ctx,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
                 prefer_reader=prefer_reader,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from arrowdsl.core.execution_context import ExecutionContext
 from datafusion_engine.dataset_registry import DatasetCatalog, registry_snapshot
 from datafusion_engine.registry_bridge import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.runtime import feature_state_snapshot
@@ -22,41 +21,29 @@ from relspec.pipeline_policy import DiagnosticsPolicy
 
 def build_engine_session(
     *,
-    ctx: ExecutionContext,
-    runtime_spec: RuntimeProfileSpec | None = None,
+    runtime_spec: RuntimeProfileSpec,
     diagnostics: DiagnosticsCollector | None = None,
     surface_policy: ExecutionSurfacePolicy | None = None,
     diagnostics_policy: DiagnosticsPolicy | None = None,
 ) -> EngineSession:
-    """Build an EngineSession bound to the provided ExecutionContext.
+    """Build an EngineSession bound to the provided runtime spec.
 
     Returns
     -------
     EngineSession
         Engine session wired to the runtime surfaces.
     """
-    runtime_profile = ctx.runtime if runtime_spec is None else runtime_spec.runtime
     engine_runtime = build_engine_runtime(
-        ctx=ctx,
-        runtime_profile=runtime_profile,
+        runtime_profile=runtime_spec.datafusion,
         diagnostics=diagnostics,
         diagnostics_policy=diagnostics_policy,
     )
-    runtime = engine_runtime.runtime_profile
     df_profile = engine_runtime.datafusion_profile
-    ctx = ExecutionContext(
-        runtime=runtime,
-        mode=ctx.mode,
-        provenance=ctx.provenance,
-        safe_cast=ctx.safe_cast,
-        debug=ctx.debug,
-        schema_validation=ctx.schema_validation,
-    )
-    profile_name = runtime_spec.name if runtime_spec is not None else runtime.name
+    profile_name = runtime_spec.name
     if diagnostics is not None:
         snapshot = feature_state_snapshot(
             profile_name=profile_name,
-            determinism_tier=runtime.determinism,
+            determinism_tier=runtime_spec.determinism_tier,
             runtime_profile=df_profile,
         )
         diagnostics.record_events("feature_state_v1", [snapshot.to_row()])
@@ -68,16 +55,23 @@ def build_engine_session(
             df_profile,
             input_plugins=(*df_profile.input_plugins, plugin),
         )
-        runtime = runtime.with_datafusion(df_profile)
         engine_runtime = engine_runtime.with_datafusion_profile(df_profile)
         input_plugin_names = [plugin.__name__]
-    settings_hash = df_profile.settings_hash() if df_profile is not None else None
-    runtime_snapshot = runtime_profile_snapshot(runtime)
+    settings_hash = df_profile.settings_hash()
+    runtime_snapshot = runtime_profile_snapshot(
+        df_profile,
+        name=profile_name,
+        determinism_tier=runtime_spec.determinism_tier,
+    )
     if diagnostics is not None:
         if not diagnostics.artifacts_snapshot().get("engine_runtime_v1"):
             diagnostics.record_artifact(
                 "engine_runtime_v1",
-                engine_runtime_artifact(runtime),
+                engine_runtime_artifact(
+                    df_profile,
+                    name=profile_name,
+                    determinism_tier=runtime_spec.determinism_tier,
+                ),
             )
         diagnostics.record_artifact(
             "datafusion_input_plugins_v1",
@@ -88,7 +82,6 @@ def build_engine_session(
             },
         )
     return EngineSession(
-        ctx=ctx,
         engine_runtime=engine_runtime,
         datasets=datasets,
         diagnostics=diagnostics,

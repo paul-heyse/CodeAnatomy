@@ -6,9 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
-from arrowdsl.core.interop import SchemaLike
-from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict
+from arrow_utils.core.interop import SchemaLike
+from arrow_utils.core.ordering import OrderingLevel
+from arrow_utils.schema.abi import schema_fingerprint, schema_to_dict
 from core_types import PathLike
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from schema_spec.specs import TableSchemaSpec

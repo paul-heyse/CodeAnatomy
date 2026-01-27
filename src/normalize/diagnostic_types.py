@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.schema.build import list_view_type, struct_type
+from arrow_utils.schema.build import list_view_type, struct_type
 
 DIAG_TAGS_TYPE = list_view_type(pa.string(), large=True)
 DIAG_DETAIL_STRUCT = struct_type(

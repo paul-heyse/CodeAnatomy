@@ -13,8 +13,8 @@ import pyarrow.ipc as pa_ipc
 from datafusion import DataFrameWriteOptions, SessionContext
 from datafusion.dataframe import DataFrame
 
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.core.streaming import to_reader
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.core.streaming import to_reader
 from engine.plan_cache import PlanCacheKey
 from schema_spec.policies import DataFusionWritePolicy
 from serde_msgspec import dumps_msgpack

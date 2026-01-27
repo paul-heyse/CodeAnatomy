@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 from datafusion import SessionContext
 
-from arrowdsl.schema.abi import schema_to_dict
+from arrow_utils.schema.abi import schema_to_dict
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from schema_spec.system import DeltaScanOptions
 

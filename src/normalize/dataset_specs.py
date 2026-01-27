@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike
+from arrow_utils.core.interop import SchemaLike
+from arrow_utils.schema.metadata import SchemaMetadataSpec
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.query_spec import QuerySpec
 from normalize.dataset_builders import build_dataset_spec, build_input_schema
 from normalize.dataset_rows import DATASET_ROWS, DatasetRow
@@ -228,7 +227,7 @@ def dataset_input_columns(name: str) -> tuple[str, ...]:
     return tuple(dataset_input_schema(name).names)
 
 
-def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
+def dataset_schema_policy(name: str) -> SchemaPolicy:
     """Return a schema policy for a dataset spec.
 
     Returns
@@ -244,7 +243,7 @@ def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
         metadata=dataset_metadata_spec(name),
         validation=contract.validation,
     )
-    return schema_policy_factory(spec.table_spec, ctx=ctx, options=options)
+    return schema_policy_factory(spec.table_spec, options=options)
 
 
 __all__ = [

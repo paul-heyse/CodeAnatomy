@@ -18,20 +18,20 @@ from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr, SortExpr
 from datafusion.expr import SortKey as DFSortKey
 
-from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.expr_types import ExplodeSpec
-from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.core.ordering import Ordering, OrderingLevel
-from arrowdsl.core.plan_ops import DedupeSpec, IntervalAlignOptions, SortKey
-from arrowdsl.core.plan_ops import SortKey as PlanSortKey
-from arrowdsl.core.schema_constants import PROVENANCE_COLS
-from arrowdsl.schema.metadata import (
+from arrow_utils.core.expr_types import ExplodeSpec
+from arrow_utils.core.interop import SchemaLike, TableLike
+from arrow_utils.core.ordering import Ordering, OrderingLevel
+from arrow_utils.core.schema_constants import PROVENANCE_COLS
+from arrow_utils.schema.metadata import (
+    SchemaMetadataSpec,
     merge_metadata_specs,
     metadata_spec_from_schema,
     ordering_from_schema,
 )
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from core_types import DeterminismTier
+from datafusion_engine.kernel_specs import DedupeSpec, IntervalAlignOptions, SortKey
+from datafusion_engine.kernel_specs import SortKey as PlanSortKey
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.udf_runtime import register_rust_udfs
 
 type KernelFn = Callable[..., TableLike]
@@ -40,14 +40,10 @@ _SPAN_NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
 MIN_JOIN_PARTITIONS: int = 2
 
 
-def _session_context(ctx: ExecutionContext | None) -> SessionContext:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
-
-    if ctx is None or ctx.runtime.datafusion is None:
-        profile = DataFusionRuntimeProfile()
-    else:
-        profile = ctx.runtime.datafusion
-    session = profile.session_context()
+def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> SessionContext:
+    profile = runtime_profile or DataFusionRuntimeProfile()
+    session_runtime = profile.session_runtime()
+    session = session_runtime.ctx
     async_timeout_ms = None
     async_batch_size = None
     if profile.enable_async_udfs:
@@ -83,20 +79,20 @@ def _df_from_table(
     )
 
 
-def _batch_size_from_ctx(ctx: ExecutionContext | None) -> int | None:
-    if ctx is None or ctx.runtime.datafusion is None:
+def _batch_size_from_profile(runtime_profile: DataFusionRuntimeProfile | None) -> int | None:
+    if runtime_profile is None:
         return None
-    return ctx.runtime.datafusion.batch_size
+    return runtime_profile.batch_size
 
 
 def _arrow_ingest_hook(
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> Callable[[Mapping[str, object]], None] | None:
     from datafusion_engine.runtime import diagnostics_arrow_ingest_hook
 
-    if ctx is None or ctx.runtime.datafusion is None:
+    if runtime_profile is None:
         return None
-    diagnostics = ctx.runtime.datafusion.diagnostics_sink
+    diagnostics = runtime_profile.diagnostics_sink
     if diagnostics is None:
         return None
     return diagnostics_arrow_ingest_hook(diagnostics)
@@ -106,15 +102,14 @@ def _repartition_for_join(
     df: DataFrame,
     *,
     keys: Sequence[str],
-    exec_ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFrame:
-    if not keys or exec_ctx is None or exec_ctx.runtime.datafusion is None:
+    if not keys or runtime_profile is None:
         return df
-    profile = exec_ctx.runtime.datafusion
-    target_partitions = profile.target_partitions
+    target_partitions = runtime_profile.target_partitions
     if target_partitions is None or target_partitions < MIN_JOIN_PARTITIONS:
         return df
-    join_policy = profile.join_policy
+    join_policy = runtime_profile.join_policy
     if join_policy is not None and not join_policy.repartition_joins:
         return df
     repartition_by_hash = getattr(df, "repartition_by_hash", None)
@@ -293,7 +288,7 @@ def dedupe_kernel(
     table: TableLike,
     *,
     spec: DedupeSpec,
-    _ctx: ExecutionContext | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> TableLike:
     """Apply DataFusion-native dedupe using window + aggregate ops.
 
@@ -302,15 +297,15 @@ def dedupe_kernel(
     TableLike
         Deduplicated table.
     """
-    ctx = _session_context(_ctx)
+    ctx = _session_context(runtime_profile)
     ordering = _require_explicit_ordering(table.schema, kernel="dedupe")
     resolved_spec = _dedupe_spec_with_ordering(spec, ordering)
     df = _df_from_table(
         ctx,
         table,
         name="dedupe",
-        batch_size=_batch_size_from_ctx(_ctx),
-        ingest_hook=_arrow_ingest_hook(_ctx),
+        batch_size=_batch_size_from_profile(runtime_profile),
+        ingest_hook=_arrow_ingest_hook(runtime_profile),
     )
     columns = list(table.schema.names)
     result_df = _dedupe_dataframe(df, spec=resolved_spec, columns=columns)
@@ -318,14 +313,21 @@ def dedupe_kernel(
     return _apply_metadata(out, metadata=_metadata_spec_from_tables([table]))
 
 
+@dataclass(frozen=True)
+class WinnerSelectRequest:
+    """Inputs required for winner-select kernel execution."""
+
+    keys: Sequence[str]
+    score_col: str = "score"
+    score_order: Literal["ascending", "descending"] = "descending"
+    tie_breakers: Sequence[SortKey] = ()
+    runtime_profile: DataFusionRuntimeProfile | None = None
+
+
 def winner_select_kernel(
     table: TableLike,
     *,
-    keys: Sequence[str],
-    score_col: str = "score",
-    score_order: Literal["ascending", "descending"] = "descending",
-    tie_breakers: Sequence[SortKey] = (),
-    _ctx: ExecutionContext | None = None,
+    request: WinnerSelectRequest,
 ) -> TableLike:
     """Select a single winner per key group based on score and tie breakers.
 
@@ -335,18 +337,22 @@ def winner_select_kernel(
         Winner-selected table.
     """
     spec = DedupeSpec(
-        keys=tuple(keys),
+        keys=tuple(request.keys),
         strategy="KEEP_BEST_BY_SCORE",
-        tie_breakers=(SortKey(score_col, score_order), *tuple(tie_breakers)),
+        tie_breakers=(
+            SortKey(request.score_col, request.score_order),
+            *tuple(request.tie_breakers),
+        ),
     )
-    return dedupe_kernel(table, spec=spec, _ctx=_ctx)
+    return dedupe_kernel(table, spec=spec, runtime_profile=request.runtime_profile)
 
 
 def canonical_sort_if_canonical(
     table: TableLike,
     *,
     sort_keys: Sequence[SortKey],
-    ctx: ExecutionContext,
+    determinism_tier: DeterminismTier,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> TableLike:
     """Sort only when determinism is canonical.
 
@@ -355,15 +361,15 @@ def canonical_sort_if_canonical(
     TableLike
         Sorted table when canonical; otherwise unchanged.
     """
-    if ctx.determinism != DeterminismTier.CANONICAL or not sort_keys:
+    if determinism_tier != DeterminismTier.CANONICAL or not sort_keys:
         return table
     keys = _append_provenance_keys(table, sort_keys)
     df = _df_from_table(
-        _session_context(ctx),
+        _session_context(runtime_profile),
         table,
         name="canonical_sort",
-        batch_size=_batch_size_from_ctx(ctx),
-        ingest_hook=_arrow_ingest_hook(ctx),
+        batch_size=_batch_size_from_profile(runtime_profile),
+        ingest_hook=_arrow_ingest_hook(runtime_profile),
     )
     order_exprs = [
         col(key.column).sort(
@@ -382,7 +388,7 @@ def explode_list_kernel(
     *,
     spec: ExplodeSpec,
     out_parent_col: str | None = None,
-    _ctx: ExecutionContext | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> TableLike:
     """Explode a list column using DataFusion unnest support.
 
@@ -394,6 +400,8 @@ def explode_list_kernel(
         Explode specification describing parent keys and output columns.
     out_parent_col:
         Optional parent output column override.
+    runtime_profile:
+        Optional runtime profile for DataFusion execution.
 
     Returns
     -------
@@ -407,13 +415,13 @@ def explode_list_kernel(
     )
     if spec.list_col not in table.column_names:
         return table
-    ctx = _session_context(_ctx)
+    ctx = _session_context(runtime_profile)
     df = _df_from_table(
         ctx,
         table,
         name="explode_list",
-        batch_size=_batch_size_from_ctx(_ctx),
-        ingest_hook=_arrow_ingest_hook(_ctx),
+        batch_size=_batch_size_from_profile(runtime_profile),
+        ingest_hook=_arrow_ingest_hook(runtime_profile),
     )
     idx_list_name = _temp_name("__idx_list", set(table.column_names))
     df = df.with_column(
@@ -622,7 +630,7 @@ def _interval_join_frames(
     *,
     ctx: SessionContext,
     batch_size: int | None = None,
-    exec_ctx: ExecutionContext | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> tuple[DataFrame, DataFrame, Mapping[str, str]]:
     left_df = _df_from_table(
         ctx,
@@ -666,12 +674,12 @@ def _interval_join_frames(
     left_df = _repartition_for_join(
         left_df,
         keys=[prepared.left_key_col],
-        exec_ctx=exec_ctx,
+        runtime_profile=runtime_profile,
     )
     right_df = _repartition_for_join(
         right_df,
         keys=[prepared.right_key_col],
-        exec_ctx=exec_ctx,
+        runtime_profile=runtime_profile,
     )
     right_key_col = prepared.right_key_col
     joined = left_df.join(
@@ -794,7 +802,7 @@ def interval_align_kernel(
     right: TableLike,
     *,
     cfg: IntervalAlignOptions,
-    _ctx: ExecutionContext | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> TableLike:
     """Align intervals using DataFusion joins + window ordering.
 
@@ -804,11 +812,11 @@ def interval_align_kernel(
         Interval-aligned table.
     """
     prepared = _prepare_interval_tables(left, right, cfg)
-    ctx = _session_context(_ctx)
+    ctx = _session_context(runtime_profile)
     left_df, joined, right_name_map = _interval_join_frames(
         prepared,
         ctx=ctx,
-        exec_ctx=_ctx,
+        runtime_profile=runtime_profile,
     )
     best = _interval_best_matches(
         joined,

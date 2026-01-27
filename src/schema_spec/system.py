@@ -22,27 +22,22 @@ from typing import TYPE_CHECKING, Literal, TypedDict, Unpack, cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.core.ordering import Ordering, OrderingLevel
-from arrowdsl.core.plan_ops import DedupeSpec, SortKey
-from arrowdsl.schema.metadata import (
+from arrow_utils.core.interop import SchemaLike, TableLike
+from arrow_utils.core.ordering import Ordering, OrderingLevel
+from arrow_utils.schema.encoding import EncodingPolicy
+from arrow_utils.schema.metadata import (
+    SchemaMetadataSpec,
     encoding_policy_from_spec,
     merge_metadata_specs,
     metadata_spec_from_schema,
     ordering_metadata_spec,
 )
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import (
-    CastErrorPolicy,
-    EncodingPolicy,
-    SchemaEvolutionSpec,
-    SchemaMetadataSpec,
-    register_schema_extensions,
-)
+from arrowdsl.schema.schema import CastErrorPolicy, SchemaEvolutionSpec, register_schema_extensions
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.finalize import Contract, FinalizeContext
+from datafusion_engine.kernel_specs import DedupeSpec, SortKey
 from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import extract_nested_dataset_names
@@ -584,7 +579,7 @@ class DatasetSpec:
             return self.datafusion_scan.unbounded
         return False
 
-    def finalize_context(self, ctx: ExecutionContext) -> FinalizeContext:
+    def finalize_context(self) -> FinalizeContext:
         """Return a FinalizeContext for this dataset spec.
 
         Returns
@@ -597,7 +592,6 @@ class DatasetSpec:
         metadata = merge_metadata_specs(self.metadata_spec, ordering)
         policy = schema_policy_factory(
             self.table_spec,
-            ctx=ctx,
             options=SchemaPolicyOptions(
                 schema=contract.with_versioned_schema(),
                 encoding=self.encoding_policy(),
@@ -610,7 +604,9 @@ class DatasetSpec:
     def unify_tables(
         self,
         tables: Sequence[TableLike],
-        ctx: ExecutionContext | None = None,
+        *,
+        safe_cast: bool = True,
+        keep_extra_columns: bool = False,
     ) -> TableLike:
         """Unify table schemas using the evolution spec and execution context.
 
@@ -619,13 +615,7 @@ class DatasetSpec:
         TableLike
             Unified table with aligned schema.
         """
-        safe_cast = True
-        keep_extra_columns = False
-        on_error: CastErrorPolicy = "unsafe"
-        if ctx is not None:
-            safe_cast = ctx.safe_cast
-            keep_extra_columns = ctx.provenance
-            on_error = "unsafe" if ctx.safe_cast else "raise"
+        on_error: CastErrorPolicy = "unsafe" if safe_cast else "raise"
         return self.evolution_spec.unify_and_cast(
             tables,
             safe_cast=safe_cast,

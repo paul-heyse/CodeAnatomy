@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from arrowdsl.core.interop import RecordBatchReaderLike
+from arrow_utils.core.interop import RecordBatchReaderLike
 from storage.deltalake import (
     DeltaVacuumOptions,
     StorageOptions,
@@ -151,8 +151,7 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
     """
     resolved = request.options or DeltaVacuumOptions()
     if resolved.enforce_retention_duration and (
-        resolved.retention_hours is None
-        or resolved.retention_hours < _DELTA_MIN_RETENTION_HOURS
+        resolved.retention_hours is None or resolved.retention_hours < _DELTA_MIN_RETENTION_HOURS
     ):
         msg = (
             "Delta vacuum retention_hours must be at least "

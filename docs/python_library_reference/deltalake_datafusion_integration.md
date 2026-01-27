@@ -1291,3 +1291,1618 @@ This is a pragmatic integration surface: **repair first, then query via DataFusi
 [7]: https://github.com/delta-io/delta-rs/issues/3736 "Unable to write concurrently to delta table with python deltalake 1.14.0 library · Issue #3736 · delta-io/delta-rs · GitHub"
 [8]: https://delta-io.github.io/delta-rs/python/api_reference.html "API Reference — delta-rs  documentation"
 [9]: https://delta-io.github.io/delta-rs/api/delta_table/ "DeltaTable - Delta Lake Documentation"
+
+## 1) Delta protocol + table-feature compatibility (DataFusion + delta-rs): implementation spec
+
+### 1.1 Protocol action: schema, invariants, presence conditions
+
+**Protocol action payload (logical):**
+
+* `minReaderVersion: int`
+* `minWriterVersion: int`
+* `readerFeatures: [string]` **present iff** `minReaderVersion == 3`
+* `writerFeatures: [string]` **present iff** `minWriterVersion == 7` ([GitHub][1])
+
+**Table-features legality constraints:**
+
+* A table may support **writer features only** (`minWriterVersion == 7`, `minReaderVersion ∈ {1,2}`, `protocol` contains `writerFeatures` only). ([GitHub][1])
+* A table may support **reader+writer features** (`minWriterVersion == 7`, `minReaderVersion == 3`, `protocol` contains both `readerFeatures` and `writerFeatures`). ([GitHub][1])
+* **Illegal state**: `minReaderVersion == 3` with `minWriterVersion < 7`; **illegal state**: feature listed only in `readerFeatures` and not in `writerFeatures`. ([GitHub][1])
+
+**Compatibility contract (normative):**
+
+* `readerFeatures` and `writerFeatures` are **required-implementation sets**; clients **must not ignore** listed features.
+* Read compatibility requires implementing **all** features in `readerFeatures`; write compatibility requires implementing **all** features in `writerFeatures`. ([GitHub][1])
+
+**Version-domain constraints (Databricks summary of protocol domains):**
+
+* `minReaderVersion ∈ {1,2,3}`; `minWriterVersion ∈ {2..7}`. ([Databricks Documentation][2])
+
+---
+
+### 1.2 Feature taxonomy: “supported” vs “active”; writer-only vs reader+writer
+
+**Supported feature (spec definition):**
+
+* A feature is “supported by a table” iff its name is in `protocol.readerFeatures` and/or `protocol.writerFeatures`. ([GitHub][1])
+
+**Active feature (spec definition):**
+
+* “Supported” ≠ “active”; activation is feature-specific and generally requires metadata/table-properties preconditions (“metadata requirements”). ([GitHub][1])
+  Example pattern (Append-only): supported iff `appendOnly ∈ writerFeatures`; active iff additionally `delta.appendOnly == true`. ([GitHub][1])
+
+**Writer-only feature vs reader+writer feature (protocol-set placement rule):**
+
+* Reader+writer features MUST appear in **both** `readerFeatures` and `writerFeatures`.
+* Writer-only features MUST appear **only** in `writerFeatures`. ([GitHub][1])
+
+**Valid feature-name universe (Delta protocol appendix):** ([GitHub][1])
+Writers-only:
+
+* `appendOnly`, `invariants`, `checkConstraints`, `generatedColumns`, `allowColumnDefaults`, `changeDataFeed`, `identityColumns`, `materializePartitionColumns`, `rowTracking`, `domainMetadata`, `icebergCompatV1`, `icebergCompatV2`, `clustering`, `inCommitTimestamp`
+
+Readers and writers:
+
+* `columnMapping`, `deletionVectors`, `timestampNtz`, `v2Checkpoint`, `vacuumProtocolCheck`
+
+**delta-rs / deltalake feature vocabulary (Rust enum surface):**
+
+* deltalake `TableFeatures` enumerates a subset (e.g., ColumnMapping, DeletionVectors, TimestampWithoutTimezone, V2Checkpoint, AppendOnly, Invariants, CheckConstraints, ChangeDataFeed, GeneratedColumns, IdentityColumns, RowTracking, DomainMetadata, IcebergCompatV1, MaterializePartitionColumns). ([Docs.rs][3])
+
+---
+
+### 1.3 Minimal protocol requirements by feature (numeric protocol mode + table-feature mode)
+
+Delta Lake publishes a “features by protocol version” mapping (legacy numeric gating). Key rows relevant to DataFusion/delta-rs interoperability: ([Delta Lake][4])
+
+* Basic: `minWriterVersion=2`, `minReaderVersion=1`
+* `checkConstraints`: `3 / 1`
+* `changeDataFeed`: `4 / 1`
+* `generatedColumns`: `4 / 1`
+* `columnMapping`: `5 / 2`
+* `identityColumns`: `6 / 1`
+* Table features (writer-feature framework): `7 / 1`
+* Table features (reader-feature framework): `7 / 3`
+* `deletionVectors`: `7 / 3`
+* `timestampNtz`: `7 / 3`
+* `v2Checkpoint`: `7 / 3`
+* `vacuumProtocolCheck`: `7 / 3`
+* `rowTracking`: `7 / 3`
+* (Also listed: `typeWidening` uses `7 / 3` in the same table.) ([Delta Lake][4])
+
+**Interpretation rule for “table features mode”:**
+
+* If a table uses table-feature lists, the table protocol resolves compatibility via `readerFeatures` / `writerFeatures` lists (feature-level gating), not solely via numeric bundling; “supported features appear in respective lists.” ([Databricks Documentation][2])
+
+---
+
+### 1.4 Configuration surfaces (feature enablement → protocol mutation)
+
+#### 1.4.1 Protocol minima as table properties
+
+Delta Lake defines:
+
+* `delta.minReaderVersion` (minimum reader protocol required)
+* `delta.minWriterVersion` (minimum writer protocol required) ([Delta Lake][5])
+
+#### 1.4.2 Column mapping: semantics + required configuration knobs
+
+**Function:** decouple logical column names from Parquet column identifiers/names; enables `RENAME COLUMN` / `DROP COLUMNS` without rewriting Parquet files. ([Delta Lake][6])
+
+**Required protocol:**
+
+* Numeric mode: reader ≥ 2; writer ≥ 5. ([Delta Lake][6])
+* Table-feature mode: reader version 3 + `columnMapping ∈ readerFeatures`; writer version 7 + `columnMapping ∈ writerFeatures`. ([GitHub][1])
+
+**Required table properties:**
+
+* `delta.columnMapping.mode ∈ {none, name, id}`; enabling example sets:
+
+  * `delta.minReaderVersion=2`
+  * `delta.minWriterVersion=5`
+  * `delta.columnMapping.mode=name` ([Delta Lake][6])
+    **Irreversibility constraint:** disabling after enablement is blocked (“cannot turn off”). ([Delta Lake][6])
+
+**Reader obligations (actionable):** given protocol supports column mapping (reader v2 or reader v3+feature), readers MUST: ([GitHub][1])
+
+* read `delta.columnMapping.mode`
+* mode `none`/absent: resolve Parquet columns by **display names** (schema `name`)
+* mode `id`: resolve Parquet columns by Parquet `field_id` matched to schema metadata `delta.columnMapping.id`; if file lacks field ids ⇒ reader MUST refuse file or return nulls; missing ids ⇒ return nulls; stats/partition values resolved by **physical names** in log
+* mode `name`: resolve Parquet columns by schema metadata `delta.columnMapping.physicalName`; missing columns ⇒ return nulls; stats/partition values resolved by **physical names**
+
+**Writer obligations (actionable):** writers MUST (initial enablement) write `metaData` (`delta.columnMapping.mode`) and, for writer v7, also write `protocol` adding `columnMapping` to both feature lists; write Parquet files using physical names + Parquet `field_id`; log stats/partition values using physical names; maintain `delta.columnMapping.maxColumnId` monotonic. ([GitHub][1])
+
+#### 1.4.3 Deletion vectors: semantics + required configuration knobs
+
+**Function:** “soft delete” representation: mark rows removed without rewriting the entire Parquet file; subsequent reads compute current table state by applying deletions recorded in DVs. ([Delta Lake][7])
+
+**Required protocol (table-feature mode):**
+
+* table MUST be reader v3, writer v7; `deletionVectors` MUST exist in both `readerFeatures` and `writerFeatures`. ([GitHub][1])
+
+**Enablement knob:**
+
+* `delta.enableDeletionVectors = true` (table property). ([Delta Lake][7])
+* Enabling upgrades protocol; post-upgrade, clients without DV support cannot read the table (compatibility break). ([Delta Lake][7])
+
+**Reader obligations (“DV logic” = explicit operational requirement):**
+
+* DV files: stored at table root; each DV file contains one or more serialized DVs; each DV describes the set of invalidated rows for an associated data file. ([GitHub][1])
+* DV semantics: DV encodes a set of **row indexes** (64-bit ints) where index is Parquet row position starting at 0. ([GitHub][1])
+* If snapshot contains logical files with DV-invalidated records, those records **MUST NOT** be returned. ([GitHub][1])
+* DV attachment point: `add`/`remove` actions may include a DV descriptor; DV may exist even when `delta.enableDeletionVectors` is not set (reader must consider existence). ([GitHub][1])
+
+**DV descriptor surface (required implementation fields):**
+
+* `storageType ∈ {'u','i','p'}` (UUID-derived relative file; inline; absolute path)
+* `pathOrInlineDv` (UUID-ish payload or inline-encoded payload or absolute path)
+* `offset` (byte offset, absent for inline)
+* `sizeInBytes`
+* `cardinality` (# logically removed rows) ([GitHub][1])
+
+**Writer obligations (minimal correctness constraint explicitly stated):**
+
+* When adding a logical file with a DV, the logical file MUST include correct `numRecords` in its `stats`. ([GitHub][1])
+
+---
+
+### 1.5 “ReaderFeatures / writerFeatures minimums” (exact answer to your “min x / min y” requirement)
+
+**To access tables using feature lists (table-features framework):**
+
+* `writerFeatures` list exists only when `minWriterVersion == 7`.
+* `readerFeatures` list exists only when `minReaderVersion == 3`.
+* Tables with `minReaderVersion == 3` require `minWriterVersion == 7` (cannot have reader-features without writer-features). ([GitHub][1])
+
+**Therefore:**
+
+* Any Delta table requiring any **reader+writer feature** in the table-feature framework (e.g., `deletionVectors`, `timestampNtz`, `v2Checkpoint`, `vacuumProtocolCheck`, `columnMapping` when expressed as a feature) will present as `minReaderVersion=3`, `minWriterVersion=7`, with that feature name present in **both** lists. ([GitHub][1])
+* Tables requiring only **writer-only features** under table-features framework can be `minWriterVersion=7`, `minReaderVersion ∈ {1,2}`, and have only `writerFeatures`. ([GitHub][1])
+
+---
+
+### 1.6 Deterministic compatibility procedure (no “example code”; explicit required steps)
+
+**Inputs:**
+
+* table snapshot protocol: (`minReaderVersion`, `minWriterVersion`, optional `readerFeatures[]`, `writerFeatures[]`) ([GitHub][1])
+* service capability model: supported numeric protocol maxima + supported feature-name universe (compile-time bound in delta-rs default checker). ([Docs.rs][8])
+
+**Procedure (read path):**
+
+1. Read `minReaderVersion`, `minWriterVersion`.
+2. If `minWriterVersion == 7`: load `writerFeatures` set; else infer required feature bundle via numeric protocol table (features-by-protocol mapping). ([GitHub][1])
+3. If `minReaderVersion == 3`: load `readerFeatures` set (must be subset of writer-features set by protocol rules); else infer read requirements from numeric protocol table. ([GitHub][1])
+4. Validate: `readerFeatures ⊆ supported_reader_feature_set`; `writerFeatures ⊆ supported_writer_feature_set` when lists exist; plus numeric version bounds. (“Must implement and respect all listed features.”) ([GitHub][1])
+5. If feature supported but activation depends on metadata, additionally evaluate feature-specific activation predicates (e.g., DV requires/uses `delta.enableDeletionVectors` for *writing*; DV presence in `add` actions still affects *reading*). ([GitHub][1])
+
+**Outputs to persist (control-plane record):**
+
+* `(table_uri, snapshot_version, minReaderVersion, minWriterVersion, readerFeatures[], writerFeatures[], detected_active_feature_flags[], decision)` where `decision ∈ {readable, writable, not-readable, not-writable}` with *reason = first unsupported constraint*. Normative “not-readable/not-writable” boundary derives from protocol feature constraints. ([GitHub][1])
+
+---
+
+### 1.7 “Degrade to Parquet file list scan” (compatibility semantics you must explicitly label)
+
+Delta defines snapshot membership via `_delta_log` (adds/removes + protocol/features); a Parquet directory scan does not apply log reconciliation; therefore output differs whenever tombstones/removes/DVs/column-mapping semantics exist. DV semantics explicitly require skipping DV-invalidated rows; column-mapping semantics explicitly require resolving columns by `field_id`/physical names under configured mapping mode. ([GitHub][1])
+
+[1]: https://raw.githubusercontent.com/delta-io/delta/master/PROTOCOL.md "raw.githubusercontent.com"
+[2]: https://docs.databricks.com/aws/en/delta/feature-compatibility "Delta Lake feature compatibility and protocols | Databricks on AWS"
+[3]: https://docs.rs/deltalake/latest/deltalake/kernel/enum.TableFeatures.html "TableFeatures in deltalake::kernel - Rust"
+[4]: https://docs.delta.io/versioning/ "How does Delta Lake manage feature compatibility? | Delta Lake"
+[5]: https://docs.delta.io/table-properties/ "Delta Table Properties Reference | Delta Lake"
+[6]: https://docs.delta.io/delta-column-mapping/ "Delta column mapping | Delta Lake"
+[7]: https://docs.delta.io/delta-deletion-vectors/ "What are deletion vectors? | Delta Lake"
+[8]: https://docs.rs/deltalake/latest/deltalake/kernel/transaction/static.PROTOCOL.html?utm_source=chatgpt.com "PROTOCOL in deltalake::kernel::transaction - Rust"
+
+## 2) Snapshot model, time travel, retention: implementation spec (delta-rs + DataFusion)
+
+### 2.1 Snapshot object model: loaded-state invariants, accessors, failure modes
+
+**DeltaTable state topology (Rust, deltalake):**
+
+* `DeltaTable` is a logical handle; concrete read planning requires a loaded snapshot (“state”). ([Docs.rs][1])
+* `DeltaTable.state: Option<DeltaTableState>`; absent state implies “uninitialized” for snapshot-dependent operations. ([Docs.rs][1])
+
+**State-dependent accessors (hard requirements):**
+
+* `DeltaTable::snapshot() -> Result<&DeltaTableState, DeltaTableError>`:
+
+  * returns `NotInitialized` when state is absent. ([Docs.rs][1])
+* `DeltaTable::version() -> Option<i64>`:
+
+  * `None` iff table not loaded; otherwise returns currently loaded version. ([Docs.rs][1])
+
+**State loaders (version selection primitives):**
+
+* `load(&mut self)`: load latest (checkpoint + apply newer versions). ([Docs.rs][1])
+* `load_version(&mut self, version: i64)`: load exact version state. ([Docs.rs][1])
+* `load_with_datetime(&mut self, datetime: DateTime<Utc>)`: load “latest version at or before datetime”; implementation performs binary search over transaction logs. ([Docs.rs][1])
+
+---
+
+### 2.2 Time-travel address spaces: version pin vs timestamp pin; resolution semantics
+
+**Two externally exposed time coordinates:**
+
+1. **Version pin**: exact integer version (`i64`) selecting a specific snapshot. ([Docs.rs][2])
+2. **Timestamp pin**: RFC3339 / ISO-8601 timestamp selecting the greatest committed version whose commit-time ≤ timestamp (“at or before” semantics). ([Docs.rs][3])
+
+**Resolution rule (timestamp → version):**
+
+* `open_table_with_ds(…, ds)` and `load_with_datetime(…, datetime)` both resolve by selecting the latest version at or before the provided time coordinate; `load_with_datetime` explicitly states binary search across logs. ([Docs.rs][3])
+
+**Operational artifact (for reproducibility):**
+
+* Timestamp pins are *indirect* selectors; reproducible replay requires persisting the **resolved version** (integer) obtained after timestamp resolution (since the snapshot that actually executes is version-addressed). (Resolution semantics cited above.) ([Docs.rs][3])
+
+---
+
+### 2.3 Rust API surfaces for time travel (construction-time vs mutation-time)
+
+#### 2.3.1 Construction-time loaders (produce a DeltaTable already pinned)
+
+* `open_table_with_version(table_url: Url, version: i64) -> Result<DeltaTable, DeltaTableError>`:
+
+  * constructs a table handle and loads metadata for the specified version. ([Docs.rs][2])
+* `open_table_with_ds(table_url: Url, ds: impl AsRef<str>) -> Result<DeltaTable, DeltaTableError>`:
+
+  * loads metadata from the version appropriate for the provided ISO-8601/RFC-3339 timestamp string. ([Docs.rs][3])
+
+#### 2.3.2 Mutation-time loaders (re-pin an existing DeltaTable handle)
+
+* `DeltaTable::load_version(&mut self, version: i64) -> Result<(), DeltaTableError>`: exact pin. ([Docs.rs][1])
+* `DeltaTable::load_with_datetime(&mut self, datetime: DateTime<Utc>) -> Result<(), DeltaTableError>`:
+
+  * timestamp pin; “at or before” semantics; binary search over logs. ([Docs.rs][1])
+
+#### 2.3.3 Provenance window (log-retained metadata)
+
+* `DeltaTable::history(limit)`:
+
+  * “history retention is based on `logRetentionDuration`, 30 days by default” (limits how far commit provenance is available via this API if older log entries have been cleaned). ([Docs.rs][1])
+
+---
+
+### 2.4 Provider-level time travel (DataFusion TableProvider pinning without pre-loading)
+
+**Builder existence and return path:**
+
+* `DeltaTable::table_provider(&self) -> TableProviderBuilder`. ([Docs.rs][1])
+
+**Builder inputs (explicit configuration degrees-of-freedom):**
+
+* `TableProviderBuilder` fields include `log_store`, `snapshot`, `file_column`, `table_version: Option<Version>`. ([Docs.rs][4])
+* The builder can be built from:
+
+  * log store, snapshot, or eager snapshot; if snapshot provided, builder states “no IO will be performed when building the provider.” ([Docs.rs][4])
+
+**Version pinning knob (provider-time):**
+
+* `TableProviderBuilder::with_table_version(version: impl Into<Option<Version>>) -> Self`:
+
+  * configures which table version the provider should target. ([Docs.rs][4])
+
+**Resolution mechanism (what “with_table_version” actually controls):**
+
+* If no snapshot/eager snapshot is provided, builder constructs `Snapshot::try_new(log_store, Default::default(), table_version.map(|v| v as i64))` (version passed into snapshot creation). ([Docs.rs][4])
+
+**Implication for deterministic query planning:**
+
+* Provider snapshot selection is a function of `(snapshot provided?) ∨ (log_store + optional table_version)`; the only stable identifier exposed by the builder for pinning is `table_version`. ([Docs.rs][4])
+
+---
+
+### 2.5 Retention model: log retention vs deleted-file retention; vacuum invalidation mechanics
+
+**Two independent retention regimes (Delta table properties):**
+
+* `delta.logRetentionDuration`: retention horizon for transaction log history; Delta cleans up log entries older than this interval during checkpointing. ([Delta Lake][5])
+* `delta.deletedFileRetentionDuration`: eligibility threshold for VACUUM to physically delete data files after logical removal; default `interval 7 days`. ([Delta Lake][6])
+
+**Vacuum semantics (time travel invalidation condition):**
+
+* Vacuum physically deletes data files that older table versions may still reference; consequently, time travel to versions requiring those files becomes impossible after vacuum has removed them. ([delta.io][7])
+* delta-rs documentation explicitly: vacuum “may make some past versions … invalid” and “can break time travel”; it retains files within a window (default one week). ([delta-io.github.io][8])
+* Delta utility docs: time travel to versions older than the retention period is lost after running vacuum. ([Delta Lake][9])
+
+**Retention configuration requirement for “time-travel window W”:**
+
+* For intended historical accessibility window `W`:
+
+  * set `delta.deletedFileRetentionDuration >= W` to prevent vacuum from deleting required data files within `W`. ([Delta Lake][6])
+  * set `delta.logRetentionDuration >= W` to retain log provenance/versions across `W` (log cleanup otherwise truncates history). ([Delta Lake][5])
+
+---
+
+### 2.6 “Pinned snapshot bundle” schema (reproducibility + cache keys)
+
+#### 2.6.1 Minimal bundle (sufficient to re-open identical snapshot, assuming retention holds)
+
+* `table_uri: string` (canonical URL / path)
+* `resolved_version: int64` (required; even if original selector was timestamp) ([Docs.rs][3])
+* `selector`:
+
+  * `version: int64 | null`
+  * `timestamp_rfc3339: string | null` ([Docs.rs][3])
+* `load_api`:
+
+  * `{open_table_with_version | open_table_with_ds | load_version | load_with_datetime}` (auditability of resolution pathway) ([Docs.rs][2])
+
+#### 2.6.2 Compatibility envelope (bind snapshot to protocol/features at that version)
+
+* `protocol.minReaderVersion: int`
+* `protocol.minWriterVersion: int`
+* `protocol.readerFeatures: [string] | null`
+* `protocol.writerFeatures: [string] | null`
+  (Protocol extraction mechanism is part of the feature-compatibility section; version pin ensures protocol/features are evaluated at the pinned snapshot’s log.) ([Docs.rs][4])
+
+#### 2.6.3 Snapshot identity hash (detect drift / partial corruption)
+
+Define a hash `H(snapshot)` over canonicalized snapshot metadata sufficient to detect changed membership:
+
+* `H = hash( resolved_version || canonical(metadata) || canonical(protocol) || canonical(active_add_files) )`
+* `active_add_files` should be canonicalized as an ordered list of `{path, size, modificationTime?, partitionValues?, stats?}` as available; the table provider ultimately plans scans from active logical files (DataFusion planning path consumes snapshot/log store). ([Docs.rs][4])
+
+(“Hash function choice” intentionally unspecified; requirement is stable canonicalization + stable hashing.)
+
+---
+
+### 2.7 Deterministic procedure: pin, register, execute, cache, validate retention
+
+**Inputs:** `table_uri`, `time_selector ∈ {version:int64 | timestamp_rfc3339:string}`, `required_history_window W`.
+
+**Procedure:**
+
+1. **Resolve and pin snapshot**
+
+   * If `version`: use `open_table_with_version(Url, i64)` or `DeltaTable::load_version(i64)`. ([Docs.rs][2])
+   * If `timestamp`: use `open_table_with_ds(Url, RFC3339)` or `DeltaTable::load_with_datetime(DateTime<Utc>)`; record `resolved_version = DeltaTable::version()` post-load. ([Docs.rs][3])
+2. **Validate initialization**
+
+   * Assert `snapshot()` succeeds (reject `NotInitialized`). ([Docs.rs][1])
+3. **Bind DataFusion provider to pinned version**
+
+   * Use `table_provider()`; if not relying on an eager snapshot, set builder `with_table_version(Some(v))` prior to building provider so snapshot creation is parameterized by that version. ([Docs.rs][1])
+4. **Retention policy alignment**
+
+   * Ensure `delta.deletedFileRetentionDuration >= W` and `delta.logRetentionDuration >= W`; otherwise, time-travel replays beyond the configured horizons are not preserved against vacuum / log cleanup. ([Delta Lake][6])
+5. **Persist bundle**
+
+   * Persist the pinned snapshot bundle (2.6) alongside cache artifacts; cache key must include `(table_uri, resolved_version)` at minimum because snapshot membership is version-indexed. ([Docs.rs][2])
+
+[1]: https://docs.rs/deltalake/latest/deltalake/table/struct.DeltaTable.html "DeltaTable in deltalake::table - Rust"
+[2]: https://docs.rs/deltalake/latest/deltalake/fn.open_table_with_version.html "open_table_with_version in deltalake - Rust"
+[3]: https://docs.rs/deltalake/latest/deltalake/fn.open_table_with_ds.html "open_table_with_ds in deltalake - Rust"
+[4]: https://docs.rs/deltalake-core/0.30.1/x86_64-unknown-linux-gnu/src/deltalake_core/delta_datafusion/table_provider.rs.html "table_provider.rs - source"
+[5]: https://docs.delta.io/table-properties/?utm_source=chatgpt.com "Delta Table Properties Reference"
+[6]: https://docs.delta.io/delta-batch/?utm_source=chatgpt.com "Table batch reads and writes"
+[7]: https://delta.io/blog/2023-02-01-delta-lake-time-travel/?utm_source=chatgpt.com "Delta Lake Time Travel"
+[8]: https://delta-io.github.io/delta-rs/python/usage.html?utm_source=chatgpt.com "Usage — delta-rs documentation"
+[9]: https://docs.delta.io/delta-utility/?utm_source=chatgpt.com "Table utility commands"
+
+## 3) Delta → DataFusion scan plan materialization (scan() mechanics): implementation spec
+
+### 3.1 DataFusion `TableProvider::scan` contract: inputs, pushdown handshake, correctness guardrails
+
+**Core interface (DataFusion):**
+
+* `scan(session, projection: Option<&Vec<usize>>, filters: &[Expr], limit: Option<usize>) -> ExecutionPlan` (async) (table provider is responsible for producing a scan plan consistent with these arguments). ([Docs.rs][1])
+* `filters` semantics: `filters` are boolean `Expr`s combined with logical `AND`; returned rows must satisfy all provided expressions. ([Docs.rs][1])
+* `supports_filters_pushdown(filter: &[&Expr]) -> Vec<TableProviderFilterPushDown>`: per-filter capability declaration; determines whether DataFusion supplies `filters` into `scan` and whether DataFusion re-applies a filter above the scan. ([Docs.rs][1])
+
+**Pushdown levels (DataFusion):**
+
+* `Exact`: provider guarantees complete application of the filter during scan; DataFusion does not need to re-apply. ([Apache DataFusion][2])
+* `Inexact`: provider may apply partially; DataFusion re-applies after scan to ensure correctness. ([Apache DataFusion][2])
+
+**Statistics side-effect (DataFusion file scans):**
+
+* DataFusion’s file-scan statistics access path marks stats as *inexact* when filters are present in the file scan configuration, explicitly to preserve correctness while enabling pushdown. ([Apache DataFusion][3])
+
+---
+
+### 3.2 delta-rs entrypoints: `scan()` call graph and primary builder objects
+
+**Provider entrypoints (delta-rs / deltalake-core):**
+
+* `DeltaTableProvider::scan(…, projection, filters, limit)`:
+
+  * registers object store into runtime env (`register_store`)
+  * forms `filter_expr = conjunction(filters)`
+  * constructs `DeltaScanBuilder` and calls `.with_projection(projection).with_limit(limit).with_filter(filter_expr).with_scan_config(config).build()` ([Docs.rs][4])
+* Equivalent path exists for `impl TableProvider for DeltaTable` using `DeltaScanBuilder::new(self.snapshot()?.snapshot(), …)` and `.build().await`. ([Docs.rs][4])
+
+**Builder precondition (protocol gate):**
+
+* `DeltaScanBuilder::build` begins with `PROTOCOL.can_read_from(self.snapshot)?` (scan construction is gated on protocol compatibility). ([Docs.rs][4])
+
+---
+
+### 3.3 Scan configuration surface: `DeltaScanConfig` fields, defaults, and session-derived knobs
+
+**Config struct (delta-rs):**
+
+* `file_column_name: Option<String>`: injects a synthetic column containing the source path. ([Docs.rs][5])
+* `wrap_partition_values: bool`: dictionary-encodes partition values (and the optional file-path column value) when injected. ([Docs.rs][5])
+* `enable_parquet_pushdown: bool`: gates whether a predicate is attached to the Parquet scan (`ParquetSource::with_predicate`). ([Docs.rs][5])
+* `schema_force_view_types: bool`: forces Parquet reader view types for string/binary families. ([Docs.rs][5])
+* `schema: Option<SchemaRef>`: read-as schema override (names must match table schema; types may be compatible variants). ([Docs.rs][5])
+
+**Default + session-derived values (delta-rs):**
+
+* `DeltaScanConfig::new()` sets `enable_parquet_pushdown=true`, `wrap_partition_values=true`, `schema_force_view_types=true`. ([Docs.rs][4])
+* `DeltaScanConfig::new_from_session(session)` sets:
+
+  * `enable_parquet_pushdown = session.config().options().execution.parquet.pushdown_filters`
+  * `schema_force_view_types = session.config().options().execution.parquet.schema_force_view_types` ([Docs.rs][4])
+
+---
+
+### 3.4 Schema materialization: logical schema vs file schema; projection-index handling
+
+**Base read schema selection (delta-rs):**
+
+* `schema = config.schema.unwrap_or(snapshot.read_schema())` (table schema, optionally overridden). ([Docs.rs][4])
+* `logical_schema = df_logical_schema(snapshot, config.file_column_name, Some(schema))` (adds partition columns + optional file path column into the DataFusion-visible schema). ([Docs.rs][4])
+
+**Projection construction (delta-rs):**
+
+* If `projection` is provided:
+
+  * build field list from `logical_schema.field(idx)` for each projected index
+  * additionally, *re-inject* any columns referenced by the filter expression that were not included in `projection` (“partition filters with Exact pushdown were removed from projection by DF optimizer … add them back for predicate pruning”). ([Docs.rs][4])
+
+**File schema separation (delta-rs):**
+
+* `file_schema` is constructed by removing table partition columns from the chosen `schema` (`filter(|f| !partition_cols.contains(f.name()))`). ([Docs.rs][4])
+* Partition columns are not read from Parquet; they are injected as partition values through `FileScanConfigBuilder::with_table_partition_cols`. ([Docs.rs][4])
+
+**Protocol-level justification (Delta spec):**
+
+* Partition directory structure is conventional; *actual partition values for a file must be read from the transaction log*. ([GitHub][6])
+
+---
+
+### 3.5 Filter handling pipeline: normalization, pushdown classification, and “pushdown_filter” construction
+
+**Normalization steps (delta-rs):**
+
+* `filter_expr = conjunction(filters.iter().cloned())` at provider entrypoint. ([Docs.rs][4])
+* `logical_filter = filter_expr.map(|expr| simplify_expr(session, &df_schema, expr))`:
+
+  * `simplify_expr` uses `ExprSimplifier` then `create_physical_expr` (physical expression for pruning/evaluation). ([Docs.rs][4])
+
+**Pushdown classification (delta-rs): `get_pushdown_filters`:**
+
+* Inputs: `filter: &[&Expr]`, `partition_cols: &[String]`
+* Output: `Vec<TableProviderFilterPushDown>`
+* Rule:
+
+  * if `expr.column_refs()` non-empty AND `expr_is_exact_predicate_for_cols(partition_cols, expr)` then `Exact`
+  * else `Inexact` ([Docs.rs][4])
+
+**Exact predicate recognizer (delta-rs): `expr_is_exact_predicate_for_cols`:**
+
+* Column restriction: every `Expr::Column` name must be contained in `partition_cols`; otherwise predicate deemed not applicable. ([Docs.rs][4])
+* Allowed operator / node subset (passes through as “continue”):
+
+  * `Expr::BinaryExpr` with `op ∈ {And, Or, NotEq, Eq, Gt, GtEq, Lt, LtEq}` ([Docs.rs][4])
+  * `Expr::Literal`, `Expr::Not`, `Expr::IsNotNull`, `Expr::IsNull`, `Expr::Between`, `Expr::InList` ([Docs.rs][4])
+* Any other expression node => `is_applicable = false` and stop traversal. ([Docs.rs][4])
+
+**Construction of `pushdown_filter` (delta-rs):**
+
+* `pushdown_filter` is built by:
+
+  * splitting conjunction into predicates
+  * computing `get_pushdown_filters` for each predicate
+  * retaining only predicates labeled `Inexact`
+  * recombining with `conjunction(filtered_predicates)`
+  * simplifying into a physical expr via `simplify_expr` ([Docs.rs][4])
+
+**Explicit intent note (delta-rs):**
+
+* Comment states: “only inexact filters should be pushed down to the data source; doing otherwise will make stats inexact and disable datafusion optimizations like AggregateStatistics.” ([Docs.rs][4])
+
+**Correctness contract coupling (DataFusion):**
+
+* Any filter labeled `Inexact` can be partially applied at scan; DataFusion will re-apply above the scan. ([Apache DataFusion][2])
+
+---
+
+### 3.6 File skipping (“container pruning”) pipeline: Delta-log stats + DataFusion `PruningPredicate`
+
+#### 3.6.1 Per-file stats source (Delta protocol): what exists and what is safe to use
+
+**Transaction-log stats availability:**
+
+* `add` and `remove` actions can carry `stats` (per-file statistics), including `numRecords` and per-column statistics; spec states they “can be used for eliminating files based on query predicates.” ([GitHub][6])
+* Checkpoint schema includes `stats_parsed` with `numRecords`, `minValues`, `maxValues`, `nullCount` structures mirroring the data schema. ([GitHub][6])
+
+**`tightBounds` semantics (Delta protocol):**
+
+* `stats.tightBounds` indicates whether per-column min/max are **tight** (true min/max of valid rows) or **wide** (bounds that still safely envelope valid values); wide bounds are explicitly described as sufficient for data skipping. ([GitHub][6])
+
+**Deletion vectors interaction (Delta protocol):**
+
+* For any logical file where `deletionVector` is not null, `numRecords` must be present and accurate (physical record count), and statistics may be outdated w.r.t. deleted rows; `tightBounds` indicates tight vs wide bounds. ([GitHub][6])
+* `nullCount` carries only two “strong” cases (`0` and `numRecords`); intermediate values are non-informative and should be treated as absent. ([GitHub][6])
+
+#### 3.6.2 delta-rs pruning execution (DeltaScanBuilder)
+
+**Pruning mask construction (delta-rs):**
+
+* `num_containers = snapshot.num_containers()`
+* If `logical_filter` exists:
+
+  * `PruningPredicate::try_new(predicate, logical_schema)`
+  * `files_to_prune = pruning_predicate.prune(snapshot)?` (boolean mask length `num_containers`) ([Docs.rs][4])
+* Else: `files_to_prune = vec![true; num_containers]` ([Docs.rs][4])
+
+**PruningPredicate semantics (DataFusion):**
+
+* `PruningPredicate` uses min/max (and related pruning statistics) to prove a predicate can never evaluate to true for a container (row group, file, “container”); proven-false containers are skipped. ([Docs.rs][7])
+
+**Early return bypass (delta-rs):**
+
+* If `logical_filter.is_none() && limit.is_none()`, scan enumerates all files via `snapshot.file_views(&log_store, None)` and collects `add_action` list. ([Docs.rs][4])
+
+---
+
+### 3.7 Limit propagation at file-selection layer (delta-rs): `num_records`-based file truncation
+
+**Algorithm (delta-rs):**
+
+* Iterate `(action, keep)` over `file_actions.zip(files_to_prune)`
+* If `keep`:
+
+  * If `limit` present:
+
+    * If `action.get_stats()?` yields stats and `rows_collected <= limit`: accumulate `rows_collected += stats.num_records`, push file; else break.
+    * If stats missing: defer by pushing file into `pruned_without_stats`. ([Docs.rs][4])
+  * Else (no limit): push file. ([Docs.rs][4])
+* After loop: if `limit` present AND `rows_collected < limit`, extend `files` with `pruned_without_stats`. ([Docs.rs][4])
+
+**Derived counters (delta-rs):**
+
+* `files_scanned = files.len()`
+* `files_pruned = num_containers - files_scanned` ([Docs.rs][4])
+
+---
+
+### 3.8 FileGroup construction + `PartitionedFile` encoding: partition values, optional path column, and dictionary wrapping
+
+**Grouping key (delta-rs):**
+
+* `file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>`, keyed by a file’s partition value vector. ([Docs.rs][4])
+
+**PartitionedFile construction (delta-rs):**
+
+* `partitioned_file_from_action(action, partition_columns, schema)`:
+
+  * maps `action.partition_values[part]` (string or null) to `ScalarValue` using schema field data type (`to_correct_scalar_value`, null handling) ([Docs.rs][4])
+  * sets `ObjectMeta.last_modified` from `action.modification_time` (ms) converted to `DateTime<Utc>` ([Docs.rs][4])
+
+**Optional file-path column injection (delta-rs):**
+
+* If `config.file_column_name.is_some()`:
+
+  * push additional partition value containing `action.path` (string)
+  * if `wrap_partition_values`, wrap via `wrap_partition_value_in_dict` else raw `ScalarValue::Utf8` ([Docs.rs][4])
+
+**Partition column field list for `FileScanConfig` (delta-rs):**
+
+* `table_partition_cols = partition_columns.map(|name| schema.field_with_name(name))`
+* If `file_column_name` present:
+
+  * add a `Field(file_column_name, dtype)` where `dtype = dict(Utf8)` if `wrap_partition_values` else `Utf8` ([Docs.rs][4])
+
+**Empty-file-set guard (delta-rs):**
+
+* If `file_groups.is_empty()`, builder emits at least one empty `FileGroup` to satisfy DataFusion sanity checks. ([Docs.rs][4])
+
+---
+
+### 3.9 Scan-time statistics injection (delta-rs): pruned vs unpruned stats; fallback behavior
+
+**Two-path stats computation (delta-rs):**
+
+* If `pruning_mask` exists:
+
+  * iterate over `snapshot.files()?` (record batches of file metadata)
+  * apply boolean mask slicing; `filter_record_batch`
+  * compute stats via `LogDataHandler::new(&pruned_batches, table_configuration).statistics()` ([Docs.rs][4])
+* Else:
+
+  * `stats = snapshot.log_data().statistics()` ([Docs.rs][4])
+* If `stats` absent: `Statistics::new_unknown(&schema)` ([Docs.rs][4])
+
+**Rationale coupling (DataFusion):**
+
+* When file scan config carries filters, DataFusion treats scan statistics as inexact; delta-rs avoids pushing `Exact` filters into the file scan (and only pushes `Inexact`) to prevent avoidable inexactness propagation for plan-level optimizers. ([Docs.rs][4])
+
+---
+
+### 3.10 Parquet predicate wiring: `DeltaScanConfig.enable_parquet_pushdown` → `ParquetSource::with_predicate`
+
+**ParquetSource creation (delta-rs):**
+
+* `parquet_options.global = session.config().options().execution.parquet.clone()`
+* `file_source = ParquetSource::new(parquet_options)` ([Docs.rs][4])
+
+**Predicate attachment (delta-rs):**
+
+* If `pushdown_filter` exists AND `config.enable_parquet_pushdown == true`:
+
+  * `file_source = file_source.with_predicate(predicate)` ([Docs.rs][4])
+
+**Schema adaptation hook (delta-rs):**
+
+* `file_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?` (schema reconciliation between Delta logical schema and Parquet physical schema). ([Docs.rs][4])
+
+**Downstream Parquet pruning context (DataFusion):**
+
+* DataFusion Parquet implementation advertises row-group and data-page pruning on min/max statistics and predicate pushdown capabilities. ([Apache DataFusion][8])
+
+---
+
+### 3.11 Final plan assembly: `FileScanConfigBuilder` → `DataSourceExec` → `DeltaScan`
+
+**FileScanConfig assembly (delta-rs):**
+
+* `FileScanConfigBuilder::new(object_store_url, file_schema, file_source)`
+* `.with_file_groups(Vec<FileGroup>)`
+* `.with_statistics(stats)`
+* `.with_projection_indices(projection)`
+* `.with_limit(limit)`
+* `.with_table_partition_cols(table_partition_cols)`
+* `.build()` ([Docs.rs][4])
+
+**ExecutionPlan wrapper (delta-rs):**
+
+* `DeltaScan { table_url, config, parquet_scan: DataSourceExec::from_data_source(file_scan_config), logical_schema, metrics }` ([Docs.rs][4])
+* `DeltaScan` implements `ExecutionPlan` and delegates schema/properties/children to the wrapped Parquet scan. ([Docs.rs][4])
+
+---
+
+### 3.12 Scan metrics: `files_scanned` / `files_pruned` counters + verification harness specification
+
+**Counters emitted (delta-rs):**
+
+* `ExecutionPlanMetricsSet` with global counters:
+
+  * `"files_scanned"` += `files_scanned`
+  * `"files_pruned"` += `files_pruned` ([Docs.rs][4])
+
+**Verification harness (artifact spec):**
+
+1. **Plan capture**
+
+   * Collect DataFusion physical plan (`EXPLAIN` / physical plan API) and assert presence of `DeltaScan` node (display name) and that the child is a file scan (`DataSourceExec`-backed). ([Docs.rs][4])
+2. **Pushdown classification audit**
+
+   * For each conjunct in the user predicate:
+
+     * compute whether it is `Exact` or `Inexact` via the same rules used by `get_pushdown_filters` (partition-column-only + restricted operator/node subset → `Exact`, else `Inexact`). ([Docs.rs][4])
+   * Assert that only `Inexact` conjuncts are passed into ParquetSource predicate when `enable_parquet_pushdown=true`. ([Docs.rs][4])
+3. **File skipping audit**
+
+   * Extract `files_scanned` / `files_pruned` from the executed plan’s metrics; reconcile:
+
+     * `files_scanned + files_pruned == snapshot.num_containers()` when pruning path is active (mask computed). ([Docs.rs][4])
+4. **Stats correctness invariants**
+
+   * When deletion vectors are present, ensure `numRecords` is populated for affected logical files; rely on `tightBounds` semantics when interpreting min/max for skipping safety. ([GitHub][6])
+
+[1]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html?utm_source=chatgpt.com "TableProvider in datafusion::datasource - Rust"
+[2]: https://datafusion.apache.org/library-user-guide/custom-table-providers.html?utm_source=chatgpt.com "Custom Table Provider — Apache DataFusion documentation"
+[3]: https://datafusion.apache.org/library-user-guide/upgrading.html?utm_source=chatgpt.com "Upgrade Guides — Apache DataFusion documentation"
+[4]: https://docs.rs/deltalake-core/0.30.1/x86_64-unknown-linux-gnu/src/deltalake_core/delta_datafusion/table_provider.rs.html "table_provider.rs - source"
+[5]: https://docs.rs/deltalake/latest/deltalake/delta_datafusion/struct.DeltaScanConfig.html?utm_source=chatgpt.com "DeltaScanConfig in deltalake::delta_datafusion - Rust"
+[6]: https://raw.githubusercontent.com/delta-io/delta/master/PROTOCOL.md "raw.githubusercontent.com"
+[7]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html "https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html"
+[8]: https://datafusion.apache.org/user-guide/features.html "https://datafusion.apache.org/user-guide/features.html"
+
+## 4) Provider construction patterns (Delta → DataFusion): API contracts, composition rules, and footgun-avoidance
+
+### 4.1 Construction surface area: *what* can be registered, and *what each form offers*
+
+**Delta-as-DataFusion integration unit:** a `TableProvider` implementation returning an `ExecutionPlan` in `scan()`; DataFusion’s built-in comparators are `ListingTable` (file listing + format readers) and `MemTable` (in-memory batches). ([Docs.rs][1])
+
+**delta-rs offers three provider-shaped entrypoints (Rust):**
+
+1. `DeltaTable::table_provider() -> TableProviderBuilder` (builder produces `Arc<dyn TableProvider>`). ([Docs.rs][2])
+2. `DeltaTableProvider` (explicit provider struct; accepts `EagerSnapshot`, `LogStore`, `DeltaScanConfig`; supports optional file subsetting). ([Docs.rs][3])
+3. `impl TableProvider for DeltaTable` (direct trait impl; exposes schema/scan/etc). ([Docs.rs][4])
+
+**Feature deltas vs a `ListingTable` on Parquet directories (alternative):**
+
+* Delta providers resolve **active files + partition values + scan stats** via the Delta log/snapshot; `ListingTable` resolves files via directory listing and does not interpret `_delta_log`. (Delta-vs-parquet semantics are covered elsewhere; here the operational consequence is “provider chooses membership source.”) ([Docs.rs][5])
+
+---
+
+### 4.2 `DeltaTable::table_provider()` selection semantics: eager-snapshot fast path vs log-store path
+
+**Method signature and intent (public API):**
+
+* `pub fn table_provider(&self) -> TableProviderBuilder` with docstring “Get a table provider … see `TableProviderBuilder` for options.” ([Docs.rs][2])
+
+**Dispatch rule (source-level behavior):**
+
+* If `self.snapshot()` succeeds, builder is initialized with `with_eager_snapshot(state.snapshot().clone())`.
+* Else builder is initialized with `with_log_store(self.log_store())`. ([Docs.rs][4])
+
+**Offered value (vs alternatives):**
+
+* **Eager snapshot path:** binds provider to a preloaded `EagerSnapshot` (no additional snapshot IO at provider build); alternative is log-store path (provider constructs `Snapshot` during build). ([Docs.rs][4])
+* **Log store path:** requires only `LogStore` access and (optionally) a version selector; alternative is providing a concrete snapshot yourself (via `with_snapshot`/`with_eager_snapshot`). ([Docs.rs][4])
+
+---
+
+### 4.3 `TableProviderBuilder`: configuration degrees-of-freedom and their semantics
+
+**Builder state (struct fields):**
+
+* `log_store: Option<Arc<dyn LogStore>>`
+* `snapshot: Option<SnapshotWrapper>` where wrapper is either `EagerSnapshot` or `Snapshot`
+* `file_column: Option<String>`
+* `table_version: Option<Version>` ([Docs.rs][4])
+
+**Configuration methods (public):**
+
+* `with_log_store(log_store: impl Into<Arc<dyn LogStore>>)` ([Docs.rs][4])
+* `with_eager_snapshot(snapshot: impl Into<Arc<EagerSnapshot>>)` ([Docs.rs][4])
+* `with_snapshot(snapshot: impl Into<Arc<Snapshot>>)` ([Docs.rs][4])
+* `with_table_version(version: impl Into<Option<Version>>)` ([Docs.rs][4])
+* `with_file_column(file_column: impl ToString)` (adds a column containing the source file path). ([Docs.rs][4])
+
+**Offered value (vs alternatives):**
+
+* `with_eager_snapshot` / `with_snapshot`: separates “snapshot acquisition” from “provider construction”; provider build performs no additional snapshot IO when snapshot wrapper is provided. ([Docs.rs][4])
+* `with_table_version`: declares a deterministic snapshot selector at provider-build time when snapshot wrapper is absent; alternative is “latest snapshot” selection (default). ([Docs.rs][4])
+* `with_file_column`: exposes provenance required for downstream debugging / lineage / UDF diagnostics; alternative is external file-path enrichment outside the engine (not provider-native). ([Docs.rs][4])
+
+---
+
+### 4.4 Build semantics: `IntoFuture` → provider materialization rules, error conditions, and default scan config
+
+**Builder execution protocol:**
+
+* `TableProviderBuilder` implements `std::future::IntoFuture` with `Output = Result<Arc<dyn TableProvider>>` and returns a boxed async future. ([Docs.rs][4])
+
+**Config synthesis:**
+
+* initializes `DeltaScanConfig::new()`
+* if `file_column` set, applies `config.with_file_column_name(file_column)` ([Docs.rs][4])
+
+**Snapshot resolution precedence:**
+
+1. If `this.snapshot.is_some()`: use provided `SnapshotWrapper` directly.
+2. Else if `this.log_store.is_some()`: construct `Snapshot::try_new(log_store, Default::default(), this.table_version.map(|v| v as i64)).await?` and wrap as `SnapshotWrapper::Snapshot(...)`.
+3. Else: return `DataFusionError::Plan("Either a log store or a snapshot must be provided …")`. ([Docs.rs][4])
+
+**Provider instantiation target:**
+
+* returns `Arc::new(next::DeltaScan::new(snapshot, config)?) as Arc<dyn TableProvider>`. ([Docs.rs][4])
+
+**Offered value (vs alternatives):**
+
+* The builder provides a *single* construction locus for `(snapshot selection + scan config defaults + provider instantiation)`; alternatives require manual assembly (`DeltaTableProvider::try_new(...)` or relying on `impl TableProvider for DeltaTable`). ([Docs.rs][3])
+
+---
+
+### 4.5 `DeltaTable::update_datafusion_session(session)`: object-store registry alignment (required for multi-store correctness)
+
+**Method behavior (source-level):**
+
+* compute `url = self.log_store().root_url().as_object_store_url()`
+* if `session.runtime_env().object_store(&url).is_err()`, register:
+  `session.runtime_env().register_object_store(url.as_ref(), self.log_store().object_store(None))`
+* return `Ok(())`. ([Docs.rs][4])
+
+**Underlying DataFusion contract:**
+
+* `RuntimeEnv::register_object_store(url, object_store)` registers an `ObjectStore` for a URL prefix/scheme; enables DataFusion to resolve reads for URLs without built-in store support. ([Docs.rs][6])
+
+**Offered value (vs alternatives):**
+
+* `update_datafusion_session` implements *idempotent* “register-if-missing” semantics for the Delta table’s root object-store URL; alternative is out-of-band registration through `SessionContext::register_object_store` / `RuntimeEnv::register_object_store` prior to table registration. ([Docs.rs][4])
+* In multi-store sessions (heterogeneous URL schemes/hosts), per-table registration prevents resolution failures attributable to missing registry entries (“no suitable object store” class failures are diagnosed in DataFusion issue tracker; not repeated here). ([GitHub][7])
+
+---
+
+### 4.6 Known sharp edge: `impl TableProvider for DeltaTable` exposes load-state unsafety (schema unwrap)
+
+**Normative warning embedded in source:**
+
+* `// TODO: implement this for Snapshot, not for DeltaTable since DeltaTable has unknown load state.`
+* `// the unwraps in the schema method are a dead giveaway ..` ([Docs.rs][4])
+
+**Concrete footgun:**
+
+* `fn schema(&self) -> Arc<Schema> { self.snapshot().unwrap().snapshot().read_schema() }` (panic if `snapshot()` fails). ([Docs.rs][4])
+
+**Operational requirement (if using `DeltaTable` directly as `TableProvider`):**
+
+* Before any DataFusion pathway that consults `TableProvider::schema()` (planning/registration/validation), ensure `DeltaTable` has a loaded snapshot state via a successful `load`/`load_version`/`load_with_datetime` sequence (methods are on `DeltaTable`). ([Docs.rs][2])
+
+**Offered value of builder/provider patterns (vs direct `DeltaTable` trait impl):**
+
+* `TableProviderBuilder` path never calls `DeltaTable::schema()`; it materializes a provider via snapshot wrapper / log store and returns `Arc<dyn TableProvider>`; direct `DeltaTable` trait impl couples correctness to load-state discipline. ([Docs.rs][4])
+
+---
+
+### 4.7 `DeltaTableProvider`: explicit provider with optional file-subsetting (advanced control plane)
+
+**Constructor + capability:**
+
+* `DeltaTableProvider::try_new(snapshot: EagerSnapshot, log_store: Arc<dyn LogStore>, config: DeltaScanConfig) -> Result<DeltaTableProvider, DeltaTableError>` builds provider with an explicit snapshot and config. ([Docs.rs][3])
+* `DeltaTableProvider::with_files(self, files: Vec<Add>) -> DeltaTableProvider` restricts which `Add` actions are considered during scan (“advanced usecases”). ([Docs.rs][3])
+
+**Offered value (vs builder):**
+
+* `with_files` provides a first-class input for incremental / curated scans (e.g., “only these `Add`s”); `TableProviderBuilder` constructs its file set from snapshot/log (no external file subset injection surface). ([Docs.rs][3])
+
+---
+
+### 4.8 Deterministic provider construction procedure (implementation checklist; no exemplar code)
+
+**Inputs:** `DeltaTable` instance `T`, DataFusion session `S`, desired semantics `{latest | pinned_version | pinned_snapshot}`, optional `{file_column_name}`.
+
+1. **Object store registration (precondition for scan execution across stores):**
+
+   * Invoke `T.update_datafusion_session(S)` OR pre-register store via `RuntimeEnv::register_object_store` / `SessionContext::register_object_store` for the table’s root URL. ([Docs.rs][4])
+
+2. **Provider construction mode selection:**
+
+   * If a snapshot is already loaded (and intended to be reused/pinned), select `DeltaTable::table_provider()` and rely on its eager-snapshot branch. ([Docs.rs][4])
+   * If no snapshot is loaded and pinning is required, set `with_table_version(Some(version))` on the returned builder (or supply `with_snapshot/with_eager_snapshot` explicitly). ([Docs.rs][4])
+
+3. **Optional provenance column:**
+
+   * If a source file-path column is required in query outputs, set `with_file_column(name)`; builder maps this into `DeltaScanConfig` (`with_file_column_name`). ([Docs.rs][4])
+
+4. **Avoid direct `impl TableProvider for DeltaTable` unless load-state is enforced:**
+
+   * If registering `DeltaTable` itself as `TableProvider`, enforce “snapshot loaded” prior to any `schema()`-dependent operation due to `unwrap()` in `schema()`. ([Docs.rs][4])
+
+This set of rules yields: (a) provider materialized with explicit snapshot/log-store provenance, (b) object store resolution aligned with session runtime env, (c) deterministic pinning when required, (d) elimination of schema unwrap panics by construction.
+
+[1]: https://docs.rs/deltalake/latest/deltalake/datafusion/index.html "deltalake::datafusion - Rust"
+[2]: https://docs.rs/deltalake/latest/deltalake/table/struct.DeltaTable.html "DeltaTable in deltalake::table - Rust"
+[3]: https://docs.rs/deltalake/latest/deltalake/delta_datafusion/struct.DeltaTableProvider.html "DeltaTableProvider in deltalake::delta_datafusion - Rust"
+[4]: https://docs.rs/deltalake-core/0.30.1/x86_64-unknown-linux-gnu/src/deltalake_core/delta_datafusion/table_provider.rs.html "table_provider.rs - source"
+[5]: https://docs.rs/deltalake/latest/deltalake/datafusion/index.html?utm_source=chatgpt.com "deltalake::datafusion - Rust"
+[6]: https://docs.rs/datafusion/latest/datafusion/execution/runtime_env/struct.RuntimeEnv.html?utm_source=chatgpt.com "RuntimeEnv in datafusion::execution::runtime_env - Rust"
+[7]: https://github.com/apache/datafusion/issues/2136?utm_source=chatgpt.com "No suitable object store found for *** · Issue #2136"
+
+## 5) Writing through DataFusion: sink path, transactional commit, and write contracts (delta-rs + DataFusion)
+
+### 5.1 DataFusion DML → sink execution contract (what is invoked, when, and with what guarantees)
+
+**Execution abstraction (DataFusion):** DML (e.g., `INSERT INTO`) is executed as an `ExecutionPlan` whose terminal operator is typically `DataSinkExec` (DataFusion’s canonical “stream RecordBatches into a sink” pattern). ([Docs.rs][1])
+
+**Sink interface (DataFusion):** a sink is a `DataSink` implementing:
+
+* `schema() -> &Arc<Schema>` (declares sink input schema)
+* `write_all(data: Pin<Box<dyn RecordBatchStream<Item = Result<RecordBatch, DataFusionError>> + Send>>, context: &Arc<TaskContext>) -> Future<Output = Result<u64, DataFusionError>>` ([Docs.rs][2])
+
+**Single-shot DML commit rule (DataFusion):**
+
+* `write_all` is called **exactly once per DML statement**; prior to returning, the sink **must perform any commit/rollback required**. ([Docs.rs][2])
+
+**Operational value vs alternatives (capability statement):**
+
+* This contract enables *streaming* writeout from an upstream DataFusion physical plan without requiring full materialization to an in-memory table prior to persistence (contrast: `collect()` then external writer). ([Docs.rs][2])
+
+---
+
+### 5.2 Delta write transaction envelope: file-first, log-commit second (atomicity boundary)
+
+**Delta transaction ordering (delta-rs / Delta docs):**
+
+* Data files (e.g., Parquet) are written first; the table changes become visible only after a new transaction log entry is committed. ([delta-io.github.io][3])
+
+**Failure surface difference vs “raw Parquet directory writes”:**
+
+* If a job errors after writing Parquet files but before writing a valid log entry, the table snapshot is unchanged (no new data visible), whereas a plain Parquet directory write can leave “partial success” that must be unwound manually. ([delta-io.github.io][3])
+
+**Implication for DataFusion sink design:**
+
+* The sink’s `write_all` must implement: (1) write file set, (2) construct Delta actions, (3) commit log entry, (4) return row-count. The commit/rollback obligation is enforced by the DataFusion single-shot rule. ([Docs.rs][2])
+
+---
+
+### 5.3 delta-rs write execution topology (how batches are driven, partitioned, and measured)
+
+**Write plan driver (delta-rs):** delta-rs’ write execution orchestrates concurrent “writer tasks” and “worker tasks” (per-partition driving), then aggregates the resulting `Add` actions and reports write/scan timing metrics (`WriteExecutionPlanMetrics { scan_time_ms, write_time_ms }`). ([Docs.rs][4])
+
+**Writer parameterization (explicit knobs):** writer setup includes:
+
+* `write_schema` (post-filter schema)
+* `partition_columns`
+* `writer_properties` (Parquet writer props)
+* `target_file_size`
+* `write_batch_size`
+* writer stats configuration (indexed/stat columns) ([Docs.rs][4])
+
+**Value vs alternatives:**
+
+* The sink path can preserve DataFusion’s upstream parallelism and record-batch streaming while mapping to Delta’s file/commit transaction model; alternative “collect then write” collapses streaming into a single materialization boundary, increasing peak memory pressure and delaying commit visibility. (Capability contrast; no behavioral claim beyond contract.) ([Docs.rs][2])
+
+---
+
+### 5.4 “UDF-heavy pipelines” consequence: validation and semantic branching occur *inside* the write driver
+
+**Batch-level validation hook:** delta-rs’ write execution calls a checker (`check_batch`) on constructed batches prior to writing (illustrated in the CDC branch where both “normal” and “cdf” batches are checked). ([Docs.rs][4])
+
+**CDC / CDF branch mechanics (delta-rs write execution):**
+
+* In a CDC-enabled path, upstream batches are split by `_change_type` into a “normal” batch and a “cdf” batch using DataFusion expressions; a temporary `MemTable` is constructed to run the filters; `_change_type` is then dropped from the normal batch before writing. ([Docs.rs][4])
+
+**Value vs alternatives:**
+
+* This demonstrates that delta-rs’ DataFusion-backed write driver can apply relational transforms (filters, projections, schema adjustments) in-process during write, rather than requiring external pre-processing prior to write submission. ([Docs.rs][4])
+
+---
+
+### 5.5 Dictionary column conversion: schema-normalization requirement, typical sources, and mitigation knobs
+
+**Where dictionary types enter (delta-rs / DataFusion integration):**
+
+* delta-rs imports Arrow `DictionaryArray` / `TypedDictionaryArray` and Arrow casting (`cast_with_options`) in the DataFusion integration module, indicating explicit support for dictionary-typed columns and cast-based normalization paths. ([Docs.rs][5])
+* delta-rs also imports DataFusion’s `wrap_partition_type_in_dict`, which is the mechanism used to dictionary-wrap partition-related injected columns in DataFusion scans. ([Docs.rs][5])
+
+**Write-path requirement (actionable constraint):**
+
+* For any sink writing into a Delta table, the outgoing batch schema must match the Delta table schema’s physical Arrow types. Therefore, any column with Arrow `DataType::Dictionary(_, value_type)` must be normalized to `value_type` (cast or unwrap) unless the target table schema explicitly stores that column as a dictionary type (rare for persisted Parquet). (Type-compatibility constraint; implementation uses Arrow cast APIs surfaced above.) ([Docs.rs][5])
+
+**Mitigation knobs (explicit):**
+
+* **Upstream mitigation:** disable dictionary-wrapping for partition/path injection at scan config level (delta-rs scan config exposes `wrap_partition_values` on read-side; if enabled, injected columns may be dictionaries). (Read-side knob already present in your scan mechanics section.)
+* **Downstream mitigation:** enforce a “sink input schema canonicalization” step using Arrow cast (the integration module explicitly imports cast utilities). ([Docs.rs][5])
+
+**Value vs alternatives:**
+
+* Normalization allows using file/path/partition metadata columns for diagnostics and intermediate transforms without persisting those dictionary encodings into the Delta table’s physical schema. ([Docs.rs][5])
+
+---
+
+### 5.6 Concurrency semantics: commit conflicts, locking clients, and service-level expectations
+
+**Delta concurrency model (Delta docs):**
+
+* Delta provides ACID behavior under concurrent writers; conflicting writes fail with a concurrent modification exception rather than corrupting the table. ([Delta Lake][6])
+
+**delta-rs concurrent write support (implementation surface):**
+
+* On ADLS/GCS/S3 with a locking client, delta-rs supports concurrent write attempts; if two writers target the same commit, delta-rs attempts conflict resolution (per maintainer discussion). ([GitHub][7])
+
+**Observed edge cases (engineering input signal):**
+
+* delta-rs has an issue report where concurrent append writers can yield asymmetric client-observed results (one writer returns error while both inserts appear), relevant for “exactly-once” service semantics and retry design. ([GitHub][8])
+* Spark-side semantics for conflict classes (e.g., `ConcurrentAppendException` when concurrent operations add files in partitions read by your job) illustrate the conflict taxonomy typical in Delta’s optimistic concurrency layer. ([community.databricks.com][9])
+
+**Operational requirement (explicit):**
+
+* A DataFusion→Delta sink must treat “commit conflict” as a first-class outcome: detect commit failure, interpret whether the transaction may have been committed by another writer, and select a retry/verification policy consistent with the service’s idempotency model (e.g., reconcile against transaction log history where available). (Conflict existence and failure mode are normative per Delta concurrency docs; delta-rs behavior depends on lock-store and client version.) ([Delta Lake][6])
+
+---
+
+### 5.7 Metrics and verification: what to record and how to validate behavior
+
+**Sink metrics contract (DataFusion):**
+
+* `DataSink::metrics() -> Option<MetricsSet>`: sinks may expose metrics snapshots; DataFusion surfaces plan metrics via `ExecutionPlan::metrics()`. ([Docs.rs][2])
+
+**delta-rs write metrics already computed in execution driver:**
+
+* delta-rs computes and returns `scan_time_ms` and `write_time_ms` as part of write execution metrics. ([Docs.rs][4])
+
+**Recommended verification harness (artifact spec):**
+
+1. Persist `EXPLAIN` (logical+physical) for the DML plan; assert terminal operator is `DataSinkExec` (or equivalent sink exec) and that the sink’s declared schema matches the expected table write schema. ([Docs.rs][10])
+2. Persist sink metrics snapshot (rows written; file counts if exposed; timing metrics). `write_all` returns `u64` “number of values written” per DataFusion contract; delta-rs additionally produces scan/write timing. ([Docs.rs][2])
+3. Persist the committed Delta version + Add-action inventory hash to bind the write to an immutable snapshot (ties into your “pinned snapshot bundle” pattern). ([delta-io.github.io][3])
+
+---
+
+### 5.8 “Write contract” checklist (implementation obligations; minimal ambiguity)
+
+**A) Input schema conformance**
+
+* Ensure sink input schema fields are a subset of target Delta schema fields (excluding known non-table metadata columns such as file-path columns unless explicitly persisted).
+* Enforce Arrow physical type compatibility; cast where required (esp. dictionary → value type). ([Docs.rs][5])
+
+**B) Partition column handling**
+
+* Partition columns must be configured consistently with the table’s partition layout; writer execution is parameterized by `partition_columns` and uses them while constructing writers and file routing. ([Docs.rs][4])
+* If upstream reads injected partition/path metadata columns, drop or rename prior to persistence unless the table schema includes them. (Injection mechanism is visible via `wrap_partition_type_in_dict` import and scan-config patterns.) ([Docs.rs][5])
+
+**C) Batch validation / constraints**
+
+* If table has invariants/constraints enabled, enforce `check_batch` over each outgoing batch prior to writing; error must abort the transaction before log commit (consistent with DataFusion sink “commit/rollback before return” rule). ([Docs.rs][4])
+
+**D) CDC/CDF semantics (if enabled)**
+
+* If `_change_type` (or equivalent) is present, define an explicit split/filter policy and schema policy (keep vs drop) prior to writing to main data and change-data destinations; delta-rs demonstrates “split, validate, drop CDC col for normal batch, validate CDF batch.” ([Docs.rs][4])
+
+**E) Transaction completion**
+
+* `write_all` must be the atomic boundary: write files → assemble actions → commit log entry → return row count; on error: abort without committing log entry. (File-first/log-second ordering is Delta’s transaction model.) ([Docs.rs][2])
+
+**F) Concurrency policy**
+
+* Select and configure a lock-enabled log store on object stores that require external coordination; treat commit conflicts as expected outcomes; implement deterministic retry/verification. ([GitHub][7])
+
+[1]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html?utm_source=chatgpt.com "TableProvider in datafusion::datasource - Rust"
+[2]: https://docs.rs/deltalake/latest/deltalake/datafusion/datasource/sink/trait.DataSink.html "DataSink in deltalake::datafusion::datasource::sink - Rust"
+[3]: https://delta-io.github.io/delta-rs/how-delta-lake-works/delta-lake-acid-transactions/?utm_source=chatgpt.com "Transactions - Delta Lake Documentation"
+[4]: https://docs.rs/crate/deltalake-core/0.30.1/source/src/operations/write/execution.rs "deltalake-core 0.30.1 - Docs.rs"
+[5]: https://docs.rs/deltalake-core/0.30.1/x86_64-unknown-linux-gnu/src/deltalake_core/delta_datafusion/mod.rs.html "mod.rs - source"
+[6]: https://docs.delta.io/concurrency-control/?utm_source=chatgpt.com "Concurrency control"
+[7]: https://github.com/delta-io/delta-rs/discussions/2426?utm_source=chatgpt.com "Concurrent write support · delta-io delta-rs"
+[8]: https://github.com/delta-io/delta-rs/issues/2279?utm_source=chatgpt.com "Successful writes return error when using concurrent writers"
+[9]: https://community.databricks.com/t5/get-started-discussions/concurrent-update-to-delta-throws-error/td-p/65599?utm_source=chatgpt.com "Concurrent Update to Delta - Throws error"
+[10]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html?utm_source=chatgpt.com "TableProvider in datafusion::catalog - Rust"
+
+## 7) Schema evolution, generated columns, constraints, column mapping: DataFusion-observed semantics (Delta protocol + delta-rs)
+
+### 7.1 Snapshot-scoped schema: what is versioned, what is “visible”
+
+**Delta snapshot definition (protocol):** the table state at version *v* (“snapshot”) includes `metaData` (schema, partition columns, table properties/config), plus the active-file set. Therefore, **schema is version-addressed**; any read/write plan is correct only w.r.t. the snapshot it was derived from. ([GitHub][1])
+
+**Implication for DataFusion:** a DataFusion `TableProvider` built from a snapshot will expose the **schema of that snapshot**; schema changes are new snapshots (new table versions), not “out-of-band Parquet schema drift.” ([GitHub][1])
+
+---
+
+### 7.2 Schema enforcement vs schema evolution: available modes, why consider, how to invoke (delta-rs)
+
+#### 7.2.1 Enforcement default (delta-rs)
+
+**Behavior:** writes reject schema mismatches by default. delta-rs docs: `write_deltalake` raises `ValueError` when incoming schema differs from existing table schema. ([Delta][2])
+
+**Why consider (vs “accept mismatched Parquet files”):**
+
+* enforcement gives a single authoritative schema in `metaData`, preventing “heterogeneous file schemas under one logical table.” ([Delta][2])
+
+#### 7.2.2 Evolution on write: `schema_mode ∈ {merge, overwrite}` (delta-rs)
+
+**`schema_mode="merge"` (delta-rs write path):**
+
+* adds new columns to the table schema; missing columns in incoming data are filled with `NULL`; supported for overwrite and also append operations. ([Delta][2])
+
+**`schema_mode="overwrite"` (delta-rs write path):**
+
+* replaces table schema with incoming schema (including dropping columns). ([Delta][2])
+
+**Why consider:**
+
+* `merge`: supports additive evolution while keeping existing files valid (older files have no values for new columns → logically `NULL`). ([Delta][2])
+* `overwrite`: supports explicit schema replacement where you want the table’s schema to become exactly the new schema. ([Delta][2])
+
+**How to invoke (delta-rs):**
+
+* on the write API surface, pass `schema_mode="merge"` or `schema_mode="overwrite"` alongside `mode={append|overwrite}`. ([Delta][2])
+
+#### 7.2.3 Explicit schema evolution DDL/ops (delta-rs): add columns / nested fields
+
+**Available operation:** delta-rs exposes an “Add Column” operation: “Add new columns and/or nested fields to a table.” ([Docs.rs][3])
+
+**How to invoke (Rust surface):**
+
+* use the operations API module `deltalake::operations::add_column` (entry builder `AddColumnBuilder`) and supply `StructField` definitions. ([Docs.rs][3])
+
+**Why consider (vs schema_mode merge-on-write):**
+
+* separates **schema mutation** (metadata commit) from **data mutation** (file adds), enabling dedicated schema-change transactions. (Schema is in `metaData` per snapshot.) ([GitHub][1])
+
+---
+
+### 7.3 Constraints + invariants: encoding, protocol gates, writer obligations, delta-rs operations
+
+#### 7.3.1 Column invariants (`delta.invariants`)
+
+**Encoding (protocol):**
+
+* a column’s schema metadata may contain key `delta.invariants`; value is a JSON string containing a boolean SQL expression at `expression.expression`. ([GitHub][1])
+
+**Protocol support gate:**
+
+* writer versions 2–6: invariants supported; writer version 7: feature name `invariants` must exist in `protocol.writerFeatures`. ([GitHub][1])
+
+**Writer requirement (protocol):**
+
+* writers **MUST abort** any transaction adding a row where an invariant evaluates to `false` or `null`. ([GitHub][1])
+
+**delta-rs surface:**
+
+* Rust type `Invariant { field_name, invariant_sql }` exists (core representation). ([Docs.rs][4])
+
+**Why consider (vs app-layer validation):**
+
+* invariant enforcement is transactional: violating rows prevent commit (table remains unchanged). ([GitHub][1])
+
+#### 7.3.2 CHECK constraints (`delta.constraints.{name}`)
+
+**Encoding (protocol):**
+
+* table `metaData.configuration` contains keys `delta.constraints.{name}`; value is a SQL expression string with Boolean return type; referenced columns must exist in schema. ([GitHub][1])
+
+**Protocol support gate:**
+
+* writer versions 3–6: supported; writer version 7: feature `checkConstraints` must exist in `protocol.writerFeatures`. ([GitHub][1])
+
+**Writer requirements (protocol):**
+
+* when adding a CHECK constraint: validate **existing** data satisfies it before committing the constraint. ([GitHub][1])
+* when writing new rows to a constrained table: all new rows must satisfy constraints; otherwise commit must fail and table remain unchanged. ([GitHub][1])
+
+**delta-rs operations API (Rust):**
+
+* delta-rs documents `DeltaOps(table).add_constraint().with_constraint(name, expr)` as the Rust method to attach a constraint. ([Delta][5])
+
+**Why consider:**
+
+* constraints become table-managed integrity checks; violations prevent partial ingestion. ([Delta Lake][6])
+
+**DataFusion-visible semantics:**
+
+* constraints/invariants are **write-time correctness conditions**; DataFusion reads expose columns and nullability but do not inherently encode these constraints as relational planner constraints (they remain metadata + enforcement obligations on writers). (Encoding + writer-abort rules above.) ([GitHub][1])
+
+---
+
+### 7.4 Generated columns: what is stored, how enforced, what DataFusion sees, delta-rs support surface
+
+#### 7.4.1 Protocol encoding + enforcement rule
+
+**Encoding (protocol):**
+
+* generated column is a normal column whose schema metadata may contain `delta.generationExpression` (SQL expression string). ([GitHub][1])
+
+**Protocol support gate:**
+
+* writer versions 4–6: supported; writer version 7: feature `generatedColumns` must exist in `protocol.writerFeatures`. ([GitHub][1])
+
+**Writer requirement (protocol):**
+
+* writers must enforce, for each written row, the condition `(<value> <=> <generation expression>) IS TRUE` where `<=>` is NULL-safe equality. ([GitHub][1])
+
+#### 7.4.2 delta-rs representation
+
+**Rust surface type:** `GeneratedColumn { name, generation_expr, validation_expr, data_type }`; `validation_expr` is “SQL string that must always evaluate to true”; implements `DataCheck`. ([Docs.rs][7])
+
+**Protocol support status signal (delta-rs):**
+
+* deltalake crate’s “Protocol Support Level” lists “Version 4 Generated Columns” as done. ([Docs.rs][8])
+
+#### 7.4.3 Write-time behavior (feature offers; usage constraints)
+
+**Feature offers (Databricks semantics):**
+
+* if values for generated columns are omitted on write, the engine computes them; if values are supplied, they must satisfy the NULL-safe equality constraint or the write fails. ([Databricks Documentation][9])
+* generated columns are stored like normal columns (“occupy storage”). ([Databricks Documentation][9])
+
+**Why consider (vs computing at query-time):**
+
+* persisted generated values remove repeated recomputation at read-time (the data is materialized in storage). ([Databricks Documentation][9])
+
+**DataFusion-visible semantics:**
+
+* on read: generated columns are indistinguishable from ordinary stored columns at the Arrow schema level. ([Databricks Documentation][9])
+* on write: any DataFusion→Delta writer must satisfy the protocol constraint (either compute values or supply values consistent with expression); otherwise commit must fail. ([GitHub][1])
+
+---
+
+### 7.5 Column mapping: rename/drop without rewriting Parquet; protocol gates; delta-rs status; DataFusion impact
+
+#### 7.5.1 Protocol model and required metadata
+
+**Purpose (protocol):**
+
+* column mapping enables renaming/dropping columns without rewriting data files and removes Parquet column-name restrictions; two modes: `name`, `id`. ([GitHub][1])
+
+**Metadata keys (protocol):**
+
+* each column (nested or leaf) has:
+
+  * `delta.columnMapping.physicalName` (unique physical name)
+  * `delta.columnMapping.id` (unique 32-bit integer id)
+* table property: `delta.columnMapping.mode ∈ {none, name, id}`. ([GitHub][1])
+
+**Protocol gates (protocol):**
+
+* readers: reader version 2, or reader version 3 with `columnMapping` table feature supported
+* writers: writer version 5/6, or writer version 7 with `columnMapping` feature supported. ([GitHub][1])
+
+**Enablement instruction (Delta docs):**
+
+* set `delta.minReaderVersion=2`, `delta.minWriterVersion=5`, `delta.columnMapping.mode=name`; upgrade is irreversible; cannot turn off. ([Delta Lake][10])
+
+**DDL effects (Delta docs):**
+
+* once enabled: `ALTER TABLE … RENAME COLUMN …` and `ALTER TABLE … DROP COLUMN(S) …` become supported schema-evolution operations without rewriting files. ([Delta Lake][10])
+
+#### 7.5.2 Writer requirements (protocol) relevant to non-Spark writers
+
+**When turning on column mapping (writer v7 path):**
+
+* write `protocol` action adding feature `columnMapping` to both `readerFeatures` and `writerFeatures`
+* write `metaData` action adding `delta.columnMapping.mode`. ([GitHub][1])
+
+**File-format obligations:** writers must produce Parquet compatible with mapping (protocol requires stable physical identity; details expanded in protocol’s “Writer Requirements for Column Mapping”). ([GitHub][1])
+
+#### 7.5.3 delta-rs status indicators (as of deltalake 0.30.1 docs)
+
+**Protocol support table (docs.rs):**
+
+* lists “Version 5 Column Mapping” and “Reader Version 2 Column Mapping” without “done” markers, while earlier protocol items show “done”; treat as “not claimed complete” by that documentation artifact. ([Docs.rs][8])
+  **Empirical friction signal:** recent delta-rs issue reports failures enabling column mapping due to missing `delta.columnMapping.id` annotations on fields. ([GitHub][11])
+
+#### 7.5.4 DataFusion-visible semantics
+
+* DataFusion schema should expose **logical column names**, while scan/write must resolve Parquet columns via **physical identity** (`physicalName`/`id`) per protocol. ([GitHub][1])
+* Rename/drop become metadata-only schema updates; engines that ignore column mapping will mis-resolve columns (protocol forbids ignoring required table features). ([GitHub][1])
+
+---
+
+### 7.6 Nested / complex type evolution: expected Delta semantics vs delta-rs observed issues
+
+#### 7.6.1 Delta (Spark semantics): arrays-of-struct evolution in MERGE
+
+* Delta `MERGE INTO` resolves struct fields by name and supports evolving schemas for arrays of structs when schema evolution is enabled; nested structs inside arrays evolve as well. ([Delta Lake][12])
+
+#### 7.6.2 delta-rs schema merge edge case (list-of-struct)
+
+* delta-rs issue #3339 reports schema-merge failures “since adoption of datafusion” when the existing schema contains a list-of-struct field and an append with `schema_mode="merge"` introduces a new field elsewhere in the nested struct. ([GitHub][13])
+
+#### 7.6.3 MERGE schema evolution divergence (delta-rs)
+
+* delta-rs issue #4009 documents that “MERGE with schema evolution does not add new columns” under `schema_mode="merge"` (columns remain absent, operation completes). ([GitHub][14])
+
+**Why this matters for a DataFusion-centric deployment:**
+
+* schema evolution correctness for nested types is not solely “Delta protocol”; it depends on the specific writer/merge implementation surface in delta-rs (append vs merge paths differ). ([Delta][2])
+
+---
+
+### 7.7 What DataFusion “sees” across these features (schema + planning contract)
+
+**Observed schema surface:**
+
+* Delta snapshot `metaData` defines the logical schema; DataFusion provider schema is snapshot-derived. ([GitHub][1])
+
+**Additive evolution semantics (null fill):**
+
+* delta-rs `schema_mode="merge"` specifies: new columns appended; missing columns filled with `NULL` (read-time semantics for older files implied by the merged schema). ([Delta][2])
+
+**Non-additive evolution semantics (rename/drop):**
+
+* requires column mapping; otherwise rename/drop implies Parquet rewrite to avoid “revival” ambiguity (motivating problem statement in Delta ecosystem). ([GitHub][1])
+
+**Constraint/generation semantics:**
+
+* constraints (`delta.constraints.*`), invariants (`delta.invariants`), generated columns (`delta.generationExpression`) are schema/config metadata plus writer-abort rules; DataFusion read schema does not automatically imply enforcement unless the writer path implements the checks. ([GitHub][1])
+
+---
+
+### 7.8 Recommended artifact: schema evolution + compatibility test suite (spec)
+
+#### 7.8.1 Golden schema ladder (versioned snapshots)
+
+Construct table versions `v0…vn` such that each version introduces exactly one feature delta; persist expected schema for each version:
+
+* v0: baseline primitive schema + partition columns
+* v1: add top-level column (add-column op; or schema_mode merge on append) ([Docs.rs][3])
+* v2: add nested struct field (supported in “add columns” DDL semantics in general; delta-rs supports “Add Column … nested fields”) ([Databricks Documentation][15])
+* v3: add CHECK constraint (`delta.constraints.*`) ([GitHub][1])
+* v4: add column invariant (`delta.invariants`) ([GitHub][1])
+* v5: introduce generated column (`delta.generationExpression`) ([GitHub][1])
+* v6: enable column mapping (`delta.columnMapping.mode`, ids/physical names), then rename + drop columns ([Delta Lake][10])
+* v7+: append with `schema_mode="merge"` where a list-of-struct exists (regression fixture for #3339) ([GitHub][13])
+
+#### 7.8.2 Read-path assertions (DataFusion planner sanity)
+
+For each version `vk`:
+
+* open snapshot at `vk` (version-pinned) and assert DataFusion-exposed schema equals golden schema for `vk` (schema is snapshot metadata). ([GitHub][1])
+* run `EXPLAIN` for representative projections/filters referencing:
+
+  * newly added columns (nullability and projection behavior)
+  * renamed columns (column mapping correctness, when supported)
+  * generated columns (treated as standard columns on read). ([Delta][2])
+
+#### 7.8.3 Write-path assertions (transactional enforcement)
+
+For each constraint/generation feature:
+
+* attempt a violating write; assert commit fails and table version does not advance (protocol abort requirement). ([GitHub][1])
+* attempt a satisfying write; assert commit succeeds and new snapshot contains expected metadata keys (`delta.constraints.*`, `delta.invariants`, `delta.generationExpression`). ([GitHub][1])
+
+#### 7.8.4 Nested evolution fixtures (divergence detection)
+
+* MERGE + schema evolution: explicit test that new columns are (or are not) added; track delta-rs behavior against the expected Delta semantics (issue #4009 indicates mismatch existed). ([Delta Lake][12])
+* list-of-struct merge: append with `schema_mode="merge"` adding a sibling nested field; assert either success with schema update or failure with classified error (issue #3339). ([GitHub][13])
+
+[1]: https://raw.githubusercontent.com/delta-io/delta/master/PROTOCOL.md "raw.githubusercontent.com"
+[2]: https://delta-io.github.io/delta-rs/usage/writing/ "https://delta-io.github.io/delta-rs/usage/writing/"
+[3]: https://docs.rs/deltalake/latest/deltalake/operations/add_column/struct.AddColumnBuilder.html "https://docs.rs/deltalake/latest/deltalake/operations/add_column/struct.AddColumnBuilder.html"
+[4]: https://docs.rs/deltalake/latest/deltalake/struct.Invariant.html "https://docs.rs/deltalake/latest/deltalake/struct.Invariant.html"
+[5]: https://delta-io.github.io/delta-rs/usage/constraints/ "Adding a constraint - Delta Lake Documentation"
+[6]: https://docs.delta.io/delta-constraints/ "https://docs.delta.io/delta-constraints/"
+[7]: https://docs.rs/deltalake/latest/deltalake/table/struct.GeneratedColumn.html "https://docs.rs/deltalake/latest/deltalake/table/struct.GeneratedColumn.html"
+[8]: https://docs.rs/crate/deltalake/latest "https://docs.rs/crate/deltalake/latest"
+[9]: https://docs.databricks.com/aws/en/delta/generated-columns "https://docs.databricks.com/aws/en/delta/generated-columns"
+[10]: https://docs.delta.io/delta-column-mapping/ "https://docs.delta.io/delta-column-mapping/"
+[11]: https://github.com/delta-io/delta-rs/issues/3936 "https://github.com/delta-io/delta-rs/issues/3936"
+[12]: https://docs.delta.io/delta-update/ "https://docs.delta.io/delta-update/"
+[13]: https://github.com/delta-io/delta-rs/issues/3339 "https://github.com/delta-io/delta-rs/issues/3339"
+[14]: https://github.com/delta-io/delta-rs/issues/4009 "https://github.com/delta-io/delta-rs/issues/4009"
+[15]: https://docs.databricks.com/aws/en/delta/update-schema "https://docs.databricks.com/aws/en/delta/update-schema"
+
+## 6) Maintenance operations (Optimize / Vacuum / Checkpoints): performance + correctness surfaces (Delta protocol + delta-rs)
+
+### 6.1 Maintenance taxonomy: data-plane rewrite vs storage GC vs metadata compaction
+
+**Delta protocol primitives (state + retention):**
+
+* Snapshot = `{protocol, metadata, active add files, tombstones(remove), txn ids}`; MVCC keeps multiple file generations; physical deletion is delayed and performed via vacuum after retention. ([GitHub][1])
+* `remove` actions create tombstones; tombstones expire when `current_time > remove_timestamp + retention_threshold`; physical deletion is permitted only after expiry. ([GitHub][1])
+
+**delta-rs exposed maintenance families (Rust API):**
+
+* **Data rewrite:** `DeltaTable::optimize() -> OptimizeBuilder` (bin-packing compaction; optional Z-order rewrite). ([Docs.rs][2])
+* **Storage GC:** `DeltaTable::vacuum() -> VacuumBuilder` (delete unreferenced files older than retention; mode selection; dry-run). ([Docs.rs][2])
+* **Metadata compaction + log cleanup:** checkpoint creation + expired-log cleanup (`deltalake::protocol::checkpoints::{create_checkpoint, cleanup_metadata, cleanup_expired_logs_for, …}`). ([Docs.rs][3])
+
+**Why consider (vs “raw Parquet directory” maintenance):**
+
+* Delta maintenance acts on *snapshot-defined membership* (active files + tombstones) rather than filesystem heuristics; rewrite operations generate `remove` actions; vacuum implements physical deletion consistent with retention; checkpoints compact log replay cost. ([GitHub][1])
+
+---
+
+### 6.2 OPTIMIZE: compaction + Z-order (what exists, why use, how to configure)
+
+#### 6.2.1 Optimize semantics (delta-rs, Rust)
+
+**Operation definition:**
+
+* Bin-packing rewrite: merges small data files into larger files; stated objective: reduce number of API calls required for reads (fewer objects opened/listed). ([Docs.rs][4])
+* Transactional effects:
+
+  * increments table version
+  * writes `remove` actions for replaced files
+  * does **not** delete physical files from storage; vacuum required for physical deletion. ([Docs.rs][4])
+
+**Concurrency rule (delta-rs, Rust):**
+
+* Optimize fails if a concurrent write removes files (e.g., overwrite); succeeds if concurrent writers only append. ([Docs.rs][4])
+
+#### 6.2.2 Optimize types (delta-rs)
+
+**Enum surface:**
+
+* `OptimizeType::Compact` (bin-pack files into predetermined bins)
+* `OptimizeType::ZOrder(Vec<String>)` (Z-order by provided columns). ([Docs.rs][5])
+
+**Feature offered (why consider):**
+
+* `Compact`: reduces file-count; reduces per-query object-store overhead (open/list/metadata IO) explicitly stated as “reduces API calls.” ([Docs.rs][4])
+* `ZOrder`: rewrites file layout using Z-order curve; goal: improve file skipping via stronger clustering on filter columns. ([Delta][6])
+* Delta Lake OSS docs note Z-order is **not idempotent** (repeated runs can keep reclustering files). ([Delta Lake][7])
+
+#### 6.2.3 OptimizeBuilder configuration surface (Rust)
+
+**Builder construction:** `DeltaTable::optimize()` (or `DeltaOps(table).optimize()`) returns `OptimizeBuilder<'a>`. ([Docs.rs][2])
+
+**Primary knobs (Rust):**
+
+* `with_type(OptimizeType)` (default = `Compact`). ([Docs.rs][8])
+* `with_filters(&[PartitionFilter])` (optimize a partition subset). ([Docs.rs][8])
+* `with_target_size(u64)` (target file size; if absent, read table property `delta.targetFileSize`, else internal default). ([Docs.rs][8])
+* `with_writer_properties(WriterProperties)` (Parquet writer properties). ([Docs.rs][8])
+* `with_commit_properties(CommitProperties)` (augment commitInfo metadata). ([Docs.rs][8])
+
+**Memory/disk control plane (Optimize-specific, Rust):**
+
+* `create_session_state_for_optimize(max_spill_size: Option<usize>, max_temp_directory_size: Option<u64>) -> SessionState` is explicitly documented as “recommended” for memory/disk limits; pass to `OptimizeBuilder` via `with_session_state`. ([Docs.rs][9])
+
+#### 6.2.4 Z-order invocation (Rust)
+
+**Required instruction sequence:**
+
+* Select `OptimizeType::ZOrder(vec![col…])` via `OptimizeBuilder::with_type`. delta-rs docs provide the canonical call shape using `DeltaOps(table).optimize().with_type(OptimizeType::ZOrder(...)).await`. ([Delta][6])
+
+---
+
+### 6.3 VACUUM: physical deletion, mode selection, retention enforcement, time-travel boundary
+
+#### 6.3.1 Vacuum semantics (Delta Lake + delta-rs)
+
+**Operation definition:**
+
+* Delete files no longer referenced by the table and older than retention threshold; running vacuum eliminates ability to time travel to versions older than the retention window if required data files are deleted. ([Docs.rs][10])
+
+**Data-vs-log distinction (Delta Lake docs):**
+
+* `vacuum` deletes **data files**; does **not** delete log files; log files are deleted asynchronously after checkpoint operations; default log retention 30 days via `delta.logRetentionDuration`. ([Delta Lake][11])
+
+**Retention parameters (Delta Lake docs):**
+
+* `delta.deletedFileRetentionDuration` controls data-file retention for vacuum (default 7 days).
+* `delta.logRetentionDuration` controls transaction-log retention (default 30 days). ([Databricks Community][12])
+
+#### 6.3.2 VacuumBuilder (Rust) + hard knobs
+
+**Builder surface (methods):**
+
+* `with_retention_period(TimeDelta)` (override default retention). ([Docs.rs][13])
+* `with_keep_versions(&[i64])` (pin specific table versions; prevent deletion of files required by those versions). ([Docs.rs][13])
+* `with_mode(VacuumMode)` (override default mode; docs.rs notes “default vacuum mode (lite)”). ([Docs.rs][13])
+* `with_dry_run(bool)` (determine deletion set without deleting). ([Docs.rs][13])
+* `with_enforce_retention_duration(bool)` (validate specified retention ≥ table minimum). ([Docs.rs][13])
+* `with_commit_properties(CommitProperties)` (commitInfo metadata). ([Docs.rs][13])
+* `with_custom_execute_handler(Arc<dyn CustomExecuteHandler>)` (pre/post execution hooks). ([Docs.rs][13])
+
+**Execution contract:**
+
+* `VacuumBuilder: IntoFuture<Output = Result<(DeltaTable, VacuumMetrics), DeltaTableError>>` (returns updated table + metrics). ([Docs.rs][13])
+
+#### 6.3.3 Vacuum modes (delta-rs semantics)
+
+**Enum surface (VacuumMode):**
+
+* `Lite`: removes files referenced by `_delta_log` `remove` actions (tombstoned files). ([Docs.rs][14])
+* `Full`: scans storage and removes all data files not actively referenced in `_delta_log` (e.g., stray Parquet not present as `add`). ([Docs.rs][14])
+
+**Why consider (Lite vs Full):**
+
+* `Lite` avoids full directory scan requirement (storage listing), depending on tombstone set; `Full` includes “files not referenced by the log.” ([Docs.rs][14])
+
+#### 6.3.4 Multi-writer gating (explicit requirement envelope)
+
+**Delta Lake safety requirement (Databricks docs):**
+
+* Retention interval must exceed the longest concurrent transaction / stale reader window; otherwise vacuum can delete files still in use; Databricks documents a retention safety check and warns about corruption if active files are removed prematurely. ([Databricks Documentation][15])
+
+**delta-rs enforcement analog:**
+
+* `with_enforce_retention_duration(true)` implements a minimum-retention check against the table’s configured minimum (retention validation hook). ([Docs.rs][13])
+
+---
+
+### 6.4 Checkpoints + log growth: format, lifecycle, hazards, delta-rs surfaces
+
+#### 6.4.1 Checkpoint definition (Delta protocol)
+
+**Checkpoint role:**
+
+* Stored in `_delta_log`; created at any time for any committed version.
+* Contains “complete replay of all actions up to and including the checkpointed version, with invalid actions removed,” plus unexpired remove tombstones; enables readers to short-cut log replay; enables metadata cleanup to delete expired JSON log entries. ([GitHub][1])
+
+**Checkpoint selection constraints:**
+
+* Readers should prefer newest complete checkpoint; for time travel, checkpoint must not be newer than target version. ([GitHub][1])
+
+**Checkpoint types (protocol):**
+
+* Classic checkpoint: `n.checkpoint.parquet`
+* Multi-part checkpoint: `n.checkpoint.o.p.parquet` (readers must ignore missing parts; multi-part non-atomic)
+* UUID-named V2 checkpoint: `n.checkpoint.u.{json|parquet}` + optional sidecars; v2-checkpoint feature forbids multi-part; writers encouraged to avoid multi-part. ([GitHub][1])
+
+**Last checkpoint pointer:**
+
+* `_delta_log/_last_checkpoint` reduces directory listing; provides recent checkpoint version for paginated/lexicographic listing systems. ([GitHub][1])
+
+#### 6.4.2 delta-rs checkpoint + cleanup APIs (Rust)
+
+**Module:** `deltalake::protocol::checkpoints` (“Implementation for writing delta checkpoints”). ([Docs.rs][3])
+
+**Functions exposed (docs.rs):**
+
+* `create_checkpoint`: create checkpoint at current table version.
+* `cleanup_metadata`: delete expired log files before a given version; retention based on `logRetentionDuration` (30 days default).
+* `cleanup_expired_logs_for`: delete expired log files up to safe checkpoint boundary.
+* `create_checkpoint_from_table_url_and_cleanup(url, version, cleanup)`: optionally runs metadata cleanup; if cleanup param empty, uses table property `enableExpiredLogCleanup`. ([Docs.rs][3])
+
+**Delta Lake docs linkage (log cleanup trigger):**
+
+* Log files are deleted asynchronously after checkpoint operations; default log retention 30 days (`delta.logRetentionDuration`). ([Delta Lake][11])
+
+#### 6.4.3 Operational hazards (observed delta-rs issue patterns)
+
+**Checkpoint memory spike (delta-rs):**
+
+* Issue report: checkpoint file ~1.4GB; memory spikes from ~600Mi to ~7Gi at checkpoint creation cadence (“every 100 batches” in the described workload). ([GitHub][16])
+
+**Checkpoint correctness hazard under partial snapshot (“without_files”):**
+
+* Issue report: reading table with `without_files` to reduce memory, then appending; during automatic checkpoint creation, older committed files removed because they are not in the snapshot and thus omitted from checkpoint. ([GitHub][17])
+
+**Cleanup safety hazard:**
+
+* Issue report: `cleanup_metadata` can delete the most recent checkpoint under aggressive retention; reported as table corruption risk. ([GitHub][18])
+
+**Derived constraint (implementation requirement, not a recommendation):**
+
+* Any checkpoint writer must include the full reconciled action set (live `add` actions + required tombstones) as specified by protocol; omitting live adds yields invalid state materialization. ([GitHub][1])
+
+---
+
+### 6.5 “Table maintenance playbook” artifact (service-oriented spec)
+
+#### 6.5.1 Policy schema (serialize as JSON/YAML; embed in catalog)
+
+**`TableMaintenancePolicy` (minimal fields):**
+
+* `table_uri: string`
+* `optimize`:
+
+  * `enabled: bool`
+  * `type: "compact" | "zorder"`
+  * `zorder_cols: [string]` (required iff type=zorder) ([Docs.rs][5])
+  * `partition_filters: [PartitionFilter]` (optional) ([Docs.rs][8])
+  * `target_size_bytes: u64 | null` (null ⇒ use `delta.targetFileSize`/default) ([Docs.rs][19])
+  * `writer_properties: {...} | null` ([Docs.rs][8])
+  * `session_state_limits`:
+
+    * `max_spill_size_bytes: usize | null`
+    * `max_temp_directory_size_bytes: u64 | null` ([Docs.rs][9])
+  * `concurrency_assumption: "append_only" | "mixed"` (used to predict optimize conflict likelihood) ([Docs.rs][4])
+* `vacuum`:
+
+  * `enabled: bool`
+  * `mode: "lite" | "full"` ([Docs.rs][14])
+  * `dry_run_default: bool` (delta-rs defaults dry-run in Python docs; Rust exposes `with_dry_run`) ([Delta][20])
+  * `retention_period: duration | null` (null ⇒ `delta.deletedFileRetentionDuration`/default 7d) ([Docs.rs][10])
+  * `enforce_retention_duration: bool` ([Docs.rs][13])
+  * `keep_versions: [int64] | null` (pin versions required for reproducibility/time-travel invariants) ([Docs.rs][13])
+* `checkpoints`:
+
+  * `enabled: bool`
+  * `log_retention: duration` (maps to `delta.logRetentionDuration`) ([Delta Lake][11])
+  * `enable_expired_log_cleanup: bool | null` (maps to `enableExpiredLogCleanup` usage in checkpoint cleanup path) ([Docs.rs][21])
+  * `run_cleanup_metadata: bool` (if true, call `cleanup_metadata` after checkpoint) ([Docs.rs][3])
+
+#### 6.5.2 Execution procedure (deterministic steps)
+
+1. **Optimize execution (rewrite stage):**
+
+   * Build `OptimizeBuilder` from `DeltaTable::optimize()`.
+   * Set `with_type(Compact|ZOrder(cols))`.
+   * Optionally set `with_filters(partition_filters)` and `with_target_size(target_size_bytes)`.
+   * If large rewrites expected, construct `SessionState = create_session_state_for_optimize(max_spill_size, max_temp_directory_size)` and pass via `with_session_state`. ([Docs.rs][8])
+2. **Vacuum execution (physical delete stage):**
+
+   * Build `VacuumBuilder` from `DeltaTable::vacuum()`.
+   * Set `with_mode(Lite|Full)`, `with_retention_period(...)` (or default), `with_dry_run(...)`, `with_enforce_retention_duration(...)`, `with_keep_versions(...)` as required by reproducibility constraints. ([Docs.rs][13])
+3. **Checkpoint + log cleanup (metadata compaction stage):**
+
+   * Create checkpoint at a known version; run `cleanup_metadata` / `cleanup_expired_logs_for` bounded by safe checkpoint boundary semantics. ([Docs.rs][3])
+4. **Guard conditions (must be encoded, not ad-hoc):**
+
+   * If running multi-writer, do not set retention below maximum concurrent transaction age; enforce retention check (`with_enforce_retention_duration(true)`; Databricks retention safety constraints documented). ([Databricks Documentation][15])
+   * Do not checkpoint from a partially materialized snapshot that omits live `add` actions (observed failure mode under `without_files`). ([GitHub][17])
+
+[1]: https://raw.githubusercontent.com/delta-io/delta/master/PROTOCOL.md "raw.githubusercontent.com"
+[2]: https://docs.rs/deltalake/latest/deltalake/table/struct.DeltaTable.html "DeltaTable in deltalake::table - Rust"
+[3]: https://docs.rs/deltalake/latest/deltalake/protocol/checkpoints/index.html "deltalake::protocol::checkpoints - Rust"
+[4]: https://docs.rs/deltalake/latest/deltalake/operations/optimize/index.html "deltalake::operations::optimize - Rust"
+[5]: https://docs.rs/deltalake/latest/deltalake/operations/optimize/enum.OptimizeType.html "OptimizeType in deltalake::operations::optimize - Rust"
+[6]: https://delta-io.github.io/delta-rs/usage/optimize/delta-lake-z-order/ "Z Order - Delta Lake Documentation"
+[7]: https://docs.delta.io/optimizations-oss/?utm_source=chatgpt.com "Optimizations"
+[8]: https://docs.rs/deltalake/latest/deltalake/operations/optimize/struct.OptimizeBuilder.html "OptimizeBuilder in deltalake::operations::optimize - Rust"
+[9]: https://docs.rs/deltalake/latest/deltalake/operations/optimize/fn.create_session_state_for_optimize.html "create_session_state_for_optimize in deltalake::operations::optimize - Rust"
+[10]: https://docs.rs/deltalake/latest/deltalake/operations/vacuum/index.html "deltalake::operations::vacuum - Rust"
+[11]: https://docs.delta.io/delta-utility/ "Table utility commands | Delta Lake"
+[12]: https://community.databricks.com/t5/data-engineering/understanding-file-retention-with-vacuum/td-p/25822?utm_source=chatgpt.com "Understanding file retention with Vacuum"
+[13]: https://docs.rs/deltalake/latest/deltalake/operations/vacuum/struct.VacuumBuilder.html "VacuumBuilder in deltalake::operations::vacuum - Rust"
+[14]: https://docs.rs/deltalake/latest/deltalake/operations/vacuum/enum.VacuumMode.html "VacuumMode in deltalake::operations::vacuum - Rust"
+[15]: https://docs.databricks.com/aws/en/sql/language-manual/delta-vacuum?utm_source=chatgpt.com "VACUUM | Databricks on AWS"
+[16]: https://github.com/delta-io/delta-rs/issues/2628 "Large Memory Spike At Checkpoint · Issue #2628 · delta-io/delta-rs · GitHub"
+[17]: https://github.com/delta-io/delta-rs/issues/3049 "Write operations with without_files lead to data loss due to checkpointing · Issue #3049 · delta-io/delta-rs · GitHub"
+[18]: https://github.com/delta-io/delta-rs/issues/2174?utm_source=chatgpt.com "cleanup_metadata can potentially delete most recent ..."
+[19]: https://docs.rs/deltalake/latest/deltalake/operations/optimize/struct.OptimizeBuilder.html?utm_source=chatgpt.com "OptimizeBuilder in deltalake::operations::optimize - Rust"
+[20]: https://delta-io.github.io/delta-rs/python/usage.html "Usage — delta-rs  documentation"
+[21]: https://docs.rs/deltalake-core/latest/deltalake_core/protocol/checkpoints/index.html?utm_source=chatgpt.com "deltalake_core::protocol::checkpoints - Rust"

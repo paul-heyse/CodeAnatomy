@@ -10,10 +10,9 @@ from typing import TYPE_CHECKING, cast, overload
 import pyarrow as pa
 from datafusion.dataframe import DataFrame
 
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.core.ordering import Ordering, OrderingLevel
-from arrowdsl.schema.metadata import ordering_metadata_spec
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.core.ordering import Ordering, OrderingLevel
+from arrow_utils.schema.metadata import SchemaMetadataSpec, ordering_metadata_spec
 
 if TYPE_CHECKING:
     from datafusion_engine.view_artifacts import DataFusionViewArtifact

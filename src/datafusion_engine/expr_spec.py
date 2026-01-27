@@ -6,8 +6,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from arrowdsl.core.expr_types import ScalarValue
-from arrowdsl.core.interop import ScalarLike
+from arrow_utils.core.expr_types import ScalarValue
+from arrow_utils.core.interop import ScalarLike
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr

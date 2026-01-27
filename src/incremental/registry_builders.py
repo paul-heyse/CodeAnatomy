@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrow_utils.schema.metadata import SchemaMetadataSpec
 from incremental.registry_rows import ContractRow, DatasetRow
 from schema_spec.registration import DatasetRegistration, register_dataset
 from schema_spec.system import make_contract_spec, make_table_spec

@@ -9,26 +9,26 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from hamilton.function_modifiers import pipe_input, source, step, tag
 
-from arrowdsl.core.interop import TableLike as ArrowTableLike
-from arrowdsl.schema.abi import schema_fingerprint
-from arrowdsl.schema.build import empty_table
+from arrow_utils.core.interop import TableLike as ArrowTableLike
+from arrow_utils.schema.abi import schema_fingerprint
+from arrow_utils.schema.build import empty_table
 from core_types import JsonDict
 from datafusion_engine.execution_facade import ExecutionResult
-from datafusion_engine.finalize import Contract, normalize_only
+from datafusion_engine.finalize import Contract, FinalizeOptions, normalize_only
 from datafusion_engine.view_registry import ensure_view_graph
+from engine.runtime_profile import RuntimeProfileSpec
 from relspec.evidence import EvidenceCatalog
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
 
 if TYPE_CHECKING:
-    from arrowdsl.core.execution_context import ExecutionContext
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.scan_planner import ScanUnit
     from engine.session import EngineSession
 else:
-    ExecutionContext = object
     DataFusionPlanBundle = object
     DataFusionRuntimeProfile = object
+    SessionRuntime = object
     ScanUnit = object
     EngineSession = object
 
@@ -84,28 +84,59 @@ def _finalize_cpg_table(
     table: TableLike,
     *,
     name: str,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
 ) -> TableLike:
     schema_names = getattr(table.schema, "names", [])
     if not schema_names:
         return empty_table(table.schema)
     contract = Contract(name=name, schema=table.schema)
-    return normalize_only(cast("ArrowTableLike", table), contract=contract, ctx=ctx)
+    return normalize_only(
+        cast("ArrowTableLike", table),
+        contract=contract,
+        options=FinalizeOptions(
+            runtime_profile=runtime_profile_spec.datafusion,
+            determinism_tier=runtime_profile_spec.determinism_tier,
+        ),
+    )
 
 
 @tag(layer="execution", artifact="cpg_nodes_finalize", kind="stage")
-def _finalize_cpg_nodes_stage(table: TableLike, ctx: ExecutionContext) -> TableLike:
-    return _finalize_cpg_table(table, name="cpg_nodes_v1", ctx=ctx)
+def _finalize_cpg_nodes_stage(
+    table: TableLike,
+    *,
+    runtime_profile_spec: RuntimeProfileSpec,
+) -> TableLike:
+    return _finalize_cpg_table(
+        table,
+        name="cpg_nodes_v1",
+        runtime_profile_spec=runtime_profile_spec,
+    )
 
 
 @tag(layer="execution", artifact="cpg_edges_finalize", kind="stage")
-def _finalize_cpg_edges_stage(table: TableLike, ctx: ExecutionContext) -> TableLike:
-    return _finalize_cpg_table(table, name="cpg_edges_v1", ctx=ctx)
+def _finalize_cpg_edges_stage(
+    table: TableLike,
+    *,
+    runtime_profile_spec: RuntimeProfileSpec,
+) -> TableLike:
+    return _finalize_cpg_table(
+        table,
+        name="cpg_edges_v1",
+        runtime_profile_spec=runtime_profile_spec,
+    )
 
 
 @tag(layer="execution", artifact="cpg_props_finalize", kind="stage")
-def _finalize_cpg_props_stage(table: TableLike, ctx: ExecutionContext) -> TableLike:
-    return _finalize_cpg_table(table, name="cpg_props_v1", ctx=ctx)
+def _finalize_cpg_props_stage(
+    table: TableLike,
+    *,
+    runtime_profile_spec: RuntimeProfileSpec,
+) -> TableLike:
+    return _finalize_cpg_table(
+        table,
+        name="cpg_props_v1",
+        runtime_profile_spec=runtime_profile_spec,
+    )
 
 
 def _record_output(
@@ -147,7 +178,8 @@ def runtime_artifacts(
         Runtime artifacts container.
     """
     return RuntimeArtifacts(
-        execution=engine_session.ctx,
+        execution=engine_session.df_runtime(),
+        determinism_tier=engine_session.surface_policy.determinism_tier,
         rulepack_param_values=relspec_param_values,
     )
 
@@ -224,15 +256,12 @@ def _ensure_scan_overrides(
     *,
     scan_context: PlanScanInputs,
 ) -> DataFusionRuntimeProfile:
-    exec_ctx = runtime.execution
-    if exec_ctx is None:
+    session_runtime = runtime.execution
+    if session_runtime is None:
         msg = "RuntimeArtifacts.execution must be configured for view execution."
         raise ValueError(msg)
-    profile = exec_ctx.runtime.datafusion
-    if profile is None:
-        msg = "DataFusion runtime profile is required for view execution."
-        raise ValueError(msg)
-    session = profile.session_context()
+    profile = session_runtime.profile
+    session = session_runtime.ctx
     refresh_requested = (
         scan_context.scan_units_hash is not None
         and runtime.scan_override_hash != scan_context.scan_units_hash
@@ -406,7 +435,7 @@ def _execute_and_record(
 
 
 @pipe_input(
-    step(_finalize_cpg_nodes_stage, ctx=source("ctx")),
+    step(_finalize_cpg_nodes_stage, runtime_profile_spec=source("runtime_profile_spec")),
     on_input="cpg_nodes_v1",
     namespace="cpg_nodes_final",
 )
@@ -423,7 +452,7 @@ def cpg_nodes_final(cpg_nodes_v1: TableLike) -> TableLike:
 
 
 @pipe_input(
-    step(_finalize_cpg_edges_stage, ctx=source("ctx")),
+    step(_finalize_cpg_edges_stage, runtime_profile_spec=source("runtime_profile_spec")),
     on_input="cpg_edges_v1",
     namespace="cpg_edges_final",
 )
@@ -440,7 +469,7 @@ def cpg_edges_final(cpg_edges_v1: TableLike) -> TableLike:
 
 
 @pipe_input(
-    step(_finalize_cpg_props_stage, ctx=source("ctx")),
+    step(_finalize_cpg_props_stage, runtime_profile_spec=source("runtime_profile_spec")),
     on_input="cpg_props_v1",
     namespace="cpg_props_final",
 )

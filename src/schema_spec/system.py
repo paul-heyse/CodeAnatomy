@@ -32,9 +32,10 @@ from arrow_utils.schema.metadata import (
     metadata_spec_from_schema,
     ordering_metadata_spec,
 )
-from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import CastErrorPolicy, SchemaEvolutionSpec, register_schema_extensions
-from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
+from arrow_utils.schema.build import register_schema_extensions
+from datafusion_engine.schema_alignment import CastErrorPolicy, SchemaEvolutionSpec
+from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
+from datafusion_engine.schema_validation import ArrowValidationOptions, validate_table
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.finalize import Contract, FinalizeContext
 from datafusion_engine.kernel_specs import DedupeSpec, SortKey

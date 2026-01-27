@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import TypedDict, Unpack
 
 from arrow_utils.schema.metadata import SchemaMetadataSpec
-from arrowdsl.schema.schema import SchemaEvolutionSpec
-from arrowdsl.schema.validation import ArrowValidationOptions
+from datafusion_engine.schema_alignment import SchemaEvolutionSpec
+from datafusion_engine.schema_validation import ArrowValidationOptions
 from datafusion_engine.expr_spec import ExprSpec
 from datafusion_engine.query_spec import QuerySpec
 from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle, TableSchemaSpec

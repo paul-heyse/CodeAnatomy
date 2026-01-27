@@ -532,11 +532,57 @@ fn string_int_string_signature(volatility: Volatility) -> Signature {
     Signature::one_of(expand_string_signatures(&arg_types), volatility)
 }
 
-fn variadic_any_signature(min_args: usize, max_args: usize, volatility: Volatility) -> Signature {
-    let signatures = (min_args..=max_args)
-        .map(TypeSignature::Any)
-        .collect::<Vec<_>>();
-    Signature::one_of(signatures, volatility)
+fn user_defined_signature(volatility: Volatility) -> Signature {
+    Signature::one_of(vec![TypeSignature::UserDefined], volatility)
+}
+
+fn variadic_any_signature(_min_args: usize, _max_args: usize, volatility: Volatility) -> Signature {
+    user_defined_signature(volatility)
+}
+
+fn expect_arg_len(name: &str, arg_types: &[DataType], min: usize, max: usize) -> Result<usize> {
+    let count = arg_types.len();
+    if count < min || count > max {
+        return Err(DataFusionError::Plan(format!(
+            "{name} expects between {min} and {max} arguments"
+        )));
+    }
+    Ok(count)
+}
+
+fn expect_arg_len_exact(name: &str, arg_types: &[DataType], expected: usize) -> Result<()> {
+    if arg_types.len() != expected {
+        return Err(DataFusionError::Plan(format!(
+            "{name} expects {expected} arguments"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_struct_arg(name: &str, arg_type: &DataType) -> Result<()> {
+    if matches!(arg_type, DataType::Struct(_)) {
+        Ok(())
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "{name} expects a struct input"
+        )))
+    }
+}
+
+fn ensure_map_arg(name: &str, arg_type: &DataType) -> Result<()> {
+    if matches!(arg_type, DataType::Map(_, _)) {
+        Ok(())
+    } else {
+        Err(DataFusionError::Plan(format!("{name} expects a map input")))
+    }
+}
+
+fn ensure_list_arg(name: &str, arg_type: &DataType) -> Result<()> {
+    if matches!(arg_type, DataType::List(_)) {
+        Ok(())
+    } else {
+        Err(DataFusionError::Plan(format!("{name} expects a list input")))
+    }
 }
 
 fn scalar_str<'a>(value: &'a ScalarValue, message: &str) -> Result<Option<&'a str>> {
@@ -945,6 +991,15 @@ impl ScalarUDFImpl for CpgScoreUdf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() < 2 || arg_types.len() > 65 {
+            return Err(DataFusionError::Plan(
+                "stable_id_parts expects between two and sixty-five arguments".into(),
+            ));
+        }
+        Ok(vec![DataType::Utf8; arg_types.len()])
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args
             .arg_fields
@@ -993,10 +1048,7 @@ struct ArrowMetadataUdf {
 impl ArrowMetadataUdf {
     fn new() -> Self {
         let signature = signature_with_names(
-            Signature::one_of(
-                vec![TypeSignature::Any(1), TypeSignature::Any(2)],
-                Volatility::Immutable,
-            ),
+            user_defined_signature(Volatility::Immutable),
             &["expr", "key"],
         );
         Self {
@@ -1026,6 +1078,16 @@ impl ScalarUDFImpl for ArrowMetadataUdf {
 
     fn signature(&self) -> &Signature {
         self.signature.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        match arg_types.len() {
+            1 => Ok(vec![arg_types[0].clone()]),
+            2 => Ok(vec![arg_types[0].clone(), DataType::Utf8]),
+            _ => Err(DataFusionError::Plan(
+                "arrow_metadata requires 1 or 2 arguments".into(),
+            )),
+        }
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -1120,14 +1182,14 @@ pub fn arrow_metadata_udf() -> ScalarUDF {
 }
 
 pub fn stable_hash64_udf() -> ScalarUDF {
-    let signature = signature_with_names(Signature::string(1, Volatility::Stable), &["value"]);
+    let signature = signature_with_names(Signature::string(1, Volatility::Immutable), &["value"]);
     ScalarUDF::new_from_shared_impl(Arc::new(StableHash64Udf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn stable_hash128_udf() -> ScalarUDF {
-    let signature = signature_with_names(Signature::string(1, Volatility::Stable), &["value"]);
+    let signature = signature_with_names(Signature::string(1, Volatility::Immutable), &["value"]);
     ScalarUDF::new_from_shared_impl(Arc::new(StableHash128Udf {
         signature: SignatureEqHash::new(signature),
     }))
@@ -1135,7 +1197,7 @@ pub fn stable_hash128_udf() -> ScalarUDF {
 
 pub fn prefixed_hash64_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::string(2, Volatility::Stable),
+        Signature::string(2, Volatility::Immutable),
         &["prefix", "value"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(PrefixedHash64Udf {
@@ -1145,7 +1207,7 @@ pub fn prefixed_hash64_udf() -> ScalarUDF {
 
 pub fn stable_id_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        Signature::string(2, Volatility::Stable),
+        Signature::string(2, Volatility::Immutable),
         &["prefix", "value"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(StableIdUdf {
@@ -1154,63 +1216,63 @@ pub fn stable_id_udf() -> ScalarUDF {
 }
 
 pub fn stable_id_parts_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(2, 65, Volatility::Stable);
+    let signature = variadic_any_signature(2, 65, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(StableIdPartsUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn prefixed_hash_parts64_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(2, 65, Volatility::Stable);
+    let signature = variadic_any_signature(2, 65, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(PrefixedHashParts64Udf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn stable_hash_any_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(1, 3, Volatility::Stable);
+    let signature = variadic_any_signature(1, 3, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(StableHashAnyUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn span_make_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(2, 5, Volatility::Stable);
+    let signature = variadic_any_signature(2, 5, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(SpanMakeUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn span_len_udf() -> ScalarUDF {
-    let signature = Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Stable);
+    let signature = user_defined_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(SpanLenUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn span_overlaps_udf() -> ScalarUDF {
-    let signature = Signature::one_of(vec![TypeSignature::Any(2)], Volatility::Stable);
+    let signature = user_defined_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(SpanOverlapsUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn span_contains_udf() -> ScalarUDF {
-    let signature = Signature::one_of(vec![TypeSignature::Any(2)], Volatility::Stable);
+    let signature = user_defined_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(SpanContainsUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn span_id_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(4, 5, Volatility::Stable);
+    let signature = variadic_any_signature(4, 5, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(SpanIdUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn utf8_normalize_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(1, 4, Volatility::Stable);
+    let signature = variadic_any_signature(1, 4, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(Utf8NormalizeUdf {
         signature: SignatureEqHash::new(signature),
     }))
@@ -1220,7 +1282,7 @@ pub fn utf8_null_if_blank_udf() -> ScalarUDF {
     let signature = signature_with_names(
         Signature::one_of(
             expand_string_signatures(&[DataType::Utf8]),
-            Volatility::Stable,
+            Volatility::Immutable,
         ),
         &["value"],
     );
@@ -1230,42 +1292,42 @@ pub fn utf8_null_if_blank_udf() -> ScalarUDF {
 }
 
 pub fn qname_normalize_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(1, 3, Volatility::Stable);
+    let signature = variadic_any_signature(1, 3, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(QNameNormalizeUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn map_get_default_udf() -> ScalarUDF {
-    let signature = Signature::one_of(vec![TypeSignature::Any(3)], Volatility::Stable);
+    let signature = user_defined_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(MapGetDefaultUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn map_normalize_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(1, 3, Volatility::Stable);
+    let signature = variadic_any_signature(1, 3, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(MapNormalizeUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn list_compact_udf() -> ScalarUDF {
-    let signature = Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Stable);
+    let signature = user_defined_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(ListCompactUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn list_unique_sorted_udf() -> ScalarUDF {
-    let signature = Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Stable);
+    let signature = user_defined_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(ListUniqueSortedUdf {
         signature: SignatureEqHash::new(signature),
     }))
 }
 
 pub fn struct_pick_udf() -> ScalarUDF {
-    let signature = variadic_any_signature(2, 7, Volatility::Stable);
+    let signature = variadic_any_signature(2, 7, Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(StructPickUdf {
         signature: SignatureEqHash::new(signature),
     }))
@@ -1275,7 +1337,7 @@ pub fn cdf_change_rank_udf() -> ScalarUDF {
     let signature = signature_with_names(
         Signature::one_of(
             expand_string_signatures(&[DataType::Utf8]),
-            Volatility::Stable,
+            Volatility::Immutable,
         ),
         &["change_type"],
     );
@@ -1288,7 +1350,7 @@ pub fn cdf_is_upsert_udf() -> ScalarUDF {
     let signature = signature_with_names(
         Signature::one_of(
             expand_string_signatures(&[DataType::Utf8]),
-            Volatility::Stable,
+            Volatility::Immutable,
         ),
         &["change_type"],
     );
@@ -1301,7 +1363,7 @@ pub fn cdf_is_delete_udf() -> ScalarUDF {
     let signature = signature_with_names(
         Signature::one_of(
             expand_string_signatures(&[DataType::Utf8]),
-            Volatility::Stable,
+            Volatility::Immutable,
         ),
         &["change_type"],
     );
@@ -1312,7 +1374,7 @@ pub fn cdf_is_delete_udf() -> ScalarUDF {
 
 pub fn col_to_byte_udf() -> ScalarUDF {
     let signature = signature_with_names(
-        string_int_string_signature(Volatility::Stable),
+        string_int_string_signature(Volatility::Immutable),
         &["line_text", "col", "col_unit"],
     );
     ScalarUDF::new_from_shared_impl(Arc::new(ColToByteUdf {
@@ -1610,6 +1672,15 @@ impl ScalarUDFImpl for StableHash64Udf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() < 2 || arg_types.len() > 65 {
+            return Err(DataFusionError::Plan(
+                "prefixed_hash_parts64 expects between two and sixty-five arguments".into(),
+            ));
+        }
+        Ok(vec![DataType::Utf8; arg_types.len()])
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args
             .arg_fields
@@ -1689,6 +1760,23 @@ impl ScalarUDFImpl for StableHash128Udf {
 
     fn signature(&self) -> &Signature {
         self.signature.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.is_empty() || arg_types.len() > 3 {
+            return Err(DataFusionError::Plan(
+                "stable_hash_any expects between one and three arguments".into(),
+            ));
+        }
+        let mut coerced = Vec::with_capacity(arg_types.len());
+        coerced.push(DataType::Utf8);
+        if arg_types.len() >= 2 {
+            coerced.push(DataType::Boolean);
+        }
+        if arg_types.len() >= 3 {
+            coerced.push(DataType::Utf8);
+        }
+        Ok(coerced)
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -1774,6 +1862,12 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
 
     fn signature(&self) -> &Signature {
         self.signature.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        expect_arg_len_exact(self.name(), arg_types, 1)?;
+        ensure_struct_arg(self.name(), &arg_types[0])?;
+        Ok(vec![arg_types[0].clone()])
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -1917,6 +2011,15 @@ impl ScalarUDFImpl for StableIdUdf {
 
     fn signature(&self) -> &Signature {
         self.signature.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if !(4..=5).contains(&arg_types.len()) {
+            return Err(DataFusionError::Plan(
+                "span_id expects four or five arguments".into(),
+            ));
+        }
+        Ok(vec![DataType::Utf8; arg_types.len()])
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -2456,13 +2559,36 @@ impl ScalarUDFImpl for SpanMakeUdf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if !(2..=5).contains(&arg_types.len()) {
+            return Err(DataFusionError::Plan(
+                "span_make expects between two and five arguments".into(),
+            ));
+        }
+        let mut coerced = Vec::with_capacity(arg_types.len());
+        coerced.push(DataType::Int64);
+        coerced.push(DataType::Int64);
+        if arg_types.len() >= 3 {
+            coerced.push(DataType::Int32);
+        }
+        if arg_types.len() >= 4 {
+            coerced.push(DataType::Utf8);
+        }
+        if arg_types.len() >= 5 {
+            coerced.push(DataType::Boolean);
+        }
+        Ok(coerced)
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
-        Ok(Arc::new(Field::new(
-            self.name(),
-            span_struct_type(),
-            nullable,
-        )))
+        let mut field = Field::new(self.name(), span_struct_type(), nullable);
+        if let Some(first) = args.arg_fields.first() {
+            if !first.metadata().is_empty() {
+                field = field.with_metadata(first.metadata().clone());
+            }
+        }
+        Ok(Arc::new(field))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -2546,12 +2672,13 @@ impl ScalarUDFImpl for SpanMakeUdf {
             col_unit_builder.append_value(&col_unit_values[row]);
             end_exclusive_builder.append_value(end_exclusive_values[row]);
         }
-        let span_fields = match span_struct_type() {
-            DataType::Struct(fields) => fields,
-            _ => {
-                return Err(DataFusionError::Plan(
-                    "span_make span_struct_type must be a struct".into(),
-                ))
+        let return_field = args.return_field.as_ref();
+        let span_fields = match return_field.data_type() {
+            DataType::Struct(fields) => fields.clone(),
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "span_make return type must be struct, got {other:?}"
+                )))
             }
         };
         let arrays: Vec<ArrayRef> = vec![
@@ -2661,6 +2788,22 @@ impl ScalarUDFImpl for SpanOverlapsUdf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return Err(DataFusionError::Plan(
+                "span_overlaps expects two arguments".into(),
+            ));
+        }
+        for arg_type in arg_types {
+            if !matches!(arg_type, DataType::Struct(_)) {
+                return Err(DataFusionError::Plan(
+                    "span_overlaps expects struct inputs".into(),
+                ));
+            }
+        }
+        Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
+    }
+
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Boolean, true)))
     }
@@ -2750,6 +2893,22 @@ impl ScalarUDFImpl for SpanContainsUdf {
 
     fn signature(&self) -> &Signature {
         self.signature.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return Err(DataFusionError::Plan(
+                "span_contains expects two arguments".into(),
+            ));
+        }
+        for arg_type in arg_types {
+            if !matches!(arg_type, DataType::Struct(_)) {
+                return Err(DataFusionError::Plan(
+                    "span_contains expects struct inputs".into(),
+                ));
+            }
+        }
+        Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -2939,6 +3098,26 @@ impl ScalarUDFImpl for Utf8NormalizeUdf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.is_empty() || arg_types.len() > 4 {
+            return Err(DataFusionError::Plan(
+                "utf8_normalize expects between one and four arguments".into(),
+            ));
+        }
+        let mut coerced = Vec::with_capacity(arg_types.len());
+        coerced.push(DataType::Utf8);
+        if arg_types.len() >= 2 {
+            coerced.push(DataType::Utf8);
+        }
+        if arg_types.len() >= 3 {
+            coerced.push(DataType::Boolean);
+        }
+        if arg_types.len() >= 4 {
+            coerced.push(DataType::Boolean);
+        }
+        Ok(coerced)
+    }
+
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
@@ -3076,6 +3255,15 @@ impl ScalarUDFImpl for Utf8NullIfBlankUdf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.is_empty() || arg_types.len() > 3 {
+            return Err(DataFusionError::Plan(
+                "qname_normalize expects between one and three arguments".into(),
+            ));
+        }
+        Ok(vec![DataType::Utf8; arg_types.len()])
+    }
+
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
@@ -3140,6 +3328,12 @@ impl ScalarUDFImpl for QNameNormalizeUdf {
 
     fn signature(&self) -> &Signature {
         self.signature.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        expect_arg_len_exact(self.name(), arg_types, 3)?;
+        ensure_map_arg(self.name(), &arg_types[0])?;
+        Ok(vec![arg_types[0].clone(), DataType::Utf8, DataType::Utf8])
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -3380,17 +3574,33 @@ impl ScalarUDFImpl for MapNormalizeUdf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let count = expect_arg_len(self.name(), arg_types, 1, 3)?;
+        ensure_map_arg(self.name(), &arg_types[0])?;
+        let mut coerced = Vec::with_capacity(count);
+        coerced.push(arg_types[0].clone());
+        if count >= 2 {
+            coerced.push(DataType::Utf8);
+        }
+        if count >= 3 {
+            coerced.push(DataType::Boolean);
+        }
+        Ok(coerced)
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args
             .arg_fields
             .first()
             .map(|field| field.is_nullable())
             .unwrap_or(true);
-        Ok(Arc::new(Field::new(
-            self.name(),
-            normalized_map_type(),
-            nullable,
-        )))
+        let mut field = Field::new(self.name(), normalized_map_type(), nullable);
+        if let Some(first) = args.arg_fields.first() {
+            if !first.metadata().is_empty() {
+                field = field.with_metadata(first.metadata().clone());
+            }
+        }
+        Ok(Arc::new(field))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3512,6 +3722,12 @@ impl ScalarUDFImpl for ListCompactUdf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        expect_arg_len_exact(self.name(), arg_types, 1)?;
+        ensure_list_arg(self.name(), &arg_types[0])?;
+        Ok(vec![arg_types[0].clone()])
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args
             .arg_fields
@@ -3519,11 +3735,13 @@ impl ScalarUDFImpl for ListCompactUdf {
             .map(|field| field.is_nullable())
             .unwrap_or(true);
         let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::List(item_field),
-            nullable,
-        )))
+        let mut field = Field::new(self.name(), DataType::List(item_field), nullable);
+        if let Some(first) = args.arg_fields.first() {
+            if !first.metadata().is_empty() {
+                field = field.with_metadata(first.metadata().clone());
+            }
+        }
+        Ok(Arc::new(field))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3590,6 +3808,12 @@ impl ScalarUDFImpl for ListUniqueSortedUdf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        expect_arg_len_exact(self.name(), arg_types, 1)?;
+        ensure_list_arg(self.name(), &arg_types[0])?;
+        Ok(vec![arg_types[0].clone()])
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args
             .arg_fields
@@ -3597,11 +3821,13 @@ impl ScalarUDFImpl for ListUniqueSortedUdf {
             .map(|field| field.is_nullable())
             .unwrap_or(true);
         let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::List(item_field),
-            nullable,
-        )))
+        let mut field = Field::new(self.name(), DataType::List(item_field), nullable);
+        if let Some(first) = args.arg_fields.first() {
+            if !first.metadata().is_empty() {
+                field = field.with_metadata(first.metadata().clone());
+            }
+        }
+        Ok(Arc::new(field))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3675,6 +3901,21 @@ impl ScalarUDFImpl for StructPickUdf {
         self.signature.signature()
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() < 2 || arg_types.len() > 7 {
+            return Err(DataFusionError::Plan(
+                "struct_pick expects between two and seven arguments".into(),
+            ));
+        }
+        ensure_struct_arg(self.name(), &arg_types[0])?;
+        let mut coerced = Vec::with_capacity(arg_types.len());
+        coerced.push(arg_types[0].clone());
+        for _ in 1..arg_types.len() {
+            coerced.push(DataType::Utf8);
+        }
+        Ok(coerced)
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         if args.arg_fields.len() < 2 {
             return Err(DataFusionError::Plan(
@@ -3717,11 +3958,11 @@ impl ScalarUDFImpl for StructPickUdf {
             selected_fields.push(selected);
         }
         let output_type = DataType::Struct(Fields::from(selected_fields));
-        Ok(Arc::new(Field::new(
-            self.name(),
-            output_type,
-            parent_nullable,
-        )))
+        let mut field = Field::new(self.name(), output_type, parent_nullable);
+        if !struct_field.metadata().is_empty() {
+            field = field.with_metadata(struct_field.metadata().clone());
+        }
+        Ok(Arc::new(field))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -3747,29 +3988,19 @@ impl ScalarUDFImpl for StructPickUdf {
             ));
         };
         let parent_nullable = struct_values.nulls().is_some();
-        let mut field_names: Vec<String> = Vec::with_capacity(args.args.len() - 1);
-        for value in args.args.iter().skip(1) {
-            let scalar =
-                scalar_columnar_value(value, "struct_pick field names must be scalar literals")?;
-            let Some(field_name) = scalar_to_string(&scalar)? else {
-                return Err(DataFusionError::Plan(
-                    "struct_pick field names cannot be null".into(),
-                ));
-            };
-            let trimmed = field_name.trim().to_string();
-            if trimmed.is_empty() {
-                return Err(DataFusionError::Plan(
-                    "struct_pick field names cannot be empty".into(),
-                ));
-            }
-            field_names.push(trimmed);
-        }
-        let mut selected_fields: Vec<Field> = Vec::with_capacity(field_names.len());
-        let mut selected_arrays: Vec<ArrayRef> = Vec::with_capacity(field_names.len());
-        for field_name in field_names {
+        let return_field = args.return_field.as_ref();
+        let DataType::Struct(return_fields) = return_field.data_type() else {
+            return Err(DataFusionError::Plan(
+                "struct_pick return type must be a struct".into(),
+            ));
+        };
+        let mut selected_fields: Vec<Field> = Vec::with_capacity(return_fields.len());
+        let mut selected_arrays: Vec<ArrayRef> = Vec::with_capacity(return_fields.len());
+        for field in return_fields {
+            let field_name = field.name();
             let field = struct_fields
                 .iter()
-                .find(|candidate| candidate.name() == &field_name)
+                .find(|candidate| candidate.name() == field_name)
                 .ok_or_else(|| {
                     DataFusionError::Plan(format!(
                         "struct_pick field not found in struct: {field_name}"
@@ -3780,7 +4011,7 @@ impl ScalarUDFImpl for StructPickUdf {
                 selected = selected.with_nullable(true);
             }
             selected_fields.push(selected);
-            let column = struct_values.column_by_name(&field_name).ok_or_else(|| {
+            let column = struct_values.column_by_name(field_name).ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "struct_pick field not found in struct data: {field_name}"
                 ))

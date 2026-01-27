@@ -11,9 +11,6 @@ When uncertain:
 3) Open the relevant reference file below (only the section you need).
 4) Implement using *existing local patterns* unless the plan says otherwise.
 
-## Quick probes (insert live output)
-DataFusion: !bash scripts/df_probe.sh
-Rust UDFs: !bash scripts/rust_udf_probe.sh
 
 ## Reference map (open these files as needed)
 - Core DataFusion Python surfaces (IO, catalog, SQL, DataFrame API): reference/datafusion.md

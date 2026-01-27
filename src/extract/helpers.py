@@ -21,7 +21,7 @@ from arrow_utils.schema.build import (
 from arrow_utils.schema.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
-from arrowdsl.schema.policy import SchemaPolicy
+from datafusion_engine.schema_policy import SchemaPolicy
 from core_types import DeterminismTier
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult

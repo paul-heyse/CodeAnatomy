@@ -11,7 +11,7 @@ from datafusion import functions as f
 
 from arrow_utils.core.interop import TableLike, coerce_table_like
 from arrow_utils.schema.build import table_from_arrays
-from arrowdsl.schema.schema import align_table
+from datafusion_engine.schema_alignment import align_table
 from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
 from incremental.plan_bundle_exec import execute_df_to_table
 from incremental.registry_specs import dataset_schema

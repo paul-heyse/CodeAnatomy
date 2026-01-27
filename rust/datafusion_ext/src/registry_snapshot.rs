@@ -50,6 +50,7 @@ pub fn registry_snapshot(state: &SessionState) -> RegistrySnapshot {
     record_window_udfs(state, &mut snapshot);
     record_table_functions(state, &mut snapshot);
     apply_table_signatures(&mut snapshot, &table_signatures);
+    apply_custom_signatures(&mut snapshot);
     apply_docs_parameter_names(state, &mut snapshot);
     snapshot.scalar.sort();
     snapshot.aggregate.sort();
@@ -155,6 +156,11 @@ fn volatility_label(value: Volatility) -> String {
 struct TableSignature {
     inputs: Vec<Vec<DataType>>,
     return_type: DataType,
+}
+
+struct FunctionSignature {
+    inputs: Vec<Vec<DataType>>,
+    returns: Vec<DataType>,
 }
 
 fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
@@ -316,6 +322,278 @@ fn custom_table_signatures() -> BTreeMap<String, TableSignature> {
         },
     );
     signatures
+}
+
+fn span_struct_type() -> DataType {
+    DataType::Struct(Fields::from(vec![
+        Field::new("bstart", DataType::Int64, true),
+        Field::new("bend", DataType::Int64, true),
+        Field::new("line_base", DataType::Int32, true),
+        Field::new("col_unit", DataType::Utf8, true),
+        Field::new("end_exclusive", DataType::Boolean, true),
+    ]))
+}
+
+fn normalized_map_type() -> DataType {
+    let entry_fields = Fields::from(vec![
+        Field::new("keys", DataType::Utf8, false),
+        Field::new("values", DataType::Utf8, true),
+    ]);
+    let entry_field = Arc::new(Field::new("entries", DataType::Struct(entry_fields), false));
+    DataType::Map(entry_field, false)
+}
+
+fn list_string_type() -> DataType {
+    let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
+    DataType::List(item_field)
+}
+
+fn generic_struct_type() -> DataType {
+    DataType::Struct(Fields::from(vec![Field::new(
+        "field",
+        DataType::Utf8,
+        true,
+    )]))
+}
+
+fn custom_signatures() -> BTreeMap<String, FunctionSignature> {
+    let mut signatures = BTreeMap::new();
+    signatures.insert(
+        "arrow_metadata".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![DataType::Null], vec![DataType::Null, DataType::Utf8]],
+            returns: vec![
+                normalized_map_type(),
+                DataType::Utf8,
+            ],
+        },
+    );
+    let stable_id_inputs = (2..=65)
+        .map(|count| vec![DataType::Utf8; count])
+        .collect::<Vec<_>>();
+    let stable_id_returns = vec![DataType::Utf8; stable_id_inputs.len()];
+    signatures.insert(
+        "stable_id_parts".to_string(),
+        FunctionSignature {
+            inputs: stable_id_inputs.clone(),
+            returns: stable_id_returns.clone(),
+        },
+    );
+    signatures.insert(
+        "prefixed_hash_parts64".to_string(),
+        FunctionSignature {
+            inputs: stable_id_inputs,
+            returns: stable_id_returns,
+        },
+    );
+    signatures.insert(
+        "stable_hash_any".to_string(),
+        FunctionSignature {
+            inputs: vec![
+                vec![DataType::Utf8],
+                vec![DataType::Utf8, DataType::Boolean],
+                vec![DataType::Utf8, DataType::Boolean, DataType::Utf8],
+            ],
+            returns: vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
+        },
+    );
+    signatures.insert(
+        "span_make".to_string(),
+        FunctionSignature {
+            inputs: vec![
+                vec![DataType::Int64, DataType::Int64],
+                vec![DataType::Int64, DataType::Int64, DataType::Int32],
+                vec![
+                    DataType::Int64,
+                    DataType::Int64,
+                    DataType::Int32,
+                    DataType::Utf8,
+                ],
+                vec![
+                    DataType::Int64,
+                    DataType::Int64,
+                    DataType::Int32,
+                    DataType::Utf8,
+                    DataType::Boolean,
+                ],
+            ],
+            returns: vec![
+                span_struct_type(),
+                span_struct_type(),
+                span_struct_type(),
+                span_struct_type(),
+            ],
+        },
+    );
+    signatures.insert(
+        "span_len".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![span_struct_type()]],
+            returns: vec![DataType::Int64],
+        },
+    );
+    signatures.insert(
+        "span_overlaps".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![span_struct_type(), span_struct_type()]],
+            returns: vec![DataType::Boolean],
+        },
+    );
+    signatures.insert(
+        "span_contains".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![span_struct_type(), span_struct_type()]],
+            returns: vec![DataType::Boolean],
+        },
+    );
+    let span_id_inputs = (4..=5)
+        .map(|count| vec![DataType::Utf8; count])
+        .collect::<Vec<_>>();
+    let span_id_returns = vec![DataType::Utf8; span_id_inputs.len()];
+    signatures.insert(
+        "span_id".to_string(),
+        FunctionSignature {
+            inputs: span_id_inputs,
+            returns: span_id_returns,
+        },
+    );
+    signatures.insert(
+        "utf8_normalize".to_string(),
+        FunctionSignature {
+            inputs: vec![
+                vec![DataType::Utf8],
+                vec![DataType::Utf8, DataType::Utf8],
+                vec![DataType::Utf8, DataType::Utf8, DataType::Boolean],
+                vec![
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Boolean,
+                    DataType::Boolean,
+                ],
+            ],
+            returns: vec![
+                DataType::Utf8,
+                DataType::Utf8,
+                DataType::Utf8,
+                DataType::Utf8,
+            ],
+        },
+    );
+    signatures.insert(
+        "qname_normalize".to_string(),
+        FunctionSignature {
+            inputs: vec![
+                vec![DataType::Utf8],
+                vec![DataType::Utf8, DataType::Utf8],
+                vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
+            ],
+            returns: vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
+        },
+    );
+    signatures.insert(
+        "map_get_default".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![normalized_map_type(), DataType::Utf8, DataType::Utf8]],
+            returns: vec![DataType::Utf8],
+        },
+    );
+    signatures.insert(
+        "map_normalize".to_string(),
+        FunctionSignature {
+            inputs: vec![
+                vec![normalized_map_type()],
+                vec![normalized_map_type(), DataType::Utf8],
+                vec![normalized_map_type(), DataType::Utf8, DataType::Boolean],
+            ],
+            returns: vec![
+                normalized_map_type(),
+                normalized_map_type(),
+                normalized_map_type(),
+            ],
+        },
+    );
+    signatures.insert(
+        "list_compact".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![list_string_type()]],
+            returns: vec![list_string_type()],
+        },
+    );
+    signatures.insert(
+        "list_unique_sorted".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![list_string_type()]],
+            returns: vec![list_string_type()],
+        },
+    );
+    let struct_pick_inputs = (2..=7)
+        .map(|count| {
+            let mut args = Vec::with_capacity(count);
+            args.push(generic_struct_type());
+            for _ in 1..count {
+                args.push(DataType::Utf8);
+            }
+            args
+        })
+        .collect::<Vec<_>>();
+    let struct_pick_returns = vec![generic_struct_type(); struct_pick_inputs.len()];
+    signatures.insert(
+        "struct_pick".to_string(),
+        FunctionSignature {
+            inputs: struct_pick_inputs,
+            returns: struct_pick_returns,
+        },
+    );
+    signatures.insert(
+        "any_value_det".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![DataType::Utf8, DataType::Int64]],
+            returns: vec![DataType::Utf8],
+        },
+    );
+    signatures.insert(
+        "arg_max".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![DataType::Utf8, DataType::Int64]],
+            returns: vec![DataType::Utf8],
+        },
+    );
+    signatures.insert(
+        "arg_min".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![DataType::Utf8, DataType::Int64]],
+            returns: vec![DataType::Utf8],
+        },
+    );
+    signatures
+}
+
+fn apply_custom_signatures(snapshot: &mut RegistrySnapshot) {
+    let signatures = custom_signatures();
+    for (name, signature) in signatures {
+        if snapshot.signature_inputs.contains_key(&name) {
+            continue;
+        }
+        let inputs = signature
+            .inputs
+            .iter()
+            .map(|args| args.iter().map(format_data_type).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        if inputs.is_empty() {
+            continue;
+        }
+        let returns = if signature.returns.len() == 1 && inputs.len() > 1 {
+            vec![format_data_type(&signature.returns[0]); inputs.len()]
+        } else {
+            signature
+                .returns
+                .iter()
+                .map(format_data_type)
+                .collect::<Vec<_>>()
+        };
+        snapshot.signature_inputs.insert(name.clone(), inputs);
+        snapshot.return_types.insert(name, returns);
+    }
 }
 
 fn rewrite_tags_for(name: &str) -> Option<Vec<String>> {

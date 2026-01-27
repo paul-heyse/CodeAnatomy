@@ -154,9 +154,7 @@ def _delta_scan_candidates(
     index = build_delta_file_index(table)
     policy = _policy_from_lineage(location=location, lineage=lineage)
     pruning = evaluate_and_select_files(index, policy, ctx=ctx)
-    candidate_files = tuple(
-        Path(table_path) / Path(path) for path in pruning.candidate_paths
-    )
+    candidate_files = tuple(Path(table_path) / Path(path) for path in pruning.candidate_paths)
     return candidate_files, table.version()
 
 

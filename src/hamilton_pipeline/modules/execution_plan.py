@@ -19,6 +19,7 @@ from relspec.execution_plan import (
 
 if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
+    from datafusion_engine.plan_bundle import DataFusionPlanBundle
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.view_graph_registry import ViewNode
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from schema_spec.system import DatasetSpec
 else:
     ExecutionContext = object
+    DataFusionPlanBundle = object
     DataFusionRuntimeProfile = object
     ViewNode = object
     PlanFingerprintSnapshot = object
@@ -97,6 +99,7 @@ def _plan_node_functions(
     return (
         ("execution_plan", _execution_plan_node(plan)),
         ("view_nodes", _view_nodes_node()),
+        ("plan_bundles_by_task", _plan_bundles_by_task_node()),
         ("dataset_specs", _dataset_specs_node()),
         ("plan_scan_units", _plan_scan_units_node()),
         ("plan_scan_keys_by_task", _plan_scan_keys_by_task_node()),
@@ -131,6 +134,21 @@ def _view_nodes_node() -> object:
         return execution_plan.view_nodes
 
     return view_nodes
+
+
+def _plan_bundles_by_task_node() -> object:
+    @tag(layer="plan", artifact="plan_bundles_by_task", kind="mapping")
+    def plan_bundles_by_task(
+        execution_plan: ExecutionPlan,
+    ) -> Mapping[str, DataFusionPlanBundle]:
+        bundles: dict[str, DataFusionPlanBundle] = {}
+        for node in execution_plan.view_nodes:
+            if node.plan_bundle is None:
+                continue
+            bundles[node.name] = node.plan_bundle
+        return bundles
+
+    return plan_bundles_by_task
 
 
 def _dataset_specs_node() -> object:

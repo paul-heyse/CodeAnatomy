@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
 
     from datafusion_engine.runtime import SessionRuntime
+    from datafusion_engine.scan_planner import ScanUnit
 
 
 try:
@@ -68,6 +69,7 @@ class PlanBundleOptions:
     registry_snapshot: Mapping[str, object] | None = None
     delta_inputs: Sequence[DeltaInputPin] = ()
     session_runtime: SessionRuntime | None = None
+    scan_units: Sequence[ScanUnit] = ()
 
 
 @dataclass(frozen=True)
@@ -158,6 +160,45 @@ class DataFusionPlanBundle:
             return None
 
 
+def _delta_inputs_from_scan_units(
+    scan_units: Sequence[ScanUnit],
+) -> tuple[DeltaInputPin, ...]:
+    """Derive DeltaInputPin entries from scan units.
+
+    Parameters
+    ----------
+    scan_units
+        Scan units with optional Delta version pins.
+
+    Returns
+    -------
+    tuple[DeltaInputPin, ...]
+        DeltaInputPin entries derived from scan units with version information.
+
+    Raises
+    ------
+    ValueError
+        When conflicting Delta versions exist for the same dataset.
+    """
+    pins: dict[str, DeltaInputPin] = {}
+    for unit in scan_units:
+        if unit.delta_version is None:
+            continue
+        existing = pins.get(unit.dataset_name)
+        if existing is not None and existing.version != unit.delta_version:
+            msg = (
+                f"Conflicting Delta versions for dataset {unit.dataset_name!r}: "
+                f"{existing.version} vs {unit.delta_version}"
+            )
+            raise ValueError(msg)
+        pins[unit.dataset_name] = DeltaInputPin(
+            dataset_name=unit.dataset_name,
+            version=unit.delta_version,
+            timestamp=None,
+        )
+    return tuple(pins[name] for name in sorted(pins))
+
+
 def build_plan_bundle(  # noqa: PLR0913
     ctx: SessionContext,
     df: DataFrame,
@@ -168,6 +209,7 @@ def build_plan_bundle(  # noqa: PLR0913
     registry_snapshot: Mapping[str, object] | None = None,
     delta_inputs: Sequence[DeltaInputPin] = (),
     session_runtime: SessionRuntime | None = None,
+    scan_units: Sequence[ScanUnit] = (),
 ) -> DataFusionPlanBundle:
     """Build a canonical plan bundle from a DataFusion DataFrame.
 
@@ -195,12 +237,69 @@ def build_plan_bundle(  # noqa: PLR0913
         Optional pinned Delta inputs for deterministic scans.
     session_runtime : SessionRuntime | None
         Optional session runtime carrying UDF and settings snapshots.
+    scan_units : Sequence[ScanUnit]
+        Optional scan units for deriving Delta version pins.
 
     Returns
     -------
     DataFusionPlanBundle
         Canonical plan artifact for execution and scheduling.
     """
+    components = _bundle_components(
+        ctx,
+        df,
+        compute_execution_plan=compute_execution_plan,
+        compute_substrait=compute_substrait,
+        validate_udfs=validate_udfs,
+        registry_snapshot=registry_snapshot,
+        delta_inputs=delta_inputs,
+        session_runtime=session_runtime,
+        scan_units=scan_units,
+    )
+
+    return DataFusionPlanBundle(
+        df=df,
+        logical_plan=components.logical,
+        optimized_logical_plan=components.optimized,
+        execution_plan=components.execution,
+        substrait_bytes=components.substrait_bytes,
+        plan_fingerprint=components.fingerprint,
+        artifacts=components.artifacts,
+        delta_inputs=components.merged_delta_inputs,
+        required_udfs=components.required_udfs,
+        required_rewrite_tags=components.required_rewrite_tags,
+        plan_details=components.plan_details,
+    )
+
+
+@dataclass(frozen=True)
+class _BundleComponents:
+    """Bundle derived artifacts and plan metadata."""
+
+    logical: LogicalPlan
+    optimized: LogicalPlan | None
+    execution: ExecutionPlan | None
+    substrait_bytes: bytes | None
+    fingerprint: str
+    artifacts: PlanArtifacts
+    merged_delta_inputs: tuple[DeltaInputPin, ...]
+    required_udfs: tuple[str, ...]
+    required_rewrite_tags: tuple[str, ...]
+    plan_details: Mapping[str, object]
+
+
+def _bundle_components(
+    ctx: SessionContext,
+    df: DataFrame,
+    *,
+    compute_execution_plan: bool,
+    compute_substrait: bool,
+    validate_udfs: bool,
+    registry_snapshot: Mapping[str, object] | None,
+    delta_inputs: Sequence[DeltaInputPin],
+    session_runtime: SessionRuntime | None,
+    scan_units: Sequence[ScanUnit],
+) -> _BundleComponents:
     logical = _safe_logical_plan(df)
     optimized = _safe_optimized_logical_plan(df)
     execution = _safe_execution_plan(df) if compute_execution_plan else None
@@ -220,12 +319,14 @@ def build_plan_bundle(  # noqa: PLR0913
         snapshot=snapshot,
     )
 
-    # Optionally validate UDFs are registered before returning the bundle
     if validate_udfs:
         from datafusion_engine.udf_runtime import validate_required_udfs
 
         if required_udfs:
             validate_required_udfs(snapshot, required=required_udfs)
+
+    scan_unit_pins = _delta_inputs_from_scan_units(scan_units)
+    merged_delta_inputs = _merge_delta_inputs(delta_inputs, scan_unit_pins)
 
     artifacts = PlanArtifacts(
         logical_plan_display=_plan_display(logical, method="display_indent_schema"),
@@ -242,19 +343,39 @@ def build_plan_bundle(  # noqa: PLR0913
         udf_snapshot=snapshot,
     )
 
-    return DataFusionPlanBundle(
-        df=df,
-        logical_plan=logical,
-        optimized_logical_plan=optimized,
-        execution_plan=execution,
+    return _BundleComponents(
+        logical=logical,
+        optimized=optimized,
+        execution=execution,
         substrait_bytes=substrait_bytes,
-        plan_fingerprint=fingerprint,
+        fingerprint=fingerprint,
         artifacts=artifacts,
-        delta_inputs=tuple(delta_inputs),
+        merged_delta_inputs=merged_delta_inputs,
         required_udfs=required_udfs,
         required_rewrite_tags=required_rewrite_tags,
         plan_details=_plan_details(df, logical=logical, optimized=optimized, execution=execution),
     )
+
+
+def _merge_delta_inputs(
+    explicit: Sequence[DeltaInputPin],
+    from_scan_units: Sequence[DeltaInputPin],
+) -> tuple[DeltaInputPin, ...]:
+    """Merge explicit and scan-unit derived Delta input pins.
+
+    Explicit pins take precedence over scan-unit derived pins.
+
+    Returns
+    -------
+    tuple[DeltaInputPin, ...]
+        Merged delta input pins sorted by dataset name.
+    """
+    pins: dict[str, DeltaInputPin] = {}
+    for pin in from_scan_units:
+        pins[pin.dataset_name] = pin
+    for pin in explicit:
+        pins[pin.dataset_name] = pin
+    return tuple(pins[name] for name in sorted(pins))
 
 
 def build_plan_bundle_from_builder(
@@ -290,6 +411,7 @@ def build_plan_bundle_from_builder(
         registry_snapshot=resolved.registry_snapshot,
         delta_inputs=resolved.delta_inputs,
         session_runtime=resolved.session_runtime,
+        scan_units=resolved.scan_units,
     )
 
 

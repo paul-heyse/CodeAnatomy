@@ -25,6 +25,25 @@ from storage.deltalake.delta import delta_table_version
 _MIN_QUALIFIED_PARTS = 2
 
 
+def _validate_delta_provider_available() -> bool:
+    """Validate that Delta provider APIs are available at import time.
+
+    Returns
+    -------
+    bool
+        True if the provider is available, False otherwise.
+    """
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError:
+        return False
+    provider_fn = getattr(module, "delta_table_provider_with_files", None)
+    return callable(provider_fn)
+
+
+_DELTA_PROVIDER_AVAILABLE = _validate_delta_provider_available()
+
+
 def apply_scan_unit_overrides(
     ctx: SessionContext,
     *,
@@ -78,12 +97,7 @@ def scan_units_hash(scan_units: Sequence[ScanUnit]) -> str:
     str
         Stable hash for the scan unit collection.
     """
-    payload = tuple(
-        sorted(
-            (unit.key, unit.delta_version)
-            for unit in scan_units
-        )
-    )
+    payload = tuple(sorted((unit.key, unit.delta_version) for unit in scan_units))
     return _hash_payload(payload)
 
 
@@ -120,10 +134,7 @@ def _pinned_version_for_units(
 ) -> int | None:
     versions = {unit.delta_version for unit in units if unit.delta_version is not None}
     if len(versions) > 1:
-        msg = (
-            "Scan units for a dataset resolved to multiple Delta versions: "
-            f"{sorted(versions)}."
-        )
+        msg = f"Scan units for a dataset resolved to multiple Delta versions: {sorted(versions)}."
         raise ValueError(msg)
     if versions:
         return versions.pop()
@@ -204,6 +215,9 @@ def _delta_table_provider_with_files(
     scan_files: Sequence[str],
     runtime_profile: DataFusionRuntimeProfile,
 ) -> object:
+    if not _DELTA_PROVIDER_AVAILABLE:
+        msg = "datafusion_ext.delta_table_provider_with_files is unavailable."
+        raise TypeError(msg)
     module = importlib.import_module("datafusion_ext")
     provider_factory = getattr(module, "delta_table_provider_with_files", None)
     if not callable(provider_factory):
@@ -251,7 +265,15 @@ def _schema_ipc_payload(schema: object | None) -> bytes | None:
     if not callable(to_bytes):
         msg = "Delta scan schema serialize() did not return a compatible buffer."
         raise TypeError(msg)
-    return to_bytes()
+    raw = to_bytes()
+    if isinstance(raw, bytes):
+        return raw
+    if isinstance(raw, bytearray):
+        return bytes(raw)
+    if isinstance(raw, memoryview):
+        return raw.tobytes()
+    msg = "Delta scan schema serialize() returned unsupported buffer type."
+    raise TypeError(msg)
 
 
 def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile) -> bool:

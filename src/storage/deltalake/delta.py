@@ -48,6 +48,7 @@ class DeltaWriteOptions:
     partition_by: Sequence[str] | None = None
     configuration: Mapping[str, str | None] | None = None
     commit_metadata: Mapping[str, str] | None = None
+    commit_properties: CommitProperties | None = None
     target_file_size: int | None = None
     writer_properties: WriterProperties | None = None
     app_id: str | None = None
@@ -523,7 +524,7 @@ def write_delta_table(
     storage = dict(resolved.storage_options or {})
     if resolved.log_storage_options is not None:
         storage.update(dict(resolved.log_storage_options))
-    commit_properties = build_commit_properties(
+    commit_properties = resolved.commit_properties or build_commit_properties(
         app_id=resolved.app_id,
         version=resolved.version,
         commit_metadata=resolved.commit_metadata,
@@ -674,6 +675,55 @@ def build_commit_properties(
     )
 
 
+def idempotent_commit_properties(
+    *,
+    operation: str,
+    mode: str,
+    idempotent: IdempotentWriteOptions | None = None,
+    extra_metadata: Mapping[str, str] | None = None,
+) -> CommitProperties:
+    """Return standardized commit properties for deterministic Delta writes.
+
+    Parameters
+    ----------
+    operation
+        Operation label for commit metadata.
+    mode
+        Write mode label for commit metadata.
+    idempotent
+        Optional idempotent write options for app transactions.
+    extra_metadata
+        Extra metadata entries merged into the commit metadata payload.
+
+    Returns
+    -------
+    CommitProperties
+        Commit properties with standardized metadata and optional app transaction.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when commit metadata is empty after normalization.
+    """
+    metadata: dict[str, str] = {
+        "operation": str(operation),
+        "mode": str(mode),
+    }
+    if extra_metadata:
+        metadata.update({str(key): str(value) for key, value in extra_metadata.items()})
+    app_id = idempotent.app_id if idempotent is not None else None
+    version = idempotent.version if idempotent is not None else None
+    commit_properties = build_commit_properties(
+        app_id=app_id,
+        version=version,
+        commit_metadata=metadata,
+    )
+    if commit_properties is None:
+        msg = "idempotent_commit_properties requires commit metadata."
+        raise RuntimeError(msg)
+    return commit_properties
+
+
 def _delta_json_value(value: object) -> dict[str, object]:
     if isinstance(value, dict):
         return {str(key): _delta_json_scalar(item) for key, item in value.items()}
@@ -744,6 +794,7 @@ __all__ = [
     "delta_table_features",
     "delta_table_version",
     "enable_delta_features",
+    "idempotent_commit_properties",
     "open_delta_table",
     "read_delta_cdf",
     "vacuum_delta",

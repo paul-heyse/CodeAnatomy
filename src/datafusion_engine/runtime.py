@@ -2362,6 +2362,7 @@ class _RuntimeDiagnosticsMixin:
             "substrait_validation": profile.substrait_validation,
             "diagnostics_sink": bool(profile.diagnostics_sink),
             "local_filesystem_root": profile.local_filesystem_root,
+            "plan_artifacts_root": profile.plan_artifacts_root,
             "input_plugins": len(profile.input_plugins),
             "prepared_statements": [stmt.name for stmt in profile.prepared_statements],
             "distributed": profile.distributed,
@@ -2732,6 +2733,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     plan_collector: DataFusionPlanCollector | None = field(default_factory=DataFusionPlanCollector)
     view_registry: DataFusionViewRegistry | None = field(default_factory=DataFusionViewRegistry)
     substrait_validation: bool = False
+    validate_plan_determinism: bool = False
+    strict_determinism: bool = False
     diagnostics_sink: DiagnosticsSink | None = None
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
     diskcache_profile: DiskCacheProfile | None = field(default_factory=default_diskcache_profile)
@@ -2739,6 +2742,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     udf_catalog_cache: dict[int, UdfCatalog] = field(default_factory=dict, repr=False)
     delta_commit_runs: dict[str, DataFusionRun] = field(default_factory=dict, repr=False)
     local_filesystem_root: str | None = None
+    plan_artifacts_root: str | None = None
     input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
     prepared_statements: tuple[PreparedStatementSpec, ...] = ()
     config_policy_name: str | None = "symtable"

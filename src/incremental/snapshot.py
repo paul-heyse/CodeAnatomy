@@ -14,9 +14,9 @@ from incremental.delta_context import DeltaAccessContext, read_delta_table_via_f
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
-    build_commit_properties,
     delta_table_version,
     enable_delta_features,
+    idempotent_commit_properties,
     open_delta_table,
     write_delta_table,
 )
@@ -101,6 +101,7 @@ def write_repo_snapshot(
     metadata = {
         "snapshot_kind": "repo_snapshot",
         "schema_fingerprint": schema_fingerprint(snapshot.schema),
+        "dataset": str(target),
     }
     storage = context.storage
     existing_version = delta_table_version(
@@ -109,13 +110,24 @@ def write_repo_snapshot(
         log_storage_options=storage.log_storage_options,
     )
     if existing_version is None:
+        commit_metadata = {
+            **metadata,
+            "operation": "snapshot_overwrite",
+            "mode": "overwrite",
+        }
+        commit_properties = idempotent_commit_properties(
+            operation="snapshot_overwrite",
+            mode="overwrite",
+            extra_metadata=commit_metadata,
+        )
         result = write_delta_table(
             snapshot,
             str(target),
             options=DeltaWriteOptions(
                 mode="overwrite",
                 schema_mode="overwrite",
-                commit_metadata=metadata,
+                commit_metadata=commit_metadata,
+                commit_properties=commit_properties,
                 storage_options=storage.storage_options,
                 log_storage_options=storage.log_storage_options,
             ),
@@ -127,15 +139,21 @@ def write_repo_snapshot(
         )
         return result
     commit_key = str(target)
+    commit_metadata = {
+        **metadata,
+        "operation": "snapshot_merge",
+        "mode": "merge",
+    }
     commit_options, commit_run = context.runtime.profile.reserve_delta_commit(
         key=commit_key,
-        metadata={"dataset": commit_key, "operation": "merge"},
-        commit_metadata=metadata,
+        metadata=commit_metadata,
+        commit_metadata=commit_metadata,
     )
-    commit_properties = build_commit_properties(
-        app_id=commit_options.app_id,
-        version=commit_options.version,
-        commit_metadata=metadata,
+    commit_properties = idempotent_commit_properties(
+        operation="snapshot_merge",
+        mode="merge",
+        idempotent=commit_options,
+        extra_metadata=commit_metadata,
     )
     table = open_delta_table(
         str(target),

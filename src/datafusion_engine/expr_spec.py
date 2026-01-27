@@ -468,6 +468,79 @@ def _expr_cdf_is_delete(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Exp
     return cdf_is_delete(args[0])
 
 
+def _expr_first_value_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import first_value_agg
+
+    return first_value_agg(args[0])
+
+
+def _expr_last_value_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import last_value_agg
+
+    return last_value_agg(args[0])
+
+
+def _expr_count_distinct_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import count_distinct_agg
+
+    return count_distinct_agg(args[0])
+
+
+def _expr_string_agg(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion_ext import string_agg
+
+    if len(args) == 1:
+        from datafusion import lit
+
+        return string_agg(args[0], lit(","))
+    return string_agg(args[0], args[1])
+
+
+def _expr_row_number_window(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion import functions as func
+
+    _ = args  # row_number takes no arguments
+    return func.row_number()
+
+
+def _expr_lag_window(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion import functions as func
+
+    value = args[0]
+    offset = _window_offset(ir_args, index=1, default=1)
+    return func.lag(value, offset)
+
+
+def _expr_lead_window(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion import functions as func
+
+    value = args[0]
+    offset = _window_offset(ir_args, index=1, default=1)
+    return func.lead(value, offset)
+
+
+def _window_offset(ir_args: Sequence[ExprIR], *, index: int, default: int) -> int:
+    resolved = default
+    if len(ir_args) > index:
+        raw = ir_args[index].value
+        if raw is not None:
+            if isinstance(raw, ScalarLike):
+                raw = raw.as_py()
+            if isinstance(raw, bool):
+                return resolved
+            if isinstance(raw, int):
+                resolved = raw
+            elif isinstance(raw, float):
+                if raw.is_integer():
+                    resolved = int(raw)
+            elif isinstance(raw, str):
+                try:
+                    resolved = int(raw)
+                except ValueError:
+                    resolved = default
+    return resolved
+
+
 _EXACT_CALL_COUNTS: dict[str, int] = {
     "stringify": _EXACT_ONE,
     "utf8_trim_whitespace": _EXACT_ONE,
@@ -490,6 +563,10 @@ _EXACT_CALL_COUNTS: dict[str, int] = {
     "cdf_change_rank": _EXACT_ONE,
     "cdf_is_upsert": _EXACT_ONE,
     "cdf_is_delete": _EXACT_ONE,
+    "first_value_agg": _EXACT_ONE,
+    "last_value_agg": _EXACT_ONE,
+    "count_distinct_agg": _EXACT_ONE,
+    "row_number_window": _EXACT_ONE,
 }
 _MIN_CALL_COUNTS: dict[str, int] = {
     "bit_wise_or": _EXACT_ONE,
@@ -505,6 +582,9 @@ _MIN_CALL_COUNTS: dict[str, int] = {
     "qname_normalize": _EXACT_ONE,
     "map_normalize": _EXACT_ONE,
     "struct_pick": _EXACT_TWO,
+    "string_agg": _EXACT_ONE,
+    "lag_window": _EXACT_ONE,
+    "lead_window": _EXACT_ONE,
 }
 _EXPR_CALLS: dict[str, Callable[[Sequence[Expr], Sequence[ExprIR]], Expr]] = {
     "stringify": _expr_stringify,
@@ -542,6 +622,13 @@ _EXPR_CALLS: dict[str, Callable[[Sequence[Expr], Sequence[ExprIR]], Expr]] = {
     "cdf_change_rank": _expr_cdf_change_rank,
     "cdf_is_upsert": _expr_cdf_is_upsert,
     "cdf_is_delete": _expr_cdf_is_delete,
+    "first_value_agg": _expr_first_value_agg,
+    "last_value_agg": _expr_last_value_agg,
+    "count_distinct_agg": _expr_count_distinct_agg,
+    "string_agg": _expr_string_agg,
+    "row_number_window": _expr_row_number_window,
+    "lag_window": _expr_lag_window,
+    "lead_window": _expr_lead_window,
 }
 _SQL_CALLS: dict[str, Callable[[Sequence[str]], str]] = {
     "stringify": lambda rendered: f"CAST({rendered[0]} AS STRING)",

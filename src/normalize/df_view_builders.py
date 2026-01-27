@@ -21,7 +21,7 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from datafusion_ext import stable_id_parts
+from datafusion_ext import span_make, stable_id_parts, utf8_null_if_blank
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -107,50 +107,30 @@ def _stable_id_expr(prefix: str, parts: Sequence[Expr], *, null_sentinel: str) -
     return stable_id_parts(prefix, normalized[0], *normalized[1:])
 
 
-def _span_struct(  # noqa: PLR0913
+def _span_expr(
     *,
     bstart: Expr,
     bend: Expr,
-    start_line0: Expr | None = None,
-    end_line0: Expr | None = None,
-    start_col: Expr | None = None,
-    end_col: Expr | None = None,
     col_unit: Expr | None = None,
-    end_exclusive: Expr | None = None,
 ) -> Expr:
-    """Build a span struct from component expressions.
+    """Build a span struct using the span_make UDF.
+
+    Parameters
+    ----------
+    bstart
+        Byte start offset expression.
+    bend
+        Byte end offset expression.
+    col_unit
+        Optional column unit expression (defaults to "byte").
 
     Returns
     -------
     Expr
-        Span struct expression.
+        Span struct expression from span_make UDF.
     """
-    null_i32 = _null_expr("Int32")
-    null_bool = _null_expr("Boolean")
-    null_str = _null_expr("Utf8")
-
-    start_line_expr = _arrow_cast(start_line0, "Int32") if start_line0 is not None else null_i32
-    end_line_expr = _arrow_cast(end_line0, "Int32") if end_line0 is not None else null_i32
-    start_col_expr = _arrow_cast(start_col, "Int32") if start_col is not None else null_i32
-    end_col_expr = _arrow_cast(end_col, "Int32") if end_col is not None else null_i32
-    col_unit_expr = _arrow_cast(col_unit, "Utf8") if col_unit is not None else null_str
-    end_exclusive_expr = (
-        _arrow_cast(end_exclusive, "Boolean") if end_exclusive is not None else null_bool
-    )
-
-    byte_start_expr = _arrow_cast(bstart, "Int32")
-    byte_len_expr = _arrow_cast(bend - bstart, "Int32")
-
-    return f.struct(
-        start_line_expr,
-        start_col_expr,
-        end_line_expr,
-        end_col_expr,
-        col_unit_expr,
-        end_exclusive_expr,
-        byte_start_expr,
-        byte_len_expr,
-    )
+    unit = col_unit if col_unit is not None else lit("byte")
+    return span_make(bstart, bend, unit)
 
 
 def type_exprs_df_builder(ctx: SessionContext) -> DataFrame:
@@ -168,12 +148,11 @@ def type_exprs_df_builder(ctx: SessionContext) -> DataFrame:
     """
     table = ctx.table("cst_type_exprs")
 
-    # Filter out empty or whitespace-only expressions
+    # Filter out empty or whitespace-only expressions using utf8_null_if_blank UDF
     expr_text = _arrow_cast(col("expr_text"), "Utf8")
-    trimmed = f.trim(expr_text)
-    non_empty = trimmed.is_not_null() & (f.length(trimmed) > lit(0))
+    type_repr = utf8_null_if_blank(f.trim(expr_text))
 
-    df = table.filter(non_empty).with_column("type_repr", trimmed)
+    df = table.filter(type_repr.is_not_null()).with_column("type_repr", type_repr)
 
     # Generate type_expr_id (based on path, bstart, bend)
     type_expr_id = _stable_id_expr(
@@ -189,14 +168,12 @@ def type_exprs_df_builder(ctx: SessionContext) -> DataFrame:
         null_sentinel=TYPE_ID_SPEC.null_sentinel,
     )
 
-    # Build span struct
+    # Build span struct using span_make UDF
     has_col_unit = "col_unit" in df.schema().names
-    has_end_exclusive = "end_exclusive" in df.schema().names
-    span = _span_struct(
+    span = _span_expr(
         bstart=col("bstart"),
         bend=col("bend"),
-        col_unit=col("col_unit") if has_col_unit else lit("byte"),
-        end_exclusive=col("end_exclusive") if has_end_exclusive else _arrow_cast(lit(1), "Boolean"),
+        col_unit=col("col_unit") if has_col_unit else None,
     )
 
     df = df.with_column("type_expr_id", type_expr_id)
@@ -235,15 +212,13 @@ def type_nodes_df_builder(ctx: SessionContext) -> DataFrame:
     # Get type expressions
     type_exprs = ctx.table("type_exprs_norm_v1")
 
-    # Build rows from type expressions
-    expr_type_repr = _arrow_cast(col("type_repr"), "Utf8")
-    expr_trimmed = f.trim(expr_type_repr)
-    expr_non_empty = expr_trimmed.is_not_null() & (f.length(expr_trimmed) > lit(0))
-    expr_valid = expr_non_empty & col("type_id").is_not_null()
+    # Build rows from type expressions using utf8_null_if_blank for blank checks
+    expr_type_repr = utf8_null_if_blank(f.trim(_arrow_cast(col("type_repr"), "Utf8")))
+    expr_valid = expr_type_repr.is_not_null() & col("type_id").is_not_null()
 
     expr_rows = (
         type_exprs.filter(expr_valid)
-        .with_column("type_repr", expr_trimmed)
+        .with_column("type_repr", expr_type_repr)
         .with_column("type_form", lit("annotation"))
         .with_column("origin", lit("annotation"))
         .select(col("type_id"), col("type_repr"), col("type_form"), col("origin"))
@@ -253,13 +228,11 @@ def type_nodes_df_builder(ctx: SessionContext) -> DataFrame:
     try:
         scip = ctx.table("scip_symbol_information")
         if "type_repr" in scip.schema().names:
-            scip_type_repr = _arrow_cast(col("type_repr"), "Utf8")
-            scip_trimmed = f.trim(scip_type_repr)
-            scip_non_empty = scip_trimmed.is_not_null() & (f.length(scip_trimmed) > lit(0))
+            scip_type_repr = utf8_null_if_blank(f.trim(_arrow_cast(col("type_repr"), "Utf8")))
 
             scip_rows = (
-                scip.filter(scip_non_empty)
-                .with_column("type_repr", scip_trimmed)
+                scip.filter(scip_type_repr.is_not_null())
+                .with_column("type_repr", scip_type_repr)
                 .with_column("type_form", lit("scip"))
                 .with_column("origin", lit("inferred"))
             )
@@ -328,16 +301,11 @@ def cfg_blocks_df_builder(ctx: SessionContext) -> DataFrame:
     else:
         joined = blocks
 
-    # Build span struct
+    # Build span struct using span_make UDF
     bstart = _arrow_cast(col("start_offset"), "Int64")
     bend = f.coalesce(_arrow_cast(col("end_offset"), "Int64"), bstart)
 
-    span = _span_struct(
-        bstart=bstart,
-        bend=bend,
-        col_unit=lit("byte"),
-        end_exclusive=_arrow_cast(lit(1), "Boolean"),
-    )
+    span = _span_expr(bstart=bstart, bend=bend)
 
     return joined.with_column("span", span)
 
@@ -430,14 +398,9 @@ def def_use_events_df_builder(ctx: SessionContext) -> DataFrame:  # noqa: PLR091
         null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
     )
 
-    # Build span struct
+    # Build span struct using span_make UDF
     bstart = _arrow_cast(col("offset"), "Int64")
-    span = _span_struct(
-        bstart=bstart,
-        bend=bstart,
-        col_unit=lit("byte"),
-        end_exclusive=_arrow_cast(lit(1), "Boolean"),
-    )
+    span = _span_expr(bstart=bstart, bend=bstart)
 
     df = df.with_column("event_id", event_id)
     df = df.with_column("span", span)
@@ -540,12 +503,7 @@ def diagnostics_df_builder(ctx: SessionContext) -> DataFrame:
         bstart = _coalesce_cols(ts_errors, "bstart", "start_byte", default_expr=_null_expr("Int64"))
         bend = _coalesce_cols(ts_errors, "bend", "end_byte", default_expr=_null_expr("Int64"))
 
-        span = _span_struct(
-            bstart=bstart,
-            bend=bend,
-            col_unit=lit("byte"),
-            end_exclusive=_arrow_cast(lit(1), "Boolean"),
-        )
+        span = _span_expr(bstart=bstart, bend=bend)
 
         df = (
             ts_errors.with_column("span", span)

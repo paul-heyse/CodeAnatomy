@@ -25,9 +25,13 @@ from hamilton_pipeline.validators import NonEmptyTableValidator
 from storage.deltalake import (
     DeltaWriteOptions,
     delta_schema_configuration,
+    delta_table_version,
     delta_write_configuration,
+    enable_delta_features,
+    idempotent_commit_properties,
     write_delta_table,
 )
+from storage.deltalake.delta import DEFAULT_DELTA_FEATURE_PROPERTIES
 from storage.ipc import payload_hash
 
 
@@ -94,31 +98,61 @@ def _delta_write(
         raise ValueError(msg)
     target_dir = Path(base_dir) / dataset_name
     target_dir.mkdir(parents=True, exist_ok=True)
+    existing_version = delta_table_version(
+        str(target_dir),
+        storage_options=output_config.delta_storage_options,
+    )
     configuration: dict[str, str | None] = {}
     if output_config.delta_write_policy is not None:
         configuration.update(delta_write_configuration(output_config.delta_write_policy) or {})
     if output_config.delta_schema_policy is not None:
         configuration.update(delta_schema_configuration(output_config.delta_schema_policy) or {})
+    configuration.update(DEFAULT_DELTA_FEATURE_PROPERTIES)
+    commit_metadata = {
+        "dataset_name": dataset_name,
+        "operation": "output_materialize",
+        "mode": "overwrite",
+        "schema_fingerprint": payload_hash(
+            {"schema": list(getattr(table.schema, "names", []))},
+            pa.schema([pa.field("schema", pa.list_(pa.string()))]),
+        ),
+    }
+    commit_properties = idempotent_commit_properties(
+        operation="output_materialize",
+        mode="overwrite",
+        extra_metadata=commit_metadata,
+    )
     result = write_delta_table(
         table,
         str(target_dir),
         options=DeltaWriteOptions(
             mode="overwrite",
             schema_mode="overwrite",
-            commit_metadata={
-                "dataset_name": dataset_name,
-                "schema_fingerprint": payload_hash(
-                    {"schema": list(getattr(table.schema, "names", []))},
-                    pa.schema([pa.field("schema", pa.list_(pa.string()))]),
-                ),
-            },
+            commit_metadata=commit_metadata,
+            commit_properties=commit_properties,
             configuration=configuration or None,
             storage_options=output_config.delta_storage_options,
         ),
     )
+    if existing_version is None:
+        enable_delta_features(
+            str(target_dir),
+            storage_options=output_config.delta_storage_options,
+            features=DEFAULT_DELTA_FEATURE_PROPERTIES,
+            commit_metadata=commit_metadata,
+        )
+    final_version = delta_table_version(
+        str(target_dir),
+        storage_options=output_config.delta_storage_options,
+    )
+    if final_version is None:
+        final_version = result.version
+    if final_version is None:
+        msg = f"Failed to resolve Delta version for output dataset: {dataset_name!r}."
+        raise RuntimeError(msg)
     return {
         "path": str(target_dir),
-        "delta_version": result.version,
+        "delta_version": final_version,
         "rows": _rows(table),
     }
 

@@ -16,9 +16,9 @@ from incremental.types import IncrementalFileChanges
 from normalize.registry_runtime import dataset_name_from_alias
 from storage.deltalake import (
     DeltaWriteOptions,
-    build_commit_properties,
     coerce_delta_table,
     enable_delta_features,
+    idempotent_commit_properties,
     open_delta_table,
     write_delta_table,
 )
@@ -357,13 +357,17 @@ def _delete_delta_partitions(
     predicate = _partition_predicate(delete_partitions)
     if not predicate:
         return
+    commit_metadata = {"dataset": base_dir, "operation": "delete"}
     commit_options, commit_run = context.runtime.profile.reserve_delta_commit(
         key=base_dir,
-        metadata={"dataset": base_dir, "operation": "delete"},
+        metadata=commit_metadata,
+        commit_metadata=commit_metadata,
     )
-    commit_properties = build_commit_properties(
-        app_id=commit_options.app_id,
-        version=commit_options.version,
+    commit_properties = idempotent_commit_properties(
+        operation="delta_delete",
+        mode="delete",
+        idempotent=commit_options,
+        extra_metadata=commit_metadata,
     )
     table = open_delta_table(
         base_dir,

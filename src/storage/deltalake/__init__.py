@@ -38,6 +38,7 @@ __all__ = (
     "enable_delta_features",
     "evaluate_and_select_files",
     "evaluate_filters_against_index",
+    "idempotent_commit_properties",
     "open_delta_table",
     "query_builder_available",
     "query_delta_via_querybuilder",
@@ -59,6 +60,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaWriteResult": ("storage.deltalake.delta", "DeltaWriteResult"),
     "StorageOptions": ("storage.deltalake.delta", "StorageOptions"),
     "build_commit_properties": ("storage.deltalake.delta", "build_commit_properties"),
+    "idempotent_commit_properties": ("storage.deltalake.delta", "idempotent_commit_properties"),
     "build_delta_scan_config": ("storage.deltalake.scan_profile", "build_delta_scan_config"),
     "cleanup_delta_log": ("storage.deltalake.delta", "cleanup_delta_log"),
     "coerce_delta_table": ("storage.deltalake.delta", "coerce_delta_table"),
@@ -114,6 +116,7 @@ if TYPE_CHECKING:
     DeltaWriteResult = _delta_io.DeltaWriteResult
     StorageOptions = _delta_io.StorageOptions
     build_commit_properties = _delta_io.build_commit_properties
+    idempotent_commit_properties = _delta_io.idempotent_commit_properties
     build_delta_scan_config = _scan_profile.build_delta_scan_config
     cleanup_delta_log = _delta_io.cleanup_delta_log
     coerce_delta_table = _delta_io.coerce_delta_table

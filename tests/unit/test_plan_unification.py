@@ -366,6 +366,9 @@ def test_task_execution_rejects_plan_signature_mismatch() -> None:
         evidence=EvidenceCatalog(),
         plan_signature="plan:a",
         active_task_names=frozenset({"out_alpha"}),
+        scan_units=(),
+        scan_keys_by_task={},
+        scan_units_hash=None,
     )
     spec = TaskExecutionSpec(
         task_name="out_alpha",

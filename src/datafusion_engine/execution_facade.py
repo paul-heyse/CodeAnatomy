@@ -5,7 +5,8 @@ Internal execution paths use builder/plan-based approaches only.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -30,7 +31,8 @@ if TYPE_CHECKING:
     from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.registry_bridge import DataFusionCachePolicy
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.schema_introspection import SchemaIntrospector
 
 
@@ -249,6 +251,19 @@ class ExecutionResult:
 
 
 @dataclass(frozen=True)
+class _ExecutionArtifactRequest:
+    """Execution artifact persistence input."""
+
+    bundle: DataFusionPlanBundle
+    view_name: str | None
+    duration_ms: float
+    status: str
+    error: str | None
+    scan_units: Sequence[ScanUnit]
+    scan_keys: Sequence[str]
+
+
+@dataclass(frozen=True)
 class DataFusionExecutionFacade:
     """Facade coordinating compilation, execution, registration, and writes.
 
@@ -345,6 +360,21 @@ class DataFusionExecutionFacade:
             runtime_profile=self.runtime_profile,
         )
 
+    def _session_runtime(self) -> SessionRuntime | None:
+        """Return the planning-ready SessionRuntime when it matches the context.
+
+        Returns
+        -------
+        SessionRuntime | None
+            Session runtime when the profile matches the session context.
+        """
+        if self.runtime_profile is None:
+            return None
+        session_runtime = self.runtime_profile.session_runtime()
+        if session_runtime.ctx is not self.ctx:
+            return None
+        return session_runtime
+
     def compile_to_bundle(
         self,
         builder: DataFrameBuilder,
@@ -374,29 +404,178 @@ class DataFusionExecutionFacade:
         >>> bundle = facade.compile_to_bundle(build_query)
         """
         df = builder(self.ctx)
+        session_runtime = self._session_runtime()
         return build_plan_bundle(
             self.ctx,
             df,
             compute_execution_plan=compute_execution_plan,
             compute_substrait=True,
+            session_runtime=session_runtime,
         )
 
-    def execute_plan_bundle(self, bundle: DataFusionPlanBundle) -> ExecutionResult:
-        """Execute a plan bundle with UDF compatibility and Substrait replay.
+    def execute_plan_bundle(
+        self,
+        bundle: DataFusionPlanBundle,
+        *,
+        view_name: str | None = None,
+        scan_units: Sequence[ScanUnit] = (),
+        scan_keys: Sequence[str] = (),
+    ) -> ExecutionResult:
+        """Execute a plan bundle with Substrait-first replay.
+
+        Substrait replay is the primary execution path for determinism. The
+        original DataFrame is used as fallback when Substrait is unavailable
+        or replay fails. Fallback events are recorded for diagnostics.
 
         Returns
         -------
         ExecutionResult
             Unified execution result for the plan bundle.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when UDF compatibility checks fail.
+        ValueError
+            Raised when execution fails with invalid inputs.
+        TypeError
+            Raised when replay fails due to incompatible plan types.
         """
-        _ensure_udf_compatibility(self.ctx, bundle)
-        df = bundle.df
-        if bundle.substrait_bytes is not None:
-            try:
-                df = replay_substrait_bytes(self.ctx, bundle.substrait_bytes)
-            except (RuntimeError, TypeError, ValueError):
-                df = bundle.df
-        return ExecutionResult.from_dataframe(df, plan_bundle=bundle)
+        start = time.perf_counter()
+        try:
+            _ensure_udf_compatibility(self.ctx, bundle)
+            df, used_fallback = self._substrait_first_df(bundle)
+            if used_fallback:
+                self._record_substrait_fallback(
+                    bundle,
+                    view_name=view_name,
+                    reason="substrait_replay_failed",
+                )
+            result = ExecutionResult.from_dataframe(df, plan_bundle=bundle)
+        except (RuntimeError, ValueError, TypeError) as exc:
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            self._record_execution_artifact(
+                _ExecutionArtifactRequest(
+                    bundle=bundle,
+                    view_name=view_name,
+                    duration_ms=duration_ms,
+                    status="error",
+                    error=str(exc),
+                    scan_units=scan_units,
+                    scan_keys=scan_keys,
+                )
+            )
+            raise
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        self._record_execution_artifact(
+            _ExecutionArtifactRequest(
+                bundle=bundle,
+                view_name=view_name,
+                duration_ms=duration_ms,
+                status="ok",
+                error=None,
+                scan_units=scan_units,
+                scan_keys=scan_keys,
+            )
+        )
+        return result
+
+    def _record_execution_artifact(self, request: _ExecutionArtifactRequest) -> None:
+        """Persist an execution artifact row when runtime settings allow it."""
+        if self.runtime_profile is None or request.view_name is None:
+            return
+        from datafusion_engine.plan_artifact_store import (
+            PlanArtifactBuildRequest,
+            persist_execution_artifact,
+        )
+
+        try:
+            persist_execution_artifact(
+                self.ctx,
+                self.runtime_profile,
+                request=PlanArtifactBuildRequest(
+                    view_name=request.view_name,
+                    bundle=request.bundle,
+                    scan_units=request.scan_units,
+                    scan_keys=request.scan_keys,
+                    execution_duration_ms=request.duration_ms,
+                    execution_status=request.status,
+                    execution_error=request.error,
+                ),
+            )
+        except (RuntimeError, ValueError, OSError, KeyError, ImportError, TypeError) as exc:
+            from datafusion_engine.diagnostics import record_artifact
+
+            record_artifact(
+                self.runtime_profile,
+                "plan_artifacts_execution_failed_v1",
+                {
+                    "view_name": request.view_name,
+                    "plan_fingerprint": request.bundle.plan_fingerprint,
+                    "status": request.status,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+
+    def _substrait_first_df(
+        self,
+        bundle: DataFusionPlanBundle,
+    ) -> tuple[DataFrame, bool]:
+        """Return DataFrame using Substrait-first execution.
+
+        Substrait replay is the primary path for deterministic execution.
+        Falls back to the original DataFrame when Substrait is unavailable.
+
+        Returns
+        -------
+        tuple[DataFrame, bool]
+            DataFrame and whether fallback was used.
+        """
+        if bundle.substrait_bytes is None:
+            return bundle.df, True
+        try:
+            df = replay_substrait_bytes(self.ctx, bundle.substrait_bytes)
+        except (RuntimeError, TypeError, ValueError):
+            return bundle.df, True
+        else:
+            return df, False
+
+    def _record_substrait_fallback(
+        self,
+        bundle: DataFusionPlanBundle,
+        *,
+        view_name: str | None,
+        reason: str,
+    ) -> None:
+        """Record diagnostics when Substrait replay falls back.
+
+        Parameters
+        ----------
+        bundle
+            Plan bundle that fell back to original DataFrame.
+        view_name
+            Optional view name for diagnostics context.
+        reason
+            Reason for the fallback (e.g., 'substrait_unavailable', 'replay_failed').
+        """
+        if self.runtime_profile is None:
+            return
+        from datafusion_engine.diagnostics import record_artifact
+
+        substrait_bytes = bundle.substrait_bytes
+        has_substrait = substrait_bytes is not None
+        record_artifact(
+            self.runtime_profile,
+            "substrait_fallback_v1",
+            {
+                "view_name": view_name,
+                "plan_fingerprint": bundle.plan_fingerprint,
+                "reason": reason,
+                "has_substrait_bytes": has_substrait,
+                "substrait_bytes_len": len(substrait_bytes) if substrait_bytes is not None else 0,
+            },
+        )
 
     def execute_builder(
         self,
@@ -422,11 +601,13 @@ class DataFusionExecutionFacade:
             Unified execution result for the builder.
         """
         df = builder(self.ctx)
+        session_runtime = self._session_runtime()
         bundle = build_plan_bundle(
             self.ctx,
             df,
             compute_execution_plan=compute_execution_plan,
             compute_substrait=compute_substrait,
+            session_runtime=session_runtime,
         )
         return self.execute_plan_bundle(bundle)
 
@@ -453,11 +634,13 @@ class DataFusionExecutionFacade:
         ExecutionResult
             Unified execution result for the DataFrame.
         """
+        session_runtime = self._session_runtime()
         bundle = build_plan_bundle(
             self.ctx,
             df,
             compute_execution_plan=compute_execution_plan,
             compute_substrait=compute_substrait,
+            session_runtime=session_runtime,
         )
         return self.execute_plan_bundle(bundle)
 
@@ -604,11 +787,13 @@ class DataFusionExecutionFacade:
         DataFusionPlanBundle
             Canonical plan artifact for the DataFrame.
         """
+        session_runtime = self._session_runtime()
         return build_plan_bundle(
             self.ctx,
             df,
             compute_execution_plan=compute_execution_plan,
             compute_substrait=compute_substrait,
+            session_runtime=session_runtime,
         )
 
 

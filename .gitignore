@@ -16,3 +16,6 @@ rust/datafusion_ext/Cargo.lock
 Cargo.lock
 # Virtual environments
 .venv
+
+# Plan artifact store outputs
+.artifacts/

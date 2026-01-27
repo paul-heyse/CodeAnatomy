@@ -5,9 +5,12 @@ from __future__ import annotations
 from functools import cache
 from typing import Final
 
-from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.schema.metadata import merge_metadata_specs, ordering_metadata_spec
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrow_utils.core.ordering import OrderingLevel
+from arrow_utils.schema.metadata import (
+    SchemaMetadataSpec,
+    merge_metadata_specs,
+    ordering_metadata_spec,
+)
 from datafusion_engine.schema_registry import SCHEMA_META_NAME, SCHEMA_META_VERSION
 from relspec.view_defs import (
     REL_CALLSITE_QNAME_OUTPUT,

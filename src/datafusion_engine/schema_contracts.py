@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pyarrow as pa
 from datafusion import SessionContext
 
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.schema.abi import schema_fingerprint
 from datafusion_engine.schema_introspection import schema_from_table
 from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
 

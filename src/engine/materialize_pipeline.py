@@ -10,10 +10,9 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
+from arrow_utils.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
+from core_types import DeterminismTier
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.dataset_locations import resolve_dataset_location
 from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
@@ -38,21 +37,19 @@ if TYPE_CHECKING:
 
 def _resolve_prefer_reader(
     *,
-    ctx: ExecutionContext,
     policy: ExecutionSurfacePolicy,
 ) -> bool:
-    if ctx.determinism == DeterminismTier.CANONICAL:
+    if policy.determinism_tier == DeterminismTier.CANONICAL:
         return False
     return policy.prefer_streaming
 
 
 def _cache_event_reporter(
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> Callable[[Mapping[str, object]], None] | None:
-    profile = ctx.runtime.datafusion
-    if profile is None:
+    if runtime_profile is None:
         return None
-    diagnostics = profile.diagnostics_sink
+    diagnostics = runtime_profile.diagnostics_sink
     if diagnostics is None:
         return None
     record_events = diagnostics.record_events
@@ -91,7 +88,6 @@ def _param_binding_state(params: Mapping[str, object] | None) -> tuple[str, str 
 
 def _resolve_cache_policy(
     *,
-    ctx: ExecutionContext,
     policy: ExecutionSurfacePolicy,
     prefer_reader: bool,
     params: Mapping[str, object] | None,
@@ -122,14 +118,6 @@ def _resolve_cache_policy(
             param_mode=param_mode,
             param_signature=param_signature,
         )
-    if ctx.determinism == DeterminismTier.BEST_EFFORT:
-        return CachePolicy(
-            enabled=False,
-            reason="best_effort",
-            writer_strategy=writer_strategy,
-            param_mode=param_mode,
-            param_signature=param_signature,
-        )
     if policy.determinism_tier == DeterminismTier.BEST_EFFORT:
         return CachePolicy(
             enabled=False,
@@ -149,7 +137,6 @@ def _resolve_cache_policy(
 
 def resolve_cache_policy(
     *,
-    ctx: ExecutionContext,
     policy: ExecutionSurfacePolicy,
     prefer_reader: bool,
     params: Mapping[str, object] | None,
@@ -162,14 +149,13 @@ def resolve_cache_policy(
         Cache policy for the materialization.
     """
     return _resolve_cache_policy(
-        ctx=ctx,
         policy=policy,
         prefer_reader=prefer_reader,
         params=params,
     )
 
 
-def resolve_prefer_reader(*, ctx: ExecutionContext, policy: ExecutionSurfacePolicy) -> bool:
+def resolve_prefer_reader(*, policy: ExecutionSurfacePolicy) -> bool:
     """Return the prefer_reader flag for plan execution.
 
     Returns
@@ -177,13 +163,13 @@ def resolve_prefer_reader(*, ctx: ExecutionContext, policy: ExecutionSurfacePoli
     bool
         ``True`` when plan execution should prefer streaming readers.
     """
-    return _resolve_prefer_reader(ctx=ctx, policy=policy)
+    return _resolve_prefer_reader(policy=policy)
 
 
 def build_plan_product(
     plan: DataFusionPlanBundle,
     *,
-    execution: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
     policy: ExecutionSurfacePolicy,
     plan_id: str | None = None,
 ) -> PlanProduct:
@@ -194,17 +180,9 @@ def build_plan_product(
     ValueError
         Always raised to enforce view-only materialization.
     """
-    _ = (plan, execution, policy, plan_id)
+    _ = (plan, runtime_profile, policy, plan_id)
     msg = "Plan materialization is deprecated; use build_view_product instead."
     raise ValueError(msg)
-
-
-def _require_datafusion_profile(ctx: ExecutionContext) -> DataFusionRuntimeProfile:
-    profile = ctx.runtime.datafusion
-    if profile is None:
-        msg = "DataFusion runtime profile is required for view materialization."
-        raise ValueError(msg)
-    return profile
 
 
 def _plan_view_bundle(
@@ -250,7 +228,7 @@ def _plan_view_scan_units(
 def build_view_product(
     view_name: str,
     *,
-    ctx: ExecutionContext,
+    session_runtime: SessionRuntime,
     policy: ExecutionSurfacePolicy,
     view_id: str | None = None,
 ) -> PlanProduct:
@@ -260,8 +238,8 @@ def build_view_product(
     ----------
     view_name
         Registered view name to materialize.
-    ctx
-        Execution context containing runtime profile and session configuration.
+    session_runtime
+        Planning-ready DataFusion session runtime.
     policy
         Execution policy controlling streaming preferences.
     view_id
@@ -277,8 +255,7 @@ def build_view_product(
     ValueError
         Raised when the runtime profile or view registration is missing.
     """
-    profile = _require_datafusion_profile(ctx)
-    session_runtime = profile.session_runtime()
+    profile = session_runtime.profile
     session = session_runtime.ctx
     if not session.table_exist(view_name):
         msg = f"View {view_name!r} is not registered for materialization."
@@ -300,7 +277,7 @@ def build_view_product(
             scan_units=scan_units,
             runtime_profile=profile,
         )
-    prefer_reader = _resolve_prefer_reader(ctx=ctx, policy=policy)
+    prefer_reader = _resolve_prefer_reader(policy=policy)
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
     view_artifact = (
@@ -322,7 +299,7 @@ def build_view_product(
         schema = table.schema
         result = ExecutionResult.from_table(table)
     _record_plan_execution(
-        ctx,
+        profile,
         plan_id=view_id or view_name,
         result=result,
         view_artifact=view_artifact,
@@ -330,7 +307,7 @@ def build_view_product(
     return PlanProduct(
         plan_id=view_id or view_name,
         schema=schema,
-        determinism_tier=ctx.determinism,
+        determinism_tier=policy.determinism_tier,
         writer_strategy=policy.writer_strategy,
         view_artifact=view_artifact,
         stream=stream,
@@ -340,15 +317,12 @@ def build_view_product(
 
 
 def _record_plan_execution(
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
     *,
     plan_id: str,
     result: ExecutionResult,
     view_artifact: DataFusionViewArtifact | None = None,
 ) -> None:
-    profile = ctx.runtime.datafusion
-    if profile is None:
-        return
     rows: int | None = None
     if result.table is not None:
         rows = result.table.num_rows
@@ -359,7 +333,7 @@ def _record_plan_execution(
     }
     if view_artifact is not None:
         payload["plan_fingerprint"] = view_artifact.plan_fingerprint
-    record_artifact(profile, "plan_execute_v1", payload)
+    record_artifact(runtime_profile, "plan_execute_v1", payload)
 
 
 @dataclass(frozen=True)
@@ -459,7 +433,7 @@ def write_extract_outputs(
     name: str,
     data: TableLike | RecordBatchReaderLike | Iterable[pa.RecordBatch],
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
     """Write extract outputs using DataFusion-native paths when configured.
 
@@ -469,10 +443,6 @@ def write_extract_outputs(
         Raised when the DataFusion runtime profile is missing, a dataset location is not
         registered, or the output yields no rows.
     """
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "DataFusion runtime profile is required for extract outputs."
-        raise ValueError(msg)
     runtime_profile.record_schema_snapshots()
     location = resolve_dataset_location(name, runtime_profile=runtime_profile)
     if location is None:

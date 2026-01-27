@@ -192,9 +192,13 @@ def _plan_view_nodes(
 def _dataset_location_map(profile: DataFusionRuntimeProfile) -> dict[str, DatasetLocation]:
     locations: dict[str, DatasetLocation] = {}
     for name, location in profile.extract_dataset_locations.items():
-        locations.setdefault(name, apply_delta_store_policy(location, policy=profile.delta_store_policy))
+        locations.setdefault(
+            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
+        )
     for name, location in profile.scip_dataset_locations.items():
-        locations.setdefault(name, apply_delta_store_policy(location, policy=profile.delta_store_policy))
+        locations.setdefault(
+            name, apply_delta_store_policy(location, policy=profile.delta_store_policy)
+        )
     for catalog in profile.registry_catalogs.values():
         for name in catalog.names():
             if name in locations:

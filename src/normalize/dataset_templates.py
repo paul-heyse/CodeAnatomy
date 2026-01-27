@@ -5,14 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.schema.metadata import (
+from arrow_utils.core.ordering import OrderingLevel
+from arrow_utils.schema.metadata import (
     EvidenceMetadataSpec,
     evidence_metadata,
     metadata_map_bytes,
     metadata_scalar_map_bytes,
 )
+from core_types import DeterminismTier
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 
 

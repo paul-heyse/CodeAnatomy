@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from arrowdsl.core.determinism import DeterminismTier
+from core_types import DeterminismTier
 
 WriterStrategy = Literal["arrow", "datafusion"]
 

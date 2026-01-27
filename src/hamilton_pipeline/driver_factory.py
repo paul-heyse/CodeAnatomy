@@ -16,10 +16,8 @@ from hamilton.execution import executors
 from hamilton.lifecycle import FunctionInputOutputTypeChecker
 from hamilton.lifecycle import base as lifecycle_base
 
-from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike
-from core_types import JsonValue
+from arrow_utils.core.interop import SchemaLike
+from core_types import DeterminismTier, JsonValue
 from engine.runtime_profile import resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
 from hamilton_pipeline.execution_manager import PlanExecutionManager
@@ -149,9 +147,9 @@ def _determinism_override(config: Mapping[str, JsonValue]) -> DeterminismTier | 
 class ViewGraphContext:
     """Runtime context needed to compile the execution plan."""
 
-    ctx: ExecutionContext
     profile: DataFusionRuntimeProfile
     session_runtime: SessionRuntime
+    determinism_tier: DeterminismTier
     snapshot: Mapping[str, object]
     view_nodes: tuple[ViewNode, ...]
 
@@ -161,12 +159,7 @@ def _view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContext:
         _runtime_profile_name(config),
         determinism=_determinism_override(config),
     )
-    runtime_profile_spec.runtime.apply_global_thread_pools()
-    ctx = ExecutionContext(runtime=runtime_profile_spec.runtime)
-    profile = runtime_profile_spec.runtime.datafusion
-    if profile is None:
-        msg = "DataFusion runtime profile is required for view graph scheduling."
-        raise ValueError(msg)
+    profile = runtime_profile_spec.datafusion
     from cpg.kind_catalog import validate_edge_kind_requirements
     from datafusion_engine.view_registry import ensure_view_graph
     from datafusion_engine.view_registry_specs import view_graph_nodes
@@ -184,9 +177,9 @@ def _view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContext:
         runtime_profile=profile,
     )
     return ViewGraphContext(
-        ctx=ctx,
         profile=profile,
         session_runtime=session_runtime,
+        determinism_tier=runtime_profile_spec.determinism_tier,
         snapshot=snapshot,
         view_nodes=tuple(nodes),
     )
@@ -264,7 +257,10 @@ def _precompute_incremental_diff(
     from relspec.incremental import diff_plan_snapshots
 
     try:
-        runtime = IncrementalRuntime.build(ctx=view_ctx.ctx)
+        runtime = IncrementalRuntime.build(
+            profile=view_ctx.profile,
+            determinism_tier=view_ctx.determinism_tier,
+        )
     except ValueError:
         return None, str(state_dir)
     context = DeltaAccessContext(runtime=runtime)

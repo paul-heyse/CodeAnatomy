@@ -353,7 +353,7 @@ def _schema_metadata_violations(
     expected = contract.schema_metadata or {}
     if not expected:
         return []
-    from arrowdsl.schema.abi import schema_fingerprint
+    from arrow_utils.schema.abi import schema_fingerprint
     from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
 
     actual = schema.metadata or {}

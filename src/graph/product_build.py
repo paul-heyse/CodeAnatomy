@@ -12,9 +12,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal, cast
 
-from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.execution_context import ExecutionContext
-from core_types import JsonDict, JsonValue, PathLike, ensure_path
+from core_types import DeterminismTier, JsonDict, JsonValue, PathLike, ensure_path
 from cpg.schemas import SCHEMA_VERSION
 from engine.plan_policy import WriterStrategy
 from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
@@ -93,7 +91,6 @@ class GraphProductBuildRequest:
     scip_index_config: ScipIndexConfig | None = None
     scip_identity_overrides: ScipIdentityOverrides | None = None
 
-    ctx: ExecutionContext | None = None
     writer_strategy: WriterStrategy | None = None
 
     incremental_config: IncrementalConfig | None = None
@@ -133,7 +130,6 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         work_dir=request.work_dir,
         scip_index_config=request.scip_index_config,
         scip_identity_overrides=request.scip_identity_overrides,
-        ctx=request.ctx,
         incremental_config=request.incremental_config,
         incremental_impact_strategy=request.incremental_impact_strategy,
         outputs=outputs,

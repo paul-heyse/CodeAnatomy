@@ -10,8 +10,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.schema.metadata import SchemaMetadataSpec
 from core_types import JsonDict, PathLike, ensure_path
 from engine.plan_product import PlanProduct
 

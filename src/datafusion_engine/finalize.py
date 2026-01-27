@@ -16,9 +16,8 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from datafusion.expr import Expr
 
-from arrowdsl.core.array_iter import iter_array_values
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import (
+from arrow_utils.core.array_iter import iter_array_values
+from arrow_utils.core.interop import (
     ArrayLike,
     DataTypeLike,
     RecordBatchReaderLike,
@@ -26,16 +25,19 @@ from arrowdsl.core.interop import (
     TableLike,
     coerce_table_like,
 )
-from arrowdsl.core.plan_ops import DedupeSpec, SortKey
-from arrowdsl.core.schema_constants import PROVENANCE_COLS
-from arrowdsl.schema.build import ColumnDefaultsSpec, ConstExpr
-from arrowdsl.schema.chunking import ChunkPolicy
+from arrow_utils.core.schema_constants import PROVENANCE_COLS
+from arrow_utils.schema.build import ColumnDefaultsSpec, ConstExpr
+from arrow_utils.schema.chunking import ChunkPolicy
+from arrow_utils.schema.metadata import SchemaMetadataSpec
 from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_table
+from arrowdsl.schema.schema import AlignmentInfo, align_table
 from arrowdsl.schema.validation import ArrowValidationOptions
+from core_types import DeterminismTier
 from datafusion_engine.io_adapter import DataFusionIOAdapter
+from datafusion_engine.kernel_specs import DedupeSpec, SortKey
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from schema_spec.specs import TableSchemaSpec
 
@@ -300,13 +302,16 @@ class FinalizeOptions:
     schema_policy: SchemaPolicy | None = None
     chunk_policy: ChunkPolicy | None = None
     skip_canonical_sort: bool = False
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
+    mode: Literal["strict", "tolerant"] = "tolerant"
+    provenance: bool = False
+    schema_validation: ArrowValidationOptions | None = None
 
 
 def _required_non_null_results(
     table: TableLike,
     cols: Sequence[str],
-    *,
-    _ctx: ExecutionContext,
 ) -> tuple[list[InvariantResult], ArrayLike]:
     """Return invariant results and combined mask for required non-null checks.
 
@@ -351,8 +356,6 @@ def _required_non_null_results(
 def _collect_invariant_results(
     table: TableLike,
     contract: Contract,
-    *,
-    ctx: ExecutionContext,
 ) -> tuple[list[InvariantResult], ArrayLike]:
     """Collect invariant results and the combined bad-row mask.
 
@@ -364,7 +367,6 @@ def _collect_invariant_results(
     results, required_bad_any = _required_non_null_results(
         table,
         contract.required_non_null,
-        _ctx=ctx,
     )
     masks: list[ArrayLike] = [required_bad_any]
     for inv in contract.invariants:
@@ -399,12 +401,9 @@ def _combine_masks_df(
 def _filter_good_rows(
     table: TableLike,
     bad_any: ArrayLike,
-    *,
-    ctx: ExecutionContext,
 ) -> TableLike:
     if table.num_rows == 0:
         return table
-    _ = ctx
     resolved = coerce_table_like(table)
     if isinstance(resolved, pa.RecordBatchReader):
         reader = cast("RecordBatchReaderLike", resolved)
@@ -445,10 +444,10 @@ def _build_stats_table(errors: TableLike, *, error_spec: ErrorArtifactSpec) -> T
 def _raise_on_errors_if_strict(
     errors: TableLike,
     *,
-    ctx: ExecutionContext,
+    mode: Literal["strict", "tolerant"],
     contract: Contract,
 ) -> None:
-    if ctx.mode != "strict" or errors.num_rows == 0:
+    if mode != "strict" or errors.num_rows == 0:
         return
     counts = _error_code_counts_table(errors)
     pairs = [
@@ -483,11 +482,9 @@ def _maybe_validate_with_arrow(
     table: TableLike,
     *,
     contract: Contract,
-    ctx: ExecutionContext,
     schema_policy: SchemaPolicy | None = None,
+    schema_validation: ArrowValidationOptions | None = None,
 ) -> TableLike:
-    if not ctx.schema_validation.enabled:
-        return table
     if contract.schema_spec is None:
         return table
     options = None
@@ -496,7 +493,9 @@ def _maybe_validate_with_arrow(
     if options is None:
         options = contract.validation
     if options is None:
-        options = ArrowValidationOptions.from_policy(ctx.schema_validation)
+        options = schema_validation
+    if options is None:
+        return table
     return _validate_arrow_table(table, spec=contract.schema_spec, options=options)
 
 
@@ -550,12 +549,12 @@ def _fill_null(values: ArrayLike, *, fill_value: bool) -> ArrayLike:
 def _row_id_for_errors(
     errors: TableLike,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile | None,
     contract: Contract,
     key_cols: Sequence[str],
 ) -> ArrayLike:
     if key_cols:
-        df_ctx = _datafusion_context(ctx)
+        df_ctx = _datafusion_context(runtime_profile)
         if df_ctx is None:
             msg = "DataFusion SessionContext required to compute error row ids."
             raise TypeError(msg)
@@ -591,12 +590,12 @@ def _row_id_for_errors(
 def _aggregate_error_detail_lists(
     errors: TableLike,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile | None,
     group_cols: Sequence[str],
     detail_field_names: Sequence[str],
 ) -> TableLike:
     group_table = errors.select(list(group_cols) + list(detail_field_names))
-    df_ctx = _datafusion_context(ctx)
+    df_ctx = _datafusion_context(runtime_profile)
     if df_ctx is None:
         msg = "DataFusion SessionContext required to aggregate error details."
         raise TypeError(msg)
@@ -615,7 +614,7 @@ def _aggregate_error_detail_lists(
 def _aggregate_error_details(
     errors: TableLike,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile | None,
     contract: Contract,
     schema: SchemaLike,
     provenance_cols: Sequence[str],
@@ -629,24 +628,25 @@ def _aggregate_error_details(
             provenance=provenance,
         )
     key_cols = _error_detail_key_cols(contract, schema)
-    row_id = _row_id_for_errors(errors, ctx=ctx, contract=contract, key_cols=key_cols)
+    row_id = _row_id_for_errors(
+        errors, runtime_profile=runtime_profile, contract=contract, key_cols=key_cols
+    )
     errors = errors.append_column("row_id", row_id)
     group_cols = ["row_id"] + [col for col in key_cols if col in errors.column_names] + provenance
     detail_field_names = [name for name, _ in ERROR_DETAIL_FIELDS]
     return _aggregate_error_detail_lists(
         errors,
-        ctx=ctx,
+        runtime_profile=runtime_profile,
         group_cols=group_cols,
         detail_field_names=detail_field_names,
     )
 
 
-def _datafusion_context(ctx: ExecutionContext) -> SessionContext | None:
-    profile = ctx.runtime.datafusion
-    if profile is None:
+def _datafusion_context(runtime_profile: DataFusionRuntimeProfile | None) -> SessionContext | None:
+    if runtime_profile is None:
         return None
     try:
-        return profile.session_context()
+        return runtime_profile.session_context()
     except (RuntimeError, TypeError, ValueError):
         return None
 
@@ -753,7 +753,6 @@ def finalize(
     table: TableLike,
     *,
     contract: Contract,
-    ctx: ExecutionContext,
     options: FinalizeOptions | None = None,
 ) -> FinalizeResult:
     """Finalize a table at the contract boundary.
@@ -764,8 +763,6 @@ def finalize(
         Input table.
     contract:
         Output contract.
-    ctx:
-        Execution context for finalize behavior.
     options:
         Optional finalize options for error specs, transforms, and chunk policies.
 
@@ -775,7 +772,7 @@ def finalize(
         Finalized table bundle.
     """
     options = options or FinalizeOptions()
-    schema_policy = _resolve_schema_policy(contract, ctx=ctx, schema_policy=options.schema_policy)
+    schema_policy = _resolve_schema_policy(contract, schema_policy=options.schema_policy)
     schema = schema_policy.resolved_schema()
     aligned, align_info = schema_policy.apply_with_info(table)
     if schema_policy.encoding is None:
@@ -783,34 +780,43 @@ def finalize(
     aligned = _maybe_validate_with_arrow(
         aligned,
         contract=contract,
-        ctx=ctx,
         schema_policy=schema_policy,
+        schema_validation=options.schema_validation,
     )
-    provenance_cols: list[str] = _provenance_columns(aligned, schema) if ctx.provenance else []
+    provenance_cols: list[str] = _provenance_columns(aligned, schema) if options.provenance else []
 
-    results, bad_any = _collect_invariant_results(aligned, contract, ctx=ctx)
+    results, bad_any = _collect_invariant_results(aligned, contract)
 
-    good = _filter_good_rows(aligned, bad_any, ctx=ctx)
+    good = _filter_good_rows(aligned, bad_any)
 
     raw_errors = _build_error_table(aligned, results, error_spec=options.error_spec)
     errors = _aggregate_error_details(
         raw_errors,
-        ctx=ctx,
+        runtime_profile=options.runtime_profile,
         contract=contract,
         schema=schema,
         provenance_cols=provenance_cols,
     )
     errors = _relax_nullable_table(errors)
 
-    _raise_on_errors_if_strict(raw_errors, ctx=ctx, contract=contract)
+    _raise_on_errors_if_strict(raw_errors, mode=options.mode, contract=contract)
 
     if contract.dedupe is not None:
-        good = dedupe_kernel(good, spec=contract.dedupe, _ctx=ctx)
+        good = dedupe_kernel(
+            good,
+            spec=contract.dedupe,
+            determinism_tier=options.determinism_tier,
+            runtime_profile=options.runtime_profile,
+        )
 
     if not options.skip_canonical_sort:
-        good = canonical_sort_if_canonical(good, sort_keys=contract.canonical_sort, ctx=ctx)
+        good = canonical_sort_if_canonical(
+            good,
+            sort_keys=contract.canonical_sort,
+            determinism_tier=options.determinism_tier,
+        )
 
-    keep_extras = bool(ctx.provenance and provenance_cols)
+    keep_extras = bool(options.provenance and provenance_cols)
     good = align_table(
         good,
         schema=schema,
@@ -838,7 +844,6 @@ def normalize_only(
     table: TableLike,
     *,
     contract: Contract,
-    ctx: ExecutionContext,
     options: FinalizeOptions | None = None,
 ) -> TableLike:
     """Normalize a table using finalize schema policy without invariants.
@@ -849,7 +854,7 @@ def normalize_only(
         Normalized (aligned/encoded) table.
     """
     options = options or FinalizeOptions()
-    schema_policy = _resolve_schema_policy(contract, ctx=ctx, schema_policy=options.schema_policy)
+    schema_policy = _resolve_schema_policy(contract, schema_policy=options.schema_policy)
     schema = schema_policy.resolved_schema()
     aligned, _ = schema_policy.apply_with_info(table)
     if schema_policy.encoding is None:
@@ -862,7 +867,6 @@ def normalize_only(
 def _resolve_schema_policy(
     contract: Contract,
     *,
-    ctx: ExecutionContext,
     schema_policy: SchemaPolicy | None,
 ) -> SchemaPolicy:
     if schema_policy is not None:
@@ -884,7 +888,7 @@ def _resolve_schema_policy(
             schema=contract.with_versioned_schema(),
             validation=contract.validation,
         )
-    return schema_policy_factory(schema_spec, ctx=ctx, options=policy_options)
+    return schema_policy_factory(schema_spec, options=policy_options)
 
 
 @dataclass(frozen=True)
@@ -897,8 +901,24 @@ class FinalizeContext:
     chunk_policy: ChunkPolicy = field(default_factory=ChunkPolicy)
     skip_canonical_sort: bool = False
 
-    def run(self, table: TableLike, ctx: ExecutionContext) -> FinalizeResult:
-        """Finalize a table using the stored contract and context.
+
+@dataclass(frozen=True)
+class FinalizeRunRequest:
+    """Inputs required to run a finalize pass."""
+
+    runtime_profile: DataFusionRuntimeProfile | None
+    determinism_tier: DeterminismTier
+    mode: Literal["strict", "tolerant"] = "tolerant"
+    provenance: bool = False
+    schema_validation: ArrowValidationOptions | None = None
+
+    def run(
+        self,
+        table: TableLike,
+        *,
+        request: FinalizeRunRequest,
+    ) -> FinalizeResult:
+        """Finalize a table using the stored contract and options.
 
         Returns
         -------
@@ -910,11 +930,15 @@ class FinalizeContext:
             schema_policy=self.schema_policy,
             chunk_policy=self.chunk_policy,
             skip_canonical_sort=self.skip_canonical_sort,
+            runtime_profile=request.runtime_profile,
+            determinism_tier=request.determinism_tier,
+            mode=request.mode,
+            provenance=request.provenance,
+            schema_validation=request.schema_validation,
         )
         return finalize(
             table,
             contract=self.contract,
-            ctx=ctx,
             options=options,
         )
 

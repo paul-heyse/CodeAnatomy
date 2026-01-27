@@ -242,7 +242,11 @@ def check_state_store_invalidation(
 
 
 def _incremental_metadata_hash(runtime: IncrementalRuntime) -> str | None:
-    runtime_snapshot = runtime_profile_snapshot(runtime.execution_ctx.runtime)
+    runtime_snapshot = runtime_profile_snapshot(
+        runtime.profile,
+        name=runtime.profile.config_policy_name,
+        determinism_tier=runtime.determinism_tier,
+    )
     payload = {
         "datafusion_settings_hash": runtime.profile.settings_hash(),
         "runtime_profile_hash": runtime_snapshot.profile_hash,
@@ -251,7 +255,11 @@ def _incremental_metadata_hash(runtime: IncrementalRuntime) -> str | None:
 
 
 def _runtime_profile_hash(runtime: IncrementalRuntime) -> str | None:
-    return runtime_profile_snapshot(runtime.execution_ctx.runtime).profile_hash
+    return runtime_profile_snapshot(
+        runtime.profile,
+        name=runtime.profile.config_policy_name,
+        determinism_tier=runtime.determinism_tier,
+    ).profile_hash
 
 
 def _incremental_plan_fingerprints(

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
 
-from arrowdsl.schema.metadata import extractor_option_defaults_from_metadata
+from arrow_utils.schema.metadata import extractor_option_defaults_from_metadata
 from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata_specs
 from datafusion_engine.extract_registry import dataset_schema, extractor_defaults
 from extract.evidence_plan import EvidencePlan

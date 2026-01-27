@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from arrowdsl.core.expr_types import ScalarValue
+from arrow_utils.core.expr_types import ScalarValue
 from datafusion_engine.expr_spec import ExprIR, ExprSpec
 
 

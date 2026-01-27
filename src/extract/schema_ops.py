@@ -7,25 +7,24 @@ from dataclasses import dataclass, replace
 
 import pyarrow as pa
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrow_utils.core.interop import TableLike
+from arrow_utils.schema.metadata import SchemaMetadataSpec
 from arrowdsl.schema.policy import SchemaPolicy
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from core_types import DeterminismTier
 from datafusion_engine.extract_registry import (
     dataset_metadata_with_options,
     dataset_schema,
     dataset_schema_policy,
     dataset_spec,
 )
-from datafusion_engine.finalize import FinalizeContext, FinalizeResult
-from datafusion_engine.runtime import sql_options_for_profile
+from datafusion_engine.finalize import FinalizeContext, FinalizeResult, FinalizeRunRequest
+from datafusion_engine.runtime import DataFusionRuntimeProfile, sql_options_for_profile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 
 
 def schema_policy_for_dataset(
     name: str,
     *,
-    ctx: ExecutionContext,
     options: object | None = None,
     repo_id: str | None = None,
     enable_encoding: bool = True,
@@ -39,7 +38,6 @@ def schema_policy_for_dataset(
     """
     return dataset_schema_policy(
         name,
-        ctx=ctx,
         options=options,
         repo_id=repo_id,
         enable_encoding=enable_encoding,
@@ -55,20 +53,26 @@ class ExtractNormalizeOptions:
     enable_encoding: bool = True
 
 
+@dataclass(frozen=True)
+class _ValidateExtractRequest:
+    """Inputs required to validate extract outputs."""
+
+    runtime_profile: DataFusionRuntimeProfile
+    determinism_tier: DeterminismTier
+    normalize: ExtractNormalizeOptions | None = None
+    apply_post_kernels: bool = True
+
+
 def _information_schema_column_order(
     name: str,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> tuple[str, ...] | None:
-    runtime = ctx.runtime.datafusion
-    if runtime is None:
-        msg = "DataFusion runtime profile is required for schema introspection."
-        raise ValueError(msg)
-    if not runtime.enable_information_schema:
+    if not runtime_profile.enable_information_schema:
         msg = "information_schema must be enabled for schema introspection."
         raise ValueError(msg)
-    sql_options = sql_options_for_profile(runtime)
-    session_runtime = runtime.session_runtime()
+    sql_options = sql_options_for_profile(runtime_profile)
+    session_runtime = runtime_profile.session_runtime()
     introspector = SchemaIntrospector(session_runtime.ctx, sql_options=sql_options)
     try:
         rows = introspector.table_columns_with_ordinal(name)
@@ -153,7 +157,7 @@ def apply_pipeline_kernels(_name: str, table: TableLike) -> TableLike:
 def finalize_context_for_dataset(
     name: str,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
     normalize: ExtractNormalizeOptions | None = None,
 ) -> FinalizeContext:
     """Return a finalize context for the dataset name.
@@ -163,7 +167,11 @@ def finalize_context_for_dataset(
     FinalizeContext
         Finalize context configured with schema policy and contract.
     """
-    policy = normalized_schema_policy_for_dataset(name, ctx=ctx, normalize=normalize)
+    policy = normalized_schema_policy_for_dataset(
+        name,
+        runtime_profile=runtime_profile,
+        normalize=normalize,
+    )
     contract = dataset_spec(name).contract()
     return FinalizeContext(contract=contract, schema_policy=policy)
 
@@ -171,7 +179,7 @@ def finalize_context_for_dataset(
 def normalized_schema_policy_for_dataset(
     name: str,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
     normalize: ExtractNormalizeOptions | None = None,
 ) -> SchemaPolicy:
     """Return schema policy with information_schema column ordering applied.
@@ -184,12 +192,12 @@ def normalized_schema_policy_for_dataset(
     normalize = normalize or ExtractNormalizeOptions()
     policy = schema_policy_for_dataset(
         name,
-        ctx=ctx,
+        runtime_profile=runtime_profile,
         options=normalize.options,
         repo_id=normalize.repo_id,
         enable_encoding=normalize.enable_encoding,
     )
-    ordered = _information_schema_column_order(name, ctx=ctx)
+    ordered = _information_schema_column_order(name, runtime_profile=runtime_profile)
     if ordered is None:
         return policy
     schema = _ordered_schema(policy.resolved_schema(), ordered)
@@ -200,9 +208,7 @@ def validate_extract_output(
     name: str,
     table: TableLike,
     *,
-    ctx: ExecutionContext,
-    normalize: ExtractNormalizeOptions | None = None,
-    apply_post_kernels: bool = True,
+    request: _ValidateExtractRequest,
 ) -> FinalizeResult:
     """Validate an extract output, returning good/errors/stats tables.
 
@@ -211,10 +217,20 @@ def validate_extract_output(
     FinalizeResult
         Finalize result with good, errors, stats, and alignment outputs.
     """
-    normalize = normalize or ExtractNormalizeOptions()
-    processed = apply_pipeline_kernels(name, table) if apply_post_kernels else table
-    finalize_ctx = finalize_context_for_dataset(name, ctx=ctx, normalize=normalize)
-    return finalize_ctx.run(processed, ctx=ctx)
+    normalize = request.normalize or ExtractNormalizeOptions()
+    processed = apply_pipeline_kernels(name, table) if request.apply_post_kernels else table
+    finalize_ctx = finalize_context_for_dataset(
+        name,
+        runtime_profile=request.runtime_profile,
+        normalize=normalize,
+    )
+    return finalize_ctx.run(
+        processed,
+        request=FinalizeRunRequest(
+            runtime_profile=request.runtime_profile,
+            determinism_tier=request.determinism_tier,
+        ),
+    )
 
 
 __all__ = [

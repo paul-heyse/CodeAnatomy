@@ -11,20 +11,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.core.interop import SchemaLike
+from arrow_utils.schema.abi import schema_fingerprint
 from cache.diskcache_factory import (
     DiskCacheProfile,
     bulk_cache_set,
     cache_for_kind,
     evict_cache_tag,
 )
+from core_types import DeterminismTier
 from datafusion_engine.execution_facade import ExecutionResult, ExecutionResultKind
 
 if TYPE_CHECKING:
     import pyarrow as pa
     from diskcache import Cache, FanoutCache
+
+    from datafusion_engine.runtime import SessionRuntime
 
 
 class TableLike(Protocol):
@@ -142,8 +144,8 @@ class RuntimeArtifacts:
 
     Attributes
     ----------
-    execution : ExecutionContext | None
-        Execution context for materialization.
+    execution : SessionRuntime | None
+        DataFusion session runtime for materialization.
     materialized_tables : dict[str, TableLike]
         Materialized PyArrow tables keyed by dataset name.
     view_references : dict[str, ViewReference]
@@ -156,13 +158,16 @@ class RuntimeArtifacts:
         Execution results keyed by dataset name.
     execution_order : list[str]
         Order in which tasks were executed.
+    determinism_tier : DeterminismTier
+        Determinism tier used for this execution run.
     scan_override_hash : str | None
         Stable identity hash for scan-unit overrides applied to the session.
     rulepack_param_values : Mapping[str, object]
         Parameter values for parameterized rulepack execution.
     """
 
-    execution: ExecutionContext | None = None
+    execution: SessionRuntime | None = None
+    determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
     materialized_tables: dict[str, TableLike] = field(default_factory=dict)
     view_references: dict[str, ViewReference] = field(default_factory=dict)
     schema_cache: dict[str, SchemaLike] = field(default_factory=dict)

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, NewType, cast
 import pyarrow as pa
 
 if TYPE_CHECKING:
-    from arrowdsl.core.interop import SchemaLike
+    from arrow_utils.core.interop import SchemaLike
 
 NodeKindId = NewType("NodeKindId", str)
 EdgeKindId = NewType("EdgeKindId", str)

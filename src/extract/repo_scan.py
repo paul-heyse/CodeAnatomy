@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Literal, overload
 
 from diskcache import memoize_stampede, throttle
 
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.schema.abi import schema_fingerprint
 from core_types import PathLike, ensure_path
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
@@ -374,7 +374,9 @@ def scan_repo(
     normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    ctx = session.exec_ctx
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
@@ -390,7 +392,8 @@ def scan_repo(
         return materialize_extract_plan(
             "repo_files_v1",
             empty_plan,
-            ctx=ctx,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
                 prefer_reader=prefer_reader,
@@ -402,7 +405,8 @@ def scan_repo(
     return materialize_extract_plan(
         "repo_files_v1",
         plan,
-        ctx=ctx,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
         options=ExtractMaterializeOptions(
             normalize=normalize,
             prefer_reader=prefer_reader,
@@ -426,7 +430,7 @@ def scan_repo_plan(
     """
     repo_root_path = ensure_path(repo_root).resolve()
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
-    cache_profile = diskcache_profile_from_ctx(session.exec_ctx)
+    cache_profile = diskcache_profile_from_ctx(session.engine_session.datafusion_profile)
     cache_options = RepoScanCacheOptions(
         cache=cache_for_kind_optional(cache_profile, "repo_scan"),
         coord_cache=cache_for_kind_optional(cache_profile, "coordination"),
@@ -571,7 +575,7 @@ def _record_repo_blame(
 ) -> None:
     if not options.record_blame:
         return
-    runtime_profile = session.exec_ctx.runtime.datafusion
+    runtime_profile = session.engine_session.datafusion_profile
     if runtime_profile is None or runtime_profile.diagnostics_sink is None:
         return
     git_ctx = open_git_context(repo_root)

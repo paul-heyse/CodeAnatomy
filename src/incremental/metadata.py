@@ -9,7 +9,7 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.schema.build import table_from_schema
+from arrow_utils.schema.build import table_from_schema
 from datafusion_engine.delta_store_policy import resolve_delta_store_policy
 from datafusion_engine.view_artifacts import view_artifact_payload_table
 from datafusion_engine.write_pipeline import WriteMode
@@ -49,7 +49,11 @@ def write_incremental_metadata(
         Delta table path for the metadata snapshot.
     """
     state_store.ensure_dirs()
-    runtime_snapshot = runtime_profile_snapshot(runtime.execution_ctx.runtime)
+    runtime_snapshot = runtime_profile_snapshot(
+        runtime.profile,
+        name=runtime.profile.config_policy_name,
+        determinism_tier=runtime.determinism_tier,
+    )
     payload = {
         "datafusion_settings_hash": runtime.profile.settings_hash(),
         "runtime_profile_hash": runtime_snapshot.profile_hash,

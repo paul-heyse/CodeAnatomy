@@ -22,16 +22,16 @@ import pyarrow as pa
 from datafusion import SessionContext, col
 from datafusion import functions as f
 
-from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.core.schema_constants import (
+from arrow_utils.core.ordering import OrderingLevel
+from arrow_utils.core.schema_constants import (
     DEFAULT_VALUE_META,
     KEY_FIELDS_META,
     REQUIRED_NON_NULL_META,
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from arrowdsl.schema.build import list_view_type, struct_type
-from arrowdsl.schema.metadata import (
+from arrow_utils.schema.build import list_view_type, struct_type
+from arrow_utils.schema.metadata import (
     function_requirements_metadata_spec,
     metadata_list_bytes,
     optional_functions_from_metadata,
@@ -40,7 +40,7 @@ from arrowdsl.schema.metadata import (
     required_function_signatures_from_metadata,
     required_functions_from_metadata,
 )
-from arrowdsl.schema.semantic_types import (
+from arrow_utils.schema.semantic_types import (
     SEMANTIC_TYPE_META,
     SPAN_TYPE_INFO,
     byte_span_type,

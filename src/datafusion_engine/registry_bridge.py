@@ -47,11 +47,11 @@ from datafusion import SessionContext, SQLOptions, col
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
 
-from arrowdsl.core.interop import SchemaLike
-from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
-from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict
-from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
+from arrow_utils.core.interop import SchemaLike
+from arrow_utils.core.ordering import OrderingLevel
+from arrow_utils.core.schema_constants import DEFAULT_VALUE_META
+from arrow_utils.schema.abi import schema_fingerprint, schema_to_dict
+from arrow_utils.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from core_types import ensure_path
 from datafusion_engine.dataset_registry import (
     DatasetCatalog,

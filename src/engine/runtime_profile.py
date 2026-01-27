@@ -6,19 +6,99 @@ import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import msgspec
 import pyarrow as pa
 
-from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile, runtime_profile_factory
-from arrowdsl.schema.abi import schema_to_msgpack
+from core_types import DeterminismTier
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from serde_msgspec import dumps_msgpack, to_builtins
 from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.udf_runtime import RustUdfSnapshot
+
+
+PROFILE_HASH_VERSION: int = 3
+_PROFILE_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("profile_name", pa.string(), nullable=False),
+        pa.field("determinism_tier", pa.string(), nullable=False),
+        pa.field("telemetry_hash", pa.string(), nullable=False),
+    ]
+)
+
+
+@dataclass(frozen=True)
+class RuntimeProfileSpec:
+    """Resolved runtime profile and determinism tier."""
+
+    name: str
+    datafusion: DataFusionRuntimeProfile
+    determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
+
+    @property
+    def datafusion_settings_hash(self) -> str:
+        """Return DataFusion settings hash when configured."""
+        return self.datafusion.settings_hash()
+
+    def runtime_profile_snapshot(self) -> RuntimeProfileSnapshot:
+        """Return a unified runtime profile snapshot.
+
+        Returns
+        -------
+        RuntimeProfileSnapshot
+            Snapshot combining deterministic profile metadata.
+        """
+        return runtime_profile_snapshot(
+            self.datafusion,
+            name=self.name,
+            determinism_tier=self.determinism_tier,
+        )
+
+    @property
+    def runtime_profile_hash(self) -> str:
+        """Return a stable hash of the unified runtime profile.
+
+        Returns
+        -------
+        str
+            Hash for the runtime profile snapshot.
+        """
+        return self.runtime_profile_snapshot().profile_hash
+
+
+@dataclass(frozen=True)
+class RuntimeProfileSnapshot:
+    """Unified runtime profile snapshot for reproducibility."""
+
+    version: int
+    name: str
+    determinism_tier: str
+    datafusion_settings_hash: str
+    datafusion_settings: dict[str, str]
+    telemetry_payload: dict[str, object]
+    profile_hash: str
+
+    def payload(self) -> dict[str, object]:
+        """Return the snapshot payload for serialization.
+
+        Returns
+        -------
+        dict[str, object]
+            Serialized payload for the runtime profile snapshot.
+        """
+        return {
+            "version": self.version,
+            "name": self.name,
+            "determinism_tier": self.determinism_tier,
+            "datafusion_settings_hash": self.datafusion_settings_hash,
+            "datafusion_settings": self.datafusion_settings,
+            "telemetry_payload": self.telemetry_payload,
+            "profile_hash": self.profile_hash,
+        }
 
 
 def _cpu_count() -> int:
@@ -40,241 +120,72 @@ def _env_value(name: str) -> str | None:
     return value if value else None
 
 
-@dataclass(frozen=True)
-class RuntimeProfileSpec:
-    """Runtime profile plus compiler/engine preferences."""
-
-    name: str
-    runtime: RuntimeProfile
-
-    @property
-    def datafusion_settings_hash(self) -> str | None:
-        """Return DataFusion settings hash when configured."""
-        if self.runtime.datafusion is None:
-            return None
-        return self.runtime.datafusion.settings_hash()
-
-    def runtime_profile_snapshot(self) -> RuntimeProfileSnapshot:
-        """Return a unified runtime profile snapshot.
-
-        Returns
-        -------
-        RuntimeProfileSnapshot
-            Snapshot combining runtime, compiler, and engine policies.
-        """
-        return runtime_profile_snapshot(self.runtime)
-
-    @property
-    def runtime_profile_hash(self) -> str:
-        """Return a stable hash of the unified runtime profile.
-
-        Returns
-        -------
-        str
-            Hash for the runtime profile snapshot.
-        """
-        return self.runtime_profile_snapshot().profile_hash
+def _profile_hash_payload(
+    *,
+    name: str,
+    determinism: DeterminismTier,
+    telemetry_hash: str,
+) -> dict[str, object]:
+    return {
+        "version": PROFILE_HASH_VERSION,
+        "profile_name": name,
+        "determinism_tier": determinism.value,
+        "telemetry_hash": telemetry_hash,
+    }
 
 
-@dataclass(frozen=True)
-class RuntimeProfileSnapshot:
-    """Unified runtime profile snapshot for reproducibility."""
-
-    version: int
-    name: str
-    determinism_tier: str
-    scan_profile: dict[str, object]
-    plan_use_threads: bool
-    arrow_resources: dict[str, object]
-    datafusion: dict[str, object] | None
-    function_registry_hash: str
-    profile_hash: str
-    scan_profile_schema_msgpack: bytes | None = None
-
-    def payload(self) -> dict[str, object]:
-        """Return the snapshot payload for serialization.
-
-        Returns
-        -------
-        dict[str, object]
-            Serialized payload for the runtime profile snapshot.
-        """
-        return {
-            "version": self.version,
-            "name": self.name,
-            "determinism_tier": self.determinism_tier,
-            "scan_profile": self.scan_profile,
-            "plan_use_threads": self.plan_use_threads,
-            "arrow_resources": self.arrow_resources,
-            "datafusion": self.datafusion,
-            "function_registry_hash": self.function_registry_hash,
-            "profile_hash": self.profile_hash,
-            "scan_profile_schema_msgpack": self.scan_profile_schema_msgpack,
-        }
+def _runtime_profile_hash(
+    *,
+    name: str,
+    determinism: DeterminismTier,
+    telemetry_hash: str,
+) -> str:
+    payload = _profile_hash_payload(
+        name=name,
+        determinism=determinism,
+        telemetry_hash=telemetry_hash,
+    )
+    return payload_hash(payload, _PROFILE_HASH_SCHEMA)
 
 
-PROFILE_HASH_VERSION: int = 2
-_SCAN_PROFILE_SCHEMA = pa.struct(
-    [
-        pa.field("name", pa.string()),
-        pa.field("batch_size", pa.int64()),
-        pa.field("batch_readahead", pa.int64()),
-        pa.field("fragment_readahead", pa.int64()),
-        pa.field("fragment_scan_options", pa.map_(pa.string(), pa.string())),
-        pa.field("cache_metadata", pa.bool_()),
-        pa.field("use_threads", pa.bool_()),
-        pa.field("require_sequenced_output", pa.bool_()),
-        pa.field("implicit_ordering", pa.bool_()),
-        pa.field("scan_provenance_columns", pa.list_(pa.string())),
-    ]
-)
-_ARROW_RESOURCES_SCHEMA = pa.struct(
-    [
-        pa.field("pyarrow_version", pa.string()),
-        pa.field("cpu_threads", pa.int64()),
-        pa.field("io_threads", pa.int64()),
-        pa.field("memory_pool", pa.string()),
-        pa.field("bytes_allocated", pa.int64()),
-        pa.field("max_memory", pa.int64()),
-    ]
-)
-_PROFILE_HASH_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32()),
-        pa.field("name", pa.string()),
-        pa.field("determinism_tier", pa.string()),
-        pa.field("scan_profile", _SCAN_PROFILE_SCHEMA),
-        pa.field("plan_use_threads", pa.bool_()),
-        pa.field("arrow_resources", _ARROW_RESOURCES_SCHEMA),
-        pa.field("datafusion_hash", pa.string()),
-        pa.field("function_registry_hash", pa.string()),
-    ]
-)
-
-
-@dataclass(frozen=True)
-class _RegistryContext:
-    session: object | None
-    registry_snapshot: Mapping[str, object] | None
-
-
-@dataclass(frozen=True)
-class _RuntimePayloads:
-    scan_payload: dict[str, object]
-    arrow_payload: dict[str, object]
-    function_registry_hash: str
-
-
-def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
-    """Return a unified runtime profile snapshot.
+def runtime_profile_snapshot(
+    profile: DataFusionRuntimeProfile,
+    *,
+    name: str | None = None,
+    determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT,
+) -> RuntimeProfileSnapshot:
+    """Return a runtime profile snapshot for diagnostics and metadata.
 
     Returns
     -------
     RuntimeProfileSnapshot
-        Snapshot combining runtime, compiler, and engine policies.
+        Snapshot describing DataFusion runtime settings.
     """
-    scan_payload = dict(_scan_profile_payload(runtime.scan))
-    arrow_payload = dict(runtime.arrow_resource_snapshot().to_payload())
-    registry_context = _build_registry_context(runtime)
-    payloads = _RuntimePayloads(
-        scan_payload=scan_payload,
-        arrow_payload=arrow_payload,
-        function_registry_hash=_function_registry_hash(registry_context),
+    profile_name = name or profile.config_policy_name or "default"
+    telemetry_payload = profile.telemetry_payload_v1()
+    telemetry_hash = profile.telemetry_payload_hash()
+    profile_hash = _runtime_profile_hash(
+        name=profile_name,
+        determinism=determinism_tier,
+        telemetry_hash=telemetry_hash,
     )
-    snapshot_payload = _runtime_snapshot_payload(runtime, payloads)
-    hash_payload = _runtime_hash_payload(runtime, payloads)
-    profile_hash = payload_hash(hash_payload, _PROFILE_HASH_SCHEMA)
-    datafusion_payload = snapshot_payload["datafusion"]
     return RuntimeProfileSnapshot(
-        version=1,
-        name=runtime.name,
-        determinism_tier=runtime.determinism.value,
-        scan_profile=payloads.scan_payload,
-        plan_use_threads=runtime.plan_use_threads,
-        arrow_resources=payloads.arrow_payload,
-        datafusion=cast("dict[str, object] | None", datafusion_payload),
-        function_registry_hash=payloads.function_registry_hash,
+        version=PROFILE_HASH_VERSION,
+        name=profile_name,
+        determinism_tier=determinism_tier.value,
+        datafusion_settings_hash=profile.settings_hash(),
+        datafusion_settings=profile.settings_payload(),
+        telemetry_payload=telemetry_payload,
         profile_hash=profile_hash,
-        scan_profile_schema_msgpack=schema_to_msgpack(
-            pa.schema([pa.field("scan_profile", _SCAN_PROFILE_SCHEMA)])
-        ),
     )
 
 
-def _build_registry_context(runtime: RuntimeProfile) -> _RegistryContext:
-    session = None
-    if runtime.datafusion is not None:
-        try:
-            session = runtime.datafusion.session_context()
-        except (RuntimeError, TypeError, ValueError):
-            session = None
-    registry_snapshot = None
-    if session is not None:
-        from datafusion_engine.udf_runtime import register_rust_udfs
-
-        enable_async = False
-        async_timeout_ms = None
-        async_batch_size = None
-        if runtime.datafusion is not None:
-            enable_async = runtime.datafusion.enable_async_udfs
-            if enable_async:
-                async_timeout_ms = runtime.datafusion.async_udf_timeout_ms
-                async_batch_size = runtime.datafusion.async_udf_batch_size
-        registry_snapshot = register_rust_udfs(
-            session,
-            enable_async=enable_async,
-            async_udf_timeout_ms=async_timeout_ms,
-            async_udf_batch_size=async_batch_size,
-        )
-    return _RegistryContext(session=session, registry_snapshot=registry_snapshot)
-
-
-def _function_registry_hash(context: _RegistryContext) -> str:
-    snapshot = context.registry_snapshot
-    if snapshot is None:
-        msg = "Rust UDF snapshot unavailable for runtime profile hashing."
-        raise ValueError(msg)
-    from datafusion_engine.udf_runtime import rust_udf_snapshot_hash
-
-    return rust_udf_snapshot_hash(snapshot)
-
-
-def _runtime_snapshot_payload(
-    runtime: RuntimeProfile,
-    payloads: _RuntimePayloads,
+def engine_runtime_artifact(
+    profile: DataFusionRuntimeProfile,
+    *,
+    name: str | None = None,
+    determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT,
 ) -> dict[str, object]:
-    return {
-        "name": runtime.name,
-        "determinism_tier": runtime.determinism.value,
-        "scan_profile": payloads.scan_payload,
-        "plan_use_threads": runtime.plan_use_threads,
-        "arrow_resources": payloads.arrow_payload,
-        "datafusion": runtime.datafusion.telemetry_payload_v1()
-        if runtime.datafusion is not None
-        else None,
-        "function_registry_hash": payloads.function_registry_hash,
-    }
-
-
-def _runtime_hash_payload(
-    runtime: RuntimeProfile,
-    payloads: _RuntimePayloads,
-) -> dict[str, object]:
-    return {
-        "version": PROFILE_HASH_VERSION,
-        "name": runtime.name,
-        "determinism_tier": runtime.determinism.value,
-        "scan_profile": payloads.scan_payload,
-        "plan_use_threads": runtime.plan_use_threads,
-        "arrow_resources": payloads.arrow_payload,
-        "datafusion_hash": runtime.datafusion.telemetry_payload_hash()
-        if runtime.datafusion is not None
-        else None,
-        "function_registry_hash": payloads.function_registry_hash,
-    }
-
-
-def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
     """Return an engine runtime artifact payload for diagnostics.
 
     Returns
@@ -282,111 +193,55 @@ def engine_runtime_artifact(runtime: RuntimeProfile) -> dict[str, object]:
     dict[str, object]
         Diagnostics payload for engine runtime settings.
     """
-    snapshot = runtime_profile_snapshot(runtime)
-    from datafusion_engine.udf_runtime import (
-        register_rust_udfs,
-        rust_udf_snapshot_bytes,
-        rust_udf_snapshot_hash,
+    snapshot = runtime_profile_snapshot(
+        profile,
+        name=name,
+        determinism_tier=determinism_tier,
     )
-
-    session = None
-    if runtime.datafusion is not None and runtime.datafusion.enable_information_schema:
+    registry_snapshot: RustUdfSnapshot | None = None
+    if profile.enable_information_schema:
         try:
-            session = runtime.datafusion.session_context()
+            session = profile.session_runtime().ctx
         except (RuntimeError, TypeError, ValueError):
             session = None
-    registry_snapshot = None
-    if session is not None:
-        enable_async = False
-        async_timeout_ms = None
-        async_batch_size = None
-        if runtime.datafusion is not None:
-            enable_async = runtime.datafusion.enable_async_udfs
-            if enable_async:
-                async_timeout_ms = runtime.datafusion.async_udf_timeout_ms
-                async_batch_size = runtime.datafusion.async_udf_batch_size
-        registry_snapshot = register_rust_udfs(
-            session,
-            enable_async=enable_async,
-            async_udf_timeout_ms=async_timeout_ms,
-            async_udf_batch_size=async_batch_size,
-        )
-    registry_hash = (
-        rust_udf_snapshot_hash(registry_snapshot) if registry_snapshot is not None else None
-    )
-    registry_payload = (
-        rust_udf_snapshot_bytes(registry_snapshot) if registry_snapshot is not None else None
-    )
-    datafusion_settings = (
-        runtime.datafusion.settings_payload() if runtime.datafusion is not None else None
-    )
+        if session is not None:
+            from datafusion_engine.udf_runtime import register_rust_udfs
+
+            registry_snapshot = register_rust_udfs(
+                session,
+                enable_async=profile.enable_async_udfs,
+                async_udf_timeout_ms=profile.async_udf_timeout_ms,
+                async_udf_batch_size=profile.async_udf_batch_size,
+            )
+    registry_hash = None
+    registry_payload = None
+    if registry_snapshot is not None:
+        from datafusion_engine.udf_runtime import rust_udf_snapshot_bytes, rust_udf_snapshot_hash
+
+        registry_hash = rust_udf_snapshot_hash(registry_snapshot)
+        registry_payload = rust_udf_snapshot_bytes(registry_snapshot)
+    datafusion_settings = profile.settings_payload()
     return {
         "event_time_unix_ms": int(time.time() * 1000),
-        "runtime_profile_name": runtime.name,
-        "determinism_tier": runtime.determinism.value,
+        "runtime_profile_name": snapshot.name,
+        "determinism_tier": snapshot.determinism_tier,
         "runtime_profile_hash": snapshot.profile_hash,
         "runtime_profile_snapshot": dumps_msgpack(snapshot.payload()),
         "function_registry_hash": registry_hash,
         "function_registry_snapshot": registry_payload,
-        "datafusion_settings_hash": (
-            runtime.datafusion.settings_hash() if runtime.datafusion is not None else None
-        ),
-        "datafusion_settings": (
-            dumps_msgpack(datafusion_settings) if datafusion_settings is not None else None
-        ),
+        "datafusion_settings_hash": snapshot.datafusion_settings_hash,
+        "datafusion_settings": dumps_msgpack(datafusion_settings),
     }
-
-
-def _scan_profile_payload(scan: ScanProfile) -> dict[str, object]:
-    """Return a scan profile payload for runtime snapshots.
-
-    Returns
-    -------
-    dict[str, object]
-        Serialized scan profile payload.
-    """
-    return {
-        "name": scan.name,
-        "batch_size": scan.batch_size,
-        "batch_readahead": scan.batch_readahead,
-        "fragment_readahead": scan.fragment_readahead,
-        "fragment_scan_options": _fragment_scan_options(scan.fragment_scan_options),
-        "cache_metadata": scan.cache_metadata,
-        "use_threads": scan.use_threads,
-        "require_sequenced_output": scan.require_sequenced_output,
-        "implicit_ordering": scan.implicit_ordering,
-        "scan_provenance_columns": list(scan.scan_provenance_columns),
-    }
-
-
-def _fragment_scan_options(options: object | None) -> dict[str, str] | None:
-    if options is None:
-        return None
-    if isinstance(options, Mapping):
-        return {str(key): str(value) for key, value in options.items()}
-    try:
-        payload = to_builtins(options)
-    except (msgspec.EncodeError, TypeError):
-        payload = None
-    if isinstance(payload, Mapping):
-        return {str(key): str(value) for key, value in payload.items()}
-    return {"value": str(options)}
 
 
 def _apply_named_profile_overrides(
     name: str,
-    runtime: RuntimeProfile,
-    df_profile: DataFusionRuntimeProfile,
-) -> tuple[RuntimeProfile, DataFusionRuntimeProfile]:
+    profile: DataFusionRuntimeProfile,
+) -> DataFusionRuntimeProfile:
     cpu_count = _cpu_count()
     if name == "dev_debug":
-        runtime = replace(
-            runtime,
-            cpu_threads=min(cpu_count, 4),
-            io_threads=min(cpu_count * 2, 8),
-        )
-        df_profile = replace(
-            df_profile,
+        return replace(
+            profile,
             config_policy_name="dev",
             target_partitions=min(cpu_count, 8),
             batch_size=4096,
@@ -394,27 +249,17 @@ def _apply_named_profile_overrides(
             explain_analyze=True,
             explain_analyze_level="dev",
         )
-    elif name == "prod_fast":
-        runtime = replace(
-            runtime,
-            cpu_threads=cpu_count,
-            io_threads=cpu_count * 2,
-        )
-        df_profile = replace(
-            df_profile,
+    if name == "prod_fast":
+        return replace(
+            profile,
             config_policy_name="prod",
             capture_explain=False,
             explain_analyze=False,
             explain_analyze_level=None,
         )
-    elif name == "memory_tight":
-        runtime = replace(
-            runtime,
-            cpu_threads=min(cpu_count, 2),
-            io_threads=min(cpu_count, 4),
-        )
-        df_profile = replace(
-            df_profile,
+    if name == "memory_tight":
+        return replace(
+            profile,
             config_policy_name="symtable",
             target_partitions=min(cpu_count, 4),
             batch_size=4096,
@@ -422,53 +267,42 @@ def _apply_named_profile_overrides(
             explain_analyze=False,
             explain_analyze_level="summary",
         )
-    return runtime, df_profile
+    return profile
 
 
 def _apply_memory_overrides(
     name: str,
-    df_profile: DataFusionRuntimeProfile,
+    profile: DataFusionRuntimeProfile,
     settings: Mapping[str, str],
 ) -> DataFusionRuntimeProfile:
     if name == "dev_debug":
-        return df_profile
-    spill_dir = df_profile.spill_dir or settings.get("datafusion.runtime.temp_directory")
-    memory_limit = df_profile.memory_limit_bytes or _settings_int(
+        return profile
+    spill_dir = profile.spill_dir or settings.get("datafusion.runtime.temp_directory")
+    memory_limit = profile.memory_limit_bytes or _settings_int(
         settings.get("datafusion.runtime.memory_limit")
     )
-    memory_pool = df_profile.memory_pool
+    memory_pool = profile.memory_pool
     if memory_limit is not None and memory_pool == "greedy":
         memory_pool = "fair"
     return replace(
-        df_profile,
+        profile,
         spill_dir=spill_dir,
         memory_limit_bytes=memory_limit,
         memory_pool=memory_pool,
     )
 
 
-def _apply_env_overrides(df_profile: DataFusionRuntimeProfile) -> DataFusionRuntimeProfile:
+def _apply_env_overrides(profile: DataFusionRuntimeProfile) -> DataFusionRuntimeProfile:
     policy_override = _env_value("CODEANATOMY_DATAFUSION_POLICY")
     if policy_override is not None:
-        df_profile = replace(df_profile, config_policy_name=policy_override)
+        profile = replace(profile, config_policy_name=policy_override)
     catalog_location = _env_value("CODEANATOMY_DATAFUSION_CATALOG_LOCATION")
     if catalog_location is not None:
-        df_profile = replace(df_profile, catalog_auto_load_location=catalog_location)
+        profile = replace(profile, catalog_auto_load_location=catalog_location)
     catalog_format = _env_value("CODEANATOMY_DATAFUSION_CATALOG_FORMAT")
     if catalog_format is not None:
-        df_profile = replace(df_profile, catalog_auto_load_format=catalog_format)
-    return df_profile
-
-
-def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfile:
-    df_profile = runtime.datafusion
-    if df_profile is None:
-        return runtime
-    settings = df_profile.settings_payload()
-    runtime, df_profile = _apply_named_profile_overrides(name, runtime, df_profile)
-    df_profile = _apply_memory_overrides(name, df_profile, settings)
-    df_profile = _apply_env_overrides(df_profile)
-    return runtime.with_datafusion(df_profile)
+        profile = replace(profile, catalog_auto_load_format=catalog_format)
+    return profile
 
 
 def resolve_runtime_profile(
@@ -483,11 +317,29 @@ def resolve_runtime_profile(
     RuntimeProfileSpec
         Resolved runtime profile spec.
     """
-    runtime = runtime_profile_factory(profile)
-    if determinism is not None:
-        runtime = runtime.with_determinism(determinism)
-    runtime = _apply_profile_overrides(profile, runtime)
-    return RuntimeProfileSpec(name=profile, runtime=runtime)
+    df_profile = DataFusionRuntimeProfile(config_policy_name=profile)
+    df_profile = _apply_named_profile_overrides(profile, df_profile)
+    df_profile = _apply_memory_overrides(profile, df_profile, df_profile.settings_payload())
+    df_profile = _apply_env_overrides(df_profile)
+    return RuntimeProfileSpec(
+        name=profile,
+        datafusion=df_profile,
+        determinism_tier=determinism or DeterminismTier.BEST_EFFORT,
+    )
+
+
+def runtime_profile_snapshot_payload(profile: DataFusionRuntimeProfile) -> dict[str, object]:
+    """Return a snapshot payload for profile diagnostics.
+
+    Returns
+    -------
+    dict[str, object]
+        Builtins-only payload suitable for diagnostics.
+    """
+    try:
+        return to_builtins(profile.telemetry_payload_v1())
+    except (msgspec.EncodeError, TypeError):
+        return {"profile_name": profile.config_policy_name}
 
 
 __all__ = [

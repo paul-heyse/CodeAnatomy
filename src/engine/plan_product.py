@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from core_types import DeterminismTier
 from engine.plan_policy import WriterStrategy
 
 if TYPE_CHECKING:

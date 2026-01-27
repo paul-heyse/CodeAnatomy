@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from arrowdsl.core.expr_types import ScalarValue
-from arrowdsl.core.interop import ScalarLike
+from arrow_utils.core.expr_types import ScalarValue
+from arrow_utils.core.interop import ScalarLike
 
 
 def parse_scalar_value(value: object) -> ScalarValue:

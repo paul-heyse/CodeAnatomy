@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from deltalake import CommitProperties, Transaction, WriterProperties
 
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrow_utils.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.schema import SchemaTransform
 from storage.ipc import ipc_bytes

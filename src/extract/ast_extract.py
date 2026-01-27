@@ -13,11 +13,11 @@ from functools import cache, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from extract.cache_utils import (
     CacheSetOptions,
     cache_for_extract,
@@ -992,8 +992,9 @@ def extract_ast(
     normalized_options = normalize_options("ast", options, ASTExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
-    ctx = session.exec_ctx
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ast_plans(
         repo_files,
@@ -1006,7 +1007,8 @@ def extract_ast(
             materialize_extract_plan(
                 "ast_files_v1",
                 plans["ast_files"],
-                ctx=ctx,
+                runtime_profile=runtime_profile,
+                determinism_tier=determinism_tier,
                 options=ExtractMaterializeOptions(
                     normalize=normalize,
                     apply_post_kernels=True,
@@ -1032,18 +1034,18 @@ def extract_ast_plans(
     normalized_options = normalize_options("ast", options, ASTExtractOptions)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
     normalize = ExtractNormalizeOptions(options=normalized_options)
     batch_size = _resolve_batch_size(normalized_options)
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
     rows: list[dict[str, object]] | None = None
-    ctx = exec_context.ctx
     if batch_size is None:
         rows = _collect_ast_rows(
             repo_files,
             file_contexts=exec_context.file_contexts,
             options=normalized_options,
-            ctx=ctx,
+            runtime_profile=runtime_profile,
         )
     else:
         row_batches = _iter_ast_row_batches(
@@ -1051,7 +1053,7 @@ def extract_ast_plans(
             file_contexts=exec_context.file_contexts,
             options=normalized_options,
             batch_size=batch_size,
-            ctx=ctx,
+            runtime_profile=runtime_profile,
         )
     evidence_plan = exec_context.evidence_plan
     plan_context = _AstPlanContext(
@@ -1074,14 +1076,14 @@ def _collect_ast_rows(
     *,
     file_contexts: Iterable[FileContext] | None,
     options: ASTExtractOptions,
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> list[dict[str, object]]:
     return list(
         _iter_ast_rows(
             repo_files,
             file_contexts=file_contexts,
             options=options,
-            ctx=ctx,
+            runtime_profile=runtime_profile,
         )
     )
 
@@ -1092,14 +1094,14 @@ def _iter_ast_row_batches(
     file_contexts: Iterable[FileContext] | None,
     options: ASTExtractOptions,
     batch_size: int,
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> Iterable[list[dict[str, object]]]:
     batch: list[dict[str, object]] = []
     for row in _iter_ast_rows(
         repo_files,
         file_contexts=file_contexts,
         options=options,
-        ctx=ctx,
+        runtime_profile=runtime_profile,
     ):
         batch.append(row)
         if len(batch) >= batch_size:
@@ -1114,13 +1116,13 @@ def _iter_ast_rows(
     *,
     file_contexts: Iterable[FileContext] | None,
     options: ASTExtractOptions,
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> Iterable[dict[str, object]]:
     contexts = list(
         iter_worklist_contexts(
             repo_files,
             output_table="ast_files_v1",
-            ctx=ctx,
+            runtime_profile=runtime_profile,
             file_contexts=file_contexts,
             queue_name=(
                 worklist_queue_name(output_table="ast_files_v1", repo_id=options.repo_id)
@@ -1132,7 +1134,7 @@ def _iter_ast_rows(
     if not contexts:
         return
     resolved_options = _resolve_feature_version(options, contexts)
-    cache_profile = diskcache_profile_from_ctx(ctx)
+    cache_profile = diskcache_profile_from_ctx(runtime_profile)
     cache_ttl = cache_ttl_seconds(cache_profile, "extract")
     if not resolved_options.parallel:
         for file_ctx in contexts:
@@ -1153,7 +1155,6 @@ def _iter_ast_rows(
     )
     max_workers = resolve_max_workers(
         resolved_options.max_workers,
-        ctx=ctx,
         kind="cpu",
     )
     for row in parallel_map(contexts, runner, max_workers=max_workers):
@@ -1209,7 +1210,6 @@ class _AstTablesKwargs(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     prefer_reader: bool
 
@@ -1220,7 +1220,6 @@ class _AstTablesKwargsTable(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     prefer_reader: Literal[False]
 
@@ -1231,7 +1230,6 @@ class _AstTablesKwargsReader(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     prefer_reader: Required[Literal[True]]
 
@@ -1273,12 +1271,13 @@ def extract_ast_tables(
     exec_context = ExtractExecutionContext(
         file_contexts=file_contexts,
         evidence_plan=evidence_plan,
-        ctx=kwargs.get("ctx"),
         session=kwargs.get("session"),
         profile=profile,
     )
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ast_plans(
         repo_files,
@@ -1289,7 +1288,8 @@ def extract_ast_tables(
         "ast_files": materialize_extract_plan(
             "ast_files_v1",
             plans["ast_files"],
-            ctx=session.exec_ctx,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
                 prefer_reader=prefer_reader,

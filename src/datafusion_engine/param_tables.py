@@ -15,8 +15,8 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
-from arrowdsl.core.interop import pc
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.core.interop import pc
+from arrow_utils.schema.abi import schema_fingerprint
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from storage.ipc import payload_hash
 

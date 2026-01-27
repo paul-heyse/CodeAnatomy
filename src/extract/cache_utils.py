@@ -21,7 +21,7 @@ from serde_msgspec import dumps_msgpack, to_builtins
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
 
-    from arrowdsl.core.execution_context import ExecutionContext
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
 def _hash_payload(payload: object) -> str:
@@ -57,17 +57,19 @@ def stable_cache_label(prefix: str, payload: Mapping[str, object]) -> str:
     return f"{prefix}_{digest}"
 
 
-def diskcache_profile_from_ctx(ctx: ExecutionContext | None) -> DiskCacheProfile | None:
-    """Return the DiskCache profile for an execution context.
+def diskcache_profile_from_ctx(
+    profile: DataFusionRuntimeProfile | None,
+) -> DiskCacheProfile | None:
+    """Return the DiskCache profile for a runtime profile.
 
     Returns
     -------
     DiskCacheProfile | None
         DiskCache profile when configured.
     """
-    if ctx is None or ctx.runtime.datafusion is None:
+    if profile is None:
         return None
-    return ctx.runtime.datafusion.diskcache_profile
+    return profile.diskcache_profile
 
 
 def cache_for_extract(

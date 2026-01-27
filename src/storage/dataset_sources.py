@@ -11,8 +11,8 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
-from arrowdsl.core.streaming import to_reader
+from arrow_utils.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrow_utils.core.streaming import to_reader
 from core_types import JsonDict
 
 type PathLike = str | Path

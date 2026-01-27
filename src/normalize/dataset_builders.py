@@ -7,11 +7,14 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import SchemaLike
-from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.schema.metadata import merge_metadata_specs, ordering_metadata_spec
-from arrowdsl.schema.schema import SchemaMetadataSpec
-from arrowdsl.schema.semantic_types import SPAN_STORAGE
+from arrow_utils.core.interop import SchemaLike
+from arrow_utils.core.ordering import OrderingLevel
+from arrow_utils.schema.metadata import (
+    SchemaMetadataSpec,
+    merge_metadata_specs,
+    ordering_metadata_spec,
+)
+from arrow_utils.schema.semantic_types import SPAN_STORAGE
 from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
 from normalize.dataset_bundles import bundle
 from normalize.dataset_rows import ContractRow, DatasetRow

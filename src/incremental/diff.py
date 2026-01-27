@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.schema.abi import schema_fingerprint
 from datafusion_engine.write_pipeline import WriteMode
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy

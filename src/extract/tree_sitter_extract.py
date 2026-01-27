@@ -25,11 +25,11 @@ from tree_sitter import (
     TreeCursor,
 )
 
-from arrowdsl.core.execution_context import ExecutionContext
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.ids import span_id
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
@@ -930,8 +930,9 @@ def extract_ts(
     normalized_options = _normalize_ts_options(normalized_options)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
-    exec_ctx = session.exec_ctx
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
+    determinism_tier = exec_context.determinism_tier()
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ts_plans(
         repo_files,
@@ -944,7 +945,8 @@ def extract_ts(
             materialize_extract_plan(
                 "tree_sitter_files_v1",
                 plans["tree_sitter_files"],
-                ctx=exec_ctx,
+                runtime_profile=runtime_profile,
+                determinism_tier=determinism_tier,
                 options=ExtractMaterializeOptions(
                     normalize=normalize,
                     apply_post_kernels=True,
@@ -971,7 +973,8 @@ def extract_ts_plans(
     normalized_options = _normalize_ts_options(normalized_options)
     exec_context = context or ExtractExecutionContext()
     session = exec_context.ensure_session()
-    exec_context = replace(exec_context, session=session, ctx=session.exec_ctx)
+    exec_context = replace(exec_context, session=session)
+    runtime_profile = exec_context.ensure_runtime_profile()
     normalize = ExtractNormalizeOptions(options=normalized_options)
     rows: list[Row] | None = None
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None
@@ -981,14 +984,14 @@ def extract_ts_plans(
             repo_files,
             options=normalized_options,
             file_contexts=exec_context.file_contexts,
-            ctx=exec_context.ctx,
+            runtime_profile=runtime_profile,
         )
     else:
         row_batches = _iter_ts_row_batches(
             repo_files,
             options=normalized_options,
             file_contexts=exec_context.file_contexts,
-            ctx=exec_context.ctx,
+            runtime_profile=runtime_profile,
             batch_size=batch_size,
         )
     evidence_plan = exec_context.evidence_plan
@@ -1012,14 +1015,14 @@ def _collect_ts_rows(
     *,
     options: TreeSitterExtractOptions,
     file_contexts: Iterable[FileContext] | None,
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> list[Row]:
     rows: list[Row] = []
     contexts = list(
         iter_worklist_contexts(
             repo_files,
             output_table="tree_sitter_files_v1",
-            ctx=ctx,
+            runtime_profile=runtime_profile,
             file_contexts=file_contexts,
             queue_name=(
                 worklist_queue_name(
@@ -1033,7 +1036,7 @@ def _collect_ts_rows(
     )
     if not contexts:
         return rows
-    rows.extend(_iter_ts_rows_for_contexts(contexts, options=options, ctx=ctx))
+    rows.extend(_iter_ts_rows_for_contexts(contexts, options=options))
     return rows
 
 
@@ -1041,7 +1044,6 @@ def _iter_ts_rows_for_contexts(
     contexts: Sequence[FileContext],
     *,
     options: TreeSitterExtractOptions,
-    ctx: ExecutionContext | None,
 ) -> Iterator[Row]:
     if not options.parallel:
         for file_ctx in contexts:
@@ -1050,7 +1052,7 @@ def _iter_ts_rows_for_contexts(
                 yield row
         return
     runner = partial(_ts_row_worker, options=options)
-    max_workers = resolve_max_workers(options.max_workers, ctx=ctx, kind="cpu")
+    max_workers = resolve_max_workers(options.max_workers, kind="cpu")
     for row in parallel_map(contexts, runner, max_workers=max_workers):
         if row is not None:
             yield row
@@ -1061,7 +1063,7 @@ def _iter_ts_row_batches(
     *,
     options: TreeSitterExtractOptions,
     file_contexts: Iterable[FileContext] | None,
-    ctx: ExecutionContext | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
     batch_size: int,
 ) -> Iterable[Sequence[Mapping[str, object]]]:
     batch: list[Row] = []
@@ -1069,7 +1071,7 @@ def _iter_ts_row_batches(
         iter_worklist_contexts(
             repo_files,
             output_table="tree_sitter_files_v1",
-            ctx=ctx,
+            runtime_profile=runtime_profile,
             file_contexts=file_contexts,
             queue_name=(
                 worklist_queue_name(
@@ -1083,7 +1085,7 @@ def _iter_ts_row_batches(
     )
     if not contexts:
         return
-    for row in _iter_ts_rows_for_contexts(contexts, options=options, ctx=ctx):
+    for row in _iter_ts_rows_for_contexts(contexts, options=options):
         batch.append(row)
         if len(batch) >= batch_size:
             yield batch
@@ -1467,7 +1469,6 @@ class _TreeSitterTablesKwargs(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     context: ExtractExecutionContext | None
     prefer_reader: bool
@@ -1479,7 +1480,6 @@ class _TreeSitterTablesKwargsTable(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     context: ExtractExecutionContext | None
     prefer_reader: Literal[False]
@@ -1491,7 +1491,6 @@ class _TreeSitterTablesKwargsReader(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     session: ExtractSession | None
-    ctx: ExecutionContext | None
     profile: str
     context: ExtractExecutionContext | None
     prefer_reader: Required[Literal[True]]
@@ -1537,13 +1536,13 @@ def extract_ts_tables(
         context = ExtractExecutionContext(
             file_contexts=kwargs.get("file_contexts"),
             evidence_plan=kwargs.get("evidence_plan"),
-            ctx=kwargs.get("ctx"),
             session=kwargs.get("session"),
             profile=kwargs.get("profile", "default"),
         )
     session = context.ensure_session()
-    context = replace(context, session=session, ctx=session.exec_ctx)
-    exec_ctx = session.exec_ctx
+    context = replace(context, session=session)
+    runtime_profile = context.ensure_runtime_profile()
+    determinism_tier = context.determinism_tier()
     prefer_reader = kwargs.get("prefer_reader", False)
     normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ts_plans(
@@ -1555,7 +1554,8 @@ def extract_ts_tables(
         "tree_sitter_files": materialize_extract_plan(
             "tree_sitter_files_v1",
             plans["tree_sitter_files"],
-            ctx=exec_ctx,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
                 prefer_reader=prefer_reader,

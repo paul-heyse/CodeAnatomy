@@ -6,7 +6,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.metadata import encoding_policy_from_spec
@@ -125,10 +124,9 @@ class SchemaPolicyOptions:
 def schema_policy_factory(
     spec: _TableSchemaSpec,
     *,
-    ctx: ExecutionContext,
     options: SchemaPolicyOptions | None = None,
 ) -> SchemaPolicy:
-    """Return a schema policy derived from a table spec and execution context.
+    """Return a schema policy derived from a table spec.
 
     Returns
     -------
@@ -140,9 +138,9 @@ def schema_policy_factory(
     resolved_encoding = options.encoding or encoding_policy_from_spec(spec)
     if resolved_encoding is not None and not resolved_encoding.dictionary_cols:
         resolved_encoding = None
-    resolved_safe_cast = ctx.safe_cast if options.safe_cast is None else options.safe_cast
+    resolved_safe_cast = True if options.safe_cast is None else options.safe_cast
     resolved_keep_extra = (
-        ctx.provenance if options.keep_extra_columns is None else options.keep_extra_columns
+        False if options.keep_extra_columns is None else options.keep_extra_columns
     )
     resolved_on_error = (
         options.on_error

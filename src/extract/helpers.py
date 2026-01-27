@@ -13,16 +13,16 @@ from datafusion import col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
-from arrowdsl.core.array_iter import iter_table_rows
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.interop import RecordBatchReaderLike, ScalarLike, TableLike
-from arrowdsl.schema.build import (
+from arrow_utils.core.array_iter import iter_table_rows
+from arrow_utils.core.interop import RecordBatchReaderLike, ScalarLike, TableLike
+from arrow_utils.schema.build import (
     record_batch_reader_from_row_batches as schema_record_batch_reader_from_row_batches,
 )
-from arrowdsl.schema.build import (
+from arrow_utils.schema.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
 from arrowdsl.schema.policy import SchemaPolicy
+from core_types import DeterminismTier
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.extract_extractors import (
@@ -35,9 +35,11 @@ from datafusion_engine.extract_registry import dataset_query, dataset_schema, ex
 from datafusion_engine.finalize import FinalizeContext, FinalizeOptions, normalize_only
 from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundle
 from datafusion_engine.query_spec import apply_query_spec
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_contracts import SchemaContract
 from datafusion_engine.view_graph_registry import _validate_schema_contract
 from engine.materialize_pipeline import write_extract_outputs
+from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.evidence_plan import EvidencePlan
 from extract.schema_ops import (
     ExtractNormalizeOptions,
@@ -51,7 +53,7 @@ from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.runtime import SessionRuntime
     from datafusion_engine.scan_planner import ScanUnit
 
 
@@ -114,23 +116,9 @@ class ExtractExecutionContext:
 
     file_contexts: Iterable[FileContext] | None = None
     evidence_plan: EvidencePlan | None = None
-    ctx: ExecutionContext | None = None
     session: ExtractSession | None = None
+    runtime_spec: RuntimeProfileSpec | None = None
     profile: str = "default"
-
-    def ensure_ctx(self) -> ExecutionContext:
-        """Return the effective execution context.
-
-        Returns
-        -------
-        ExecutionContext
-            Provided context or a profile-derived context when missing.
-        """
-        if self.session is not None:
-            return self.session.exec_ctx
-        if self.ctx is not None:
-            return self.ctx
-        return execution_context_factory(self.profile)
 
     def ensure_session(self) -> ExtractSession:
         """Return the effective extract session.
@@ -142,8 +130,28 @@ class ExtractExecutionContext:
         """
         if self.session is not None:
             return self.session
-        exec_ctx = self.ctx or execution_context_factory(self.profile)
-        return build_extract_session(exec_ctx)
+        runtime_spec = self.runtime_spec or resolve_runtime_profile(self.profile)
+        return build_extract_session(runtime_spec)
+
+    def ensure_runtime_profile(self) -> DataFusionRuntimeProfile:
+        """Return the DataFusion runtime profile for extraction.
+
+        Returns
+        -------
+        DataFusionRuntimeProfile
+            Resolved DataFusion runtime profile.
+        """
+        return self.ensure_session().engine_session.datafusion_profile
+
+    def determinism_tier(self) -> DeterminismTier:
+        """Return the determinism tier for extract execution.
+
+        Returns
+        -------
+        DeterminismTier
+            Determinism tier for extract execution.
+        """
+        return self.ensure_session().engine_session.surface_policy.determinism_tier
 
 
 def iter_file_contexts(repo_files: TableLike) -> Iterator[FileContext]:
@@ -566,7 +574,8 @@ class ExtractMaterializeOptions:
 @dataclass(frozen=True)
 class _NormalizationContext:
     name: str
-    exec_ctx: ExecutionContext
+    runtime_profile: DataFusionRuntimeProfile
+    determinism_tier: DeterminismTier
     finalize_ctx: FinalizeContext
     apply_post_kernels: bool
 
@@ -617,15 +626,18 @@ def _normalize_table(
     return normalize_only(
         processed,
         contract=context.finalize_ctx.contract,
-        ctx=context.exec_ctx,
-        options=FinalizeOptions(schema_policy=resolved_policy),
+        options=FinalizeOptions(
+            schema_policy=resolved_policy,
+            runtime_profile=context.runtime_profile,
+            determinism_tier=context.determinism_tier,
+        ),
     )
 
 
 def extract_dataset_location_or_raise(
     name: str,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> DatasetLocation:
     """Return the extract dataset location, raising when missing.
 
@@ -639,10 +651,6 @@ def extract_dataset_location_or_raise(
     ValueError
         Raised when the DataFusion runtime or dataset location is unavailable.
     """
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "DataFusion runtime is required to resolve extract dataset locations."
-        raise ValueError(msg)
     location = runtime_profile.dataset_location(name)
     if location is None:
         msg = f"No extract dataset location configured for {name!r}."
@@ -653,38 +661,35 @@ def extract_dataset_location_or_raise(
 def _streaming_supported_for_extract(
     name: str,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
     normalize: ExtractNormalizeOptions | None,
 ) -> bool:
-    runtime_profile = _require_datafusion_profile(ctx)
     if runtime_profile.dataset_location(name) is None:
         return False
     policy = normalized_schema_policy_for_dataset(
         name,
-        ctx=ctx,
+        runtime_profile=runtime_profile,
         normalize=normalize,
     )
     return not policy.keep_extra_columns
 
 
-def _require_datafusion_profile(ctx: ExecutionContext) -> DataFusionRuntimeProfile:
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "DataFusion runtime profile is required for extract materialization."
-        raise ValueError(msg)
-    return runtime_profile
-
-
 def _build_normalization_context(
     name: str,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
+    determinism_tier: DeterminismTier,
     options: ExtractMaterializeOptions,
 ) -> _NormalizationContext:
-    finalize_ctx = finalize_context_for_dataset(name, ctx=ctx, normalize=options.normalize)
+    finalize_ctx = finalize_context_for_dataset(
+        name,
+        runtime_profile=runtime_profile,
+        normalize=options.normalize,
+    )
     return _NormalizationContext(
         name=name,
-        exec_ctx=ctx,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
         finalize_ctx=finalize_ctx,
         apply_post_kernels=options.apply_post_kernels,
     )
@@ -752,20 +757,20 @@ def _write_and_record_extract_output(
     plan: DataFusionPlanBundle,
     output: TableLike | pa.RecordBatchReader,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
-    write_extract_outputs(name, output, ctx=ctx)
-    _register_extract_view(name, ctx=ctx)
+    write_extract_outputs(name, output, runtime_profile=runtime_profile)
+    _register_extract_view(name, runtime_profile=runtime_profile)
     _record_extract_view_artifact(
         name,
         plan,
         schema=_arrow_schema_from_output(output),
-        ctx=ctx,
+        runtime_profile=runtime_profile,
     )
     _validate_extract_schema_contract(
         name,
         schema=_arrow_schema_from_output(output),
-        ctx=ctx,
+        runtime_profile=runtime_profile,
     )
 
 
@@ -776,7 +781,8 @@ class _StreamingMaterializeRequest:
     name: str
     df: DataFrame
     plan: DataFusionPlanBundle
-    ctx: ExecutionContext
+    runtime_profile: DataFusionRuntimeProfile
+    determinism_tier: DeterminismTier
     normalization_ctx: _NormalizationContext
     options: ExtractMaterializeOptions
     streaming_supported: bool
@@ -789,13 +795,22 @@ def _materialize_streaming_output(
         return None
     reader = cast("RecordBatchReaderLike", request.df.execute_stream())
     reader_for_write = _normalize_reader(request.normalization_ctx, reader)
-    _write_and_record_extract_output(request.name, request.plan, reader_for_write, ctx=request.ctx)
+    _write_and_record_extract_output(
+        request.name,
+        request.plan,
+        reader_for_write,
+        runtime_profile=request.runtime_profile,
+    )
     if not request.options.prefer_reader:
         return None
     reader = cast("RecordBatchReaderLike", request.df.execute_stream())
     reader_result = ExecutionResult.from_reader(reader)
     normalized_reader = _normalize_reader(request.normalization_ctx, reader)
-    _record_extract_execution(request.name, reader_result, ctx=request.ctx)
+    _record_extract_execution(
+        request.name,
+        reader_result,
+        runtime_profile=request.runtime_profile,
+    )
     return normalized_reader
 
 
@@ -803,7 +818,8 @@ def materialize_extract_plan(
     name: str,
     plan: DataFusionPlanBundle,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
+    determinism_tier: DeterminismTier,
     options: ExtractMaterializeOptions | None = None,
 ) -> TableLike | pa.RecordBatchReader:
     """Materialize an extract plan bundle and normalize at the Arrow boundary.
@@ -815,15 +831,19 @@ def materialize_extract_plan(
 
     """
     resolved = options or ExtractMaterializeOptions()
-    _record_extract_compile(name, plan, ctx=ctx)
-    _record_extract_udf_parity(name, ctx=ctx)
-    runtime_profile = _require_datafusion_profile(ctx)
+    _record_extract_compile(name, plan, runtime_profile=runtime_profile)
+    _record_extract_udf_parity(name, runtime_profile=runtime_profile)
     streaming_supported = _streaming_supported_for_extract(
         name,
-        ctx=ctx,
+        runtime_profile=runtime_profile,
         normalize=resolved.normalize,
     )
-    normalization_ctx = _build_normalization_context(name, ctx=ctx, options=resolved)
+    normalization_ctx = _build_normalization_context(
+        name,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
+        options=resolved,
+    )
     result, _scan_units, _scan_keys = _execute_extract_plan_bundle(
         name,
         plan,
@@ -835,7 +855,8 @@ def materialize_extract_plan(
             name=name,
             df=df,
             plan=plan,
-            ctx=ctx,
+            runtime_profile=runtime_profile,
+            determinism_tier=determinism_tier,
             normalization_ctx=normalization_ctx,
             options=resolved,
             streaming_supported=streaming_supported,
@@ -847,18 +868,18 @@ def materialize_extract_plan(
     table_result = ExecutionResult.from_table(table)
     normalized = _normalize_table(normalization_ctx, table)
     if not streaming_supported:
-        _write_and_record_extract_output(name, plan, normalized, ctx=ctx)
+        _write_and_record_extract_output(name, plan, normalized, runtime_profile=runtime_profile)
     if resolved.prefer_reader:
         if isinstance(normalized, pa.Table):
             resolved_table = cast("pa.Table", normalized)
-            _record_extract_execution(name, table_result, ctx=ctx)
+            _record_extract_execution(name, table_result, runtime_profile=runtime_profile)
             return pa.RecordBatchReader.from_batches(
                 resolved_table.schema,
                 resolved_table.to_batches(),
             )
-        _record_extract_execution(name, table_result, ctx=ctx)
+        _record_extract_execution(name, table_result, runtime_profile=runtime_profile)
         return normalized
-    _record_extract_execution(name, table_result, ctx=ctx)
+    _record_extract_execution(name, table_result, runtime_profile=runtime_profile)
     return normalized
 
 
@@ -896,7 +917,8 @@ def materialize_extract_reader(
     return materialize_extract_plan(
         name,
         plan,
-        ctx=session.exec_ctx,
+        runtime_profile=session.engine_session.datafusion_profile,
+        determinism_tier=session.engine_session.surface_policy.determinism_tier,
         options=resolved_materialize,
     )
 
@@ -905,12 +927,8 @@ def _record_extract_execution(
     name: str,
     result: ExecutionResult,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
-    profile = ctx.runtime.datafusion
-    if profile is None:
-        msg = "DataFusion runtime profile is required for extract diagnostics."
-        raise ValueError(msg)
     row_count: int | None = None
     table = result.table
     if table is not None:
@@ -922,48 +940,28 @@ def _record_extract_execution(
         "result_kind": result.kind.value,
         "rows": row_count,
     }
-    record_artifact(profile, "extract_plan_execute_v1", payload)
+    record_artifact(runtime_profile, "extract_plan_execute_v1", payload)
 
 
 def _record_extract_compile(
     name: str,
     plan: DataFusionPlanBundle,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
-    """Record a compile fingerprint artifact for extract plans.
-
-    Raises
-    ------
-    ValueError
-        Raised when the DataFusion runtime profile is unavailable.
-    """
-    profile = ctx.runtime.datafusion
-    if profile is None:
-        msg = "DataFusion runtime profile is required for extract diagnostics."
-        raise ValueError(msg)
+    """Record a compile fingerprint artifact for extract plans."""
     from datafusion_engine.diagnostics import record_artifact
 
     payload = {
         "dataset": name,
         "plan_fingerprint": plan.plan_fingerprint,
     }
-    record_artifact(profile, "extract_plan_compile_v1", payload)
+    record_artifact(runtime_profile, "extract_plan_compile_v1", payload)
 
 
-def _register_extract_view(name: str, *, ctx: ExecutionContext) -> None:
-    """Register a view for a materialized extract dataset.
-
-    Raises
-    ------
-    ValueError
-        Raised when the DataFusion runtime profile is unavailable.
-    """
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "DataFusion runtime profile is required for extract view registration."
-        raise ValueError(msg)
-    location = extract_dataset_location_or_raise(name, ctx=ctx)
+def _register_extract_view(name: str, *, runtime_profile: DataFusionRuntimeProfile) -> None:
+    """Register a view for a materialized extract dataset."""
+    location = extract_dataset_location_or_raise(name, runtime_profile=runtime_profile)
     session_runtime = runtime_profile.session_runtime()
     facade = DataFusionExecutionFacade(
         ctx=session_runtime.ctx,
@@ -977,19 +975,10 @@ def _record_extract_view_artifact(
     plan: DataFusionPlanBundle,
     *,
     schema: pa.Schema,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
-    """Record a deterministic view artifact for extract outputs.
-
-    Raises
-    ------
-    ValueError
-        Raised when the DataFusion runtime profile is unavailable.
-    """
-    profile = ctx.runtime.datafusion
-    if profile is None:
-        msg = "DataFusion runtime profile is required for extract diagnostics."
-        raise ValueError(msg)
+    """Record a deterministic view artifact for extract outputs."""
+    profile = runtime_profile
     from datafusion_engine.lineage_datafusion import extract_lineage
     from datafusion_engine.runtime import record_view_definition, session_runtime_hash
     from datafusion_engine.view_artifacts import (
@@ -1024,7 +1013,7 @@ def _validate_extract_schema_contract(
     name: str,
     *,
     schema: pa.Schema,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
     """Validate extract outputs against the expected ABI schema.
 
@@ -1032,13 +1021,7 @@ def _validate_extract_schema_contract(
     ------
     TypeError
         Raised when the expected schema cannot be resolved.
-    ValueError
-        Raised when the DataFusion runtime profile is unavailable.
     """
-    runtime_profile = ctx.runtime.datafusion
-    if runtime_profile is None:
-        msg = "DataFusion runtime profile is required for extract validation."
-        raise ValueError(msg)
     expected = dataset_schema(name)
     if not isinstance(expected, pa.Schema):
         msg = f"Expected schema unavailable for extract dataset {name!r}."
@@ -1070,19 +1053,10 @@ def _arrow_schema_from_output(output: TableLike | RecordBatchReaderLike) -> pa.S
 def _record_extract_udf_parity(
     name: str,
     *,
-    ctx: ExecutionContext,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
-    """Record extract-scoped UDF parity diagnostics.
-
-    Raises
-    ------
-    ValueError
-        Raised when the DataFusion runtime profile is unavailable.
-    """
-    profile = ctx.runtime.datafusion
-    if profile is None:
-        msg = "DataFusion runtime profile is required for UDF parity checks."
-        raise ValueError(msg)
+    """Record extract-scoped UDF parity diagnostics."""
+    profile = runtime_profile
     from datafusion_engine.diagnostics import record_artifact
     from datafusion_engine.udf_parity import udf_parity_report
 

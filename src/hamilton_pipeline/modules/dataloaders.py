@@ -8,8 +8,8 @@ from pathlib import Path
 
 from hamilton.function_modifiers import dataloader, tag
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrow_utils.core.interop import TableLike
+from engine.runtime_profile import RuntimeProfileSpec
 from extract.helpers import ExtractExecutionContext
 from extract.repo_scan import RepoScanOptions, scan_repo
 from extract.scip_extract import (
@@ -118,7 +118,7 @@ def scip_index_path(
 @tag(layer="inputs", artifact="repo_files", kind="dataloader")
 def repo_files(
     repo_scan_config: RepoScanConfig,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     cache_salt: str,
     incremental_config: IncrementalConfig | None = None,
 ) -> tuple[TableLike, dict[str, object]]:
@@ -134,7 +134,7 @@ def repo_files(
         incremental=incremental_config,
         cache_salt=cache_salt,
     )
-    exec_ctx = ExtractExecutionContext(ctx=ctx)
+    exec_ctx = ExtractExecutionContext(runtime_spec=runtime_profile_spec)
     table = scan_repo(repo_scan_config.repo_root, options=options, context=exec_ctx)
     metadata: dict[str, object] = {
         "repo_root": repo_scan_config.repo_root,
@@ -155,7 +155,7 @@ def scip_tables(
     repo_root: str,
     scip_index_path: str | None,
     scip_extract_options: ScipExtractOptions,
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
 ) -> tuple[Mapping[str, TableLike], dict[str, object]]:
     """Load SCIP tables from an index.scip file.
 
@@ -167,7 +167,7 @@ def scip_tables(
     context = ScipExtractContext(
         scip_index_path=scip_index_path,
         repo_root=repo_root,
-        ctx=ctx,
+        runtime_spec=runtime_profile_spec,
     )
     tables = extract_scip_tables(context=context, options=scip_extract_options, prefer_reader=False)
     metadata: dict[str, object] = {

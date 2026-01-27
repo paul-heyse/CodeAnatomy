@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import SchemaLike
+from arrow_utils.core.interop import SchemaLike
 from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
 from datafusion_engine.schema_registry import registered_table_names
 from schema_spec.system import DatasetSpec, dataset_spec_from_schema

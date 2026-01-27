@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Self
 
 import pyarrow as pa
 
-from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from core_types import DeterminismTier
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
@@ -22,16 +22,17 @@ if TYPE_CHECKING:
 class IncrementalRuntime:
     """Runtime container for DataFusion incremental execution."""
 
-    execution_ctx: ExecutionContext
     profile: DataFusionRuntimeProfile
     _session_runtime: SessionRuntime
+    determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
 
     @classmethod
     def build(
         cls,
         *,
-        ctx: ExecutionContext | None = None,
-        profile: str = "default",
+        profile: DataFusionRuntimeProfile | None = None,
+        profile_name: str = "default",
+        determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT,
     ) -> IncrementalRuntime:
         """Create a runtime with default DataFusion profile.
 
@@ -39,21 +40,12 @@ class IncrementalRuntime:
         -------
         IncrementalRuntime
             Newly constructed runtime instance.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution context lacks a DataFusion profile.
         """
-        exec_ctx = ctx or execution_context_factory(profile)
-        runtime_profile = exec_ctx.runtime.datafusion
-        if runtime_profile is None:
-            msg = "Incremental runtime requires a DataFusion profile."
-            raise ValueError(msg)
+        runtime_profile = profile or DataFusionRuntimeProfile(config_policy_name=profile_name)
         return cls(
-            execution_ctx=exec_ctx,
             profile=runtime_profile,
             _session_runtime=runtime_profile.session_runtime(),
+            determinism_tier=determinism_tier,
         )
 
     def session_runtime(self) -> SessionRuntime:
@@ -75,16 +67,6 @@ class IncrementalRuntime:
             Session context bound to the incremental SessionRuntime.
         """
         return self._session_runtime.ctx
-
-    def execution_context(self) -> ExecutionContext:
-        """Return the cached ExecutionContext for incremental work.
-
-        Returns
-        -------
-        ExecutionContext
-            Cached or newly created execution context.
-        """
-        return self.execution_ctx
 
     def io_adapter(self) -> DataFusionIOAdapter:
         """Return a DataFusion IO adapter bound to this runtime.

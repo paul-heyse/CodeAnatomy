@@ -10,9 +10,7 @@ from typing import Literal, TypedDict, Unpack
 
 from hamilton.function_modifiers import cache, tag
 
-from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.execution_context import ExecutionContext
-from core_types import JsonDict
+from core_types import DeterminismTier, JsonDict
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
@@ -126,21 +124,6 @@ def runtime_profile_spec(
 
 @cache(behavior="ignore")
 @tag(layer="inputs", kind="runtime")
-def ctx(runtime_profile_spec: RuntimeProfileSpec) -> ExecutionContext:
-    """Build the execution context for Arrow DSL execution.
-
-    Returns
-    -------
-    ExecutionContext
-        Default execution context instance.
-    """
-    runtime = runtime_profile_spec.runtime
-    runtime.apply_global_thread_pools()
-    return ExecutionContext(runtime=runtime)
-
-
-@cache(behavior="ignore")
-@tag(layer="inputs", kind="runtime")
 def diagnostics_collector() -> DiagnosticsCollector:
     """Return a diagnostics collector for the run.
 
@@ -156,7 +139,6 @@ def diagnostics_collector() -> DiagnosticsCollector:
 @cache(behavior="ignore")
 @tag(layer="inputs", kind="runtime")
 def engine_session(
-    ctx: ExecutionContext,
     runtime_profile_spec: RuntimeProfileSpec,
     diagnostics_collector: DiagnosticsCollector,
     execution_surface_policy: ExecutionSurfacePolicy,
@@ -170,7 +152,6 @@ def engine_session(
         Session containing runtime surfaces and diagnostics wiring.
     """
     return build_engine_session(
-        ctx=ctx,
         runtime_spec=runtime_profile_spec,
         diagnostics=diagnostics_collector,
         surface_policy=execution_surface_policy,
@@ -200,22 +181,14 @@ def streaming_table_provider(incremental_config: IncrementalConfig) -> object | 
 
 
 @tag(layer="inputs", kind="runtime")
-def adapter_execution_policy(ctx: ExecutionContext) -> AdapterExecutionPolicy:
+def adapter_execution_policy() -> AdapterExecutionPolicy:
     """Return the execution policy for adapter execution behavior.
-
-    Raises
-    ------
-    ValueError
-        Raised when an unsupported execution mode is configured.
 
     Returns
     -------
     AdapterExecutionPolicy
-        Policy that governs adapter execution behavior.
+        Adapter execution policy configuration.
     """
-    if ctx.mode not in {"strict", "tolerant"}:
-        msg = f"Unsupported execution mode: {ctx.mode!r}."
-        raise ValueError(msg)
     return AdapterExecutionPolicy()
 
 
@@ -597,7 +570,7 @@ def output_config(
 
 @tag(layer="inputs", kind="object")
 def execution_surface_policy(
-    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
     output_config: OutputConfig,
 ) -> ExecutionSurfacePolicy:
     """Return the execution surface policy for plan materialization.
@@ -609,7 +582,7 @@ def execution_surface_policy(
     """
     return ExecutionSurfacePolicy(
         prefer_streaming=True,
-        determinism_tier=ctx.determinism,
+        determinism_tier=runtime_profile_spec.determinism_tier,
         writer_strategy=output_config.writer_strategy,
     )
 

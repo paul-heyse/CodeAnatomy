@@ -9,8 +9,6 @@ from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import TypeVar
 
-from arrowdsl.core.execution_context import ExecutionContext
-
 T = TypeVar("T")
 U = TypeVar("U")
 
@@ -80,7 +78,6 @@ def parallel_map(
 def resolve_max_workers(
     max_workers: int | None,
     *,
-    ctx: ExecutionContext | None,
     kind: str = "cpu",
 ) -> int:
     """Resolve max_workers using runtime defaults when unset.
@@ -92,12 +89,7 @@ def resolve_max_workers(
     """
     if max_workers is not None:
         return max(1, max_workers)
-    if ctx is not None:
-        runtime = ctx.runtime
-        if kind == "io" and runtime.io_threads is not None:
-            return max(1, runtime.io_threads)
-        if kind != "io" and runtime.cpu_threads is not None:
-            return max(1, runtime.cpu_threads)
+    _ = kind
     cpu_count = os.cpu_count() or 1
     return max(1, cpu_count)
 

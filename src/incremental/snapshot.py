@@ -162,21 +162,27 @@ def write_repo_snapshot(
         "source.mtime_ns <> target.mtime_ns"
     )
     ctx = context.runtime.session_context()
+    from storage.deltalake import DeltaMergeArrowRequest
+
     delta_merge_arrow(
         ctx,
-        path=str(target),
-        source=snapshot,
-        predicate="source.file_id = target.file_id",
-        storage_options=storage.storage_options,
-        log_storage_options=storage.log_storage_options,
-        source_alias="source",
-        target_alias="target",
-        matched_predicate=update_predicate,
-        update_all=True,
-        insert_all=True,
-        delete_not_matched_by_source=True,
-        commit_properties=commit_properties,
-        commit_metadata=commit_metadata,
+        request=DeltaMergeArrowRequest(
+            path=str(target),
+            source=snapshot,
+            predicate="source.file_id = target.file_id",
+            storage_options=storage.storage_options,
+            log_storage_options=storage.log_storage_options,
+            source_alias="source",
+            target_alias="target",
+            matched_predicate=update_predicate,
+            update_all=True,
+            insert_all=True,
+            delete_not_matched_by_source=True,
+            commit_properties=commit_properties,
+            commit_metadata=commit_metadata,
+            runtime_profile=context.runtime.profile,
+            dataset_name="repo_snapshot",
+        ),
     )
     context.runtime.profile.finalize_delta_commit(
         key=commit_key,

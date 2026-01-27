@@ -65,11 +65,13 @@ def _bundle_builder(builder: DataFrameBuilder) -> PlanBundleBuilder:
     PlanBundleBuilder
         Builder that produces DataFusionPlanBundle artifacts.
     """
+
     def _build(session_runtime: SessionRuntime) -> DataFusionPlanBundle:
         df = builder(session_runtime.ctx)
         return _plan_bundle_from_df(df, session_runtime=session_runtime)
 
     return _build
+
 
 # Def/Use operation detection constants
 _DEF_USE_OPS: tuple[str, ...] = ("IMPORT_NAME", "IMPORT_FROM")
@@ -281,7 +283,9 @@ def type_nodes_df_builder(ctx: SessionContext) -> DataFrame:
     try:
         scip = ctx.table("scip_symbol_information")
         if "type_repr" in scip.schema().names:
-            scip_type_repr = utf8_null_if_blank(_normalized_text(_arrow_cast(col("type_repr"), "Utf8")))
+            scip_type_repr = utf8_null_if_blank(
+                _normalized_text(_arrow_cast(col("type_repr"), "Utf8"))
+            )
 
             scip_rows = (
                 scip.filter(scip_type_repr.is_not_null())

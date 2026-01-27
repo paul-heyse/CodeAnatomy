@@ -29,6 +29,8 @@ Pattern
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import time
 from collections.abc import Mapping
@@ -117,6 +119,19 @@ def _merge_constraints(
         if normalized:
             ordered.setdefault(normalized, None)
     return tuple(ordered)
+
+
+def _storage_options_hash(
+    storage_options: Mapping[str, str] | None,
+    log_storage_options: Mapping[str, str] | None,
+) -> str | None:
+    storage = dict(storage_options or {})
+    if log_storage_options:
+        storage.update({str(key): str(value) for key, value in log_storage_options.items()})
+    if not storage:
+        return None
+    payload = json.dumps(sorted(storage.items()), sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -818,6 +833,44 @@ class WritePipeline:
             ),
         )
 
+    def _record_delta_mutation(
+        self,
+        *,
+        spec: DeltaWriteSpec,
+        delta_result: DeltaWriteResult,
+        operation: str,
+        constraint_status: str,
+    ) -> None:
+        if self.runtime_profile is None:
+            return
+        report = delta_result.report or {}
+        from datafusion_engine.delta_observability import (
+            DeltaMutationArtifact,
+            record_delta_mutation,
+        )
+
+        commit_run_id = spec.commit_run.run_id if spec.commit_run is not None else None
+        record_delta_mutation(
+            self.runtime_profile,
+            artifact=DeltaMutationArtifact(
+                table_uri=spec.table_uri,
+                operation=operation,
+                report=report,
+                dataset_name=spec.commit_key,
+                mode=spec.mode,
+                commit_metadata=spec.commit_metadata,
+                commit_app_id=spec.commit_app_id,
+                commit_version=spec.commit_version,
+                commit_run_id=commit_run_id,
+                constraint_status=constraint_status,
+                constraint_violations=(),
+                storage_options_hash=_storage_options_hash(
+                    spec.storage_options,
+                    spec.log_storage_options,
+                ),
+            ),
+        )
+
     def _write_delta(
         self,
         result: StreamingExecutionResult,
@@ -876,6 +929,12 @@ class WritePipeline:
             spec.table_uri,
             options=delta_options,
             ctx=self.ctx,
+        )
+        self._record_delta_mutation(
+            spec=spec,
+            delta_result=delta_result,
+            operation="write",
+            constraint_status="passed" if spec.extra_constraints else "skipped",
         )
         enabled_features = enable_delta_features(
             spec.table_uri,

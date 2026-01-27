@@ -59,7 +59,7 @@ from storage.dataset_sources import (
     PathLike,
     normalize_dataset_source,
 )
-from storage.deltalake import delta_table_schema
+from storage.deltalake import DeltaSchemaRequest, delta_table_schema
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
@@ -1211,11 +1211,13 @@ def dataset_spec_from_path(
     options = options or DatasetOpenSpec()
     if options.dataset_format == "delta":
         schema = delta_table_schema(
-            str(path),
-            storage_options=options.storage_options or None,
-            log_storage_options=options.delta_log_storage_options or None,
-            version=options.delta_version,
-            timestamp=options.delta_timestamp,
+            DeltaSchemaRequest(
+                path=str(path),
+                storage_options=options.storage_options or None,
+                log_storage_options=options.delta_log_storage_options or None,
+                version=options.delta_version,
+                timestamp=options.delta_timestamp,
+            )
         )
         if schema is None:
             msg = f"Delta schema unavailable for dataset at {path!r}."

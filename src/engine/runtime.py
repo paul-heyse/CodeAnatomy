@@ -50,7 +50,7 @@ def build_engine_runtime(
     Returns
     -------
     EngineRuntime
-        Bundled runtime settings for DataFusion and Ibis (SQLGlot deprecated).
+        Bundled runtime settings for DataFusion execution.
     """
     runtime = runtime_profile or ctx.runtime
     runtime.apply_global_thread_pools()

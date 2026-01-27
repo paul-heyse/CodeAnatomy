@@ -81,7 +81,12 @@ def upsert_partitioned_dataset(
         schema=schema,
         encoding_policy=encoding_policy_from_schema(schema),
     )
-    _delete_delta_partitions(base_dir, delete_partitions=delete_partitions, context=context)
+    _delete_delta_partitions(
+        base_dir,
+        delete_partitions=delete_partitions,
+        context=context,
+        dataset_name=spec.name,
+    )
     result = write_delta_table(
         data,
         base_dir,
@@ -351,6 +356,7 @@ def _delete_delta_partitions(
     *,
     delete_partitions: Sequence[Mapping[str, str]],
     context: DeltaAccessContext,
+    dataset_name: str | None,
 ) -> None:
     if not delete_partitions:
         return
@@ -370,14 +376,20 @@ def _delete_delta_partitions(
         extra_metadata=commit_metadata,
     )
     ctx = context.runtime.session_context()
+    from storage.deltalake import DeltaDeleteWhereRequest
+
     delta_delete_where(
         ctx,
-        path=base_dir,
-        predicate=predicate,
-        storage_options=context.storage.storage_options,
-        log_storage_options=context.storage.log_storage_options,
-        commit_properties=commit_properties,
-        commit_metadata=commit_metadata,
+        request=DeltaDeleteWhereRequest(
+            path=base_dir,
+            predicate=predicate,
+            storage_options=context.storage.storage_options,
+            log_storage_options=context.storage.log_storage_options,
+            commit_properties=commit_properties,
+            commit_metadata=commit_metadata,
+            runtime_profile=context.runtime.profile,
+            dataset_name=dataset_name,
+        ),
     )
     context.runtime.profile.finalize_delta_commit(
         key=base_dir,

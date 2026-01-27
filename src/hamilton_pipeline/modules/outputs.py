@@ -1,6 +1,7 @@
 """Hamilton output nodes for inference-driven pipeline."""
 
 import json
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,18 +17,18 @@ from hamilton.function_modifiers import (
     tag,
 )
 
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from core_types import JsonDict
+from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from hamilton_pipeline.pipeline_types import OutputConfig
 from hamilton_pipeline.validators import NonEmptyTableValidator
 from storage.deltalake import (
-    DeltaWriteOptions,
     delta_schema_configuration,
     delta_table_version,
     delta_write_configuration,
-    enable_delta_features,
-    idempotent_commit_properties,
-    write_delta_table,
 )
 from storage.deltalake.delta import DEFAULT_DELTA_FEATURE_PROPERTIES
 from storage.ipc import payload_hash
@@ -95,6 +96,7 @@ def _semantic_tag(*, artifact: str, spec: SemanticTagSpec) -> Callable[[F], F]:
 def _delta_write(
     table: TableLike,
     *,
+    ctx: ExecutionContext,
     output_config: OutputConfig,
     dataset_name: str,
 ) -> JsonDict:
@@ -104,10 +106,11 @@ def _delta_write(
         raise ValueError(msg)
     target_dir = Path(base_dir) / dataset_name
     target_dir.mkdir(parents=True, exist_ok=True)
-    existing_version = delta_table_version(
-        str(target_dir),
-        storage_options=output_config.delta_storage_options,
-    )
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        msg = "DataFusion runtime profile is required for Delta materialization."
+        raise ValueError(msg)
+    session_runtime = runtime_profile.session_runtime()
     configuration: dict[str, str | None] = {}
     if output_config.delta_write_policy is not None:
         configuration.update(delta_write_configuration(output_config.delta_write_policy) or {})
@@ -123,36 +126,46 @@ def _delta_write(
             pa.schema([pa.field("schema", pa.list_(pa.string()))]),
         ),
     }
-    commit_properties = idempotent_commit_properties(
-        operation="output_materialize",
-        mode="overwrite",
-        extra_metadata=commit_metadata,
+    df = datafusion_from_arrow(
+        session_runtime.ctx,
+        name=f"__output_{dataset_name}_{uuid.uuid4().hex}",
+        value=table,
     )
-    result = write_delta_table(
-        table,
-        str(target_dir),
-        options=DeltaWriteOptions(
-            mode="overwrite",
-            schema_mode="overwrite",
-            commit_metadata=commit_metadata,
-            commit_properties=commit_properties,
-            configuration=configuration or None,
-            storage_options=output_config.delta_storage_options,
+    format_options: dict[str, object] = {
+        "commit_metadata": commit_metadata,
+        "table_properties": configuration or None,
+        "schema_mode": "overwrite",
+    }
+    if output_config.delta_storage_options is not None:
+        format_options["storage_options"] = dict(output_config.delta_storage_options)
+    if output_config.delta_write_policy is not None:
+        format_options["target_file_size"] = output_config.delta_write_policy.target_file_size
+    pipeline = WritePipeline(
+        session_runtime.ctx,
+        sql_options=runtime_profile.sql_options(),
+        recorder=recorder_for_profile(
+            runtime_profile,
+            operation_id=f"hamilton_output::{dataset_name}",
         ),
+        runtime_profile=runtime_profile,
     )
-    if existing_version is None:
-        enable_delta_features(
-            str(target_dir),
-            storage_options=output_config.delta_storage_options,
-            features=DEFAULT_DELTA_FEATURE_PROPERTIES,
-            commit_metadata=commit_metadata,
+    write_result = pipeline.write(
+        WriteRequest(
+            source=df,
+            destination=str(target_dir),
+            format=WriteFormat.DELTA,
+            mode=WriteMode.OVERWRITE,
+            format_options=format_options,
         )
-    final_version = delta_table_version(
-        str(target_dir),
-        storage_options=output_config.delta_storage_options,
+    )
+    final_version = (
+        write_result.delta_result.version if write_result.delta_result is not None else None
     )
     if final_version is None:
-        final_version = result.version
+        final_version = delta_table_version(
+            str(target_dir),
+            storage_options=output_config.delta_storage_options,
+        )
     if final_version is None:
         msg = f"Failed to resolve Delta version for output dataset: {dataset_name!r}."
         raise RuntimeError(msg)
@@ -255,6 +268,7 @@ def cpg_props(cpg_props_final: TableLike) -> TableLike:
 @tag(layer="outputs", artifact="write_cpg_nodes_delta", kind="delta")
 def write_cpg_nodes_delta(
     cpg_nodes: TableLike,
+    ctx: ExecutionContext,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG nodes output.
@@ -266,6 +280,7 @@ def write_cpg_nodes_delta(
     """
     return _delta_write(
         cpg_nodes,
+        ctx=ctx,
         output_config=output_config,
         dataset_name="cpg_nodes",
     )
@@ -275,6 +290,7 @@ def write_cpg_nodes_delta(
 @tag(layer="outputs", artifact="write_cpg_edges_delta", kind="delta")
 def write_cpg_edges_delta(
     cpg_edges: TableLike,
+    ctx: ExecutionContext,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG edges output.
@@ -286,6 +302,7 @@ def write_cpg_edges_delta(
     """
     return _delta_write(
         cpg_edges,
+        ctx=ctx,
         output_config=output_config,
         dataset_name="cpg_edges",
     )
@@ -295,6 +312,7 @@ def write_cpg_edges_delta(
 @tag(layer="outputs", artifact="write_cpg_props_delta", kind="delta")
 def write_cpg_props_delta(
     cpg_props: TableLike,
+    ctx: ExecutionContext,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG properties output.
@@ -306,6 +324,7 @@ def write_cpg_props_delta(
     """
     return _delta_write(
         cpg_props,
+        ctx=ctx,
         output_config=output_config,
         dataset_name="cpg_props",
     )
@@ -315,6 +334,7 @@ def write_cpg_props_delta(
 @tag(layer="outputs", artifact="write_cpg_nodes_quality_delta", kind="delta")
 def write_cpg_nodes_quality_delta(
     cpg_nodes: TableLike,
+    ctx: ExecutionContext,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG node quality output.
@@ -326,6 +346,7 @@ def write_cpg_nodes_quality_delta(
     """
     return _delta_write(
         cpg_nodes,
+        ctx=ctx,
         output_config=output_config,
         dataset_name="cpg_nodes_quality",
     )
@@ -335,6 +356,7 @@ def write_cpg_nodes_quality_delta(
 @tag(layer="outputs", artifact="write_cpg_props_quality_delta", kind="delta")
 def write_cpg_props_quality_delta(
     cpg_props: TableLike,
+    ctx: ExecutionContext,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG prop quality output.
@@ -346,6 +368,7 @@ def write_cpg_props_quality_delta(
     """
     return _delta_write(
         cpg_props,
+        ctx=ctx,
         output_config=output_config,
         dataset_name="cpg_props_quality",
     )
@@ -355,6 +378,7 @@ def write_cpg_props_quality_delta(
 @tag(layer="outputs", artifact="write_cpg_props_json_delta", kind="delta")
 def write_cpg_props_json_delta(
     cpg_props: TableLike,
+    ctx: ExecutionContext,
     output_config: OutputConfig,
 ) -> DataSaverDict:
     """Return stub metadata for CPG props JSON output.
@@ -366,6 +390,7 @@ def write_cpg_props_json_delta(
     """
     return _delta_write(
         cpg_props,
+        ctx=ctx,
         output_config=output_config,
         dataset_name="cpg_props_json",
     )

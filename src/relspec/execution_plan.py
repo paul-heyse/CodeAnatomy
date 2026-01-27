@@ -145,8 +145,8 @@ class _PlanBuildContext:
     output_contracts: Mapping[str, OutputContract]
     evidence: EvidenceCatalog
     dataset_spec_map: Mapping[str, DatasetSpec]
-    runtime_profile: DataFusionRuntimeProfile | None
-    session_runtime: SessionRuntime | None
+    runtime_profile: DataFusionRuntimeProfile
+    session_runtime: SessionRuntime
     scan_units: tuple[ScanUnit, ...]
     scan_keys_by_task: Mapping[str, tuple[str, ...]]
     scan_task_units_by_name: Mapping[str, ScanUnit]
@@ -272,15 +272,15 @@ def _scan_unit_delta_pins(
 
 def compile_execution_plan(
     *,
-    session: SessionContext,
+    session_runtime: SessionRuntime,
     request: ExecutionPlanRequest,
 ) -> ExecutionPlan:
     """Compile the canonical execution plan for the current session.
 
     Parameters
     ----------
-    session : SessionContext
-        Active DataFusion session used for schema discovery.
+    session_runtime : SessionRuntime
+        Active SessionRuntime used for schema discovery and planning.
     request : ExecutionPlanRequest
         Inputs that shape plan compilation and pruning.
 
@@ -290,7 +290,7 @@ def compile_execution_plan(
         Fully compiled execution plan for this session.
 
     """
-    context = _prepare_plan_context(session, request)
+    context = _prepare_plan_context(session_runtime, request)
     plan_fingerprints = _plan_fingerprint_map(context.inferred)
     plan_task_signatures = _plan_task_signature_map(
         context=context,
@@ -460,17 +460,31 @@ def _contracts_and_evidence(
 
 
 def _prepare_plan_context(
-    session: SessionContext,
+    session_runtime: SessionRuntime,
     request: ExecutionPlanRequest,
 ) -> _PlanBuildContext:
+    session = session_runtime.ctx
     requested = set(request.requested_task_names or ())
     nodes_with_ast = _validated_view_nodes(request.view_nodes, requested=requested)
     dataset_spec_map = _dataset_spec_map(session)
+    runtime_profile = request.runtime_profile or session_runtime.profile
+    if (
+        request.runtime_profile is not None
+        and request.runtime_profile is not session_runtime.profile
+    ):
+        msg = "ExecutionPlanRequest runtime_profile must match the SessionRuntime profile."
+        raise ValueError(msg)
     planned = plan_with_delta_pins(
         session,
         view_nodes=nodes_with_ast,
-        runtime_profile=request.runtime_profile,
+        runtime_profile=runtime_profile,
         snapshot=request.snapshot,
+    )
+    _validate_plan_bundle_compatibility(
+        view_nodes=nodes_with_ast,
+        inferred=planned.inferred,
+        scan_units=planned.scan_units,
+        scan_keys_by_task=planned.scan_keys_by_task,
     )
     priorities = _priority_map(planned.inferred)
     graph = build_task_graph_from_inferred_deps(
@@ -511,7 +525,7 @@ def _prepare_plan_context(
         try:
             persist_plan_artifacts_for_views(
                 session,
-                request.runtime_profile,
+                runtime_profile,
                 request=PlanArtifactsForViewsRequest(
                     view_nodes=pruned.view_nodes,
                     scan_units=pruned.scan_units,
@@ -523,7 +537,7 @@ def _prepare_plan_context(
             from datafusion_engine.diagnostics import record_artifact
 
             record_artifact(
-                request.runtime_profile,
+                runtime_profile,
                 "plan_artifacts_store_failed_v1",
                 {
                     "error_type": type(exc).__name__,
@@ -553,8 +567,8 @@ def _prepare_plan_context(
         output_contracts=contracts_evidence.output_contracts,
         evidence=contracts_evidence.evidence,
         dataset_spec_map=dataset_spec_map,
-        runtime_profile=request.runtime_profile,
-        session_runtime=planned.session_runtime,
+        runtime_profile=runtime_profile,
+        session_runtime=session_runtime,
         requested_task_names=requested_task_names,
         impacted_task_names=impacted_task_names,
         allow_partial=bool(request.allow_partial),
@@ -603,6 +617,7 @@ def _scan_units_for_inferred(
         session,
         dataset_locations=dataset_locations,
         scans_by_task=scans_by_task,
+        runtime_profile=runtime_profile,
     )
 
 
@@ -908,16 +923,31 @@ def _df_settings_hash(df_settings: Mapping[str, str]) -> str:
     return _hash_payload(entries)
 
 
+DeltaInputPayload = tuple[
+    str,
+    int | None,
+    str | None,
+    tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None,
+    tuple[tuple[str, object], ...] | None,
+    str | None,
+]
+
+
 def _delta_inputs_payload(
     bundle: object,
-) -> tuple[tuple[str, int | None, str | None, tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None], ...]:
+) -> tuple[
+    DeltaInputPayload,
+    ...,
+]:
     delta_inputs = getattr(bundle, "delta_inputs", ())
-    payload: list[tuple[str, int | None, str | None]] = []
+    payload: list[DeltaInputPayload] = []
     for item in delta_inputs:
         dataset_name = getattr(item, "dataset_name", None)
         version = getattr(item, "version", None)
         timestamp = getattr(item, "timestamp", None)
         gate = getattr(item, "feature_gate", None)
+        protocol = getattr(item, "protocol", None)
+        storage_hash = getattr(item, "storage_options_hash", None)
         if not isinstance(dataset_name, str) or not dataset_name:
             continue
         version_value = int(version) if isinstance(version, int) else None
@@ -927,7 +957,16 @@ def _delta_inputs_payload(
             timestamp_value = str(int(timestamp))
         else:
             timestamp_value = None
-        payload.append((dataset_name, version_value, timestamp_value, _delta_gate_payload(gate)))
+        payload.append(
+            (
+                dataset_name,
+                version_value,
+                timestamp_value,
+                _delta_gate_payload(gate),
+                _protocol_payload(protocol),
+                str(storage_hash) if isinstance(storage_hash, str) else None,
+            )
+        )
     return tuple(sorted(payload, key=lambda entry: entry[0]))
 
 
@@ -959,11 +998,126 @@ def _scan_unit_signature(scan_unit: ScanUnit, *, runtime_hash: str | None) -> st
         ("delta_timestamp", scan_unit.delta_timestamp),
         ("snapshot_timestamp", scan_unit.snapshot_timestamp),
         ("delta_feature_gate", _delta_gate_payload(scan_unit.delta_feature_gate)),
+        ("delta_protocol", _protocol_payload(scan_unit.delta_protocol)),
+        ("storage_options_hash", scan_unit.storage_options_hash),
+        ("total_files", scan_unit.total_files),
+        ("candidate_file_count", scan_unit.candidate_file_count),
+        ("pruned_file_count", scan_unit.pruned_file_count),
         ("candidate_files", candidate_files),
         ("pushed_filters", tuple(sorted(scan_unit.pushed_filters))),
         ("projected_columns", tuple(sorted(scan_unit.projected_columns))),
     )
     return _hash_payload(payload)
+
+
+def _protocol_payload(
+    protocol: Mapping[str, object] | None,
+) -> tuple[tuple[str, object], ...] | None:
+    if not isinstance(protocol, Mapping):
+        return None
+    items: list[tuple[str, object]] = []
+    for key, value in protocol.items():
+        if isinstance(value, (str, int, float)) or value is None:
+            items.append((str(key), value))
+            continue
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            items.append((str(key), tuple(str(item) for item in value)))
+            continue
+        items.append((str(key), str(value)))
+    return tuple(sorted(items, key=lambda item: item[0]))
+
+
+def _scan_unit_delta_inputs_payload(
+    scan_units: Sequence[ScanUnit],
+) -> tuple[DeltaInputPayload, ...]:
+    payload: list[DeltaInputPayload] = []
+    for unit in scan_units:
+        timestamp = unit.delta_timestamp
+        if timestamp is None and unit.snapshot_timestamp is not None:
+            timestamp = str(unit.snapshot_timestamp)
+        if unit.delta_version is None and timestamp is None:
+            continue
+        payload.append(
+            (
+                unit.dataset_name,
+                unit.delta_version,
+                timestamp,
+                _delta_gate_payload(unit.delta_feature_gate),
+                _protocol_payload(unit.delta_protocol),
+                unit.storage_options_hash,
+            )
+        )
+    return tuple(sorted(payload, key=lambda entry: entry[0]))
+
+
+def _validate_plan_bundle_compatibility(
+    *,
+    view_nodes: Sequence[ViewNode],
+    inferred: Sequence[InferredDeps],
+    scan_units: Sequence[ScanUnit],
+    scan_keys_by_task: Mapping[str, tuple[str, ...]],
+) -> None:
+    inferred_by_task = {item.task_name: item for item in inferred}
+    scan_units_by_key = {unit.key: unit for unit in scan_units}
+    for node in view_nodes:
+        bundle = node.plan_bundle
+        if bundle is None:
+            continue
+        deps = inferred_by_task.get(node.name)
+        if deps is None:
+            continue
+        _validate_bundle_udfs(node.name, bundle=bundle, inferred=deps)
+        scan_keys = scan_keys_by_task.get(node.name, ())
+        if not scan_keys:
+            continue
+        task_units = [scan_units_by_key[key] for key in scan_keys if key in scan_units_by_key]
+        _validate_bundle_delta_inputs(node.name, bundle=bundle, scan_units=task_units)
+
+
+def _validate_bundle_udfs(
+    task_name: str,
+    *,
+    bundle: object,
+    inferred: InferredDeps,
+) -> None:
+    bundle_udfs = tuple(sorted(getattr(bundle, "required_udfs", ())))
+    bundle_tags = tuple(sorted(getattr(bundle, "required_rewrite_tags", ())))
+    inferred_udfs = tuple(sorted(inferred.required_udfs))
+    inferred_tags = tuple(sorted(inferred.required_rewrite_tags))
+    if bundle_udfs != inferred_udfs:
+        msg = (
+            f"UDF requirements mismatch for {task_name!r}: "
+            f"bundle={bundle_udfs} inferred={inferred_udfs}"
+        )
+        raise ValueError(msg)
+    if bundle_tags != inferred_tags:
+        msg = (
+            f"Rewrite tag requirements mismatch for {task_name!r}: "
+            f"bundle={bundle_tags} inferred={inferred_tags}"
+        )
+        raise ValueError(msg)
+
+
+def _validate_bundle_delta_inputs(
+    task_name: str,
+    *,
+    bundle: object,
+    scan_units: Sequence[ScanUnit],
+) -> None:
+    expected = _scan_unit_delta_inputs_payload(scan_units)
+    if not expected:
+        return
+    expected_by_dataset = {entry[0]: entry for entry in expected}
+    actual = _delta_inputs_payload(bundle)
+    actual_by_dataset = {entry[0]: entry for entry in actual}
+    mismatches: dict[str, tuple[DeltaInputPayload, DeltaInputPayload | None]] = {}
+    for dataset_name, expected_entry in expected_by_dataset.items():
+        actual_entry = actual_by_dataset.get(dataset_name)
+        if actual_entry != expected_entry:
+            mismatches[dataset_name] = (expected_entry, actual_entry)
+    if mismatches:
+        msg = f"Delta input pins do not match scan units for {task_name!r}: {mismatches}"
+        raise ValueError(msg)
 
 
 def _plan_bundle_task_signature(

@@ -1256,6 +1256,11 @@ def _scan_units_payload(
                 "delta_timestamp": unit.delta_timestamp,
                 "snapshot_timestamp": unit.snapshot_timestamp,
                 "delta_feature_gate": _delta_gate_payload(unit.delta_feature_gate),
+                "delta_protocol": unit.delta_protocol,
+                "storage_options_hash": unit.storage_options_hash,
+                "total_files": unit.total_files,
+                "candidate_file_count": unit.candidate_file_count,
+                "pruned_file_count": unit.pruned_file_count,
                 "candidate_files": [str(path) for path in unit.candidate_files],
                 "pushed_filters": list(unit.pushed_filters),
                 "projected_columns": list(unit.projected_columns),
@@ -1272,6 +1277,8 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, objec
             "version": pin.version,
             "timestamp": pin.timestamp,
             "feature_gate": _delta_gate_payload(pin.feature_gate),
+            "protocol": _delta_protocol_payload(pin.protocol),
+            "storage_options_hash": pin.storage_options_hash,
         }
         for pin in bundle.delta_inputs
     ]
@@ -1292,6 +1299,21 @@ def _delta_gate_payload(gate: object | None) -> dict[str, object] | None:
         "required_reader_features": list(required_reader_features),
         "required_writer_features": list(required_writer_features),
     }
+
+
+def _delta_protocol_payload(protocol: object | None) -> dict[str, object] | None:
+    if not isinstance(protocol, Mapping):
+        return None
+    payload: dict[str, object] = {}
+    for key, value in protocol.items():
+        if isinstance(value, (str, int, float)) or value is None:
+            payload[str(key)] = value
+            continue
+        if isinstance(value, (list, tuple)):
+            payload[str(key)] = [str(item) for item in value]
+            continue
+        payload[str(key)] = str(value)
+    return payload or None
 
 
 def _plan_identity_payload(

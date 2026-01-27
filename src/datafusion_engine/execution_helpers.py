@@ -78,6 +78,8 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object
             "version": pin.version,
             "timestamp": pin.timestamp,
             "feature_gate": _delta_gate_payload(pin.feature_gate),
+            "protocol": _delta_protocol_payload(pin.protocol),
+            "storage_options_hash": pin.storage_options_hash,
         }
         for pin in bundle.delta_inputs
     ]
@@ -106,6 +108,23 @@ def _delta_gate_payload(
         "required_reader_features": list(required_reader_features),
         "required_writer_features": list(required_writer_features),
     }
+
+
+def _delta_protocol_payload(
+    protocol: object | None,
+) -> dict[str, object] | None:
+    if not isinstance(protocol, Mapping):
+        return None
+    payload: dict[str, object] = {}
+    for key, value in protocol.items():
+        if isinstance(value, (str, int, float)) or value is None:
+            payload[str(key)] = value
+            continue
+        if isinstance(value, (list, tuple)):
+            payload[str(key)] = [str(item) for item in value]
+            continue
+        payload[str(key)] = str(value)
+    return payload or None
 
 
 def plan_bundle_cache_key(

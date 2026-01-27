@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from arrowdsl.core.interop import SchemaLike
@@ -13,7 +12,7 @@ from datafusion_engine.schema_registry import is_extract_nested_dataset
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset_registry import DatasetLocation
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.runtime import SessionRuntime
     from schema_spec.system import DatasetSpec
     from schema_spec.view_specs import ViewSpec
 
@@ -79,49 +78,47 @@ class DatasetHandle:
 
     def register(
         self,
-        ctx: SessionContext,
+        session_runtime: SessionRuntime,
         *,
         location: DatasetLocation,
-        runtime_profile: DataFusionRuntimeProfile,
     ) -> DataFrame:
         """Register the dataset in DataFusion and return a DataFrame.
 
         Parameters
         ----------
-        ctx:
-            DataFusion session context used for registration.
+        session_runtime:
+            DataFusion SessionRuntime used for registration.
         location:
             Dataset location to register.
-        runtime_profile:
-            Runtime profile that defines registration policies and diagnostics.
 
         Returns
         -------
         datafusion.dataframe.DataFrame
             Registered DataFrame for the dataset location.
         """
-        from datafusion_engine.execution_facade import DataFusionExecutionFacade
+        from datafusion_engine.registry_bridge import register_dataset_df
 
-        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-        return facade.register_dataset(name=self.spec.name, location=location)
+        return register_dataset_df(
+            session_runtime.ctx,
+            name=self.spec.name,
+            location=location,
+            runtime_profile=session_runtime.profile,
+        )
 
     def register_views(
         self,
-        ctx: SessionContext,
+        session_runtime: SessionRuntime,
         *,
         validate: bool = True,
-        runtime_profile: DataFusionRuntimeProfile,
     ) -> None:
         """Register associated view specs into DataFusion.
 
         Parameters
         ----------
-        ctx:
-            DataFusion session context used for registration.
+        session_runtime:
+            DataFusion SessionRuntime used for registration.
         validate:
             Whether to validate the view schemas after registration.
-        runtime_profile:
-            Runtime profile used for view registration.
         """
         views = self.spec.resolved_view_specs()
         if not views:
@@ -131,9 +128,9 @@ class DatasetHandle:
             )
 
             if is_extract_nested_dataset(self.spec.name):
-                views = (nested_view_spec(ctx, self.spec.name),)
+                views = (nested_view_spec(session_runtime.ctx, self.spec.name),)
         for view in views:
-            view.register(ctx, validate=validate, runtime_profile=runtime_profile)
+            view.register(session_runtime, validate=validate)
 
     def view_specs(self) -> tuple[ViewSpec, ...]:
         """Return the view specs associated with the dataset.

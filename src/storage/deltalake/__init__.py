@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING
 __all__ = (
     "DeltaCdfOptions",
     "DeltaDataCheckRequest",
+    "DeltaDeleteWhereRequest",
+    "DeltaMergeArrowRequest",
     "DeltaSchemaPolicy",
+    "DeltaSchemaRequest",
     "DeltaVacuumOptions",
     "DeltaWriteOptions",
     "DeltaWritePolicy",
@@ -54,6 +57,9 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "delta_write_configuration": ("storage.deltalake.config", "delta_write_configuration"),
     "DeltaCdfOptions": ("storage.deltalake.delta", "DeltaCdfOptions"),
     "DeltaDataCheckRequest": ("storage.deltalake.delta", "DeltaDataCheckRequest"),
+    "DeltaDeleteWhereRequest": ("storage.deltalake.delta", "DeltaDeleteWhereRequest"),
+    "DeltaMergeArrowRequest": ("storage.deltalake.delta", "DeltaMergeArrowRequest"),
+    "DeltaSchemaRequest": ("storage.deltalake.delta", "DeltaSchemaRequest"),
     "DeltaVacuumOptions": ("storage.deltalake.delta", "DeltaVacuumOptions"),
     "DeltaWriteOptions": ("storage.deltalake.delta", "DeltaWriteOptions"),
     "DeltaWriteResult": ("storage.deltalake.delta", "DeltaWriteResult"),
@@ -108,6 +114,9 @@ if TYPE_CHECKING:
     delta_write_configuration = _delta_config.delta_write_configuration
     DeltaCdfOptions = _delta_io.DeltaCdfOptions
     DeltaDataCheckRequest = _delta_io.DeltaDataCheckRequest
+    DeltaDeleteWhereRequest = _delta_io.DeltaDeleteWhereRequest
+    DeltaMergeArrowRequest = _delta_io.DeltaMergeArrowRequest
+    DeltaSchemaRequest = _delta_io.DeltaSchemaRequest
     DeltaVacuumOptions = _delta_io.DeltaVacuumOptions
     DeltaWriteOptions = _delta_io.DeltaWriteOptions
     DeltaWriteResult = _delta_io.DeltaWriteResult

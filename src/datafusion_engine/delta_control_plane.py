@@ -841,6 +841,62 @@ def delta_delete(
     return _ensure_mapping(response, label="delta_delete")
 
 
+def _validate_update_constraints(ctx: SessionContext, request: DeltaUpdateRequest) -> None:
+    if not request.extra_constraints:
+        return
+    from datafusion import col
+
+    from storage.deltalake import DeltaDataCheckRequest, delta_data_checker
+
+    bundle = delta_provider_from_session(
+        ctx,
+        request=DeltaProviderRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            delta_scan=None,
+            gate=request.gate,
+        ),
+    )
+    df = ctx.read_table(bundle.provider)
+    if request.predicate:
+        try:
+            predicate_expr = df.parse_sql_expr(request.predicate)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            msg = f"Delta update predicate parse failed: {exc}"
+            raise ValueError(msg) from exc
+        df = df.filter(predicate_expr)
+    schema = df.schema()
+    exprs = []
+    for name in schema.names:
+        if name in request.updates:
+            try:
+                expr = df.parse_sql_expr(request.updates[name]).alias(name)
+            except (RuntimeError, TypeError, ValueError) as exc:
+                msg = f"Delta update expression parse failed for {name!r}: {exc}"
+                raise ValueError(msg) from exc
+            exprs.append(expr)
+        else:
+            exprs.append(col(name))
+    updated = df.select(*exprs)
+    violations = delta_data_checker(
+        DeltaDataCheckRequest(
+            ctx=ctx,
+            table_path=request.table_uri,
+            data=updated.to_arrow_table(),
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            extra_constraints=request.extra_constraints,
+            gate=request.gate,
+        )
+    )
+    if violations:
+        msg = "Delta update constraint check failed."
+        raise ValueError(f"{msg} Violations: {violations}")
+
+
 def delta_update(
     ctx: SessionContext,
     *,
@@ -870,6 +926,7 @@ def delta_update(
     if not request.updates:
         msg = "Delta update requires at least one column assignment."
         raise ValueError(msg)
+    _validate_update_constraints(ctx, request)
     module = _require_datafusion_ext()
     update_fn = getattr(module, "delta_update", None)
     if not callable(update_fn):

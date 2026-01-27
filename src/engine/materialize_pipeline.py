@@ -16,12 +16,11 @@ from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, Tabl
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.dataset_locations import resolve_dataset_location
-from datafusion_engine.dataset_registry import resolve_delta_log_storage_options
 from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
-from datafusion_engine.execution_facade import ExecutionResult
+from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.param_tables import scalar_param_signature
-from datafusion_engine.plan import DataFusionPlan
+from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.runtime import (
     DataFusionRuntimeProfile,
 )
@@ -29,10 +28,11 @@ from datafusion_engine.streaming_executor import StreamingExecutionResult
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
-from storage.deltalake import DeltaWriteOptions, DeltaWriteResult, write_delta_table
+from storage.deltalake import DeltaWriteResult
 
 if TYPE_CHECKING:
-    from datafusion_engine.dataset_registry import DatasetLocation
+    from datafusion_engine.runtime import SessionRuntime
+    from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.view_artifacts import DataFusionViewArtifact
 
 
@@ -181,7 +181,7 @@ def resolve_prefer_reader(*, ctx: ExecutionContext, policy: ExecutionSurfacePoli
 
 
 def build_plan_product(
-    plan: DataFusionPlan,
+    plan: DataFusionPlanBundle,
     *,
     execution: ExecutionContext,
     policy: ExecutionSurfacePolicy,
@@ -197,6 +197,54 @@ def build_plan_product(
     _ = (plan, execution, policy, plan_id)
     msg = "Plan materialization is deprecated; use build_view_product instead."
     raise ValueError(msg)
+
+
+def _require_datafusion_profile(ctx: ExecutionContext) -> DataFusionRuntimeProfile:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        msg = "DataFusion runtime profile is required for view materialization."
+        raise ValueError(msg)
+    return profile
+
+
+def _plan_view_bundle(
+    view_name: str,
+    *,
+    session_runtime: SessionRuntime,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DataFusionPlanBundle:
+    ctx = session_runtime.ctx
+    df = ctx.table(view_name)
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+    return facade.build_plan_bundle(df)
+
+
+def _plan_view_scan_units(
+    bundle: DataFusionPlanBundle,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
+    from datafusion_engine.lineage_datafusion import extract_lineage
+    from datafusion_engine.scan_planner import plan_scan_unit
+
+    session_runtime = runtime_profile.session_runtime()
+    scan_units: dict[str, ScanUnit] = {}
+    for scan in extract_lineage(
+        bundle.optimized_logical_plan,
+        udf_snapshot=bundle.artifacts.udf_snapshot,
+    ).scans:
+        location = runtime_profile.dataset_location(scan.dataset_name)
+        if location is None:
+            continue
+        unit = plan_scan_unit(
+            session_runtime.ctx,
+            dataset_name=scan.dataset_name,
+            location=location,
+            lineage=scan,
+        )
+        scan_units[unit.key] = unit
+    units = tuple(sorted(scan_units.values(), key=lambda unit: unit.key))
+    return units, tuple(unit.key for unit in units)
 
 
 def build_view_product(
@@ -229,24 +277,42 @@ def build_view_product(
     ValueError
         Raised when the runtime profile or view registration is missing.
     """
-    profile = ctx.runtime.datafusion
-    if profile is None:
-        msg = "DataFusion runtime profile is required for view materialization."
-        raise ValueError(msg)
-    session = profile.session_context()
+    profile = _require_datafusion_profile(ctx)
+    session_runtime = profile.session_runtime()
+    session = session_runtime.ctx
     if not session.table_exist(view_name):
         msg = f"View {view_name!r} is not registered for materialization."
         raise ValueError(msg)
     from datafusion_engine.schema_registry import validate_nested_types
 
     validate_nested_types(session, view_name)
+    bundle = _plan_view_bundle(
+        view_name,
+        session_runtime=session_runtime,
+        runtime_profile=profile,
+    )
+    scan_units, scan_keys = _plan_view_scan_units(bundle, runtime_profile=profile)
+    if scan_units:
+        from datafusion_engine.scan_overrides import apply_scan_unit_overrides
+
+        apply_scan_unit_overrides(
+            session,
+            scan_units=scan_units,
+            runtime_profile=profile,
+        )
     prefer_reader = _resolve_prefer_reader(ctx=ctx, policy=policy)
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
     view_artifact = (
         profile.view_registry.entries.get(view_name) if profile.view_registry is not None else None
     )
-    df = session.table(view_name)
+    facade = DataFusionExecutionFacade(ctx=session, runtime_profile=profile)
+    df = facade.execute_plan_bundle(
+        bundle,
+        view_name=view_name,
+        scan_units=scan_units,
+        scan_keys=scan_keys,
+    ).require_dataframe()
     if prefer_reader:
         stream = cast("RecordBatchReaderLike", StreamingExecutionResult(df).to_arrow_stream())
         schema = stream.schema
@@ -387,44 +453,6 @@ def _coerce_reader(
 
     reader = pa.RecordBatchReader.from_batches(first.schema, _iter_batches())
     return reader, None
-
-
-@dataclass(frozen=True)
-class _DeltaWriteContext:
-    dataset: str
-    runtime_profile: DataFusionRuntimeProfile
-    location: DatasetLocation
-    rows: int | None
-
-
-def _write_delta(
-    reader: RecordBatchReaderLike,
-    *,
-    context: _DeltaWriteContext,
-) -> None:
-    log_storage_options = resolve_delta_log_storage_options(context.location)
-    datafusion_result = write_delta_table(
-        reader,
-        str(context.location.path),
-        options=DeltaWriteOptions(
-            mode="append",
-            storage_options=context.location.storage_options,
-            log_storage_options=log_storage_options,
-        ),
-    )
-    _record_extract_write(
-        context.runtime_profile,
-        record=_ExtractWriteRecord(
-            dataset=context.dataset,
-            mode="insert",
-            path=str(context.location.path),
-            file_format="delta",
-            rows=context.rows,
-            copy_sql=None,
-            copy_options=None,
-            delta_result=datafusion_result,
-        ),
-    )
 
 
 def write_extract_outputs(

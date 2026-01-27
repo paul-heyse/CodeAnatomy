@@ -80,17 +80,19 @@ def apply_scan_unit_overrides(
             spec=_DeltaOverrideSpec(
                 name=dataset_name,
                 location=updated_location,
-            scan_files=scan_files,
-            runtime_profile=runtime_profile,
-        ),
+                scan_files=scan_files,
+                runtime_profile=runtime_profile,
+            ),
         )
         _record_override_artifact(
             runtime_profile,
-            dataset_name=dataset_name,
-            pinned_version=pinned_version,
-            pinned_timestamp=pinned_timestamp,
-            gate=gate,
-            scan_files=scan_files,
+            request=_ScanOverrideArtifactRequest(
+                dataset_name=dataset_name,
+                pinned_version=pinned_version,
+                pinned_timestamp=pinned_timestamp,
+                gate=gate,
+                scan_files=scan_files,
+            ),
         )
 
 
@@ -292,22 +294,29 @@ def _schema_hardening_view_types(runtime_profile: DataFusionRuntimeProfile) -> b
     return runtime_profile.schema_hardening_name == "arrow_performance"
 
 
+@dataclass(frozen=True)
+class _ScanOverrideArtifactRequest:
+    """Inputs required to record scan override artifacts."""
+
+    dataset_name: str
+    pinned_version: int | None
+    pinned_timestamp: str | None
+    gate: object | None
+    scan_files: Sequence[str]
+
+
 def _record_override_artifact(
     runtime_profile: DataFusionRuntimeProfile,
     *,
-    dataset_name: str,
-    pinned_version: int | None,
-    pinned_timestamp: str | None,
-    gate: object | None,
-    scan_files: Sequence[str],
+    request: _ScanOverrideArtifactRequest,
 ) -> None:
-    scan_files_hash = _hash_payload(scan_files)
+    scan_files_hash = _hash_payload(request.scan_files)
     payload = {
-        "dataset_name": dataset_name,
-        "pinned_version": pinned_version,
-        "pinned_timestamp": pinned_timestamp,
-        "delta_feature_gate": _gate_payload(gate),
-        "scan_file_count": len(scan_files),
+        "dataset_name": request.dataset_name,
+        "pinned_version": request.pinned_version,
+        "pinned_timestamp": request.pinned_timestamp,
+        "delta_feature_gate": _gate_payload(request.gate),
+        "scan_file_count": len(request.scan_files),
         "scan_files_hash": scan_files_hash,
     }
     record_artifact(runtime_profile, "scan_unit_overrides_v1", payload)

@@ -32,6 +32,7 @@ def test_nested_schema_for_cst_parse_manifest() -> None:
     """Ensure nested schema derivation for LibCST parse manifest."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
+    session_runtime = profile.session_runtime()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     adapter.register_arrow_table(
         "libcst_files_v1",
@@ -39,7 +40,7 @@ def test_nested_schema_for_cst_parse_manifest() -> None:
         overwrite=True,
     )
     view_spec = nested_view_spec(ctx, "cst_parse_manifest")
-    view_spec.register(ctx, runtime_profile=profile, validate=False)
+    view_spec.register(session_runtime, validate=False)
     schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert schema.names[:2] == ("file_id", "path")
     assert "module_name" in schema.names
@@ -50,6 +51,7 @@ def test_nested_schema_for_cst_refs() -> None:
     """Ensure nested schema derivation for LibCST references."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
+    session_runtime = profile.session_runtime()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     adapter.register_arrow_table(
         "libcst_files_v1",
@@ -57,7 +59,7 @@ def test_nested_schema_for_cst_refs() -> None:
         overwrite=True,
     )
     view_spec = nested_view_spec(ctx, "cst_refs")
-    view_spec.register(ctx, runtime_profile=profile, validate=False)
+    view_spec.register(session_runtime, validate=False)
     schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert "ref_id" in schema.names
     assert "ref_kind" in schema.names
@@ -68,6 +70,7 @@ def test_nested_schema_for_cst_call_args() -> None:
     """Ensure nested schema derivation for LibCST call arguments."""
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
+    session_runtime = profile.session_runtime()
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     adapter.register_arrow_table(
         "libcst_files_v1",
@@ -75,7 +78,7 @@ def test_nested_schema_for_cst_call_args() -> None:
         overwrite=True,
     )
     view_spec = nested_view_spec(ctx, "cst_call_args")
-    view_spec.register(ctx, runtime_profile=profile, validate=False)
+    view_spec.register(session_runtime, validate=False)
     schema = _to_arrow_schema(ctx.table(view_spec.name).schema())
     assert "call_id" in schema.names
     assert "arg_index" in schema.names

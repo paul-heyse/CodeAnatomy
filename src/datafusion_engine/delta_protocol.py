@@ -47,14 +47,16 @@ def validate_delta_gate(snapshot: Mapping[str, object], gate: DeltaFeatureGate) 
     writer_version = _coerce_int(snapshot.get("min_writer_version"))
     reader_features = _feature_set(snapshot.get("reader_features"))
     writer_features = _feature_set(snapshot.get("writer_features"))
-    if gate.min_reader_version is not None:
-        if reader_version is None or reader_version < gate.min_reader_version:
-            msg = "Delta reader protocol gate failed."
-            raise ValueError(msg)
-    if gate.min_writer_version is not None:
-        if writer_version is None or writer_version < gate.min_writer_version:
-            msg = "Delta writer protocol gate failed."
-            raise ValueError(msg)
+    if gate.min_reader_version is not None and (
+        reader_version is None or reader_version < gate.min_reader_version
+    ):
+        msg = "Delta reader protocol gate failed."
+        raise ValueError(msg)
+    if gate.min_writer_version is not None and (
+        writer_version is None or writer_version < gate.min_writer_version
+    ):
+        msg = "Delta writer protocol gate failed."
+        raise ValueError(msg)
     if gate.required_reader_features:
         required = set(gate.required_reader_features)
         if not required.issubset(reader_features):
@@ -68,21 +70,21 @@ def validate_delta_gate(snapshot: Mapping[str, object], gate: DeltaFeatureGate) 
 
 
 def _coerce_int(value: object) -> int | None:
+    result: int | None = None
     if value is None:
-        return None
+        return result
     if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
+        result = value
+    elif isinstance(value, float):
+        result = int(value)
+    elif isinstance(value, str):
         stripped = value.strip()
-        if not stripped:
-            return None
-        try:
-            return int(stripped)
-        except ValueError:
-            return None
-    return None
+        if stripped:
+            try:
+                result = int(stripped)
+            except ValueError:
+                result = None
+    return result
 
 
 def _feature_set(value: object) -> set[str]:

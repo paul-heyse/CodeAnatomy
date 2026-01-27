@@ -21,6 +21,7 @@ from datafusion_engine.dataset_registry import (
     DatasetCatalog,
     DatasetLocation,
     resolve_dataset_schema,
+    resolve_delta_feature_gate,
     resolve_delta_log_storage_options,
     resolve_delta_scan_options,
 )
@@ -80,6 +81,7 @@ def _dataset_from_location(
                 version=location.delta_version,
                 timestamp=pinned_timestamp,
                 delta_scan=resolve_delta_scan_options(location),
+                gate=resolve_delta_feature_gate(location),
             ),
         )
         return bundle.provider
@@ -161,6 +163,11 @@ class RegistrySchemaProvider(SchemaProvider):
         -------
         datafusion.catalog.Table | None
             Resolved table when available.
+
+        Raises
+        ------
+        ValueError
+            Raised when the registry lacks a SessionContext.
         """
         key = _normalize_dataset_name(name)
         cached = self._tables.get(key)

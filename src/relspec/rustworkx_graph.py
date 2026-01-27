@@ -329,7 +329,7 @@ def build_task_graph_from_views(
     priorities: Mapping[str, int] | None = None,
     extra_evidence: Iterable[str] | Sequence[DatasetSpec] | None = None,
 ) -> TaskGraph:
-    """Build a task graph from view nodes and their SQLGlot ASTs.
+    """Build a task graph from view nodes and their plan bundles.
 
     Returns
     -------

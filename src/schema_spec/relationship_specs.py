@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from functools import cache
 
-from datafusion import SessionContext, SQLOptions
+from datafusion import SQLOptions
 
-from datafusion_engine.runtime import dataset_spec_from_context
+from datafusion_engine.runtime import SessionRuntime, dataset_spec_from_context
 from datafusion_engine.schema_introspection import table_constraint_rows
 from schema_spec.system import (
     ContractCatalogSpec,
@@ -260,7 +260,7 @@ def _expected_dedupe_keys() -> dict[str, tuple[str, ...]]:
 
 
 def relationship_constraint_errors(
-    ctx: SessionContext,
+    session_runtime: SessionRuntime,
     *,
     sql_options: SQLOptions | None = None,
 ) -> dict[str, object]:
@@ -275,6 +275,7 @@ def relationship_constraint_errors(
     if not expected:
         return {}
     errors: dict[str, object] = {}
+    ctx = session_runtime.ctx
     for name, keys in expected.items():
         try:
             rows = table_constraint_rows(

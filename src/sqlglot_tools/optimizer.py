@@ -1,4 +1,13 @@
-"""SQLGlot optimization helpers."""
+"""SQLGlot optimization helpers.
+
+Deprecation notice:
+Schema drift patches expressed as SQLGlot rewrites (e.g., injecting CAST
+expressions or column projections to normalize schemas) should be replaced
+with scan-time schema adapters. When `enable_schema_evolution_adapter=True`
+in the runtime profile, DataFusion physical expression adapters handle schema
+normalization at the TableProvider boundary during physical plan execution,
+eliminating the need for query rewriting.
+"""
 
 from __future__ import annotations
 
@@ -247,7 +256,11 @@ class CanonicalizationRules:
 
 @dataclass(frozen=True)
 class SqlGlotPolicySnapshot:
-    """Snapshot of SQLGlot compiler policy settings."""
+    """Snapshot of SQLGlot compiler policy settings.
+
+    DEPRECATED: Use plan_fingerprint from DataFusionPlanBundle instead.
+    SQLGlot policy snapshots are deprecated in favor of DataFusion-native planning.
+    """
 
     read_dialect: str
     write_dialect: str
@@ -260,7 +273,7 @@ class SqlGlotPolicySnapshot:
     tokenizer_mode: str
     transforms: tuple[str, ...]
     identify: bool
-    policy_hash: str
+    policy_hash: str  # DEPRECATED: Use plan_fingerprint from bundle
 
     def payload(self) -> dict[str, object]:
         """Return the policy payload for diagnostics.
@@ -720,6 +733,9 @@ def sqlglot_surface_policy(surface: SqlGlotSurface) -> SqlGlotSurfacePolicy:
 
 def sqlglot_policy_snapshot_for(policy: SqlGlotPolicy) -> SqlGlotPolicySnapshot:
     """Return a SQLGlot policy snapshot for a provided policy.
+
+    DEPRECATED: Use plan_fingerprint from DataFusionPlanBundle instead.
+    SQLGlot policy snapshots are deprecated in favor of DataFusion-native planning.
 
     Returns
     -------

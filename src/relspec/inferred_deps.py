@@ -1,4 +1,4 @@
-"""Dependency inference from SQLGlot expression analysis."""
+"""Dependency inference from DataFusion plan bundles."""
 
 from __future__ import annotations
 
@@ -8,24 +8,16 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from sqlglot_tools.lineage import referenced_tables, referenced_udf_calls
-from sqlglot_tools.optimizer import (
-    ast_policy_fingerprint,
-    canonical_ast_fingerprint,
-    resolve_sqlglot_policy,
-    sqlglot_policy_snapshot_for,
-)
-
 if TYPE_CHECKING:
+    from datafusion_engine.plan_bundle import DataFusionPlanBundle
     from datafusion_engine.schema_contracts import SchemaContract
     from datafusion_engine.view_graph_registry import ViewNode
     from schema_spec.system import DatasetSpec
-    from sqlglot_tools.compat import Expression
 
 
 @dataclass(frozen=True)
 class InferredDeps:
-    """Dependencies inferred from Ibis/SQLGlot expression analysis.
+    """Dependencies inferred from DataFusion plan bundles.
 
     Captures table and column-level dependencies by analyzing the actual
     query plan rather than relying on declared inputs.
@@ -62,72 +54,78 @@ class InferredDeps:
 
 @dataclass(frozen=True)
 class InferredDepsInputs:
-    """Inputs needed to infer dependencies from SQLGlot."""
+    """Inputs needed to infer dependencies from a DataFusion plan bundle.
 
-    expr: object
+    Attributes
+    ----------
+    task_name : str
+        Name of the task these dependencies apply to.
+    output : str
+        Output dataset name produced by the task.
+    snapshot : Mapping[str, object] | None
+        Optional Rust UDF snapshot for validation.
+    required_udfs : Sequence[str] | None
+        Optional explicit UDF names.
+    plan_bundle : DataFusionPlanBundle
+        DataFusion plan bundle for native lineage extraction.
+    """
+
     task_name: str
     output: str
-    dialect: str = "datafusion"
     snapshot: Mapping[str, object] | None = None
     required_udfs: Sequence[str] | None = None
+    plan_bundle: DataFusionPlanBundle
 
 
-def infer_deps_from_sqlglot_expr(
+def infer_deps_from_plan_bundle(
     inputs: InferredDepsInputs,
 ) -> InferredDeps:
-    """Infer dependencies from a raw SQLGlot expression.
+    """Infer dependencies from a DataFusion plan bundle.
 
-    Lower-level variant that works directly with SQLGlot expressions
-    when an Ibis plan is not available.
+    This is the preferred path for dependency inference, using DataFusion-native
+    lineage extraction instead of SQLGlot parsing.
 
     Parameters
     ----------
     inputs : InferredDepsInputs
-        Dependency inference inputs including AST and task metadata.
+        Dependency inference inputs including plan bundle and task metadata.
 
     Returns
     -------
     InferredDeps
-        Inferred dependencies.
+        Inferred dependencies extracted from DataFusion plan.
 
     Raises
     ------
-    TypeError
-        Raised when expr is not a SQLGlot Expression.
+    ValueError
+        Raised when plan_bundle is None or invalid.
     """
-    from sqlglot_tools.compat import Expression
+    from datafusion_engine.lineage_datafusion import extract_lineage
+    plan_bundle = inputs.plan_bundle
 
-    expr = inputs.expr
-    if not isinstance(expr, Expression):
-        msg = f"Expected SQLGlot Expression, got {type(expr).__name__}"
-        raise TypeError(msg)
-    _ = inputs.dialect
+    # Extract lineage from the optimized logical plan
+    lineage = extract_lineage(plan_bundle.optimized_logical_plan)
 
-    # Extract table references
-    tables = referenced_tables(expr)
-    columns_by_table = _required_columns_from_sqlglot(expr)
+    # Map lineage to InferredDeps format
+    tables = lineage.referenced_tables
+    columns_by_table = dict(lineage.required_columns_by_dataset)
 
+    # Compute required types and metadata from registry
     required_types = _required_types_from_registry(columns_by_table)
     required_metadata = _required_metadata_for_tables(columns_by_table)
+
+    # Handle UDF resolution
     resolved_udfs: tuple[str, ...] = ()
     if inputs.required_udfs is not None:
         resolved_udfs = tuple(inputs.required_udfs)
-    elif inputs.snapshot is not None:
-        resolved_udfs = _required_udfs_from_ast(expr, snapshot=inputs.snapshot)
-    else:
-        resolved_udfs = tuple(sorted(referenced_udf_calls(expr)))
+
     if inputs.snapshot is not None and resolved_udfs:
         from datafusion_engine.udf_runtime import validate_required_udfs
 
         validate_required_udfs(inputs.snapshot, required=resolved_udfs)
 
-    # Compute plan fingerprint
-    policy = resolve_sqlglot_policy(name="datafusion_compile")
-    policy_hash = sqlglot_policy_snapshot_for(policy).policy_hash
-    fingerprint = ast_policy_fingerprint(
-        ast_fingerprint=canonical_ast_fingerprint(expr),
-        policy_hash=policy_hash,
-    )
+    # Use plan fingerprint from bundle
+    fingerprint = plan_bundle.plan_fingerprint
 
     return InferredDeps(
         task_name=inputs.task_name,
@@ -146,12 +144,14 @@ def infer_deps_from_view_nodes(
     *,
     snapshot: Mapping[str, object] | None = None,
 ) -> tuple[InferredDeps, ...]:
-    """Infer dependencies for view nodes using their SQLGlot ASTs.
+    """Infer dependencies for view nodes using DataFusion plan bundles.
+
+    Requires DataFusion plan bundles for lineage extraction.
 
     Parameters
     ----------
     nodes : Sequence[ViewNode]
-        View nodes with SQLGlot ASTs attached.
+        View nodes with plan bundles attached (plan_bundle preferred).
     snapshot : Mapping[str, object] | None
         Optional Rust UDF snapshot used for required UDF validation.
 
@@ -163,45 +163,28 @@ def infer_deps_from_view_nodes(
     Raises
     ------
     ValueError
-        Raised when a view node lacks a SQLGlot AST.
+        Raised when a view node lacks a plan bundle.
     """
     inferred: list[InferredDeps] = []
     for node in nodes:
-        if node.sqlglot_ast is None:
-            msg = f"View node {node.name!r} is missing a SQLGlot AST."
+        if node.plan_bundle is None:
+            msg = (
+                f"View node {node.name!r} is missing plan_bundle. "
+                "Plan bundles are required for dependency inference."
+            )
             raise ValueError(msg)
         inferred.append(
-            infer_deps_from_sqlglot_expr(
+            infer_deps_from_plan_bundle(
                 InferredDepsInputs(
-                    expr=node.sqlglot_ast,
                     task_name=node.name,
                     output=node.name,
                     snapshot=snapshot,
                     required_udfs=tuple(node.required_udfs) if node.required_udfs else None,
+                    plan_bundle=node.plan_bundle,
                 )
             )
         )
     return tuple(inferred)
-
-
-def _required_udfs_from_ast(
-    expr: Expression,
-    *,
-    snapshot: Mapping[str, object],
-) -> tuple[str, ...]:
-    from datafusion_engine.udf_runtime import udf_names_from_snapshot
-
-    udf_calls = referenced_udf_calls(expr)
-    if not udf_calls:
-        return ()
-    snapshot_names = udf_names_from_snapshot(snapshot)
-    lookup = {name.lower(): name for name in snapshot_names}
-    required = {
-        lookup[name.lower()]
-        for name in udf_calls
-        if isinstance(name, str) and name.lower() in lookup
-    }
-    return tuple(sorted(required))
 
 
 def _required_metadata_for_tables(
@@ -216,20 +199,6 @@ def _required_metadata_for_tables(
         if metadata:
             required[table_name] = tuple(sorted(metadata.items(), key=lambda item: item[0]))
     return required
-
-
-def _required_columns_from_sqlglot(
-    expr: Expression,
-) -> dict[str, tuple[str, ...]]:
-    from sqlglot_tools.compat import exp
-
-    required: dict[str, set[str]] = {}
-    for column in expr.find_all(exp.Column):
-        table = column.table
-        if not table:
-            continue
-        required.setdefault(table, set()).add(column.name)
-    return {table: tuple(sorted(cols)) for table, cols in required.items()}
 
 
 def _required_types_from_registry(
@@ -356,5 +325,7 @@ def _types_from_contract(
 
 __all__ = [
     "InferredDeps",
-    "infer_deps_from_sqlglot_expr",
+    "InferredDepsInputs",
+    "infer_deps_from_plan_bundle",
+    "infer_deps_from_view_nodes",
 ]

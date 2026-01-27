@@ -9,7 +9,7 @@ datasets through Arrow RecordBatch iteration.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
@@ -25,7 +25,6 @@ from datafusion_engine.compile_options import DataFusionSqlPolicy
 class PipeToDatasetOptions:
     """Options for streaming partitioned datasets to disk."""
 
-    file_format: str = "parquet"
     partitioning: ds.Partitioning | list[str] | None = None
     existing_data_behavior: str = "error"
     file_visitor: Callable[[str], None] | None = None
@@ -34,7 +33,6 @@ class PipeToDatasetOptions:
     max_rows_per_file: int = 10_000_000
     min_rows_per_group: int = 0
     max_rows_per_group: int = 1_000_000
-    format_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -174,10 +172,7 @@ class StreamingExecutionResult:
         --------
         >>> result.pipe_to_dataset(
         ...     "/data/events",
-        ...     options=PipeToDatasetOptions(
-        ...         partitioning=["year", "month", "day"],
-        ...         format_options={"compression": "zstd", "compression_level": 9},
-        ...     ),
+        ...     options=PipeToDatasetOptions(partitioning=["year", "month", "day"]),
         ... )
         """
         # Build partitioning if list of column names
@@ -191,16 +186,10 @@ class StreamingExecutionResult:
         else:
             partitioning = resolved.partitioning
 
-        # Build format options
-        if resolved.file_format == "parquet":
-            file_options = ds.ParquetFileFormat().make_write_options(**resolved.format_options)
-        else:
-            file_options = None
-
         ds.write_dataset(
             self.to_arrow_stream(),
             base_dir=base_dir,
-            format=resolved.file_format,
+            format="delta",
             partitioning=partitioning,
             existing_data_behavior=resolved.existing_data_behavior,
             file_visitor=resolved.file_visitor,
@@ -209,52 +198,7 @@ class StreamingExecutionResult:
             max_rows_per_file=resolved.max_rows_per_file,
             min_rows_per_group=resolved.min_rows_per_group,
             max_rows_per_group=resolved.max_rows_per_group,
-            file_options=file_options,
         )
-
-    def pipe_to_parquet(
-        self,
-        path: str,
-        *,
-        compression: str = "zstd",
-        compression_level: int | None = None,
-        row_group_size: int = 1_000_000,
-    ) -> None:
-        """
-        Stream to single Parquet file.
-
-        Writes results to a single Parquet file using streaming
-        writer. For partitioned output, use pipe_to_dataset.
-
-        Parameters
-        ----------
-        path : str
-            Output file path.
-        compression : str, default="zstd"
-            Compression codec (zstd, snappy, gzip, lz4, brotli, none).
-        compression_level : int, optional
-            Codec-specific compression level.
-        row_group_size : int, default=1_000_000
-            Target rows per row group.
-
-        Examples
-        --------
-        >>> result.pipe_to_parquet(
-        ...     "/data/output.parquet",
-        ...     compression="zstd",
-        ...     compression_level=9,
-        ... )
-        """
-        import pyarrow.parquet as pq
-
-        with pq.ParquetWriter(
-            path,
-            self.schema,
-            compression=compression,
-            compression_level=compression_level,
-        ) as writer:
-            for batch in self.to_batches():
-                writer.write_batch(batch, row_group_size=row_group_size)
 
 
 class StreamingExecutor:
@@ -341,7 +285,7 @@ class StreamingExecutor:
         from datafusion_engine.sql_safety import sanitize_external_sql
         from sqlglot_tools.optimizer import (
             StrictParseOptions,
-            parse_sql_strict,
+            parse_sql_strict,  # DEPRECATED: Use DataFusion's native SQL parser for validation
             register_datafusion_dialect,
         )
 
@@ -351,6 +295,9 @@ class StreamingExecutor:
             params=params or None,
         )
         facade = DataFusionExecutionFacade(ctx=self.ctx, runtime_profile=None)
+        # DEPRECATED: SQLGlot-based SQL validation for DataFusion queries.
+        # For DataFusion query ingress, prefer DataFusion's native SQL parser
+        # with SQLOptions gating.
         try:
             register_datafusion_dialect()
             sanitized = sanitize_external_sql(sql)

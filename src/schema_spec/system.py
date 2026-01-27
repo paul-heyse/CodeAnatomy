@@ -1,4 +1,15 @@
-"""Schema system registry, factories, and Arrow validation integration."""
+"""Schema system registry, factories, and Arrow validation integration.
+
+This module provides dataset specifications, contracts, and schema discovery
+utilities. Schema discovery and validation are sourced from DataFusion's
+catalog and information_schema views, making DataFusion the source of truth
+for all schema metadata.
+
+IO contracts are specified through DataFusion registration (register_listing_table,
+register_object_store) and DDL surfaces (CREATE EXTERNAL TABLE). Schema validation
+and introspection query DataFusion's information_schema.columns, information_schema.tables,
+information_schema.table_constraints, and information_schema.key_column_usage views.
+"""
 
 from __future__ import annotations
 
@@ -138,7 +149,20 @@ class DedupeSpecSpec:
 
 @dataclass(frozen=True)
 class TableSchemaContract:
-    """Combine file and partition schema into a TableSchema contract."""
+    """Combine file and partition schema into a TableSchema contract.
+
+    This contract specifies the schema expectations for DataFusion table
+    registration. The file_schema represents the data file schema, while
+    partition_cols specify partition column metadata used in DataFusion's
+    register_listing_table() table_partition_cols parameter.
+
+    Attributes
+    ----------
+    file_schema : pa.Schema
+        Arrow schema for data files (without partition columns).
+    partition_cols : tuple[tuple[str, pa.DataType], ...]
+        Partition column specifications (name, dtype pairs).
+    """
 
     file_schema: pa.Schema
     partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
@@ -185,7 +209,57 @@ class ParquetColumnOptions:
 
 @dataclass(frozen=True)
 class DataFusionScanOptions:
-    """DataFusion-specific scan configuration."""
+    """DataFusion-specific scan configuration.
+
+    IO contracts are specified through DataFusion registration and DDL surfaces.
+    These options map directly to DataFusion's register_listing_table() parameters
+    and CREATE EXTERNAL TABLE options.
+
+    Attributes
+    ----------
+    partition_cols : tuple[tuple[str, pa.DataType], ...]
+        Partition column specifications for DataFusion registration.
+    file_sort_order : tuple[tuple[str, str], ...]
+        File-level sort order for DataFusion DDL.
+    parquet_pruning : bool
+        Enable Parquet predicate pushdown.
+    skip_metadata : bool
+        Skip Parquet metadata reads for performance.
+    skip_arrow_metadata : bool | None
+        Skip Arrow schema metadata in Parquet files.
+    binary_as_string : bool | None
+        Treat binary columns as string in scans.
+    schema_force_view_types : bool | None
+        Force schema types to match view definitions.
+    listing_table_factory_infer_partitions : bool | None
+        Infer partition columns from directory structure.
+    listing_table_ignore_subdirectory : bool | None
+        Ignore subdirectories in listing table scans.
+    file_extension : str | None
+        File extension filter for listing table scans.
+    cache : bool
+        Enable DataFusion's table scan caching.
+    collect_statistics : bool | None
+        Collect table statistics during registration.
+    meta_fetch_concurrency : int | None
+        Concurrency level for metadata fetching.
+    list_files_cache_ttl : str | None
+        TTL for listing table file cache.
+    list_files_cache_limit : str | None
+        Size limit for listing table file cache.
+    projection_exprs : tuple[str, ...]
+        Projection expressions for scan optimization.
+    parquet_column_options : ParquetColumnOptions | None
+        Per-column Parquet scan settings.
+    listing_mutable : bool
+        Mark listing table as mutable for dynamic file discovery.
+    unbounded : bool
+        Mark table as unbounded/streaming source.
+    table_schema_contract : TableSchemaContract | None
+        Schema contract for file and partition schemas.
+    expr_adapter_factory : object | None
+        Custom expression adapter factory for specialized scans.
+    """
 
     partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
     file_sort_order: tuple[tuple[str, str], ...] = ()
@@ -212,10 +286,30 @@ class DataFusionScanOptions:
 
 @dataclass(frozen=True)
 class DeltaScanOptions:
-    """Delta-specific scan configuration."""
+    """Delta-specific scan configuration.
 
-    # Delta CDF configuration is handled via DatasetLocation.delta_cdf_options
-    # to keep change-data-feed registration separate from standard scans.
+    Delta table registration uses DataFusion's native Delta TableProvider.
+    All IO contracts for Delta tables are specified through DataFusion
+    registration and catalog metadata.
+
+    Notes
+    -----
+    Delta CDF configuration is handled via DatasetLocation.delta_cdf_options
+    to keep change-data-feed registration separate from standard scans.
+
+    Attributes
+    ----------
+    file_column_name : str | None
+        Column name for source file metadata in Delta scans.
+    enable_parquet_pushdown : bool
+        Enable predicate pushdown to underlying Parquet files.
+    schema_force_view_types : bool | None
+        Force schema types to match view definitions.
+    wrap_partition_values : bool
+        Wrap partition values in structs for nested access.
+    schema : pa.Schema | None
+        Optional schema override for Delta table registration.
+    """
 
     file_column_name: str | None = None
     enable_parquet_pushdown: bool = True
@@ -493,7 +587,7 @@ class DatasetSpec:
         location : str
             Storage location for the external table.
         file_format : str
-            File format (e.g., 'parquet', 'delta').
+            File format (e.g., 'delta', 'csv').
         overrides : ExternalTableConfigOverrides | None
             Optional configuration overrides. If unbounded is explicitly set
             in overrides, it takes precedence over the scan options.
@@ -1187,6 +1281,9 @@ def dataset_spec_from_schema(
 def dataset_table_definition(name: str) -> str | None:
     """Return the DataFusion CREATE TABLE definition for a dataset.
 
+    This is the canonical source for DDL provenance. All table metadata
+    should be sourced from DataFusion's catalog and information_schema.
+
     Parameters
     ----------
     name
@@ -1195,7 +1292,7 @@ def dataset_table_definition(name: str) -> str | None:
     Returns
     -------
     str | None
-        CREATE TABLE statement when available.
+        CREATE TABLE statement when available from DataFusion catalog.
     """
     module = importlib.import_module("datafusion_engine.runtime")
     runtime = module.DataFusionRuntimeProfile()
@@ -1207,6 +1304,9 @@ def dataset_table_definition(name: str) -> str | None:
 def dataset_table_constraints(name: str) -> tuple[str, ...]:
     """Return DataFusion constraint metadata for a dataset.
 
+    Constraints are sourced from DataFusion's information_schema.table_constraints
+    and information_schema.key_column_usage views.
+
     Parameters
     ----------
     name
@@ -1215,7 +1315,7 @@ def dataset_table_constraints(name: str) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Constraint expressions or identifiers, when available.
+        Constraint expressions or identifiers from DataFusion catalog.
     """
     module = importlib.import_module("datafusion_engine.runtime")
     runtime = module.DataFusionRuntimeProfile()
@@ -1227,6 +1327,9 @@ def dataset_table_constraints(name: str) -> tuple[str, ...]:
 def dataset_table_column_defaults(name: str) -> dict[str, object]:
     """Return DataFusion column default metadata for a dataset.
 
+    Column defaults are sourced from DataFusion's information_schema.columns view
+    (column_default column).
+
     Parameters
     ----------
     name
@@ -1235,7 +1338,7 @@ def dataset_table_column_defaults(name: str) -> dict[str, object]:
     Returns
     -------
     dict[str, object]
-        Mapping of column names to default expressions.
+        Mapping of column names to default expressions from DataFusion catalog.
     """
     module = importlib.import_module("datafusion_engine.runtime")
     runtime = module.DataFusionRuntimeProfile()
@@ -1247,6 +1350,9 @@ def dataset_table_column_defaults(name: str) -> dict[str, object]:
 def dataset_table_logical_plan(name: str) -> str | None:
     """Return DataFusion logical plan text for a dataset.
 
+    The logical plan is retrieved from DataFusion's DataFrame.logical_plan() method
+    and represents the optimized query plan for the table.
+
     Parameters
     ----------
     name
@@ -1255,13 +1361,36 @@ def dataset_table_logical_plan(name: str) -> str | None:
     Returns
     -------
     str | None
-        Logical plan text when available.
+        Logical plan text from DataFusion when available.
     """
     module = importlib.import_module("datafusion_engine.runtime")
     runtime = module.DataFusionRuntimeProfile()
     ctx = runtime.session_context()
     introspector = SchemaIntrospector(ctx, sql_options=module.sql_options_for_profile(runtime))
     return introspector.table_logical_plan(name)
+
+
+def schema_from_datafusion_catalog(name: str) -> pa.Schema:
+    """Return Arrow schema from DataFusion catalog for a registered table.
+
+    This is the canonical schema discovery method. All schema queries should
+    use DataFusion's catalog as the source of truth via ctx.table(name).schema().
+
+    Parameters
+    ----------
+    name
+        Dataset name registered in DataFusion.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Arrow schema resolved from DataFusion catalog.
+    """
+    module = importlib.import_module("datafusion_engine.runtime")
+    runtime = module.DataFusionRuntimeProfile()
+    ctx = runtime.session_context()
+    introspector = SchemaIntrospector(ctx, sql_options=module.sql_options_for_profile(runtime))
+    return introspector.table_schema(name)
 
 
 def dataset_spec_from_dataset(
@@ -1392,6 +1521,7 @@ __all__ = [
     "make_dataset_spec",
     "make_table_spec",
     "resolve_schema_evolution_spec",
+    "schema_from_datafusion_catalog",
     "table_spec_from_schema",
     "validate_arrow_table",
 ]

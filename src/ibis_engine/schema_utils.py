@@ -1,4 +1,12 @@
-"""Schema helpers for Ibis expressions."""
+"""Schema helpers for Ibis expressions.
+
+Deprecation notice:
+Schema normalization and drift resolution should now be handled at scan-time
+via DataFusion physical expression adapters rather than downstream Ibis
+transforms. When `enable_schema_evolution_adapter=True` in the runtime profile,
+schema adapters normalize batches at the TableProvider boundary, eliminating
+the need for explicit cast/projection operations in Ibis transforms.
+"""
 
 from __future__ import annotations
 

@@ -93,7 +93,7 @@ if TYPE_CHECKING:
         DataFusionPluginSpec,
     )
     from datafusion_engine.udf_catalog import UdfCatalog
-    from datafusion_engine.view_artifacts import ViewArtifact
+    from datafusion_engine.view_artifacts import DataFusionViewArtifact, ViewArtifact
     from datafusion_engine.view_graph_registry import ViewNode
     from ibis_engine.registry import DatasetCatalog, DatasetLocation
     from obs.datafusion_runs import DataFusionRun
@@ -168,14 +168,6 @@ _WRITE_POLICY_SCHEMA = pa.struct(
         pa.field("partition_by", pa.list_(pa.string())),
         pa.field("single_file_output", pa.bool_()),
         pa.field("sort_by", pa.list_(pa.string())),
-        pa.field("parquet_compression", pa.string()),
-        pa.field("parquet_statistics_enabled", pa.string()),
-        pa.field("parquet_row_group_size", pa.int64()),
-        pa.field("parquet_bloom_filter_on_write", pa.bool_()),
-        pa.field("parquet_dictionary_enabled", pa.bool_()),
-        pa.field("parquet_encoding", pa.string()),
-        pa.field("parquet_skip_arrow_metadata", pa.bool_()),
-        pa.field("parquet_column_options", pa.map_(pa.string(), pa.string())),
     ]
 )
 _SPILL_SCHEMA = pa.struct(
@@ -601,10 +593,18 @@ class DataFusionPlanCollector:
 class DataFusionViewRegistry:
     """Record DataFusion view artifacts for reproducibility."""
 
-    entries: dict[str, ViewArtifact] = field(default_factory=dict)
+    entries: dict[str, ViewArtifact | DataFusionViewArtifact] = field(default_factory=dict)
 
-    def record(self, *, name: str, artifact: ViewArtifact) -> None:
-        """Record a view artifact by name."""
+    def record(self, *, name: str, artifact: ViewArtifact | DataFusionViewArtifact) -> None:
+        """Record a view artifact by name.
+
+        Parameters
+        ----------
+        name
+            View name.
+        artifact
+            View artifact (legacy ViewArtifact or DataFusion-native DataFusionViewArtifact).
+        """
         self.entries[name] = artifact
 
     def snapshot(self) -> list[dict[str, object]]:
@@ -625,7 +625,7 @@ class DataFusionViewRegistry:
 
         Parameters
         ----------
-        event_time_unix_ms:
+        event_time_unix_ms
             Event timestamp to attach to each payload.
 
         Returns
@@ -825,9 +825,32 @@ def _prepare_statement_sql(statement: PreparedStatementSpec) -> str:
 
 
 def _prepare_statement_expr(statement: PreparedStatementSpec) -> exp.Expression:
+    """Build SQLGlot AST for prepared statement validation.
+
+    DEPRECATED: This function uses SQLGlot's parse_sql_strict for validation.
+    For DataFusion query validation, prefer DataFusion's native SQL parser
+    with SQLOptions for ingress gating. SQLGlot validation is retained for
+    backward compatibility during migration only.
+
+    Parameters
+    ----------
+    statement
+        Prepared statement specification to convert to SQLGlot AST.
+
+    Returns
+    -------
+    exp.Expression
+        SQLGlot expression for the prepared statement.
+
+    Raises
+    ------
+    ValueError
+        Raised when SQLGlot AST construction fails.
+    """
     sql = _prepare_statement_sql(statement)
     register_datafusion_dialect()
     try:
+        # DEPRECATED: Use DataFusion's native SQL parser for validation instead
         return parse_sql_strict(sql, dialect="datafusion")
     except (TypeError, ValueError) as exc:
         msg = f"Failed to build SQLGlot AST for prepared statement {statement.name!r}."
@@ -880,8 +903,27 @@ def _sql_parser_dialect(profile: DataFusionRuntimeProfile) -> str:
 
 
 def _sql_parse_errors(sql: str, *, dialect: str) -> list[dict[str, object]] | None:
+    """Parse SQL and collect parsing errors.
+
+    DEPRECATED: This function uses SQLGlot's parse_sql_strict for validation.
+    For DataFusion query validation, prefer DataFusion's native SQL parser
+    with SQLOptions for ingress gating.
+
+    Parameters
+    ----------
+    sql
+        SQL string to parse and validate.
+    dialect
+        SQL dialect for parsing.
+
+    Returns
+    -------
+    list[dict[str, object]] | None
+        List of parsing errors if any, None if parsing succeeds.
+    """
     register_datafusion_dialect()
     try:
+        # DEPRECATED: Use DataFusion's native SQL parser for validation instead
         parse_sql_strict(sql, dialect=dialect)
     except ParseError as exc:
         errors: list[dict[str, object]] = []
@@ -1091,7 +1133,6 @@ def register_view_specs(
         Whether to validate view schemas after registration.
 
     """
-    from datafusion_engine.udf_runtime import validate_rust_udf_snapshot
     from datafusion_engine.view_graph_registry import (
         ViewGraphOptions,
         ViewGraphRuntimeOptions,
@@ -1102,15 +1143,15 @@ def register_view_specs(
     if not views:
         return
     snapshot = _register_view_specs_udfs(ctx, runtime_profile=runtime_profile)
-    validate_rust_udf_snapshot(snapshot)
     policy = resolve_sqlglot_policy(name="datafusion_compile")
+    # DEPRECATED: ibis_backend is deprecated, will be removed in future version
     ibis_backend = None
     nodes = _build_view_nodes(
         ctx,
         views=views,
         policy=policy,
         snapshot=snapshot,
-        ibis_backend=ibis_backend,
+        ibis_backend=ibis_backend,  # DEPRECATED
     )
     register_view_graph(
         ctx,
@@ -1142,8 +1183,18 @@ def _build_view_nodes(
     views: Sequence[ViewSpec],
     policy: SqlGlotPolicy,
     snapshot: Mapping[str, object],
-    ibis_backend: object | None,
+    ibis_backend: object | None,  # DEPRECATED: Ibis backend is deprecated
 ) -> list[ViewNode]:
+    """Build view nodes for registration (DEPRECATED).
+
+    DEPRECATED: This function uses deprecated Ibis backend integration.
+    Use DataFusion-native builder functions instead.
+
+    Returns
+    -------
+    list[ViewNode]
+        List of compiled view nodes.
+    """
     from datafusion_engine.view_graph_registry import ViewNode
 
     nodes: list[ViewNode] = []
@@ -1222,10 +1273,21 @@ def _ensure_ibis_backend(
     backend: object | None,
     snapshot: Mapping[str, object],
 ) -> object:
+    """Ensure Ibis backend is initialized (DEPRECATED).
+
+    DEPRECATED: This function supports legacy view compilation. Use DataFusion-native
+    builder functions instead.
+
+    Returns
+    -------
+    object
+        Initialized Ibis backend.
+    """
     if backend is not None:
         return backend
     import ibis
 
+    # DEPRECATED: Ibis backend connection is deprecated
     ibis_backend = ibis.datafusion.connect(ctx)
     from ibis_engine.builtin_udfs import register_ibis_udf_snapshot
 
@@ -1435,6 +1497,12 @@ def _load_schema_evolution_adapter_factory() -> object:
 
 def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
     """Install the schema evolution adapter factory via the native extension.
+
+    Schema evolution adapters handle schema drift resolution at scan-time,
+    normalizing physical batches at the TableProvider boundary. This eliminates
+    the need for downstream cast/projection transforms and ensures schema
+    adaptation happens during physical plan execution rather than in
+    post-processing.
 
     Parameters
     ----------
@@ -1655,9 +1723,17 @@ def function_catalog_snapshot_for_profile(
 def record_view_definition(
     profile: DataFusionRuntimeProfile,
     *,
-    artifact: ViewArtifact,
+    artifact: ViewArtifact | DataFusionViewArtifact,
 ) -> None:
-    """Record a view artifact for diagnostics snapshots."""
+    """Record a view artifact for diagnostics snapshots.
+
+    Parameters
+    ----------
+    profile
+        Runtime profile for recording diagnostics.
+    artifact
+        View artifact (legacy ViewArtifact or DataFusion-native DataFusionViewArtifact).
+    """
     if profile.view_registry is None:
         return
     profile.view_registry.record(name=artifact.name, artifact=artifact)
@@ -1859,7 +1935,8 @@ def diagnostics_cache_hook(
                     "cache_max_columns": event.cache_max_columns,
                     "column_count": event.column_count,
                     "reason": event.reason,
-                    "plan_hash": event.plan_hash,
+                    "ast_fingerprint": event.ast_fingerprint,
+                    "policy_hash": event.policy_hash,
                     "profile_hash": event.profile_hash,
                 }
             ],
@@ -1888,7 +1965,8 @@ def diagnostics_substrait_fallback_hook(
                     "event_time_unix_ms": int(time.time() * 1000),
                     "reason": event.reason,
                     "expr_type": event.expr_type,
-                    "plan_hash": event.plan_hash,
+                    "ast_fingerprint": event.ast_fingerprint,
+                    "policy_hash": event.policy_hash,
                     "profile_hash": event.profile_hash,
                     "run_id": event.run_id,
                 }
@@ -2657,8 +2735,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     ast_catalog_location: str | None = None
     ast_catalog_format: str | None = None
     ast_external_location: str | None = None
-    ast_external_format: str = "parquet"
-    ast_external_provider: Literal["listing", "parquet"] | None = None
+    ast_external_format: str = "delta"
+    ast_external_provider: Literal["listing"] | None = None
     ast_external_ordering: tuple[tuple[str, str], ...] = (
         ("repo", "ascending"),
         ("path", "ascending"),
@@ -2683,8 +2761,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     bytecode_catalog_location: str | None = None
     bytecode_catalog_format: str | None = None
     bytecode_external_location: str | None = None
-    bytecode_external_format: str = "parquet"
-    bytecode_external_provider: Literal["listing", "parquet"] | None = None
+    bytecode_external_format: str = "delta"
+    bytecode_external_provider: Literal["listing"] | None = None
     bytecode_external_ordering: tuple[tuple[str, str], ...] = (
         ("path", "ascending"),
         ("file_id", "ascending"),
@@ -3664,9 +3742,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.ast_external_location:
             from ibis_engine.registry import DatasetLocation
 
-            if self.ast_external_format == "delta":
-                msg = "AST external format must not be 'delta'."
-                raise ValueError(msg)
             scan = DataFusionScanOptions(
                 partition_cols=self.ast_external_partition_cols,
                 file_sort_order=self.ast_external_ordering,
@@ -3735,9 +3810,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.bytecode_external_location:
             from ibis_engine.registry import DatasetLocation
 
-            if self.bytecode_external_format == "delta":
-                msg = "Bytecode external format must not be 'delta'."
-                raise ValueError(msg)
             scan = DataFusionScanOptions(
                 partition_cols=self.bytecode_external_partition_cols,
                 file_sort_order=self.bytecode_external_ordering,

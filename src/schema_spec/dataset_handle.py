@@ -42,7 +42,7 @@ def _scan_external_table_options(location: DatasetLocation) -> dict[str, object]
     options: dict[str, object] = {}
     if scan.file_extension and location.format != "delta":
         options["file_extension"] = scan.file_extension
-    if location.format == "parquet":
+    if location.format != "delta":
         if scan.skip_metadata is not None:
             options["skip_metadata"] = scan.skip_metadata
         if scan.schema_force_view_types is not None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from functools import cache
 from typing import cast
 
@@ -126,14 +127,19 @@ def schema_fingerprint(schema: SchemaLike) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def dataset_fingerprint(
-    *,
-    plan_hash: str,
-    schema_fingerprint: str,
-    profile_hash: str,
-    writer_strategy: str,
-    input_fingerprints: Sequence[str] = (),
-) -> str:
+@dataclass(frozen=True)
+class DatasetFingerprintInputs:
+    """Inputs used to compute a dataset fingerprint."""
+
+    ast_fingerprint: str
+    policy_hash: str
+    schema_fingerprint: str
+    profile_hash: str
+    writer_strategy: str
+    input_fingerprints: Sequence[str] = ()
+
+
+def dataset_fingerprint(inputs: DatasetFingerprintInputs) -> str:
     """Compute a stable fingerprint for a materialized dataset.
 
     Returns
@@ -143,11 +149,12 @@ def dataset_fingerprint(
     """
     payload = {
         "version": DATASET_FINGERPRINT_VERSION,
-        "plan_hash": plan_hash,
-        "schema_fingerprint": schema_fingerprint,
-        "profile_hash": profile_hash,
-        "writer_strategy": writer_strategy,
-        "input_fingerprints": sorted(input_fingerprints),
+        "ast_fingerprint": inputs.ast_fingerprint,
+        "policy_hash": inputs.policy_hash,
+        "schema_fingerprint": inputs.schema_fingerprint,
+        "profile_hash": inputs.profile_hash,
+        "writer_strategy": inputs.writer_strategy,
+        "input_fingerprints": sorted(inputs.input_fingerprints),
     }
     return payload_hash(payload, _dataset_fingerprint_schema())
 

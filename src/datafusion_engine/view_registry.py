@@ -17,6 +17,7 @@ from datafusion_engine.schema_registry import (
     extract_nested_dataset_names,
     nested_base_df,
 )
+from datafusion_engine.sqlglot_exprs import sqlglot_select_from_exprs
 from datafusion_engine.view_graph_registry import ViewNode
 from datafusion_ext import (
     arrow_metadata,
@@ -31,13 +32,9 @@ from datafusion_ext import (
     union_tag,
 )
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
-from sqlglot_tools.optimizer import (
-    StrictParseOptions,
-    parse_sql_strict,
-    register_datafusion_dialect,
-    resolve_sqlglot_policy,
-    sqlglot_sql,
-)
+from sqlglot_tools.compat import exp
+from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_sql
+from sqlglot_tools.view_builders import select_all
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table
@@ -2364,36 +2361,47 @@ def _should_skip_exprs(exprs: Sequence[object]) -> bool:
     return not exprs
 
 
-def _sqlglot_from_dataframe(df: DataFrame) -> Expression | None:
-    try:
-        from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
-        from datafusion.unparser import Dialect as DataFusionDialect
-        from datafusion.unparser import Unparser as DataFusionUnparser
-    except ImportError:
-        return None
-    logical_plan = getattr(df, "logical_plan", None)
-    if not callable(logical_plan):
-        return None
-    sql = ""
-    try:
-        plan_obj = logical_plan()
-        if isinstance(plan_obj, DataFusionLogicalPlan):
-            unparser = DataFusionUnparser(DataFusionDialect.default())
-            sql = str(unparser.plan_to_sql(plan_obj))
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    if not sql:
-        return None
-    register_datafusion_dialect()
-    try:
-        ast = parse_sql_strict(
-            sql,
-            dialect="datafusion_ext",
-            options=StrictParseOptions(error_level=None),
-        )
-    except (TypeError, ValueError):
-        return None
-    return ast
+def _table_alias(table: str, alias: str) -> Expression:
+    return exp.alias_(exp.table_(table), alias, table=True)
+
+
+def _subquery_alias(query: Expression, alias: str) -> Expression:
+    return exp.Subquery(this=query, alias=exp.TableAlias(this=exp.Identifier(this=alias)))
+
+
+def _unnest_expr(expr: Expression, alias: str) -> Expression:
+    return exp.Unnest(
+        expressions=[expr],
+        alias=exp.TableAlias(this=exp.Identifier(this=alias)),
+    )
+
+
+def _join_on(
+    *,
+    left_alias: str,
+    right_alias: str,
+    left_keys: Sequence[str],
+    right_keys: Sequence[str],
+) -> Expression:
+    if len(left_keys) != len(right_keys) or not left_keys:
+        msg = "Join keys must be non-empty and aligned."
+        raise ValueError(msg)
+    condition: Expression | None = None
+    for left_key, right_key in zip(left_keys, right_keys, strict=True):
+        left_expr = exp.column(left_key, table=left_alias)
+        right_expr = exp.column(right_key, table=right_alias)
+        eq_expr = exp.EQ(this=left_expr, expression=right_expr)
+        condition = eq_expr if condition is None else exp.And(this=condition, expression=eq_expr)
+    if condition is None:
+        msg = "Join condition resolution failed."
+        raise ValueError(msg)
+    return condition
+
+
+def _select_from_base(*, base_table: str, exprs: Sequence[Expr]) -> Expression:
+    if _should_skip_exprs(exprs):
+        return select_all(base_table)
+    return sqlglot_select_from_exprs(base_table=base_table, exprs=exprs)
 
 
 def _ibis_expr_from_sqlglot(
@@ -2451,11 +2459,8 @@ def _map_keys_view_df(ctx: SessionContext, *, name: str, base_view: str) -> Data
     return df.select(*exprs)
 
 
-def _map_values_view_df(ctx: SessionContext, *, _name: str, base_view: str) -> DataFrame:
-    base_df = _nested_base_df(ctx, base_view)
-    df = base_df.with_column("attr_value", map_values(col("attrs")))
-    df = df.unnest_columns("attr_value")
-    return df.select(
+def _map_values_view_exprs() -> tuple[Expr, ...]:
+    return (
         col("file_id"),
         col("path"),
         col("code_unit_id"),
@@ -2469,10 +2474,21 @@ def _map_values_view_df(ctx: SessionContext, *, _name: str, base_view: str) -> D
     )
 
 
+def _map_values_view_df(ctx: SessionContext, *, _name: str, base_view: str) -> DataFrame:
+    base_df = _nested_base_df(ctx, base_view)
+    df = base_df.with_column("attr_value", map_values(col("attrs")))
+    df = df.unnest_columns("attr_value")
+    return df.select(*_map_values_view_exprs())
+
+
 def _cst_span_unnest_df(ctx: SessionContext, *, name: str, base_view: str) -> DataFrame:
     base_df = _view_df(ctx, base_view)
+    return base_df.select(*_cst_span_unnest_exprs(name))
+
+
+def _cst_span_unnest_exprs(name: str) -> tuple[Expr, ...]:
     if name == "cst_callsite_span_unnest":
-        return base_df.select(
+        return (
             col("file_id"),
             col("path"),
             col("call_id"),
@@ -2480,14 +2496,14 @@ def _cst_span_unnest_df(ctx: SessionContext, *, name: str, base_view: str) -> Da
             col("call_bend").alias("bend"),
         )
     if name == "cst_def_span_unnest":
-        return base_df.select(
+        return (
             col("file_id"),
             col("path"),
             col("def_id"),
             col("def_bstart").alias("bstart"),
             col("def_bend").alias("bend"),
         )
-    return base_df.select(
+    return (
         col("file_id"),
         col("path"),
         col("ref_id"),
@@ -2711,6 +2727,527 @@ def _view_df(ctx: SessionContext, name: str) -> DataFrame:
     return base_df.select(*exprs)
 
 
+def _base_table_for_view(name: str) -> str:
+    base_table = VIEW_BASE_TABLE.get(name)
+    if base_table is not None:
+        return base_table
+    if name in NESTED_VIEW_NAMES and name not in SCIP_VIEW_NAMES:
+        return name
+    msg = f"Missing base table mapping for view {name!r}."
+    raise KeyError(msg)
+
+
+def _map_entries_view_ast(name: str, *, base_view: str) -> Expression:
+    exprs = VIEW_SELECT_EXPRS[name]
+    query = cast("exp.Select", _select_from_base(base_table=base_view, exprs=exprs))
+    unnest_expr = _unnest_expr(exp.func("map_entries", exp.column("attrs")), "kv")
+    return query.join(unnest_expr, join_type="cross")
+
+
+def _map_keys_view_ast(name: str, *, base_view: str) -> Expression:
+    exprs = [expr for expr in VIEW_SELECT_EXPRS[name] if expr.schema_name() != "attr_key"]
+    exprs.append(col("attr_key").alias("attr_key"))
+    query = cast("exp.Select", _select_from_base(base_table=base_view, exprs=exprs))
+    unnest_expr = _unnest_expr(exp.func("map_keys", exp.column("attrs")), "attr_key")
+    return query.join(unnest_expr, join_type="cross")
+
+
+def _map_values_view_ast(name: str, *, base_view: str) -> Expression:
+    _ = name
+    query = cast(
+        "exp.Select", _select_from_base(base_table=base_view, exprs=_map_values_view_exprs())
+    )
+    unnest_expr = _unnest_expr(exp.func("map_values", exp.column("attrs")), "attr_value")
+    return query.join(unnest_expr, join_type="cross")
+
+
+def _cst_span_unnest_ast(name: str, *, base_view: str) -> Expression:
+    exprs = _cst_span_unnest_exprs(name)
+    return _select_from_base(base_table=base_view, exprs=exprs)
+
+
+def _symtable_class_methods_ast() -> Expression:
+    exprs = (
+        col("file_id"),
+        col("path"),
+        col("scope_id"),
+        col("scope_name"),
+        col("class_methods").alias("method_name"),
+    )
+    query = cast("exp.Select", _select_from_base(base_table="symtable_scopes", exprs=exprs))
+    unnest_expr = _unnest_expr(exp.column("class_methods"), "class_methods")
+    return query.join(unnest_expr, join_type="cross")
+
+
+def _symtable_function_partitions_ast() -> Expression:
+    exprs = VIEW_SELECT_EXPRS["symtable_function_partitions"]
+    query = cast("exp.Select", _select_from_base(base_table="symtable_scopes", exprs=exprs))
+    condition = exp.Not(this=exp.Is(this=exp.column("function_partitions"), expression=exp.Null()))
+    return query.where(condition)
+
+
+def _symtable_namespace_edges_ast() -> Expression:
+    symbols = _table_alias("symtable_symbols", "symbols")
+    unnest_expr = _unnest_expr(
+        exp.column("namespace_block_ids", table="symbols"),
+        "child_table_id",
+    )
+    scopes_query = exp.select(
+        exp.alias_(exp.column("table_id"), "child_table_id"),
+        exp.alias_(exp.column("scope_id"), "child_scope_id"),
+        exp.alias_(exp.column("path"), "child_path"),
+    ).from_("symtable_scopes")
+    scopes = _subquery_alias(scopes_query, "scopes")
+    condition = _join_on(
+        left_alias="symbols",
+        right_alias="scopes",
+        left_keys=("child_table_id", "path"),
+        right_keys=("child_table_id", "child_path"),
+    )
+    query = exp.select(
+        exp.column("file_id", table="symbols"),
+        exp.column("path", table="symbols"),
+        exp.column("scope_id", table="symbols"),
+        exp.alias_(exp.column("name", table="symbols"), "symbol_name"),
+        exp.column("child_table_id"),
+        exp.column("child_scope_id", table="scopes"),
+        exp.column("namespace_count", table="symbols"),
+    ).from_(symbols)
+    query = query.join(unnest_expr, join_type="cross")
+    return query.join(scopes, on=condition, join_type="left")
+
+
+def _symtable_scope_edges_ast() -> Expression:
+    scopes = _table_alias("symtable_scopes", "scopes")
+    parent_query = exp.select(
+        exp.alias_(exp.column("table_id"), "parent_table_id"),
+        exp.alias_(exp.column("scope_id"), "parent_scope_id"),
+        exp.alias_(exp.column("path"), "parent_path"),
+    ).from_("symtable_scopes")
+    child_query = exp.select(
+        exp.alias_(exp.column("table_id"), "child_table_id"),
+        exp.alias_(exp.column("scope_id"), "child_scope_id"),
+        exp.alias_(exp.column("path"), "child_path"),
+    ).from_("symtable_scopes")
+    parent = _subquery_alias(parent_query, "parent")
+    child = _subquery_alias(child_query, "child")
+    parent_join = _join_on(
+        left_alias="scopes",
+        right_alias="parent",
+        left_keys=("parent_table_id", "path"),
+        right_keys=("parent_table_id", "parent_path"),
+    )
+    child_join = _join_on(
+        left_alias="scopes",
+        right_alias="child",
+        left_keys=("table_id", "path"),
+        right_keys=("child_table_id", "child_path"),
+    )
+    query = exp.select(
+        exp.column("file_id", table="scopes"),
+        exp.column("path", table="scopes"),
+        exp.column("parent_table_id", table="scopes"),
+        exp.alias_(exp.column("table_id", table="scopes"), "child_table_id"),
+        exp.column("parent_scope_id", table="parent"),
+        exp.column("child_scope_id", table="child"),
+    ).from_(scopes)
+    query = query.join(parent, on=parent_join, join_type="left")
+    return query.join(child, on=child_join, join_type="left")
+
+
+def _arrow_cast_expr(expr: Expression, data_type: str) -> Expression:
+    return exp.func("arrow_cast", expr, exp.Literal.string(data_type))
+
+
+def _ts_ast_check_ast(*, ts_view: str, ast_view: str, label: str) -> Expression:
+    ts, ast_base = _ts_ast_sources(ts_view=ts_view, ast_view=ast_view)
+    start_idx, end_idx = _ts_ast_index_subqueries()
+    ast = _ts_ast_joined_ast(ast_base=ast_base, start_idx=start_idx, end_idx=end_idx)
+    joined = _ts_ast_joined_ts_ast(ts=ts, ast=ast)
+    return _ts_ast_mismatch_agg(joined=joined, label=label)
+
+
+def _ts_ast_sources(*, ts_view: str, ast_view: str) -> tuple[Expression, Expression]:
+    ts_query = exp.select(
+        exp.column("file_id"),
+        exp.column("path"),
+        exp.alias_(exp.column("start_byte"), "ts_start_byte"),
+        exp.alias_(exp.column("end_byte"), "ts_end_byte"),
+    ).from_(ts_view)
+    ts = _subquery_alias(ts_query, "ts")
+    ast_base_query = exp.select(
+        exp.column("file_id"),
+        exp.column("path"),
+        exp.column("lineno"),
+        exp.column("col_offset"),
+        exp.column("end_lineno"),
+        exp.column("end_col_offset"),
+        exp.column("line_base"),
+        exp.alias_(
+            exp.Sub(this=exp.column("lineno"), expression=exp.column("line_base")),
+            "start_line_no",
+        ),
+        exp.alias_(
+            exp.Sub(this=exp.column("end_lineno"), expression=exp.column("line_base")),
+            "end_line_no",
+        ),
+    ).from_(ast_view)
+    ast_base = _subquery_alias(ast_base_query, "ast_base")
+    return ts, ast_base
+
+
+def _ts_ast_index_subqueries() -> tuple[Expression, Expression]:
+    start_idx_query = exp.select(
+        exp.alias_(exp.column("file_id"), "start_file_id"),
+        exp.alias_(exp.column("path"), "start_path"),
+        exp.alias_(exp.column("line_no"), "start_line_no"),
+        exp.alias_(exp.column("line_start_byte"), "start_line_start_byte"),
+    ).from_("file_line_index_v1")
+    end_idx_query = exp.select(
+        exp.alias_(exp.column("file_id"), "end_file_id"),
+        exp.alias_(exp.column("path"), "end_path"),
+        exp.alias_(exp.column("line_no"), "end_line_no"),
+        exp.alias_(exp.column("line_start_byte"), "end_line_start_byte"),
+    ).from_("file_line_index_v1")
+    return _subquery_alias(start_idx_query, "start_idx"), _subquery_alias(end_idx_query, "end_idx")
+
+
+def _ts_ast_joined_ast(
+    *,
+    ast_base: Expression,
+    start_idx: Expression,
+    end_idx: Expression,
+) -> Expression:
+    join_start = _join_on(
+        left_alias="ast_base",
+        right_alias="start_idx",
+        left_keys=("file_id", "path", "start_line_no"),
+        right_keys=("start_file_id", "start_path", "start_line_no"),
+    )
+    join_end = _join_on(
+        left_alias="ast_base",
+        right_alias="end_idx",
+        left_keys=("file_id", "path", "end_line_no"),
+        right_keys=("end_file_id", "end_path", "end_line_no"),
+    )
+    ast_joined = exp.select(
+        exp.column("file_id", table="ast_base"),
+        exp.column("path", table="ast_base"),
+        exp.column("col_offset", table="ast_base"),
+        exp.column("end_col_offset", table="ast_base"),
+        exp.column("start_line_start_byte", table="start_idx"),
+        exp.column("end_line_start_byte", table="end_idx"),
+    ).from_(ast_base)
+    ast_joined = ast_joined.join(start_idx, on=join_start, join_type="left")
+    ast_joined = ast_joined.join(end_idx, on=join_end, join_type="left")
+    ast_joined_sub = _subquery_alias(ast_joined, "ast_joined")
+    ast_query = exp.select(
+        exp.column("file_id", table="ast_joined"),
+        exp.column("path", table="ast_joined"),
+        exp.alias_(
+            exp.Add(
+                this=exp.column("start_line_start_byte", table="ast_joined"),
+                expression=_arrow_cast_expr(
+                    exp.column("col_offset", table="ast_joined"),
+                    "Int64",
+                ),
+            ),
+            "ast_start_byte",
+        ),
+        exp.alias_(
+            exp.Add(
+                this=exp.column("end_line_start_byte", table="ast_joined"),
+                expression=_arrow_cast_expr(
+                    exp.column("end_col_offset", table="ast_joined"),
+                    "Int64",
+                ),
+            ),
+            "ast_end_byte",
+        ),
+    ).from_(ast_joined_sub)
+    return _subquery_alias(ast_query, "ast")
+
+
+def _ts_ast_joined_ts_ast(*, ts: Expression, ast: Expression) -> Expression:
+    join_condition = _join_on(
+        left_alias="ts",
+        right_alias="ast",
+        left_keys=("file_id", "path", "ts_start_byte", "ts_end_byte"),
+        right_keys=("file_id", "path", "ast_start_byte", "ast_end_byte"),
+    )
+    joined_query = exp.select(
+        exp.alias_(
+            exp.func(
+                "coalesce",
+                exp.column("file_id", table="ts"),
+                exp.column("file_id", table="ast"),
+            ),
+            "file_id",
+        ),
+        exp.alias_(
+            exp.func(
+                "coalesce",
+                exp.column("path", table="ts"),
+                exp.column("path", table="ast"),
+            ),
+            "path",
+        ),
+        exp.column("ts_start_byte", table="ts"),
+        exp.column("ts_end_byte", table="ts"),
+        exp.column("ast_start_byte", table="ast"),
+        exp.column("ast_end_byte", table="ast"),
+    ).from_(ts)
+    joined_query = joined_query.join(ast, on=join_condition, join_type="full")
+    return _subquery_alias(joined_query, "joined")
+
+
+def _ts_ast_mismatch_agg(*, joined: Expression, label: str) -> Expression:
+    ts_present = exp.Not(this=exp.Is(this=exp.column("ts_start_byte"), expression=exp.Null()))
+    ast_present = exp.Not(this=exp.Is(this=exp.column("ast_start_byte"), expression=exp.Null()))
+    ts_only_expr = exp.Case(
+        ifs=[
+            exp.When(
+                this=exp.And(
+                    this=ts_present,
+                    expression=exp.Is(this=exp.column("ast_start_byte"), expression=exp.Null()),
+                ),
+                true=exp.Literal.number(1),
+            )
+        ],
+        default=exp.Literal.number(0),
+    )
+    ast_only_expr = exp.Case(
+        ifs=[
+            exp.When(
+                this=exp.And(
+                    this=exp.Is(this=exp.column("ts_start_byte"), expression=exp.Null()),
+                    expression=ast_present,
+                ),
+                true=exp.Literal.number(1),
+            )
+        ],
+        default=exp.Literal.number(0),
+    )
+    agg_query = exp.select(
+        exp.column("file_id"),
+        exp.column("path"),
+        exp.alias_(
+            exp.func(
+                "sum",
+                exp.Case(
+                    ifs=[
+                        exp.When(
+                            this=ts_present,
+                            true=exp.Literal.number(1),
+                        )
+                    ],
+                    default=exp.Literal.number(0),
+                ),
+            ),
+            f"ts_{label}",
+        ),
+        exp.alias_(
+            exp.func(
+                "sum",
+                exp.Case(
+                    ifs=[
+                        exp.When(
+                            this=ast_present,
+                            true=exp.Literal.number(1),
+                        )
+                    ],
+                    default=exp.Literal.number(0),
+                ),
+            ),
+            f"ast_{label}",
+        ),
+        exp.alias_(exp.func("sum", ts_only_expr), "ts_only"),
+        exp.alias_(exp.func("sum", ast_only_expr), "ast_only"),
+    ).from_(joined)
+    agg_query = agg_query.group_by(exp.column("file_id"), exp.column("path"))
+    agg = _subquery_alias(agg_query, "agg")
+    mismatch_count = exp.Add(this=exp.column("ts_only"), expression=exp.column("ast_only"))
+    return exp.select(
+        exp.column("file_id"),
+        exp.column("path"),
+        exp.column(f"ts_{label}"),
+        exp.column(f"ast_{label}"),
+        exp.column("ts_only"),
+        exp.column("ast_only"),
+        exp.alias_(mismatch_count, "mismatch_count"),
+        exp.alias_(exp.GT(this=mismatch_count, expression=exp.Literal.number(0)), "mismatch"),
+    ).from_(agg)
+
+
+def _ts_cst_docstrings_check_ast() -> Expression:
+    ts_query = exp.select(
+        exp.column("file_id"),
+        exp.column("path"),
+        exp.alias_(exp.column("start_byte"), "ts_start_byte"),
+        exp.alias_(exp.column("end_byte"), "ts_end_byte"),
+    ).from_("ts_docstrings")
+    ts = _subquery_alias(ts_query, "ts")
+
+    cst_query = exp.select(
+        exp.column("file_id"),
+        exp.column("path"),
+        exp.alias_(_arrow_cast_expr(exp.column("bstart"), "Int64"), "cst_start_byte"),
+        exp.alias_(_arrow_cast_expr(exp.column("bend"), "Int64"), "cst_end_byte"),
+    ).from_("cst_docstrings")
+    cst = _subquery_alias(cst_query, "cst")
+
+    join_condition = _join_on(
+        left_alias="ts",
+        right_alias="cst",
+        left_keys=("file_id", "path", "ts_start_byte", "ts_end_byte"),
+        right_keys=("file_id", "path", "cst_start_byte", "cst_end_byte"),
+    )
+    joined_query = exp.select(
+        exp.alias_(
+            exp.func(
+                "coalesce",
+                exp.column("file_id", table="ts"),
+                exp.column("file_id", table="cst"),
+            ),
+            "file_id",
+        ),
+        exp.alias_(
+            exp.func(
+                "coalesce",
+                exp.column("path", table="ts"),
+                exp.column("path", table="cst"),
+            ),
+            "path",
+        ),
+        exp.column("ts_start_byte", table="ts"),
+        exp.column("cst_start_byte", table="cst"),
+    ).from_(ts)
+    joined_query = joined_query.join(cst, on=join_condition, join_type="full")
+    joined = _subquery_alias(joined_query, "joined")
+
+    ts_present = exp.Not(this=exp.Is(this=exp.column("ts_start_byte"), expression=exp.Null()))
+    cst_present = exp.Not(this=exp.Is(this=exp.column("cst_start_byte"), expression=exp.Null()))
+    ts_only_expr = exp.Case(
+        ifs=[
+            exp.When(
+                this=exp.And(
+                    this=ts_present,
+                    expression=exp.Is(this=exp.column("cst_start_byte"), expression=exp.Null()),
+                ),
+                true=exp.Literal.number(1),
+            )
+        ],
+        default=exp.Literal.number(0),
+    )
+    cst_only_expr = exp.Case(
+        ifs=[
+            exp.When(
+                this=exp.And(
+                    this=exp.Is(this=exp.column("ts_start_byte"), expression=exp.Null()),
+                    expression=cst_present,
+                ),
+                true=exp.Literal.number(1),
+            )
+        ],
+        default=exp.Literal.number(0),
+    )
+    agg_query = exp.select(
+        exp.column("file_id"),
+        exp.column("path"),
+        exp.alias_(
+            exp.func(
+                "sum",
+                exp.Case(
+                    ifs=[
+                        exp.When(
+                            this=ts_present,
+                            true=exp.Literal.number(1),
+                        )
+                    ],
+                    default=exp.Literal.number(0),
+                ),
+            ),
+            "ts_docstrings",
+        ),
+        exp.alias_(
+            exp.func(
+                "sum",
+                exp.Case(
+                    ifs=[
+                        exp.When(
+                            this=cst_present,
+                            true=exp.Literal.number(1),
+                        )
+                    ],
+                    default=exp.Literal.number(0),
+                ),
+            ),
+            "cst_docstrings",
+        ),
+        exp.alias_(exp.func("sum", ts_only_expr), "ts_only"),
+        exp.alias_(exp.func("sum", cst_only_expr), "cst_only"),
+    ).from_(joined)
+    agg_query = agg_query.group_by(exp.column("file_id"), exp.column("path"))
+    agg = _subquery_alias(agg_query, "agg")
+
+    mismatch_count = exp.Add(this=exp.column("ts_only"), expression=exp.column("cst_only"))
+    return exp.select(
+        exp.column("file_id"),
+        exp.column("path"),
+        exp.column("ts_docstrings"),
+        exp.column("cst_docstrings"),
+        exp.column("ts_only"),
+        exp.column("cst_only"),
+        exp.alias_(mismatch_count, "mismatch_count"),
+        exp.alias_(exp.GT(this=mismatch_count, expression=exp.Literal.number(0)), "mismatch"),
+    ).from_(agg)
+
+
+def _register_ast_builder_map() -> dict[str, Callable[[str], Expression]]:
+    builders: dict[str, Callable[[str], Expression]] = {}
+    for view_name, base_view in ATTRS_VIEW_BASE.items():
+        builders[view_name] = partial(_map_entries_view_ast, base_view=base_view)
+    for view_name, base_view in MAP_KEYS_VIEW_BASE.items():
+        builders[view_name] = partial(_map_keys_view_ast, base_view=base_view)
+    for view_name, base_view in MAP_VALUES_VIEW_BASE.items():
+        builders[view_name] = partial(_map_values_view_ast, base_view=base_view)
+    for view_name, base_view in CST_SPAN_UNNEST_BASE.items():
+        builders[view_name] = partial(_cst_span_unnest_ast, base_view=base_view)
+    builders["symtable_class_methods"] = lambda _name: _symtable_class_methods_ast()
+    builders["symtable_function_partitions"] = lambda _name: _symtable_function_partitions_ast()
+    builders["symtable_namespace_edges"] = lambda _name: _symtable_namespace_edges_ast()
+    builders["symtable_scope_edges"] = lambda _name: _symtable_scope_edges_ast()
+    builders["ts_ast_calls_check"] = lambda _name: _ts_ast_check_ast(
+        ts_view="ts_calls",
+        ast_view="ast_calls",
+        label="calls",
+    )
+    builders["ts_ast_defs_check"] = lambda _name: _ts_ast_check_ast(
+        ts_view="ts_defs",
+        ast_view="ast_defs",
+        label="defs",
+    )
+    builders["ts_ast_imports_check"] = lambda _name: _ts_ast_check_ast(
+        ts_view="ts_imports",
+        ast_view="ast_imports",
+        label="imports",
+    )
+    builders["ts_cst_docstrings_check"] = lambda _name: _ts_cst_docstrings_check_ast()
+    return builders
+
+
+_CUSTOM_AST_BUILDERS: Final[dict[str, Callable[[str], Expression]]] = _register_ast_builder_map()
+
+
+def _view_ast(name: str) -> Expression:
+    builder = _CUSTOM_AST_BUILDERS.get(name)
+    if builder is not None:
+        return builder(name)
+    base_table = _base_table_for_view(name)
+    exprs = VIEW_SELECT_EXPRS.get(name, ())
+    return _select_from_base(base_table=base_table, exprs=exprs)
+
+
 def _register_builder_map() -> dict[str, Callable[[SessionContext], DataFrame]]:
     builders: dict[str, Callable[[SessionContext], DataFrame]] = {}
     for view_name, base_view in ATTRS_VIEW_BASE.items():
@@ -2786,11 +3323,6 @@ def registry_view_specs(
     -------
     tuple[ViewSpec, ...]
         View specifications for registry views.
-
-    Raises
-    ------
-    ValueError
-        Raised when registry views are missing SQLGlot ASTs.
     """
     excluded = set(exclude or ())
     specs: list[ViewSpec] = []
@@ -2798,11 +3330,7 @@ def registry_view_specs(
         if name in excluded:
             continue
         builder = partial(_view_df, name=name)
-        df = builder(ctx)
-        ast = _sqlglot_from_dataframe(df)
-        if ast is None:
-            msg = f"Registry view {name!r} missing SQLGlot AST."
-            raise ValueError(msg)
+        ast = _view_ast(name)
         specs.append(
             view_spec_from_builder(
                 ViewSpecInputs(
@@ -2885,11 +3413,6 @@ def registry_view_nodes(
     -------
     tuple[ViewNode, ...]
         Registry view nodes with SQLGlot ASTs.
-
-    Raises
-    ------
-    ValueError
-        Raised when registry view ASTs cannot be produced.
     """
     excluded = set(exclude or ())
     nodes: list[ViewNode] = []
@@ -2897,11 +3420,7 @@ def registry_view_nodes(
         if name in excluded:
             continue
         builder = partial(_view_df, name=name)
-        df = builder(ctx)
-        ast = _sqlglot_from_dataframe(df)
-        if ast is None:
-            msg = f"Registry view {name!r} missing SQLGlot AST."
-            raise ValueError(msg)
+        ast = _view_ast(name)
         try:
             from sqlglot.schema import MappingSchema
 

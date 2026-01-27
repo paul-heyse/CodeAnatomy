@@ -635,9 +635,7 @@ def _scip_document_row(inputs: _ScipDocumentInputs) -> Row:
         Nested document payload for the SCIP index row.
     """
     text = (
-        _string_value(getattr(inputs.doc, "text", None))
-        if inputs.include_document_text
-        else None
+        _string_value(getattr(inputs.doc, "text", None)) if inputs.include_document_text else None
     )
     symbols: list[Row] = []
     if inputs.include_document_symbols:

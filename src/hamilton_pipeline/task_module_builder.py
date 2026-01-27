@@ -130,7 +130,7 @@ def _decorate_task_node(
 ) -> Callable[..., TableLike]:
     task = context.task
     if task.cache_policy in {"session", "persistent"}:
-        node_fn = cache(format="parquet", behavior="default")(node_fn)
+        node_fn = cache(format="delta", behavior="default")(node_fn)
     dependency_sources = tuple(source(dep) for dep in sorted(set(context.dependencies)))
     task_spec = task_execution.TaskExecutionSpec(
         task_name=task.name,

@@ -32,10 +32,30 @@ if TYPE_CHECKING:
         IntrospectionSnapshot,
     )
     from datafusion_engine.io_adapter import DataFusionIOAdapter
+    from datafusion_engine.lineage_datafusion import (
+        LineageReport,
+        ScanLineage,
+        extract_lineage,
+        referenced_tables_from_plan,
+        required_columns_by_table,
+    )
     from datafusion_engine.param_binding import (
         DataFusionParamBindings,
         apply_bindings_to_context,
         resolve_param_bindings,
+    )
+    from datafusion_engine.plan_bundle import (
+        DataFusionPlanBundle,
+        build_plan_bundle,
+    )
+    from datafusion_engine.plan_udf_analysis import (
+        derive_required_udfs_from_plans,
+        ensure_plan_udfs_available,
+        extract_udfs_from_dataframe,
+        extract_udfs_from_logical_plan,
+        extract_udfs_from_plan_bundle,
+        validate_required_udfs_from_bundle,
+        validate_required_udfs_from_plan,
     )
     from datafusion_engine.registry_loader import (
         RegistryTarget,
@@ -95,8 +115,12 @@ if TYPE_CHECKING:
         validate_sql_safety,
     )
     from datafusion_engine.streaming_executor import StreamingExecutionResult
+    from datafusion_engine.udf_platform import (
+        RustUdfPlatform,
+        RustUdfPlatformOptions,
+        install_rust_udf_platform,
+    )
     from datafusion_engine.write_pipeline import (
-        ParquetWritePolicy,
         WriteFormat,
         WriteMode,
         WritePipeline,
@@ -117,6 +141,7 @@ __all__ = [
     "DataFusionExecutionFacade",
     "DataFusionIOAdapter",
     "DataFusionParamBindings",
+    "DataFusionPlanBundle",
     "DataFusionRuntimeProfile",
     "DataFusionSqlPolicy",
     "DiagnosticsContext",
@@ -131,14 +156,17 @@ __all__ = [
     "InMemoryDiagnosticsSink",
     "IntrospectionCache",
     "IntrospectionSnapshot",
+    "LineageReport",
     "MemoryPool",
-    "ParquetWritePolicy",
     "RebuildPolicy",
     "RegistryCatalogProvider",
     "RegistrySchemaProvider",
     "RegistryTarget",
+    "RustUdfPlatform",
+    "RustUdfPlatformOptions",
     "SQLPolicyProfile",
     "SafeExecutor",
+    "ScanLineage",
     "SchemaContract",
     "SchemaHardeningProfile",
     "SchemaIntrospector",
@@ -154,14 +182,23 @@ __all__ = [
     "apply_bindings_to_context",
     "apply_execution_label",
     "apply_execution_policy",
+    "build_plan_bundle",
     "compile_sql_policy",
     "compute_rebuild_needed",
+    "derive_required_udfs_from_plans",
+    "ensure_plan_udfs_available",
     "execute_with_policy",
+    "extract_lineage",
     "extract_nested_dataset_names",
     "extract_nested_schema_names",
+    "extract_udfs_from_dataframe",
+    "extract_udfs_from_logical_plan",
+    "extract_udfs_from_plan_bundle",
+    "install_rust_udf_platform",
     "nested_base_df",
     "nested_dataset_names",
     "nested_schema_names",
+    "referenced_tables_from_plan",
     "register_registry_catalog",
     "register_registry_delta_tables",
     "register_registry_exports",
@@ -169,8 +206,11 @@ __all__ = [
     "registry_delta_table_paths",
     "registry_output_dir",
     "render_for_execution",
+    "required_columns_by_table",
     "resolve_param_bindings",
     "snapshot_plans",
+    "validate_required_udfs_from_bundle",
+    "validate_required_udfs_from_plan",
     "validate_sql_safety",
 ]
 
@@ -265,7 +305,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     # IO Adapter
     "DataFusionIOAdapter": ("datafusion_engine.io_adapter", "DataFusionIOAdapter"),
     # Write Pipeline
-    "ParquetWritePolicy": ("datafusion_engine.write_pipeline", "ParquetWritePolicy"),
     "WriteFormat": ("datafusion_engine.write_pipeline", "WriteFormat"),
     "WriteMode": ("datafusion_engine.write_pipeline", "WriteMode"),
     "WritePipeline": ("datafusion_engine.write_pipeline", "WritePipeline"),
@@ -283,6 +322,53 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "SchemaContract": ("datafusion_engine.schema_contracts", "SchemaContract"),
     "SchemaViolation": ("datafusion_engine.schema_contracts", "SchemaViolation"),
     "SchemaViolationType": ("datafusion_engine.schema_contracts", "SchemaViolationType"),
+    # Plan Bundle and Lineage (DataFusion-native)
+    "DataFusionPlanBundle": ("datafusion_engine.plan_bundle", "DataFusionPlanBundle"),
+    "build_plan_bundle": ("datafusion_engine.plan_bundle", "build_plan_bundle"),
+    "LineageReport": ("datafusion_engine.lineage_datafusion", "LineageReport"),
+    "ScanLineage": ("datafusion_engine.lineage_datafusion", "ScanLineage"),
+    "extract_lineage": ("datafusion_engine.lineage_datafusion", "extract_lineage"),
+    "referenced_tables_from_plan": (
+        "datafusion_engine.lineage_datafusion",
+        "referenced_tables_from_plan",
+    ),
+    "required_columns_by_table": (
+        "datafusion_engine.lineage_datafusion",
+        "required_columns_by_table",
+    ),
+    # Plan UDF Analysis
+    "derive_required_udfs_from_plans": (
+        "datafusion_engine.plan_udf_analysis",
+        "derive_required_udfs_from_plans",
+    ),
+    "ensure_plan_udfs_available": (
+        "datafusion_engine.plan_udf_analysis",
+        "ensure_plan_udfs_available",
+    ),
+    "extract_udfs_from_dataframe": (
+        "datafusion_engine.plan_udf_analysis",
+        "extract_udfs_from_dataframe",
+    ),
+    "extract_udfs_from_logical_plan": (
+        "datafusion_engine.plan_udf_analysis",
+        "extract_udfs_from_logical_plan",
+    ),
+    "extract_udfs_from_plan_bundle": (
+        "datafusion_engine.plan_udf_analysis",
+        "extract_udfs_from_plan_bundle",
+    ),
+    "validate_required_udfs_from_bundle": (
+        "datafusion_engine.plan_udf_analysis",
+        "validate_required_udfs_from_bundle",
+    ),
+    "validate_required_udfs_from_plan": (
+        "datafusion_engine.plan_udf_analysis",
+        "validate_required_udfs_from_plan",
+    ),
+    # UDF Platform (Planning-Critical Extensions)
+    "RustUdfPlatform": ("datafusion_engine.udf_platform", "RustUdfPlatform"),
+    "RustUdfPlatformOptions": ("datafusion_engine.udf_platform", "RustUdfPlatformOptions"),
+    "install_rust_udf_platform": ("datafusion_engine.udf_platform", "install_rust_udf_platform"),
 }
 
 

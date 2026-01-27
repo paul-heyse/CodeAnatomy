@@ -1,4 +1,19 @@
-"""Schema introspection helpers for DataFusion sessions."""
+"""Schema introspection helpers for DataFusion sessions.
+
+This module provides schema reflection utilities that source metadata from
+DataFusion's catalog and information_schema views. All schema discovery,
+constraint validation, and DDL provenance queries use DataFusion as the
+canonical source of truth.
+
+Key introspection surfaces:
+- information_schema.columns: Column metadata and defaults
+- information_schema.tables: Table inventory
+- information_schema.table_constraints: Constraint metadata
+- information_schema.key_column_usage: Key column definitions
+- information_schema.routines: Function/UDF catalog
+- information_schema.parameters: Function parameter metadata
+- information_schema.df_settings: Session configuration
+"""
 
 from __future__ import annotations
 
@@ -9,7 +24,6 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
-from diskcache import memoize_stampede
 
 from datafusion_engine.introspection import (
     IntrospectionCache,
@@ -21,10 +35,46 @@ from datafusion_engine.sql_options import (
     statement_sql_options_for_profile,
 )
 from datafusion_engine.table_provider_metadata import table_provider_metadata
-from ibis_engine.schema_utils import sqlglot_column_defs
 from serde_msgspec import dumps_msgpack, to_builtins
 from sqlglot_tools.compat import Expression
-from sqlglot_tools.optimizer import SchemaMapping, schema_map_fingerprint_from_mapping
+
+SchemaMapping = dict[str, dict[str, dict[str, dict[str, str]]]]
+
+
+def schema_map_fingerprint_from_mapping(mapping: SchemaMapping) -> str:
+    """Return a stable fingerprint for a schema mapping.
+
+    Parameters
+    ----------
+    mapping : SchemaMapping
+        Nested schema mapping structure.
+
+    Returns
+    -------
+    str
+        SHA-256 fingerprint for the schema map payload.
+    """
+    raw = dumps_msgpack(to_builtins(mapping))
+    return hashlib.sha256(raw).hexdigest()
+
+
+def schema_map_fingerprint(introspector: SchemaIntrospector) -> str:
+    """Return a stable fingerprint for a schema introspector mapping.
+
+    Parameters
+    ----------
+    introspector : SchemaIntrospector
+        Schema introspector providing the schema mapping.
+
+    Returns
+    -------
+    str
+        SHA-256 fingerprint for the schema mapping payload.
+    """
+    mapping = introspector.schema_map()
+    wrapped: SchemaMapping = {"default": {"default": mapping}}
+    return schema_map_fingerprint_from_mapping(wrapped)
+
 
 if TYPE_CHECKING:
     from diskcache import Cache, FanoutCache
@@ -557,20 +607,42 @@ def constraint_rows(
     return _constraint_rows_from_snapshot(snapshot, catalog=catalog, schema=schema)
 
 
-def _ddl_column_defs(schema: pa.Schema, *, partition_columns: set[str]) -> list[str]:
-    sqlglot_defs = sqlglot_column_defs(schema, dialect="datafusion")
-    if len(sqlglot_defs) != len(schema):
-        msg = "SQLGlot column definitions must match schema column count."
-        raise ValueError(msg)
-    column_defs: list[str] = []
-    for schema_field, column_def in zip(schema, sqlglot_defs, strict=True):
-        if schema_field.name in partition_columns:
-            continue
-        column_sql = column_def.sql(dialect="datafusion")
-        if not schema_field.nullable and "NOT NULL" not in column_sql.upper():
-            column_sql = f"{column_sql} NOT NULL"
-        column_defs.append(f"  {column_sql}")
-    return column_defs
+def schema_from_table(ctx: SessionContext, name: str) -> pa.Schema:
+    """Return Arrow schema from DataFusion catalog for a table.
+
+    This is the canonical schema discovery method for DataFusion-registered tables.
+    Schema resolution uses ctx.table(name).schema() to query DataFusion's catalog
+    and TableProvider metadata. All downstream schema validation, contract checking,
+    and DDL generation should source schemas through this function or SchemaIntrospector.
+
+    Parameters
+    ----------
+    ctx : SessionContext
+        DataFusion session context.
+    name : str
+        Table name registered in the catalog.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Arrow schema resolved from DataFusion catalog.
+
+    Raises
+    ------
+    TypeError
+        Raised when the schema cannot be resolved to an Arrow schema.
+    """
+    df = ctx.table(name)
+    schema = df.schema()
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    if isinstance(schema, pa.Schema):
+        return schema
+    msg = "Unable to resolve DataFusion schema to Arrow schema."
+    raise TypeError(msg)
 
 
 def _table_name_from_ddl(ddl: str) -> str:
@@ -605,7 +677,7 @@ def _table_name_from_ddl(ddl: str) -> str:
     raise ValueError(msg)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True)  # noqa: PLR0904
 class SchemaIntrospector:
     """Expose schema reflection across tables, queries, and settings."""
 
@@ -677,10 +749,13 @@ class SchemaIntrospector:
         from datafusion_engine.compile_options import DataFusionCompileOptions
         from sqlglot_tools.optimizer import (
             StrictParseOptions,
-            parse_sql_strict,
+            parse_sql_strict,  # DEPRECATED: Use DataFusion's native SQL parser for validation
             register_datafusion_dialect,
         )
 
+        # DEPRECATED: SQLGlot-based SQL validation for DataFusion queries.
+        # For DataFusion query validation, prefer DataFusion's native SQL parser
+        # with SQLOptions for ingress gating.
         try:
             register_datafusion_dialect()
             expr = parse_sql_strict(
@@ -854,33 +929,25 @@ class SchemaIntrospector:
             return []
         return [dict(row) for row in snapshot.columns.to_pylist()]
 
-    def schema_map(self) -> dict[str, dict[str, str]]:
-        """Return a SQLGlot schema mapping derived from information_schema.
+    def table_schema(self, table_name: str) -> pa.Schema:
+        """Return Arrow schema from DataFusion catalog for a table.
+
+        This method queries DataFusion's catalog via ctx.table(name).schema() to
+        resolve the Arrow schema. All schema validation and contract checks should
+        use this method or schema_from_table() to ensure DataFusion is the source
+        of truth for schema metadata.
+
+        Parameters
+        ----------
+        table_name : str
+            Table name registered in the catalog.
 
         Returns
         -------
-        dict[str, dict[str, str]]
-            Mapping of fully qualified table name to column/type mappings.
+        pyarrow.Schema
+            Arrow schema resolved from DataFusion catalog.
         """
-        rows = self.columns_snapshot()
-        mapping: dict[str, dict[str, str]] = {}
-        for row in rows:
-            catalog = row.get("table_catalog")
-            schema = row.get("table_schema")
-            table = row.get("table_name")
-            column = row.get("column_name")
-            dtype = row.get("data_type")
-            if not isinstance(table, str) or not isinstance(column, str):
-                continue
-            if not table or not column:
-                continue
-            catalog_name = str(catalog) if catalog is not None else "datafusion"
-            schema_name = str(schema) if schema is not None else "public"
-            table_key = f"{catalog_name}.{schema_name}.{table}"
-            mapping.setdefault(table_key, {})[column] = (
-                str(dtype) if dtype is not None else "unknown"
-            )
-        return mapping
+        return schema_from_table(self.ctx, table_name)
 
     def routines_snapshot(self) -> list[dict[str, object]]:
         """Return routine inventory rows from information_schema.
@@ -1062,96 +1129,40 @@ class SchemaIntrospector:
                 constraints.append(str(constraint_name))
         return tuple(constraints)
 
+    def schema_map(self) -> dict[str, dict[str, str]]:
+        """Build schema mapping for SQLGlot optimizer.
 
-def schema_map_for_sqlglot(introspector: SchemaIntrospector) -> SchemaMapping:
-    """Return a SQLGlot-compatible nested schema mapping.
+        Delegates to the underlying IntrospectionSnapshot.schema_map() method
+        to provide a mapping of table names to their columns and types.
 
-    Returns a nested mapping structure compatible with SQLGlot's SchemaMapping
-    type, which has the form: {catalog: {schema: {table: {column: type}}}}.
-
-    Returns
-    -------
-    SchemaMapping
-        Nested schema mapping for SQLGlot qualification and validation.
-    """
-    rows = introspector.columns_snapshot()
-    mapping: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
-    for row in rows:
-        catalog = row.get("table_catalog")
-        schema = row.get("table_schema")
-        table = row.get("table_name")
-        column = row.get("column_name")
-        dtype = row.get("data_type")
-        if not isinstance(table, str) or not isinstance(column, str):
-            continue
-        if not table or not column:
-            continue
-        catalog_name = str(catalog) if catalog is not None else "datafusion"
-        schema_name = str(schema) if schema is not None else "public"
-        dtype_str = str(dtype) if dtype is not None else "unknown"
-        mapping.setdefault(catalog_name, {}).setdefault(schema_name, {}).setdefault(table, {})[
-            column
-        ] = dtype_str
-    return mapping
+        Returns
+        -------
+        dict[str, dict[str, str]]
+            Mapping of table_name -> {column_name: data_type}.
+        """
+        snapshot = self.snapshot
+        if snapshot is None:
+            return {}
+        return snapshot.schema_map()
 
 
-def schema_map_fingerprint(introspector: SchemaIntrospector) -> str:
-    """Return a stable fingerprint for an introspector's schema map.
+def schema_map_for_sqlglot(introspector: SchemaIntrospector) -> dict[str, dict[str, str]]:
+    """Return schema mapping for SQLGlot optimizer from an introspector.
+
+    This helper extracts the schema map from a SchemaIntrospector instance
+    in a format suitable for SQLGlot's MappingSchema.
+
+    Parameters
+    ----------
+    introspector : SchemaIntrospector
+        Schema introspector to extract mapping from.
 
     Returns
     -------
-    str
-        SHA-256 fingerprint for the schema map payload.
+    dict[str, dict[str, str]]
+        Mapping of table_name -> {column_name: data_type}.
     """
-    return schema_map_fingerprint_from_mapping(introspector.schema_map())
-
-
-def schema_map_snapshot(
-    ctx: SessionContext,
-    *,
-    sql_options: SQLOptions | None,
-    cache_options: SchemaMapCacheOptions | None = None,
-) -> tuple[SchemaMapping | None, str | None]:
-    """Return a SQLGlot schema mapping and fingerprint snapshot.
-
-    Returns
-    -------
-    tuple[SchemaMapping | None, str | None]
-        Schema mapping with its fingerprint, or ``(None, None)`` on failure.
-    """
-
-    def _compute() -> tuple[SchemaMapping | None, str | None]:
-        try:
-            introspector = SchemaIntrospector(ctx, sql_options=sql_options)
-            mapping = schema_map_for_sqlglot(introspector)
-            return mapping, schema_map_fingerprint_from_mapping(mapping)
-        except (RuntimeError, TypeError, ValueError):
-            return None, None
-
-    if cache_options is None:
-        return _compute()
-
-    @memoize_stampede(
-        cache_options.cache,
-        expire=cache_options.ttl,
-        tag=cache_options.tag,
-        name="schema_map_snapshot",
-    )
-    def _cached(key: str) -> tuple[SchemaMapping | None, str | None]:
-        _ = key
-        return _compute()
-
-    return _cached(cache_options.key)
-
-
-@dataclass(frozen=True)
-class SchemaMapCacheOptions:
-    """Cache options for schema map snapshots."""
-
-    cache: Cache | FanoutCache
-    key: str
-    ttl: float | None = None
-    tag: str | None = None
+    return introspector.schema_map()
 
 
 def find_struct_field_keys(
@@ -1247,10 +1258,11 @@ def catalogs_snapshot(introspector: SchemaIntrospector) -> list[dict[str, object
 
 __all__ = [
     "SchemaIntrospector",
-    "SchemaMapCacheOptions",
     "catalogs_snapshot",
     "find_struct_field_keys",
     "parameters_snapshot_table",
     "routines_snapshot_table",
+    "schema_from_table",
+    "schema_map_for_sqlglot",
     "tables_snapshot_table",
 ]

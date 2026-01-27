@@ -15,9 +15,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, cast
 import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
-from ibis.expr.types import Scalar
 from ibis.expr.types import Table as IbisTable
-from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.interop import (
     RecordBatchReaderLike,
@@ -153,16 +151,6 @@ class IbisNamedDatasetWriteOptions:
     delta_schema_policy: DeltaSchemaPolicy | None = None
     storage_options: StorageOptions | None = None
     delta_log_storage_options: StorageOptions | None = None
-
-
-@dataclass(frozen=True)
-class IbisParquetWriteOptions:
-    """Options for writing Ibis expressions to parquet directories."""
-
-    execution: IbisExecutionContext
-    overwrite: bool = True
-    partition_by: Sequence[str] | None = None
-    dataset_options: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -637,6 +625,30 @@ def _write_delta_ibis_from_input(
     path: str,
     options: IbisDeltaWriteOptions,
 ) -> int | None:
+    """Write Delta via Ibis backend to_delta method.
+
+    Parameters
+    ----------
+    value
+        Input data to write (Ibis plan, table, or Arrow-compatible).
+    backend
+        Ibis backend for write execution.
+    execution
+        Execution context with runtime profile.
+    path
+        Delta table destination path.
+    options
+        Delta write options.
+
+    Returns
+    -------
+    int | None
+        Delta table version after write, if available.
+
+    .. deprecated:: Scope 15
+        Internal helper for Ibis-based Delta writes. Will be replaced by
+        DataFusion-native Delta writer when feature-complete.
+    """
     write_source = value.materialize_table() if isinstance(value, PlanProduct) else value
     write_plan = source_to_ibis(
         cast("IbisPlan | IbisTable | TableLike | RecordBatchReaderLike", write_source),
@@ -767,6 +779,12 @@ def write_ibis_dataset_delta(
 ) -> DeltaWriteResult:
     """Write an Ibis plan/table or Arrow input as a Delta table.
 
+    .. deprecated:: Scope 15
+        This function routes Delta writes through Ibis backends. Prefer using
+        DataFusion-native write surfaces via `WritePipeline` when possible.
+        This bridge will be removed once DataFusion's native Delta writer
+        supports all required features (partitioning, schema evolution).
+
     Returns
     -------
     DeltaWriteResult
@@ -819,6 +837,12 @@ def write_ibis_named_datasets_delta(
     options: IbisNamedDatasetWriteOptions | None = None,
 ) -> dict[str, DeltaWriteResult]:
     """Write a mapping of Ibis/Arrow datasets to Delta tables.
+
+    .. deprecated:: Scope 15
+        This function routes Delta writes through Ibis backends. Prefer using
+        DataFusion-native write surfaces via `WritePipeline` when possible.
+        This bridge will be removed once DataFusion's native Delta writer
+        supports all required features (partitioning, schema evolution).
 
     Returns
     -------
@@ -1263,7 +1287,7 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
         write_request = WriteRequest(
             source=source.source_expr,
             destination=request.table_name,
-            format=WriteFormat.PARQUET,
+            format=WriteFormat.DELTA,
             mode=WriteMode.OVERWRITE if request.mode == "overwrite" else WriteMode.APPEND,
             table_name=request.table_name,
             constraints=request.constraints,
@@ -1277,6 +1301,7 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
                 request.runtime_profile,
                 operation_id="delta_insert_write",
             ),
+            runtime_profile=request.runtime_profile,
         )
         pipeline.write(write_request, prefer_streaming=False)
         result = DeltaInsertResult(
@@ -1303,108 +1328,6 @@ def _try_delta_insert(request: DeltaInsertRequest) -> DeltaInsertResult | None:
         rows_affected=result.rows_affected,
     )
     return result
-
-
-def _prepare_parquet_dir(path: Path, *, overwrite: bool) -> None:
-    if overwrite and path.exists():
-        shutil.rmtree(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-
-def _coerce_parquet_table(
-    value: IbisWriteInput,
-    *,
-    options: IbisParquetWriteOptions,
-    name: str | None,
-) -> IbisTable:
-    backend = options.execution.ibis_backend
-    if backend is None:
-        msg = "Parquet exports require an Ibis backend."
-        raise ValueError(msg)
-    if isinstance(value, PlanProduct):
-        value = value.materialize_table()
-    if isinstance(value, IbisPlan):
-        return value.expr
-    if isinstance(value, IbisTable):
-        return value
-    plan = source_to_ibis(
-        value,
-        options=SourceToIbisOptions(
-            backend=backend,
-            name=name,
-            runtime_profile=options.execution.ctx.runtime.datafusion,
-        ),
-    )
-    return plan.expr
-
-
-def write_ibis_dataset_parquet(
-    data: IbisWriteInput,
-    base_dir: PathLike,
-    *,
-    options: IbisParquetWriteOptions,
-) -> str:
-    """Write an Ibis dataset as a parquet directory.
-
-    Returns
-    -------
-    str
-        Path to the parquet dataset directory.
-
-    Raises
-    ------
-    ValueError
-        If the runtime profile or Ibis backend is unavailable.
-    """
-    runtime_profile = options.execution.ctx.runtime.datafusion
-    backend = options.execution.ibis_backend
-    if runtime_profile is None or backend is None:
-        msg = "Parquet exports require a runtime profile and Ibis backend."
-        raise ValueError(msg)
-    df_ctx = runtime_profile.session_context()
-    source = _write_source_for_datafusion(
-        name="parquet",
-        value=data,
-        context=_WriteSourceContext(
-            ctx=df_ctx,
-            backend=cast("IbisCompilerBackend", backend),
-            runtime_profile=runtime_profile,
-            batch_size=options.execution.batch_size,
-        ),
-    )
-    path = Path(base_dir)
-    _prepare_parquet_dir(path, overwrite=options.overwrite)
-    format_options: dict[str, object] = (
-        dict(options.dataset_options) if options.dataset_options is not None else {}
-    )
-    format_options.pop("partition_by", None)
-    partition_by = _copy_partition_by(
-        options.partition_by,
-        schema_names=_schema_names_for_input(data),
-    )
-    request = WriteRequest(
-        source=source.source_expr,
-        destination=str(path),
-        format=WriteFormat.PARQUET,
-        mode=WriteMode.OVERWRITE if options.overwrite else WriteMode.ERROR,
-        partition_by=partition_by,
-        format_options=format_options or None,
-    )
-    profile = _write_pipeline_profile()
-    pipeline = WritePipeline(
-        df_ctx,
-        profile,
-        sql_options=statement_sql_options_for_profile(runtime_profile),
-        recorder=recorder_for_profile(runtime_profile, operation_id="ibis_parquet_write"),
-    )
-    try:
-        pipeline.write(request, prefer_streaming=True)
-    finally:
-        if source.temp_name is not None:
-            adapter = DataFusionIOAdapter(ctx=df_ctx, profile=runtime_profile)
-            with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-                adapter.deregister_table(source.temp_name)
-    return str(path)
 
 
 def write_ibis_dataset_copy(
@@ -1459,6 +1382,7 @@ def write_ibis_named_datasets_copy(
         profile,
         sql_options=statement_sql_options_for_profile(runtime_profile),
         recorder=recorder_for_profile(runtime_profile, operation_id="ibis_copy_write"),
+        runtime_profile=runtime_profile,
     )
     write_format = _write_format(options.file_format)
     context = _NamedCopyContext(
@@ -1574,7 +1498,7 @@ def _write_pipeline_profile() -> SQLPolicyProfile:
 def _write_format(value: str) -> WriteFormat:
     normalized = value.strip().lower()
     mapping = {
-        "parquet": WriteFormat.PARQUET,
+        "delta": WriteFormat.DELTA,
         "csv": WriteFormat.CSV,
         "json": WriteFormat.JSON,
         "arrow": WriteFormat.ARROW,
@@ -1616,39 +1540,6 @@ def _copy_partition_by(
     return tuple(name for name in partition_by if name in available)
 
 
-def _parquet_params(
-    params: Mapping[IbisValue, object] | None,
-) -> Mapping[Scalar, object] | None:
-    if params is None:
-        return None
-    resolved = {key: value for key, value in params.items() if isinstance(key, Scalar)}
-    return resolved or None
-
-
-def write_ibis_named_datasets_parquet(
-    datasets: Mapping[str, IbisWriteInput],
-    base_dir: PathLike,
-    *,
-    options: IbisParquetWriteOptions,
-) -> dict[str, str]:
-    """Write a mapping of datasets to parquet directories.
-
-    Returns
-    -------
-    dict[str, str]
-        Mapping of dataset names to parquet directory paths.
-    """
-    results: dict[str, str] = {}
-    for name, value in datasets.items():
-        path = Path(base_dir) / name
-        results[name] = write_ibis_dataset_parquet(
-            value,
-            path,
-            options=options,
-        )
-    return results
-
-
 __all__ = [
     "DeltaWriteResult",
     "IbisCopyWriteOptions",
@@ -1657,7 +1548,6 @@ __all__ = [
     "IbisDeltaWriteOptions",
     "IbisMaterializeOptions",
     "IbisNamedDatasetWriteOptions",
-    "IbisParquetWriteOptions",
     "IbisWriteInput",
     "apply_ibis_delta_write_policies",
     "ibis_plan_to_reader",
@@ -1666,8 +1556,6 @@ __all__ = [
     "materialize_table",
     "write_ibis_dataset_copy",
     "write_ibis_dataset_delta",
-    "write_ibis_dataset_parquet",
     "write_ibis_named_datasets_copy",
     "write_ibis_named_datasets_delta",
-    "write_ibis_named_datasets_parquet",
 ]

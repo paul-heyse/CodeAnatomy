@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import pyarrow as pa
 from hamilton import driver
@@ -41,7 +41,10 @@ if TYPE_CHECKING:
 
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.view_graph_registry import ViewNode
+    from hamilton_pipeline.cache_lineage import CacheLineageHook
+    from hamilton_pipeline.semantic_registry import SemanticRegistryHook
     from relspec.execution_plan import ExecutionPlan
+    from relspec.incremental import IncrementalDiff
 from storage.ipc import ipc_hash
 
 try:
@@ -61,25 +64,6 @@ def default_modules() -> list[ModuleType]:
     return hamilton_modules.load_all_modules()
 
 
-_LEGACY_MODULE_NAMES: frozenset[str] = frozenset(
-    {
-        "hamilton_pipeline.modules.incremental_plan",
-        "hamilton_pipeline.modules.task_graph",
-    }
-)
-
-
-def _filter_legacy_modules(modules: Sequence[ModuleType]) -> list[ModuleType]:
-    """Drop legacy schedule modules superseded by plan injection.
-
-    Returns
-    -------
-    list[ModuleType]
-        Filtered modules without legacy scheduling layers.
-    """
-    return [module for module in modules if module.__name__ not in _LEGACY_MODULE_NAMES]
-
-
 def config_fingerprint(config: Mapping[str, JsonValue]) -> str:
     """Compute a stable config fingerprint for driver caching.
 
@@ -93,6 +77,27 @@ def config_fingerprint(config: Mapping[str, JsonValue]) -> str:
         SHA-256 fingerprint for the config.
     """
     payload = {"version": 1, "config": dict(config)}
+    table = pa.Table.from_pylist([payload])
+    return ipc_hash(table)
+
+
+def driver_cache_key(
+    config: Mapping[str, JsonValue],
+    *,
+    plan_signature: str,
+) -> str:
+    """Compute a plan-aware driver cache key.
+
+    Returns
+    -------
+    str
+        SHA-256 fingerprint for the config and plan signature.
+    """
+    payload = {
+        "version": 2,
+        "plan_signature": plan_signature,
+        "config": dict(config),
+    }
     table = pa.Table.from_pylist([payload])
     return ipc_hash(table)
 
@@ -209,6 +214,100 @@ def _compile_plan(view_ctx: ViewGraphContext, config: Mapping[str, JsonValue]) -
     return compile_execution_plan(session=view_ctx.session, request=request)
 
 
+def _incremental_enabled(config: Mapping[str, JsonValue]) -> bool:
+    if bool(config.get("incremental_enabled")):
+        return True
+    mode = os.environ.get("CODEANATOMY_PIPELINE_MODE", "").strip().lower()
+    return mode in {"incremental", "streaming"}
+
+
+def _resolve_incremental_state_dir(config: Mapping[str, JsonValue]) -> Path | None:
+    if not _incremental_enabled(config):
+        return None
+    repo_root_value = config.get("repo_root")
+    if not isinstance(repo_root_value, str) or not repo_root_value.strip():
+        return None
+    repo_root = Path(repo_root_value).expanduser()
+    state_dir_value = config.get("incremental_state_dir")
+    state_dir_env = os.environ.get("CODEANATOMY_STATE_DIR")
+    state_dir = state_dir_value if isinstance(state_dir_value, str) else state_dir_env
+    if isinstance(state_dir, str) and state_dir.strip():
+        return repo_root / Path(state_dir)
+    return repo_root / "build" / "state"
+
+
+def _precompute_incremental_diff(
+    *,
+    view_ctx: ViewGraphContext,
+    plan: ExecutionPlan,
+    config: Mapping[str, JsonValue],
+) -> tuple[IncrementalDiff | None, str | None]:
+    state_dir = _resolve_incremental_state_dir(config)
+    if state_dir is None:
+        return None, None
+    from incremental.delta_context import DeltaAccessContext
+    from incremental.plan_fingerprints import read_plan_snapshots
+    from incremental.runtime import IncrementalRuntime
+    from incremental.state_store import StateStore
+    from relspec.incremental import diff_plan_snapshots
+
+    try:
+        runtime = IncrementalRuntime.build(ctx=view_ctx.ctx)
+    except ValueError:
+        return None, str(state_dir)
+    context = DeltaAccessContext(runtime=runtime)
+    state_store = StateStore(root=state_dir)
+    previous = read_plan_snapshots(state_store, context=context)
+    diff = diff_plan_snapshots(previous, plan.plan_snapshots)
+    return diff, str(state_dir)
+
+
+def _active_tasks_from_incremental_diff(
+    *,
+    plan: ExecutionPlan,
+    diff: IncrementalDiff,
+) -> set[str]:
+    from relspec.execution_plan import downstream_task_closure, upstream_task_closure
+
+    active = set(plan.active_tasks)
+    rebuild = diff.tasks_requiring_rebuild()
+    rebuild_active = set(rebuild) & active
+    if not rebuild_active:
+        return active
+    impacted = downstream_task_closure(plan.task_graph, rebuild_active) & active
+    if not impacted:
+        return active
+    impacted_with_deps = upstream_task_closure(plan.task_graph, impacted) & active
+    if not plan.requested_task_names:
+        return impacted_with_deps
+    requested_anchor = upstream_task_closure(plan.task_graph, plan.requested_task_names) & active
+    return impacted_with_deps | requested_anchor
+
+
+def _plan_with_incremental_pruning(
+    *,
+    view_ctx: ViewGraphContext,
+    plan: ExecutionPlan,
+    config: Mapping[str, JsonValue],
+) -> ExecutionPlan:
+    diff, state_dir = _precompute_incremental_diff(view_ctx=view_ctx, plan=plan, config=config)
+    if diff is None and state_dir is None:
+        return plan
+    plan_with_diff = replace(
+        plan,
+        incremental_diff=diff,
+        incremental_state_dir=state_dir,
+    )
+    if diff is None:
+        return plan_with_diff
+    active_from_diff = _active_tasks_from_incremental_diff(plan=plan_with_diff, diff=diff)
+    if active_from_diff == set(plan_with_diff.active_tasks):
+        return plan_with_diff
+    from relspec.execution_plan import prune_execution_plan
+
+    return prune_execution_plan(plan_with_diff, active_tasks=active_from_diff)
+
+
 def _maybe_build_tracker_adapter(
     config: Mapping[str, JsonValue],
 ) -> lifecycle_base.LifecycleAdapter | None:
@@ -298,6 +397,7 @@ def _apply_dynamic_execution(
     *,
     config: Mapping[str, JsonValue],
     plan: ExecutionPlan,
+    diagnostics: DiagnosticsCollector,
 ) -> driver.Builder:
     if not bool(config.get("enable_dynamic_execution", False)):
         return builder
@@ -305,14 +405,33 @@ def _apply_dynamic_execution(
     max_tasks = 4
     if isinstance(max_tasks_value, int) and not isinstance(max_tasks_value, bool):
         max_tasks = max_tasks_value
-    from hamilton_pipeline.scheduling_hooks import plan_grouping_strategy
+    from hamilton_pipeline.scheduling_hooks import (
+        plan_grouping_strategy,
+        plan_task_grouping_hook,
+        plan_task_submission_hook,
+    )
 
-    return (
+    enable_submission_hook = bool(config.get("enable_plan_task_submission_hook", True))
+    enable_grouping_hook = bool(config.get("enable_plan_task_grouping_hook", True))
+    enforce_submission = bool(config.get("enforce_plan_task_submission", True))
+
+    dynamic_builder = (
         builder.enable_dynamic_execution(allow_experimental_mode=True)
         .with_local_executor(executors.SynchronousLocalTaskExecutor())
         .with_remote_executor(executors.MultiProcessingExecutor(max_tasks=max_tasks))
         .with_grouping_strategy(plan_grouping_strategy(plan))
     )
+    if enable_submission_hook:
+        dynamic_builder = dynamic_builder.with_adapters(
+            plan_task_submission_hook(
+                plan,
+                diagnostics,
+                enforce_active=enforce_submission,
+            )
+        )
+    if enable_grouping_hook:
+        dynamic_builder = dynamic_builder.with_adapters(plan_task_grouping_hook(plan, diagnostics))
+    return dynamic_builder
 
 
 @lru_cache(maxsize=1)
@@ -380,6 +499,70 @@ def _apply_materializers(
     return builder.with_materializers(*materializers)
 
 
+@dataclass(frozen=True)
+class CachePolicyProfile:
+    """Explicit cache policy defaults for correctness boundaries."""
+
+    name: str
+    default_behavior: CacheBehavior
+    default_loader_behavior: CacheBehavior
+    default_saver_behavior: CacheBehavior
+    log_to_file: bool
+
+
+CacheBehavior = Literal["default", "disable", "ignore", "recompute"]
+
+
+def _string_override(config: Mapping[str, JsonValue], key: str) -> str | None:
+    value = config.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _cache_behavior_override(
+    config: Mapping[str, JsonValue],
+    key: str,
+) -> CacheBehavior | None:
+    value = _string_override(config, key)
+    if value is None:
+        return None
+    if value in {"default", "disable", "ignore", "recompute"}:
+        return cast("CacheBehavior", value)
+    return None
+
+
+def _cache_policy_profile(config: Mapping[str, JsonValue]) -> CachePolicyProfile:
+    profile_value = config.get("cache_policy_profile")
+    profile_name = profile_value.strip() if isinstance(profile_value, str) else ""
+    cache_opt_in = bool(config.get("cache_opt_in", True))
+    default_behavior: CacheBehavior = "disable" if cache_opt_in else "default"
+    default_loader_behavior: CacheBehavior = "recompute"
+    default_saver_behavior: CacheBehavior = "disable"
+    if profile_name == "aggressive":
+        default_loader_behavior = "default"
+        default_saver_behavior = "default"
+    default_behavior = (
+        _cache_behavior_override(config, "cache_default_behavior") or default_behavior
+    )
+    default_loader_behavior = (
+        _cache_behavior_override(config, "cache_default_loader_behavior") or default_loader_behavior
+    )
+    default_saver_behavior = (
+        _cache_behavior_override(config, "cache_default_saver_behavior") or default_saver_behavior
+    )
+    log_to_file_value = config.get("cache_log_to_file")
+    log_to_file = log_to_file_value if isinstance(log_to_file_value, bool) else True
+    resolved_name = profile_name or "strict_causal"
+    return CachePolicyProfile(
+        name=resolved_name,
+        default_behavior=default_behavior,
+        default_loader_behavior=default_loader_behavior,
+        default_saver_behavior=default_saver_behavior,
+        log_to_file=log_to_file,
+    )
+
+
 def _apply_cache(
     builder: driver.Builder,
     *,
@@ -397,22 +580,15 @@ def _apply_cache(
     results_path = base_path / "results"
     results_path.mkdir(parents=True, exist_ok=True)
     result_store = FileResultStore(path=str(results_path))
-    cache_opt_in = bool(config.get("cache_opt_in", True))
-    if cache_opt_in:
-        # cache only nodes annotated for caching
-        return builder.with_cache(
-            path=str(base_path),
-            metadata_store=metadata_store,
-            result_store=result_store,
-            default_behavior="disable",
-            log_to_file=True,
-        )
-    # cache everything (aggressive)
+    profile = _cache_policy_profile(config)
     return builder.with_cache(
         path=str(base_path),
         metadata_store=metadata_store,
         result_store=result_store,
-        log_to_file=True,
+        default_behavior=profile.default_behavior,
+        default_loader_behavior=profile.default_loader_behavior,
+        default_saver_behavior=profile.default_saver_behavior,
+        log_to_file=profile.log_to_file,
     )
 
 
@@ -432,7 +608,9 @@ def _apply_adapters(
     if bool(config.get("enable_hamilton_node_diagnostics", True)):
         builder = builder.with_adapters(DiagnosticsNodeHook(diagnostics))
     if bool(config.get("enable_plan_diagnostics", True)):
-        builder = builder.with_adapters(PlanDiagnosticsHook(plan=plan, profile=profile))
+        builder = builder.with_adapters(
+            PlanDiagnosticsHook(plan=plan, profile=profile, collector=diagnostics)
+        )
     return builder
 
 
@@ -440,6 +618,8 @@ def build_driver(
     *,
     config: Mapping[str, JsonValue],
     modules: Sequence[ModuleType] | None = None,
+    view_ctx: ViewGraphContext | None = None,
+    plan: ExecutionPlan | None = None,
 ) -> driver.Driver:
     """Build a Hamilton Driver for the pipeline.
 
@@ -455,13 +635,20 @@ def build_driver(
         Built Hamilton driver instance.
     """
     modules = list(modules) if modules is not None else default_modules()
-    modules = _filter_legacy_modules(modules)
-    view_ctx = _view_graph_context(config)
-    plan = _compile_plan(view_ctx, config)
-    modules.append(build_execution_plan_module(plan))
-    modules.append(build_task_execution_module(plan=plan, options=TaskExecutionModuleOptions()))
+    resolved_view_ctx = view_ctx or _view_graph_context(config)
+    resolved_plan = plan or _compile_plan(resolved_view_ctx, config)
+    if plan is None:
+        resolved_plan = _plan_with_incremental_pruning(
+            view_ctx=resolved_view_ctx,
+            plan=resolved_plan,
+            config=config,
+        )
+    modules.append(build_execution_plan_module(resolved_plan))
+    modules.append(
+        build_task_execution_module(plan=resolved_plan, options=TaskExecutionModuleOptions())
+    )
 
-    config_payload = _with_graph_tags(config, graph_signature=plan.plan_signature)
+    config_payload = _with_graph_tags(config, graph_signature=resolved_plan.plan_signature)
     config_payload.setdefault("runtime_profile_name_override", _runtime_profile_name(config))
     determinism_override = _determinism_override(config)
     if determinism_override is not None:
@@ -471,22 +658,52 @@ def build_driver(
     set_hamilton_diagnostics_collector(diagnostics)
 
     builder = (
-        driver.Builder()
-        .allow_module_overrides()
-        .with_modules(*modules)
-        .with_config(config_payload)
+        driver.Builder().allow_module_overrides().with_modules(*modules).with_config(config_payload)
     )
-    builder = _apply_dynamic_execution(builder, config=config_payload, plan=plan)
+    builder = _apply_dynamic_execution(
+        builder,
+        config=config_payload,
+        plan=resolved_plan,
+        diagnostics=diagnostics,
+    )
     builder = _apply_cache(builder, config=config_payload)
     builder = _apply_materializers(builder, config=config_payload)
     builder = _apply_adapters(
         builder,
         config=config_payload,
         diagnostics=diagnostics,
-        plan=plan,
-        profile=view_ctx.profile,
+        plan=resolved_plan,
+        profile=resolved_view_ctx.profile,
     )
-    return builder.build()
+    semantic_registry_hook: SemanticRegistryHook | None = None
+    if bool(config_payload.get("enable_semantic_registry", True)):
+        from hamilton_pipeline.semantic_registry import (
+            SemanticRegistryHook as _SemanticRegistryHook,
+        )
+
+        semantic_registry_hook = _SemanticRegistryHook(
+            profile=resolved_view_ctx.profile,
+            plan_signature=resolved_plan.plan_signature,
+            config=config_payload,
+        )
+        builder = builder.with_adapters(semantic_registry_hook)
+    cache_lineage_hook: CacheLineageHook | None = None
+    cache_path = config_payload.get("cache_path")
+    if isinstance(cache_path, str) and cache_path:
+        from hamilton_pipeline.cache_lineage import CacheLineageHook as _CacheLineageHook
+
+        cache_lineage_hook = _CacheLineageHook(
+            profile=resolved_view_ctx.profile,
+            config=config_payload,
+            plan_signature=resolved_plan.plan_signature,
+        )
+        builder = builder.with_adapters(cache_lineage_hook)
+    driver_instance = builder.build()
+    if semantic_registry_hook is not None:
+        semantic_registry_hook.bind_driver(driver_instance)
+    if cache_lineage_hook is not None:
+        cache_lineage_hook.bind_driver(driver_instance)
+    return driver_instance
 
 
 def _relation_output_schema(session: SessionContext) -> SchemaLike:
@@ -499,7 +716,7 @@ def _relation_output_schema(session: SessionContext) -> SchemaLike:
 @dataclass
 class DriverFactory:
     """
-    Caches built Hamilton Drivers by config fingerprint.
+    Caches built Hamilton Drivers by plan-aware fingerprint.
 
     Use this if you're embedding the pipeline into a service where config changes
     are relatively infrequent but executions are frequent.
@@ -516,9 +733,17 @@ class DriverFactory:
         driver.Driver
             Cached or newly built Hamilton driver.
         """
-        fp = config_fingerprint(config)
-        if fp in self._cache:
-            return self._cache[fp]
-        dr = build_driver(config=config, modules=self.modules)
-        self._cache[fp] = dr
-        return dr
+        view_ctx = _view_graph_context(config)
+        plan = _compile_plan(view_ctx, config)
+        plan = _plan_with_incremental_pruning(view_ctx=view_ctx, plan=plan, config=config)
+        key = driver_cache_key(config, plan_signature=plan.plan_signature)
+        cached = self._cache.get(key)
+        if cached is None:
+            cached = build_driver(
+                config=config,
+                modules=self.modules,
+                view_ctx=view_ctx,
+                plan=plan,
+            )
+            self._cache[key] = cached
+        return cached

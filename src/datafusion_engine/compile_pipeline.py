@@ -1,5 +1,10 @@
 """Unified compilation pipeline for Ibis expressions and SQLGlot ASTs.
 
+DEPRECATED: Use DataFusionPlanBundle from datafusion_engine.plan_bundle instead.
+
+This module is retained for backward compatibility only. Internal execution
+should use build_plan_bundle() directly.
+
 This module provides a centralized compilation orchestration layer that
 routes all expression types through a single deterministic pipeline:
 Ibis → SQLGlot AST → Canonicalization → Execution.
@@ -34,6 +39,8 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class CompiledExpression:
     """Triple checkpoint: Ibis IR + SQLGlot AST + rendered SQL.
+
+    DEPRECATED: Use DataFusionPlanBundle instead for DataFusion-native planning.
 
     This is the canonical compilation result that flows through
     the execution pipeline.

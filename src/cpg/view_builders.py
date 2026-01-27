@@ -1,4 +1,8 @@
-"""View builders for CPG node/edge/property outputs."""
+"""View builders for CPG node/edge/property outputs.
+
+DEPRECATED: This module provides Ibis-based CPG builders which are being phased out.
+New code should use the DataFusion-native builders in view_builders_df.py instead.
+"""
 
 from __future__ import annotations
 

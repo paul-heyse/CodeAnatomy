@@ -1,4 +1,15 @@
-"""TableProvider metadata tracking for DDL provenance and constraints."""
+"""TableProvider metadata tracking for DDL provenance and constraints.
+
+This module tracks metadata associated with DataFusion TableProvider registrations.
+DDL statements, constraints, schema fingerprints, and storage locations are recorded
+at registration time and retrieved for schema validation and introspection.
+
+All metadata flows through DataFusion registration surfaces:
+- register_listing_table(): Multi-file datasets with partition columns
+- register_object_store(): Object store routing for remote storage
+- CREATE EXTERNAL TABLE: DDL-based registration with options
+- register_table(): TableProvider registration with custom metadata
+"""
 
 from __future__ import annotations
 
@@ -27,7 +38,7 @@ class TableProviderMetadata:
     storage_location : str | None
         Storage location URI for external tables.
     file_format : str | None
-        File format (e.g., 'parquet', 'delta', 'csv') for external tables.
+        File format (e.g., 'delta', 'csv') for external tables.
     partition_columns : tuple[str, ...]
         Partition column names for partitioned tables.
     metadata : dict[str, str]
@@ -40,6 +51,11 @@ class TableProviderMetadata:
         Whether the provider supports INSERT operations.
     supports_cdf : bool | None
         Whether the provider exposes change data feed support.
+    schema_adapter_enabled : bool
+        Whether schema evolution adapters are attached at scan-time.
+        When True, schema drift resolution happens at the TableProvider
+        boundary via DataFusion-native physical expression adapters,
+        eliminating the need for downstream cast/projection transforms.
     """
 
     table_name: str
@@ -55,6 +71,7 @@ class TableProviderMetadata:
     ddl_fingerprint: str | None = None
     supports_insert: bool | None = None
     supports_cdf: bool | None = None
+    schema_adapter_enabled: bool = False
 
     def with_ddl(self, ddl: str) -> TableProviderMetadata:
         """Return a copy with updated DDL.
@@ -83,6 +100,7 @@ class TableProviderMetadata:
             ddl_fingerprint=self.ddl_fingerprint,
             supports_insert=self.supports_insert,
             supports_cdf=self.supports_cdf,
+            schema_adapter_enabled=self.schema_adapter_enabled,
         )
 
     def with_constraints(self, constraints: tuple[str, ...]) -> TableProviderMetadata:
@@ -112,6 +130,7 @@ class TableProviderMetadata:
             ddl_fingerprint=self.ddl_fingerprint,
             supports_insert=self.supports_insert,
             supports_cdf=self.supports_cdf,
+            schema_adapter_enabled=self.schema_adapter_enabled,
         )
 
     def with_schema_fingerprint(self, fingerprint: str) -> TableProviderMetadata:
@@ -141,6 +160,37 @@ class TableProviderMetadata:
             ddl_fingerprint=self.ddl_fingerprint,
             supports_insert=self.supports_insert,
             supports_cdf=self.supports_cdf,
+            schema_adapter_enabled=self.schema_adapter_enabled,
+        )
+
+    def with_schema_adapter(self, *, enabled: bool = True) -> TableProviderMetadata:
+        """Return a copy with schema adapter flag updated.
+
+        Parameters
+        ----------
+        enabled : bool
+            Whether schema evolution adapters are enabled at scan-time.
+
+        Returns
+        -------
+        TableProviderMetadata
+            New metadata instance with updated schema adapter flag.
+        """
+        return TableProviderMetadata(
+            table_name=self.table_name,
+            ddl=self.ddl,
+            constraints=self.constraints,
+            default_values=self.default_values,
+            schema_fingerprint=self.schema_fingerprint,
+            storage_location=self.storage_location,
+            file_format=self.file_format,
+            partition_columns=self.partition_columns,
+            metadata=self.metadata,
+            unbounded=self.unbounded,
+            ddl_fingerprint=self.ddl_fingerprint,
+            supports_insert=self.supports_insert,
+            supports_cdf=self.supports_cdf,
+            schema_adapter_enabled=enabled,
         )
 
 

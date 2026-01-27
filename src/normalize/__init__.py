@@ -16,6 +16,16 @@ if TYPE_CHECKING:
     )
     from normalize.dataset_builders import field, field_name, fields
     from normalize.dataset_specs import dataset_contract_schema
+    from normalize.df_view_builders import (
+        VIEW_BUILDERS,
+        cfg_blocks_df_builder,
+        cfg_edges_df_builder,
+        def_use_events_df_builder,
+        diagnostics_df_builder,
+        reaching_defs_df_builder,
+        type_exprs_df_builder,
+        type_nodes_df_builder,
+    )
     from normalize.diagnostic_types import (
         DIAG_DETAIL_STRUCT,
         DIAG_DETAILS_TYPE,
@@ -62,6 +72,14 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "REACH_EDGE_ID_SPEC": ("datafusion_engine.normalize_ids", "REACH_EDGE_ID_SPEC"),
     "TYPE_EXPR_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_EXPR_ID_SPEC"),
     "TYPE_ID_SPEC": ("datafusion_engine.normalize_ids", "TYPE_ID_SPEC"),
+    "VIEW_BUILDERS": ("normalize.df_view_builders", "VIEW_BUILDERS"),
+    "cfg_blocks_df_builder": ("normalize.df_view_builders", "cfg_blocks_df_builder"),
+    "cfg_edges_df_builder": ("normalize.df_view_builders", "cfg_edges_df_builder"),
+    "def_use_events_df_builder": ("normalize.df_view_builders", "def_use_events_df_builder"),
+    "diagnostics_df_builder": ("normalize.df_view_builders", "diagnostics_df_builder"),
+    "reaching_defs_df_builder": ("normalize.df_view_builders", "reaching_defs_df_builder"),
+    "type_exprs_df_builder": ("normalize.df_view_builders", "type_exprs_df_builder"),
+    "type_nodes_df_builder": ("normalize.df_view_builders", "type_nodes_df_builder"),
     "DiagnosticsSources": ("normalize.ibis_api", "DiagnosticsSources"),
     "ensure_execution_context": ("normalize.ibis_api", "ensure_execution_context"),
     "add_ast_byte_spans": ("normalize.ibis_api", "add_ast_byte_spans"),
@@ -126,6 +144,7 @@ __all__ = [
     "REACH_EDGE_ID_SPEC",
     "TYPE_EXPR_ID_SPEC",
     "TYPE_ID_SPEC",
+    "VIEW_BUILDERS",
     "DiagnosticsSources",
     "add_ast_byte_spans",
     "add_scip_occurrence_byte_spans",
@@ -133,6 +152,8 @@ __all__ = [
     "build_cfg_blocks",
     "build_cfg_edges",
     "build_def_use_events",
+    "cfg_blocks_df_builder",
+    "cfg_edges_df_builder",
     "collect_diags",
     "dataset_alias",
     "dataset_contract",
@@ -147,6 +168,8 @@ __all__ = [
     "dataset_spec",
     "dataset_specs",
     "dataset_table_spec",
+    "def_use_events_df_builder",
+    "diagnostics_df_builder",
     "ensure_execution_context",
     "field",
     "field_name",
@@ -157,5 +180,8 @@ __all__ = [
     "normalize_cst_imports_spans",
     "normalize_type_exprs",
     "normalize_types",
+    "reaching_defs_df_builder",
     "run_reaching_defs",
+    "type_exprs_df_builder",
+    "type_nodes_df_builder",
 ]

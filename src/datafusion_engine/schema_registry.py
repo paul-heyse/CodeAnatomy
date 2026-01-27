@@ -1,4 +1,13 @@
-"""DataFusion-native nested schemas for canonical datasets."""
+"""DataFusion-native nested schemas for canonical datasets.
+
+Schema drift and evolution:
+Schemas registered in this module can leverage scan-time schema adapters when
+the runtime profile enables `enable_schema_evolution_adapter=True`. Schema
+adapters normalize physical batches at the TableProvider boundary, handling
+column reordering, type coercion, and missing/extra columns during physical
+plan execution. This eliminates the need for downstream drift normalization
+transforms expressed as SQLGlot rewrites or Ibis casts.
+"""
 
 from __future__ import annotations
 
@@ -39,6 +48,7 @@ from arrowdsl.schema.semantic_types import (
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_engine.sqlglot_exprs import sqlglot_ast_from_dataframe
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
 from sqlglot_tools.compat import exp
 
@@ -1350,8 +1360,10 @@ DATAFUSION_SEMANTIC_DIFF_SCHEMA = _schema_with_metadata(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
             pa.field("run_id", pa.string(), nullable=True),
-            pa.field("plan_hash", pa.string(), nullable=True),
-            pa.field("base_plan_hash", pa.string(), nullable=True),
+            pa.field("ast_fingerprint", pa.string(), nullable=True),
+            pa.field("policy_hash", pa.string(), nullable=True),
+            pa.field("base_ast_fingerprint", pa.string(), nullable=True),
+            pa.field("base_policy_hash", pa.string(), nullable=True),
             pa.field("category", pa.string(), nullable=False),
             pa.field("changed", pa.bool_(), nullable=False),
             pa.field("breaking", pa.bool_(), nullable=False),
@@ -1382,7 +1394,6 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
             pa.field("run_id", pa.string(), nullable=True),
-            pa.field("plan_hash", pa.string(), nullable=True),
             pa.field("policy_hash", pa.string(), nullable=True),
             pa.field("ast_fingerprint", pa.string(), nullable=True),
             pa.field("sql", pa.string(), nullable=False),
@@ -1589,7 +1600,8 @@ DATASET_FINGERPRINT_SCHEMA = _schema_with_metadata(
     pa.schema(
         [
             pa.field("version", pa.int32(), nullable=False),
-            pa.field("plan_hash", pa.string(), nullable=False),
+            pa.field("ast_fingerprint", pa.string(), nullable=False),
+            pa.field("policy_hash", pa.string(), nullable=False),
             pa.field("schema_fingerprint", pa.string(), nullable=False),
             pa.field("profile_hash", pa.string(), nullable=False),
             pa.field("writer_strategy", pa.string(), nullable=False),
@@ -2782,18 +2794,10 @@ def nested_view_spec(
     -------
     ViewSpec
         View specification derived from the registered base table.
-
-    Raises
-    ------
-    ValueError
-        Raised when the nested view is missing a SQLGlot AST.
     """
     builder = partial(nested_base_df, name=name, table=table)
     df = builder(ctx)
-    ast = _sqlglot_from_dataframe(df)
-    if ast is None:
-        msg = f"Nested view {name!r} missing SQLGlot AST."
-        raise ValueError(msg)
+    ast = sqlglot_ast_from_dataframe(df)
     return view_spec_from_builder(
         ViewSpecInputs(
             ctx=ctx,
@@ -2818,43 +2822,6 @@ def nested_view_specs(
         View specifications for nested datasets.
     """
     return tuple(nested_view_spec(ctx, name, table=table) for name in nested_dataset_names())
-
-
-def _sqlglot_from_dataframe(df: DataFrame) -> exp.Expression | None:
-    try:
-        from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
-        from datafusion.unparser import Dialect as DataFusionDialect
-        from datafusion.unparser import Unparser as DataFusionUnparser
-    except ImportError:
-        return None
-    logical_plan = getattr(df, "logical_plan", None)
-    if not callable(logical_plan):
-        return None
-    sql = ""
-    try:
-        plan_obj = logical_plan()
-        if isinstance(plan_obj, DataFusionLogicalPlan):
-            unparser = DataFusionUnparser(DataFusionDialect.default())
-            sql = str(unparser.plan_to_sql(plan_obj))
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    if not sql:
-        return None
-    try:
-        from sqlglot_tools.optimizer import (
-            StrictParseOptions,
-            parse_sql_strict,
-            register_datafusion_dialect,
-        )
-
-        register_datafusion_dialect()
-        return parse_sql_strict(
-            sql,
-            dialect="datafusion_ext",
-            options=StrictParseOptions(error_level=None),
-        )
-    except (TypeError, ValueError):
-        return None
 
 
 def validate_schema_metadata(schema: pa.Schema) -> None:

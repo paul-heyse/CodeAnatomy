@@ -21,9 +21,12 @@ from arrowdsl.schema.metadata import (
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from cpg.specs import TaskIdentity
+from datafusion_engine.lineage_datafusion import extract_lineage
 from datafusion_engine.nested_tables import ViewReference
+from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundle
 from datafusion_engine.schema_contracts import SchemaContract
 from datafusion_engine.schema_introspection import table_names_snapshot
+from datafusion_engine.sqlglot_exprs import sqlglot_ast_from_dataframe
 from datafusion_engine.udf_runtime import udf_names_from_snapshot, validate_rust_udf_snapshot
 from datafusion_engine.view_graph_registry import ViewNode
 from ibis_engine.catalog import IbisPlanCatalog
@@ -31,13 +34,7 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from sqlglot_tools.compat import Expression
 from sqlglot_tools.lineage import referenced_tables, referenced_udf_calls
-from sqlglot_tools.optimizer import (
-    StrictParseOptions,
-    parse_sql_strict,
-    register_datafusion_dialect,
-    resolve_sqlglot_policy,
-    sqlglot_sql,
-)
+from sqlglot_tools.optimizer import resolve_sqlglot_policy, sqlglot_sql
 from sqlglot_tools.view_builders import select_all
 
 if TYPE_CHECKING:
@@ -51,13 +48,6 @@ if TYPE_CHECKING:
     from schema_spec.system import DatasetSpec
     from sqlglot_tools.bridge import IbisCompilerBackend
 
-try:
-    from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
-    from datafusion.unparser import Dialect as DataFusionDialect
-    from datafusion.unparser import Unparser as DataFusionUnparser
-except ImportError:  # pragma: no cover - optional dependency
-    DataFusionDialect = None
-    DataFusionUnparser = None
     DataFusionLogicalPlan = None
 
 
@@ -138,37 +128,69 @@ def _required_udfs_from_ast(
     return tuple(sorted(required))
 
 
+def _required_udfs_from_plan_bundle(
+    bundle: DataFusionPlanBundle,
+    snapshot: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Extract required UDFs from a DataFusion plan bundle.
+
+    This extracts UDF references from the optimized logical plan display
+    and validates them against the snapshot.
+
+    Parameters
+    ----------
+    bundle
+        DataFusion plan bundle containing optimized logical plan.
+    snapshot
+        Rust UDF registry snapshot for validation.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted tuple of required UDF names.
+    """
+    # Get the optimized plan display string
+    plan_display = bundle.display_optimized_plan()
+    if plan_display is None:
+        return ()
+
+    # Parse UDF calls from the plan display
+    # This is a heuristic approach - we look for function calls in the display
+    snapshot_names = udf_names_from_snapshot(snapshot)
+    lookup = {name.lower(): name for name in snapshot_names}
+
+    # Search for potential UDF calls in the plan display
+    import re
+
+    # Pattern matches function calls like: function_name(...)
+    pattern = r"\b([a-zA-Z_]\w*)\s*\("
+    matches = re.findall(pattern, plan_display)
+
+    required = {
+        lookup[name.lower()] for name in matches if isinstance(name, str) and name.lower() in lookup
+    }
+    return tuple(sorted(required))
+
+
 def _deps_from_ast(expr: Expression) -> tuple[str, ...]:
     return tuple(referenced_tables(expr))
 
 
-def _sqlglot_from_dataframe(df: DataFrame) -> Expression | None:
-    if DataFusionUnparser is None or DataFusionDialect is None or DataFusionLogicalPlan is None:
-        return None
-    logical_plan = getattr(df, "logical_plan", None)
-    if not callable(logical_plan):
-        return None
-    sql = ""
-    try:
-        plan_obj = logical_plan()
-        if isinstance(plan_obj, DataFusionLogicalPlan):
-            unparser = DataFusionUnparser(DataFusionDialect.default())
-            sql = str(unparser.plan_to_sql(plan_obj))
-    except (RuntimeError, TypeError, ValueError):
-        return None
-    if not sql:
-        return None
-    policy = resolve_sqlglot_policy(name="datafusion")
-    register_datafusion_dialect()
-    try:
-        ast = parse_sql_strict(
-            sql,
-            dialect=policy.write_dialect,
-            options=StrictParseOptions(error_level=policy.error_level),
-        )
-    except (TypeError, ValueError):
-        return None
-    return ast
+def _deps_from_plan_bundle(bundle: DataFusionPlanBundle) -> tuple[str, ...]:
+    """Extract dependencies from a DataFusion plan bundle.
+
+    Parameters
+    ----------
+    bundle
+        DataFusion plan bundle containing optimized logical plan.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted tuple of referenced table names.
+    """
+    lineage = extract_lineage(bundle.optimized_logical_plan)
+    return lineage.referenced_tables
 
 
 def _ibis_expr_from_sqlglot(
@@ -456,6 +478,11 @@ def _normalize_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
         metadata = _metadata_with_required_udfs(metadata, required)
         expected_schema = _arrow_schema_from_contract(dataset_contract_schema(spec.name))
         ibis_expr = plan.expr if isinstance(plan, IbisPlan) else plan
+
+        # Build plan bundle for DataFusion-native lineage
+        df = build_ctx.builder_from_plan(plan, label=spec.label)(build_ctx.ctx)
+        plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
+
         nodes.append(
             ViewNode(
                 name=spec.name,
@@ -470,6 +497,7 @@ def _normalize_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
                 required_udfs=required,
                 sqlglot_ast=ast,
                 ibis_expr=ibis_expr,
+                plan_bundle=plan_bundle,
             )
         )
     return nodes
@@ -493,6 +521,11 @@ def _view_node_from_sqlglot(
 
     required = _required_udfs_from_ast(canonical_ast, build_ctx.snapshot)
     metadata = _metadata_with_required_udfs(schema_metadata, required)
+
+    # Build plan bundle for DataFusion-native lineage
+    df = _build(build_ctx.ctx)
+    plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
+
     return ViewNode(
         name=name,
         deps=_deps_from_ast(canonical_ast),
@@ -501,6 +534,7 @@ def _view_node_from_sqlglot(
         required_udfs=required,
         sqlglot_ast=canonical_ast,
         ibis_expr=ibis_expr,
+        plan_bundle=plan_bundle,
     )
 
 
@@ -513,13 +547,13 @@ def _relspec_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
         rel_name_symbol_metadata_spec,
         relation_output_metadata_spec,
     )
-    from relspec.relationship_sql import (
-        build_rel_callsite_qname_sql,
-        build_rel_callsite_symbol_sql,
-        build_rel_def_symbol_sql,
-        build_rel_import_symbol_sql,
-        build_rel_name_symbol_sql,
-        build_relation_output_sql,
+    from relspec.relationship_datafusion import (
+        build_rel_callsite_qname_df,
+        build_rel_callsite_symbol_df,
+        build_rel_def_symbol_df,
+        build_rel_import_symbol_df,
+        build_rel_name_symbol_df,
+        build_relation_output_df,
     )
     from relspec.view_defs import (
         DEFAULT_REL_TASK_PRIORITY,
@@ -533,73 +567,73 @@ def _relspec_view_nodes(build_ctx: ViewBuildContext) -> list[ViewNode]:
 
     priority = DEFAULT_REL_TASK_PRIORITY
 
-    rel_name_expr = build_rel_name_symbol_sql(
-        task_name="rel.name_symbol",
-        task_priority=priority,
-    )
-    rel_import_expr = build_rel_import_symbol_sql(
-        task_name="rel.import_symbol",
-        task_priority=priority,
-    )
-    rel_def_expr = build_rel_def_symbol_sql(
-        task_name="rel.def_symbol",
-        task_priority=priority,
-    )
-    rel_callsite_expr = build_rel_callsite_symbol_sql(
-        task_name="rel.callsite_symbol",
-        task_priority=priority,
-    )
-    rel_callsite_qname_expr = build_rel_callsite_qname_sql(
-        task_name="rel.callsite_qname",
-        task_priority=priority,
-    )
-    relation_output_expr = build_relation_output_sql()
-
-    def _rel_view_node(
+    def _rel_view_node_df(
         name: str,
         *,
-        expr: Expression,
+        builder: Callable[[SessionContext], DataFrame],
         metadata: SchemaMetadataSpec,
     ) -> ViewNode:
-        node = _view_node_from_sqlglot(
-            build_ctx,
-            name=name,
-            expr=expr,
-            schema_metadata=metadata,
-        )
-        df = node.builder(build_ctx.ctx)
+        df = builder(build_ctx.ctx)
         build_ctx.register_schema(name, _arrow_schema_from_df(df))
-        return node
+        ast = sqlglot_ast_from_dataframe(df)
+        deps = _deps_from_ast(ast)
+        required = _required_udfs_from_ast(ast, build_ctx.snapshot)
+        metadata_with_udfs = _metadata_with_required_udfs(metadata, required)
+        ibis_expr = _ibis_expr_from_sqlglot(build_ctx, ast, label=name)
+
+        # Build plan bundle for DataFusion-native lineage
+        plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
+
+        return ViewNode(
+            name=name,
+            deps=deps,
+            builder=builder,
+            contract_builder=_contract_builder(name, metadata_spec=metadata_with_udfs),
+            required_udfs=required,
+            sqlglot_ast=ast,
+            ibis_expr=ibis_expr,
+            plan_bundle=plan_bundle,
+        )
 
     return [
-        _rel_view_node(
+        _rel_view_node_df(
             REL_NAME_SYMBOL_OUTPUT,
-            expr=rel_name_expr,
+            builder=lambda ctx: build_rel_name_symbol_df(
+                ctx, task_name="rel.name_symbol", task_priority=priority
+            ),
             metadata=rel_name_symbol_metadata_spec(),
         ),
-        _rel_view_node(
+        _rel_view_node_df(
             REL_IMPORT_SYMBOL_OUTPUT,
-            expr=rel_import_expr,
+            builder=lambda ctx: build_rel_import_symbol_df(
+                ctx, task_name="rel.import_symbol", task_priority=priority
+            ),
             metadata=rel_import_symbol_metadata_spec(),
         ),
-        _rel_view_node(
+        _rel_view_node_df(
             REL_DEF_SYMBOL_OUTPUT,
-            expr=rel_def_expr,
+            builder=lambda ctx: build_rel_def_symbol_df(
+                ctx, task_name="rel.def_symbol", task_priority=priority
+            ),
             metadata=rel_def_symbol_metadata_spec(),
         ),
-        _rel_view_node(
+        _rel_view_node_df(
             REL_CALLSITE_SYMBOL_OUTPUT,
-            expr=rel_callsite_expr,
+            builder=lambda ctx: build_rel_callsite_symbol_df(
+                ctx, task_name="rel.callsite_symbol", task_priority=priority
+            ),
             metadata=rel_callsite_symbol_metadata_spec(),
         ),
-        _rel_view_node(
+        _rel_view_node_df(
             REL_CALLSITE_QNAME_OUTPUT,
-            expr=rel_callsite_qname_expr,
+            builder=lambda ctx: build_rel_callsite_qname_df(
+                ctx, task_name="rel.callsite_qname", task_priority=priority
+            ),
             metadata=rel_callsite_qname_metadata_spec(),
         ),
-        _rel_view_node(
+        _rel_view_node_df(
             RELATION_OUTPUT_NAME,
-            expr=relation_output_expr,
+            builder=build_relation_output_df,
             metadata=relation_output_metadata_spec(),
         ),
     ]
@@ -625,13 +659,14 @@ def _symtable_view_nodes(_build_ctx: ViewBuildContext) -> list[ViewNode]:
     ) -> ViewNode:
         df = builder(_build_ctx.ctx)
         _build_ctx.register_schema(name, _arrow_schema_from_df(df))
-        ast = _sqlglot_from_dataframe(df)
-        if ast is None:
-            msg = f"Missing SQLGlot AST for symtable view {name!r}."
-            raise ValueError(msg)
+        ast = sqlglot_ast_from_dataframe(df)
         deps = _deps_from_ast(ast)
         required = _required_udfs_from_ast(ast, _build_ctx.snapshot)
         ibis_expr = _ibis_expr_from_sqlglot(_build_ctx, ast, label=name)
+
+        # Build plan bundle for DataFusion-native lineage
+        plan_bundle = build_plan_bundle(_build_ctx.ctx, df, compute_execution_plan=False)
+
         return ViewNode(
             name=name,
             deps=deps,
@@ -640,6 +675,7 @@ def _symtable_view_nodes(_build_ctx: ViewBuildContext) -> list[ViewNode]:
             required_udfs=required,
             sqlglot_ast=ast,
             ibis_expr=ibis_expr,
+            plan_bundle=plan_bundle,
         )
 
     return [
@@ -700,10 +736,16 @@ def _cpg_view_node(
     required = _required_udfs_from_ast(ast, build_ctx.snapshot)
     metadata = _metadata_with_required_udfs(None, required)
     schema = _arrow_schema_from_ibis(plan)
+
+    # Build plan bundle for DataFusion-native lineage
+    builder = build_ctx.builder_from_plan(plan, label=name)
+    df = builder(build_ctx.ctx)
+    plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
+
     return ViewNode(
         name=name,
         deps=_deps_from_ast(ast),
-        builder=build_ctx.builder_from_plan(plan, label=name),
+        builder=builder,
         contract_builder=_contract_builder(
             name,
             metadata_spec=metadata,
@@ -713,6 +755,7 @@ def _cpg_view_node(
         required_udfs=required,
         sqlglot_ast=ast,
         ibis_expr=plan.expr if isinstance(plan, IbisPlan) else plan,
+        plan_bundle=plan_bundle,
     )
 
 
@@ -725,15 +768,22 @@ def _alias_nodes(nodes: Sequence[ViewNode], *, build_ctx: ViewBuildContext) -> l
             continue
         expr = select_all(name)
         ibis_expr = _ibis_expr_from_sqlglot(build_ctx, expr, label=alias)
+        builder = _alias_builder(source=name)
+
+        # Build plan bundle for DataFusion-native lineage
+        df = builder(build_ctx.ctx)
+        plan_bundle = build_plan_bundle(build_ctx.ctx, df, compute_execution_plan=False)
+
         alias_nodes.append(
             ViewNode(
                 name=alias,
                 deps=_deps_from_ast(expr),
-                builder=_alias_builder(source=name),
+                builder=builder,
                 contract_builder=_contract_builder(alias, metadata_spec=None),
                 required_udfs=(),
                 sqlglot_ast=expr,
                 ibis_expr=ibis_expr,
+                plan_bundle=plan_bundle,
             )
         )
     return alias_nodes

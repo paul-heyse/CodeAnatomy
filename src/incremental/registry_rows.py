@@ -212,7 +212,8 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         name="datafusion_plan_artifacts_v1",
         version=SCHEMA_VERSION,
         fields=(
-            ArrowFieldSpec(name="plan_hash", dtype=interop.string()),
+            ArrowFieldSpec(name="ast_fingerprint", dtype=interop.string()),
+            ArrowFieldSpec(name="policy_hash", dtype=interop.string()),
             ArrowFieldSpec(name="sql", dtype=interop.string()),
             ArrowFieldSpec(name="normalized_sql", dtype=interop.string()),
             ArrowFieldSpec(name="explain_artifact_path", dtype=interop.string()),
@@ -247,8 +248,8 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ArrowFieldSpec(name="join_operators", dtype=pa.list_(pa.string())),
         ),
         constraints=TableSpecConstraints(
-            required_non_null=("plan_hash",),
-            key_fields=("plan_hash",),
+            required_non_null=("ast_fingerprint", "policy_hash"),
+            key_fields=("ast_fingerprint", "policy_hash"),
         ),
     ),
 )

@@ -17,14 +17,10 @@ from datafusion_engine.finalize import Contract, normalize_only
 from datafusion_engine.view_registry import ensure_view_graph
 from relspec.evidence import EvidenceCatalog
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
-from relspec.rustworkx_graph import task_graph_impact_subgraph
 
 if TYPE_CHECKING:
-
     from arrowdsl.core.execution_context import ExecutionContext
     from ibis_engine.execution import IbisExecutionContext
-    from relspec.graph_inference import TaskGraph
-    from relspec.incremental import IncrementalDiff
 
 
 @dataclass(frozen=True)
@@ -139,25 +135,6 @@ def task_execution_inputs(
     )
 
 
-def task_graph_for_diff(
-    task_graph: TaskGraph,
-    diff: IncrementalDiff | None,
-) -> TaskGraph:
-    """Return the execution graph for an incremental diff.
-
-    Returns
-    -------
-    TaskGraph
-        Impact subgraph when diff is provided, otherwise the full graph.
-    """
-    if diff is None:
-        return task_graph
-    changed = diff.tasks_requiring_rebuild()
-    if not changed:
-        return task_graph_impact_subgraph(task_graph, task_names=())
-    return task_graph_impact_subgraph(task_graph, task_names=changed)
-
-
 def _execute_view(
     runtime: RuntimeArtifacts,
     *,
@@ -220,6 +197,10 @@ def execute_task_from_catalog(
             evidence.register_schema(spec.task_output, existing.schema)
         return existing
     inactive = spec.task_name not in inputs.active_task_names
+    if inactive:
+        runtime.record_execution(f"{spec.task_name}:skipped")
+        msg = f"Task {spec.task_name!r} is inactive under the current incremental plan."
+        raise ValueError(msg)
     return _execute_and_record(
         inputs=inputs,
         spec=spec,
@@ -316,5 +297,4 @@ __all__ = [
     "execute_task_from_catalog",
     "runtime_artifacts",
     "task_execution_inputs",
-    "task_graph_for_diff",
 ]

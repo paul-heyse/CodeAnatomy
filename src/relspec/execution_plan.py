@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 import rustworkx as rx
@@ -14,8 +14,13 @@ from relspec.evidence import EvidenceCatalog, initial_evidence_from_views, known
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
 from relspec.rustworkx_graph import (
     GraphDiagnostics,
+    TaskDependencyReduction,
     TaskGraph,
+    TaskNode,
     build_task_graph_from_inferred_deps,
+    task_dependency_critical_path_length,
+    task_dependency_critical_path_tasks,
+    task_dependency_reduction,
     task_graph_diagnostics,
     task_graph_signature,
     task_graph_snapshot,
@@ -36,8 +41,11 @@ from relspec.view_defs import (
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from datafusion_engine.schema_contracts import SchemaContract
     from datafusion_engine.view_graph_registry import ViewNode
+    from relspec.incremental import IncrementalDiff
     from schema_spec.system import ContractSpec, DatasetSpec
+
     OutputContract = ContractSpec | DatasetSpec | object
 else:
     OutputContract = object
@@ -60,17 +68,32 @@ class ExecutionPlan:
 
     view_nodes: tuple[ViewNode, ...]
     task_graph: TaskGraph
+    task_dependency_graph: rx.PyDiGraph
+    reduced_task_dependency_graph: rx.PyDiGraph
     evidence: EvidenceCatalog
     task_schedule: TaskSchedule
     schedule_metadata: Mapping[str, TaskScheduleMetadata]
     plan_fingerprints: Mapping[str, str]
     plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
+    output_contracts: Mapping[str, OutputContract]
     plan_signature: str
+    task_dependency_signature: str
+    reduced_task_dependency_signature: str
+    reduction_node_map: Mapping[int, int]
+    reduction_edge_count: int
+    reduction_removed_edge_count: int
     diagnostics: GraphDiagnostics
+    critical_path_task_names: tuple[str, ...]
+    critical_path_length_weighted: float | None
     bottom_level_costs: Mapping[str, float]
     dependency_map: Mapping[str, tuple[str, ...]]
     dataset_specs: Mapping[str, DatasetSpec]
     active_tasks: frozenset[str]
+    requested_task_names: tuple[str, ...] = ()
+    impacted_task_names: tuple[str, ...] = ()
+    allow_partial: bool = False
+    incremental_diff: IncrementalDiff | None = None
+    incremental_state_dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +118,42 @@ class _PlanBuildContext:
     output_contracts: Mapping[str, OutputContract]
     evidence: EvidenceCatalog
     dataset_spec_map: Mapping[str, DatasetSpec]
+    requested_task_names: tuple[str, ...]
+    impacted_task_names: tuple[str, ...]
+    allow_partial: bool
+
+
+@dataclass(frozen=True)
+class _PrunedPlanBundle:
+    """Pruned graph and node bundle."""
+
+    task_graph: TaskGraph
+    active_tasks: set[str]
+    view_nodes: tuple[ViewNode, ...]
+    inferred: tuple[InferredDeps, ...]
+
+
+@dataclass(frozen=True)
+class _ContractsEvidence:
+    """Contracts and evidence bundle."""
+
+    output_contracts: Mapping[str, OutputContract]
+    evidence: EvidenceCatalog
+
+
+@dataclass(frozen=True)
+class _PrunedPlanComponents:
+    """Pruned plan components used for recomputation."""
+
+    task_graph: TaskGraph
+    view_nodes: tuple[ViewNode, ...]
+    plan_fingerprints: Mapping[str, str]
+    plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
+    output_contracts: Mapping[str, OutputContract]
+    dependency_map: Mapping[str, tuple[str, ...]]
+    requested_task_names: tuple[str, ...]
+    impacted_task_names: tuple[str, ...]
+    incremental_diff: IncrementalDiff | None
 
 
 def priority_for_task(task_name: str) -> int:
@@ -133,20 +192,24 @@ def compile_execution_plan(
 
     """
     context = _prepare_plan_context(session, request)
+    plan_fingerprints = _plan_fingerprint_map(context.inferred)
+    reduction = _task_dependency_reduction(context.task_graph, plan_fingerprints)
+    output_schema_for = _output_schema_lookup(context.output_contracts)
     schedule = schedule_tasks(
         context.task_graph,
         evidence=context.evidence,
-        output_schema_for=context.output_contracts.get,
+        output_schema_for=output_schema_for,
         allow_partial=request.allow_partial,
+        reduced_dependency_graph=reduction.reduced_graph,
     )
     schedule_meta = task_schedule_metadata(schedule)
-    plan_fingerprints = _plan_fingerprint_map(context.inferred)
     plan_snapshots = _plan_snapshot_map(context.view_nodes, plan_fingerprints)
     signature, diagnostics = _plan_signature_and_diagnostics(
         context.task_graph,
         plan_fingerprints,
+        reduction=reduction,
     )
-    bottom_costs = bottom_level_costs(context.task_graph.graph)
+    bottom_costs = bottom_level_costs(reduction.reduced_graph)
     dependency_map = dependency_map_from_inferred(
         context.inferred,
         active_tasks=context.active_tasks,
@@ -154,42 +217,63 @@ def compile_execution_plan(
     return ExecutionPlan(
         view_nodes=context.view_nodes,
         task_graph=context.task_graph,
+        task_dependency_graph=reduction.full_graph,
+        reduced_task_dependency_graph=reduction.reduced_graph,
         evidence=context.evidence,
         task_schedule=schedule,
         schedule_metadata=schedule_meta,
         plan_fingerprints=plan_fingerprints,
         plan_snapshots=plan_snapshots,
+        output_contracts=context.output_contracts,
         plan_signature=signature,
+        task_dependency_signature=reduction.full_signature,
+        reduced_task_dependency_signature=reduction.reduced_signature,
+        reduction_node_map=reduction.node_map,
+        reduction_edge_count=reduction.edge_count,
+        reduction_removed_edge_count=reduction.removed_edge_count,
         diagnostics=diagnostics,
+        critical_path_task_names=diagnostics.critical_path_task_names,
+        critical_path_length_weighted=diagnostics.critical_path_length_weighted,
         bottom_level_costs=bottom_costs,
         dependency_map=dependency_map,
         dataset_specs=context.dataset_spec_map,
         active_tasks=frozenset(context.active_tasks),
+        requested_task_names=context.requested_task_names,
+        impacted_task_names=context.impacted_task_names,
+        allow_partial=context.allow_partial,
     )
 
 
-def _prepare_plan_context(
-    session: SessionContext,
+def _validated_view_nodes(
+    view_nodes: Sequence[ViewNode],
+    *,
+    requested: set[str],
+) -> tuple[ViewNode, ...]:
+    nodes_with_plan, missing_plan = _partition_view_nodes(view_nodes)
+    if requested and missing_plan & requested:
+        missing = sorted(missing_plan & requested)
+        msg = (
+            f"Requested tasks are missing plan_bundle: {missing}. "
+            "Plan bundles are required for dependency inference."
+        )
+        raise ValueError(msg)
+    if not nodes_with_plan:
+        msg = (
+            "Execution plan requires view nodes with plan_bundle. "
+            "Plan bundles are required for DataFusion-native lineage extraction."
+        )
+        raise ValueError(msg)
+    return nodes_with_plan
+
+
+def _pruned_plan_bundle(
+    *,
+    graph: TaskGraph,
+    nodes_with_ast: tuple[ViewNode, ...],
+    inferred: Sequence[InferredDeps],
     request: ExecutionPlanRequest,
-) -> _PlanBuildContext:
-    nodes_with_ast, missing_ast = _partition_view_nodes(request.view_nodes)
-    requested = set(request.requested_task_names or ())
-    if requested and missing_ast & requested:
-        missing = sorted(missing_ast & requested)
-        msg = f"Requested tasks are missing SQLGlot ASTs: {missing}."
-        raise ValueError(msg)
-    if not nodes_with_ast:
-        msg = "Execution plan requires view nodes with SQLGlot ASTs."
-        raise ValueError(msg)
-
-    inferred = infer_deps_from_view_nodes(nodes_with_ast, snapshot=request.snapshot)
-    priorities = _priority_map(inferred)
-    dataset_spec_map = _dataset_spec_map(session)
-    graph = build_task_graph_from_inferred_deps(
-        inferred,
-        priorities=priorities,
-        extra_evidence=tuple(sorted(dataset_spec_map)),
-    )
+    requested: set[str],
+) -> _PrunedPlanBundle:
     active_tasks = _resolve_active_tasks(
         graph,
         requested_task_names=requested,
@@ -199,25 +283,74 @@ def _prepare_plan_context(
     pruned_graph = _prune_task_graph(graph, active_tasks=active_tasks)
     pruned_nodes = _prune_view_nodes(nodes_with_ast, active_tasks=active_tasks)
     pruned_inferred = tuple(dep for dep in inferred if dep.task_name in active_tasks)
-    output_contracts = _output_contract_map(
-        session,
-        pruned_nodes,
-        dataset_spec_map=dataset_spec_map,
-    )
-    evidence = initial_evidence_from_views(
-        pruned_nodes,
-        ctx=session,
-        task_names=set(active_tasks),
-        dataset_specs=tuple(dataset_spec_map[name] for name in sorted(dataset_spec_map)),
-    )
-    return _PlanBuildContext(
-        view_nodes=pruned_nodes,
-        inferred=pruned_inferred,
+    return _PrunedPlanBundle(
         task_graph=pruned_graph,
         active_tasks=active_tasks,
-        output_contracts=output_contracts,
-        evidence=evidence,
+        view_nodes=pruned_nodes,
+        inferred=pruned_inferred,
+    )
+
+
+def _contracts_and_evidence(
+    *,
+    session: SessionContext,
+    pruned: _PrunedPlanBundle,
+    dataset_spec_map: Mapping[str, DatasetSpec],
+) -> _ContractsEvidence:
+    output_contracts = _output_contract_map(
+        session,
+        pruned.view_nodes,
         dataset_spec_map=dataset_spec_map,
+    )
+    dataset_specs = tuple(dataset_spec_map[name] for name in sorted(dataset_spec_map))
+    evidence = initial_evidence_from_views(
+        pruned.view_nodes,
+        ctx=session,
+        task_names=set(pruned.active_tasks),
+        dataset_specs=dataset_specs,
+    )
+    return _ContractsEvidence(output_contracts=output_contracts, evidence=evidence)
+
+
+def _prepare_plan_context(
+    session: SessionContext,
+    request: ExecutionPlanRequest,
+) -> _PlanBuildContext:
+    requested = set(request.requested_task_names or ())
+    nodes_with_ast = _validated_view_nodes(request.view_nodes, requested=requested)
+    inferred = infer_deps_from_view_nodes(nodes_with_ast, snapshot=request.snapshot)
+    priorities = _priority_map(inferred)
+    dataset_spec_map = _dataset_spec_map(session)
+    graph = build_task_graph_from_inferred_deps(
+        inferred,
+        priorities=priorities,
+        extra_evidence=tuple(sorted(dataset_spec_map)),
+    )
+    pruned = _pruned_plan_bundle(
+        graph=graph,
+        nodes_with_ast=nodes_with_ast,
+        inferred=inferred,
+        request=request,
+        requested=requested,
+    )
+    contracts_evidence = _contracts_and_evidence(
+        session=session,
+        pruned=pruned,
+        dataset_spec_map=dataset_spec_map,
+    )
+    requested_task_names = tuple(sorted(requested))
+    impacted_task_names = tuple(sorted(set(request.impacted_task_names or ())))
+    return _PlanBuildContext(
+        view_nodes=pruned.view_nodes,
+        inferred=pruned.inferred,
+        task_graph=pruned.task_graph,
+        active_tasks=pruned.active_tasks,
+        output_contracts=contracts_evidence.output_contracts,
+        evidence=contracts_evidence.evidence,
+        dataset_spec_map=dataset_spec_map,
+        requested_task_names=requested_task_names,
+        impacted_task_names=impacted_task_names,
+        allow_partial=bool(request.allow_partial),
     )
 
 
@@ -226,9 +359,18 @@ def _dataset_spec_map(session: SessionContext) -> Mapping[str, DatasetSpec]:
     return {spec.name: spec for spec in dataset_specs}
 
 
+def _task_dependency_reduction(
+    graph: TaskGraph,
+    plan_fingerprints: Mapping[str, str],
+) -> TaskDependencyReduction:
+    return task_dependency_reduction(graph, task_signatures=plan_fingerprints)
+
+
 def _plan_signature_and_diagnostics(
     graph: TaskGraph,
     plan_fingerprints: Mapping[str, str],
+    *,
+    reduction: TaskDependencyReduction,
 ) -> tuple[str, GraphDiagnostics]:
     snapshot_payload = task_graph_snapshot(
         graph,
@@ -237,7 +379,24 @@ def _plan_signature_and_diagnostics(
     )
     signature = task_graph_signature(snapshot_payload)
     diagnostics = task_graph_diagnostics(graph, include_node_link=True)
-    return signature, diagnostics
+    critical_path_task_names = task_dependency_critical_path_tasks(reduction.reduced_graph)
+    critical_path_length_weighted = (
+        task_dependency_critical_path_length(reduction.reduced_graph)
+        if reduction.reduced_graph.num_nodes() > 0
+        else None
+    )
+    enriched = replace(
+        diagnostics,
+        full_graph_signature=signature,
+        reduced_graph_signature=reduction.reduced_signature,
+        reduction_node_map=dict(reduction.node_map),
+        critical_path_task_names=critical_path_task_names,
+        critical_path_length_weighted=critical_path_length_weighted,
+        dependency_edge_count=reduction.edge_count,
+        reduced_dependency_edge_count=reduction.reduced_edge_count,
+        dependency_removed_edge_count=reduction.removed_edge_count,
+    )
+    return signature, enriched
 
 
 def dependency_map_from_inferred(
@@ -260,6 +419,18 @@ def dependency_map_from_inferred(
     return dependency_map
 
 
+def _output_schema_lookup(
+    contracts: Mapping[str, OutputContract],
+) -> Callable[[str], SchemaContract | DatasetSpec | ContractSpec | None]:
+    def _lookup(name: str) -> SchemaContract | DatasetSpec | ContractSpec | None:
+        return cast(
+            "SchemaContract | DatasetSpec | ContractSpec | None",
+            contracts.get(name),
+        )
+
+    return _lookup
+
+
 def bottom_level_costs(graph: rx.PyDiGraph) -> dict[str, float]:
     """Compute bottom-level costs to prioritize critical-path tasks.
 
@@ -274,35 +445,45 @@ def bottom_level_costs(graph: rx.PyDiGraph) -> dict[str, float]:
         succs = graph.successor_indices(node_idx)
         best_succ = max((bottom[s] for s in succs), default=0.0)
         node = graph[node_idx]
-        cost = 1.0
-        if getattr(node, "kind", None) == "task":
-            payload = getattr(node, "payload", None)
-            priority = getattr(payload, "priority", 100)
-            cost = float(max(priority, 1))
+        task_name, priority = _task_name_priority(node)
+        cost = float(max(priority, 1)) if task_name is not None else 1.0
         bottom[node_idx] = cost + best_succ
     out: dict[str, float] = {}
     for node_idx, score in bottom.items():
         node = graph[node_idx]
-        if getattr(node, "kind", None) != "task":
-            continue
-        payload = getattr(node, "payload", None)
-        name = getattr(payload, "name", None)
-        if isinstance(name, str):
-            out[name] = score
+        task_name, _priority = _task_name_priority(node)
+        if task_name is not None:
+            out[task_name] = score
     return out
+
+
+def _task_name_priority(node: object) -> tuple[str | None, int]:
+    if isinstance(node, TaskNode):
+        return node.name, node.priority
+    kind = getattr(node, "kind", None)
+    payload = getattr(node, "payload", None)
+    if kind != "task":
+        return None, 1
+    if isinstance(payload, TaskNode):
+        return payload.name, payload.priority
+    name = getattr(payload, "name", None)
+    priority = getattr(payload, "priority", 1)
+    if isinstance(name, str) and isinstance(priority, int):
+        return name, priority
+    return name if isinstance(name, str) else None, 1
 
 
 def _partition_view_nodes(
     view_nodes: Sequence[ViewNode],
 ) -> tuple[tuple[ViewNode, ...], set[str]]:
-    nodes_with_ast: list[ViewNode] = []
+    nodes_with_plan: list[ViewNode] = []
     missing: set[str] = set()
     for node in view_nodes:
-        if node.sqlglot_ast is None:
+        if node.plan_bundle is None:
             missing.add(node.name)
             continue
-        nodes_with_ast.append(node)
-    return tuple(nodes_with_ast), missing
+        nodes_with_plan.append(node)
+    return tuple(nodes_with_plan), missing
 
 
 def _priority_map(inferred: Sequence[InferredDeps]) -> dict[str, int]:
@@ -429,12 +610,12 @@ def _plan_snapshot_map(
 ) -> dict[str, PlanFingerprintSnapshot]:
     snapshots: dict[str, PlanFingerprintSnapshot] = {}
     for node in view_nodes:
-        if node.sqlglot_ast is None:
-            msg = f"View node {node.name!r} is missing a SQLGlot AST."
-            raise ValueError(msg)
+        substrait_bytes = None
+        if node.plan_bundle is not None:
+            substrait_bytes = node.plan_bundle.substrait_bytes
         snapshots[node.name] = PlanFingerprintSnapshot(
             plan_fingerprint=plan_fingerprints.get(node.name, ""),
-            sqlglot_ast=node.sqlglot_ast,
+            substrait_bytes=substrait_bytes,
         )
     return snapshots
 
@@ -470,6 +651,147 @@ def _arrow_schema_from_session_table(session: SessionContext, name: str) -> pa.S
     raise TypeError(msg)
 
 
+def _pruned_plan_components(
+    *,
+    plan: ExecutionPlan,
+    active_tasks: set[str],
+) -> _PrunedPlanComponents:
+    pruned_graph = _prune_task_graph(plan.task_graph, active_tasks=active_tasks)
+    pruned_view_nodes = _prune_view_nodes(plan.view_nodes, active_tasks=active_tasks)
+    pruned_fingerprints = {
+        name: plan.plan_fingerprints[name]
+        for name in sorted(active_tasks)
+        if name in plan.plan_fingerprints
+    }
+    pruned_snapshots = {
+        name: plan.plan_snapshots[name]
+        for name in sorted(active_tasks)
+        if name in plan.plan_snapshots
+    }
+    pruned_contracts = {
+        name: plan.output_contracts[name]
+        for name in sorted(active_tasks)
+        if name in plan.output_contracts
+    }
+    pruned_dependency_map = {
+        name: tuple(dep for dep in deps if dep in active_tasks)
+        for name, deps in plan.dependency_map.items()
+        if name in active_tasks
+    }
+    pruned_requested = tuple(name for name in plan.requested_task_names if name in active_tasks)
+    pruned_impacted = tuple(name for name in plan.impacted_task_names if name in active_tasks)
+    pruned_diff = _prune_incremental_diff(plan.incremental_diff, active_tasks=active_tasks)
+    return _PrunedPlanComponents(
+        task_graph=pruned_graph,
+        view_nodes=pruned_view_nodes,
+        plan_fingerprints=pruned_fingerprints,
+        plan_snapshots=pruned_snapshots,
+        output_contracts=pruned_contracts,
+        dependency_map=pruned_dependency_map,
+        requested_task_names=pruned_requested,
+        impacted_task_names=pruned_impacted,
+        incremental_diff=pruned_diff,
+    )
+
+
+def prune_execution_plan(
+    plan: ExecutionPlan,
+    *,
+    active_tasks: Iterable[str],
+    allow_partial: bool | None = None,
+) -> ExecutionPlan:
+    """Return a plan pruned to the provided active task set.
+
+    Returns
+    -------
+    ExecutionPlan
+        Pruned plan with recomputed scheduling and diagnostics.
+
+    Raises
+    ------
+    ValueError
+        Raised when pruning resolves to zero active tasks.
+    """
+    target_active = set(active_tasks) & set(plan.active_tasks)
+    if not target_active:
+        msg = "Pruned execution plan resolved to zero active tasks."
+        raise ValueError(msg)
+    if target_active == set(plan.active_tasks):
+        return plan
+    components = _pruned_plan_components(plan=plan, active_tasks=target_active)
+    reduction = _task_dependency_reduction(components.task_graph, components.plan_fingerprints)
+    output_schema_for = _output_schema_lookup(components.output_contracts)
+    schedule = schedule_tasks(
+        components.task_graph,
+        evidence=plan.evidence,
+        output_schema_for=output_schema_for,
+        allow_partial=plan.allow_partial if allow_partial is None else allow_partial,
+        reduced_dependency_graph=reduction.reduced_graph,
+    )
+    schedule_meta = task_schedule_metadata(schedule)
+    signature, diagnostics = _plan_signature_and_diagnostics(
+        components.task_graph,
+        components.plan_fingerprints,
+        reduction=reduction,
+    )
+    bottom_costs = bottom_level_costs(reduction.reduced_graph)
+    return ExecutionPlan(
+        view_nodes=components.view_nodes,
+        task_graph=components.task_graph,
+        task_dependency_graph=reduction.full_graph,
+        reduced_task_dependency_graph=reduction.reduced_graph,
+        evidence=plan.evidence,
+        task_schedule=schedule,
+        schedule_metadata=schedule_meta,
+        plan_fingerprints=components.plan_fingerprints,
+        plan_snapshots=components.plan_snapshots,
+        output_contracts=components.output_contracts,
+        plan_signature=signature,
+        task_dependency_signature=reduction.full_signature,
+        reduced_task_dependency_signature=reduction.reduced_signature,
+        reduction_node_map=reduction.node_map,
+        reduction_edge_count=reduction.edge_count,
+        reduction_removed_edge_count=reduction.removed_edge_count,
+        diagnostics=diagnostics,
+        critical_path_task_names=diagnostics.critical_path_task_names,
+        critical_path_length_weighted=diagnostics.critical_path_length_weighted,
+        bottom_level_costs=bottom_costs,
+        dependency_map=components.dependency_map,
+        dataset_specs=plan.dataset_specs,
+        active_tasks=frozenset(target_active),
+        requested_task_names=components.requested_task_names,
+        impacted_task_names=components.impacted_task_names,
+        allow_partial=plan.allow_partial if allow_partial is None else allow_partial,
+        incremental_diff=components.incremental_diff,
+        incremental_state_dir=plan.incremental_state_dir,
+    )
+
+
+def _prune_incremental_diff(
+    diff: IncrementalDiff | None,
+    *,
+    active_tasks: set[str],
+) -> IncrementalDiff | None:
+    if diff is None:
+        return None
+    changed = tuple(name for name in diff.changed_tasks if name in active_tasks)
+    added = tuple(name for name in diff.added_tasks if name in active_tasks)
+    removed = tuple(name for name in diff.removed_tasks if name in active_tasks)
+    unchanged = tuple(name for name in diff.unchanged_tasks if name in active_tasks)
+    semantic = {
+        name: diff.semantic_changes[name] for name in changed if name in diff.semantic_changes
+    }
+    from relspec.incremental import IncrementalDiff as _IncrementalDiff
+
+    return _IncrementalDiff(
+        changed_tasks=changed,
+        added_tasks=added,
+        removed_tasks=removed,
+        unchanged_tasks=unchanged,
+        semantic_changes=semantic,
+    )
+
+
 __all__ = [
     "ExecutionPlan",
     "ExecutionPlanRequest",
@@ -478,5 +800,6 @@ __all__ = [
     "dependency_map_from_inferred",
     "downstream_task_closure",
     "priority_for_task",
+    "prune_execution_plan",
     "upstream_task_closure",
 ]

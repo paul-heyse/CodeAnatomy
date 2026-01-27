@@ -24,7 +24,6 @@ from sqlglot_tools.optimizer import (
     SchemaMapping,
     SqlGlotPolicy,
     _flatten_schema_mapping,
-    ast_policy_fingerprint,
     ast_to_artifact,
     canonical_ast_fingerprint,
     resolve_sqlglot_policy,
@@ -108,7 +107,7 @@ class SqlGlotPlanArtifacts:
     """Plan-level SQLGlot artifacts for diagnostics."""
 
     diagnostics: SqlGlotDiagnostics
-    plan_hash: str
+    ast_fingerprint: str
     policy_hash: str
     policy_rules_hash: str
     schema_map_hash: str | None
@@ -170,9 +169,7 @@ def sqlglot_diagnostics(
     stats = None
     if options.normalize:
         compile_schema: SchemaMapping | MappingSchema
-        compile_schema = (
-            MappingSchema({}) if options.schema_map is None else options.schema_map
-        )
+        compile_schema = MappingSchema({}) if options.schema_map is None else options.schema_map
         profile = SQLPolicyProfile(
             policy=resolved_policy,
             read_dialect=resolved_policy.read_dialect,
@@ -238,10 +235,6 @@ def collect_sqlglot_plan_artifacts(
         ),
     )
     ast_fingerprint = canonical_ast_fingerprint(diagnostics.optimized)
-    plan_hash = ast_policy_fingerprint(
-        ast_fingerprint=ast_fingerprint,
-        policy_hash=snapshot.policy_hash,
-    )
     lineage = _lineage_payload(
         diagnostics.optimized,
         schema_map=resolved_options.schema_map,
@@ -255,7 +248,7 @@ def collect_sqlglot_plan_artifacts(
     )
     return SqlGlotPlanArtifacts(
         diagnostics=diagnostics,
-        plan_hash=plan_hash,
+        ast_fingerprint=ast_fingerprint,
         policy_hash=snapshot.policy_hash,
         policy_rules_hash=snapshot.rules_hash,
         schema_map_hash=resolved_options.schema_map_hash,

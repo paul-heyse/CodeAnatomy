@@ -6,7 +6,7 @@ import ibis
 
 from sqlglot_tools.bridge import collect_sqlglot_plan_artifacts
 from sqlglot_tools.optimizer import (
-    plan_fingerprint,
+    canonical_ast_fingerprint,
     resolve_sqlglot_policy,
     sqlglot_policy_snapshot_for,
 )
@@ -22,10 +22,5 @@ def test_collect_sqlglot_plan_artifacts_uses_datafusion_compile_policy() -> None
     snapshot = sqlglot_policy_snapshot_for(policy)
     assert artifacts.policy_hash == snapshot.policy_hash
     assert artifacts.policy_rules_hash == snapshot.rules_hash
-    expected_hash = plan_fingerprint(
-        artifacts.diagnostics.optimized,
-        dialect=policy.write_dialect,
-        policy_hash=snapshot.policy_hash,
-        schema_map_hash=artifacts.schema_map_hash,
-    )
-    assert artifacts.plan_hash == expected_hash
+    expected_fingerprint = canonical_ast_fingerprint(artifacts.diagnostics.optimized)
+    assert artifacts.ast_fingerprint == expected_fingerprint

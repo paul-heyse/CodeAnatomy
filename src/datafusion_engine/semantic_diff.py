@@ -427,6 +427,9 @@ def compute_rebuild_needed(
     # Parse and canonicalize both versions
     from sqlglot_tools.optimizer import StrictParseOptions, parse_sql_strict
 
+    # DEPRECATED: SQLGlot-based SQL validation for DataFusion queries.
+    # For DataFusion query validation, prefer DataFusion's native SQL parser
+    # with SQLOptions for ingress gating.
     options = StrictParseOptions(
         error_level=profile.error_level,
         unsupported_level=profile.unsupported_level,

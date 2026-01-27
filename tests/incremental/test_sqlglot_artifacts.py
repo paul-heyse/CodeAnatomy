@@ -51,8 +51,8 @@ def _runtime_with_sink() -> tuple[IncrementalRuntime, _DiagnosticsSink]:
     return runtime, sink
 
 
-def test_record_view_artifact_payload_has_plan_hash() -> None:
-    """Ensure view artifacts yield stable plan hashes."""
+def test_record_view_artifact_payload_has_ast_policy_fingerprint() -> None:
+    """Ensure view artifacts yield stable AST/policy fingerprints."""
     runtime, _ = _runtime_with_sink()
     expr = ibis.memtable({"a": [1, 2]})
     schema = pa.schema([pa.field("a", pa.int64(), nullable=True)])
@@ -60,16 +60,16 @@ def test_record_view_artifact_payload_has_plan_hash() -> None:
     artifact_one = record_view_artifact(runtime, name="test_plan", expr=expr, schema=schema)
     artifact_two = record_view_artifact(runtime, name="test_plan", expr=expr, schema=schema)
 
-    plan_hash_one = ast_policy_fingerprint(
+    fingerprint_one = ast_policy_fingerprint(
         ast_fingerprint=artifact_one.ast_fingerprint,
         policy_hash=artifact_one.policy_hash,
     )
-    plan_hash_two = ast_policy_fingerprint(
+    fingerprint_two = ast_policy_fingerprint(
         ast_fingerprint=artifact_two.ast_fingerprint,
         policy_hash=artifact_two.policy_hash,
     )
-    assert plan_hash_one
-    assert plan_hash_one == plan_hash_two
+    assert fingerprint_one
+    assert fingerprint_one == fingerprint_two
     snapshot = runtime.profile.view_registry_snapshot()
     assert snapshot is not None
     assert len(snapshot) == 1

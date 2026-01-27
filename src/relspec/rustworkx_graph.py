@@ -16,12 +16,14 @@ from storage.ipc import payload_hash
 
 if TYPE_CHECKING:
     from datafusion_engine.view_graph_registry import ViewNode
+    from schema_spec.system import DatasetSpec
 
 NodeKind = Literal["evidence", "task"]
 EdgeKind = Literal["requires", "produces"]
 OutputPolicy = Literal["all_producers"]
 
 TASK_GRAPH_SNAPSHOT_VERSION = 1
+TASK_DEPENDENCY_SNAPSHOT_VERSION = 1
 _CYCLE_EDGE_MIN_LEN = 2
 _TASK_GRAPH_NODE_SCHEMA = pa.struct(
     [
@@ -73,6 +75,29 @@ _TASK_GRAPH_SCHEMA = pa.schema(
         pa.field("output_policy", pa.string(), nullable=False),
         pa.field("nodes", pa.list_(_TASK_GRAPH_NODE_SCHEMA), nullable=False),
         pa.field("edges", pa.list_(_TASK_GRAPH_EDGE_SCHEMA), nullable=False),
+    ]
+)
+_TASK_DEPENDENCY_NODE_SCHEMA = pa.struct(
+    [
+        pa.field("id", pa.int32(), nullable=False),
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("priority", pa.int32(), nullable=False),
+        pa.field("signature", pa.string(), nullable=True),
+    ]
+)
+_TASK_DEPENDENCY_EDGE_SCHEMA = pa.struct(
+    [
+        pa.field("source", pa.int32(), nullable=False),
+        pa.field("target", pa.int32(), nullable=False),
+        pa.field("evidence_names", pa.list_(pa.string()), nullable=False),
+    ]
+)
+_TASK_DEPENDENCY_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("label", pa.string(), nullable=False),
+        pa.field("nodes", pa.list_(_TASK_DEPENDENCY_NODE_SCHEMA), nullable=False),
+        pa.field("edges", pa.list_(_TASK_DEPENDENCY_EDGE_SCHEMA), nullable=False),
     ]
 )
 
@@ -147,6 +172,30 @@ class TaskGraphSnapshot:
 
 
 @dataclass(frozen=True)
+class TaskDependencySnapshot:
+    """Deterministic snapshot of a task dependency graph."""
+
+    version: int
+    label: str
+    nodes: tuple[dict[str, object], ...]
+    edges: tuple[dict[str, object], ...]
+
+
+@dataclass(frozen=True)
+class TaskDependencyReduction:
+    """Reduction artifacts for task dependency graphs."""
+
+    full_graph: rx.PyDiGraph
+    reduced_graph: rx.PyDiGraph
+    node_map: Mapping[int, int]
+    full_signature: str
+    reduced_signature: str
+    edge_count: int
+    reduced_edge_count: int
+    removed_edge_count: int
+
+
+@dataclass(frozen=True)
 class GraphDiagnostics:
     """Diagnostics for task graphs."""
 
@@ -162,6 +211,14 @@ class GraphDiagnostics:
     isolates: tuple[int, ...] = ()
     isolate_labels: tuple[str, ...] = ()
     node_link_json: str | None = None
+    full_graph_signature: str | None = None
+    reduced_graph_signature: str | None = None
+    reduction_node_map: dict[int, int] | None = None
+    critical_path_task_names: tuple[str, ...] = ()
+    critical_path_length_weighted: float | None = None
+    dependency_edge_count: int | None = None
+    reduced_dependency_edge_count: int | None = None
+    dependency_removed_edge_count: int | None = None
 
 
 def build_task_graph_from_inferred_deps(
@@ -211,7 +268,7 @@ def build_task_graph_from_views(
     output_policy: OutputPolicy = "all_producers",
     priority: int = 100,
     priorities: Mapping[str, int] | None = None,
-    extra_evidence: Iterable[str] | None = None,
+    extra_evidence: Iterable[str] | Sequence[DatasetSpec] | None = None,
 ) -> TaskGraph:
     """Build a task graph from view nodes and their SQLGlot ASTs.
 
@@ -221,13 +278,34 @@ def build_task_graph_from_views(
         Graph constructed from view node dependencies.
     """
     inferred = infer_deps_from_view_nodes(nodes)
+    extra_evidence_names = _extra_evidence_names(extra_evidence)
     return build_task_graph_from_inferred_deps(
         inferred,
         output_policy=output_policy,
         priority=priority,
         priorities=priorities,
-        extra_evidence=extra_evidence,
+        extra_evidence=extra_evidence_names,
     )
+
+
+def _extra_evidence_names(
+    extra_evidence: Iterable[str] | Sequence[DatasetSpec] | None,
+) -> tuple[str, ...]:
+    if extra_evidence is None:
+        return ()
+    names: set[str] = set()
+    for item in extra_evidence:
+        if isinstance(item, str):
+            if item:
+                names.add(item)
+            continue
+        name = getattr(item, "name", None)
+        if isinstance(name, str) and name:
+            names.add(name)
+            continue
+        msg = "Extra evidence must be strings or dataset specs with a name."
+        raise TypeError(msg)
+    return tuple(sorted(names))
 
 
 def task_graph_snapshot(
@@ -522,6 +600,301 @@ def task_graph_impact_subgraph(
     return task_graph_subgraph(graph, node_ids=impacted)
 
 
+def task_dependency_graph(graph: TaskGraph) -> rx.PyDiGraph:
+    """Return a task-only dependency graph derived from evidence edges.
+
+    Returns
+    -------
+    rx.PyDiGraph
+        Task-only dependency graph.
+
+    Raises
+    ------
+    TypeError
+        Raised when a task node payload is not a TaskNode.
+    """
+    tasks: list[TaskNode] = []
+    for name in sorted(graph.task_idx):
+        node_idx = graph.task_idx[name]
+        node = graph.graph[node_idx]
+        if node.kind != "task":
+            continue
+        payload = node.payload
+        if not isinstance(payload, TaskNode):
+            msg = "Expected TaskNode payload for task graph node."
+            raise TypeError(msg)
+        tasks.append(payload)
+    dependency_edges = _task_dependency_edges(graph)
+    dep_graph = rx.PyDiGraph(
+        multigraph=False,
+        check_cycle=False,
+        node_count_hint=len(tasks),
+        edge_count_hint=len(dependency_edges),
+    )
+    node_indices = dep_graph.add_nodes_from(tasks)
+    task_idx = dict(zip([task.name for task in tasks], node_indices, strict=True))
+    edge_payloads: list[tuple[int, int, tuple[str, ...]]] = []
+    for (source, target), evidence_names in dependency_edges.items():
+        source_idx = task_idx.get(source)
+        target_idx = task_idx.get(target)
+        if source_idx is None or target_idx is None:
+            continue
+        edge_payloads.append((source_idx, target_idx, tuple(sorted(evidence_names))))
+    dep_graph.add_edges_from(edge_payloads)
+    return dep_graph
+
+
+def task_dependency_reduction(
+    graph: TaskGraph,
+    *,
+    task_signatures: Mapping[str, str] | None = None,
+    label: str = "task_dependency",
+) -> TaskDependencyReduction:
+    """Return full and reduced task dependency graphs with signatures.
+
+    Returns
+    -------
+    TaskDependencyReduction
+        Reduction artifacts and signatures for dependency graphs.
+
+    Raises
+    ------
+    RelspecValidationError
+        Raised when the dependency graph contains a cycle.
+    """
+    full_graph = task_dependency_graph(graph)
+    if not rx.is_directed_acyclic_graph(full_graph):
+        msg = "Task dependency graph contains a cycle."
+        raise RelspecValidationError(msg)
+    edge_count = full_graph.num_edges()
+    reduced_graph, node_map = rx.transitive_reduction(full_graph)
+    reduced_edge_count = reduced_graph.num_edges()
+    removed_edge_count = edge_count - reduced_edge_count
+    full_snapshot = _task_dependency_snapshot(
+        full_graph,
+        label=label,
+        task_signatures=task_signatures,
+    )
+    reduced_snapshot = _task_dependency_snapshot(
+        reduced_graph,
+        label=label,
+        task_signatures=task_signatures,
+    )
+    full_signature = task_dependency_signature(full_snapshot)
+    reduced_signature = task_dependency_signature(reduced_snapshot)
+    return TaskDependencyReduction(
+        full_graph=full_graph,
+        reduced_graph=reduced_graph,
+        node_map=dict(node_map),
+        full_signature=full_signature,
+        reduced_signature=reduced_signature,
+        edge_count=edge_count,
+        reduced_edge_count=reduced_edge_count,
+        removed_edge_count=removed_edge_count,
+    )
+
+
+def task_dependency_signature(snapshot: TaskDependencySnapshot) -> str:
+    """Return a stable signature for a task dependency snapshot.
+
+    Returns
+    -------
+    str
+        Stable hash signature for the snapshot.
+    """
+    payload = {
+        "version": snapshot.version,
+        "label": snapshot.label,
+        "nodes": list(snapshot.nodes),
+        "edges": list(snapshot.edges),
+    }
+    return payload_hash(payload, _TASK_DEPENDENCY_SCHEMA)
+
+
+def task_dependency_critical_path(graph: rx.PyDiGraph) -> tuple[int, ...]:
+    """Return the weighted critical path node indices for a dependency graph.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Node indices along the weighted critical path.
+    """
+
+    def _edge_weight(_source: int, target: int, _edge: object) -> float:
+        return _task_node_weight(graph[target])
+
+    return tuple(rx.dag_weighted_longest_path(graph, _edge_weight))
+
+
+def task_dependency_critical_path_length(graph: rx.PyDiGraph) -> float:
+    """Return the weighted critical path length for a dependency graph.
+
+    Returns
+    -------
+    float
+        Weighted critical path length.
+    """
+
+    def _edge_weight(_source: int, target: int, _edge: object) -> float:
+        return _task_node_weight(graph[target])
+
+    length = rx.dag_weighted_longest_path_length(graph, _edge_weight)
+    return float(length)
+
+
+def task_dependency_critical_path_tasks(graph: rx.PyDiGraph) -> tuple[str, ...]:
+    """Return the critical path as task names.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Task names along the critical path.
+    """
+    names: list[str] = []
+    for node_idx in task_dependency_critical_path(graph):
+        node = graph[node_idx]
+        if isinstance(node, TaskNode):
+            names.append(node.name)
+    return tuple(names)
+
+
+def _task_dependency_edges(graph: TaskGraph) -> dict[tuple[str, str], set[str]]:
+    edges: dict[tuple[str, str], set[str]] = {}
+    for evidence_name, evidence_idx in graph.evidence_idx.items():
+        producers = _task_neighbors(graph, graph.graph.predecessor_indices(evidence_idx))
+        consumers = _task_neighbors(graph, graph.graph.successor_indices(evidence_idx))
+        if not producers or not consumers:
+            continue
+        for producer in producers:
+            for consumer in consumers:
+                if producer == consumer:
+                    continue
+                edges.setdefault((producer, consumer), set()).add(evidence_name)
+    return edges
+
+
+def _task_neighbors(graph: TaskGraph, nodes: Iterable[int]) -> list[str]:
+    names: list[str] = []
+    for idx in nodes:
+        node = graph.graph[idx]
+        if node.kind != "task":
+            continue
+        payload = node.payload
+        if not isinstance(payload, TaskNode):
+            msg = "Expected TaskNode payload for task graph node."
+            raise TypeError(msg)
+        names.append(payload.name)
+    return sorted(set(names))
+
+
+def _task_dependency_snapshot(
+    graph: rx.PyDiGraph,
+    *,
+    label: str,
+    task_signatures: Mapping[str, str] | None,
+) -> TaskDependencySnapshot:
+    signatures = dict(task_signatures or {})
+    node_map = {id(graph[idx]): idx for idx in graph.node_indices()}
+    try:
+        ordered_nodes = rx.lexicographical_topological_sort(
+            graph,
+            key=_dependency_node_sort_key,
+        )
+        ordered_pairs = [(node_map[id(node)], node) for node in ordered_nodes]
+    except ValueError:
+        ordered_pairs = [
+            (idx, graph[idx])
+            for idx in sorted(
+                graph.node_indices(),
+                key=lambda item: _dependency_node_sort_key(graph[item]),
+            )
+        ]
+    nodes = tuple(
+        _dependency_node_payload(node_idx, node, signatures=signatures)
+        for node_idx, node in ordered_pairs
+    )
+    edges = tuple(_task_dependency_edge_payloads(graph))
+    return TaskDependencySnapshot(
+        version=TASK_DEPENDENCY_SNAPSHOT_VERSION,
+        label=label,
+        nodes=nodes,
+        edges=edges,
+    )
+
+
+def _task_dependency_edge_payloads(graph: rx.PyDiGraph) -> Sequence[dict[str, object]]:
+    node_names = {
+        idx: graph[idx].name for idx in graph.node_indices() if isinstance(graph[idx], TaskNode)
+    }
+    edges: list[dict[str, object]] = []
+    for source, target, payload in graph.weighted_edge_list():
+        evidence_names = _evidence_name_list(payload)
+        edges.append(
+            {
+                "source": source,
+                "target": target,
+                "evidence_names": evidence_names,
+            }
+        )
+
+    def _edge_sort_key(item: Mapping[str, object]) -> tuple[str, str, str]:
+        source = item.get("source")
+        target = item.get("target")
+        source_name = node_names.get(source, "") if isinstance(source, int) else ""
+        target_name = node_names.get(target, "") if isinstance(target, int) else ""
+        evidence_names = item.get("evidence_names")
+        if isinstance(evidence_names, Sequence) and not isinstance(evidence_names, (str, bytes)):
+            evidence_label = ",".join(str(name) for name in evidence_names)
+        else:
+            evidence_label = ""
+        return source_name, target_name, evidence_label
+
+    edges.sort(key=_edge_sort_key)
+    return edges
+
+
+def _evidence_name_list(payload: object) -> list[str]:
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        names = [name for name in payload if isinstance(name, str)]
+        return sorted(set(names))
+    if isinstance(payload, str):
+        return [payload]
+    return []
+
+
+def _dependency_node_sort_key(node: object) -> str:
+    if isinstance(node, TaskNode):
+        return node.name
+    return ""
+
+
+def _dependency_node_payload(
+    node_id: int,
+    node: object,
+    *,
+    signatures: Mapping[str, str],
+) -> dict[str, object]:
+    if not isinstance(node, TaskNode):
+        msg = "Expected TaskNode payload for dependency graph node."
+        raise TypeError(msg)
+    return {
+        "id": node_id,
+        "name": node.name,
+        "priority": int(node.priority),
+        "signature": signatures.get(node.name),
+    }
+
+
+def _task_node_weight(node: object) -> float:
+    if isinstance(node, TaskNode):
+        return float(max(node.priority, 1))
+    payload = getattr(node, "payload", None)
+    priority = getattr(payload, "priority", 1)
+    if isinstance(priority, int):
+        return float(max(priority, 1))
+    return 1.0
+
+
 def _build_task_graph_inferred(
     tasks: Sequence[TaskNode],
     *,
@@ -806,12 +1179,20 @@ __all__ = [
     "GraphDiagnostics",
     "GraphEdge",
     "GraphNode",
+    "TaskDependencyReduction",
+    "TaskDependencySnapshot",
     "TaskEdgeRequirements",
     "TaskGraph",
     "TaskGraphSnapshot",
     "TaskNode",
     "build_task_graph_from_inferred_deps",
     "build_task_graph_from_views",
+    "task_dependency_critical_path",
+    "task_dependency_critical_path_length",
+    "task_dependency_critical_path_tasks",
+    "task_dependency_graph",
+    "task_dependency_reduction",
+    "task_dependency_signature",
     "task_graph_diagnostics",
     "task_graph_impact_subgraph",
     "task_graph_isolate_labels",

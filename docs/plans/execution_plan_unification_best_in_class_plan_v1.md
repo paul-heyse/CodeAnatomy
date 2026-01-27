@@ -23,6 +23,20 @@ change.
 4) Scheduling is not computed in multiple places.
 5) Observability artifacts are plan-native and deterministic.
 
+## Status Snapshot (January 27, 2026)
+
+- [x] Canonical `ExecutionPlan` compilation exists in `relspec.execution_plan`.
+- [x] Driver construction compiles the plan once per build and injects it into
+      Hamilton.
+- [x] Schedule duplication and generation-wave gating modules have been removed.
+- [x] Plan diagnostics, semantic registry, and cache lineage hooks are wired in.
+- [x] Dynamic execution uses a plan-aware grouping strategy.
+- [ ] Plan-aware submission/grouping lifecycle hooks (priority submission +
+      grouping diagnostics) are not yet implemented.
+- [x] Driver caching is plan-signature aware and rebuilds drivers when the plan
+      changes.
+- [x] `active_task_names` now drives runtime gating for inactive tasks.
+
 ---
 
 ## Scope 1 - Canonical ExecutionPlan Compiler (rustworkx as kernel)
@@ -149,19 +163,19 @@ def _bottom_level_costs(graph: "rx.PyDiGraph") -> dict[str, float]:
 
 ### Implementation checklist
 
-- [ ] Create `ExecutionPlan` and `compile_execution_plan(...)` in
+- [x] Create `ExecutionPlan` and `compile_execution_plan(...)` in
       `src/relspec/execution_plan.py`.
-- [ ] Ensure plan compilation produces:
-  - [ ] task graph,
-  - [ ] schedule and per-task schedule metadata,
-  - [ ] plan fingerprints and plan signature,
-  - [ ] rustworkx diagnostics artifacts,
-  - [ ] bottom level costs for prioritization.
-- [ ] Add plan-level helpers for:
-  - [ ] impacted task pruning,
-  - [ ] requested output pruning,
-  - [ ] evidence seeding from dataset specs.
-- [ ] Move all plan signature computation behind the plan compiler.
+- [x] Ensure plan compilation produces:
+  - [x] task graph,
+  - [x] schedule and per-task schedule metadata,
+  - [x] plan fingerprints and plan signature,
+  - [x] rustworkx diagnostics artifacts,
+  - [x] bottom level costs for prioritization.
+- [x] Add plan-level helpers for:
+  - [x] impacted task pruning,
+  - [x] requested output pruning,
+  - [x] evidence seeding from dataset specs.
+- [x] Move all plan signature computation behind the plan compiler.
 
 ---
 
@@ -261,12 +275,14 @@ def build_driver_from_plan(*, session, view_nodes, base_modules):
 
 ### Implementation checklist
 
-- [ ] Build the plan once in `driver_factory` before creating dynamic modules.
-- [ ] Inject plan nodes via `modules/execution_plan.py`.
-- [ ] Update `task_module_builder` to accept `ExecutionPlan` instead of
+- [x] Build the plan once in `driver_factory` before creating dynamic modules.
+- [x] Inject plan nodes via `modules/execution_plan.py`.
+- [x] Update `task_module_builder` to accept `ExecutionPlan` instead of
       `dependency_map` and `view_nodes`.
-- [ ] Ensure schedule metadata and fingerprints come from the injected plan.
-- [ ] Remove all schedule recomputation paths outside the plan compiler.
+- [x] Ensure schedule metadata and fingerprints come from the injected plan.
+- [x] Remove all schedule recomputation paths outside the plan compiler.
+- [x] Make driver caching plan-sensitive by including the plan signature (or a
+      plan fingerprint) in the driver cache key.
 
 ---
 
@@ -342,11 +358,19 @@ class PrioritySubmissionHook(lifecycle_api.TaskSubmissionHook):
 
 ### Implementation checklist
 
-- [ ] Prune tasks at plan compile time (impact and requested outputs).
-- [ ] Ensure only pruned tasks are present in the generated task module.
-- [ ] Replace generation gating with task hooks and plan-driven grouping.
-- [ ] Sort ready work by criticality using bottom level costs.
-- [ ] Keep rustworkx as the scheduling source of truth.
+- [x] Prune tasks at plan compile time (impact and requested outputs).
+- [x] Ensure only pruned tasks are present in the generated task module.
+- [x] Remove generation-wave gating in favor of per-task execution nodes.
+- [x] Use plan schedule metadata for generation-aware grouping.
+- [ ] Add plan-aware `TaskSubmissionHook` and/or `TaskGroupingHook` so ready
+      work is ordered by bottom-level criticality at submission time.
+- [ ] Wire scheduling hooks into dynamic execution adapters and record their
+      diagnostics artifacts.
+- [x] Keep rustworkx as the scheduling source of truth.
+- [x] Enforce runtime gating so tasks outside `active_task_names` are skipped,
+      not executed.
+- [x] Consider pruning generated task nodes further when incremental diff limits
+      the active closure.
 
 ---
 
@@ -405,10 +429,10 @@ def inject_plan_inputs(node_fn, *, task_name: str, task_output: str, plan_finger
 
 ### Implementation checklist
 
-- [ ] Inject `plan_signature` and per-task `plan_fingerprint` as inputs.
-- [ ] Configure cache with opt-in defaults and JSONL logs.
-- [ ] Export deterministic cache lineage per run.
-- [ ] Record cache lineage and plan signature in diagnostics artifacts.
+- [x] Inject `plan_signature` and per-task `plan_fingerprint` as inputs.
+- [x] Configure cache with opt-in defaults and JSONL logs.
+- [x] Export deterministic cache lineage per run.
+- [x] Record cache lineage and plan signature in diagnostics artifacts.
 
 ---
 
@@ -482,10 +506,10 @@ def record_plan_diagnostics(profile, plan: ExecutionPlan) -> None:
 
 ### Implementation checklist
 
-- [ ] Adopt a semantic tag contract for public outputs.
-- [ ] Ensure schedule metadata tags come from the plan.
-- [ ] Emit plan diagnostics artifacts for every run.
-- [ ] Optionally compile a semantic registry from tags as a first-class artifact.
+- [x] Adopt a semantic tag contract for public outputs.
+- [x] Ensure schedule metadata tags come from the plan.
+- [x] Emit plan diagnostics artifacts for every run.
+- [x] Optionally compile a semantic registry from tags as a first-class artifact.
 
 ---
 
@@ -515,8 +539,8 @@ injection, scheduler-driven execution, and plan-aware caching are all in place.
 
 ### Deferred deletion checklist
 
-- [ ] Verify no remaining imports reference the candidate modules.
-- [ ] Replace tests with plan-centric scheduling and execution tests.
-- [ ] Confirm plan signature changes invalidate cached results as intended.
-- [ ] Confirm dynamic execution uses plan grouping and priority hooks.
-
+- [x] Verify no remaining imports reference the candidate modules.
+- [x] Replace tests with plan-centric scheduling and execution tests.
+- [x] Confirm plan signature changes invalidate cached results as intended.
+- [ ] Confirm dynamic execution uses plan submission/grouping hooks in addition
+      to the grouping strategy.

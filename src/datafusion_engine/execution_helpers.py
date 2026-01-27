@@ -1,4 +1,9 @@
-"""Execution helper utilities for DataFusion compilation and diagnostics."""
+"""Execution helper utilities for DataFusion compilation and diagnostics.
+
+DEPRECATED: SQLGlot policy and safety validation functions are deprecated for
+internal execution paths. SQL ingress should be gated by DataFusion SQLOptions.
+Internal execution should use builder/plan-based approaches only.
+"""
 
 from __future__ import annotations
 
@@ -12,9 +17,8 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TYPE_CHECKING, cast
 
-import msgspec
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 
@@ -32,13 +36,7 @@ try:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
 except ImportError:
     DataFusionLogicalPlan = None
-from datafusion import (
-    DataFrameWriteOptions,
-    ParquetColumnOptions,
-    ParquetWriterOptions,
-    SessionContext,
-    SQLOptions,
-)
+from datafusion import DataFrameWriteOptions, SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
 from ibis.expr.types import Value as IbisValue
 
@@ -80,8 +78,6 @@ from sqlglot_tools.optimizer import (
     PreflightOptions,
     SchemaMapping,
     SqlGlotPolicy,
-    ast_policy_fingerprint,
-    ast_to_artifact,
     bind_params,
     build_select,
     emit_preflight_diagnostics,
@@ -90,7 +86,6 @@ from sqlglot_tools.optimizer import (
     register_datafusion_dialect,
     resolve_sqlglot_policy,
     rewrite_expr,
-    serialize_ast_artifact,
     sqlglot_emit,
     sqlglot_policy_snapshot_for,
     sqlglot_sql,
@@ -142,30 +137,33 @@ if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlanType
     from datafusion.substrait import Consumer as SubstraitConsumerType
     from datafusion.substrait import Serde as SubstraitSerdeType
-
-    from schema_spec.policies import ParquetColumnPolicy
 else:
     DataFusionLogicalPlanType = object
 
 
-def _emit_cache_event(
-    *,
-    options: DataFusionCompileOptions,
-    column_count: int,
-    cache_enabled: bool,
-    reason: str,
-) -> None:
-    hook = options.cache_event_hook
+@dataclass(frozen=True)
+class _CacheEventContext:
+    options: DataFusionCompileOptions
+    column_count: int
+    cache_enabled: bool
+    reason: str
+    ast_fingerprint: str | None = None
+    policy_hash: str | None = None
+
+
+def _emit_cache_event(context: _CacheEventContext) -> None:
+    hook = context.options.cache_event_hook
     if hook is None:
         return
     hook(
         DataFusionCacheEvent(
-            cache_enabled=cache_enabled,
-            cache_max_columns=options.cache_max_columns,
-            column_count=column_count,
-            reason=reason,
-            plan_hash=options.plan_hash,
-            profile_hash=options.profile_hash,
+            cache_enabled=context.cache_enabled,
+            cache_max_columns=context.options.cache_max_columns,
+            column_count=context.column_count,
+            reason=context.reason,
+            ast_fingerprint=context.ast_fingerprint,
+            policy_hash=context.policy_hash,
+            profile_hash=context.options.profile_hash,
         )
     )
 
@@ -175,30 +173,44 @@ def _should_cache_df(
     *,
     options: DataFusionCompileOptions,
     reason: str | None = None,
+    ast_fingerprint: str | None = None,
+    policy_hash: str | None = None,
 ) -> bool:
     if options.cache is not True:
         _emit_cache_event(
-            options=options,
-            column_count=len(df.schema().names),
-            cache_enabled=False,
-            reason="cache_disabled",
+            _CacheEventContext(
+                options=options,
+                column_count=len(df.schema().names),
+                cache_enabled=False,
+                reason="cache_disabled",
+                ast_fingerprint=ast_fingerprint,
+                policy_hash=policy_hash,
+            )
         )
         return False
     column_count = len(df.schema().names)
     if options.cache_max_columns is not None and column_count > options.cache_max_columns:
         suffix = reason or "max_columns_exceeded"
         _emit_cache_event(
-            options=options,
-            column_count=column_count,
-            cache_enabled=False,
-            reason=f"{suffix}_max_columns_exceeded",
+            _CacheEventContext(
+                options=options,
+                column_count=column_count,
+                cache_enabled=False,
+                reason=f"{suffix}_max_columns_exceeded",
+                ast_fingerprint=ast_fingerprint,
+                policy_hash=policy_hash,
+            )
         )
         return False
     _emit_cache_event(
-        options=options,
-        column_count=column_count,
-        cache_enabled=True,
-        reason=reason or "cache_enabled",
+        _CacheEventContext(
+            options=options,
+            column_count=column_count,
+            cache_enabled=True,
+            reason=reason or "cache_enabled",
+            ast_fingerprint=ast_fingerprint,
+            policy_hash=policy_hash,
+        )
     )
     return True
 
@@ -220,6 +232,24 @@ def _resolve_cache_policy(
 
 
 def _policy_hash_for_options(options: DataFusionCompileOptions) -> str:
+    """Compute SQLGlot policy hash from compile options.
+
+    DEPRECATED: Use plan_fingerprint from DataFusionPlanBundle instead.
+    This function computes SQLGlot policy hashes which are deprecated in favor of
+    DataFusion-native plan fingerprints from DataFusionPlanBundle.
+
+    Parameters
+    ----------
+    options
+        Compile options containing policy configuration.
+
+    Returns
+    -------
+    str
+        SQLGlot policy hash (DEPRECATED).
+    """
+    if options.policy_hash is not None:
+        return options.policy_hash
     if options.sqlglot_policy_hash is not None:
         return options.sqlglot_policy_hash
     if options.sqlglot_policy is not None:
@@ -228,13 +258,57 @@ def _policy_hash_for_options(options: DataFusionCompileOptions) -> str:
         policy = options.sql_policy_profile.to_sqlglot_policy()
     else:
         policy = resolve_sqlglot_policy(name="datafusion_compile")
+    # DEPRECATED: Use plan_fingerprint from DataFusionPlanBundle instead
     return sqlglot_policy_snapshot_for(policy).policy_hash
 
 
-def _plan_hash_for_expr(expr: Expression, *, options: DataFusionCompileOptions) -> str:
-    ast_fingerprint = canonical_ast_fingerprint(expr)
-    policy_hash = _policy_hash_for_options(options)
-    return ast_policy_fingerprint(ast_fingerprint=ast_fingerprint, policy_hash=policy_hash)
+def _plan_fingerprint_for_expr(
+    expr: Expression, *, options: DataFusionCompileOptions
+) -> tuple[str, str]:
+    """Compute plan fingerprint from expression.
+
+    DEPRECATED: Use plan_fingerprint from DataFusionPlanBundle instead.
+    This function computes SQLGlot AST fingerprints and policy hashes which are
+    deprecated in favor of DataFusion-native plan fingerprints.
+
+    Returns
+    -------
+    tuple[str, str]
+        AST fingerprint and policy hash tuple (both DEPRECATED).
+    """
+    ast_fingerprint = options.ast_fingerprint or canonical_ast_fingerprint(expr)
+    policy_hash = _policy_hash_for_options(options)  # DEPRECATED
+    return ast_fingerprint, policy_hash
+
+
+def plan_fingerprint_from_bundle(
+    *,
+    substrait_bytes: bytes | None,
+    optimized: object,
+) -> str:
+    """Compute plan fingerprint from DataFusion plan bundle.
+
+    Prefers Substrait bytes when available, falls back to plan display.
+
+    Parameters
+    ----------
+    substrait_bytes : bytes | None
+        Substrait serialization bytes (preferred).
+    optimized : object
+        Optimized logical plan for fallback fingerprinting.
+
+    Returns
+    -------
+    str
+        SHA256 fingerprint of the plan.
+    """
+    if substrait_bytes is not None:
+        return hashlib.sha256(substrait_bytes).hexdigest()
+    if optimized is not None:
+        display = _plan_display(optimized, display_method="display_indent_schema")
+        if display is not None:
+            return hashlib.sha256(display.encode("utf-8")).hexdigest()
+    return hashlib.sha256(b"empty_plan").hexdigest()
 
 
 def _plan_cache_key(
@@ -243,14 +317,24 @@ def _plan_cache_key(
     ctx: SessionContext,
     options: DataFusionCompileOptions,
 ) -> PlanCacheKey | None:
+    """Build plan cache key from expression.
+
+    Cache keys are based on Substrait hashes for portable, deterministic caching.
+    This function is deprecated in favor of plan_bundle_cache_key() which uses
+    DataFusion plan bundles directly.
+
+    Returns
+    -------
+    PlanCacheKey | None
+        Cache key with Substrait hash, or None if caching is unavailable.
+    """
     if options.plan_cache is None or options.profile_hash is None:
         return None
     if options.params is not None or options.named_params is not None:
         return None
     if not options.diagnostics_allow_sql:
         return None
-    ast_fingerprint = canonical_ast_fingerprint(expr)
-    policy_hash = _policy_hash_for_options(options)
+    ast_fingerprint, policy_hash = _plan_fingerprint_for_expr(expr, options=options)
     _ensure_dialect(options.dialect)
     try:
         sql = _emit_sql(expr, options=options)
@@ -264,6 +348,43 @@ def _plan_cache_key(
         ast_fingerprint=ast_fingerprint,
         policy_hash=policy_hash,
         profile_hash=options.profile_hash,
+        substrait_hash=substrait_hash,
+    )
+
+
+def plan_bundle_cache_key(
+    *,
+    bundle: object,
+    policy_hash: str,
+    profile_hash: str,
+) -> PlanCacheKey | None:
+    """Build plan cache key from DataFusion plan bundle.
+
+    Parameters
+    ----------
+    bundle : DataFusionPlanBundle
+        Plan bundle containing Substrait bytes and plan fingerprint.
+    policy_hash : str
+        SQL policy hash for cache key.
+    profile_hash : str
+        Runtime profile hash for cache key.
+
+    Returns
+    -------
+    PlanCacheKey | None
+        Cache key based on plan bundle, or None if unavailable.
+    """
+    from datafusion_engine.plan_bundle import DataFusionPlanBundle
+
+    if not isinstance(bundle, DataFusionPlanBundle):
+        return None
+    if bundle.substrait_bytes is None:
+        return None
+    substrait_hash = hashlib.sha256(bundle.substrait_bytes).hexdigest()
+    return PlanCacheKey(
+        ast_fingerprint=bundle.plan_fingerprint,
+        policy_hash=policy_hash,
+        profile_hash=profile_hash,
         substrait_hash=substrait_hash,
     )
 
@@ -357,6 +478,15 @@ def _default_sql_policy() -> DataFusionSqlPolicy:
 
 
 def _execution_policy_from_sql_policy(policy: DataFusionSqlPolicy) -> ExecutionPolicy:
+    """Convert DataFusionSqlPolicy to ExecutionPolicy.
+
+    DEPRECATED: Use DataFusion SQLOptions directly for internal execution gating.
+
+    Returns
+    -------
+    ExecutionPolicy
+        Execution policy derived from SQL policy.
+    """
     return ExecutionPolicy(
         allow_ddl=policy.allow_ddl,
         allow_dml=policy.allow_dml,
@@ -365,6 +495,15 @@ def _execution_policy_from_sql_policy(policy: DataFusionSqlPolicy) -> ExecutionP
 
 
 def _execution_policy_for_options(options: DataFusionCompileOptions) -> ExecutionPolicy:
+    """Derive ExecutionPolicy from compile options.
+
+    DEPRECATED: Use DataFusion SQLOptions directly for internal execution gating.
+
+    Returns
+    -------
+    ExecutionPolicy
+        Execution policy derived from options.
+    """
     policy = options.sql_policy or resolve_sql_policy(
         options.sql_policy_name,
         fallback=_default_sql_policy(),
@@ -442,6 +581,15 @@ def _compilation_pipeline(
     *,
     options: DataFusionCompileOptions,
 ) -> CompilationPipeline:
+    """Build a compilation pipeline from compile options.
+
+    DEPRECATED: Use build_plan_bundle() from datafusion_engine.plan_bundle instead.
+
+    Returns
+    -------
+    CompilationPipeline
+        Legacy compilation pipeline for SQLGlot/Ibis expressions.
+    """
     profile = _sql_policy_profile_from_options(options)
     compile_options = CompileOptions(
         prefer_substrait=options.prefer_substrait,
@@ -455,6 +603,15 @@ def _compilation_pipeline(
 
 
 def _sqlglot_emit_policy(options: DataFusionCompileOptions) -> SqlGlotPolicy:
+    """Build SQLGlot emit policy.
+
+    DEPRECATED: Use DataFusion-native planning instead.
+
+    Returns
+    -------
+    SqlGlotPolicy
+        SQLGlot policy for SQL emission.
+    """
     base = options.sqlglot_policy or resolve_sqlglot_policy(name="datafusion_compile")
     return replace(
         base,
@@ -465,6 +622,15 @@ def _sqlglot_emit_policy(options: DataFusionCompileOptions) -> SqlGlotPolicy:
 
 
 def _emit_sql(expr: Expression, *, options: DataFusionCompileOptions) -> str:
+    """Emit SQL from SQLGlot AST.
+
+    DEPRECATED: Use DataFusion-native planning instead.
+
+    Returns
+    -------
+    str
+        SQL string emitted from AST.
+    """
     policy = _sqlglot_emit_policy(options)
     return sqlglot_emit(expr, policy=policy)
 
@@ -500,6 +666,7 @@ def validate_table_constraints(
         for constraint in constraints:
             if not constraint.strip():
                 continue
+            # DEPRECATED: Use DataFusion's native SQL parser for validation instead
             constraint_expr = parse_sql_strict(constraint, dialect=policy.read_dialect)
             query_expr = build_select(
                 [exp.Literal.number(1)],
@@ -744,6 +911,9 @@ def _maybe_enforce_preflight(
 ) -> None:
     """Enforce preflight qualification when enabled.
 
+    DEPRECATED: SQLGlot-based preflight validation is deprecated.
+    Use DataFusion-native query validation instead.
+
     Parameters
     ----------
     expr
@@ -780,6 +950,16 @@ def _maybe_enforce_preflight(
 
 
 def _policy_violations(expr: Expression, policy: DataFusionSqlPolicy) -> tuple[str, ...]:
+    """Check policy violations from SQLGlot AST.
+
+    DEPRECATED: Use DataFusion SQLOptions for SQL ingress gating instead.
+    This function is retained for backward compatibility during migration only.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Tuple of policy violation names.
+    """
     violations: list[str] = []
     if not policy.allow_ddl and _contains_ddl(expr):
         violations.append("ddl")
@@ -856,7 +1036,6 @@ def _sql_options_for_named_params(options: DataFusionCompileOptions) -> SQLOptio
 class DataFusionPlanArtifacts:
     """Captured DataFusion plan artifacts for diagnostics."""
 
-    plan_hash: str | None
     sql: str
     explain: TableLike | RecordBatchReaderLike | None
     explain_analyze: TableLike | RecordBatchReaderLike | None
@@ -906,7 +1085,6 @@ class DataFusionPlanArtifacts:
             else None
         )
         return {
-            "plan_hash": self.plan_hash,
             "policy_hash": self.policy_hash,
             "ast_fingerprint": self.ast_fingerprint,
             "sql": self.sql,
@@ -969,7 +1147,6 @@ class DataFusionPlanArtifacts:
         return {
             "event_time_unix_ms": int(time.time() * 1000),
             "run_id": self.run_id,
-            "plan_hash": self.plan_hash,
             "policy_hash": self.policy_hash,
             "ast_fingerprint": self.ast_fingerprint,
             "sql": self.sql,
@@ -1073,8 +1250,10 @@ def _maybe_collect_plan_artifacts(
         options.plan_artifacts_hook(artifacts.structured_explain_payload())
 
 
-def _semantic_plan_hash(expr: Expression, *, options: DataFusionCompileOptions) -> str:
-    return _plan_hash_for_expr(expr, options=options)
+def _semantic_plan_fingerprint(
+    expr: Expression, *, options: DataFusionCompileOptions
+) -> tuple[str, str]:
+    return _plan_fingerprint_for_expr(expr, options=options)
 
 
 def _semantic_diff_base_expr(
@@ -1097,6 +1276,9 @@ def _semantic_diff_base_expr(
 
     from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
+    # DEPRECATED: SQLGlot-based SQL validation for DataFusion queries.
+    # For DataFusion query validation, prefer DataFusion's native SQL parser
+    # with SQLOptions for ingress gating.
     try:
         register_datafusion_dialect()
         base_expr = parse_sql_strict(options.semantic_diff_base_sql, dialect=base_options.dialect)
@@ -1122,8 +1304,8 @@ def _maybe_collect_semantic_diff(
     from datafusion_engine.semantic_diff import ChangeCategory, SemanticDiff
 
     diff = SemanticDiff.compute(base_expr, expr)
-    plan_hash = options.plan_hash or _semantic_plan_hash(expr, options=options)
-    base_hash = _semantic_plan_hash(base_expr, options=options)
+    ast_fingerprint, policy_hash = _semantic_plan_fingerprint(expr, options=options)
+    base_ast_fingerprint, base_policy_hash = _semantic_plan_fingerprint(base_expr, options=options)
     row_multiplying = diff.overall_category == ChangeCategory.ROW_MULTIPLYING
     breaking = diff.overall_category in {ChangeCategory.BREAKING, ChangeCategory.ROW_MULTIPLYING}
     change_count = len(
@@ -1132,8 +1314,10 @@ def _maybe_collect_semantic_diff(
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "run_id": options.run_id,
-        "plan_hash": plan_hash,
-        "base_plan_hash": base_hash,
+        "ast_fingerprint": ast_fingerprint,
+        "policy_hash": policy_hash,
+        "base_ast_fingerprint": base_ast_fingerprint,
+        "base_policy_hash": base_policy_hash,
         "category": diff.overall_category.name.lower(),
         "changed": diff.overall_category != ChangeCategory.NONE,
         "breaking": breaking,
@@ -1198,6 +1382,9 @@ def df_from_sqlglot_or_sql(
 ) -> DataFrame:
     """Compile SQLGlot input and return a DataFusion DataFrame.
 
+    DEPRECATED: Use DataFusion-native builder functions that return DataFrame
+    directly instead.
+
     Parameters
     ----------
     ctx : datafusion.SessionContext
@@ -1234,8 +1421,8 @@ def df_from_sqlglot_or_sql(
 
 def datafusion_write_options(
     policy: DataFusionWritePolicy | None,
-) -> tuple[DataFrameWriteOptions, ParquetWriterOptions]:
-    """Build DataFusion write option objects from a policy.
+) -> DataFrameWriteOptions:
+    """Build DataFusion write options from a policy.
 
     Parameters
     ----------
@@ -1244,40 +1431,15 @@ def datafusion_write_options(
 
     Returns
     -------
-    tuple[DataFrameWriteOptions, ParquetWriterOptions]
-        DataFusion write options and Parquet writer options.
+    DataFrameWriteOptions
+        DataFusion write options derived from the policy.
     """
     resolved = policy or DataFusionWritePolicy()
-    write_options = DataFrameWriteOptions(
+    return DataFrameWriteOptions(
         partition_by=list(resolved.partition_by),
         sort_by=None,
         single_file_output=resolved.single_file_output,
     )
-    column_options: dict[str, ParquetColumnOptions] = {}
-    if resolved.parquet_column_options:
-        for name, option in resolved.parquet_column_options.items():
-            column_options[name] = ParquetColumnOptions(
-                compression=option.compression,
-                dictionary_enabled=option.dictionary_enabled,
-                statistics_enabled=option.statistics_enabled,
-                bloom_filter_enabled=option.bloom_filter_enabled,
-                bloom_filter_fpp=option.bloom_filter_fpp,
-                bloom_filter_ndv=option.bloom_filter_ndv,
-                encoding=option.encoding,
-            )
-    parquet_options = ParquetWriterOptions(
-        compression=resolved.parquet_compression or "zstd",
-        statistics_enabled=resolved.parquet_statistics_enabled or "page",
-        max_row_group_size=resolved.parquet_row_group_size or 1_000_000,
-        bloom_filter_on_write=resolved.parquet_bloom_filter_on_write or False,
-        dictionary_enabled=resolved.parquet_dictionary_enabled
-        if resolved.parquet_dictionary_enabled is not None
-        else True,
-        encoding=resolved.parquet_encoding,
-        skip_arrow_metadata=resolved.parquet_skip_arrow_metadata or False,
-        column_specific_options=column_options or None,
-    )
-    return write_options, parquet_options
 
 
 def _df_plan_details(df: DataFrame) -> dict[str, object]:
@@ -1392,7 +1554,8 @@ class _PlanArtifactInputs:
     projection_map: bytes | None
     policy: SqlGlotPolicy
     details: _PlanArtifactsDetails
-    plan_hash: str
+    ast_fingerprint: str
+    policy_hash: str
 
 
 def _collect_plan_artifact_inputs(
@@ -1426,7 +1589,7 @@ def _collect_plan_artifact_inputs(
         df=df,
         substrait_plan_override=options.substrait_plan_override,
     )
-    plan_hash = options.plan_hash or _plan_hash_for_expr(resolved_expr, options=options)
+    ast_fingerprint, policy_hash = _plan_fingerprint_for_expr(resolved_expr, options=options)
     return _PlanArtifactInputs(
         resolved_expr=resolved_expr,
         sql=sql,
@@ -1434,20 +1597,30 @@ def _collect_plan_artifact_inputs(
         projection_map=projection_map,
         policy=policy,
         details=details,
-        plan_hash=plan_hash,
+        ast_fingerprint=ast_fingerprint,
+        policy_hash=policy_hash,
     )
 
 
 def _collect_sqlglot_ast_artifact(
-    resolved_expr: Expression,
+    resolved_expr: Expression,  # noqa: ARG001
     *,
-    sql: str,
-    policy: SqlGlotPolicy,
+    sql: str,  # noqa: ARG001
+    policy: SqlGlotPolicy,  # noqa: ARG001
 ) -> bytes | None:
-    try:
-        return serialize_ast_artifact(ast_to_artifact(resolved_expr, sql=sql, policy=policy))
-    except (RuntimeError, TypeError, ValueError, msgspec.EncodeError):
-        return None
+    """Collect SQLGlot AST artifact.
+
+    DEPRECATED: SQLGlot AST artifacts are being phased out in favor of
+    DataFusion plan bundles. This function is retained for backward
+    compatibility during migration but should not be used for new code.
+
+    Returns
+    -------
+    bytes | None
+        Always returns None to phase out SQLGlot AST artifacts.
+    """
+    # Return None to phase out SQLGlot AST artifacts
+    return None
 
 
 def _collect_lineage_payload(
@@ -1533,6 +1706,9 @@ def collect_plan_artifacts(
 ) -> DataFusionPlanArtifacts:
     """Collect plan artifacts for diagnostics.
 
+    DEPRECATED: SQLGlot-based artifact collection is deprecated.
+    Prefer collecting artifacts directly from DataFusion plan bundles.
+
     Parameters
     ----------
     ctx:
@@ -1574,9 +1750,8 @@ def collect_plan_artifacts(
     )
     ibis_payload = _collect_ibis_artifacts(options)
     return DataFusionPlanArtifacts(
-        plan_hash=inputs.plan_hash,
         policy_hash=policy_hash,
-        ast_fingerprint=canonical_fingerprint,
+        ast_fingerprint=inputs.ast_fingerprint,
         sql=inputs.sql,
         normalized_sql=normalized_sql,
         explain=inputs.details.explain_rows,
@@ -1613,54 +1788,6 @@ def collect_plan_artifacts(
         ),
         run_id=run_id,
     )
-
-
-class _ParquetColumnOptionsKwargs(TypedDict, total=False):
-    compression: str | None
-    dictionary_enabled: bool
-    statistics_enabled: str | None
-    bloom_filter_enabled: bool
-    bloom_filter_fpp: float
-    bloom_filter_ndv: int
-    encoding: str
-
-
-def _column_options(
-    options: Mapping[str, ParquetColumnPolicy] | None,
-) -> dict[str, ParquetColumnOptions] | None:
-    if not options:
-        return None
-    resolved: dict[str, ParquetColumnOptions] = {}
-    for name, spec in options.items():
-        kwargs: _ParquetColumnOptionsKwargs = {}
-        if spec.compression is not None:
-            kwargs["compression"] = spec.compression
-        if spec.dictionary_enabled is not None:
-            kwargs["dictionary_enabled"] = spec.dictionary_enabled
-        if spec.statistics_enabled is not None:
-            kwargs["statistics_enabled"] = spec.statistics_enabled
-        if spec.bloom_filter_enabled is not None:
-            kwargs["bloom_filter_enabled"] = spec.bloom_filter_enabled
-        if spec.bloom_filter_fpp is not None:
-            kwargs["bloom_filter_fpp"] = spec.bloom_filter_fpp
-        if spec.bloom_filter_ndv is not None:
-            kwargs["bloom_filter_ndv"] = spec.bloom_filter_ndv
-        if spec.encoding is not None:
-            kwargs["encoding"] = spec.encoding
-        resolved[name] = ParquetColumnOptions(**kwargs)
-    return resolved
-
-
-def _parquet_column_options_payload(options: ParquetColumnOptions) -> dict[str, object]:
-    return {
-        "compression": getattr(options, "compression", None),
-        "dictionary_enabled": getattr(options, "dictionary_enabled", None),
-        "statistics_enabled": getattr(options, "statistics_enabled", None),
-        "bloom_filter_enabled": getattr(options, "bloom_filter_enabled", None),
-        "bloom_filter_fpp": getattr(options, "bloom_filter_fpp", None),
-        "bloom_filter_ndv": getattr(options, "bloom_filter_ndv", None),
-        "encoding": getattr(options, "encoding", None),
-    }
 
 
 def replay_substrait_bytes(ctx: SessionContext, plan_bytes: bytes) -> DataFrame:
@@ -1741,6 +1868,8 @@ __all__ = [
     "datafusion_to_reader",
     "datafusion_write_options",
     "df_from_sqlglot_or_sql",
+    "plan_bundle_cache_key",
+    "plan_fingerprint_from_bundle",
     "rehydrate_plan_artifacts",
     "replay_substrait_bytes",
     "validate_substrait_plan",

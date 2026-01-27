@@ -1,4 +1,8 @@
-"""Engine runtime composition helpers."""
+"""Engine runtime composition helpers.
+
+DEPRECATED: SQLGlot policy support in EngineRuntime is deprecated. Use
+DataFusion-native planning with SQLOptions for SQL ingress gating.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,8 @@ from typing import TYPE_CHECKING
 
 from arrowdsl.core.execution_context import ExecutionContext
 from ibis_engine.config import IbisBackendConfig
+
+# DEPRECATED: SQLGlot policy replaced by DataFusion-native planning
 from sqlglot_tools.optimizer import SqlGlotPolicy, default_sqlglot_policy
 
 if TYPE_CHECKING:
@@ -18,12 +24,17 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class EngineRuntime:
-    """Unified runtime settings for engine execution surfaces."""
+    """Unified runtime settings for engine execution surfaces.
+
+    DEPRECATED: sqlglot_policy field is deprecated. Use DataFusion SQLOptions
+    for SQL ingress gating instead. Internal execution should use builder/plan-based
+    approaches only.
+    """
 
     runtime_profile: RuntimeProfile
     datafusion_profile: DataFusionRuntimeProfile | None
     ibis_config: IbisBackendConfig
-    sqlglot_policy: SqlGlotPolicy
+    sqlglot_policy: SqlGlotPolicy  # DEPRECATED: Replaced by DataFusion SQLOptions
 
     def with_datafusion_profile(
         self,
@@ -53,10 +64,12 @@ def build_engine_runtime(
 ) -> EngineRuntime:
     """Build the unified runtime bundle for engine execution.
 
+    DEPRECATED: SQLGlot policy support is deprecated. Prefer DataFusion-native planning.
+
     Returns
     -------
     EngineRuntime
-        Bundled runtime settings for DataFusion, Ibis, and SQLGlot.
+        Bundled runtime settings for DataFusion and Ibis (SQLGlot deprecated).
     """
     runtime = runtime_profile or ctx.runtime
     runtime.apply_global_thread_pools()

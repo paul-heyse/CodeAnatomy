@@ -709,6 +709,12 @@ def write_delta_ibis(
 ) -> int | None:
     """Write a Delta table via the backend to_delta method.
 
+    .. deprecated:: Scope 15
+        This function writes Delta tables through Ibis backend to_delta methods.
+        Prefer using DataFusion-native write surfaces via `WritePipeline` for
+        new code. This will be phased out once DataFusion's native Delta writer
+        supports all required features.
+
     Parameters
     ----------
     backend : BaseBackend

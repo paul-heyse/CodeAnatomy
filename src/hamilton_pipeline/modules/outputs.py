@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import pyarrow as pa
 from hamilton.function_modifiers import (
@@ -43,6 +45,40 @@ def _stage_identity(table: TableLike) -> TableLike:
 
 def _stage_ready(table: TableLike) -> TableLike:
     return table
+
+
+@dataclass(frozen=True)
+class SemanticTagSpec:
+    """Semantic tag inputs for CPG output tagging."""
+
+    semantic_id: str
+    entity: str
+    grain: str
+    schema_ref: str
+    entity_keys: tuple[str, ...]
+    join_keys: tuple[str, ...] | None = None
+
+
+F = TypeVar("F", bound=Callable[..., object])
+
+
+def _semantic_tag(*, artifact: str, spec: SemanticTagSpec) -> Callable[[F], F]:
+    resolved_join_keys = spec.join_keys if spec.join_keys is not None else spec.entity_keys
+    return tag(
+        layer="semantic",
+        artifact=artifact,
+        kind="table",
+        semantic_id=spec.semantic_id,
+        entity=spec.entity,
+        grain=spec.grain,
+        version="1",
+        stability="design",
+        schema_ref=spec.schema_ref,
+        entity_keys=",".join(spec.entity_keys),
+        join_keys=",".join(resolved_join_keys),
+        materialization="delta",
+        materialized_name=spec.schema_ref,
+    )
 
 
 def _delta_write(
@@ -95,9 +131,18 @@ def _delta_write(
     on_input="cpg_nodes_final",
     namespace="cpg_nodes",
 )
-@cache(format="parquet", behavior="default")
+@cache(format="delta", behavior="default")
 @check_output_custom(NonEmptyTableValidator())
-@tag(layer="outputs", artifact="cpg_nodes", kind="table")
+@_semantic_tag(
+    artifact="cpg_nodes",
+    spec=SemanticTagSpec(
+        semantic_id="cpg.nodes.v1",
+        entity="node",
+        grain="per_node",
+        schema_ref="semantic.cpg_nodes_v1",
+        entity_keys=("repo", "commit", "node_id"),
+    ),
+)
 def cpg_nodes(cpg_nodes_final: TableLike) -> TableLike:
     """Return the final CPG nodes table.
 
@@ -115,9 +160,18 @@ def cpg_nodes(cpg_nodes_final: TableLike) -> TableLike:
     on_input="cpg_edges_final",
     namespace="cpg_edges",
 )
-@cache(format="parquet", behavior="default")
+@cache(format="delta", behavior="default")
 @check_output_custom(NonEmptyTableValidator())
-@tag(layer="outputs", artifact="cpg_edges", kind="table")
+@_semantic_tag(
+    artifact="cpg_edges",
+    spec=SemanticTagSpec(
+        semantic_id="cpg.edges.v1",
+        entity="edge",
+        grain="per_edge",
+        schema_ref="semantic.cpg_edges_v1",
+        entity_keys=("repo", "commit", "edge_id"),
+    ),
+)
 def cpg_edges(cpg_edges_final: TableLike) -> TableLike:
     """Return the final CPG edges table.
 
@@ -135,9 +189,19 @@ def cpg_edges(cpg_edges_final: TableLike) -> TableLike:
     on_input="cpg_props_final",
     namespace="cpg_props",
 )
-@cache(format="parquet", behavior="default")
+@cache(format="delta", behavior="default")
 @check_output_custom(NonEmptyTableValidator())
-@tag(layer="outputs", artifact="cpg_props", kind="table")
+@_semantic_tag(
+    artifact="cpg_props",
+    spec=SemanticTagSpec(
+        semantic_id="cpg.props.v1",
+        entity="prop",
+        grain="per_prop",
+        schema_ref="semantic.cpg_props_v1",
+        entity_keys=("repo", "commit", "node_id", "key"),
+        join_keys=("repo", "commit", "node_id"),
+    ),
+)
 def cpg_props(cpg_props_final: TableLike) -> TableLike:
     """Return the final CPG properties table.
 

@@ -105,10 +105,19 @@ def _plan_diagnostics_payload(plan: ExecutionPlan, *, run_id: str) -> dict[str, 
         return tuple(labels)
 
     critical_path = _labels(diagnostics.critical_path or ())
+    critical_path_task_names = tuple(plan.critical_path_task_names)
     weak_components = tuple(
         tuple(sorted(task_graph_node_label(plan.task_graph, node_id) for node_id in component))
         for component in diagnostics.weak_components
     )
+    reduction_node_map = {
+        str(key): value
+        for key, value in sorted(
+            plan.reduction_node_map.items(),
+            key=lambda item: item[0],
+        )
+    }
+    reduced_edge_count = max(plan.reduction_edge_count - plan.reduction_removed_edge_count, 0)
     schedule_metadata = [
         {
             "task_name": name,
@@ -128,14 +137,22 @@ def _plan_diagnostics_payload(plan: ExecutionPlan, *, run_id: str) -> dict[str, 
     return {
         "run_id": run_id,
         "plan_signature": plan.plan_signature,
+        "task_dependency_signature": plan.task_dependency_signature,
+        "reduced_task_dependency_signature": plan.reduced_task_dependency_signature,
         "task_count": len(plan.task_schedule.ordered_tasks),
         "generation_count": len(plan.task_schedule.generations),
         "missing_tasks": list(plan.task_schedule.missing_tasks),
         "schedule_metadata": schedule_metadata,
         "critical_path": list(critical_path),
         "critical_path_length": diagnostics.critical_path_length,
+        "critical_path_task_names": list(critical_path_task_names),
+        "critical_path_length_weighted": plan.critical_path_length_weighted,
         "weak_components": [list(component) for component in weak_components],
         "isolates": list(diagnostics.isolate_labels),
+        "reduction_node_map": reduction_node_map,
+        "reduction_edge_count": plan.reduction_edge_count,
+        "reduction_removed_edge_count": plan.reduction_removed_edge_count,
+        "reduction_reduced_edge_count": reduced_edge_count,
         "dot": diagnostics.dot,
         "node_link_json": diagnostics.node_link_json,
         "active_tasks": sorted(plan.active_tasks),
@@ -150,6 +167,7 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
 
     plan: ExecutionPlan
     profile: DataFusionRuntimeProfile
+    collector: DiagnosticsCollector | None = None
 
     def run_before_graph_execution(
         self,
@@ -166,6 +184,53 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
             "task_graph_diagnostics_v2",
             _plan_diagnostics_payload(self.plan, run_id=run_id),
         )
+
+    def run_after_graph_execution(
+        self,
+        *,
+        run_id: str,
+        **kwargs: object,
+    ) -> None:
+        """Record scheduling diagnostics after graph execution."""
+        _ = kwargs
+        _flush_plan_events(self.plan, profile=self.profile, collector=self.collector, run_id=run_id)
+
+
+def _flush_plan_events(
+    plan: ExecutionPlan,
+    *,
+    profile: DataFusionRuntimeProfile,
+    collector: DiagnosticsCollector | None,
+    run_id: str,
+) -> None:
+    if collector is None:
+        return
+    from datafusion_engine.diagnostics import record_artifact, record_events
+
+    plan_event_names = (
+        "hamilton_task_submission_v1",
+        "hamilton_task_grouping_v1",
+        "hamilton_task_expansion_v1",
+    )
+    events_snapshot = collector.events_snapshot()
+    event_counts: dict[str, int] = {}
+    for name in plan_event_names:
+        rows = events_snapshot.get(name, [])
+        event_counts[name] = len(rows)
+        if not rows:
+            continue
+        normalized_rows = [{str(key): value for key, value in row.items()} for row in rows]
+        record_events(profile, name, normalized_rows)
+    record_artifact(
+        profile,
+        "hamilton_plan_events_v1",
+        {
+            "run_id": run_id,
+            "plan_signature": plan.plan_signature,
+            "reduced_task_dependency_signature": plan.reduced_task_dependency_signature,
+            "event_counts": event_counts,
+        },
+    )
 
 
 __all__ = [

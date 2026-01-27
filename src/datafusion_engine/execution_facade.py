@@ -1,7 +1,17 @@
-"""Unified execution facade for DataFusion compilation and execution."""
+"""Unified execution facade for DataFusion compilation and execution.
+
+SQL ingress is gated by DataFusion SQLOptions. Internal execution paths
+use builder/plan-based approaches only. SQLGlot policy and safety validation
+are deprecated for internal paths.
+
+DEPRECATION NOTICE: Ibis compilation paths are deprecated. Prefer DataFusion-native
+builder functions returning DataFrame directly. See datafusion_engine.sqlglot_exprs
+for recommended DataFrame construction patterns.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, cast
@@ -9,16 +19,14 @@ from typing import TYPE_CHECKING, cast
 import sqlglot.expressions as exp
 from datafusion import DataFrame, SessionContext
 
-from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
+from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.compile_pipeline import CompiledExpression
 from datafusion_engine.diagnostics import DiagnosticsRecorder, recorder_for_profile
 from datafusion_engine.execution_helpers import (
     _compilation_pipeline,
-    _execution_policy_for_options,
     _maybe_collect_plan_artifacts,
     _maybe_collect_semantic_diff,
     _maybe_explain,
-    _policy_violations,
     _resolve_cache_policy,
     _should_cache_df,
     _sql_options_for_named_params,
@@ -26,14 +34,16 @@ from datafusion_engine.execution_helpers import (
 )
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.param_binding import resolve_param_bindings
-from datafusion_engine.sql_safety import validate_sql_safety
+from datafusion_engine.plan_bundle import (
+    DataFusionPlanBundle,
+    build_plan_bundle,
+)
 from datafusion_engine.write_pipeline import (
     WritePipeline,
     WriteRequest,
     WriteResult,
     WriteViewRequest,
 )
-from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -69,22 +79,33 @@ class ExecutionResult:
     table: TableLike | None = None
     reader: RecordBatchReaderLike | None = None
     write_result: WriteResult | None = None
+    plan_bundle: DataFusionPlanBundle | None = None
 
     @staticmethod
-    def from_dataframe(df: DataFrame) -> ExecutionResult:
+    def from_dataframe(
+        df: DataFrame,
+        *,
+        plan_bundle: DataFusionPlanBundle | None = None,
+    ) -> ExecutionResult:
         """Wrap a DataFusion DataFrame.
 
         Parameters
         ----------
         df
             DataFusion DataFrame to wrap.
+        plan_bundle
+            Optional plan bundle for lineage tracking.
 
         Returns
         -------
         ExecutionResult
             Wrapped execution result.
         """
-        return ExecutionResult(kind=ExecutionResultKind.DATAFRAME, dataframe=df)
+        return ExecutionResult(
+            kind=ExecutionResultKind.DATAFRAME,
+            dataframe=df,
+            plan_bundle=plan_bundle,
+        )
 
     @staticmethod
     def from_table(table: TableLike) -> ExecutionResult:
@@ -217,20 +238,44 @@ class CompiledPlan:
 
 @dataclass(frozen=True)
 class DataFusionExecutionFacade:
-    """Facade coordinating compilation, execution, registration, and writes."""
+    """Facade coordinating compilation, execution, registration, and writes.
+
+    DEPRECATION NOTICE: The ibis_backend field is deprecated and will be removed
+    in a future version. Use DataFusion-native builder functions instead of Ibis
+    compilation paths.
+    """
 
     ctx: SessionContext
     runtime_profile: DataFusionRuntimeProfile | None = None
-    ibis_backend: IbisCompilerBackend | None = None
+    ibis_backend: IbisCompilerBackend | None = None  # DEPRECATED: Ibis compilation is deprecated
 
     def __post_init__(self) -> None:
-        """Ensure the Rust UDF platform is installed for this context."""
+        """Ensure planner extensions are installed before any plan operations.
+
+        Planner extensions (Rust UDFs, ExprPlanner, FunctionFactory) are
+        planning-critical features and must be installed before any
+        plan-bundle construction.
+
+        DEPRECATION WARNING: Emits warning when ibis_backend is provided.
+        """
+        import warnings
+
         from datafusion_engine.udf_platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
         )
 
+        if self.ibis_backend is not None:
+            warnings.warn(
+                "ibis_backend parameter is deprecated and will be removed in a future version. "
+                "Use DataFusion-native builder functions instead of Ibis compilation paths. "
+                "See datafusion_engine.sqlglot_exprs for recommended patterns.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         if self.runtime_profile is None:
+            # Default configuration: enable all planner extensions
             options = RustUdfPlatformOptions(
                 enable_udfs=True,
                 enable_function_factory=True,
@@ -240,6 +285,8 @@ class DataFusionExecutionFacade:
             )
             install_rust_udf_platform(self.ctx, options=options)
             return
+
+        # Profile-driven configuration with strict validation
         options = RustUdfPlatformOptions(
             enable_udfs=self.runtime_profile.enable_udfs,
             enable_async_udfs=self.runtime_profile.enable_async_udfs,
@@ -308,6 +355,7 @@ class DataFusionExecutionFacade:
             if self.runtime_profile is not None
             else None,
             recorder=recorder,
+            runtime_profile=self.runtime_profile,
         )
 
     def compile(
@@ -317,6 +365,16 @@ class DataFusionExecutionFacade:
         options: DataFusionCompileOptions | None = None,
     ) -> CompiledPlan:
         """Compile an expression into a canonicalized plan.
+
+        DEPRECATED: This method is deprecated. Use compile_to_bundle() for
+        DataFusion-native planning or use builder functions that return
+        DataFrame directly.
+
+        SQLGlot/Ibis compilation paths are deprecated. Prefer DataFusion-native
+        builder functions returning DataFrame directly.
+
+        SQL string ingress is gated by SQLOptions and only accepted when
+        sql_ingest_hook is configured to mark explicit external SQL ingress.
 
         Parameters
         ----------
@@ -337,15 +395,11 @@ class DataFusionExecutionFacade:
             Raised when SQL ingestion is not explicitly enabled.
         """
         resolved = self._resolve_compile_options(options)
-        recorder = self.diagnostics_recorder(operation_id="compile")
-        if recorder is not None:
-            snapshot = sqlglot_policy_snapshot()
-            recorder.record_artifact(
-                "sqlglot_tokenizer_mode_v1",
-                {"tokenizer_mode": snapshot.tokenizer_mode},
-            )
+        # DEPRECATED: SQLGlot policy snapshot recording removed for DataFusion-native planning
+        # Use DataFusionPlanBundle for plan artifacts instead
         pipeline = _compilation_pipeline(self.ctx, options=resolved)
         if isinstance(expr, str):
+            # SQL string ingress: strict gating via sql_ingest_hook
             if resolved.sql_ingest_hook is None:
                 msg = (
                     "SQL string compilation is restricted to explicit SQL ingress. "
@@ -357,10 +411,13 @@ class DataFusionExecutionFacade:
             from datafusion_engine.sql_safety import sanitize_external_sql
             from sqlglot_tools.optimizer import (
                 StrictParseOptions,
-                parse_sql_strict,
+                parse_sql_strict,  # DEPRECATED: Use DataFusion's native SQL parser for validation
                 register_datafusion_dialect,
             )
 
+            # DEPRECATED: SQLGlot-based SQL validation for DataFusion queries.
+            # For DataFusion query ingress, prefer DataFusion's native SQL parser
+            # with SQLOptions gating.
             try:
                 sanitized = sanitize_external_sql(expr)
                 register_datafusion_dialect()
@@ -376,11 +433,50 @@ class DataFusionExecutionFacade:
         elif isinstance(expr, exp.Expression):
             compiled = pipeline.compile_ast(expr)
         else:
+            # DEPRECATED: Ibis compilation path. Use DataFrame builder functions instead.
+            # See datafusion_engine.sqlglot_exprs for recommended patterns.
             compiled = pipeline.compile_ibis(
                 cast("IbisTable", expr),
                 backend=self._resolve_ibis_backend(),
             )
         return CompiledPlan(compiled=compiled, options=resolved)
+
+    def compile_to_bundle(
+        self,
+        builder: Callable[[SessionContext], DataFrame],
+        *,
+        compute_execution_plan: bool = False,
+    ) -> DataFusionPlanBundle:
+        """Compile a DataFrame builder to a DataFusionPlanBundle.
+
+        This is the preferred compilation path for DataFusion-native planning.
+        Use this method instead of compile() for new code.
+
+        Parameters
+        ----------
+        builder
+            Callable that returns a DataFrame given a SessionContext.
+        compute_execution_plan
+            Whether to compute the physical execution plan (expensive).
+
+        Returns
+        -------
+        DataFusionPlanBundle
+            Canonical plan artifact for execution and scheduling.
+
+        Examples
+        --------
+        >>> def build_query(ctx: SessionContext) -> DataFrame:
+        ...     return ctx.sql("SELECT * FROM my_table")
+        >>> bundle = facade.compile_to_bundle(build_query)
+        """
+        df = builder(self.ctx)
+        return build_plan_bundle(
+            self.ctx,
+            df,
+            compute_execution_plan=compute_execution_plan,
+            compute_substrait=True,
+        )
 
     def execute(
         self,
@@ -390,6 +486,9 @@ class DataFusionExecutionFacade:
         named_params: Mapping[str, object] | None = None,
     ) -> ExecutionResult:
         """Execute a compiled plan and return a unified result.
+
+        Internal execution uses DataFusion-native planning with SQLOptions gating.
+        SQLGlot policy validation is deprecated for internal paths.
 
         Parameters
         ----------
@@ -408,7 +507,7 @@ class DataFusionExecutionFacade:
         Raises
         ------
         ValueError
-            Raised when the SQL fails safety validation.
+            Raised when parameter bindings are invalid.
         """
         resolved = plan.options
         params = params if params is not None else resolved.params
@@ -434,22 +533,7 @@ class DataFusionExecutionFacade:
             msg = "Named parameters must be table-like."
             raise ValueError(msg)
         named_tables = named_bindings.named_tables
-        if named_tables:
-            read_only_policy = DataFusionSqlPolicy()
-            violations = _policy_violations(plan.compiled.sqlglot_ast, read_only_policy)
-            if violations:
-                msg = f"Named parameter SQL must be read-only: {', '.join(violations)}."
-                raise ValueError(msg)
-        if plan.compiled.source == "sql":
-            policy = _execution_policy_for_options(resolved)
-            violations = validate_sql_safety(
-                plan.compiled.rendered_sql,
-                policy,
-                dialect=resolved.dialect,
-            )
-            if violations:
-                msg = f"SQL policy violations: {', '.join(violations)}."
-                raise ValueError(msg)
+        # Internal execution: SQLOptions gating only, no SQLGlot policy validation
         df = pipeline.execute(
             plan.compiled,
             params=bindings.param_values or None,
@@ -463,8 +547,28 @@ class DataFusionExecutionFacade:
         _maybe_explain(self.ctx, plan.compiled.sqlglot_ast, options=resolved)
         _maybe_collect_plan_artifacts(self.ctx, plan.compiled.sqlglot_ast, options=resolved, df=df)
         _maybe_collect_semantic_diff(self.ctx, plan.compiled.sqlglot_ast, options=resolved)
-        df = df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
-        return ExecutionResult.from_dataframe(df)
+
+        # Build plan bundle for DataFusion-native lineage tracking
+        bundle = self.build_plan_bundle(df, compute_substrait=True)
+
+        # Prefer DataFusion plan bundle fingerprint over legacy AST fingerprint
+        # Legacy AST fingerprinting is deprecated (lines 375-379)
+        fingerprint = bundle.plan_fingerprint
+        # Use empty policy hash for DataFusion-native plans
+        policy_hash = ""
+
+        df = (
+            df.cache()
+            if _should_cache_df(
+                df,
+                options=resolved,
+                reason=cache_reason,
+                ast_fingerprint=fingerprint,
+                policy_hash=policy_hash,
+            )
+            else df
+        )
+        return ExecutionResult.from_dataframe(df, plan_bundle=bundle)
 
     def execute_expr(
         self,
@@ -613,7 +717,55 @@ class DataFusionExecutionFacade:
         )
         return SchemaIntrospector(self.ctx, sql_options=sql_options)
 
+    def build_plan_bundle(
+        self,
+        df: DataFrame,
+        *,
+        compute_execution_plan: bool = False,
+        compute_substrait: bool = True,
+    ) -> DataFusionPlanBundle:
+        """Build a plan bundle from a DataFrame.
+
+        This is the canonical way to capture plan artifacts for scheduling
+        and lineage analysis.
+
+        Parameters
+        ----------
+        df
+            DataFusion DataFrame to build plan bundle from.
+        compute_execution_plan
+            Whether to compute the physical execution plan (expensive).
+        compute_substrait
+            Whether to compute Substrait bytes for fingerprinting.
+
+        Returns
+        -------
+        DataFusionPlanBundle
+            Canonical plan artifact for the DataFrame.
+        """
+        return build_plan_bundle(
+            self.ctx,
+            df,
+            compute_execution_plan=compute_execution_plan,
+            compute_substrait=compute_substrait,
+        )
+
     def _resolve_ibis_backend(self) -> IbisCompilerBackend:
+        """Resolve Ibis backend for legacy compilation paths (DEPRECATED).
+
+        DEPRECATED: This method supports deprecated Ibis compilation. Use DataFusion-native
+        builder functions instead.
+
+        Returns
+        -------
+        IbisCompilerBackend
+            Resolved Ibis compiler backend.
+
+        Raises
+        ------
+        ValueError
+            Raised when ibis_backend is None.
+        """
         if self.ibis_backend is None:
             msg = "Ibis backend required for Ibis compilation."
             raise ValueError(msg)

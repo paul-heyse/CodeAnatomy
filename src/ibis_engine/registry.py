@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 type PathLike = str | Path
 type DatasetFormat = str
-type DataFusionProvider = Literal["listing", "parquet", "delta_cdf"]
+type DataFusionProvider = Literal["listing", "delta_cdf"]
 
 
 class FilesystemBackend(Protocol):
@@ -516,11 +516,7 @@ def read_dataset(
         options.setdefault("table_name", params.table_name)
     if params.storage_options:
         options.setdefault("storage_options", dict(params.storage_options))
-    if (
-        params.dataset_format == "parquet"
-        and params.partitioning
-        and params.partitioning.lower() == "hive"
-    ):
+    if params.partitioning and params.partitioning.lower() == "hive":
         options.setdefault("hive_partitioning", True)
     reader = _resolve_reader(backend, params.dataset_format)
     return reader(params.path, **options)
@@ -586,7 +582,6 @@ def _resolve_reader(
     backend: ibis.backends.BaseBackend, dataset_format: DatasetFormat
 ) -> Callable[..., Table]:
     reader_map = {
-        "parquet": "read_parquet",
         "csv": "read_csv",
         "json": "read_json",
         "delta": "read_delta",

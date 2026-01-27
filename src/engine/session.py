@@ -1,4 +1,8 @@
-"""Execution session model for the compute engine."""
+"""Execution session model for the compute engine.
+
+DEPRECATION NOTICE: Ibis backend coupling in EngineSession and DataFusionExecutionFacade
+is deprecated. Use DataFusion-native builder functions instead.
+"""
 
 from __future__ import annotations
 
@@ -59,6 +63,9 @@ class EngineSession:
     def datafusion_facade(self) -> DataFusionExecutionFacade | None:
         """Return a DataFusion execution facade when configured.
 
+        DEPRECATION NOTICE: The ibis_backend parameter passed to DataFusionExecutionFacade
+        is deprecated. Future versions will not require Ibis backend configuration.
+
         Returns
         -------
         DataFusionExecutionFacade | None
@@ -66,10 +73,11 @@ class EngineSession:
         """
         if self.engine_runtime.datafusion_profile is None:
             return None
+        # DEPRECATED: ibis_backend parameter is deprecated, will be removed in future version
         return DataFusionExecutionFacade(
             ctx=self.engine_runtime.datafusion_profile.session_context(),
             runtime_profile=self.engine_runtime.datafusion_profile,
-            ibis_backend=cast("IbisCompilerBackend", self.ibis_backend),
+            ibis_backend=cast("IbisCompilerBackend", self.ibis_backend),  # DEPRECATED
         )
 
 

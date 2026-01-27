@@ -16,21 +16,26 @@ from ibis_engine.io_bridge import (
     write_ibis_dataset_delta,
 )
 from incremental.delta_context import read_delta_table_via_facade
-from sqlglot_tools.optimizer import ast_policy_fingerprint, sqlglot_policy_snapshot_for
+from sqlglot_tools.optimizer import sqlglot_policy_snapshot_for
 from storage.deltalake import delta_table_version, enable_delta_features
 from storage.ipc import payload_hash
 
 INVALIDATION_SNAPSHOT_VERSION = 1
-_PLAN_HASH_ENTRY = pa.struct(
+_PLAN_FINGERPRINT_ENTRY = pa.struct(
     [
         pa.field("plan_name", pa.string(), nullable=False),
-        pa.field("plan_hash", pa.string(), nullable=False),
+        pa.field("ast_fingerprint", pa.string(), nullable=False),
+        pa.field("policy_hash", pa.string(), nullable=False),
     ]
 )
 _INVALIDATION_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32(), nullable=False),
-        pa.field("incremental_plan_hashes", pa.list_(_PLAN_HASH_ENTRY), nullable=False),
+        pa.field(
+            "incremental_plan_fingerprints",
+            pa.list_(_PLAN_FINGERPRINT_ENTRY),
+            nullable=False,
+        ),
         pa.field("incremental_metadata_hash", pa.string(), nullable=True),
         pa.field("runtime_profile_hash", pa.string(), nullable=True),
     ]
@@ -50,10 +55,18 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class PlanFingerprint:
+    """Fingerprint fields for a compiled plan."""
+
+    ast_fingerprint: str
+    policy_hash: str
+
+
+@dataclass(frozen=True)
 class InvalidationSnapshot:
     """Persisted signatures for incremental invalidation checks."""
 
-    incremental_plan_hashes: dict[str, str]
+    incremental_plan_fingerprints: dict[str, PlanFingerprint]
     incremental_metadata_hash: str | None
     runtime_profile_hash: str | None
 
@@ -67,7 +80,9 @@ class InvalidationSnapshot:
         """
         return {
             "version": INVALIDATION_SNAPSHOT_VERSION,
-            "incremental_plan_hashes": _plan_hash_entries(self.incremental_plan_hashes),
+            "incremental_plan_fingerprints": _plan_fingerprint_entries(
+                self.incremental_plan_fingerprints
+            ),
             "incremental_metadata_hash": self.incremental_metadata_hash,
             "runtime_profile_hash": self.runtime_profile_hash,
         }
@@ -91,11 +106,11 @@ def build_invalidation_snapshot(
     Returns
     -------
     InvalidationSnapshot
-        Snapshot of plan hashes + runtime metadata.
+        Snapshot of plan fingerprints + runtime metadata.
     """
     runtime = context.runtime
     return InvalidationSnapshot(
-        incremental_plan_hashes=_incremental_plan_hashes(
+        incremental_plan_fingerprints=_incremental_plan_fingerprints(
             context=context,
             state_store=state_store,
         ),
@@ -202,9 +217,9 @@ def diff_invalidation_snapshots(
         reasons.append("incremental_metadata")
     reasons.extend(
         _diff_mapping(
-            previous.incremental_plan_hashes,
-            current.incremental_plan_hashes,
-            prefix="incremental_plan_hash",
+            previous.incremental_plan_fingerprints,
+            current.incremental_plan_fingerprints,
+            prefix="incremental_plan_fingerprint",
         )
     )
     return tuple(reasons)
@@ -249,15 +264,15 @@ def _runtime_profile_hash(runtime: IncrementalRuntime) -> str | None:
     return runtime_profile_snapshot(runtime.execution_ctx.runtime).profile_hash
 
 
-def _incremental_plan_hashes(
+def _incremental_plan_fingerprints(
     *,
     context: DeltaAccessContext,
     state_store: StateStore | None,
-) -> dict[str, str]:
+) -> dict[str, PlanFingerprint]:
     runtime = context.runtime
     artifacts = runtime.profile.view_registry_snapshot()
     if artifacts:
-        return _plan_hashes_from_artifacts(artifacts)
+        return _plan_fingerprints_from_artifacts(artifacts)
     if state_store is None:
         return {}
     path = state_store.view_artifacts_path()
@@ -273,36 +288,42 @@ def _incremental_plan_hashes(
         return {}
     table = _read_delta_table(context, path)
     rows = table.to_pylist()
-    return _plan_hashes_from_artifacts(rows)
+    return _plan_fingerprints_from_artifacts(rows)
 
 
-def _plan_hashes_from_artifacts(
+def _plan_fingerprints_from_artifacts(
     artifacts: Sequence[Mapping[str, object]],
-) -> dict[str, str]:
-    resolved: dict[str, str] = {}
+) -> dict[str, PlanFingerprint]:
+    resolved: dict[str, PlanFingerprint] = {}
     for payload in artifacts:
         name = payload.get("name")
         ast_fingerprint = payload.get("ast_fingerprint")
         policy_hash = payload.get("policy_hash")
         if not name or not ast_fingerprint or not policy_hash:
             continue
-        resolved[str(name)] = ast_policy_fingerprint(
+        resolved[str(name)] = PlanFingerprint(
             ast_fingerprint=str(ast_fingerprint),
             policy_hash=str(policy_hash),
         )
     return resolved
 
 
-def _plan_hash_entries(plan_hashes: Mapping[str, str]) -> list[dict[str, object]]:
+def _plan_fingerprint_entries(
+    plan_fingerprints: Mapping[str, PlanFingerprint],
+) -> list[dict[str, object]]:
     return [
-        {"plan_name": name, "plan_hash": plan_hash}
-        for name, plan_hash in sorted(plan_hashes.items())
+        {
+            "plan_name": name,
+            "ast_fingerprint": fingerprint.ast_fingerprint,
+            "policy_hash": fingerprint.policy_hash,
+        }
+        for name, fingerprint in sorted(plan_fingerprints.items())
     ]
 
 
 def _diff_mapping(
-    previous: Mapping[str, str],
-    current: Mapping[str, str],
+    previous: Mapping[str, PlanFingerprint],
+    current: Mapping[str, PlanFingerprint],
     *,
     prefix: str,
 ) -> list[str]:
@@ -320,28 +341,32 @@ def _diff_mapping(
 
 
 def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
-    plan_hashes = _coerce_plan_hash_entries(row.get("incremental_plan_hashes"))
+    plan_fingerprints = _coerce_plan_fingerprint_entries(row.get("incremental_plan_fingerprints"))
     metadata_hash = row.get("incremental_metadata_hash")
     runtime_hash = row.get("runtime_profile_hash")
     return InvalidationSnapshot(
-        incremental_plan_hashes=plan_hashes,
+        incremental_plan_fingerprints=plan_fingerprints,
         incremental_metadata_hash=str(metadata_hash) if metadata_hash is not None else None,
         runtime_profile_hash=str(runtime_hash) if runtime_hash is not None else None,
     )
 
 
-def _coerce_plan_hash_entries(value: object) -> dict[str, str]:
+def _coerce_plan_fingerprint_entries(value: object) -> dict[str, PlanFingerprint]:
     if not isinstance(value, Sequence):
         return {}
-    resolved: dict[str, str] = {}
+    resolved: dict[str, PlanFingerprint] = {}
     for entry in value:
         if not isinstance(entry, Mapping):
             continue
         name = entry.get("plan_name")
-        plan_hash = entry.get("plan_hash")
-        if name is None or plan_hash is None:
+        ast_fingerprint = entry.get("ast_fingerprint")
+        policy_hash = entry.get("policy_hash")
+        if name is None or ast_fingerprint is None or policy_hash is None:
             continue
-        resolved[str(name)] = str(plan_hash)
+        resolved[str(name)] = PlanFingerprint(
+            ast_fingerprint=str(ast_fingerprint),
+            policy_hash=str(policy_hash),
+        )
     return resolved
 
 

@@ -1,4 +1,12 @@
-"""View builders for normalize outputs."""
+"""View builders for normalize outputs.
+
+DEPRECATED: This module contains Ibis-based view builders.
+For new code, use df_view_builders.py which provides DataFusion-native
+DataFrame builders with DataFusionPlanBundle support for lineage extraction.
+
+The Ibis builders in this module are maintained for backward compatibility
+but will be removed once all callsites migrate to DataFusion-native builders.
+"""
 
 from __future__ import annotations
 

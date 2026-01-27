@@ -4,6 +4,10 @@ This module provides AST-based builders for DDL and DML statements,
 replacing string assembly with structured SQLGlot expression building.
 All builders produce SQLGlot expressions that can be rendered to
 dialect-specific SQL.
+
+.. deprecated::
+    Use DataFusion catalog and TableSchemaSpec DDL methods instead.
+    Schema contracts should be derived directly from DataFusion catalog.
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ class ExternalTableDDLConfig:
     schema_expressions
         SQLGlot schema expressions (ColumnDef + constraints) when available.
     file_format
-        File format (PARQUET, CSV, JSON, ARROW).
+        File format (DELTA, CSV, JSON, ARROW).
     options
         Format-specific options for the table provider.
     compression
@@ -50,7 +54,7 @@ class ExternalTableDDLConfig:
 
     schema: dict[str, str] | None = None
     schema_expressions: list[exp.Expression] | None = None
-    file_format: str = "PARQUET"
+    file_format: str = "DELTA"
     options: dict[str, str] | None = None
     compression: str | None = None
     partitioned_by: tuple[str, ...] | None = None
@@ -143,7 +147,7 @@ def build_copy_to_ast(
     *,
     query: exp.Expression,
     path: str,
-    file_format: str | None = "PARQUET",
+    file_format: str | None = "DELTA",
     options: dict[str, object] | None = None,
     partition_by: tuple[str, ...] = (),
 ) -> exp.Copy:
@@ -161,7 +165,7 @@ def build_copy_to_ast(
     path
         Destination path (local filesystem or object store URI).
     file_format
-        Output format (PARQUET, CSV, JSON, ARROW).
+        Output format (DELTA, CSV, JSON, ARROW).
     options
         Format-specific options (compression, delimiter, etc.).
     partition_by
@@ -178,13 +182,13 @@ def build_copy_to_ast(
     >>> query = parse_sql_strict("SELECT * FROM mytable", dialect="datafusion")
     >>> copy_expr = build_copy_to_ast(
     ...     query=query,
-    ...     path="/tmp/output.parquet",
-    ...     file_format="PARQUET",
+    ...     path="/tmp/output",
+    ...     file_format="DELTA",
     ...     options={"compression": "zstd"},
     ...     partition_by=("year", "month"),
     ... )
     >>> copy_expr.sql(dialect="postgres")
-    'COPY (SELECT * FROM mytable) TO \'/tmp/output.parquet\' ...'
+    'COPY (SELECT * FROM mytable) TO \'/tmp/output\' ...'
     """
     option_exprs: list[exp.Expression] = []
 
@@ -252,10 +256,10 @@ def build_external_table_ddl(
     Examples
     --------
     >>> from ibis_engine.registry import DatasetLocation
-    >>> location = DatasetLocation(path="/data/events.parquet")
+    >>> location = DatasetLocation(path="/data/events")
     >>> config = ExternalTableDDLConfig(
     ...     schema={"id": "BIGINT", "timestamp": "TIMESTAMP"},
-    ...     file_format="PARQUET",
+    ...     file_format="DELTA",
     ... )
     >>> ddl = build_external_table_ddl(name="events", location=location, config=config)
     >>> print(ddl.sql(dialect="datafusion"))

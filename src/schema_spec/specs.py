@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
@@ -554,21 +555,37 @@ class TableSchemaSpec:
     def to_ibis_schema(self) -> ibis.Schema:
         """Build an Ibis schema for SQLGlot/DDL tooling.
 
+        .. deprecated::
+            Use DataFusion catalog schemas directly via schema_from_table instead.
+
         Returns
         -------
         ibis.Schema
             Ibis schema derived from the Arrow field specs.
         """
+        warnings.warn(
+            "to_ibis_schema is deprecated; use DataFusion catalog schemas directly",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return ibis.schema({field.name: _arrow_dtype_to_ibis(field.dtype) for field in self.fields})
 
     def to_sqlglot_column_defs(self, *, dialect: str | None = None) -> list[exp.ColumnDef]:
         """Return SQLGlot ColumnDef nodes for the schema.
+
+        .. deprecated::
+            Use DataFusion catalog schemas directly via schema_from_table instead.
 
         Returns
         -------
         list[sqlglot.expressions.ColumnDef]
             SQLGlot ColumnDef nodes derived from the Ibis schema.
         """
+        warnings.warn(
+            "to_sqlglot_column_defs is deprecated; use DataFusion catalog schemas directly",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         dialect_name = dialect or "datafusion"
         if dialect_name in {"datafusion", "datafusion_ext"}:
             register_datafusion_dialect()
@@ -680,7 +697,7 @@ class TableSchemaSpec:
         location:
             Dataset location for the external table.
         file_format:
-            Storage format for the external table (e.g., parquet, csv).
+            Storage format for the external table (e.g., delta, csv).
         overrides:
             Optional overrides for table options and formatting.
 

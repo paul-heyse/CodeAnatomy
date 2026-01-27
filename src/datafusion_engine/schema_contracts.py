@@ -14,10 +14,11 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
+from datafusion import SessionContext
 
 from arrowdsl.schema.abi import schema_fingerprint
+from datafusion_engine.schema_introspection import schema_from_table
 from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
-from sqlglot_tools.compat import exp
 
 SCHEMA_ABI_FINGERPRINT_META: bytes = b"schema_abi_fingerprint"
 
@@ -332,39 +333,21 @@ class SchemaContract:
 
         return violations
 
-    def to_sqlglot_ddl(self, dialect: str = "postgres") -> exp.Expression:
+    def schema_from_catalog(self, ctx: SessionContext) -> pa.Schema:
         """
-        Generate CREATE TABLE DDL via SQLGlot.
-
-        Uses Ibis schema → SQLGlot interop for type mapping and
-        generates a CREATE TABLE statement.
+        Get Arrow schema from DataFusion catalog.
 
         Parameters
         ----------
-        dialect : str
-            SQL dialect for DDL generation
+        ctx : SessionContext
+            DataFusion session context
 
         Returns
         -------
-        sqlglot.expressions.Expression
-            CREATE TABLE DDL expression
+        pa.Schema
+            Arrow schema resolved from catalog
         """
-        import ibis
-
-        # Build Ibis schema
-        ibis_schema = ibis.schema(
-            [(col.name, self._arrow_type_to_ibis(col.arrow_type)) for col in self.columns]
-        )
-
-        # Get SQLGlot column defs
-        column_defs = ibis_schema.to_sqlglot_column_defs(dialect)
-
-        # Build CREATE TABLE
-        return exp.Create(
-            this=exp.Table(this=exp.to_identifier(self.table_name)),
-            kind="TABLE",
-            expression=exp.Schema(expressions=column_defs),
-        )
+        return schema_from_table(ctx, self.table_name)
 
     @staticmethod
     def _arrow_type_to_sql(arrow_type: pa.DataType) -> str:
@@ -390,30 +373,6 @@ class SchemaContract:
             pa.bool_(): "Boolean",
         }
         return type_map.get(arrow_type, str(arrow_type))
-
-    @staticmethod
-    def _arrow_type_to_ibis(arrow_type: pa.DataType) -> str:
-        """
-        Convert Arrow type to Ibis type string.
-
-        Parameters
-        ----------
-        arrow_type : pa.DataType
-            Arrow data type
-
-        Returns
-        -------
-        str
-            Ibis type string
-        """
-        type_map = {
-            pa.int64(): "int64",
-            pa.int32(): "int32",
-            pa.string(): "string",
-            pa.float64(): "float64",
-            pa.bool_(): "boolean",
-        }
-        return type_map.get(arrow_type, "string")
 
     @staticmethod
     def _types_compatible(expected: str, actual: str) -> bool:

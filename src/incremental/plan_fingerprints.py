@@ -1,4 +1,14 @@
-"""Plan fingerprint persistence for incremental scheduling."""
+"""Plan fingerprint persistence for incremental scheduling.
+
+Plan fingerprints are now based on DataFusion plan bundles and Substrait bytes,
+replacing SQLGlot AST-based fingerprints.
+
+Note
+----
+This module currently uses `write_ibis_dataset_delta` for Delta table writes.
+This is a transitional bridge that will be replaced with DataFusion-native
+write surfaces from `WritePipeline` once the migration is complete (Scope 15).
+"""
 
 from __future__ import annotations
 
@@ -19,14 +29,12 @@ from incremental.delta_context import read_delta_table_via_facade
 from storage.deltalake import delta_table_version, enable_delta_features
 
 if TYPE_CHECKING:
-    import sqlglot.expressions as exp
-
     from ibis_engine.execution import IbisExecutionContext
     from incremental.delta_context import DeltaAccessContext
     from incremental.state_store import StateStore
     from storage.deltalake import StorageOptions
 
-PLAN_FINGERPRINTS_VERSION = 3
+PLAN_FINGERPRINTS_VERSION = 4  # Incremented for DataFusion plan bundle migration
 _PLAN_FINGERPRINTS_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32(), nullable=False),
@@ -39,10 +47,21 @@ _PLAN_FINGERPRINTS_DIRNAME = "plan_fingerprints"
 
 @dataclass(frozen=True)
 class PlanFingerprintSnapshot:
-    """Plan fingerprint snapshot."""
+    """Plan fingerprint snapshot.
+
+    Plan fingerprints are now based on DataFusion Substrait bytes or
+    optimized logical plan display when Substrait is unavailable.
+
+    Attributes
+    ----------
+    plan_fingerprint : str
+        SHA256 hash of Substrait bytes or optimized plan display.
+    substrait_bytes : bytes | None
+        Optional Substrait serialization for portable plan storage.
+    """
 
     plan_fingerprint: str
-    sqlglot_ast: exp.Expression | None = None
+    substrait_bytes: bytes | None = None
 
 
 def _plan_fingerprints_path(state_store: StateStore) -> Path:

@@ -1,8 +1,11 @@
 """SQL policy engine for deterministic canonicalization and optimization.
 
-This module provides a unified, policy-driven SQLGlot pipeline and defers
-heavy lifting to ``sqlglot_tools.optimizer`` so there is exactly one
-canonical policy lane across the codebase.
+DEPRECATED: This module is deprecated in favor of DataFusion-native planning.
+SQL strings should be treated as external ingress only, gated by DataFusion
+SQLOptions. Internal execution should use builder/plan-based approaches.
+
+This module is retained for backward compatibility during migration only.
+Use DataFusion DataFrame builders and logical plan construction instead.
 """
 
 from __future__ import annotations
@@ -118,8 +121,10 @@ class SQLPolicyProfile:
             identify=base.identify if self.identify_mode is None else self.identify_mode,
         )
 
-    def policy_fingerprint(self) -> str:
+    def policy_hash(self) -> str:
         """Generate hash of policy settings for cache keys.
+
+        DEPRECATED: Use plan_fingerprint from DataFusionPlanBundle instead.
 
         Returns
         -------
@@ -140,6 +145,18 @@ class SQLPolicyProfile:
             "transforms": [transform.__name__ for transform in policy.transforms],
         }
         return hashlib.sha256(json.dumps(policy_dict, sort_keys=True).encode()).hexdigest()[:16]
+
+    def policy_fingerprint(self) -> str:
+        """Return the policy hash for compatibility.
+
+        DEPRECATED: Use plan_fingerprint from DataFusionPlanBundle instead.
+
+        Returns
+        -------
+        str
+            Stable fingerprint for policy settings.
+        """
+        return self.policy_hash()
 
 
 @dataclass
@@ -212,6 +229,9 @@ def compile_sql_policy(
     original_sql: str | None = None,
 ) -> tuple[exp.Expression, CompilationArtifacts]:
     """Execute the unified policy-aware SQLGlot canonicalization pipeline.
+
+    DEPRECATED: Use DataFusion-native planning with DataFrame builders instead.
+    This function is retained for backward compatibility during migration only.
 
     Returns
     -------

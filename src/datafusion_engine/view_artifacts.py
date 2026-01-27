@@ -25,10 +25,16 @@ if TYPE_CHECKING:
 
     from datafusion_engine.schema_introspection import SchemaIntrospector
 
+# Runtime import for DataFusionPlanBundle (used in function signatures)
+from datafusion_engine.plan_bundle import DataFusionPlanBundle
+
 
 @dataclass(frozen=True)
 class ViewArtifact:
-    """Canonical artifact bundle for a registered view."""
+    """Canonical artifact bundle for a registered view.
+
+    DEPRECATED: Use DataFusionViewArtifact for new code.
+    """
 
     name: str
     ast: exp.Expression
@@ -91,6 +97,73 @@ class ViewArtifact:
 
 
 @dataclass(frozen=True)
+class DataFusionViewArtifact:
+    """DataFusion-native view artifact using plan_bundle instead of AST.
+
+    This artifact uses DataFusion's plan fingerprint directly without requiring
+    SQLGlot AST or policy_hash, making it suitable for DataFusion-native views.
+
+    Attributes
+    ----------
+    name : str
+        View name.
+    plan_fingerprint : str
+        DataFusion plan fingerprint from plan_bundle.
+    schema : pa.Schema
+        View output schema.
+    required_udfs : tuple[str, ...]
+        UDF names required by this view.
+    referenced_tables : tuple[str, ...]
+        Table names referenced by this view.
+    """
+
+    name: str
+    plan_fingerprint: str
+    schema: pa.Schema
+    required_udfs: tuple[str, ...]
+    referenced_tables: tuple[str, ...]
+
+    def payload(self) -> dict[str, object]:
+        """Return a JSON-ready payload for diagnostics and persistence.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-serializable payload for diagnostics and storage.
+        """
+        return {
+            "name": self.name,
+            "plan_fingerprint": self.plan_fingerprint,
+            "schema": schema_to_dict(self.schema),
+            "required_udfs": list(self.required_udfs),
+            "referenced_tables": list(self.referenced_tables),
+        }
+
+    def diagnostics_payload(self, *, event_time_unix_ms: int) -> dict[str, object]:
+        """Return a stable diagnostics payload.
+
+        Parameters
+        ----------
+        event_time_unix_ms
+            Event timestamp in milliseconds.
+
+        Returns
+        -------
+        dict[str, object]
+            Diagnostics-ready payload with serialized schema.
+        """
+        return {
+            "event_time_unix_ms": event_time_unix_ms,
+            "name": self.name,
+            "plan_fingerprint": self.plan_fingerprint,
+            "schema_fingerprint": schema_fingerprint(self.schema),
+            "schema_msgpack": schema_to_msgpack(self.schema),
+            "required_udfs": list(self.required_udfs),
+            "referenced_tables": list(self.referenced_tables),
+        }
+
+
+@dataclass(frozen=True)
 class ViewArtifactInputs:
     """Inputs for building a view artifact."""
 
@@ -106,6 +179,9 @@ class ViewArtifactInputs:
 def build_view_artifact(inputs: ViewArtifactInputs) -> ViewArtifact:
     """Build a ViewArtifact from a canonical SQLGlot AST.
 
+    DEPRECATED: Use build_view_artifact_from_bundle for DataFusion-native views.
+    This function uses SQLGlot policy snapshots which are deprecated.
+
     Returns
     -------
     ViewArtifact
@@ -113,10 +189,13 @@ def build_view_artifact(inputs: ViewArtifactInputs) -> ViewArtifact:
     """
     profile = inputs.policy_profile or SQLPolicyProfile()
     policy = profile.to_sqlglot_policy()
+    # DEPRECATED: Use plan_fingerprint from DataFusionPlanBundle instead
     policy_hash = sqlglot_policy_snapshot_for(policy).policy_hash
     schema_map = schema_map_for_sqlglot(_schema_introspector(inputs.ctx))
     mapping = MappingSchema(dict(schema_map))
     artifacts = CompilationArtifacts.from_ast(inputs.ast, mapping)
+    # DEPRECATED: ast_policy_fingerprint combines ast_fingerprint + policy_hash
+    # Use plan_fingerprint from DataFusionPlanBundle instead
     plan_fingerprint = ast_policy_fingerprint(
         ast_fingerprint=artifacts.ast_fingerprint,
         policy_hash=policy_hash,
@@ -130,13 +209,50 @@ def build_view_artifact(inputs: ViewArtifactInputs) -> ViewArtifact:
         name=inputs.name,
         ast=inputs.ast,
         serde_payload=artifacts.serde_payload,
-        ast_fingerprint=artifacts.ast_fingerprint,
-        policy_hash=policy_hash,
-        plan_fingerprint=plan_fingerprint,
+        ast_fingerprint=artifacts.ast_fingerprint,  # DEPRECATED
+        policy_hash=policy_hash,  # DEPRECATED
+        plan_fingerprint=plan_fingerprint,  # DEPRECATED: Use bundle.plan_fingerprint
         schema=inputs.schema,
         lineage=artifacts.lineage_by_column,
         required_udfs=required_udfs,
         sql=inputs.sql,
+    )
+
+
+def build_view_artifact_from_bundle(
+    bundle: DataFusionPlanBundle,
+    *,
+    name: str,
+    schema: pa.Schema,
+    required_udfs: tuple[str, ...],
+    referenced_tables: tuple[str, ...],
+) -> DataFusionViewArtifact:
+    """Build a DataFusionViewArtifact from a DataFusion plan bundle.
+
+    Parameters
+    ----------
+    bundle
+        DataFusion plan bundle containing optimized logical plan.
+    name
+        View name.
+    schema
+        View output schema.
+    required_udfs
+        Required UDF names.
+    referenced_tables
+        Referenced table names.
+
+    Returns
+    -------
+    DataFusionViewArtifact
+        DataFusion-native view artifact.
+    """
+    return DataFusionViewArtifact(
+        name=name,
+        plan_fingerprint=bundle.plan_fingerprint,
+        schema=schema,
+        required_udfs=required_udfs,
+        referenced_tables=referenced_tables,
     )
 
 
@@ -240,8 +356,10 @@ def view_artifact_payload_table(rows: Sequence[Mapping[str, object]]) -> pa.Tabl
 
 __all__ = [
     "VIEW_ARTIFACT_PAYLOAD_SCHEMA",
+    "DataFusionViewArtifact",
     "ViewArtifact",
     "ViewArtifactInputs",
     "build_view_artifact",
+    "build_view_artifact_from_bundle",
     "view_artifact_payload_table",
 ]

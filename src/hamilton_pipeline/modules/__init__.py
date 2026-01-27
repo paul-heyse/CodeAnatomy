@@ -12,8 +12,6 @@ _MODULE_NAMES: tuple[str, ...] = (
     "dataloaders",
     "params",
     "execution_plan",
-    "task_graph",
-    "incremental_plan",
     "task_execution",
     "outputs",
 )
@@ -22,12 +20,10 @@ if TYPE_CHECKING:
     from hamilton_pipeline.modules import (
         dataloaders,
         execution_plan,
-        incremental_plan,
         inputs,
         outputs,
         params,
         task_execution,
-        task_graph,
     )
 
 
@@ -80,11 +76,9 @@ __all__ = [
     "ALL_MODULES",
     "dataloaders",
     "execution_plan",
-    "incremental_plan",
     "inputs",
     "load_all_modules",
     "outputs",
     "params",
     "task_execution",
-    "task_graph",
 ]

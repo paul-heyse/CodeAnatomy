@@ -1,4 +1,14 @@
-"""SQLGlot AST builders for relationship plans."""
+"""SQLGlot AST builders for relationship plans.
+
+DEPRECATED: This module provides SQLGlot AST builders for legacy compatibility.
+New code should use the DataFusion-native builders in relationship_datafusion.py.
+
+The SQLGlot AST builders in this module are maintained for compatibility with
+existing code that compiles SQLGlot to Ibis, but will be removed once all
+internal authoring surfaces use DataFusion expression/DataFrame builders.
+
+See relationship_datafusion.py for the DataFusion-native implementation.
+"""
 
 from __future__ import annotations
 

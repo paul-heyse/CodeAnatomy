@@ -1,8 +1,17 @@
 """SQL execution safety gates using DataFusion SQLOptions.
 
-This module is intended for external SQL ingress paths. Internal execution
-should flow through Ibis → SQLGlot AST compilation with policy enforcement,
-and only use SQL strings as diagnostics artifacts.
+This module is intended ONLY for external SQL ingress paths. SQL strings must
+be gated by DataFusion SQLOptions before execution.
+
+Internal execution paths should use DataFusion DataFrame builders and logical
+plan construction directly. SQLGlot policy validation is deprecated for
+internal paths.
+
+Key principles:
+- SQL strings are external ingress only
+- All SQL ingress must be gated by DataFusion SQLOptions
+- Internal execution uses builder/plan-based approaches
+- SQL text is for diagnostics only in internal paths
 """
 
 from __future__ import annotations
@@ -184,6 +193,9 @@ def execute_with_policy(
 ) -> DataFrame:
     """Execute SQL with policy validation.
 
+    This is the RECOMMENDED pattern for SQL ingress: gate SQL execution
+    with DataFusion SQLOptions directly, avoiding SQLGlot policy validation.
+
     The query is validated against the policy before execution.
     Raises an error if the query would perform disallowed operations.
 
@@ -200,6 +212,16 @@ def execute_with_policy(
     -------
     DataFrame
         Query result.
+
+    Examples
+    --------
+    >>> from datafusion import SQLOptions, SessionContext
+    >>> ctx = SessionContext()
+    >>> # Recommended: Use SQLOptions directly for SQL ingress
+    >>> options = (
+    ...     SQLOptions().with_allow_ddl(False).with_allow_dml(False).with_allow_statements(False)
+    ... )
+    >>> df = ctx.sql_with_options("SELECT * FROM table", options)
     """
     sanitized = sanitize_external_sql(sql)
     return ctx.sql_with_options(
@@ -215,6 +237,19 @@ def validate_sql_safety(
     dialect: str = "postgres",
 ) -> list[str]:
     """Validate SQL against policy without executing.
+
+    DEPRECATED: This function is deprecated for DataFusion query validation.
+    For DataFusion queries, use DataFusion's native SQLOptions for SQL ingress
+    gating instead. SQLGlot-based validation with parse_sql_strict is retained
+    for non-DataFusion SQL dialects only.
+
+    Recommended pattern for DataFusion queries:
+        options = SQLOptions()
+        options.with_allow_ddl(False).with_allow_dml(False).with_allow_statements(False)
+        df = ctx.sql_with_options(sql, options)
+
+    This function is retained for backward compatibility and non-DataFusion
+    SQL dialects during migration only.
 
     Returns list of policy violations (empty if valid).
 
@@ -235,7 +270,7 @@ def validate_sql_safety(
     from sqlglot.errors import ParseError, SqlglotError
 
     from sqlglot_tools.compat import exp
-    from sqlglot_tools.optimizer import parse_sql_strict
+    from sqlglot_tools.optimizer import parse_sql_strict  # DEPRECATED for DataFusion queries
 
     violations: list[str] = []
     sanitized = sanitize_external_sql(sql)

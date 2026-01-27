@@ -19,6 +19,7 @@ _RUST_UDF_POLICIES: WeakKeyDictionary[
     SessionContext,
     tuple[bool, int | None, int | None],
 ] = WeakKeyDictionary()
+_RUST_UDF_VALIDATED: WeakSet[SessionContext] = WeakSet()
 
 _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "scalar",
@@ -198,6 +199,9 @@ def rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     """
     cached = _RUST_UDF_SNAPSHOTS.get(ctx)
     if cached is not None:
+        if ctx not in _RUST_UDF_VALIDATED:
+            validate_rust_udf_snapshot(cached)
+            _RUST_UDF_VALIDATED.add(ctx)
         return cached
     snapshot = _build_registry_snapshot(ctx)
     docs = None
@@ -206,8 +210,30 @@ def rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     if docs:
         snapshot = dict(snapshot)
         snapshot["documentation"] = docs
+    validate_rust_udf_snapshot(snapshot)
+    _RUST_UDF_VALIDATED.add(ctx)
     _notify_ibis_snapshot(snapshot)
     _RUST_UDF_SNAPSHOTS[ctx] = snapshot
+    return snapshot
+
+
+def _validated_snapshot(ctx: SessionContext) -> Mapping[str, object]:
+    """Return a validated Rust UDF snapshot for a session.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Snapshot payload validated for required keys and metadata.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Rust UDF snapshot was not validated.
+    """
+    snapshot = rust_udf_snapshot(ctx)
+    if ctx not in _RUST_UDF_VALIDATED:
+        msg = "Rust UDF snapshot validation missing for the session context."
+        raise RuntimeError(msg)
     return snapshot
 
 
@@ -333,7 +359,7 @@ def register_rust_udfs(
         ):
             msg = "Rust UDFs already registered with a different async policy."
             raise ValueError(msg)
-        return rust_udf_snapshot(ctx)
+        return _validated_snapshot(ctx)
     datafusion_ext.register_udfs(
         ctx,
         enable_async,
@@ -342,7 +368,7 @@ def register_rust_udfs(
     )
     _RUST_UDF_CONTEXTS.add(ctx)
     _RUST_UDF_POLICIES[ctx] = policy
-    return rust_udf_snapshot(ctx)
+    return _validated_snapshot(ctx)
 
 
 __all__ = [

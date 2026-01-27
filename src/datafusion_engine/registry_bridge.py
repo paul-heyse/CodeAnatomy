@@ -1,4 +1,32 @@
-"""Dataset registry bridge for DataFusion SessionContext."""
+"""Dataset registry bridge for DataFusion SessionContext.
+
+This module provides dataset registration utilities that bind datasets to
+DataFusion's catalog via native registration APIs and DDL surfaces. All IO
+contracts are specified through DataFusion registration parameters and options.
+
+Registration surfaces:
+- register_listing_table(): Multi-file datasets with partition metadata
+- register_object_store(): Object store routing (S3, GCS, Azure, etc.)
+- CREATE EXTERNAL TABLE: DDL-based registration with schema and options
+- register_table(): TableProvider registration with custom capsules
+
+Schema discovery and validation query DataFusion's catalog and information_schema
+views after registration, ensuring DataFusion is the source of truth for all
+table metadata.
+
+Schema drift and evolution:
+Schema adapters are attached at registration time via the runtime profile's
+physical expression adapter factory. When `enable_schema_evolution_adapter=True`
+in the runtime profile, scan-time adapters handle schema drift resolution at
+the TableProvider boundary, eliminating the need for downstream cast/projection
+transforms. This ensures schema normalization happens during physical plan
+execution rather than in post-processing.
+
+Write routing:
+All write operations should use `WritePipeline` from `datafusion_engine.write_pipeline`,
+which provides DataFusion-native write surfaces (write_parquet, write_csv, write_json,
+write_table, and streaming Delta writes via provider inserts).
+"""
 
 from __future__ import annotations
 
@@ -18,7 +46,6 @@ import pyarrow.fs as pafs
 from datafusion import SessionContext, SQLOptions
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
-from sqlglot.errors import ParseError
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
@@ -26,6 +53,14 @@ from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.abi import schema_fingerprint, schema_to_dict
 from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from core_types import ensure_path
+from datafusion_engine.dataset_registry import (
+    DatasetCatalog,
+    DatasetLocation,
+    resolve_datafusion_scan_options,
+    resolve_dataset_schema,
+    resolve_delta_log_storage_options,
+    resolve_delta_scan_options,
+)
 from datafusion_engine.diagnostics import record_artifact
 from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from datafusion_engine.introspection import (
@@ -45,20 +80,11 @@ from datafusion_engine.sql_options import (
 from datafusion_engine.sql_options import (
     statement_sql_options_for_profile as _statement_sql_options_for_profile,
 )
-from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.table_provider_capsule import TableProviderCapsule
 from datafusion_engine.table_provider_metadata import (
     TableProviderMetadata,
     record_table_provider_metadata,
     table_provider_metadata,
-)
-from ibis_engine.registry import (
-    DatasetLocation,
-    IbisDatasetRegistry,
-    resolve_datafusion_scan_options,
-    resolve_dataset_schema,
-    resolve_delta_log_storage_options,
-    resolve_delta_scan_options,
 )
 from schema_spec.system import (
     DataFusionScanOptions,
@@ -68,13 +94,6 @@ from schema_spec.system import (
     TableSchemaContract,
     dataset_spec_from_schema,
     make_dataset_spec,
-)
-from sqlglot_tools.compat import exp
-from sqlglot_tools.optimizer import (
-    StrictParseOptions,
-    build_select,
-    parse_sql_strict,
-    resolve_sqlglot_policy,
 )
 from storage.deltalake import DeltaCdfOptions
 
@@ -154,11 +173,11 @@ class DatasetInputSource:
         self,
         ctx: SessionContext,
         *,
-        registry: IbisDatasetRegistry,
+        catalog: DatasetCatalog,
         runtime_profile: DataFusionRuntimeProfile | None,
     ) -> None:
         self._ctx = ctx
-        self._registry = registry
+        self._catalog = catalog
         self._runtime_profile = runtime_profile
 
     def is_correct_input(
@@ -176,7 +195,7 @@ class DatasetInputSource:
         """
         _ = table_name, kwargs
         name = _dataset_name_from_input(input_item)
-        return name is not None and self._registry.catalog.has(name)
+        return name is not None and self._catalog.has(name)
 
     def build_table(
         self,
@@ -201,7 +220,7 @@ class DatasetInputSource:
         if name is None:
             msg = f"Unsupported dataset handle: {input_item!r}."
             raise ValueError(msg)
-        location = self._registry.catalog.get(name)
+        location = self._catalog.get(name)
         return register_dataset_df(
             self._ctx,
             name=table_name,
@@ -220,7 +239,7 @@ def _dataset_name_from_input(value: object) -> str | None:
 
 
 def dataset_input_plugin(
-    registry: IbisDatasetRegistry,
+    catalog: DatasetCatalog,
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> Callable[[SessionContext], None]:
@@ -241,7 +260,7 @@ def dataset_input_plugin(
         register(
             DatasetInputSource(
                 ctx,
-                registry=registry,
+                catalog=catalog,
                 runtime_profile=runtime_profile,
             )
         )
@@ -268,7 +287,7 @@ class DataFusionRegistryOptions:
     schema: SchemaLike | None
     read_options: Mapping[str, object]
     cache: bool
-    provider: Literal["listing", "parquet", "delta_cdf"] | None
+    provider: Literal["listing", "delta_cdf"] | None
 
 
 @dataclass(frozen=True)
@@ -434,7 +453,7 @@ def _default_scan_options_for_dataset(
     return DataFusionScanOptions(
         partition_cols=tuple(partition_cols),
         file_sort_order=file_sort_order,
-        file_extension=".parquet",
+        file_extension=None,
         parquet_pruning=True,
         skip_metadata=True,
         collect_statistics=defaults.collect_statistics,
@@ -485,23 +504,22 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     scan = resolve_datafusion_scan_options(location)
     schema = resolve_dataset_schema(location)
     provider = location.datafusion_provider
+    format_name = location.format or "delta"
     if provider == "dataset":
         msg = "DataFusion dataset providers are not supported; use listing or native formats."
         raise ValueError(msg)
-    if provider == "delta_cdf" and location.format != "delta":
+    if provider == "delta_cdf" and format_name != "delta":
         msg = "Delta CDF provider requires delta-format datasets."
         raise ValueError(msg)
-    if provider == "parquet":
-        provider = "listing"
     if (
         provider is None
         and location.dataset_spec is not None
         and location.dataset_spec.dataset_kind == "delta_cdf"
     ):
         provider = "delta_cdf"
-    if provider is None and location.format == "delta" and location.delta_cdf_options is not None:
+    if provider is None and format_name == "delta" and location.delta_cdf_options is not None:
         provider = "delta_cdf"
-    if provider is None and location.format != "delta":
+    if provider is None and format_name != "delta":
         provider = "listing"
     if provider is None and _prefers_listing_table(location, scan=scan):
         provider = "listing"
@@ -553,7 +571,7 @@ def _prefers_listing_table(
     *,
     scan: DataFusionScanOptions | None,
 ) -> bool:
-    if location.format != "parquet":
+    if location.format is None or location.format == "delta":
         return False
     if location.files:
         return False
@@ -693,7 +711,7 @@ class DatasetRegistration:
     name: str
     spec: DatasetSpec
     location: str
-    file_format: str = "PARQUET"
+    file_format: str = "delta"
 
 
 def register_dataset_spec(
@@ -720,7 +738,7 @@ def register_dataset_spec(
 
     Examples
     --------
-    Register a streaming Parquet source:
+    Register a streaming Delta source:
 
     >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
     >>> from schema_spec.system import DatasetSpec, DataFusionScanOptions
@@ -785,6 +803,12 @@ def _build_registration_context(
         provider_metadata["delta_cdf_enabled"] = "true"
     if location.datafusion_provider is not None:
         provider_metadata["datafusion_provider"] = str(location.datafusion_provider)
+    # Schema adapters are attached at SessionContext creation via the runtime
+    # profile's physical expression adapter factory. When enabled, scan-time
+    # adapters handle schema drift resolution at the TableProvider boundary.
+    schema_adapter_enabled = (
+        runtime_profile is not None and runtime_profile.enable_schema_evolution_adapter
+    )
     metadata = TableProviderMetadata(
         table_name=name,
         ddl=None,
@@ -796,6 +820,7 @@ def _build_registration_context(
         unbounded=options.scan.unbounded if options.scan else False,
         ddl_fingerprint=None,
         metadata=provider_metadata,
+        schema_adapter_enabled=schema_adapter_enabled,
     )
     record_table_provider_metadata(id(ctx), metadata=metadata)
     return context
@@ -1084,7 +1109,7 @@ def _file_extension_for_location(
 ) -> str:
     if scan is not None and scan.file_extension:
         return scan.file_extension
-    format_name = str(location.format or "parquet").lower()
+    format_name = str(location.format or "delta").lower()
     if format_name.startswith("."):
         return format_name
     return f".{format_name}"
@@ -1194,7 +1219,7 @@ def _register_file_list_dataset(
         raise ValueError(msg)
     dataset = ds.dataset(
         list(files),
-        format=str(context.location.format or "parquet").lower(),
+        format=str(context.location.format or "delta").lower(),
         filesystem=context.location.filesystem,
         schema=context.options.schema,
         partitioning=context.location.partitioning or "hive",
@@ -1472,54 +1497,29 @@ def _apply_projection_exprs(
     if not projection_exprs:
         return ctx.table(table_name)
     _ = sql_options
-    policy = resolve_sqlglot_policy(name="datafusion_compile")
-    parsed_exprs: list[exp.Expression] = []
-    for projection in projection_exprs:
-        try:
-            parsed_exprs.append(
-                parse_sql_strict(
-                    projection,
-                    dialect=policy.read_dialect,
-                    options=StrictParseOptions(
-                        error_level=policy.error_level,
-                        unsupported_level=policy.unsupported_level,
-                    ),
-                )
-            )
-        except (ParseError, TypeError, ValueError) as exc:
-            msg = f"Projection expression parse failed: {projection}"
-            raise ValueError(msg) from exc
-    if not parsed_exprs:
+    df = ctx.table(table_name)
+    schema_names = set(df.schema().names)
+    selected = [name for name in projection_exprs if name in schema_names]
+    if not selected:
         msg = "Projection expressions are required for dynamic projection."
         raise ValueError(msg)
-    view_expr = build_select(parsed_exprs, from_=table_name)
-    policy_profile = SQLPolicyProfile(policy=policy)
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    from datafusion_engine.compile_options import DataFusionCompileOptions
-
-    plan = facade.compile(
-        view_expr,
-        options=DataFusionCompileOptions(
-            sql_policy_profile=policy_profile,
-            runtime_profile=runtime_profile,
-        ),
-    )
-    df = facade.execute(plan).require_dataframe()
+    projected = df.select(*[col(name) for name in selected])
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
-    adapter.register_view(table_name, df, overwrite=True, temporary=False)
+    adapter.register_view(table_name, projected, overwrite=True, temporary=False)
     if runtime_profile is not None:
         from datafusion_engine.runtime import record_view_definition
-        from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
+        from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
 
-        schema = _schema_from_df(df)
-        view_expr = plan.compiled.sqlglot_ast
-        artifact = build_view_artifact(
-            ViewArtifactInputs(
-                ctx=ctx,
-                name=table_name,
-                ast=view_expr,
-                schema=schema,
-            )
+        schema = _schema_from_df(projected)
+        bundle = build_plan_bundle(ctx, projected)
+        required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(bundle)))
+        referenced_tables = referenced_tables_from_plan(bundle.optimized_logical_plan)
+        artifact = build_view_artifact_from_bundle(
+            bundle,
+            name=table_name,
+            schema=schema,
+            required_udfs=required_udfs,
+            referenced_tables=referenced_tables,
         )
         record_view_definition(runtime_profile, artifact=artifact)
         _invalidate_information_schema_cache(runtime_profile, ctx)
@@ -1539,11 +1539,6 @@ def _schema_from_df(df: DataFrame) -> pa.Schema:
     raise TypeError(msg)
 
 
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
-
-
 def apply_projection_overrides(
     ctx: SessionContext,
     *,
@@ -1557,7 +1552,7 @@ def apply_projection_overrides(
     for table_name, columns in projection_map.items():
         if not columns:
             continue
-        projection_exprs = [_sql_identifier(name) for name in columns]
+        projection_exprs = [str(name) for name in columns if str(name)]
         try:
             _apply_projection_exprs(
                 ctx,
@@ -1588,7 +1583,7 @@ def apply_projection_scan_overrides(
         scan = resolve_datafusion_scan_options(location)
         if scan is None:
             continue
-        projection_exprs = tuple(_sql_identifier(name) for name in columns)
+        projection_exprs = tuple(str(name) for name in columns if str(name))
         if scan.projection_exprs == projection_exprs:
             continue
         updated_scan = replace(scan, projection_exprs=projection_exprs)
@@ -1685,32 +1680,17 @@ def _set_runtime_setting(
         Raised when SQL violates the execution policy.
     """
     sql = f"SET {key} = '{value}'"
-    from sqlglot.errors import ParseError
-
-    from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionSqlPolicy
-    from datafusion_engine.execution_facade import DataFusionExecutionFacade
-    from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
-
     allow_statements_flag = True
     resolved_sql_options = sql_options.with_allow_statements(allow_statements_flag)
-    options = DataFusionCompileOptions(
-        sql_options=resolved_sql_options,
-        sql_policy=DataFusionSqlPolicy(allow_statements=True),
-        runtime_profile=runtime_profile,
-    )
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     try:
-        register_datafusion_dialect()
-        expr = parse_sql_strict(sql, dialect=options.dialect)
-    except (ParseError, TypeError, ValueError) as exc:
-        msg = "SET SQL parse failed."
+        df = ctx.sql_with_options(sql, resolved_sql_options)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = "SET execution failed."
         raise ValueError(msg) from exc
-    plan = facade.compile(expr, options=options)
-    result = facade.execute(plan)
-    if result.dataframe is None:
+    if df is None:
         msg = "SET execution did not return a DataFusion DataFrame."
         raise ValueError(msg)
-    result.dataframe.collect()
+    df.collect()
 
 
 def _refresh_listing_table(

@@ -186,10 +186,24 @@ def record_view_artifact(sink: DiagnosticsCollector, *, artifact: ViewArtifact) 
     )
 
 
+def record_cache_lineage(
+    sink: DiagnosticsCollector,
+    *,
+    payload: Mapping[str, object],
+    rows: Sequence[Mapping[str, object]] | None = None,
+) -> None:
+    """Record cache lineage artifacts and optional per-node rows."""
+    recorder_sink = ensure_recorder_sink(sink, session_id="obs")
+    recorder_sink.record_artifact("hamilton_cache_lineage_v2", payload)
+    if rows:
+        recorder_sink.record_events("hamilton_cache_lineage_nodes_v1", rows)
+
+
 __all__ = [
     "DiagnosticsCollector",
     "PreparedStatementSpec",
     "prepared_statement_hook",
+    "record_cache_lineage",
     "record_rust_udf_snapshot",
     "record_view_artifact",
     "record_view_contract_violations",

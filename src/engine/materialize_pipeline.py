@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
 import time
-import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -16,28 +14,13 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
-from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.dataset_locations import resolve_dataset_location
-from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
+from datafusion_engine.diagnostics import record_artifact, record_events
 from datafusion_engine.execution_facade import ExecutionResult
-from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import (
     DataFusionRuntimeProfile,
-    diagnostics_arrow_ingest_hook,
-    statement_sql_options_for_profile,
 )
-from datafusion_engine.sql_policy_engine import SQLPolicyProfile
 from datafusion_engine.streaming_executor import StreamingExecutionResult
-from datafusion_engine.write_pipeline import (
-    ParquetWritePolicy,
-    WriteFormat,
-    WriteMethod,
-    WriteMode,
-    WritePipeline,
-    WriteRequest,
-    WriteResult,
-    parquet_policy_from_datafusion,
-)
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
 from ibis_engine.execution_factory import ibis_execution_from_ctx
@@ -50,14 +33,10 @@ from ibis_engine.params_bridge import param_binding_mode, param_binding_signatur
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import resolve_delta_log_storage_options
 from ibis_engine.runner import IbisCachePolicy
-from schema_spec.policies import DataFusionWritePolicy
-from sqlglot_tools.compat import exp
 from storage.deltalake import DeltaWriteResult
 
 if TYPE_CHECKING:
-    from datafusion.dataframe import DataFrame
-
-    from datafusion_engine.view_artifacts import ViewArtifact
+    from datafusion_engine.view_artifacts import DataFusionViewArtifact, ViewArtifact
     from ibis_engine.execution import IbisExecutionContext
     from ibis_engine.registry import DatasetLocation
 
@@ -280,7 +259,7 @@ def _record_plan_execution(
     *,
     plan_id: str,
     result: ExecutionResult,
-    view_artifact: ViewArtifact | None = None,
+    view_artifact: ViewArtifact | DataFusionViewArtifact | None = None,
 ) -> None:
     profile = ctx.runtime.datafusion
     if profile is None:
@@ -294,13 +273,13 @@ def _record_plan_execution(
         "rows": rows,
     }
     if view_artifact is not None:
-        payload.update(
-            {
-                "plan_fingerprint": view_artifact.plan_fingerprint,
-                "ast_fingerprint": view_artifact.ast_fingerprint,
-                "policy_hash": view_artifact.policy_hash,
-            }
-        )
+        payload["plan_fingerprint"] = view_artifact.plan_fingerprint
+        ast_fingerprint = getattr(view_artifact, "ast_fingerprint", None)
+        if isinstance(ast_fingerprint, str):
+            payload["ast_fingerprint"] = ast_fingerprint
+        policy_hash = getattr(view_artifact, "policy_hash", None)
+        if isinstance(policy_hash, str):
+            payload["policy_hash"] = policy_hash
     record_artifact(profile, "plan_execute_v1", payload)
 
 
@@ -311,8 +290,6 @@ class _ExtractWriteRecord:
     path: str
     file_format: str
     rows: int | None
-    write_policy: DataFusionWritePolicy | None
-    parquet_payload: Mapping[str, object] | None
     copy_sql: str | None
     copy_options: Mapping[str, object] | None
     delta_result: DeltaWriteResult | None
@@ -323,11 +300,6 @@ def _record_extract_write(
     *,
     record: _ExtractWriteRecord,
 ) -> None:
-    parquet_options: dict[str, object] | None = None
-    if record.parquet_payload is not None:
-        options_value = record.parquet_payload.get("parquet_options")
-        if isinstance(options_value, Mapping):
-            parquet_options = dict(options_value)
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset": record.dataset,
@@ -335,8 +307,6 @@ def _record_extract_write(
         "path": record.path,
         "format": record.file_format,
         "rows": record.rows,
-        "write_policy": record.write_policy.payload() if record.write_policy is not None else None,
-        "parquet_options": parquet_options,
         "copy_sql": record.copy_sql,
         "copy_options": dict(record.copy_options) if record.copy_options is not None else None,
         "delta_version": record.delta_result.version if record.delta_result is not None else None,
@@ -374,142 +344,11 @@ def _record_diskcache_stats(runtime_profile: DataFusionRuntimeProfile) -> None:
         record_events(runtime_profile, "diskcache_stats_v1", events)
 
 
-def _write_pipeline_profile() -> SQLPolicyProfile:
-    from sqlglot_tools.optimizer import register_datafusion_dialect, resolve_sqlglot_policy
-
-    policy = resolve_sqlglot_policy(name="datafusion_dml")
-    register_datafusion_dialect(policy.write_dialect)
-    return SQLPolicyProfile(
-        read_dialect=policy.read_dialect,
-        write_dialect=policy.write_dialect,
-    )
-
-
-def _write_format(value: str) -> WriteFormat:
-    normalized = value.strip().lower()
-    mapping = {
-        "parquet": WriteFormat.PARQUET,
-        "csv": WriteFormat.CSV,
-        "json": WriteFormat.JSON,
-    }
-    resolved = mapping.get(normalized)
-    if resolved is None:
-        msg = f"DataFusion writes only support parquet/csv/json, got {value!r}."
-        raise ValueError(msg)
-    return resolved
-
-
-def _write_partition_by(
-    policy: DataFusionWritePolicy | None,
-    *,
-    schema: pa.Schema,
-) -> tuple[str, ...]:
-    if policy is None or not policy.partition_by:
-        return ()
-    available = set(schema.names)
-    return tuple(name for name in policy.partition_by if name in available)
-
-
-def _write_sort_by(
-    policy: DataFusionWritePolicy | None,
-    *,
-    schema: pa.Schema,
-) -> tuple[str, ...]:
-    if policy is None or not policy.sort_by:
-        return ()
-    available = set(schema.names)
-    return tuple(name for name in policy.sort_by if name in available)
-
-
-def _write_select_expr(
-    table_name: str,
-    *,
-    sort_by: Sequence[str],
-    schema: pa.Schema,
-) -> exp.Expression:
-    available = set(schema.names)
-    order_by = [name for name in sort_by if name in available]
-    query = exp.select("*").from_(exp.table_(table_name))
-    if order_by:
-        order_exprs = [exp.Ordered(this=exp.column(name)) for name in order_by]
-        query.set("order", exp.Order(expressions=order_exprs))
-    return query
-
-
-def _parquet_payload(
-    *,
-    path: str,
-    policy: DataFusionWritePolicy | None,
-    parquet_policy: ParquetWritePolicy | None,
-) -> dict[str, object] | None:
-    if policy is None and parquet_policy is None:
-        return None
-    payload: dict[str, object] = {
-        "path": path,
-        "write_policy": policy.payload() if policy is not None else None,
-        "parquet_options": (
-            parquet_policy.to_copy_options() if parquet_policy is not None else None
-        ),
-    }
-    return payload
-
-
 def _ibis_execution_from_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
     if ctx.runtime.datafusion is None:
         runtime_profile = ctx.runtime.with_datafusion(DataFusionRuntimeProfile())
         ctx = ExecutionContext(runtime=runtime_profile)
     return ibis_execution_from_ctx(ctx)
-
-
-def _write_policy_for_dataset(
-    runtime_profile: DataFusionRuntimeProfile,
-    *,
-    dataset: str,
-    schema: pa.Schema,
-) -> DataFusionWritePolicy | None:
-    available = set(schema.names)
-    default_partition: tuple[str, ...]
-    default_sort: tuple[str, ...]
-    if dataset == "ast_files_v1":
-        default_partition = tuple(
-            name for name, _ in runtime_profile.ast_external_partition_cols if name in available
-        )
-        default_sort = tuple(
-            name for name, _ in runtime_profile.ast_external_ordering if name in available
-        )
-    elif dataset == "bytecode_files_v1":
-        default_partition = tuple(
-            name
-            for name, _ in runtime_profile.bytecode_external_partition_cols
-            if name in available
-        )
-        default_sort = tuple(
-            name for name, _ in runtime_profile.bytecode_external_ordering if name in available
-        )
-    else:
-        default_partition = tuple(name for name in ("repo",) if name in available)
-        default_sort = tuple(name for name in ("path", "file_id") if name in available)
-    policy = runtime_profile.write_policy
-    if policy is None:
-        if not default_partition and not default_sort:
-            return None
-        return DataFusionWritePolicy(
-            partition_by=default_partition,
-            sort_by=default_sort,
-        )
-    return DataFusionWritePolicy(
-        partition_by=policy.partition_by or default_partition,
-        single_file_output=policy.single_file_output,
-        sort_by=policy.sort_by or default_sort,
-        parquet_compression=policy.parquet_compression,
-        parquet_statistics_enabled=policy.parquet_statistics_enabled,
-        parquet_row_group_size=policy.parquet_row_group_size,
-        parquet_bloom_filter_on_write=policy.parquet_bloom_filter_on_write,
-        parquet_dictionary_enabled=policy.parquet_dictionary_enabled,
-        parquet_encoding=policy.parquet_encoding,
-        parquet_skip_arrow_metadata=policy.parquet_skip_arrow_metadata,
-        parquet_column_options=policy.parquet_column_options,
-    )
 
 
 def _coerce_reader(
@@ -545,155 +384,12 @@ def _coerce_reader(
 
 
 @dataclass(frozen=True)
-class _ExternalWriteContext:
-    dataset: str
-    runtime_profile: DataFusionRuntimeProfile
-    location: DatasetLocation
-    write_policy: DataFusionWritePolicy | None
-    rows: int | None
-
-
-@dataclass(frozen=True)
 class _DeltaWriteContext:
     dataset: str
     runtime_profile: DataFusionRuntimeProfile
     location: DatasetLocation
     rows: int | None
     execution: IbisExecutionContext
-
-
-@dataclass(frozen=True)
-class _ExternalCopyDiagnosticsContext:
-    runtime_profile: DataFusionRuntimeProfile
-    dataset: str
-    result: WriteResult
-    parquet_policy: ParquetWritePolicy | None
-    rows: int | None
-    write_policy: DataFusionWritePolicy | None
-
-
-def _build_external_write_request(
-    *,
-    context: _ExternalWriteContext,
-    temp_name: str,
-    df: DataFrame,
-    write_format: WriteFormat,
-) -> tuple[WriteRequest, ParquetWritePolicy | None]:
-    schema = cast("pa.Schema", df.schema())
-    sort_by = _write_sort_by(context.write_policy, schema=schema)
-    select_expr = _write_select_expr(temp_name, sort_by=sort_by, schema=schema)
-    partition_by = _write_partition_by(context.write_policy, schema=schema)
-    parquet_policy = parquet_policy_from_datafusion(context.write_policy)
-    request = WriteRequest(
-        source=select_expr,
-        destination=str(context.location.path),
-        format=write_format,
-        mode=WriteMode.OVERWRITE,
-        partition_by=partition_by,
-        parquet_policy=parquet_policy,
-        single_file_output=(
-            context.write_policy.single_file_output if context.write_policy is not None else None
-        ),
-    )
-    return request, parquet_policy
-
-
-def _build_external_write_pipeline(
-    runtime_profile: DataFusionRuntimeProfile,
-    *,
-    operation_id: str,
-) -> tuple[WritePipeline, SQLPolicyProfile]:
-    profile = _write_pipeline_profile()
-    pipeline = WritePipeline(
-        runtime_profile.session_context(),
-        profile,
-        sql_options=statement_sql_options_for_profile(runtime_profile),
-        recorder=recorder_for_profile(runtime_profile, operation_id=operation_id),
-    )
-    return pipeline, profile
-
-
-def _emit_external_copy_diagnostics(context: _ExternalCopyDiagnosticsContext) -> None:
-    request = context.result.request
-    copy_sql = context.result.sql if context.result.method == WriteMethod.COPY else None
-    parquet_payload = (
-        _parquet_payload(
-            path=str(request.destination),
-            policy=context.write_policy,
-            parquet_policy=context.parquet_policy,
-        )
-        if request.format == WriteFormat.PARQUET
-        else None
-    )
-    options: dict[str, object] = {"format": request.format.name}
-    if request.format_options:
-        options.update(request.format_options)
-    if context.parquet_policy is not None:
-        options.update(context.parquet_policy.to_copy_options())
-    copy_payload: Mapping[str, object] | None = options or None
-    _record_extract_write(
-        context.runtime_profile,
-        record=_ExtractWriteRecord(
-            dataset=context.dataset,
-            mode="copy",
-            path=str(request.destination),
-            file_format=request.format.name.lower(),
-            rows=context.rows,
-            write_policy=context.write_policy,
-            parquet_payload=parquet_payload,
-            copy_sql=copy_sql,
-            copy_options=copy_payload,
-            delta_result=None,
-        ),
-    )
-
-
-def _write_external(
-    reader: RecordBatchReaderLike,
-    *,
-    context: _ExternalWriteContext,
-) -> None:
-    location = context.location
-    write_format = _write_format(location.format)
-    df_ctx = context.runtime_profile.session_context()
-    temp_name = f"__extract_write_{uuid.uuid4().hex}"
-    ingest_hook = (
-        diagnostics_arrow_ingest_hook(context.runtime_profile.diagnostics_sink)
-        if context.runtime_profile.diagnostics_sink is not None
-        else None
-    )
-    df = datafusion_from_arrow(
-        df_ctx,
-        name=temp_name,
-        value=reader,
-        ingest_hook=ingest_hook,
-    )
-    try:
-        request, parquet_policy = _build_external_write_request(
-            context=context,
-            temp_name=temp_name,
-            df=df,
-            write_format=write_format,
-        )
-        pipeline, _ = _build_external_write_pipeline(
-            context.runtime_profile,
-            operation_id=f"extract_write:{context.dataset}",
-        )
-        result = pipeline.write(request, prefer_streaming=True)
-        _emit_external_copy_diagnostics(
-            _ExternalCopyDiagnosticsContext(
-                runtime_profile=context.runtime_profile,
-                dataset=context.dataset,
-                result=result,
-                parquet_policy=parquet_policy,
-                rows=context.rows,
-                write_policy=context.write_policy,
-            )
-        )
-    finally:
-        adapter = DataFusionIOAdapter(ctx=df_ctx, profile=context.runtime_profile)
-        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            adapter.deregister_table(temp_name)
 
 
 def _write_delta(
@@ -724,8 +420,6 @@ def _write_delta(
             path=str(context.location.path),
             file_format="delta",
             rows=context.rows,
-            write_policy=None,
-            parquet_payload=None,
             copy_sql=None,
             copy_options=None,
             delta_result=datafusion_result,
@@ -760,31 +454,20 @@ def write_extract_outputs(
     if reader is None:
         msg = f"Extract output {name!r} yielded no rows."
         raise ValueError(msg)
-    schema = cast("pa.Schema", reader.schema)
-    policy = _write_policy_for_dataset(runtime_profile, dataset=name, schema=schema)
-    if location.format.lower() == "delta":
-        execution = _ibis_execution_from_ctx(ctx)
-        _write_delta(
-            reader,
-            context=_DeltaWriteContext(
-                dataset=name,
-                runtime_profile=runtime_profile,
-                location=location,
-                rows=rows,
-                execution=execution,
-            ),
-        )
-    else:
-        _write_external(
-            reader,
-            context=_ExternalWriteContext(
-                dataset=name,
-                runtime_profile=runtime_profile,
-                location=location,
-                write_policy=policy,
-                rows=rows,
-            ),
-        )
+    if location.format.lower() != "delta":
+        msg = f"Delta-only extract writes are enforced; got {location.format!r}."
+        raise ValueError(msg)
+    execution = _ibis_execution_from_ctx(ctx)
+    _write_delta(
+        reader,
+        context=_DeltaWriteContext(
+            dataset=name,
+            runtime_profile=runtime_profile,
+            location=location,
+            rows=rows,
+            execution=execution,
+        ),
+    )
     _record_diskcache_stats(runtime_profile)
 
 

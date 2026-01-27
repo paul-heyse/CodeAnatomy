@@ -74,6 +74,6 @@ def test_invalidation_snapshot_round_trip(tmp_path: Path) -> None:
 
     loaded = read_invalidation_snapshot(store, context=context)
     assert loaded is not None
-    assert loaded.incremental_plan_hashes == snapshot.incremental_plan_hashes
+    assert loaded.incremental_plan_fingerprints == snapshot.incremental_plan_fingerprints
     assert loaded.incremental_metadata_hash == snapshot.incremental_metadata_hash
     assert loaded.runtime_profile_hash == snapshot.runtime_profile_hash

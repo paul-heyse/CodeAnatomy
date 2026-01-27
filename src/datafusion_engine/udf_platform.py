@@ -1,4 +1,31 @@
-"""Rust UDF platform installation helpers."""
+"""Rust UDF platform installation for planning-critical extensions.
+
+This module installs the Rust UDF platform as a core planning feature.
+Planner extensions (Rust UDFs, ExprPlanner, FunctionFactory, RelationPlanner,
+and table functions) are treated as planning-critical components that must
+be installed before any plan-bundle construction.
+
+The platform installation pattern:
+
+    from datafusion import SessionContext
+    from datafusion_engine.udf_platform import (
+        RustUdfPlatformOptions,
+        install_rust_udf_platform,
+    )
+
+    ctx = SessionContext()
+    options = RustUdfPlatformOptions(
+        enable_udfs=True,
+        enable_function_factory=True,
+        enable_expr_planners=True,
+        expr_planner_names=("codeanatomy_domain",),
+        strict=True,
+    )
+    install_rust_udf_platform(ctx, options=options)
+
+All DataFusion execution facades automatically install the platform in
+`__post_init__` to ensure extensions are available before plan operations.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +47,6 @@ from datafusion_engine.function_factory import (
 from datafusion_engine.udf_runtime import (
     register_rust_udfs,
     rust_udf_docs,
-    validate_rust_udf_snapshot,
 )
 
 
@@ -137,7 +163,19 @@ def install_rust_udf_platform(
     *,
     options: RustUdfPlatformOptions | None = None,
 ) -> RustUdfPlatform:
-    """Install the Rust UDF platform in one step.
+    """Install planning-critical extension platform before plan-bundle construction.
+
+    This function installs the Rust UDF platform as a core planning feature.
+    Planner extensions (Rust UDFs, ExprPlanner, FunctionFactory) must be
+    installed before any DataFusion plan-bundle construction to ensure:
+
+    1. Required UDFs can be derived from logical plans
+    2. Domain syntax is routed through ExprPlanner
+    3. Function rewrites are applied via FunctionFactory
+    4. Table functions and relation planners are available
+
+    This replaces SQLGlot/Ibis UDF enforcement paths with DataFusion-native
+    extension points.
 
     Parameters
     ----------
@@ -166,7 +204,6 @@ def install_rust_udf_platform(
             async_udf_timeout_ms=resolved.async_udf_timeout_ms,
             async_udf_batch_size=resolved.async_udf_batch_size,
         )
-        validate_rust_udf_snapshot(snapshot)
         docs_value = snapshot.get("documentation") if isinstance(snapshot, Mapping) else None
         docs = cast("Mapping[str, object] | None", docs_value)
         if docs is None:

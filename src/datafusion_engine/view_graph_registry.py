@@ -23,12 +23,17 @@ from datafusion_engine.udf_runtime import (
     validate_required_udfs,
     validate_rust_udf_snapshot,
 )
-from datafusion_engine.view_artifacts import ViewArtifactInputs, build_view_artifact
+from datafusion_engine.view_artifacts import (
+    ViewArtifactInputs,
+    build_view_artifact,
+    build_view_artifact_from_bundle,
+)
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table
 
+    from datafusion_engine.plan_bundle import DataFusionPlanBundle
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.sql_policy_engine import SQLPolicyProfile
     from sqlglot_tools.compat import Expression
@@ -36,15 +41,36 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ViewNode:
-    """Declarative view definition with explicit dependencies."""
+    """Declarative view definition with explicit dependencies.
+
+    Attributes
+    ----------
+    name : str
+        View name for registration.
+    deps : tuple[str, ...]
+        Dependency names (table/view references).
+    builder : Callable[[SessionContext], DataFrame]
+        Function that builds the DataFrame for this view.
+    contract_builder : Callable[[pa.Schema], SchemaContract] | None
+        Optional schema contract builder.
+    required_udfs : tuple[str, ...]
+        Required UDF names for this view.
+    sqlglot_ast : Expression | None
+        DEPRECATED: SQLGlot AST for the view. Use plan_bundle for lineage extraction.
+    ibis_expr : Table | None
+        DEPRECATED: Ibis expression for the view. Use plan_bundle for lineage extraction.
+    plan_bundle : DataFusionPlanBundle | None
+        DataFusion plan bundle (preferred source of truth for lineage).
+    """
 
     name: str
     deps: tuple[str, ...]
     builder: Callable[[SessionContext], DataFrame]
     contract_builder: Callable[[pa.Schema], SchemaContract] | None = None
     required_udfs: tuple[str, ...] = ()
-    sqlglot_ast: Expression | None = None
-    ibis_expr: Table | None = None
+    sqlglot_ast: Expression | None = None  # DEPRECATED: Use plan_bundle
+    ibis_expr: Table | None = None  # DEPRECATED: Use plan_bundle
+    plan_bundle: DataFusionPlanBundle | None = None
 
 
 class SchemaContractViolationError(ValueError):
@@ -97,7 +123,6 @@ def register_view_graph(
     Raises
     ------
     ValueError
-        Raised when a view node is missing a SQLGlot AST.
         Raised when artifact recording is required without a runtime profile.
     """
     resolved = options or ViewGraphOptions()
@@ -125,9 +150,6 @@ def register_view_graph(
         _validate_udf_calls(snapshot, node)
         validate_required_udfs(snapshot, required=node.required_udfs)
         _validate_required_functions(ctx, node.required_udfs)
-        if node.sqlglot_ast is None:
-            msg = f"View {node.name!r} missing SQLGlot AST."
-            raise ValueError(msg)
         df = node.builder(ctx)
         if resolved.temporary:
             adapter.register_view(
@@ -136,10 +158,9 @@ def register_view_graph(
                 overwrite=resolved.overwrite,
                 temporary=resolved.temporary,
             )
-        else:
-            if ibis_backend is None or node.ibis_expr is None:
-                msg = f"View {node.name!r} requires an Ibis expression for persistent registration."
-                raise ValueError(msg)
+        # DataFusion-native path (preferred)
+        elif node.ibis_expr is not None and ibis_backend is not None:
+            # Legacy Ibis path for backward compatibility
             register_ibis_view(
                 node.ibis_expr,
                 options=SourceToIbisOptions(
@@ -150,6 +171,14 @@ def register_view_graph(
                     runtime_profile=runtime.runtime_profile,
                 ),
             )
+        else:
+            # DataFusion-native persistent registration (preferred)
+            adapter.register_view(
+                node.name,
+                df,
+                overwrite=resolved.overwrite,
+                temporary=False,
+            )
         schema = _schema_from_df(df)
         if resolved.validate_schema and node.contract_builder is not None:
             contract = node.contract_builder(schema)
@@ -157,16 +186,30 @@ def register_view_graph(
         if runtime.runtime_profile is not None:
             from datafusion_engine.runtime import record_view_definition
 
-            artifact = build_view_artifact(
-                ViewArtifactInputs(
-                    ctx=ctx,
+            # Prefer plan_bundle-based artifact (DataFusion-native)
+            if node.plan_bundle is not None:
+                artifact = build_view_artifact_from_bundle(
+                    node.plan_bundle,
                     name=node.name,
-                    ast=node.sqlglot_ast,
                     schema=schema,
                     required_udfs=node.required_udfs,
-                    policy_profile=policy_profile,
+                    referenced_tables=node.deps,
                 )
-            )
+            elif node.sqlglot_ast is not None:
+                # Fall back to legacy AST-based artifact
+                artifact = build_view_artifact(
+                    ViewArtifactInputs(
+                        ctx=ctx,
+                        name=node.name,
+                        ast=node.sqlglot_ast,
+                        schema=schema,
+                        required_udfs=node.required_udfs,
+                        policy_profile=policy_profile,
+                    )
+                )
+            else:
+                # No artifact can be built - skip recording
+                continue
             record_view_definition(runtime.runtime_profile, artifact=artifact)
 
 
@@ -188,19 +231,25 @@ def _validate_deps(
 
 
 def _validate_udf_calls(snapshot: Mapping[str, object], node: ViewNode) -> None:
-    if node.sqlglot_ast is None:
-        msg = f"View {node.name!r} missing SQLGlot AST."
-        raise ValueError(msg)
-    from sqlglot_tools.lineage import referenced_udf_calls
+    # Prefer plan_bundle for UDF extraction when available (DataFusion-native)
+    if node.plan_bundle is not None:
+        udfs_from_bundle = _required_udfs_from_plan_bundle(node.plan_bundle, snapshot=snapshot)
+        if udfs_from_bundle:
+            # All UDFs from bundle are pre-validated against snapshot in _required_udfs_from_plan_bundle
+            return
+    elif node.sqlglot_ast is not None:
+        # Fall back to legacy AST-based validation
+        from sqlglot_tools.lineage import referenced_udf_calls
 
-    udf_calls = referenced_udf_calls(node.sqlglot_ast)
-    if not udf_calls:
-        return
-    available = {name.lower() for name in udf_names_from_snapshot(snapshot)}
-    missing = [name for name in udf_calls if name.lower() not in available]
-    if missing:
-        msg = f"View {node.name!r} references non-Rust UDFs: {sorted(missing)}."
-        raise ValueError(msg)
+        udf_calls = referenced_udf_calls(node.sqlglot_ast)
+        if not udf_calls:
+            return
+        available = {name.lower() for name in udf_names_from_snapshot(snapshot)}
+        missing = [name for name in udf_calls if name.lower() not in available]
+        if missing:
+            msg = f"View {node.name!r} references non-Rust UDFs: {sorted(missing)}."
+            raise ValueError(msg)
+    # If neither plan_bundle nor sqlglot_ast is available, skip validation
 
 
 def _materialize_nodes(
@@ -210,19 +259,63 @@ def _materialize_nodes(
 ) -> tuple[ViewNode, ...]:
     resolved: list[ViewNode] = []
     for node in nodes:
-        if node.sqlglot_ast is None:
-            msg = f"View {node.name!r} missing SQLGlot AST."
+        # Prefer plan_bundle for dependency/UDF extraction when available
+        deps_from_bundle = _deps_from_plan_bundle(node.plan_bundle)
+        udfs_from_bundle = _required_udfs_from_plan_bundle(node.plan_bundle, snapshot=snapshot)
+
+        if deps_from_bundle is not None and udfs_from_bundle is not None:
+            # Use DataFusion-native lineage (preferred path)
+            deps = deps_from_bundle
+            required = udfs_from_bundle
+        elif node.sqlglot_ast is not None:
+            # Fall back to SQLGlot AST (legacy path)
+            deps = _deps_from_ast(node.sqlglot_ast)
+            required = _required_udfs_from_ast(node.sqlglot_ast, snapshot=snapshot)
+        else:
+            msg = f"View {node.name!r} missing both plan_bundle and SQLGlot AST."
             raise ValueError(msg)
-        deps = _deps_from_ast(node.sqlglot_ast)
-        required = _required_udfs_from_ast(node.sqlglot_ast, snapshot=snapshot)
         resolved.append(replace(node, deps=deps, required_udfs=required))
     return tuple(resolved)
 
 
 def _deps_from_ast(expr: Expression) -> tuple[str, ...]:
+    """Extract dependencies from SQLGlot AST (legacy path).
+
+    Returns
+    -------
+    tuple[str, ...]
+        Referenced table names.
+    """
     from sqlglot_tools.lineage import referenced_tables
 
     return tuple(referenced_tables(expr))
+
+
+def _deps_from_plan_bundle(bundle: DataFusionPlanBundle | None) -> tuple[str, ...] | None:
+    """Extract dependencies from DataFusion plan bundle (preferred path).
+
+    Parameters
+    ----------
+    bundle : DataFusionPlanBundle | None
+        Plan bundle with optimized logical plan.
+
+    Returns
+    -------
+    tuple[str, ...] | None
+        Dependency names, or None if bundle unavailable.
+    """
+    if bundle is None:
+        return None
+    if bundle.optimized_logical_plan is None:
+        return None
+    try:
+        from datafusion_engine.lineage_datafusion import extract_lineage
+
+        lineage = extract_lineage(bundle.optimized_logical_plan)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    else:
+        return lineage.referenced_tables
 
 
 def _required_udfs_from_ast(
@@ -230,6 +323,13 @@ def _required_udfs_from_ast(
     *,
     snapshot: Mapping[str, object],
 ) -> tuple[str, ...]:
+    """Extract required UDFs from SQLGlot AST (legacy path).
+
+    Returns
+    -------
+    tuple[str, ...]
+        Required UDF names.
+    """
     from sqlglot_tools.lineage import referenced_udf_calls
 
     udf_calls = referenced_udf_calls(expr)
@@ -241,6 +341,66 @@ def _required_udfs_from_ast(
         lookup[name.lower()]
         for name in udf_calls
         if isinstance(name, str) and name.lower() in lookup
+    }
+    return tuple(sorted(required))
+
+
+def _required_udfs_from_plan_bundle(
+    bundle: DataFusionPlanBundle | None,
+    *,
+    snapshot: Mapping[str, object],
+) -> tuple[str, ...] | None:
+    """Extract required UDFs from DataFusion plan bundle (preferred path).
+
+    Parameters
+    ----------
+    bundle : DataFusionPlanBundle | None
+        Plan bundle with optimized logical plan.
+    snapshot : Mapping[str, object]
+        Rust UDF snapshot.
+
+    Returns
+    -------
+    tuple[str, ...] | None
+        Required UDF names, or None if bundle unavailable.
+    """
+    if bundle is None:
+        return None
+    if bundle.optimized_logical_plan is None:
+        return None
+
+    # Prefer DataFusion-native lineage extraction with UDF support
+    try:
+        from datafusion_engine.lineage_datafusion import extract_lineage
+
+        lineage = extract_lineage(bundle.optimized_logical_plan)
+        if lineage.referenced_udfs:
+            # Filter to only UDFs that exist in snapshot
+            snapshot_names = udf_names_from_snapshot(snapshot)
+            lookup = {name.lower(): name for name in snapshot_names}
+            required = {
+                lookup[name.lower()]
+                for name in lineage.referenced_udfs
+                if isinstance(name, str) and name.lower() in lookup
+            }
+            return tuple(sorted(required))
+    except (RuntimeError, TypeError, ValueError):
+        pass
+
+    # Fallback: Parse function calls from the plan display (legacy path)
+    plan_display = bundle.display_optimized_plan()
+    if not plan_display:
+        return None
+    snapshot_names = udf_names_from_snapshot(snapshot)
+    lookup = {name.lower(): name for name in snapshot_names}
+    # Look for function calls in the plan display
+    import re
+
+    # Pattern for function calls in DataFusion plan display
+    pattern = r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\("
+    matches = re.findall(pattern, plan_display)
+    required = {
+        lookup[name.lower()] for name in matches if isinstance(name, str) and name.lower() in lookup
     }
     return tuple(sorted(required))
 

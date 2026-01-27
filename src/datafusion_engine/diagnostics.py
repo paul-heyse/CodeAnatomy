@@ -19,7 +19,7 @@ Examples
 ...     input_sql="SELECT * FROM table",
 ...     output_sql="SELECT * FROM table",
 ...     ast_fingerprint="abc123",
-...     policy_fingerprint="def456",
+...     policy_hash="def456",
 ...     dialect="postgres",
 ...     duration_ms=10.5,
 ... )
@@ -111,27 +111,38 @@ class DiagnosticsSink(Protocol):
 
 @dataclass(frozen=True)
 class CompilationRecord:
-    """Payload for SQL compilation diagnostics."""
+    """Payload for SQL compilation diagnostics.
+
+    DEPRECATED: ast_fingerprint and policy_hash are deprecated.
+    Use plan_fingerprint from DataFusionPlanBundle instead.
+    """
 
     input_sql: str
     output_sql: str
-    ast_fingerprint: str
-    policy_fingerprint: str
+    ast_fingerprint: str  # DEPRECATED: Use plan_fingerprint instead
+    policy_hash: str  # DEPRECATED: Use plan_fingerprint instead
     dialect: str
     duration_ms: float
     lineage: dict[str, Any] | None = None
+    plan_fingerprint: str | None = None  # Preferred over ast_fingerprint + policy_hash
 
 
 @dataclass(frozen=True)
 class ExecutionRecord:
-    """Payload for SQL execution diagnostics."""
+    """Payload for SQL execution diagnostics.
+
+    DEPRECATED: ast_fingerprint and policy_hash are deprecated.
+    Use plan_fingerprint from DataFusionPlanBundle instead.
+    """
 
     sql: str
-    ast_fingerprint: str
+    ast_fingerprint: str  # DEPRECATED: Use plan_fingerprint instead
     duration_ms: float
+    policy_hash: str | None = None  # DEPRECATED: Use plan_fingerprint instead
     rows_produced: int | None = None
     bytes_scanned: int | None = None
     error: str | None = None
+    plan_fingerprint: str | None = None  # Preferred over ast_fingerprint + policy_hash
 
 
 @dataclass(frozen=True)
@@ -407,6 +418,8 @@ class DiagnosticsRecorder:
         if not self.enabled or self._sink is None:
             return
 
+        # DEPRECATED: ast_fingerprint and policy_hash are deprecated.
+        # Use plan_fingerprint from DataFusionPlanBundle instead.
         self._sink.record_artifact(
             "sql_compilation",
             {
@@ -415,8 +428,9 @@ class DiagnosticsRecorder:
                 "timestamp": datetime.now().astimezone().isoformat(),
                 "input_sql": record.input_sql,
                 "output_sql": record.output_sql,
-                "ast_fingerprint": record.ast_fingerprint,
-                "policy_fingerprint": record.policy_fingerprint,
+                "ast_fingerprint": record.ast_fingerprint,  # DEPRECATED
+                "policy_hash": record.policy_hash,  # DEPRECATED
+                "plan_fingerprint": record.plan_fingerprint,  # Preferred
                 "dialect": record.dialect,
                 "duration_ms": record.duration_ms,
                 "lineage": record.lineage,
@@ -435,6 +449,8 @@ class DiagnosticsRecorder:
         if not self.enabled or self._sink is None:
             return
 
+        # DEPRECATED: ast_fingerprint and policy_hash are deprecated.
+        # Use plan_fingerprint from DataFusionPlanBundle instead.
         self._sink.record_artifact(
             "sql_execution",
             {
@@ -442,7 +458,9 @@ class DiagnosticsRecorder:
                 "operation_id": self._context.operation_id,
                 "timestamp": datetime.now().astimezone().isoformat(),
                 "sql": record.sql,
-                "ast_fingerprint": record.ast_fingerprint,
+                "ast_fingerprint": record.ast_fingerprint,  # DEPRECATED
+                "policy_hash": record.policy_hash,  # DEPRECATED
+                "plan_fingerprint": record.plan_fingerprint,  # Preferred
                 "duration_ms": record.duration_ms,
                 "rows_produced": record.rows_produced,
                 "bytes_scanned": record.bytes_scanned,
@@ -715,6 +733,47 @@ def record_events(
     recorder.record_events(name, rows)
 
 
+def record_cache_lineage(
+    profile: DataFusionRuntimeProfile | None,
+    *,
+    summary: Mapping[str, object],
+    rows: Sequence[Mapping[str, object]],
+) -> None:
+    """Record cache lineage summaries and per-node facts.
+
+    Parameters
+    ----------
+    profile : DataFusionRuntimeProfile | None
+        Runtime profile for diagnostics emission.
+    summary : Mapping[str, object]
+        Summary payload containing run metadata and counts.
+    rows : Sequence[Mapping[str, object]]
+        Per-node cache lineage rows to emit as events.
+    """
+    summary_payload = dict(summary)
+    record_artifact(profile, "hamilton_cache_lineage_v2", summary_payload)
+    node_rows = [_normalize_diagnostics_row(row) for row in rows]
+    if node_rows:
+        record_events(profile, "hamilton_cache_lineage_nodes_v1", node_rows)
+
+
+def _normalize_diagnostics_row(row: Mapping[str, object]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, value in row.items():
+        if isinstance(value, Mapping):
+            normalized[key] = {
+                str(inner_key): inner_value
+                for inner_key, inner_value in value.items()
+                if isinstance(inner_key, str)
+            }
+            continue
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            normalized[key] = list(value)
+            continue
+        normalized[key] = value
+    return normalized
+
+
 def ensure_recorder_sink(
     sink: DiagnosticsSink,
     *,
@@ -843,6 +902,9 @@ def view_fingerprint_payload(
 ) -> dict[str, object]:
     """Return a diagnostics payload describing view fingerprints.
 
+    DEPRECATED: This function uses SQLGlot AST fingerprints and policy hashes.
+    Use plan_fingerprint from DataFusionPlanBundle (ViewNode.plan_bundle) instead.
+
     Parameters
     ----------
     view_nodes
@@ -862,17 +924,22 @@ def view_fingerprint_payload(
     rows: list[dict[str, object]] = []
     views_with_fingerprint = 0
     profile = policy_profile or SQLPolicyProfile()
+    # DEPRECATED: Use plan_fingerprint from DataFusionPlanBundle instead
     policy_hash = sqlglot_policy_snapshot_for(profile.to_sqlglot_policy()).policy_hash
     for node in view_nodes:
         fingerprint: str | None = None
+        # DEPRECATED: sqlglot_ast is deprecated. Use plan_bundle.plan_fingerprint instead.
         if node.sqlglot_ast is not None:
             fingerprint = canonical_ast_fingerprint(node.sqlglot_ast)
             views_with_fingerprint += 1
+        # Prefer plan_fingerprint from plan_bundle when available
+        plan_fingerprint = node.plan_bundle.plan_fingerprint if node.plan_bundle else None
         rows.append(
             {
                 "view": node.name,
-                "ast_fingerprint": fingerprint,
-                "policy_hash": policy_hash,
+                "ast_fingerprint": fingerprint,  # DEPRECATED
+                "policy_hash": policy_hash,  # DEPRECATED
+                "plan_fingerprint": plan_fingerprint,  # Preferred
             }
         )
     return {

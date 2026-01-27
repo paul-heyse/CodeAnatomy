@@ -98,25 +98,37 @@ def resolve_sql_policy(
 
 @dataclass(frozen=True)
 class DataFusionCacheEvent:
-    """Diagnostics payload for DataFusion cache decisions."""
+    """Diagnostics payload for DataFusion cache decisions.
+
+    DEPRECATED: ast_fingerprint and policy_hash are deprecated.
+    Use plan_fingerprint from DataFusionPlanBundle instead.
+    """
 
     cache_enabled: bool
     cache_max_columns: int | None
     column_count: int
     reason: str
-    plan_hash: str | None = None
+    ast_fingerprint: str | None = None  # DEPRECATED: Use plan_fingerprint instead
+    policy_hash: str | None = None  # DEPRECATED: Use plan_fingerprint instead
     profile_hash: str | None = None
+    plan_fingerprint: str | None = None  # Preferred over ast_fingerprint + policy_hash
 
 
 @dataclass(frozen=True)
 class DataFusionSubstraitFallbackEvent:
-    """Diagnostics payload for Substrait fallback decisions."""
+    """Diagnostics payload for Substrait fallback decisions.
+
+    DEPRECATED: ast_fingerprint and policy_hash are deprecated.
+    Use plan_fingerprint from DataFusionPlanBundle instead.
+    """
 
     reason: str
     expr_type: str
-    plan_hash: str | None = None
+    ast_fingerprint: str | None = None  # DEPRECATED: Use plan_fingerprint instead
+    policy_hash: str | None = None  # DEPRECATED: Use plan_fingerprint instead
     profile_hash: str | None = None
     run_id: str | None = None
+    plan_fingerprint: str | None = None  # Preferred over ast_fingerprint + policy_hash
 
 
 @dataclass(frozen=True)
@@ -179,12 +191,13 @@ class DataFusionCompileOptions:
     semantic_diff_base_sql: str | None = None
     semantic_diff_hook: Callable[[Mapping[str, object]], None] | None = None
     plan_cache: PlanCache | None = None
-    plan_hash: str | None = None
+    ast_fingerprint: str | None = None  # DEPRECATED: Use plan_fingerprint from bundle
+    policy_hash: str | None = None  # DEPRECATED: Use plan_fingerprint from bundle
     profile_hash: str | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
-    sqlglot_policy: SqlGlotPolicy | None = None
-    sqlglot_policy_hash: str | None = None
-    sql_policy_profile: SQLPolicyProfile | None = None
+    sqlglot_policy: SqlGlotPolicy | None = None  # DEPRECATED: Use DataFusion-native planning
+    sqlglot_policy_hash: str | None = None  # DEPRECATED: Use plan_fingerprint from bundle
+    sql_policy_profile: SQLPolicyProfile | None = None  # DEPRECATED: Use DataFusion-native
     run_id: str | None = None
     prefer_substrait: bool = False
     prefer_ast_execution: bool = True

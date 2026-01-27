@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
-from datafusion_engine.semantic_diff import (
-    ChangeCategory,
-    RebuildPolicy,
-    SemanticChange,
-    SemanticDiff,
-)
+from datafusion_engine.semantic_diff import RebuildPolicy, SemanticDiff
 from ibis_engine.registry import DatasetCatalog
 from incremental.cdf_cursors import CdfCursorStore
 from incremental.cdf_filters import CdfFilterPolicy
@@ -21,9 +15,6 @@ from incremental.plan_fingerprints import PlanFingerprintSnapshot
 from relspec.evidence import EvidenceCatalog
 from relspec.rustworkx_graph import TaskGraph
 from relspec.rustworkx_schedule import impacted_tasks
-
-if TYPE_CHECKING:
-    from datafusion_engine.view_graph_registry import ViewNode
 
 
 @dataclass(frozen=True)
@@ -170,81 +161,23 @@ def impacted_tasks_for_cdf(request: CdfImpactRequest) -> tuple[str, ...]:
     return tuple(sorted(impacted))
 
 
-def view_fingerprint_map(nodes: Sequence[ViewNode]) -> dict[str, str]:
-    """Return a mapping of view names to plan fingerprints.
-
-    Returns
-    -------
-    dict[str, str]
-        Mapping of view name to plan fingerprint.
-    """
-    from relspec.inferred_deps import infer_deps_from_view_nodes
-
-    inferred = infer_deps_from_view_nodes(nodes)
-    return {dep.task_name: dep.plan_fingerprint for dep in inferred}
-
-
-def view_snapshot_map(nodes: Sequence[ViewNode]) -> dict[str, PlanFingerprintSnapshot]:
-    """Return a mapping of view names to plan snapshots.
-
-    Returns
-    -------
-    dict[str, PlanFingerprintSnapshot]
-        Mapping of view name to snapshot metadata.
-
-    Raises
-    ------
-    ValueError
-        Raised when a view node is missing a SQLGlot AST.
-    """
-    from relspec.inferred_deps import infer_deps_from_view_nodes
-
-    inferred = {dep.task_name: dep for dep in infer_deps_from_view_nodes(nodes)}
-    snapshots: dict[str, PlanFingerprintSnapshot] = {}
-    for node in nodes:
-        if node.sqlglot_ast is None:
-            msg = f"View node {node.name!r} is missing a SQLGlot AST."
-            raise ValueError(msg)
-        dep = inferred.get(node.name)
-        fingerprint = dep.plan_fingerprint if dep is not None else ""
-        snapshots[node.name] = PlanFingerprintSnapshot(
-            plan_fingerprint=fingerprint,
-            sqlglot_ast=node.sqlglot_ast,
-        )
-    return snapshots
-
-
 def _semantic_diff_map(
     prev: Mapping[str, PlanFingerprintSnapshot],
     curr: Mapping[str, PlanFingerprintSnapshot],
     changed_tasks: tuple[str, ...],
 ) -> dict[str, SemanticDiff]:
-    results: dict[str, SemanticDiff] = {}
-    for name in changed_tasks:
-        prev_snapshot = prev.get(name)
-        curr_snapshot = curr.get(name)
-        if prev_snapshot is None or curr_snapshot is None:
-            continue
-        if prev_snapshot.sqlglot_ast is None or curr_snapshot.sqlglot_ast is None:
-            continue
-        try:
-            diff = SemanticDiff.compute(
-                prev_snapshot.sqlglot_ast,
-                curr_snapshot.sqlglot_ast,
-            )
-        except (TypeError, ValueError) as exc:
-            diff = SemanticDiff(
-                changes=[
-                    SemanticChange(
-                        edit_type="diff_error",
-                        node_type=type(exc).__name__,
-                        description=str(exc) or "AST diff error",
-                        category=ChangeCategory.BREAKING,
-                    )
-                ]
-            )
-        results[name] = diff
-    return results
+    """Return semantic diff details for changed tasks when supported.
+
+    DataFusion-native semantic diffing is not yet implemented. This function
+    returns an empty mapping until a LogicalPlan diff engine is available.
+
+    Returns
+    -------
+    dict[str, SemanticDiff]
+        Semantic diff records keyed by task name.
+    """
+    _ = prev, curr, changed_tasks
+    return {}
 
 
 __all__ = [
@@ -253,6 +186,4 @@ __all__ = [
     "diff_plan_fingerprints",
     "diff_plan_snapshots",
     "impacted_tasks_for_cdf",
-    "view_fingerprint_map",
-    "view_snapshot_map",
 ]

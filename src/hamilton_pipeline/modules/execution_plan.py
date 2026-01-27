@@ -258,9 +258,15 @@ def _incremental_plan_diff_node(options: PlanModuleOptions) -> object:
             return None
         state_store = StateStore(root=incremental_config.state_dir)
         context = DeltaAccessContext(runtime=runtime)
-        previous = read_plan_snapshots(state_store, context=context)
         current = execution_plan.plan_snapshots
-        diff = diff_plan_snapshots(previous, current)
+        plan_state_dir = execution_plan.incremental_state_dir
+        config_state_dir = str(incremental_config.state_dir)
+        precomputed = execution_plan.incremental_diff
+        if precomputed is not None and plan_state_dir == config_state_dir:
+            diff = precomputed
+        else:
+            previous = read_plan_snapshots(state_store, context=context)
+            diff = diff_plan_snapshots(previous, current)
         if options.record_incremental_artifacts:
             _record_plan_diff(
                 diff,
@@ -281,21 +287,31 @@ def _active_task_names_node() -> object:
         incremental_plan_diff: IncrementalDiff | None,
     ) -> frozenset[str]:
         active = set(execution_plan.active_tasks)
+        requested_anchor: set[str] = set()
+        if execution_plan.requested_task_names:
+            requested_anchor = upstream_task_closure(
+                execution_plan.task_graph,
+                execution_plan.requested_task_names,
+            )
+            requested_anchor &= active
         diff = incremental_plan_diff
         if diff is None:
             return frozenset(active)
         rebuild = set(diff.tasks_requiring_rebuild())
         if not rebuild:
-            return frozenset(active)
+            return frozenset(active | requested_anchor)
         rebuild &= active
         if not rebuild:
-            return frozenset(active)
+            return frozenset(active | requested_anchor)
         impacted = downstream_task_closure(execution_plan.task_graph, rebuild)
         impacted &= active
         if not impacted:
-            return frozenset(active)
+            return frozenset(active | requested_anchor)
         impacted_with_deps = upstream_task_closure(execution_plan.task_graph, impacted)
-        return frozenset(impacted_with_deps & active)
+        impacted_with_deps &= active
+        if requested_anchor:
+            impacted_with_deps |= requested_anchor
+        return frozenset(impacted_with_deps)
 
     return active_task_names
 

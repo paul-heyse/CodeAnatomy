@@ -55,6 +55,7 @@ class DiagnosticsNodeHook(lifecycle_api.NodeExecutionHook):
         self._starts[key] = time.monotonic()
         node_input_types = kwargs.get("node_input_types", {})
         node_return_type = kwargs.get("node_return_type", object)
+        input_types_payload = {key: str(value) for key, value in node_input_types.items()}
         self.collector.record_events(
             "hamilton_node_start_v1",
             [
@@ -63,7 +64,7 @@ class DiagnosticsNodeHook(lifecycle_api.NodeExecutionHook):
                     "task_id": task_id,
                     "node_name": node_name,
                     "node_tags": dict(node_tags),
-                    "node_input_types": {k: str(v) for k, v in node_input_types.items()},
+                    "node_input_types": input_types_payload,
                     "node_return_type": str(node_return_type),
                 }
             ],
@@ -96,7 +97,11 @@ class DiagnosticsNodeHook(lifecycle_api.NodeExecutionHook):
         self.collector.record_events("hamilton_node_finish_v1", [payload])
 
 
-def _plan_diagnostics_payload(plan: ExecutionPlan, *, run_id: str) -> dict[str, object]:
+def _plan_diagnostics_payload(
+    plan: ExecutionPlan,
+    *,
+    run_id: str,
+) -> dict[str, object]:
     diagnostics = plan.diagnostics
     from relspec.rustworkx_graph import task_graph_node_label
 
@@ -117,7 +122,8 @@ def _plan_diagnostics_payload(plan: ExecutionPlan, *, run_id: str) -> dict[str, 
             key=lambda item: item[0],
         )
     }
-    reduced_edge_count = max(plan.reduction_edge_count - plan.reduction_removed_edge_count, 0)
+    reduced_edge_delta = plan.reduction_edge_count - plan.reduction_removed_edge_count
+    reduced_edge_count = max(reduced_edge_delta, 0)
     schedule_metadata = [
         {
             "task_name": name,
@@ -193,7 +199,12 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
     ) -> None:
         """Record scheduling diagnostics after graph execution."""
         _ = kwargs
-        _flush_plan_events(self.plan, profile=self.profile, collector=self.collector, run_id=run_id)
+        _flush_plan_events(
+            self.plan,
+            profile=self.profile,
+            collector=self.collector,
+            run_id=run_id,
+        )
 
 
 def _flush_plan_events(
@@ -223,14 +234,95 @@ def _flush_plan_events(
         record_events(profile, name, normalized_rows)
     record_artifact(
         profile,
+        "hamilton_plan_drift_v1",
+        _plan_drift_payload(
+            plan,
+            events_snapshot=events_snapshot,
+            run_id=run_id,
+        ),
+    )
+    record_artifact(
+        profile,
         "hamilton_plan_events_v1",
         {
             "run_id": run_id,
             "plan_signature": plan.plan_signature,
-            "reduced_task_dependency_signature": plan.reduced_task_dependency_signature,
+            "reduced_task_dependency_signature": (plan.reduced_task_dependency_signature),
             "event_counts": event_counts,
         },
     )
+
+
+def _plan_drift_payload(
+    plan: ExecutionPlan,
+    *,
+    events_snapshot: Mapping[str, list[Mapping[str, object]]],
+    run_id: str,
+) -> dict[str, object]:
+    submission_rows = events_snapshot.get("hamilton_task_submission_v1", [])
+    grouping_rows = events_snapshot.get("hamilton_task_grouping_v1", [])
+    expansion_rows = events_snapshot.get("hamilton_task_expansion_v1", [])
+    plan_active_tasks = set(plan.active_tasks)
+    admitted_tasks = _admitted_task_names(submission_rows)
+    missing_tasks = tuple(sorted(plan_active_tasks - admitted_tasks))
+    unexpected_tasks = tuple(sorted(admitted_tasks - plan_active_tasks))
+    plan_generations = _plan_generation_indices(plan)
+    admitted_generations = _admitted_generation_indices(submission_rows)
+    missing_generations = tuple(sorted(plan_generations - admitted_generations))
+    plan_task_count = len(plan_active_tasks)
+    admitted_task_count = len(admitted_tasks)
+    coverage_ratio = (
+        float(admitted_task_count) / float(plan_task_count) if plan_task_count > 0 else 1.0
+    )
+    return {
+        "run_id": run_id,
+        "plan_signature": plan.plan_signature,
+        "reduced_plan_signature": (plan.reduced_task_dependency_signature),
+        "plan_task_count": plan_task_count,
+        "admitted_task_count": admitted_task_count,
+        "admitted_task_coverage_ratio": coverage_ratio,
+        "missing_admitted_tasks": list(missing_tasks),
+        "unexpected_admitted_tasks": list(unexpected_tasks),
+        "plan_generation_count": len(plan.task_schedule.generations),
+        "plan_generations": sorted(plan_generations),
+        "admitted_generation_count": len(admitted_generations),
+        "admitted_generations": sorted(admitted_generations),
+        "missing_generations": list(missing_generations),
+        "submission_event_count": len(submission_rows),
+        "grouping_event_count": len(grouping_rows),
+        "expansion_event_count": len(expansion_rows),
+    }
+
+
+def _plan_generation_indices(plan: ExecutionPlan) -> set[int]:
+    return {meta.generation_index for meta in plan.schedule_metadata.values()}
+
+
+def _admitted_task_names(rows: list[Mapping[str, object]]) -> set[str]:
+    admitted: set[str] = set()
+    for row in rows:
+        value = row.get("admitted_tasks")
+        if isinstance(value, list):
+            admitted.update(name for name in value if isinstance(name, str))
+    return admitted
+
+
+def _admitted_generation_indices(rows: list[Mapping[str, object]]) -> set[int]:
+    generations: set[int] = set()
+    for row in rows:
+        value = row.get("task_facts")
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            generation_value = item.get("generation_index")
+            if isinstance(generation_value, int) and not isinstance(generation_value, bool):
+                generations.add(generation_value)
+                continue
+            if isinstance(generation_value, str) and generation_value.isdigit():
+                generations.add(int(generation_value))
+    return generations
 
 
 __all__ = [

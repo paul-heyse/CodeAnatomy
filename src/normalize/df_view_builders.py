@@ -7,7 +7,7 @@ instances directly and support DataFusionPlanBundle-based lineage extraction.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 from datafusion import SessionContext, col, lit
@@ -21,7 +21,7 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from datafusion_ext import stable_id
+from datafusion_ext import stable_id_parts
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -74,6 +74,37 @@ def _coalesce_cols(df: DataFrame, *col_names: str, default_expr: Expr | None = N
     if default_expr is not None:
         result = f.coalesce(result, default_expr)
     return result
+
+
+def _hash_part(expr: Expr, *, null_sentinel: str) -> Expr:
+    """Normalize a hash part by casting to Utf8 and coalescing nulls.
+
+    Returns
+    -------
+    Expr
+        Normalized hash-part expression.
+    """
+    return f.coalesce(_arrow_cast(expr, "Utf8"), lit(null_sentinel))
+
+
+def _stable_id_expr(prefix: str, parts: Sequence[Expr], *, null_sentinel: str) -> Expr:
+    """Build a stable identifier from normalized parts.
+
+    Returns
+    -------
+    Expr
+        Stable identifier expression.
+
+    Raises
+    ------
+    ValueError
+        Raised when no expression parts are provided.
+    """
+    if not parts:
+        msg = "stable identifiers require at least one part."
+        raise ValueError(msg)
+    normalized = [_hash_part(part, null_sentinel=null_sentinel) for part in parts]
+    return stable_id_parts(prefix, normalized[0], *normalized[1:])
 
 
 def _span_struct(  # noqa: PLR0913
@@ -145,15 +176,17 @@ def type_exprs_df_builder(ctx: SessionContext) -> DataFrame:
     df = table.filter(non_empty).with_column("type_repr", trimmed)
 
     # Generate type_expr_id (based on path, bstart, bend)
-    type_expr_id = stable_id(
+    type_expr_id = _stable_id_expr(
         TYPE_EXPR_ID_SPEC.prefix,
-        f.concat_ws(":", col("path"), col("bstart"), col("bend")),
+        (col("path"), col("bstart"), col("bend")),
+        null_sentinel=TYPE_EXPR_ID_SPEC.null_sentinel,
     )
 
     # Generate type_id (based on type_repr)
-    type_id = stable_id(
+    type_id = _stable_id_expr(
         TYPE_ID_SPEC.prefix,
-        col("type_repr"),
+        (col("type_repr"),),
+        null_sentinel=TYPE_ID_SPEC.null_sentinel,
     )
 
     # Build span struct
@@ -232,9 +265,10 @@ def type_nodes_df_builder(ctx: SessionContext) -> DataFrame:
             )
 
             # Generate type_id for SCIP rows
-            scip_type_id = stable_id(
+            scip_type_id = _stable_id_expr(
                 TYPE_ID_SPEC.prefix,
-                col("type_repr"),
+                (col("type_repr"),),
+                null_sentinel=TYPE_ID_SPEC.null_sentinel,
             )
             scip_rows = scip_rows.with_column("type_id", scip_type_id)
             scip_rows = scip_rows.select(
@@ -390,9 +424,10 @@ def def_use_events_df_builder(ctx: SessionContext) -> DataFrame:  # noqa: PLR091
     df = table.with_column("symbol", symbol).with_column("kind", kind)
 
     # Generate event_id
-    event_id = stable_id(
+    event_id = _stable_id_expr(
         DEF_USE_EVENT_ID_SPEC.prefix,
-        f.concat_ws(":", col("code_unit_id"), col("instr_id"), col("kind"), col("symbol")),
+        (col("code_unit_id"), col("instr_id"), col("kind"), col("symbol")),
+        null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
     )
 
     # Build span struct
@@ -465,9 +500,10 @@ def reaching_defs_df_builder(ctx: SessionContext) -> DataFrame:
     )
 
     # Generate edge_id
-    edge_id = stable_id(
+    edge_id = _stable_id_expr(
         REACH_EDGE_ID_SPEC.prefix,
-        f.concat_ws(":", col("def_event_id"), col("use_event_id")),
+        (col("def_event_id"), col("use_event_id")),
+        null_sentinel=REACH_EDGE_ID_SPEC.null_sentinel,
     )
 
     return joined.with_column("edge_id", edge_id)
@@ -520,9 +556,10 @@ def diagnostics_df_builder(ctx: SessionContext) -> DataFrame:
         )
 
         # Generate diag_id
-        diag_id = stable_id(
+        diag_id = _stable_id_expr(
             DIAG_ID_SPEC.prefix,
-            f.concat_ws(":", col("path"), bstart, bend, col("diag_source"), col("message")),
+            (col("path"), bstart, bend, col("diag_source"), col("message")),
+            null_sentinel=DIAG_ID_SPEC.null_sentinel,
         )
 
         return df.with_column("diag_id", diag_id)

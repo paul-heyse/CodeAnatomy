@@ -1,29 +1,55 @@
-"""DataFusion-native lineage extraction from logical plans.
-
-This module provides lineage extraction directly from DataFusion LogicalPlan
-variants, replacing SQLGlot-based lineage analysis.
-"""
+"""Structured lineage extraction from DataFusion logical plans."""
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+
+from datafusion_engine.udf_catalog import rewrite_tag_index
+from datafusion_engine.udf_runtime import (
+    udf_names_from_snapshot,
+    validate_rust_udf_snapshot,
+)
+
+_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_QUALIFIED_COLUMN_PATTERN = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)"
+)
+_VARIANT_COLUMN_PATTERN = re.compile(r'table: "([^"]+)"[^}]*name: "([^"]+)"')
+_PAIR_LEN = 2
+_SINGLE_DATASET_COUNT = 1
+
+_PLAN_EXPR_ATTRS: dict[str, tuple[str, ...]] = {
+    "Aggregate": ("group_expr", "group_exprs", "aggr_expr", "aggr_exprs"),
+    "Filter": ("predicate",),
+    "Join": ("filter",),
+    "Projection": ("projections",),
+    "Sort": ("expr", "exprs", "sort_exprs"),
+    "TableScan": ("filters",),
+    "Window": ("window_expr", "window_exprs"),
+}
+
+_EXPR_CHILD_ATTRS: tuple[str, ...] = (
+    "args",
+    "expr",
+    "exprs",
+    "left",
+    "right",
+    "predicate",
+    "filter",
+    "when_then_expr",
+    "then_expr",
+    "else_expr",
+    "partition_by",
+    "order_by",
+    "on",
+)
 
 
 @dataclass(frozen=True)
 class ScanLineage:
-    """Lineage information for a single table scan.
-
-    Attributes
-    ----------
-    dataset_name : str
-        Name of the scanned dataset/table.
-    projected_columns : tuple[str, ...]
-        Columns included in the projection (may be empty for SELECT *).
-    pushed_filters : tuple[str, ...]
-        Filter predicates pushed down to the scan.
-    """
+    """Lineage information for a single table scan."""
 
     dataset_name: str
     projected_columns: tuple[str, ...] = ()
@@ -32,17 +58,7 @@ class ScanLineage:
 
 @dataclass(frozen=True)
 class JoinLineage:
-    """Lineage information for a join operation.
-
-    Attributes
-    ----------
-    join_type : str
-        Type of join (e.g., "inner", "left", "right", "full").
-    left_keys : tuple[str, ...]
-        Join keys from the left side.
-    right_keys : tuple[str, ...]
-        Join keys from the right side.
-    """
+    """Lineage information for a join operation."""
 
     join_type: str
     left_keys: tuple[str, ...] = ()
@@ -50,36 +66,28 @@ class JoinLineage:
 
 
 @dataclass(frozen=True)
+class ExprInfo:
+    """Structured expression lineage extracted from a plan."""
+
+    kind: str
+    referenced_columns: tuple[tuple[str, str], ...]
+    referenced_udfs: tuple[str, ...]
+    text: str | None = None
+
+
+@dataclass(frozen=True)
 class LineageReport:
-    """Complete lineage report extracted from a DataFusion logical plan.
-
-    This replaces SQLGlot-based lineage extraction with native DataFusion
-    plan traversal.
-
-    Attributes
-    ----------
-    scans : tuple[ScanLineage, ...]
-        Information about table scans in the plan.
-    joins : tuple[JoinLineage, ...]
-        Information about join operations.
-    filters : tuple[str, ...]
-        Filter expressions in the plan.
-    required_columns_by_dataset : Mapping[str, tuple[str, ...]]
-        Per-table column requirements computed from projection propagation.
-    aggregations : tuple[str, ...]
-        Aggregation expressions in the plan.
-    window_functions : tuple[str, ...]
-        Window function expressions in the plan.
-    subqueries : tuple[str, ...]
-        Subquery references in the plan.
-    referenced_udfs : tuple[str, ...]
-        User-defined function names referenced in the plan.
-    """
+    """Complete lineage report extracted from a DataFusion logical plan."""
 
     scans: tuple[ScanLineage, ...] = ()
     joins: tuple[JoinLineage, ...] = ()
+    exprs: tuple[ExprInfo, ...] = ()
+    required_udfs: tuple[str, ...] = ()
+    required_rewrite_tags: tuple[str, ...] = ()
+    required_columns_by_dataset: Mapping[str, tuple[str, ...]] = field(
+        default_factory=dict
+    )
     filters: tuple[str, ...] = ()
-    required_columns_by_dataset: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     aggregations: tuple[str, ...] = ()
     window_functions: tuple[str, ...] = ()
     subqueries: tuple[str, ...] = ()
@@ -87,780 +95,411 @@ class LineageReport:
 
     @property
     def referenced_tables(self) -> tuple[str, ...]:
-        """Return all table names referenced in the plan.
-
-        Returns
-        -------
-        tuple[str, ...]
-            Sorted tuple of unique table names.
-        """
+        """Return all table names referenced in the plan."""
         return tuple(sorted({scan.dataset_name for scan in self.scans}))
 
     @property
     def all_required_columns(self) -> tuple[tuple[str, str], ...]:
-        """Return all required columns as (table, column) pairs.
-
-        Returns
-        -------
-        tuple[tuple[str, str], ...]
-            Sorted pairs of (table_name, column_name).
-        """
+        """Return all required columns as (table, column) pairs."""
         pairs = [
-            (table, col)
+            (table, column)
             for table, columns in self.required_columns_by_dataset.items()
-            for col in columns
+            for column in columns
         ]
         return tuple(sorted(pairs))
 
 
-def extract_lineage(plan: object) -> LineageReport:
+def extract_lineage(
+    plan: object,
+    *,
+    udf_snapshot: Mapping[str, object] | None = None,
+) -> LineageReport:
     """Extract lineage information from a DataFusion logical plan.
-
-    This function traverses the logical plan tree to extract:
-    - Table scan references and projections
-    - Join operations and keys
-    - Filter predicates
-    - Required columns per dataset
-    - Aggregations and window functions
-    - User-defined function references
-
-    Parameters
-    ----------
-    plan : object
-        DataFusion LogicalPlan (untyped to handle import issues).
 
     Returns
     -------
     LineageReport
-        Complete lineage information extracted from the plan.
+        Structured lineage report extracted from the plan.
     """
-    nodes = _logical_nodes(plan)
-    scans = _extract_scans(nodes)
-    joins = _extract_joins(nodes)
-    filters = _extract_filters(nodes)
-    aggregations = _extract_aggregations(nodes)
-    window_functions = _extract_window_functions(nodes)
-    subqueries = _extract_subqueries(nodes)
-    udfs = _extract_udfs(plan)
+    udf_name_map = _udf_name_map(udf_snapshot)
+    scans: list[ScanLineage] = []
+    joins: list[JoinLineage] = []
+    exprs: list[ExprInfo] = []
+    stack: list[object] = [plan]
 
-    # Compute required columns by propagating through the plan
-    required_columns = _propagate_required_columns(nodes, scans)
+    while stack:
+        node = stack.pop()
+        variant = _plan_variant(node)
+        tag = _variant_name(node=node, variant=variant)
+        scans.extend(_extract_scan_lineage(tag=tag, variant=variant))
+        joins.extend(_extract_join_lineage(tag=tag, variant=variant))
+        exprs.extend(
+            _extract_expr_infos(tag=tag, variant=variant, udf_name_map=udf_name_map)
+        )
+        stack.extend(_plan_inputs(node))
+
+    required_udfs = _required_udfs(exprs)
+    required_tags = _required_rewrite_tags(required_udfs, udf_snapshot)
+    required_columns = _required_columns_by_dataset(scans=scans, exprs=exprs)
+    filters = _filters_from_exprs(exprs)
+    aggregations = _aggregations_from_exprs(exprs)
+    window_functions = _window_functions_from_exprs(exprs)
 
     return LineageReport(
         scans=tuple(scans),
         joins=tuple(joins),
-        filters=tuple(filters),
+        exprs=tuple(exprs),
+        required_udfs=required_udfs,
+        required_rewrite_tags=required_tags,
         required_columns_by_dataset=required_columns,
-        aggregations=tuple(aggregations),
-        window_functions=tuple(window_functions),
-        subqueries=tuple(subqueries),
-        referenced_udfs=tuple(udfs),
+        filters=filters,
+        aggregations=aggregations,
+        window_functions=window_functions,
+        referenced_udfs=required_udfs,
     )
 
 
 def extract_lineage_from_display(plan_display: str) -> LineageReport:
     """Extract lineage from a plan display string.
 
-    Fallback method when direct plan object traversal isn't available.
-    Parses the display_indent_schema() output to extract lineage.
-
-    Parameters
-    ----------
-    plan_display : str
-        Output from plan.display_indent_schema().
+    This is a compatibility fallback for environments where plan objects
+    are not available.
 
     Returns
     -------
     LineageReport
-        Lineage information parsed from the display.
+        Lineage report inferred from the display string.
     """
-    scans = _parse_scans_from_display(plan_display)
-    joins = _parse_joins_from_display(plan_display)
-    filters = _parse_filters_from_display(plan_display)
-    udfs = _parse_udfs_from_display(plan_display)
-    required_columns = _required_by_dataset_from_scans(scans)
-
+    scans = _display_scans(plan_display)
+    required_columns = _required_columns_by_dataset(scans=scans, exprs=())
     return LineageReport(
         scans=tuple(scans),
-        joins=tuple(joins),
-        filters=tuple(filters),
         required_columns_by_dataset=required_columns,
-        referenced_udfs=tuple(udfs),
     )
-
-
-def _logical_nodes(plan: object) -> list[object]:
-    """Traverse the logical plan tree and collect all nodes.
-
-    Uses display_indent_schema() to get a textual representation,
-    then parses it to understand the plan structure.
-
-    Returns
-    -------
-    list[object]
-        Collected plan nodes in traversal order.
-    """
-    nodes: list[object] = []
-    _collect_nodes(plan, nodes)
-    return nodes
-
-
-def _collect_nodes(node: object, nodes: list[object]) -> None:
-    """Recursively collect all nodes in the plan tree."""
-    if node is None:
-        return
-    nodes.append(node)
-
-    # Try to access child nodes
-    inputs = getattr(node, "inputs", None)
-    if inputs is not None:
-        if callable(inputs):
-            try:
-                children = inputs()
-                if isinstance(children, (list, tuple)):
-                    for child in children:
-                        _collect_nodes(child, nodes)
-            except (RuntimeError, TypeError, ValueError):
-                pass
-        elif isinstance(inputs, (list, tuple)):
-            for child in inputs:
-                _collect_nodes(child, nodes)
-
-
-def _extract_scans(nodes: Sequence[object]) -> list[ScanLineage]:
-    """Extract TableScan nodes from the plan.
-
-    Returns
-    -------
-    list[ScanLineage]
-        Table scan lineage information.
-    """
-    scans: list[ScanLineage] = []
-    seen_tables: set[str] = set()
-
-    for node in nodes:
-        # Check node type by class name or variant
-        node_type = _node_type(node)
-        if node_type in {"TableScan", "SubqueryAlias", "EmptyRelation"}:
-            name = _extract_table_name(node)
-            if name and name not in seen_tables:
-                seen_tables.add(name)
-                columns = _extract_projected_columns(node)
-                filters = _extract_scan_filters(node)
-                scans.append(
-                    ScanLineage(
-                        dataset_name=name,
-                        projected_columns=tuple(columns),
-                        pushed_filters=tuple(filters),
-                    )
-                )
-
-    # Also parse from display string as fallback
-    for node in nodes:
-        display = _node_display(node)
-        if display:
-            parsed = _parse_scans_from_display(display)
-            for scan in parsed:
-                if scan.dataset_name not in seen_tables:
-                    seen_tables.add(scan.dataset_name)
-                    scans.append(scan)
-
-    return scans
-
-
-def _extract_joins(nodes: Sequence[object]) -> list[JoinLineage]:
-    """Extract Join nodes from the plan.
-
-    Returns
-    -------
-    list[JoinLineage]
-        Join lineage information.
-    """
-    joins: list[JoinLineage] = []
-
-    for node in nodes:
-        node_type = _node_type(node)
-        if "Join" in node_type:
-            join_type = _extract_join_type(node)
-            left_keys, right_keys = _extract_join_keys(node)
-            joins.append(
-                JoinLineage(
-                    join_type=join_type,
-                    left_keys=tuple(left_keys),
-                    right_keys=tuple(right_keys),
-                )
-            )
-
-    return joins
-
-
-def _extract_filters(nodes: Sequence[object]) -> list[str]:
-    """Extract Filter expressions from the plan.
-
-    Returns
-    -------
-    list[str]
-        Filter predicate expressions.
-    """
-    filters: list[str] = []
-
-    for node in nodes:
-        node_type = _node_type(node)
-        if node_type == "Filter":
-            predicate = _extract_predicate(node)
-            if predicate:
-                filters.append(predicate)
-
-    return filters
-
-
-def _extract_aggregations(nodes: Sequence[object]) -> list[str]:
-    """Extract Aggregate expressions from the plan.
-
-    Returns
-    -------
-    list[str]
-        Aggregate expression strings.
-    """
-    aggregations: list[str] = []
-
-    for node in nodes:
-        node_type = _node_type(node)
-        if node_type == "Aggregate":
-            agg_exprs = _extract_aggregate_exprs(node)
-            aggregations.extend(agg_exprs)
-
-    return aggregations
-
-
-def _extract_window_functions(nodes: Sequence[object]) -> list[str]:
-    """Extract Window function expressions from the plan.
-
-    Returns
-    -------
-    list[str]
-        Window expression strings.
-    """
-    windows: list[str] = []
-
-    for node in nodes:
-        node_type = _node_type(node)
-        if node_type == "Window":
-            window_exprs = _extract_window_exprs(node)
-            windows.extend(window_exprs)
-
-    return windows
-
-
-def _extract_subqueries(nodes: Sequence[object]) -> list[str]:
-    """Extract Subquery references from the plan.
-
-    Returns
-    -------
-    list[str]
-        Subquery display strings.
-    """
-    subqueries: list[str] = []
-
-    for node in nodes:
-        node_type = _node_type(node)
-        if node_type in {"Subquery", "ScalarSubquery", "InSubquery"}:
-            subquery_display = _node_display(node)
-            if subquery_display:
-                subqueries.append(subquery_display)
-
-    return subqueries
-
-
-def _extract_udfs(plan: object) -> list[str]:
-    """Extract UDF references from the logical plan.
-
-    This parses the plan display string to identify ScalarUDF and AggregateUDF
-    references. DataFusion's LogicalPlan display includes UDF information in
-    patterns like:
-    - ScalarUDF { name: "function_name", ... }
-    - AggregateUDF { name: "function_name", ... }
-
-    Returns
-    -------
-    list[str]
-        Sorted list of unique UDF names referenced in the plan.
-    """
-    display = _node_display(plan)
-    if not display:
-        return []
-
-    udfs: set[str] = set()
-
-    # Pattern 1: ScalarUDF { ... name: "udf_name" ... }
-    # Pattern 2: AggregateUDF { ... name: "udf_name" ... }
-    # Pattern 3: ScalarFunction with user-defined functions
-    for pattern in (
-        r'ScalarUDF\s*\{[^}]*name:\s*"([^"]+)"',
-        r"ScalarUDF\s*\{[^}]*name:\s*'([^']+)'",
-        r'AggregateUDF\s*\{[^}]*name:\s*"([^"]+)"',
-        r"AggregateUDF\s*\{[^}]*name:\s*'([^']+)'",
-    ):
-        matches = re.findall(pattern, display)
-        udfs.update(matches)
-
-    return sorted(udfs)
-
-
-def _propagate_required_columns(
-    nodes: Sequence[object],
-    scans: Sequence[ScanLineage],
-) -> dict[str, tuple[str, ...]]:
-    """Propagate required columns through the plan to determine per-table needs.
-
-    This implements column pruning analysis by tracking which columns
-    from each source table are actually needed by the query.
-
-    Returns
-    -------
-    dict[str, tuple[str, ...]]
-        Per-table required columns.
-    """
-    required: dict[str, set[str]] = {}
-
-    # Start with explicitly projected columns from scans
-    for scan in scans:
-        if scan.projected_columns:
-            required.setdefault(scan.dataset_name, set()).update(scan.projected_columns)
-
-    # Parse column references from node displays
-    for node in nodes:
-        display = _node_display(node)
-        if display:
-            refs = _parse_column_references(display)
-            for table, col in refs:
-                if table:
-                    required.setdefault(table, set()).add(col)
-
-    return {table: tuple(sorted(cols)) for table, cols in required.items()}
-
-
-def _required_by_dataset_from_scans(scans: Sequence[ScanLineage]) -> dict[str, tuple[str, ...]]:
-    """Build required columns map from scan lineage.
-
-    Returns
-    -------
-    dict[str, tuple[str, ...]]
-        Required columns keyed by dataset name.
-    """
-    required: dict[str, set[str]] = {}
-    for scan in scans:
-        required.setdefault(scan.dataset_name, set()).update(scan.projected_columns)
-    return {table: tuple(sorted(cols)) for table, cols in required.items()}
-
-
-def _node_type(node: object) -> str:
-    """Get the type name of a logical plan node.
-
-    Returns
-    -------
-    str
-        Type or variant name for the node.
-    """
-    # Try variant name first (Rust enum style)
-    variant = getattr(node, "variant_name", None)
-    if variant is not None:
-        return str(variant)
-
-    # Try class name
-    return type(node).__name__
-
-
-def _node_display(node: object) -> str | None:
-    """Get display string for a node.
-
-    Returns
-    -------
-    str | None
-        Display string for the node, if available.
-    """
-    for method_name in ("display_indent_schema", "display_indent", "__str__"):
-        method = getattr(node, method_name, None)
-        if callable(method):
-            try:
-                return str(method())
-            except (RuntimeError, TypeError, ValueError):
-                continue
-    return None
-
-
-def _extract_table_name(node: object) -> str | None:
-    """Extract table name from a TableScan or SubqueryAlias node.
-
-    Returns
-    -------
-    str | None
-        Extracted table name, if found.
-    """
-    # Try table_name attribute
-    name = getattr(node, "table_name", None)
-    if name is not None:
-        return str(name)
-
-    # Try name attribute
-    name = getattr(node, "name", None)
-    if name is not None:
-        return str(name)
-
-    # Parse from display
-    display = _node_display(node)
-    if display:
-        match = re.search(r"TableScan:\s*(\w+)", display)
-        if match:
-            return match.group(1)
-        match = re.search(r"SubqueryAlias:\s*(\w+)", display)
-        if match:
-            return match.group(1)
-
-    return None
-
-
-def _extract_projected_columns(node: object) -> list[str]:
-    """Extract projected column names from a scan node.
-
-    Returns
-    -------
-    list[str]
-        Column names referenced in the scan projection.
-    """
-    columns: list[str] = []
-
-    # Try projection attribute
-    projection = getattr(node, "projection", None)
-    if isinstance(projection, (list, tuple)):
-        for col in projection:
-            col_name = _column_name(col)
-            if col_name:
-                columns.append(col_name)
-
-    # Parse from display
-    display = _node_display(node)
-    if display:
-        # Look for projection=[col1, col2, ...]
-        match = re.search(r"projection=\[([^\]]+)\]", display)
-        if match:
-            col_str = match.group(1)
-            columns.extend(c.strip() for c in col_str.split(",") if c.strip())
-
-    return columns
-
-
-def _extract_scan_filters(node: object) -> list[str]:
-    """Extract pushed-down filter predicates from a scan node.
-
-    Returns
-    -------
-    list[str]
-        Filter predicate strings.
-    """
-    filters: list[str] = []
-
-    # Try filters attribute
-    node_filters = getattr(node, "filters", None)
-    if isinstance(node_filters, (list, tuple)):
-        filters.extend(str(f) for f in node_filters)
-
-    # Parse from display
-    display = _node_display(node)
-    if display:
-        match = re.search(r"filters=\[([^\]]+)\]", display)
-        if match:
-            filter_str = match.group(1)
-            filters.extend(f.strip() for f in filter_str.split(",") if f.strip())
-
-    return filters
-
-
-def _extract_join_type(node: object) -> str:
-    """Extract join type from a Join node.
-
-    Returns
-    -------
-    str
-        Join type in lowercase, or "unknown" if unavailable.
-    """
-    join_type = getattr(node, "join_type", None)
-    if join_type is not None:
-        return str(join_type).lower()
-
-    # Parse from display
-    display = _node_display(node)
-    if display:
-        for jtype in ("inner", "left", "right", "full", "semi", "anti", "cross"):
-            if jtype in display.lower():
-                return jtype
-
-    return "unknown"
-
-
-def _extract_join_keys(node: object) -> tuple[list[str], list[str]]:
-    """Extract join keys from a Join node.
-
-    Returns
-    -------
-    tuple[list[str], list[str]]
-        Left and right join key references.
-    """
-    left_keys: list[str] = []
-    right_keys: list[str] = []
-
-    # Try on attribute (join condition)
-    on = getattr(node, "on", None)
-    if on is not None:
-        # Parse join condition
-        on_str = str(on)
-        # Pattern uses left dot column equals right dot column.
-        matches = re.findall(r"(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)", on_str)
-        for left_table, left_col, right_table, right_col in matches:
-            left_keys.append(f"{left_table}.{left_col}")
-            right_keys.append(f"{right_table}.{right_col}")
-
-    return left_keys, right_keys
-
-
-def _extract_predicate(node: object) -> str | None:
-    """Extract filter predicate from a Filter node.
-
-    Returns
-    -------
-    str | None
-        Filter predicate string if available.
-    """
-    predicate = getattr(node, "predicate", None)
-    if predicate is not None:
-        return str(predicate)
-
-    # Parse from display
-    display = _node_display(node)
-    if display:
-        match = re.search(r"Filter:\s*(.+)", display)
-        if match:
-            return match.group(1).strip()
-
-    return None
-
-
-def _extract_aggregate_exprs(node: object) -> list[str]:
-    """Extract aggregation expressions from an Aggregate node.
-
-    Returns
-    -------
-    list[str]
-        Aggregate expression strings.
-    """
-    exprs: list[str] = []
-
-    aggr_expr = getattr(node, "aggr_expr", None)
-    if isinstance(aggr_expr, (list, tuple)):
-        exprs.extend(str(e) for e in aggr_expr)
-
-    return exprs
-
-
-def _extract_window_exprs(node: object) -> list[str]:
-    """Extract window function expressions from a Window node.
-
-    Returns
-    -------
-    list[str]
-        Window expression strings.
-    """
-    exprs: list[str] = []
-
-    window_expr = getattr(node, "window_expr", None)
-    if isinstance(window_expr, (list, tuple)):
-        exprs.extend(str(e) for e in window_expr)
-
-    return exprs
-
-
-def _column_name(col: object) -> str | None:
-    """Extract column name from a column reference.
-
-    Returns
-    -------
-    str | None
-        Column name if available.
-    """
-    name = getattr(col, "name", None)
-    if name is not None:
-        return str(name)
-    return str(col)
-
-
-def _parse_scans_from_display(display: str) -> list[ScanLineage]:
-    """Parse table scans from plan display string.
-
-    Returns
-    -------
-    list[ScanLineage]
-        Parsed scan lineage entries.
-    """
-    scans: list[ScanLineage] = []
-    seen: set[str] = set()
-
-    # Pattern: TableScan: table_name projection=[col1, col2]
-    pattern = r"TableScan:\s*(\w+)(?:\s+projection=\[([^\]]*)\])?"
-    for match in re.finditer(pattern, display):
-        table_name = match.group(1)
-        if table_name in seen:
-            continue
-        seen.add(table_name)
-
-        columns: tuple[str, ...] = ()
-        if match.group(2):
-            columns = tuple(c.strip() for c in match.group(2).split(",") if c.strip())
-
-        scans.append(ScanLineage(dataset_name=table_name, projected_columns=columns))
-
-    # Also look for SubqueryAlias
-    alias_pattern = r"SubqueryAlias:\s*(\w+)"
-    for match in re.finditer(alias_pattern, display):
-        table_name = match.group(1)
-        if table_name not in seen:
-            seen.add(table_name)
-            scans.append(ScanLineage(dataset_name=table_name))
-
-    return scans
-
-
-def _parse_joins_from_display(display: str) -> list[JoinLineage]:
-    """Parse joins from plan display string.
-
-    Returns
-    -------
-    list[JoinLineage]
-        Parsed join lineage entries.
-    """
-    joins: list[JoinLineage] = []
-
-    # Pattern: Join: type=Inner, on=[...]
-    pattern = r"(\w+)Join"
-    for match in re.finditer(pattern, display, re.IGNORECASE):
-        join_type = match.group(1).lower()
-        joins.append(JoinLineage(join_type=join_type))
-
-    return joins
-
-
-def _parse_filters_from_display(display: str) -> list[str]:
-    """Parse filter predicates from plan display string.
-
-    Returns
-    -------
-    list[str]
-        Parsed filter predicate strings.
-    """
-    filters: list[str] = []
-
-    # Pattern: Filter: predicate
-    pattern = r"Filter:\s*(.+?)(?:\n|$)"
-    for match in re.finditer(pattern, display):
-        predicate = match.group(1).strip()
-        if predicate:
-            filters.append(predicate)
-
-    return filters
-
-
-def _parse_column_references(display: str) -> list[tuple[str | None, str]]:
-    """Parse column references from plan display string.
-
-    Returns (table_name, column_name) pairs. Table may be None for
-    unqualified references.
-
-    Returns
-    -------
-    list[tuple[str | None, str]]
-        Parsed (table, column) references.
-    """
-    refs: list[tuple[str | None, str]] = []
-
-    # Pattern: table.column or #column
-    qualified_pattern = r"(\w+)\.(\w+)"
-    for match in re.finditer(qualified_pattern, display):
-        table = match.group(1)
-        col = match.group(2)
-        # Avoid matching type casts like Int32
-        if table[0].islower():
-            refs.append((table, col))
-
-    # Pattern: #column
-    ref_pattern = r"#(\w+)"
-    refs.extend((None, match.group(1)) for match in re.finditer(ref_pattern, display))
-
-    return refs
-
-
-def _parse_udfs_from_display(display: str) -> list[str]:
-    """Parse UDF references from plan display string.
-
-    Extracts ScalarUDF and AggregateUDF function names from the display.
-
-    Returns
-    -------
-    list[str]
-        Sorted list of unique UDF names.
-    """
-    udfs: set[str] = set()
-
-    # Pattern for UDF references in DataFusion plan display
-    for pattern in (
-        r'ScalarUDF\s*\{[^}]*name:\s*"([^"]+)"',
-        r"ScalarUDF\s*\{[^}]*name:\s*'([^']+)'",
-        r'AggregateUDF\s*\{[^}]*name:\s*"([^"]+)"',
-        r"AggregateUDF\s*\{[^}]*name:\s*'([^']+)'",
-    ):
-        matches = re.findall(pattern, display)
-        udfs.update(matches)
-
-    return sorted(udfs)
 
 
 def referenced_tables_from_plan(plan: object) -> tuple[str, ...]:
     """Extract referenced table names from a DataFusion plan.
 
-    Convenience function for common use case.
-
-    Parameters
-    ----------
-    plan : object
-        DataFusion LogicalPlan.
-
     Returns
     -------
     tuple[str, ...]
-        Sorted tuple of unique table names.
+        Sorted table names referenced in the plan.
     """
-    lineage = extract_lineage(plan)
-    return lineage.referenced_tables
+    return extract_lineage(plan).referenced_tables
 
 
 def required_columns_by_table(plan: object) -> Mapping[str, tuple[str, ...]]:
     """Extract required columns per table from a DataFusion plan.
 
-    Convenience function for scheduling and validation.
-
-    Parameters
-    ----------
-    plan : object
-        DataFusion LogicalPlan.
-
     Returns
     -------
     Mapping[str, tuple[str, ...]]
-        Per-table column requirements.
+        Mapping of dataset name to required columns.
     """
-    lineage = extract_lineage(plan)
-    return lineage.required_columns_by_dataset
+    return extract_lineage(plan).required_columns_by_dataset
+
+
+def _variant_name(*, node: object, variant: object | None) -> str:
+    if variant is not None:
+        return type(variant).__name__
+    return type(node).__name__
+
+
+def _plan_variant(plan: object) -> object | None:
+    to_variant = getattr(plan, "to_variant", None)
+    if not callable(to_variant):
+        return None
+    try:
+        return to_variant()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _plan_inputs(plan: object) -> list[object]:
+    inputs = getattr(plan, "inputs", None)
+    if not callable(inputs):
+        return []
+    try:
+        children = inputs()
+    except (RuntimeError, TypeError, ValueError):
+        return []
+    if isinstance(children, Sequence) and not isinstance(children, (str, bytes)):
+        return [child for child in children if child is not None]
+    return []
+
+
+def _safe_attr(obj: object | None, name: str) -> object | None:
+    if obj is None:
+        return None
+    value = getattr(obj, name, None)
+    if callable(value):
+        try:
+            return value()
+        except (RuntimeError, TypeError, ValueError):
+            return None
+    return value
+
+
+def _normalize_exprs(value: object | None) -> list[object]:
+    if value is None:
+        return []
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        exprs: list[object] = []
+        for entry in value:
+            if entry is None:
+                continue
+            if isinstance(entry, tuple) and len(entry) == _PAIR_LEN:
+                exprs.extend((entry[0], entry[1]))
+                continue
+            exprs.append(entry)
+        return exprs
+    return [value]
+
+
+def _projection_names(projection: object | None) -> tuple[str, ...]:
+    if projection is None:
+        return ()
+    names: list[str] = []
+    for entry in _normalize_exprs(projection):
+        if isinstance(entry, tuple) and len(entry) >= _PAIR_LEN:
+            names.append(str(entry[1]))
+            continue
+        names.append(str(entry))
+    return tuple(dict.fromkeys(names))
+
+
+def _extract_scan_lineage(*, tag: str, variant: object | None) -> list[ScanLineage]:
+    if tag != "TableScan" or variant is None:
+        return []
+    dataset_name = _safe_attr(variant, "table_name") or _safe_attr(variant, "fqn")
+    if dataset_name is None:
+        return []
+    projection = _safe_attr(variant, "projection")
+    projected_columns = _projection_names(projection)
+    filters = tuple(
+        str(expr) for expr in _normalize_exprs(_safe_attr(variant, "filters"))
+    )
+    return [
+        ScanLineage(
+            dataset_name=str(dataset_name),
+            projected_columns=projected_columns,
+            pushed_filters=filters,
+        )
+    ]
+
+
+def _extract_join_lineage(*, tag: str, variant: object | None) -> list[JoinLineage]:
+    if tag != "Join" or variant is None:
+        return []
+    join_type = _safe_attr(variant, "join_type")
+    on_pairs = _safe_attr(variant, "on")
+    left_keys: list[str] = []
+    right_keys: list[str] = []
+    for left_expr, right_expr in _normalize_on_pairs(on_pairs):
+        left_keys.extend(_qualified_column_names(left_expr))
+        right_keys.extend(_qualified_column_names(right_expr))
+    return [
+        JoinLineage(
+            join_type=str(join_type).lower() if join_type is not None else "unknown",
+            left_keys=tuple(sorted(dict.fromkeys(left_keys))),
+            right_keys=tuple(sorted(dict.fromkeys(right_keys))),
+        )
+    ]
+
+
+def _normalize_on_pairs(value: object | None) -> list[tuple[object, object]]:
+    return [
+        (entry[0], entry[1])
+        for entry in _normalize_exprs(value)
+        if isinstance(entry, tuple) and len(entry) == _PAIR_LEN
+    ]
+
+
+def _extract_expr_infos(
+    *,
+    tag: str,
+    variant: object | None,
+    udf_name_map: Mapping[str, str],
+) -> list[ExprInfo]:
+    if variant is None:
+        return []
+    exprs: list[object] = []
+    for attr in _PLAN_EXPR_ATTRS.get(tag, ()):
+        exprs.extend(_normalize_exprs(_safe_attr(variant, attr)))
+    if tag == "Join":
+        for left_expr, right_expr in _normalize_on_pairs(_safe_attr(variant, "on")):
+            exprs.extend((left_expr, right_expr))
+    return [
+        _expr_info(expr=expr, kind=tag, udf_name_map=udf_name_map)
+        for expr in exprs
+    ]
+
+
+def _expr_info(*, expr: object, kind: str, udf_name_map: Mapping[str, str]) -> ExprInfo:
+    columns = _column_refs_from_expr(expr)
+    udfs = _udf_refs_from_expr(expr, udf_name_map)
+    text = _expr_text(expr)
+    return ExprInfo(
+        kind=kind,
+        referenced_columns=tuple(sorted(columns)),
+        referenced_udfs=tuple(sorted(udfs)),
+        text=text,
+    )
+
+
+def _expr_text(expr: object) -> str | None:
+    try:
+        return str(expr)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _expr_variant(expr: object) -> object | None:
+    to_variant = getattr(expr, "to_variant", None)
+    if not callable(to_variant):
+        return None
+    try:
+        return to_variant()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _column_refs_from_expr(expr: object) -> set[tuple[str, str]]:
+    variant = _expr_variant(expr)
+    if variant is None:
+        return _column_refs_from_text(_expr_text(expr))
+    name = type(variant).__name__
+    if name == "Column":
+        relation = _safe_attr(variant, "relation")
+        column_name = _safe_attr(variant, "name")
+        if column_name is None:
+            return set()
+        dataset = "" if relation is None else str(relation)
+        return {(dataset, str(column_name))}
+    refs: set[tuple[str, str]] = set()
+    for child in _expr_children(variant):
+        refs.update(_column_refs_from_expr(child))
+    refs.update(_column_refs_from_text(_expr_text(expr)))
+    return refs
+
+
+def _expr_children(variant: object) -> Iterable[object]:
+    for name in _EXPR_CHILD_ATTRS:
+        value = _safe_attr(variant, name)
+        yield from _normalize_exprs(value)
+
+
+def _column_refs_from_text(text: str | None) -> set[tuple[str, str]]:
+    if not text:
+        return set()
+    refs: set[tuple[str, str]] = set()
+    for dataset, column in _QUALIFIED_COLUMN_PATTERN.findall(text):
+        refs.add((dataset, column))
+    for dataset, column in _VARIANT_COLUMN_PATTERN.findall(text):
+        refs.add((dataset, column))
+    return refs
+
+
+def _udf_refs_from_expr(expr: object, udf_name_map: Mapping[str, str]) -> set[str]:
+    if not udf_name_map:
+        return set()
+    text = _expr_text(expr)
+    if not text:
+        return set()
+    tokens = {token.lower() for token in _TOKEN_PATTERN.findall(text)}
+    return {udf_name_map[token] for token in tokens if token in udf_name_map}
+
+
+def _qualified_column_names(expr: object) -> list[str]:
+    names: list[str] = []
+    for dataset, column in _column_refs_from_expr(expr):
+        if dataset:
+            names.append(f"{dataset}.{column}")
+        else:
+            names.append(column)
+    return names
+
+
+def _required_udfs(exprs: Sequence[ExprInfo]) -> tuple[str, ...]:
+    names = {name for expr in exprs for name in expr.referenced_udfs}
+    return tuple(sorted(names))
+
+
+def _required_rewrite_tags(
+    required_udfs: Sequence[str],
+    snapshot: Mapping[str, object] | None,
+) -> tuple[str, ...]:
+    if not required_udfs or snapshot is None:
+        return ()
+    tag_index = rewrite_tag_index(snapshot)
+    required = set(required_udfs)
+    tags: set[str] = set()
+    for tag, names in tag_index.items():
+        if any(name in required for name in names):
+            tags.add(tag)
+    return tuple(sorted(tags))
+
+
+def _required_columns_by_dataset(
+    *,
+    scans: Sequence[ScanLineage],
+    exprs: Sequence[ExprInfo],
+) -> dict[str, tuple[str, ...]]:
+    dataset_names = {scan.dataset_name for scan in scans}
+    columns_by_dataset: dict[str, set[str]] = {}
+    for scan in scans:
+        columns_by_dataset.setdefault(scan.dataset_name, set()).update(
+            scan.projected_columns
+        )
+    for expr in exprs:
+        for dataset, column in expr.referenced_columns:
+            if not column:
+                continue
+            resolved_dataset = dataset
+            if not resolved_dataset and len(dataset_names) == _SINGLE_DATASET_COUNT:
+                resolved_dataset = next(iter(dataset_names))
+            if not resolved_dataset:
+                continue
+            columns_by_dataset.setdefault(resolved_dataset, set()).add(column)
+    return {
+        dataset: tuple(sorted(columns))
+        for dataset, columns in columns_by_dataset.items()
+    }
+
+
+def _filters_from_exprs(exprs: Sequence[ExprInfo]) -> tuple[str, ...]:
+    filters = {expr.text for expr in exprs if expr.kind == "Filter" and expr.text}
+    return tuple(sorted(filters))
+
+
+def _aggregations_from_exprs(exprs: Sequence[ExprInfo]) -> tuple[str, ...]:
+    aggs = {expr.text for expr in exprs if expr.kind == "Aggregate" and expr.text}
+    return tuple(sorted(aggs))
+
+
+def _window_functions_from_exprs(exprs: Sequence[ExprInfo]) -> tuple[str, ...]:
+    windows = {expr.text for expr in exprs if expr.kind == "Window" and expr.text}
+    return tuple(sorted(windows))
+
+
+def _udf_name_map(snapshot: Mapping[str, object] | None) -> dict[str, str]:
+    if snapshot is None:
+        return {}
+    validate_rust_udf_snapshot(snapshot)
+    names = udf_names_from_snapshot(snapshot)
+    return {name.lower(): name for name in names}
+
+
+def _display_scans(display: str) -> list[ScanLineage]:
+    pattern = re.compile(
+        r"TableScan\([^\n]*table_name:?\s*([A-Za-z0-9_.]+)"
+    )
+    return [ScanLineage(dataset_name=str(match)) for match in pattern.findall(display)]
 
 
 __all__ = [
+    "ExprInfo",
     "JoinLineage",
     "LineageReport",
     "ScanLineage",

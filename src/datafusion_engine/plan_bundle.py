@@ -7,15 +7,20 @@ and scheduling paths use, replacing SQLGlot/Ibis compilation pipelines.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
+from serde_msgspec import dumps_msgpack
+
 if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
+
+    from datafusion_engine.runtime import SessionRuntime
+
 
 try:
     from datafusion.substrait import Producer as SubstraitProducer
@@ -24,6 +29,45 @@ except ImportError:
 
 # Type alias for DataFrame builder functions
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
+
+
+@dataclass(frozen=True)
+class PlanArtifacts:
+    """Serializable planning artifacts for reproducibility and scheduling."""
+
+    logical_plan_display: str | None
+    optimized_plan_display: str | None
+    optimized_plan_graphviz: str | None
+    optimized_plan_pgjson: str | None
+    execution_plan_display: str | None
+    df_settings: Mapping[str, str]
+    udf_snapshot_hash: str
+    function_registry_hash: str
+    function_registry_snapshot: Mapping[str, object]
+    rewrite_tags: tuple[str, ...]
+    domain_planner_names: tuple[str, ...]
+    udf_snapshot: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class DeltaInputPin:
+    """Pinned Delta version information for a scan input."""
+
+    dataset_name: str
+    version: int | None
+    timestamp: str | None
+
+
+@dataclass(frozen=True)
+class PlanBundleOptions:
+    """Options for building a DataFusion plan bundle."""
+
+    compute_execution_plan: bool = False
+    compute_substrait: bool = True
+    validate_udfs: bool = False
+    registry_snapshot: Mapping[str, object] | None = None
+    delta_inputs: Sequence[DeltaInputPin] = ()
+    session_runtime: SessionRuntime | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +91,8 @@ class DataFusionPlanBundle:
         Substrait serialization of the plan (used for fingerprinting).
     plan_fingerprint : str
         Stable hash for caching and comparison.
+    artifacts : PlanArtifacts
+        Serializable artifacts used for determinism, caching, and scheduling.
     plan_details : Mapping[str, object]
         Additional plan metadata for diagnostics.
     """
@@ -57,6 +103,10 @@ class DataFusionPlanBundle:
     execution_plan: object | None  # DataFusionExecutionPlan | None
     substrait_bytes: bytes | None
     plan_fingerprint: str
+    artifacts: PlanArtifacts
+    delta_inputs: tuple[DeltaInputPin, ...] = ()
+    required_udfs: tuple[str, ...] = ()
+    required_rewrite_tags: tuple[str, ...] = ()
     plan_details: Mapping[str, object] = field(default_factory=dict)
 
     def display_logical_plan(self) -> str | None:
@@ -116,6 +166,8 @@ def build_plan_bundle(  # noqa: PLR0913
     compute_substrait: bool = True,
     validate_udfs: bool = False,
     registry_snapshot: Mapping[str, object] | None = None,
+    delta_inputs: Sequence[DeltaInputPin] = (),
+    session_runtime: SessionRuntime | None = None,
 ) -> DataFusionPlanBundle:
     """Build a canonical plan bundle from a DataFusion DataFrame.
 
@@ -139,6 +191,10 @@ def build_plan_bundle(  # noqa: PLR0913
         Whether to validate that all referenced UDFs are registered.
     registry_snapshot : Mapping[str, object] | None
         Optional registry snapshot for UDF validation.
+    delta_inputs : Sequence[DeltaInputPin]
+        Optional pinned Delta inputs for deterministic scans.
+    session_runtime : SessionRuntime | None
+        Optional session runtime carrying UDF and settings snapshots.
 
     Returns
     -------
@@ -152,20 +208,39 @@ def build_plan_bundle(  # noqa: PLR0913
         _to_substrait_bytes(ctx, optimized) if compute_substrait and optimized is not None else None
     )
     fingerprint = _hash_plan(substrait_bytes=substrait_bytes, optimized=optimized)
-    details = _plan_details(df, logical=logical, optimized=optimized, execution=execution)
+    snapshot, snapshot_hash, rewrite_tags, domain_planner_names = _udf_artifacts(
+        ctx,
+        registry_snapshot=registry_snapshot,
+        session_runtime=session_runtime,
+    )
+    function_registry_hash, function_registry_snapshot = _function_registry_artifacts(ctx)
+    df_settings = _df_settings_snapshot(ctx, session_runtime=session_runtime)
+    required_udfs, required_rewrite_tags = _required_udf_artifacts(
+        optimized or logical,
+        snapshot=snapshot,
+    )
 
     # Optionally validate UDFs are registered before returning the bundle
     if validate_udfs:
-        if registry_snapshot is None:
-            from datafusion_engine.udf_runtime import rust_udf_snapshot
-
-            registry_snapshot = rust_udf_snapshot(ctx)
-        from datafusion_engine.plan_udf_analysis import extract_udfs_from_logical_plan
         from datafusion_engine.udf_runtime import validate_required_udfs
 
-        required_udfs = extract_udfs_from_logical_plan(optimized or logical)
         if required_udfs:
-            validate_required_udfs(registry_snapshot, required=tuple(required_udfs))
+            validate_required_udfs(snapshot, required=required_udfs)
+
+    artifacts = PlanArtifacts(
+        logical_plan_display=_plan_display(logical, method="display_indent_schema"),
+        optimized_plan_display=_plan_display(optimized, method="display_indent_schema"),
+        optimized_plan_graphviz=_plan_graphviz(optimized),
+        optimized_plan_pgjson=_plan_pgjson(optimized),
+        execution_plan_display=_plan_display(execution, method="display_indent"),
+        df_settings=df_settings,
+        udf_snapshot_hash=snapshot_hash,
+        function_registry_hash=function_registry_hash,
+        function_registry_snapshot=function_registry_snapshot,
+        rewrite_tags=rewrite_tags,
+        domain_planner_names=domain_planner_names,
+        udf_snapshot=snapshot,
+    )
 
     return DataFusionPlanBundle(
         df=df,
@@ -174,7 +249,11 @@ def build_plan_bundle(  # noqa: PLR0913
         execution_plan=execution,
         substrait_bytes=substrait_bytes,
         plan_fingerprint=fingerprint,
-        plan_details=details,
+        artifacts=artifacts,
+        delta_inputs=tuple(delta_inputs),
+        required_udfs=required_udfs,
+        required_rewrite_tags=required_rewrite_tags,
+        plan_details=_plan_details(df, logical=logical, optimized=optimized, execution=execution),
     )
 
 
@@ -182,8 +261,7 @@ def build_plan_bundle_from_builder(
     ctx: SessionContext,
     builder: DataFrameBuilder,
     *,
-    compute_execution_plan: bool = False,
-    compute_substrait: bool = True,
+    options: PlanBundleOptions | None = None,
 ) -> DataFusionPlanBundle:
     """Build a plan bundle from a DataFrame builder function.
 
@@ -193,10 +271,8 @@ def build_plan_bundle_from_builder(
         DataFusion session context.
     builder : DataFrameBuilder
         Callable that returns a DataFrame given a SessionContext.
-    compute_execution_plan : bool
-        Whether to compute the physical execution plan.
-    compute_substrait : bool
-        Whether to compute Substrait bytes.
+    options : PlanBundleOptions | None
+        Optional configuration overrides for plan bundle construction.
 
     Returns
     -------
@@ -204,11 +280,16 @@ def build_plan_bundle_from_builder(
         Canonical plan artifact.
     """
     df = builder(ctx)
+    resolved = options or PlanBundleOptions()
     return build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=compute_execution_plan,
-        compute_substrait=compute_substrait,
+        compute_execution_plan=resolved.compute_execution_plan,
+        compute_substrait=resolved.compute_substrait,
+        validate_udfs=resolved.validate_udfs,
+        registry_snapshot=resolved.registry_snapshot,
+        delta_inputs=resolved.delta_inputs,
+        session_runtime=resolved.session_runtime,
     )
 
 
@@ -341,6 +422,27 @@ def _plan_display(plan: object | None, *, method: str) -> str | None:
     return str(plan)
 
 
+def _plan_pgjson(plan: object | None) -> str | None:
+    """Extract PostgreSQL JSON representation from a plan when available.
+
+    Returns
+    -------
+    str | None
+        PG-JSON representation when available.
+    """
+    if plan is None:
+        return None
+    method = getattr(plan, "display_pgjson", None)
+    if not callable(method):
+        method = getattr(plan, "display_pg_json", None)
+        if not callable(method):
+            return None
+    try:
+        return str(method())
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
 def _plan_details(
     df: DataFrame,
     *,
@@ -360,6 +462,7 @@ def _plan_details(
     details["optimized_plan"] = _plan_display(optimized, method="display_indent_schema")
     details["physical_plan"] = _plan_display(execution, method="display_indent")
     details["graphviz"] = _plan_graphviz(optimized)
+    details["optimized_plan_pgjson"] = _plan_pgjson(optimized)
     details["partition_count"] = _plan_partition_count(execution)
     schema_names: list[str] = list(df.schema().names) if hasattr(df.schema(), "names") else []
     details["schema_names"] = schema_names
@@ -408,9 +511,103 @@ def _plan_partition_count(plan: object | None) -> int | None:
         return None
 
 
+def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for row in rows:
+        name = row.get("name") or row.get("setting_name") or row.get("key")
+        if name is None:
+            continue
+        value = row.get("value")
+        mapping[str(name)] = "" if value is None else str(value)
+    return mapping
+
+
+def _df_settings_snapshot(
+    ctx: SessionContext,
+    *,
+    session_runtime: SessionRuntime | None,
+) -> Mapping[str, str]:
+    if session_runtime is not None and session_runtime.ctx is ctx:
+        return dict(session_runtime.df_settings)
+    from datafusion_engine.schema_introspection import SchemaIntrospector
+
+    try:
+        introspector = SchemaIntrospector(ctx)
+        rows = introspector.settings_snapshot()
+        if not rows:
+            return {}
+        return _settings_rows_to_mapping(rows)
+    except (RuntimeError, TypeError, ValueError):
+        return {}
+
+
+def _function_registry_hash(snapshot: Mapping[str, object]) -> str:
+    payload = dumps_msgpack(snapshot)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _function_registry_artifacts(ctx: SessionContext) -> tuple[str, Mapping[str, object]]:
+    from datafusion_engine.schema_introspection import SchemaIntrospector
+
+    functions: Sequence[Mapping[str, object]] = ()
+    try:
+        introspector = SchemaIntrospector(ctx)
+        functions = introspector.function_catalog_snapshot(include_parameters=True)
+    except (RuntimeError, TypeError, ValueError):
+        functions = ()
+    snapshot: Mapping[str, object] = {"functions": list(functions)}
+    return _function_registry_hash(snapshot), snapshot
+
+
+def _udf_artifacts(
+    ctx: SessionContext,
+    *,
+    registry_snapshot: Mapping[str, object] | None,
+    session_runtime: SessionRuntime | None,
+) -> tuple[Mapping[str, object], str, tuple[str, ...], tuple[str, ...]]:
+    if session_runtime is not None and session_runtime.ctx is ctx:
+        return (
+            session_runtime.udf_snapshot,
+            session_runtime.udf_snapshot_hash,
+            session_runtime.udf_rewrite_tags,
+            session_runtime.domain_planner_names,
+        )
+    if registry_snapshot is not None:
+        snapshot = registry_snapshot
+    else:
+        from datafusion_engine.udf_runtime import rust_udf_snapshot
+
+        snapshot = rust_udf_snapshot(ctx)
+    from datafusion_engine.domain_planner import domain_planner_names_from_snapshot
+    from datafusion_engine.udf_catalog import rewrite_tag_index
+    from datafusion_engine.udf_runtime import rust_udf_snapshot_hash, validate_rust_udf_snapshot
+
+    validate_rust_udf_snapshot(snapshot)
+    snapshot_hash = rust_udf_snapshot_hash(snapshot)
+    tag_index = rewrite_tag_index(snapshot)
+    rewrite_tags = tuple(sorted(tag_index))
+    planner_names = domain_planner_names_from_snapshot(snapshot)
+    return snapshot, snapshot_hash, rewrite_tags, planner_names
+
+
+def _required_udf_artifacts(
+    plan: object | None,
+    *,
+    snapshot: Mapping[str, object],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if plan is None:
+        return (), ()
+    from datafusion_engine.lineage_datafusion import extract_lineage
+
+    lineage = extract_lineage(plan, udf_snapshot=snapshot)
+    return lineage.required_udfs, lineage.required_rewrite_tags
+
+
 __all__ = [
     "DataFrameBuilder",
     "DataFusionPlanBundle",
+    "DeltaInputPin",
+    "PlanArtifacts",
     "build_plan_bundle",
     "build_plan_bundle_from_builder",
 ]

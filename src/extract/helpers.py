@@ -864,11 +864,10 @@ def _record_extract_view_artifact(
     except (RuntimeError, TypeError, ValueError):
         return
     from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
-    from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
     from datafusion_engine.runtime import record_view_definition
     from datafusion_engine.view_artifacts import build_view_artifact_from_bundle
 
-    required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(plan_bundle)))
+    required_udfs = plan_bundle.required_udfs
     referenced_tables = tuple(
         sorted(referenced_tables_from_plan(plan_bundle.optimized_logical_plan))
     )

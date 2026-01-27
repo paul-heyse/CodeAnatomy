@@ -37,11 +37,21 @@ use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 
 const LIST_UNIQUE_NAME: &str = "list_unique";
 const COUNT_DISTINCT_NAME: &str = "count_distinct_agg";
+const COLLECT_SET_NAME: &str = "collect_set";
+const COUNT_IF_NAME: &str = "count_if";
+const ANY_VALUE_DET_NAME: &str = "any_value_det";
+const ARG_MAX_NAME: &str = "arg_max";
+const ARG_MIN_NAME: &str = "arg_min";
 
 pub fn builtin_udafs() -> Vec<AggregateUDF> {
     vec![
         list_unique_udaf(),
+        collect_set_udaf(),
         count_distinct_udaf(),
+        count_if_udaf(),
+        any_value_det_udaf(),
+        arg_max_udaf(),
+        arg_min_udaf(),
         first_value_udaf()
             .as_ref()
             .clone()
@@ -56,6 +66,10 @@ pub fn builtin_udafs() -> Vec<AggregateUDF> {
 
 fn list_unique_udaf() -> AggregateUDF {
     AggregateUDF::new_from_shared_impl(Arc::new(ListUniqueUdaf::new()))
+}
+
+fn collect_set_udaf() -> AggregateUDF {
+    AggregateUDF::new_from_shared_impl(Arc::new(CollectSetUdaf::new()))
 }
 
 fn count_distinct_udaf() -> AggregateUDF {
@@ -150,6 +164,93 @@ impl AggregateUDFImpl for ListUniqueUdaf {
 
 #[user_doc(
     doc_section(label = "Built-in Functions"),
+    description = "Aggregate values into a deterministic set (unique, sorted).",
+    syntax_example = "collect_set(value)",
+    standard_argument(name = "value", prefix = "String")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct CollectSetUdaf {
+    signature: Signature,
+}
+
+impl CollectSetUdaf {
+    fn new() -> Self {
+        let signature = signature_with_names(
+            string_signature(Volatility::Immutable),
+            &["value"],
+        );
+        Self { signature }
+    }
+}
+
+impl AggregateUDFImpl for CollectSetUdaf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        COLLECT_SET_NAME
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::List(Arc::new(Field::new_list_field(
+            DataType::Utf8,
+            true,
+        ))))
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        Ok(vec![Field::new_list(
+            format_state_name(args.name, "collect_set"),
+            Field::new_list_field(DataType::Utf8, true),
+            true,
+        )
+        .into()])
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(ListUniqueAccumulator::new(
+            acc_args.ignore_nulls,
+        )))
+    }
+
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        Ok(Box::new(ListUniqueGroupsAccumulator::new(
+            args.ignore_nulls,
+        )))
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(ListUniqueSlidingAccumulator::new(
+            args.ignore_nulls,
+        )))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Built-in Functions"),
     description = "Count distinct values in the aggregate window.",
     syntax_example = "count_distinct_agg(value)",
     standard_argument(name = "value", prefix = "String")
@@ -175,6 +276,14 @@ fn string_signature(volatility: Volatility) -> Signature {
         TypeSignature::Exact(vec![DataType::Utf8View]),
     ];
     Signature::one_of(signatures, volatility)
+}
+
+fn signature_with_names(signature: Signature, names: &[&str]) -> Signature {
+    let parameter_names = names.iter().map(|name| (*name).to_string()).collect();
+    signature
+        .clone()
+        .with_parameter_names(parameter_names)
+        .unwrap_or(signature)
 }
 
 impl AggregateUDFImpl for CountDistinctUdaf {
@@ -241,6 +350,671 @@ impl AggregateUDFImpl for CountDistinctUdaf {
 
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(0)))
+    }
+}
+
+fn count_if_udaf() -> AggregateUDF {
+    AggregateUDF::new_from_shared_impl(Arc::new(CountIfUdaf::new()))
+}
+
+fn boolean_signature(volatility: Volatility) -> Signature {
+    Signature::one_of(
+        vec![TypeSignature::Exact(vec![DataType::Boolean])],
+        volatility,
+    )
+}
+
+fn boolean_array<'a>(array: &'a ArrayRef, message: &str) -> Result<&'a BooleanArray> {
+    array
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or_else(|| DataFusionError::Plan(message.to_string()))
+}
+
+fn ensure_count_capacity(counts: &mut Vec<i64>, total_num_groups: usize) {
+    if total_num_groups > counts.len() {
+        counts.resize(total_num_groups, 0);
+    }
+}
+
+fn build_count_array(counts: &[i64]) -> Int64Array {
+    let mut builder = Int64Builder::with_capacity(counts.len());
+    for count in counts {
+        builder.append_value(*count);
+    }
+    builder.finish()
+}
+
+#[user_doc(
+    doc_section(label = "Built-in Functions"),
+    description = "Count rows where the predicate evaluates to true.",
+    syntax_example = "count_if(predicate)",
+    standard_argument(name = "predicate", prefix = "Boolean")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct CountIfUdaf {
+    signature: Signature,
+}
+
+impl CountIfUdaf {
+    fn new() -> Self {
+        let signature = signature_with_names(boolean_signature(Volatility::Immutable), &["predicate"]);
+        Self { signature }
+    }
+}
+
+impl AggregateUDFImpl for CountIfUdaf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        COUNT_IF_NAME
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        Ok(vec![Field::new(
+            format_state_name(args.name, "count_if"),
+            DataType::Int64,
+            false,
+        )
+        .into()])
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(CountIfAccumulator::default()))
+    }
+
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        Ok(Box::new(CountIfGroupsAccumulator::default()))
+    }
+
+    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(0)))
+    }
+}
+
+#[derive(Debug, Default)]
+struct CountIfAccumulator {
+    count: i64,
+}
+
+impl Accumulator for CountIfAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let [predicate] = values else {
+            return Err(DataFusionError::Plan(
+                "count_if expects a single predicate argument".into(),
+            ));
+        };
+        let predicate = boolean_array(predicate, "count_if expects boolean input")?;
+        for row in 0..predicate.len() {
+            if predicate.is_null(row) || !predicate.value(row) {
+                continue;
+            }
+            self.count += 1;
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(self.count)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![ScalarValue::Int64(Some(self.count))])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let [state] = states else {
+            return Err(DataFusionError::Plan(
+                "count_if expects a single state value".into(),
+            ));
+        };
+        let state = state
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| DataFusionError::Plan("count_if expects int64 state".into()))?;
+        for row in 0..state.len() {
+            if state.is_null(row) {
+                continue;
+            }
+            self.count += state.value(row);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct CountIfGroupsAccumulator {
+    counts: Vec<i64>,
+}
+
+impl GroupsAccumulator for CountIfGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        let [predicate] = values else {
+            return Err(DataFusionError::Plan(
+                "count_if expects a single predicate argument".into(),
+            ));
+        };
+        let predicate = boolean_array(predicate, "count_if expects boolean input")?;
+        ensure_count_capacity(&mut self.counts, total_num_groups);
+        for (row, group_index) in group_indices.iter().enumerate() {
+            if let Some(filter) = opt_filter {
+                if filter.is_null(row) || !filter.value(row) {
+                    continue;
+                }
+            }
+            if predicate.is_null(row) || !predicate.value(row) {
+                continue;
+            }
+            if let Some(count) = self.counts.get_mut(*group_index) {
+                *count += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let total_groups = self.counts.len();
+        let (emit_count, retain) = match emit_to {
+            EmitTo::All => (total_groups, false),
+            EmitTo::First(count) => (count.min(total_groups), true),
+        };
+        let array = build_count_array(&self.counts[..emit_count]);
+        if retain {
+            self.counts.drain(0..emit_count);
+        } else {
+            self.counts.clear();
+        }
+        Ok(Arc::new(array))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let array = self.evaluate(emit_to)?;
+        Ok(vec![array])
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        let [state] = values else {
+            return Err(DataFusionError::Plan(
+                "count_if expects a single state value".into(),
+            ));
+        };
+        let state = state
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| DataFusionError::Plan("count_if expects int64 state".into()))?;
+        ensure_count_capacity(&mut self.counts, total_num_groups);
+        for (row, group_index) in group_indices.iter().enumerate() {
+            if let Some(filter) = opt_filter {
+                if filter.is_null(row) || !filter.value(row) {
+                    continue;
+                }
+            }
+            if state.is_null(row) {
+                continue;
+            }
+            if let Some(count) = self.counts.get_mut(*group_index) {
+                *count += state.value(row);
+            }
+        }
+        Ok(())
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let [predicate] = values else {
+            return Err(DataFusionError::Plan(
+                "count_if expects a single predicate argument".into(),
+            ));
+        };
+        let predicate = boolean_array(predicate, "count_if expects boolean input")?;
+        let mut builder = Int64Builder::with_capacity(predicate.len());
+        for row in 0..predicate.len() {
+            if let Some(filter) = opt_filter {
+                if filter.is_null(row) || !filter.value(row) {
+                    builder.append_value(0);
+                    continue;
+                }
+            }
+            if predicate.is_null(row) || !predicate.value(row) {
+                builder.append_value(0);
+            } else {
+                builder.append_value(1);
+            }
+        }
+        Ok(vec![Arc::new(builder.finish())])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + (self.counts.len() * std::mem::size_of::<i64>())
+    }
+}
+
+fn any_value_det_udaf() -> AggregateUDF {
+    AggregateUDF::new_from_shared_impl(Arc::new(AnyValueDetUdaf::new()))
+}
+
+fn arg_max_udaf() -> AggregateUDF {
+    AggregateUDF::new_from_shared_impl(Arc::new(ArgMaxUdaf::new()))
+}
+
+fn arg_min_udaf() -> AggregateUDF {
+    AggregateUDF::new_from_shared_impl(Arc::new(ArgMinUdaf::new()))
+}
+
+fn arg_best_signature(volatility: Volatility) -> Signature {
+    signature_with_names(
+        Signature::one_of(vec![TypeSignature::Any(2)], volatility),
+        &["value", "order_key"],
+    )
+}
+
+fn arg_best_state_fields(args: StateFieldsArgs, label: &str) -> Vec<FieldRef> {
+    let value_suffix = format!("{label}_value");
+    let key_suffix = format!("{label}_key");
+    vec![
+        Field::new(
+            format_state_name(args.name, value_suffix.as_str()),
+            DataType::Utf8,
+            true,
+        )
+        .into(),
+        Field::new(
+            format_state_name(args.name, key_suffix.as_str()),
+            DataType::Int64,
+            true,
+        )
+        .into(),
+    ]
+}
+
+fn scalar_to_string(value: &ScalarValue) -> Option<String> {
+    match value {
+        ScalarValue::Null => None,
+        ScalarValue::Utf8(value)
+        | ScalarValue::LargeUtf8(value)
+        | ScalarValue::Utf8View(value) => value.clone(),
+        other => Some(other.to_string()),
+    }
+}
+
+fn scalar_to_i64(value: &ScalarValue, context: &str) -> Result<Option<i64>> {
+    match value {
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Int8(value) => Ok(value.map(i64::from)),
+        ScalarValue::Int16(value) => Ok(value.map(i64::from)),
+        ScalarValue::Int32(value) => Ok(value.map(i64::from)),
+        ScalarValue::Int64(value) => Ok(*value),
+        ScalarValue::UInt8(value) => Ok(value.map(i64::from)),
+        ScalarValue::UInt16(value) => Ok(value.map(i64::from)),
+        ScalarValue::UInt32(value) => Ok(value.map(i64::from)),
+        ScalarValue::UInt64(value) => Ok(value.map(|value| value as i64)),
+        ScalarValue::Float32(value) => Ok(value.map(|value| value as i64)),
+        ScalarValue::Float64(value) => Ok(value.map(|value| value as i64)),
+        ScalarValue::TimestampSecond(value, _)
+        | ScalarValue::TimestampMillisecond(value, _)
+        | ScalarValue::TimestampMicrosecond(value, _)
+        | ScalarValue::TimestampNanosecond(value, _) => Ok(*value),
+        ScalarValue::Date32(value) => Ok(value.map(i64::from)),
+        ScalarValue::Date64(value) => Ok(*value),
+        ScalarValue::DurationSecond(value)
+        | ScalarValue::DurationMillisecond(value)
+        | ScalarValue::DurationMicrosecond(value)
+        | ScalarValue::DurationNanosecond(value) => Ok(*value),
+        ScalarValue::Utf8(value)
+        | ScalarValue::LargeUtf8(value)
+        | ScalarValue::Utf8View(value) => {
+            if let Some(text) = value {
+                let parsed = text.parse::<i64>().map_err(|err| {
+                    DataFusionError::Plan(format!(
+                        "{context}: failed to parse order_key as int64: {err}"
+                    ))
+                })?;
+                Ok(Some(parsed))
+            } else {
+                Ok(None)
+            }
+        }
+        other => Err(DataFusionError::Plan(format!(
+            "{context}: unsupported order_key type: {other:?}"
+        ))),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ArgBestMode {
+    Min,
+    Max,
+}
+
+#[derive(Debug)]
+struct ArgBestAccumulator {
+    mode: ArgBestMode,
+    best_value: Option<String>,
+    best_key: Option<i64>,
+}
+
+impl ArgBestAccumulator {
+    fn new(mode: ArgBestMode) -> Self {
+        Self {
+            mode,
+            best_value: None,
+            best_key: None,
+        }
+    }
+
+    fn update_candidate(&mut self, value: Option<String>, key: Option<i64>) {
+        let Some(key) = key else {
+            return;
+        };
+        let Some(value) = value else {
+            return;
+        };
+        match self.best_key {
+            None => {
+                self.best_key = Some(key);
+                self.best_value = Some(value);
+            }
+            Some(best_key) => {
+                let better_key = match self.mode {
+                    ArgBestMode::Min => key < best_key,
+                    ArgBestMode::Max => key > best_key,
+                };
+                if better_key {
+                    self.best_key = Some(key);
+                    self.best_value = Some(value);
+                    return;
+                }
+                if key != best_key {
+                    return;
+                }
+                let replace = match &self.best_value {
+                    None => true,
+                    Some(best_value) => value.as_str() < best_value.as_str(),
+                };
+                if replace {
+                    self.best_key = Some(key);
+                    self.best_value = Some(value);
+                }
+            }
+        }
+    }
+
+    fn update_from_arrays(&mut self, values: &ArrayRef, keys: &ArrayRef, context: &str) -> Result<()> {
+        if values.len() != keys.len() {
+            return Err(DataFusionError::Plan(format!(
+                "{context}: value and order_key lengths must match"
+            )));
+        }
+        for row in 0..values.len() {
+            let value = ScalarValue::try_from_array(values.as_ref(), row)?;
+            let key = ScalarValue::try_from_array(keys.as_ref(), row)?;
+            let value_text = scalar_to_string(&value);
+            let key_value = scalar_to_i64(&key, context)?;
+            self.update_candidate(value_text, key_value);
+        }
+        Ok(())
+    }
+}
+
+impl Accumulator for ArgBestAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let [values, order_key] = values else {
+            return Err(DataFusionError::Plan(
+                "arg_* aggregators expect value and order_key arguments".into(),
+            ));
+        };
+        self.update_from_arrays(values, order_key, "arg_* aggregators")
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Utf8(self.best_value.clone()))
+    }
+
+    fn size(&self) -> usize {
+        let value_size = self
+            .best_value
+            .as_ref()
+            .map(|value| value.len())
+            .unwrap_or(0);
+        size_of_val(self) + value_size
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![
+            ScalarValue::Utf8(self.best_value.clone()),
+            ScalarValue::Int64(self.best_key),
+        ])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let [values, order_key] = states else {
+            return Err(DataFusionError::Plan(
+                "arg_* aggregators expect value and order_key state".into(),
+            ));
+        };
+        self.update_from_arrays(values, order_key, "arg_* aggregators state")
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Built-in Functions"),
+    description = "Return a deterministic value by selecting the row with the smallest order key.",
+    syntax_example = "any_value_det(value, order_key)",
+    argument(name = "value", description = "Value to return."),
+    argument(name = "order_key", description = "Ordering key used for deterministic selection.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct AnyValueDetUdaf {
+    signature: Signature,
+}
+
+impl AnyValueDetUdaf {
+    fn new() -> Self {
+        Self {
+            signature: arg_best_signature(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for AnyValueDetUdaf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        ANY_VALUE_DET_NAME
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        Ok(arg_best_state_fields(args, ANY_VALUE_DET_NAME))
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(ArgBestAccumulator::new(ArgBestMode::Min)))
+    }
+
+    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
+        Ok(ScalarValue::Utf8(None))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Built-in Functions"),
+    description = "Return the value associated with the maximum order key.",
+    syntax_example = "arg_max(value, order_key)",
+    argument(name = "value", description = "Value to return."),
+    argument(name = "order_key", description = "Ordering key used to select the maximum value.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ArgMaxUdaf {
+    signature: Signature,
+}
+
+impl ArgMaxUdaf {
+    fn new() -> Self {
+        Self {
+            signature: arg_best_signature(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for ArgMaxUdaf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        ARG_MAX_NAME
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        Ok(arg_best_state_fields(args, ARG_MAX_NAME))
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(ArgBestAccumulator::new(ArgBestMode::Max)))
+    }
+
+    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
+        Ok(ScalarValue::Utf8(None))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Built-in Functions"),
+    description = "Return the value associated with the minimum order key.",
+    syntax_example = "arg_min(value, order_key)",
+    argument(name = "value", description = "Value to return."),
+    argument(name = "order_key", description = "Ordering key used to select the minimum value.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ArgMinUdaf {
+    signature: Signature,
+}
+
+impl ArgMinUdaf {
+    fn new() -> Self {
+        Self {
+            signature: arg_best_signature(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for ArgMinUdaf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        ARG_MIN_NAME
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        Ok(arg_best_state_fields(args, ARG_MIN_NAME))
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(ArgBestAccumulator::new(ArgBestMode::Min)))
+    }
+
+    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
+        Ok(ScalarValue::Utf8(None))
     }
 }
 

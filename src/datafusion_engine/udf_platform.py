@@ -44,9 +44,11 @@ from datafusion_engine.function_factory import (
     function_factory_policy_from_snapshot,
     install_function_factory,
 )
+from datafusion_engine.udf_catalog import rewrite_tag_index
 from datafusion_engine.udf_runtime import (
     register_rust_udfs,
     rust_udf_docs,
+    rust_udf_snapshot_hash,
 )
 
 
@@ -64,6 +66,9 @@ class RustUdfPlatform:
     """Snapshot of a Rust UDF platform installation."""
 
     snapshot: Mapping[str, object] | None
+    snapshot_hash: str | None
+    rewrite_tags: tuple[str, ...]
+    domain_planner_names: tuple[str, ...]
     docs: Mapping[str, object] | None
     function_factory: ExtensionInstallStatus | None
     expr_planners: ExtensionInstallStatus | None
@@ -197,6 +202,8 @@ def install_rust_udf_platform(
     resolved = options or RustUdfPlatformOptions()
     snapshot: Mapping[str, object] | None = None
     docs: Mapping[str, object] | None = None
+    snapshot_hash: str | None = None
+    rewrite_tags: tuple[str, ...] = ()
     if resolved.enable_udfs:
         snapshot = register_rust_udfs(
             ctx,
@@ -204,17 +211,20 @@ def install_rust_udf_platform(
             async_udf_timeout_ms=resolved.async_udf_timeout_ms,
             async_udf_batch_size=resolved.async_udf_batch_size,
         )
+        snapshot_hash = rust_udf_snapshot_hash(snapshot)
+        tag_index = rewrite_tag_index(snapshot)
+        rewrite_tags = tuple(sorted(tag_index))
         docs_value = snapshot.get("documentation") if isinstance(snapshot, Mapping) else None
         docs = cast("Mapping[str, object] | None", docs_value)
         if docs is None:
             docs = rust_udf_docs(ctx)
     planner_names = tuple(resolved.expr_planner_names)
+    derived_planners = domain_planner_names_from_snapshot(snapshot)
     if resolved.enable_expr_planners and resolved.expr_planner_hook is None:
-        derived = domain_planner_names_from_snapshot(snapshot)
         if planner_names:
-            planner_names = tuple(dict.fromkeys((*planner_names, *derived)))
+            planner_names = tuple(dict.fromkeys((*planner_names, *derived_planners)))
         else:
-            planner_names = derived
+            planner_names = derived_planners
     function_factory_policy = resolved.function_factory_policy
     if function_factory_policy is None and snapshot is not None:
         function_factory_policy = function_factory_policy_from_snapshot(
@@ -242,6 +252,9 @@ def install_rust_udf_platform(
             raise RuntimeError(msg)
     return RustUdfPlatform(
         snapshot=snapshot,
+        snapshot_hash=snapshot_hash,
+        rewrite_tags=rewrite_tags,
+        domain_planner_names=planner_names,
         docs=docs,
         function_factory=function_factory,
         expr_planners=expr_planners,

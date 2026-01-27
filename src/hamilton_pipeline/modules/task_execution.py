@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -20,6 +20,7 @@ from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, T
 
 if TYPE_CHECKING:
     from arrowdsl.core.execution_context import ExecutionContext
+    from datafusion_engine.scan_planner import ScanUnit
     from engine.session import EngineSession
 
 
@@ -31,6 +32,18 @@ class TaskExecutionInputs:
     evidence: EvidenceCatalog
     plan_signature: str
     active_task_names: frozenset[str]
+    scan_units: tuple[ScanUnit, ...]
+    scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_units_hash: str | None
+
+
+@dataclass(frozen=True)
+class PlanScanInputs:
+    """Scan-unit context for deterministic execution."""
+
+    scan_units: tuple[ScanUnit, ...]
+    scan_keys_by_task: Mapping[str, tuple[str, ...]]
+    scan_units_hash: str | None
 
 
 @dataclass(frozen=True)
@@ -113,14 +126,54 @@ def runtime_artifacts(
     )
 
 
+@tag(layer="execution", artifact="plan_scan_inputs", kind="context")
+def plan_scan_inputs(
+    plan_scan_units: tuple[ScanUnit, ...],
+    plan_scan_keys_by_task: Mapping[str, tuple[str, ...]],
+) -> PlanScanInputs:
+    """Bundle scan-unit context for deterministic task execution.
+
+    Returns
+    -------
+    PlanScanInputs
+        Scan-unit context and hash for the execution run.
+    """
+    scan_hash: str | None = None
+    if plan_scan_units:
+        from datafusion_engine.scan_overrides import scan_units_hash
+
+        scan_hash = scan_units_hash(plan_scan_units)
+    return PlanScanInputs(
+        scan_units=plan_scan_units,
+        scan_keys_by_task=plan_scan_keys_by_task,
+        scan_units_hash=scan_hash,
+    )
+
+
 @tag(layer="execution", artifact="task_execution_inputs", kind="context")
 def task_execution_inputs(
     runtime_artifacts: RuntimeArtifacts,
     evidence_catalog: EvidenceCatalog,
     plan_signature: str,
     active_task_names: frozenset[str],
+    plan_scan_inputs: PlanScanInputs,
 ) -> TaskExecutionInputs:
     """Bundle shared execution inputs for per-task nodes.
+
+    Parameters
+    ----------
+    runtime_artifacts
+        Runtime artifact container for the execution run.
+    evidence_catalog
+        Evidence catalog used for scheduling and contract validation.
+    plan_signature
+        Execution-plan signature for consistency checks.
+    active_task_names
+        Active task names for the current run.
+    plan_scan_units
+        Scan units derived from the plan for deterministic inputs.
+    plan_scan_keys_by_task
+        Scan keys grouped by task name.
 
     Returns
     -------
@@ -132,6 +185,9 @@ def task_execution_inputs(
         evidence=evidence_catalog,
         plan_signature=plan_signature,
         active_task_names=active_task_names,
+        scan_units=plan_scan_inputs.scan_units,
+        scan_keys_by_task=plan_scan_inputs.scan_keys_by_task,
+        scan_units_hash=plan_scan_inputs.scan_units_hash,
     )
 
 
@@ -139,6 +195,8 @@ def _execute_view(
     runtime: RuntimeArtifacts,
     *,
     view_name: str,
+    scan_units: tuple[ScanUnit, ...],
+    scan_units_hash: str | None,
 ) -> ExecutionResult:
     exec_ctx = runtime.execution
     if exec_ctx is None:
@@ -149,15 +207,20 @@ def _execute_view(
         msg = "DataFusion runtime profile is required for view execution."
         raise ValueError(msg)
     session = profile.session_context()
-    if not session.table_exist(view_name):
+    refresh_requested = not session.table_exist(view_name)
+    if scan_units_hash is not None and runtime.scan_override_hash != scan_units_hash:
+        refresh_requested = True
+    if refresh_requested:
         ensure_view_graph(
             session,
             runtime_profile=profile,
             include_registry_views=True,
+            scan_units=scan_units,
         )
         if not session.table_exist(view_name):
             msg = f"View {view_name!r} is not registered; call ensure_view_graph first."
             raise ValueError(msg)
+        runtime.scan_override_hash = scan_units_hash
     table = session.table(view_name).to_arrow_table()
     return ExecutionResult.from_table(table)
 
@@ -223,7 +286,12 @@ def _execute_and_record(
     runtime = inputs.runtime
     task_name = spec.task_name
     runtime.record_execution(task_name if not inactive else f"{task_name}:inactive")
-    result = _execute_view(runtime, view_name=spec.task_output)
+    result = _execute_view(
+        runtime,
+        view_name=spec.task_output,
+        scan_units=inputs.scan_units,
+        scan_units_hash=inputs.scan_units_hash,
+    )
     table = result.require_table()
     _record_output(
         inputs=inputs,

@@ -11,6 +11,18 @@ from hamilton.lifecycle import api as lifecycle_api
 from core_types import JsonValue
 
 _SEMANTIC_LAYER = "semantic"
+_REQUIRED_SEMANTIC_TAGS: frozenset[str] = frozenset(
+    {
+        "layer",
+        "semantic_id",
+        "kind",
+        "entity",
+        "grain",
+        "version",
+        "stability",
+    }
+)
+_ERROR_PREVIEW_LIMIT = 8
 
 if TYPE_CHECKING:
     from hamilton import driver as hamilton_driver
@@ -106,6 +118,11 @@ def compile_semantic_registry(
     -------
     SemanticRegistry
         Compiled semantic registry.
+
+    Raises
+    ------
+    ValueError
+        Raised when semantic outputs are missing required semantic tags.
     """
     records: list[SemanticNodeRecord] = []
     errors: list[str] = []
@@ -119,11 +136,16 @@ def compile_semantic_registry(
         if record is not None:
             records.append(record)
     ordered_records = tuple(sorted(records, key=_record_sort_key))
-    return SemanticRegistry(
+    registry = SemanticRegistry(
         plan_signature=plan_signature,
         records=ordered_records,
         errors=tuple(errors),
     )
+    if registry.errors:
+        preview = "; ".join(registry.errors[:_ERROR_PREVIEW_LIMIT])
+        msg = f"Semantic registry validation failed: {preview}."
+        raise ValueError(msg)
+    return registry
 
 
 def semantic_registry_from_driver(
@@ -138,7 +160,10 @@ def semantic_registry_from_driver(
     SemanticRegistry
         Compiled semantic registry.
     """
-    return compile_semantic_registry(driver.graph.nodes, plan_signature=plan_signature)
+    return compile_semantic_registry(
+        driver.graph.nodes,
+        plan_signature=plan_signature,
+    )
 
 
 @dataclass
@@ -167,7 +192,10 @@ class SemanticRegistryHook(lifecycle_api.GraphExecutionHook):
         driver = self._driver
         if driver is None:
             return
-        registry = semantic_registry_from_driver(driver, plan_signature=self.plan_signature)
+        registry = semantic_registry_from_driver(
+            driver,
+            plan_signature=self.plan_signature,
+        )
         from datafusion_engine.diagnostics import record_artifact
 
         record_artifact(
@@ -196,16 +224,19 @@ def _semantic_record(
     semantic_id = semantic_id_value if isinstance(semantic_id_value, str) else ""
     layer_value = tags.get("layer")
     layer = layer_value if isinstance(layer_value, str) else ""
-    if not semantic_id and layer != _SEMANTIC_LAYER:
+    is_semantic_node = bool(semantic_id) or layer == _SEMANTIC_LAYER
+    if not is_semantic_node:
         return None, ()
     errors: list[str] = []
+    if layer != _SEMANTIC_LAYER:
+        errors.append(f"{node_name}: semantic outputs must use layer=semantic")
+    missing_tags = sorted(_missing_required_tags(tags))
+    if missing_tags:
+        errors.append(f"{node_name}: missing required semantic tags: {missing_tags}")
     if not semantic_id:
         semantic_id = node_name
-        errors.append(f"{node_name}: missing semantic_id tag; defaulting to node name")
     kind_value = tags.get("kind")
     kind = kind_value if isinstance(kind_value, str) and kind_value else "unknown"
-    if kind == "unknown":
-        errors.append(f"{node_name}: missing kind tag")
     record = SemanticNodeRecord(
         node_name=node_name,
         semantic_id=semantic_id,
@@ -226,6 +257,15 @@ def _semantic_record(
         generation_size=_as_str(tags.get("generation_size")),
     )
     return record, tuple(errors)
+
+
+def _missing_required_tags(tags: Mapping[str, object]) -> set[str]:
+    missing: set[str] = set()
+    for key in _REQUIRED_SEMANTIC_TAGS:
+        value = tags.get(key)
+        if not isinstance(value, str) or not value.strip():
+            missing.add(key)
+    return missing
 
 
 def _parse_key_list(value: object) -> tuple[str, ...]:

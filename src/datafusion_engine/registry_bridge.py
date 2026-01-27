@@ -69,7 +69,6 @@ from datafusion_engine.introspection import (
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
 from datafusion_engine.plan_bundle import build_plan_bundle
-from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
 from datafusion_engine.runtime import schema_introspector_for_profile
 from datafusion_engine.schema_contracts import schema_contract_from_table_schema_contract
 from datafusion_engine.schema_introspection import (
@@ -1513,7 +1512,7 @@ def _apply_projection_exprs(
 
         schema = _schema_from_df(projected)
         bundle = build_plan_bundle(ctx, projected)
-        required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(bundle)))
+        required_udfs = bundle.required_udfs
         referenced_tables = referenced_tables_from_plan(bundle.optimized_logical_plan)
         artifact = build_view_artifact_from_bundle(
             bundle,

@@ -23,16 +23,7 @@ from datafusion_engine.hash_utils import (
 )
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_ext import (
-    prefixed_hash64 as df_prefixed_hash64,
-)
-from datafusion_ext import (
-    stable_hash64,
-    stable_hash128,
-)
-from datafusion_ext import (
-    stable_id as df_stable_id,
-)
+from datafusion_ext import prefixed_hash_parts64, stable_hash64, stable_hash128, stable_id_parts
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr
@@ -78,6 +69,24 @@ def _concat_ws(parts: Sequence[Expr]) -> Expr:
     return f.concat_ws(_NULL_SEPARATOR, *parts)
 
 
+def _hash_parts(
+    column_names: Sequence[str],
+    *,
+    prefix: str | None,
+    null_sentinel: str,
+    extra_literals: Sequence[str] = (),
+) -> list[Expr]:
+    parts: list[Expr] = []
+    if prefix is not None:
+        parts.append(lit(prefix))
+    parts.extend(lit(value) for value in extra_literals)
+    parts.extend(_coalesce_cast(col(name), null_sentinel=null_sentinel) for name in column_names)
+    if not parts:
+        msg = "hash expressions require at least one part."
+        raise ValueError(msg)
+    return parts
+
+
 def _hash_expression(
     column_names: Sequence[str],
     *,
@@ -86,11 +95,12 @@ def _hash_expression(
     use_128: bool,
     extra_literals: Sequence[str] = (),
 ) -> Expr:
-    parts: list[Expr] = []
-    if prefix is not None:
-        parts.append(lit(prefix))
-    parts.extend(lit(value) for value in extra_literals)
-    parts.extend(_coalesce_cast(col(name), null_sentinel=null_sentinel) for name in column_names)
+    parts = _hash_parts(
+        column_names,
+        prefix=prefix,
+        null_sentinel=null_sentinel,
+        extra_literals=extra_literals,
+    )
     joined = _concat_ws(parts)
     return stable_hash128(joined) if use_128 else stable_hash64(joined)
 
@@ -103,16 +113,15 @@ def _prefixed_hash_expression(
     use_128: bool,
     extra_literals: Sequence[str] = (),
 ) -> Expr:
-    hash_expr = _hash_expression(
+    parts = _hash_parts(
         column_names,
-        prefix=prefix,
+        prefix=None,
         null_sentinel=null_sentinel,
-        use_128=use_128,
         extra_literals=extra_literals,
     )
     if use_128:
-        return df_stable_id(prefix, hash_expr)
-    return df_prefixed_hash64(prefix, hash_expr)
+        return stable_id_parts(prefix, parts[0], *parts[1:])
+    return prefixed_hash_parts64(prefix, parts[0], *parts[1:])
 
 
 def _is_not_null(expr: Expr) -> Expr:

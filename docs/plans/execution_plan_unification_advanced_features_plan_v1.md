@@ -1,44 +1,60 @@
-# Execution Plan Unification - Advanced Hamilton + rustworkx Features Plan v1
+# Execution Plan Unification - Advanced Hamilton + rustworkx Features Plan v1 (DataFusion + Delta aligned)
 
 Date: January 27, 2026
 
 ## Intent
 
-This plan extends the already-unified ExecutionPlan architecture to a
-best-in-class endpoint that is:
+This plan now serves as the advanced execution/scheduling companion to the
+DataFusion + Delta Lake wholesale-switch target state described in
+`docs/plans/datafusion_delta_best_in_class_architecture_plan_v1.md`.
 
-- maximally causal for caching and invalidation correctness,
-- explicitly DAG-kernel-driven via rustworkx,
-- enforced at runtime through Hamilton dynamic execution hooks,
-- deeply observable through lineage-grade diagnostics, and
-- UI/catalog friendly without exploding DAG version churn.
+The design goal is no longer "make ExecutionPlan nicer in isolation." It is:
 
-Because we are in the design phase, this plan prefers structural clarity,
-correctness boundaries, and system-level leverage, even when it introduces
-breaking changes.
+- make plan bundles and pinned Delta inputs the only scheduling inputs,
+- keep rustworkx as the DAG kernel, but drive it from DataFusion plans,
+- use Hamilton dynamic execution as enforcement and observability, not truth,
+- treat diagnostics/artifacts as queryable products, and
+- keep UI/catalog semantics stable even as plans vary aggressively.
 
-## Target State Invariants
+Because we are in design phase, this plan prefers structural leverage and
+deterministic correctness boundaries over backward compatibility.
 
-1) Cache correctness boundaries are explicit and enforced by policy.
-2) rustworkx is the graph kernel for both planning and scheduling semantics.
-3) Runtime admission control is plan-native (not advisory).
-4) Plan diagnostics are first-class nodes and first-class artifacts.
-5) UI/telemetry semantics are stable, queryable, and governance-friendly.
+## Target State Invariants (DataFusion + Delta aligned)
+
+1) Session/runtime identity and settings are part of plan identity.
+2) `DataFusionPlanBundle` is the canonical scheduling contract.
+3) Lineage is structured (no display-string parsing).
+4) Delta scan units and pinned versions are first-class DAG nodes.
+5) rustworkx remains the graph kernel; Hamilton enforces plan-native rules.
+6) Plan artifacts and diagnostics are persisted as queryable tables.
 
 ## Status Snapshot (January 27, 2026)
 
+What is already landed and still relevant under the pivot:
+
 - [x] Cache policy defaults now make correctness boundaries explicit.
-- [x] Cache lineage export now includes metadata-store facts and decoded
-      dependency data versions.
-- [x] rustworkx transitive reduction and weighted critical path are now
-      plan-native artifacts.
-- [x] The scheduler now derives generation layers from the reduced dependency
-      DAG.
-- [x] Dynamic execution now wires plan-native submission and grouping hooks.
-- [ ] Plan artifacts are not yet first-class Hamilton nodes.
-- [ ] UI identity still encodes the plan signature into the DAG name.
-- [ ] Tests and plan stubs have not yet been updated to the expanded
-      `ExecutionPlan` contract.
+- [x] Cache lineage export includes metadata-store facts plus decoded
+      dependency data versions, and emits `hamilton_cache_lineage_v2`.
+- [x] rustworkx transitive reduction, lexicographical ordering, node-link
+      JSON, and weighted critical path artifacts are plan-native.
+- [x] The scheduler derives generation layers from the reduced dependency DAG.
+- [x] Dynamic execution wires plan-native submission and grouping hooks, and
+      plan events are flushed as artifacts.
+- [x] Plan artifacts now expose plan-native summary nodes via
+      `@extract_fields`.
+- [x] Plan-vs-runtime drift now emits a `hamilton_plan_drift_v1` artifact.
+- [x] UI identity now keeps `dag_name` stable and pushes plan identity into tags.
+- [x] ExecutionPlan test stubs were updated to the expanded contract.
+
+Pivot-critical gaps that remain:
+
+- [ ] Session/runtime identity is not yet an explicit planning object.
+- [ ] `DataFusionPlanBundle` is not yet enriched with settings, UDF identity,
+      rewrite tags, Delta pins, and plan artifacts as first-class fields.
+- [ ] Lineage and UDF extraction still rely heavily on display-string parsing.
+- [ ] No Delta-aware scan planner/scan units are modeled in the DAG.
+- [ ] Plan identity and cache keys do not yet include runtime settings, UDF
+      snapshot hash, rewrite tags, or Delta pins.
 
 ---
 
@@ -278,161 +294,325 @@ class PlanTaskGroupingHook(lifecycle_api.TaskGroupingHook):
   - [x] is explicit about fallback behavior for unknown tasks.
 - [x] Implement (or stub) a `PlanTaskGroupingHook` that:
   - [x] records actual groupings,
-  - [ ] allows comparison against plan generations.
+  - [x] allows comparison against plan generations (via drift artifacts).
 - [x] Attach hooks in `driver_factory` behind clear config flags.
 - [x] Emit diagnostics artifacts that capture:
   - [x] admitted vs rejected tasks,
   - [x] actual groupings,
-  - [ ] any plan-vs-runtime drift.
+  - [x] any plan-vs-runtime drift (for example, `hamilton_plan_drift_v1`).
 
 ---
 
-## Scope 4 - Plan Artifacts as First-Class Nodes (Extract + Validate + Tag)
+## Scope 4 - SessionRuntime + Enriched DataFusionPlanBundle Identity
 
 ### Representative architectural patterns
 
-Split plan diagnostics into explicit nodes that are individually cacheable,
-queryable, and testable:
+Make runtime/session identity explicit and bind it into plan identity:
+
+```python
+from dataclasses import dataclass
+from typing import Mapping
+
+from datafusion import SessionContext
+
+
+@dataclass(frozen=True)
+class SessionRuntime:
+    ctx: SessionContext
+    runtime_hash: str
+    udf_snapshot_hash: str
+    rewrite_tags: tuple[str, ...]
+    df_settings: Mapping[str, str]
+```
+
+Enrich the plan bundle so it captures scheduling, reproducibility, and
+runtime-compatibility requirements in one canonical surface:
+
+```python
+from dataclasses import dataclass
+from typing import Mapping
+
+from datafusion.dataframe import DataFrame
+
+
+@dataclass(frozen=True)
+class PlanArtifacts:
+    df_settings: Mapping[str, str]
+    udf_snapshot_hash: str
+    rewrite_tags: tuple[str, ...]
+    logical_plan_display: str | None
+    optimized_plan_display: str | None
+    optimized_plan_graphviz: str | None
+    optimized_plan_pgjson: str | None
+    execution_plan_display: str | None
+
+
+@dataclass(frozen=True)
+class DeltaInputPin:
+    dataset_name: str
+    version: int | None
+    timestamp: str | None
+
+
+@dataclass(frozen=True)
+class DataFusionPlanBundle:
+    df: DataFrame
+    plan_fingerprint: str
+    artifacts: PlanArtifacts
+    delta_inputs: tuple[DeltaInputPin, ...]
+    required_udfs: tuple[str, ...]
+    required_rewrite_tags: tuple[str, ...]
+    plan_details: Mapping[str, object]
+```
+
+### Target files to modify
+
+- `src/datafusion_engine/runtime.py`
+  - Introduce a first-class `SessionRuntime` surface derived from the profile.
+  - Persist a settings snapshot from `information_schema.df_settings`.
+- `src/datafusion_engine/plan_bundle.py`
+  - Enrich the bundle with plan artifacts, runtime identity, Delta pins, and
+    required UDF/rewrite-tag fields.
+- `src/datafusion_engine/execution_helpers.py`
+  - Update plan and cache key derivations to include runtime identity and pins.
+- `src/engine/plan_cache.py`
+  - Expand cache keys beyond profile + Substrait hashes.
+- `src/datafusion_engine/diagnostics.py`
+  - Record bundle/runtime artifacts as first-class, queryable diagnostics.
+- `src/relspec/execution_plan.py`
+  - Bind plan signatures to enriched bundle identity (not just fingerprints).
+
+### Code and modules to delete
+
+- Display-string fallback fingerprinting once Substrait + settings snapshots
+  are required for plan identity.
+- Plan cache keys that ignore runtime identity, UDF identity, and Delta pins.
+
+### Implementation checklist
+
+- [x] Runtime profiles already enforce `information_schema=True`.
+- [ ] Introduce `SessionRuntime` and require it across planning boundaries.
+- [ ] Snapshot:
+  - [ ] `df_settings`,
+  - [ ] `udf_snapshot_hash`,
+  - [ ] `rewrite_tags`,
+  - [ ] enabled planners/rewrites.
+- [ ] Enrich `DataFusionPlanBundle` with:
+  - [ ] plan artifacts (display/graphviz/pgjson where available),
+  - [ ] runtime artifacts,
+  - [ ] Delta input pins,
+  - [ ] `required_udfs` and `required_rewrite_tags`.
+- [ ] Update plan signatures and cache keys to incorporate:
+  - [ ] plan fingerprint,
+  - [ ] runtime/session hash,
+  - [ ] UDF snapshot hash + rewrite tags,
+  - [ ] Delta pins.
+
+---
+
+## Scope 5 - Structured Lineage + Delta Scan Units as First-Class Nodes
+
+### Representative architectural patterns
+
+Lineage must be structured from the plan object, not parsed from display
+strings:
+
+```python
+from collections.abc import Iterable
+
+
+def iter_plan_nodes(plan: object) -> Iterable[object]:
+    stack = [plan]
+    while stack:
+        node = stack.pop()
+        yield node
+        inputs = getattr(node, "inputs", None)
+        if callable(inputs):
+            stack.extend(inputs())
+```
+
+Use Delta metadata and pruning policy to define deterministic scan units:
+
+```python
+from dataclasses import dataclass
+from pathlib import Path
+
+from storage.deltalake.file_index import build_delta_file_index
+from storage.deltalake.file_pruning import FilePruningPolicy, select_candidate_files
+
+
+@dataclass(frozen=True)
+class ScanUnit:
+    dataset_name: str
+    delta_version: int | None
+    candidate_files: tuple[Path, ...]
+    projected_columns: tuple[str, ...]
+    pushed_filters: tuple[str, ...]
+
+
+def plan_scan_unit(*, delta_table, lineage) -> ScanUnit:
+    index = build_delta_file_index(delta_table)
+    policy = FilePruningPolicy(partition_filters=[], stats_filters=[])
+    pruned = select_candidate_files(index, policy=policy)
+    return ScanUnit(
+        dataset_name=lineage.dataset_name,
+        delta_version=getattr(delta_table, "version", None),
+        candidate_files=tuple(pruned.candidate_paths),
+        projected_columns=lineage.projected_columns,
+        pushed_filters=lineage.pushed_filters,
+    )
+```
+
+### Target files to modify
+
+- `src/datafusion_engine/lineage_datafusion.py`
+  - Replace display-string parsing with structured traversal (`to_variant`,
+    `inputs`, and expression inspection where available).
+- `src/datafusion_engine/plan_udf_analysis.py`
+  - Replace display parsing with structured UDF extraction.
+- `src/datafusion_engine/view_registry_specs.py`
+  - Depend on structured lineage outputs (including required UDFs/tags).
+- `src/datafusion_engine/view_graph_registry.py`
+  - Require structured lineage and enriched bundles for artifact recording.
+- `src/relspec/inferred_deps.py`
+  - Derive required UDFs/tags and column dependencies from structured lineage.
+- `src/storage/deltalake/file_index.py`
+  - Ensure index outputs remain stable and compatible with pruning contracts.
+- `src/storage/deltalake/file_pruning.py`
+  - Provide a planning-grade pruning entrypoint for scan-unit construction.
+- `src/relspec/rustworkx_graph.py`
+  - Introduce scan-node types and scan-unit edges.
+- `src/relspec/execution_plan.py`
+  - Compile scan units and bind them into plan signatures and scheduling.
+
+### Code and modules to delete
+
+- Lineage and UDF extraction paths that parse `display_indent*()` output.
+
+### Implementation checklist
+
+- [ ] Implement structured logical-plan traversal and lineage extraction.
+- [ ] Emit lineage that includes:
+  - [ ] scans, joins, predicates, projections,
+  - [ ] required columns per dataset,
+  - [ ] required UDFs,
+  - [ ] required rewrite tags.
+- [ ] Introduce scan units with pinned Delta versions.
+- [ ] Derive scan units from lineage plus Delta metadata and pruning policy.
+- [ ] Bind scan units into plan signatures and cache keys.
+
+---
+
+## Scope 6 - Plan-Driven DAG, Hamilton Enforcement, and Diagnostics as Products
+
+### Representative architectural patterns
+
+Model scans and view computation as distinct node kinds, then reuse the already
+landed rustworkx reduction and critical-path artifacts on the unified graph:
+
+```python
+from dataclasses import dataclass
+
+import rustworkx as rx
+
+
+@dataclass(frozen=True)
+class TaskNode:
+    key: str
+    kind: str
+    view_name: str | None = None
+    dataset_name: str | None = None
+
+
+def build_task_graph(nodes: list[TaskNode], edges: list[tuple[int, int]]) -> rx.PyDiGraph:
+    graph = rx.PyDiGraph(multigraph=False, check_cycle=True)
+    graph.add_nodes_from(nodes)
+    graph.add_edges_from_no_data(edges)
+    return graph
+```
+
+Plan artifacts should be first-class Hamilton nodes with stable tagging, while
+UI identity remains stable and plan variability is pushed into tags:
 
 ```python
 from hamilton.function_modifiers import extract_fields, tag
 
 
-@tag(layer="plan", artifact="plan_diagnostics", kind="mapping")
+@tag(layer="plan", artifact="plan_artifacts", kind="mapping")
 @extract_fields(
-    plan_critical_path=tuple[str, ...],
-    plan_isolates=tuple[str, ...],
-    plan_reduction_node_map=dict,
+    plan_signature=str,
+    reduced_plan_signature=str,
+    critical_path_task_names=tuple[str, ...],
 )
-def plan_diagnostics(execution_plan) -> dict[str, object]:
-    diagnostics = execution_plan.diagnostics
+def plan_artifacts(execution_plan) -> dict[str, object]:
     return {
-        "plan_critical_path": tuple(diagnostics.critical_path or ()),
-        "plan_isolates": tuple(diagnostics.isolate_labels),
-        "plan_reduction_node_map": dict(diagnostics.node_map or {}),
+        "plan_signature": execution_plan.plan_signature,
+        "reduced_plan_signature": execution_plan.reduced_task_dependency_signature,
+        "critical_path_task_names": execution_plan.critical_path_task_names,
     }
-```
-
-Validation that is architectural (not ad hoc), using Hamilton validators:
-
-```python
-from hamilton.function_modifiers import check_output, tag
-
-
-@tag(layer="semantic", semantic_id="semantic.cpg_nodes_v1", kind="table")
-@check_output(importance="fail", allow_nans=False)
-def cpg_nodes(cpg_nodes_final):
-    return cpg_nodes_final
 ```
 
 ### Target files to modify
 
-- `src/hamilton_pipeline/modules/execution_plan.py`
-  - Introduce extracted plan diagnostics nodes (critical path, isolates,
-    reduction maps, schedule tables, and so on).
-  - Ensure plan artifacts are tagged consistently and include the plan signature.
-- `src/hamilton_pipeline/lifecycle.py`
-  - Prefer plan-artifact nodes as diagnostic sources where appropriate, and
-    keep hooks focused on run framing (run_id, timestamps, envelope metadata).
-- `src/hamilton_pipeline/modules/outputs.py`
-  - Expand validation beyond non-empty checks to include structural constraints
-    that match the semantic contract.
-- `src/hamilton_pipeline/semantic_registry.py`
-  - Upgrade registry compilation into a validator with explicit required-tag
-    enforcement for public semantic outputs.
-- `src/datafusion_engine/diagnostics.py`
-  - Add helpers to record plan-artifact nodes as first-class diagnostics
-    artifacts in a consistent schema.
-
-### Code and modules to delete
-
-- None immediately. (See deferred deletions at the end for hook cleanup once
-  plan artifacts fully subsume existing diagnostics hooks.)
-
-### Implementation checklist
-
-- [ ] Create plan-diagnostics nodes using `@extract_fields` so individual plan
-      artifacts are addressable nodes.
-- [ ] Ensure all plan artifacts are tagged with:
-  - [ ] `layer="plan"`,
-  - [ ] stable `artifact` identifiers,
-  - [ ] the plan signature where appropriate.
-- [ ] Strengthen semantic output validation with `@check_output` and/or
-      `@check_output_custom` where contracts are known.
-- [ ] Enforce required semantic tags via registry validation and fail fast on
-      malformed public outputs.
-
----
-
-## Scope 5 - UI/Telemetry Semantics that Scale (Stable DAG Names + Rich Tags)
-
-### Representative architectural patterns
-
-Keep DAG version identity stable while surfacing plan variability in tags:
-
-```python
-def ui_identity(config: dict[str, object], *, plan_signature: str) -> tuple[str, dict[str, str]]:
-    dag_name = str(config.get("hamilton_dag_name") or "codeintel_semantic_v1")
-    tags = {
-        "plan_signature": plan_signature,
-        "plan_task_count": str(config.get("plan_task_count", "")),
-        "plan_generation_count": str(config.get("plan_generation_count", "")),
-        "semantic_version": "v1",
-    }
-    return dag_name, tags
-```
-
-Governance-friendly capture defaults:
-
-```bash
-export HAMILTON_CAPTURE_DATA_STATISTICS=0
-export HAMILTON_MAX_LIST_LENGTH_CAPTURE=20
-export HAMILTON_MAX_DICT_LENGTH_CAPTURE=50
-```
-
-### Target files to modify
-
+- `src/relspec/rustworkx_graph.py`
+  - Extend node models and signatures to include scan units and bundle/runtime
+    artifacts as first-class nodes.
+- `src/relspec/execution_plan.py`
+  - Compile a unified scan + view DAG derived only from structured lineage,
+    scan units, and enriched plan bundles.
+- `src/relspec/rustworkx_schedule.py`
+  - Keep generation and ordering derived only from the reduced unified DAG.
+- `src/hamilton_pipeline/scheduling_hooks.py`
+  - Enforce plan-native admission and ordering without suppression comments.
+  - Emit explicit plan-vs-runtime drift artifacts.
 - `src/hamilton_pipeline/driver_factory.py`
-  - Stop encoding the plan signature into `dag_name`.
-  - Keep `dag_name` stable and push plan identity into tags.
-  - Enrich tracker tags with plan-level metadata (task counts, generation
-    counts, semantic version, and so on).
+  - Use either:
+    - local/remote executors, or
+    - an `ExecutionManager` profile for scan vs view routing (not both).
+  - Stop encoding plan signatures into `hamilton_dag_name`.
+- `src/hamilton_pipeline/modules/execution_plan.py`
+  - Promote plan artifacts (signatures, scans, lineage, schedule) to explicit
+    nodes via `@extract_fields`.
 - `src/hamilton_pipeline/semantic_registry.py`
-  - Align semantic registry payloads with the UI-facing tag taxonomy.
+  - Enforce required tags for public semantic outputs.
 - `src/datafusion_engine/diagnostics.py`
-  - Ensure run-level artifacts include tracker-compatible plan metadata.
+  - Record plan/runtime/scan artifacts and Hamilton events as queryable tables.
 
 ### Code and modules to delete
 
-- None in this scope.
+- `src/hamilton_pipeline/driver_factory.py:config_fingerprint(...)`
+- `src/relspec/execution_plan.py:bottom_level_costs(...)` once replaced by
+  DAG-kernel-native criticality and/or scan-aware cost models.
+- Plan diagnostics duplication once plan artifacts are fully node-driven.
+- Plan signatures injected into `dag_name`.
 
 ### Implementation checklist
 
-- [ ] Make `dag_name` stable and semantic-version scoped.
-- [ ] Push plan variability into tags (plan signature, counts, fingerprints).
-- [ ] Ensure tracker configuration is governance-friendly by default and easy
-      to clamp further in production environments.
-- [ ] Validate that registry payloads and tracker tags are aligned (so the UI
-      becomes a reliable catalog, not just a telemetry stream).
+- [x] rustworkx reduction + critical-path artifacts are already plan-native.
+- [ ] Unify the DAG around scan units plus plan bundles (scan + view nodes).
+- [ ] Ensure all edges come from structured lineage and scan planning only.
+- [x] Promote plan artifacts to Hamilton nodes via `@extract_fields`.
+- [x] Enforce required semantic tags in registry compilation.
+- [x] Remove suppression comments by structurally routing hook inputs.
+- [ ] Introduce an `ExecutionManager` routing profile for scan-heavy tasks.
+- [x] Stabilize `dag_name` and move plan identity into tags.
+- [ ] Persist plan artifacts and plan events as Delta-backed diagnostics tables.
 
 ---
 
-## Scope 6 - Deferred Deletions and Cleanup (Only After Scopes 1-5)
+## Scope 7 - Deferred Deletions and Cleanup (Only After Scopes 1-6)
 
-The following deletions should be performed only after the earlier scopes
-are complete and validated end-to-end.
+The following deletions should be performed only after the earlier scopes are
+complete and validated end-to-end under the DataFusion + Delta architecture.
 
 ### Candidate deletions
 
-- `src/hamilton_pipeline/driver_factory.py:config_fingerprint(...)`
-  - Now unused after plan-aware caching keys.
-- `src/relspec/execution_plan.py:bottom_level_costs(...)`
-  - Replace with rustworkx DAG-kernel-native criticality artifacts.
-- Diagnostics duplication once plan artifacts are fully first-class:
-  - `PlanDiagnosticsHook` can potentially be reduced to a thin run envelope
-    (or removed) once plan diagnostics are exclusively node-driven.
-- Any local recomputation of plan diagnostics that becomes redundant once
-  reduced-graph and critical-path artifacts are plan-native.
+- Display-string lineage and UDF extraction helpers.
+- Legacy plan fingerprint fallbacks that ignore runtime identity.
+- Any plan compilation paths that accept builders without emitting a canonical
+  enriched plan bundle.
+- Hamilton hooks that duplicate node-driven plan artifacts once those nodes
+  exist and are validated.
 
 ### Deferred deletion checklist
 

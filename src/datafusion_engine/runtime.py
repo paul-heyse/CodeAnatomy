@@ -2519,6 +2519,98 @@ class _RuntimeDiagnosticsMixin:
 
 
 @dataclass(frozen=True)
+class SessionRuntime:
+    """Authoritative runtime surface for planning and execution."""
+
+    ctx: SessionContext
+    profile: DataFusionRuntimeProfile
+    udf_snapshot_hash: str
+    udf_rewrite_tags: tuple[str, ...]
+    domain_planner_names: tuple[str, ...]
+    udf_snapshot: Mapping[str, object]
+    df_settings: Mapping[str, str]
+
+
+_SESSION_RUNTIME_CACHE: dict[str, SessionRuntime] = {}
+
+
+def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str, str]:
+    """Build a name/value settings mapping from introspection rows.
+
+    Parameters
+    ----------
+    rows
+        Settings rows from information_schema snapshots.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of setting names to stringified values.
+    """
+    mapping: dict[str, str] = {}
+    for row in rows:
+        name = row.get("name") or row.get("setting_name") or row.get("key")
+        if name is None:
+            continue
+        value = row.get("value")
+        mapping[str(name)] = "" if value is None else str(value)
+    return mapping
+
+
+def build_session_runtime(
+    profile: DataFusionRuntimeProfile, *, use_cache: bool = True
+) -> SessionRuntime:
+    """Build and cache a planning-ready SessionRuntime for a profile.
+
+    Parameters
+    ----------
+    profile
+        DataFusion runtime profile to materialize.
+    use_cache
+        When ``True``, cache the runtime by the profile cache key.
+
+    Returns
+    -------
+    SessionRuntime
+        Planning-ready runtime with UDF identity and settings snapshots.
+    """
+    cache_key = profile.context_cache_key()
+    cached = _SESSION_RUNTIME_CACHE.get(cache_key)
+    if cached is not None and use_cache:
+        return cached
+    ctx = profile.session_context()
+    from datafusion_engine.domain_planner import domain_planner_names_from_snapshot
+    from datafusion_engine.udf_catalog import rewrite_tag_index
+    from datafusion_engine.udf_runtime import rust_udf_snapshot, rust_udf_snapshot_hash
+
+    snapshot = rust_udf_snapshot(ctx)
+    snapshot_hash = rust_udf_snapshot_hash(snapshot)
+    tag_index = rewrite_tag_index(snapshot)
+    rewrite_tags = tuple(sorted(tag_index))
+    planner_names = domain_planner_names_from_snapshot(snapshot)
+    df_settings: Mapping[str, str]
+    try:
+        from datafusion_engine.schema_introspection import SchemaIntrospector
+
+        introspector = SchemaIntrospector(ctx)
+        df_settings = _settings_rows_to_mapping(introspector.settings_snapshot())
+    except (RuntimeError, TypeError, ValueError):
+        df_settings = {}
+    runtime = SessionRuntime(
+        ctx=ctx,
+        profile=profile,
+        udf_snapshot_hash=snapshot_hash,
+        udf_rewrite_tags=rewrite_tags,
+        domain_planner_names=planner_names,
+        udf_snapshot=snapshot,
+        df_settings=df_settings,
+    )
+    if use_cache:
+        _SESSION_RUNTIME_CACHE[cache_key] = runtime
+    return runtime
+
+
+@dataclass(frozen=True)
 class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     """DataFusion runtime configuration."""
 
@@ -2885,6 +2977,16 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         self._cache_context(ctx)
         return ctx
 
+    def session_runtime(self) -> SessionRuntime:
+        """Return a planning-ready SessionRuntime for the profile.
+
+        Returns
+        -------
+        SessionRuntime
+            Planning-ready session runtime.
+        """
+        return build_session_runtime(self, use_cache=True)
+
     def ephemeral_context(self) -> SessionContext:
         """Return a non-cached SessionContext configured from the profile.
 
@@ -2957,7 +3059,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             "errors": errors,
         }
 
-    def validate_named_args_extension_parity(self) -> dict[str, object]:
+    def _validate_named_args_extension_parity(self) -> dict[str, object]:
         """Validate that named-arg support aligns with extension capabilities.
 
         This method checks whether the Python-side configuration for named arguments
@@ -4452,7 +4554,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         )
 
     def _record_extension_parity_validation(self, ctx: SessionContext) -> None:
-        payload = dict(self.validate_named_args_extension_parity())
+        payload = dict(self._validate_named_args_extension_parity())
         payload["async_udf_policy"] = self._validate_async_udf_policy()
         payload["udf_info_schema_parity"] = self._validate_udf_info_schema_parity(ctx)
         if self.diagnostics_sink is None:

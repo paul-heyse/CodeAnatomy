@@ -17,6 +17,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.streaming import to_reader
 from engine.plan_cache import PlanCacheKey
 from schema_spec.policies import DataFusionWritePolicy
+from serde_msgspec import dumps_msgpack
 
 try:
     import pyarrow.substrait as pa_substrait
@@ -66,6 +67,29 @@ def plan_fingerprint_from_bundle(
     return hashlib.sha256(b"empty_plan").hexdigest()
 
 
+def _hash_payload(payload: object) -> str:
+    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
+
+
+def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = [
+        {
+            "dataset_name": pin.dataset_name,
+            "version": pin.version,
+            "timestamp": pin.timestamp,
+        }
+        for pin in bundle.delta_inputs
+    ]
+    payloads.sort(
+        key=lambda row: (
+            str(row["dataset_name"]),
+            row["version"] or -1,
+            row["timestamp"] or "",
+        )
+    )
+    return payloads
+
+
 def plan_bundle_cache_key(
     *,
     bundle: DataFusionPlanBundle,
@@ -88,9 +112,21 @@ def plan_bundle_cache_key(
     if bundle.substrait_bytes is None:
         return None
     substrait_hash = hashlib.sha256(bundle.substrait_bytes).hexdigest()
+    required_udfs_hash = _hash_payload(tuple(sorted(bundle.required_udfs)))
+    required_tags_hash = _hash_payload(tuple(sorted(bundle.required_rewrite_tags)))
+    settings_items = tuple(sorted(bundle.artifacts.df_settings.items()))
+    settings_hash = _hash_payload(settings_items)
+    delta_inputs_hash = _hash_payload(_delta_inputs_payload(bundle))
     return PlanCacheKey(
         profile_hash=profile_hash,
         substrait_hash=substrait_hash,
+        plan_fingerprint=bundle.plan_fingerprint,
+        udf_snapshot_hash=bundle.artifacts.udf_snapshot_hash,
+        function_registry_hash=bundle.artifacts.function_registry_hash,
+        required_udfs_hash=required_udfs_hash,
+        required_rewrite_tags_hash=required_tags_hash,
+        settings_hash=settings_hash,
+        delta_inputs_hash=delta_inputs_hash,
     )
 
 

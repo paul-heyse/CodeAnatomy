@@ -147,6 +147,8 @@ class RuntimeArtifacts:
         Execution results keyed by dataset name.
     execution_order : list[str]
         Order in which tasks were executed.
+    scan_override_hash : str | None
+        Stable identity hash for scan-unit overrides applied to the session.
     rulepack_param_values : Mapping[str, object]
         Parameter values for parameterized rulepack execution.
     """
@@ -158,6 +160,7 @@ class RuntimeArtifacts:
     table_metadata: dict[str, MaterializedTable] = field(default_factory=dict)
     execution_artifacts: dict[str, ExecutionArtifact] = field(default_factory=dict)
     execution_order: list[str] = field(default_factory=list)
+    scan_override_hash: str | None = None
     rulepack_param_values: Mapping[str, object] = field(default_factory=dict)
     diskcache_profile: DiskCacheProfile | None = None
     _diskcache: Cache | FanoutCache | None = field(default=None, init=False, repr=False)

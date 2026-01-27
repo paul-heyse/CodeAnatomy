@@ -17,7 +17,7 @@ from cpg.kind_catalog import (
     EDGE_KIND_PY_IMPORTS_SYMBOL,
     EDGE_KIND_PY_REFERENCES_SYMBOL,
 )
-from datafusion_ext import stable_id
+from datafusion_ext import stable_id_parts
 
 
 def build_rel_name_symbol_df(
@@ -202,7 +202,8 @@ def build_rel_callsite_qname_df(
     """
     source = ctx.table("callsite_qname_candidates_v1")
     qname = col("qname")
-    qname_id = stable_id("qname", qname)
+    null_utf8 = f.arrow_cast(lit(None), lit("Utf8"))
+    qname_id = f.when(qname.is_not_null(), stable_id_parts("qname", qname)).otherwise(null_utf8)
     return source.select(
         col("call_id").alias("call_id"),
         qname_id.alias("qname_id"),

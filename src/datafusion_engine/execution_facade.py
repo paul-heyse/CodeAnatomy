@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from datafusion import DataFrame, SessionContext
 
 from datafusion_engine.diagnostics import DiagnosticsRecorder, recorder_for_profile
+from datafusion_engine.execution_helpers import replay_substrait_bytes
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.plan_bundle import (
     DataFusionPlanBundle,
@@ -34,6 +35,50 @@ if TYPE_CHECKING:
 
 
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
+
+
+def _validate_required_rewrite_tags(
+    snapshot: Mapping[str, object],
+    *,
+    required_tags: tuple[str, ...],
+) -> None:
+    if not required_tags:
+        return
+    from datafusion_engine.udf_catalog import rewrite_tag_index
+
+    tag_index = rewrite_tag_index(snapshot)
+    missing = [tag for tag in required_tags if tag not in tag_index]
+    if missing:
+        msg = f"Missing required rewrite tags at execution time: {sorted(missing)}."
+        raise ValueError(msg)
+
+
+def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanBundle) -> None:
+    """Fail fast when the execution UDF platform diverges from the plan bundle.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the execution UDF snapshot hash does not match the plan bundle.
+    """
+    from datafusion_engine.udf_runtime import (
+        rust_udf_snapshot,
+        rust_udf_snapshot_hash,
+        validate_required_udfs,
+    )
+
+    snapshot = rust_udf_snapshot(ctx)
+    snapshot_hash = rust_udf_snapshot_hash(snapshot)
+    planned_hash = bundle.artifacts.udf_snapshot_hash
+    if snapshot_hash != planned_hash:
+        msg = (
+            "UDF snapshot mismatch between planning and execution. "
+            f"planned={planned_hash} execution={snapshot_hash}"
+        )
+        raise RuntimeError(msg)
+    if bundle.required_udfs:
+        validate_required_udfs(snapshot, required=bundle.required_udfs)
+    _validate_required_rewrite_tags(snapshot, required_tags=bundle.required_rewrite_tags)
 
 
 class ExecutionResultKind(StrEnum):
@@ -336,6 +381,23 @@ class DataFusionExecutionFacade:
             compute_substrait=True,
         )
 
+    def execute_plan_bundle(self, bundle: DataFusionPlanBundle) -> ExecutionResult:
+        """Execute a plan bundle with UDF compatibility and Substrait replay.
+
+        Returns
+        -------
+        ExecutionResult
+            Unified execution result for the plan bundle.
+        """
+        _ensure_udf_compatibility(self.ctx, bundle)
+        df = bundle.df
+        if bundle.substrait_bytes is not None:
+            try:
+                df = replay_substrait_bytes(self.ctx, bundle.substrait_bytes)
+            except (RuntimeError, TypeError, ValueError):
+                df = bundle.df
+        return ExecutionResult.from_dataframe(df, plan_bundle=bundle)
+
     def execute_builder(
         self,
         builder: DataFrameBuilder,
@@ -366,7 +428,7 @@ class DataFusionExecutionFacade:
             compute_execution_plan=compute_execution_plan,
             compute_substrait=compute_substrait,
         )
-        return ExecutionResult.from_dataframe(df, plan_bundle=bundle)
+        return self.execute_plan_bundle(bundle)
 
     def execute_dataframe(
         self,
@@ -397,7 +459,7 @@ class DataFusionExecutionFacade:
             compute_execution_plan=compute_execution_plan,
             compute_substrait=compute_substrait,
         )
-        return ExecutionResult.from_dataframe(df, plan_bundle=bundle)
+        return self.execute_plan_bundle(bundle)
 
     def write(
         self,

@@ -17,12 +17,13 @@ use crate::loader::PluginHandle;
 
 impl PluginHandle {
     fn require_capability(&self, mask: u64, label: &str) -> Result<()> {
-        if (self.manifest.capabilities & mask) != 0 {
+        let manifest = self.manifest();
+        if (manifest.capabilities & mask) != 0 {
             return Ok(());
         }
         Err(DataFusionError::Plan(format!(
             "Plugin {name} missing capability {label}",
-            name = self.manifest.plugin_name
+            name = manifest.plugin_name
         )))
     }
 

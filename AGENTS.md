@@ -26,29 +26,9 @@
 
 ---
 
-## Agent Operating Protocol (TL;DR)
 
-**You are an autonomous Python engineer. Follow this sequence for *every* change:**
 
-1) **Load context fast**
-   - Bootstrap environment and run local checks:
-    ```bash
-    scripts/bootstrap_codex.sh
-    ```
-    then run "uv sync"
-
-2) **Implement**
-   - Code to the typed API sketch.
-   - Keep functions small; separate I/O from pure logic; prefer composition over inheritance.
-
-3) **Validate quality gates locally**
-  ```bash
-  - The key quality gates that you should check are in order:
-    - `uv run ruff check --fix` (lint + autofix for style/import issues).
-    - `uv run pyrefly check` (additional type and contract validation).
-    - `uv run pyright --warnings --pythonversion=3.13` (strict type checking with warnings).
-
-4) For all python code run via the terminal you must use "uv run". Failing to use "uv run" when running python commands will result in error messages about missing module imports due to failure to properly utilize the uv based environment
+1) For all python code run via the terminal you must use "uv run". Failing to use "uv run" when running python commands will result in error messages about missing module imports due to failure to properly utilize the uv based environment
 
 
 

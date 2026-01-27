@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from datafusion_engine.lineage_datafusion import ScanLineage
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
     from datafusion_engine.schema_contracts import SchemaContract
     from datafusion_engine.view_graph_registry import ViewNode
@@ -40,6 +41,10 @@ class InferredDeps:
         Stable hash for caching and comparison.
     required_udfs : tuple[str, ...]
         Required UDF names inferred from the expression.
+    required_rewrite_tags : tuple[str, ...]
+        Required rewrite tags derived from referenced UDFs.
+    scans : tuple[ScanLineage, ...]
+        Structured scan lineage entries for scan planning.
     """
 
     task_name: str
@@ -50,6 +55,8 @@ class InferredDeps:
     required_metadata: Mapping[str, tuple[tuple[bytes, bytes], ...]] = field(default_factory=dict)
     plan_fingerprint: str = ""
     required_udfs: tuple[str, ...] = ()
+    required_rewrite_tags: tuple[str, ...] = ()
+    scans: tuple[ScanLineage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,7 +108,11 @@ def infer_deps_from_plan_bundle(
     plan_bundle = inputs.plan_bundle
 
     # Extract lineage from the optimized logical plan
-    lineage = extract_lineage(plan_bundle.optimized_logical_plan)
+    lineage_snapshot = inputs.snapshot or plan_bundle.artifacts.udf_snapshot
+    lineage = extract_lineage(
+        plan_bundle.optimized_logical_plan,
+        udf_snapshot=lineage_snapshot,
+    )
 
     # Map lineage to InferredDeps format
     tables = lineage.referenced_tables
@@ -115,6 +126,10 @@ def infer_deps_from_plan_bundle(
     resolved_udfs: tuple[str, ...] = ()
     if inputs.required_udfs is not None:
         resolved_udfs = tuple(inputs.required_udfs)
+    elif plan_bundle.required_udfs:
+        resolved_udfs = plan_bundle.required_udfs
+    else:
+        resolved_udfs = lineage.required_udfs
 
     if inputs.snapshot is not None and resolved_udfs:
         from datafusion_engine.udf_runtime import validate_required_udfs
@@ -133,6 +148,8 @@ def infer_deps_from_plan_bundle(
         required_metadata=required_metadata,
         plan_fingerprint=fingerprint,
         required_udfs=resolved_udfs,
+        required_rewrite_tags=lineage.required_rewrite_tags,
+        scans=lineage.scans,
     )
 
 

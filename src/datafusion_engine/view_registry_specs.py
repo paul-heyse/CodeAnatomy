@@ -19,7 +19,6 @@ from arrowdsl.schema.schema import SchemaMetadataSpec
 from cpg.specs import TaskIdentity
 from datafusion_engine.lineage_datafusion import extract_lineage
 from datafusion_engine.plan_bundle import build_plan_bundle
-from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
 from datafusion_engine.schema_contracts import SchemaContract
 from datafusion_engine.udf_runtime import udf_names_from_snapshot, validate_rust_udf_snapshot
 from datafusion_engine.view_graph_registry import ViewNode
@@ -99,7 +98,13 @@ def _required_udfs_from_plan_bundle(
     bundle: DataFusionPlanBundle,
     snapshot: Mapping[str, object],
 ) -> tuple[str, ...]:
-    required = extract_udfs_from_plan_bundle(bundle)
+    required = bundle.required_udfs
+    if not required and bundle.optimized_logical_plan is not None:
+        lineage = extract_lineage(
+            bundle.optimized_logical_plan,
+            udf_snapshot=bundle.artifacts.udf_snapshot,
+        )
+        required = lineage.required_udfs
     if not required:
         return ()
     snapshot_names = udf_names_from_snapshot(snapshot)
@@ -118,7 +123,10 @@ def _bundle_deps_and_udfs(
     df = builder(ctx)
     bundle = build_plan_bundle(ctx, df, compute_execution_plan=False)
     try:
-        lineage = extract_lineage(bundle.optimized_logical_plan)
+        lineage = extract_lineage(
+            bundle.optimized_logical_plan,
+            udf_snapshot=bundle.artifacts.udf_snapshot,
+        )
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = f"Failed to extract lineage for view {label!r}."
         raise ValueError(msg) from exc

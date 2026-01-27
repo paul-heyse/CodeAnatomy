@@ -52,6 +52,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
     hamilton_adapters = None
 
+_DEFAULT_DAG_NAME = "codeintel::semantic_v1"
+_SEMANTIC_VERSION = "v1"
+
 
 def default_modules() -> list[ModuleType]:
     """Return the default Hamilton module set for the pipeline.
@@ -67,8 +70,9 @@ def default_modules() -> list[ModuleType]:
 def config_fingerprint(config: Mapping[str, JsonValue]) -> str:
     """Compute a stable config fingerprint for driver caching.
 
-    Hamilton build-time config is immutable after build; if config changes, rebuild a new driver.
-    The Hamilton docs recommend a small driver-factory that caches by config fingerprint.
+    Hamilton build-time config is immutable after build; if config changes,
+    rebuild a new driver. The Hamilton docs recommend a small driver-factory
+    that caches by config fingerprint.
     :contentReference[oaicite:2]{index=2}
 
     Returns
@@ -198,7 +202,10 @@ def _task_name_list_from_config(
     return tuple(sorted(set(names)))
 
 
-def _compile_plan(view_ctx: ViewGraphContext, config: Mapping[str, JsonValue]) -> ExecutionPlan:
+def _compile_plan(
+    view_ctx: ViewGraphContext,
+    config: Mapping[str, JsonValue],
+) -> ExecutionPlan:
     from relspec.execution_plan import ExecutionPlanRequest, compile_execution_plan
 
     requested = _task_name_list_from_config(config, key="plan_requested_tasks")
@@ -207,6 +214,7 @@ def _compile_plan(view_ctx: ViewGraphContext, config: Mapping[str, JsonValue]) -
     request = ExecutionPlanRequest(
         view_nodes=view_ctx.view_nodes,
         snapshot=view_ctx.snapshot,
+        runtime_profile=view_ctx.profile,
         requested_task_names=requested,
         impacted_task_names=impacted,
         allow_partial=allow_partial,
@@ -274,13 +282,17 @@ def _active_tasks_from_incremental_diff(
     rebuild_active = set(rebuild) & active
     if not rebuild_active:
         return active
-    impacted = downstream_task_closure(plan.task_graph, rebuild_active) & active
+    impacted = downstream_task_closure(plan.task_graph, rebuild_active)
+    impacted &= active
     if not impacted:
         return active
-    impacted_with_deps = upstream_task_closure(plan.task_graph, impacted) & active
+    impacted_with_deps = upstream_task_closure(plan.task_graph, impacted)
+    impacted_with_deps &= active
     if not plan.requested_task_names:
         return impacted_with_deps
-    requested_anchor = upstream_task_closure(plan.task_graph, plan.requested_task_names) & active
+    requested_tasks = plan.requested_task_names
+    requested_anchor = upstream_task_closure(plan.task_graph, requested_tasks)
+    requested_anchor &= active
     return impacted_with_deps | requested_anchor
 
 
@@ -290,7 +302,11 @@ def _plan_with_incremental_pruning(
     plan: ExecutionPlan,
     config: Mapping[str, JsonValue],
 ) -> ExecutionPlan:
-    diff, state_dir = _precompute_incremental_diff(view_ctx=view_ctx, plan=plan, config=config)
+    diff, state_dir = _precompute_incremental_diff(
+        view_ctx=view_ctx,
+        plan=plan,
+        config=config,
+    )
     if diff is None and state_dir is None:
         return plan
     plan_with_diff = replace(
@@ -300,12 +316,18 @@ def _plan_with_incremental_pruning(
     )
     if diff is None:
         return plan_with_diff
-    active_from_diff = _active_tasks_from_incremental_diff(plan=plan_with_diff, diff=diff)
+    active_from_diff = _active_tasks_from_incremental_diff(
+        plan=plan_with_diff,
+        diff=diff,
+    )
     if active_from_diff == set(plan_with_diff.active_tasks):
         return plan_with_diff
     from relspec.execution_plan import prune_execution_plan
 
-    return prune_execution_plan(plan_with_diff, active_tasks=active_from_diff)
+    return prune_execution_plan(
+        plan_with_diff,
+        active_tasks=active_from_diff,
+    )
 
 
 def _maybe_build_tracker_adapter(
@@ -314,7 +336,12 @@ def _maybe_build_tracker_adapter(
     """Build an optional Hamilton UI tracker adapter.
 
     Docs show:
-      tracker = adapters.HamiltonTracker(project_id=..., username=..., dag_name=..., tags=...)
+      tracker = adapters.HamiltonTracker(
+          project_id=...,
+          username=...,
+          dag_name=...,
+          tags=...,
+      )
       Builder().with_modules(...).with_config(...).with_adapters(tracker).build()
       :contentReference[oaicite:3]{index=3}
 
@@ -380,14 +407,28 @@ def _maybe_build_tracker_adapter(
 def _with_graph_tags(
     config: Mapping[str, JsonValue],
     *,
-    graph_signature: str,
+    plan: ExecutionPlan,
 ) -> dict[str, JsonValue]:
     config_payload = dict(config)
-    config_payload.setdefault("hamilton_dag_name", f"codeintel_{graph_signature}")
+    dag_name_value = config_payload.get("hamilton_dag_name")
+    dag_name = (
+        dag_name_value if isinstance(dag_name_value, str) and dag_name_value else _DEFAULT_DAG_NAME
+    )
+    config_payload["hamilton_dag_name"] = dag_name
     tags_value = config_payload.get("hamilton_tags")
-    merged_tags: dict[str, str] = {"plan_signature": graph_signature}
+    merged_tags: dict[str, str] = {}
     if isinstance(tags_value, Mapping):
         merged_tags.update({str(k): str(v) for k, v in tags_value.items()})
+    merged_tags["plan_signature"] = plan.plan_signature
+    merged_tags["reduced_plan_signature"] = plan.reduced_task_dependency_signature
+    merged_tags["task_dependency_signature"] = plan.task_dependency_signature
+    merged_tags["plan_task_count"] = str(len(plan.active_tasks))
+    merged_tags["plan_generation_count"] = str(len(plan.task_schedule.generations))
+    merged_tags["plan_reduction_edge_count"] = str(plan.reduction_edge_count)
+    merged_tags["plan_reduction_removed_edge_count"] = str(plan.reduction_removed_edge_count)
+    merged_tags["semantic_version"] = _SEMANTIC_VERSION
+    if plan.critical_path_length_weighted is not None:
+        merged_tags["plan_critical_path_length_weighted"] = str(plan.critical_path_length_weighted)
     config_payload["hamilton_tags"] = merged_tags
     return config_payload
 
@@ -414,11 +455,12 @@ def _apply_dynamic_execution(
     enable_submission_hook = bool(config.get("enable_plan_task_submission_hook", True))
     enable_grouping_hook = bool(config.get("enable_plan_task_grouping_hook", True))
     enforce_submission = bool(config.get("enforce_plan_task_submission", True))
+    remote_executor = executors.MultiProcessingExecutor(max_tasks=max_tasks)
 
     dynamic_builder = (
         builder.enable_dynamic_execution(allow_experimental_mode=True)
         .with_local_executor(executors.SynchronousLocalTaskExecutor())
-        .with_remote_executor(executors.MultiProcessingExecutor(max_tasks=max_tasks))
+        .with_remote_executor(remote_executor)
         .with_grouping_strategy(plan_grouping_strategy(plan))
     )
     if enable_submission_hook:
@@ -542,15 +584,18 @@ def _cache_policy_profile(config: Mapping[str, JsonValue]) -> CachePolicyProfile
     if profile_name == "aggressive":
         default_loader_behavior = "default"
         default_saver_behavior = "default"
-    default_behavior = (
-        _cache_behavior_override(config, "cache_default_behavior") or default_behavior
+    default_override = _cache_behavior_override(config, "cache_default_behavior")
+    if default_override is not None:
+        default_behavior = default_override
+    loader_override = _cache_behavior_override(
+        config,
+        "cache_default_loader_behavior",
     )
-    default_loader_behavior = (
-        _cache_behavior_override(config, "cache_default_loader_behavior") or default_loader_behavior
-    )
-    default_saver_behavior = (
-        _cache_behavior_override(config, "cache_default_saver_behavior") or default_saver_behavior
-    )
+    if loader_override is not None:
+        default_loader_behavior = loader_override
+    saver_override = _cache_behavior_override(config, "cache_default_saver_behavior")
+    if saver_override is not None:
+        default_saver_behavior = saver_override
     log_to_file_value = config.get("cache_log_to_file")
     log_to_file = log_to_file_value if isinstance(log_to_file_value, bool) else True
     resolved_name = profile_name or "strict_causal"
@@ -627,7 +672,7 @@ def build_driver(
       - enable_dynamic_execution: bool (optional)
       - cache_path: str | None
       - cache_opt_in: bool (if True, default_behavior="disable")
-      - enable_hamilton_tracker + tracker config keys
+      - enable_hamilton_tracker and tracker config keys
 
     Returns
     -------
@@ -636,7 +681,10 @@ def build_driver(
     """
     modules = list(modules) if modules is not None else default_modules()
     resolved_view_ctx = view_ctx or _view_graph_context(config)
-    resolved_plan = plan or _compile_plan(resolved_view_ctx, config)
+    resolved_plan = plan or _compile_plan(
+        resolved_view_ctx,
+        config,
+    )
     if plan is None:
         resolved_plan = _plan_with_incremental_pruning(
             view_ctx=resolved_view_ctx,
@@ -645,21 +693,29 @@ def build_driver(
         )
     modules.append(build_execution_plan_module(resolved_plan))
     modules.append(
-        build_task_execution_module(plan=resolved_plan, options=TaskExecutionModuleOptions())
+        build_task_execution_module(
+            plan=resolved_plan,
+            options=TaskExecutionModuleOptions(),
+        )
     )
 
-    config_payload = _with_graph_tags(config, graph_signature=resolved_plan.plan_signature)
-    config_payload.setdefault("runtime_profile_name_override", _runtime_profile_name(config))
+    config_payload = _with_graph_tags(config, plan=resolved_plan)
+    config_payload.setdefault(
+        "runtime_profile_name_override",
+        _runtime_profile_name(config),
+    )
     determinism_override = _determinism_override(config)
     if determinism_override is not None:
-        config_payload.setdefault("determinism_override_override", determinism_override.value)
+        config_payload.setdefault(
+            "determinism_override_override",
+            determinism_override.value,
+        )
 
     diagnostics = DiagnosticsCollector()
     set_hamilton_diagnostics_collector(diagnostics)
 
-    builder = (
-        driver.Builder().allow_module_overrides().with_modules(*modules).with_config(config_payload)
-    )
+    builder = driver.Builder().allow_module_overrides()
+    builder = builder.with_modules(*modules).with_config(config_payload)
     builder = _apply_dynamic_execution(
         builder,
         config=config_payload,
@@ -690,7 +746,9 @@ def build_driver(
     cache_lineage_hook: CacheLineageHook | None = None
     cache_path = config_payload.get("cache_path")
     if isinstance(cache_path, str) and cache_path:
-        from hamilton_pipeline.cache_lineage import CacheLineageHook as _CacheLineageHook
+        from hamilton_pipeline.cache_lineage import (
+            CacheLineageHook as _CacheLineageHook,
+        )
 
         cache_lineage_hook = _CacheLineageHook(
             profile=resolved_view_ctx.profile,
@@ -710,7 +768,8 @@ def _relation_output_schema(session: SessionContext) -> SchemaLike:
     if not session.table_exist(RELATION_OUTPUT_NAME):
         msg = f"Relation output view {RELATION_OUTPUT_NAME!r} is not registered."
         raise ValueError(msg)
-    return cast("SchemaLike", session.table(RELATION_OUTPUT_NAME).schema())
+    schema = session.table(RELATION_OUTPUT_NAME).schema()
+    return cast("SchemaLike", schema)
 
 
 @dataclass
@@ -718,12 +777,13 @@ class DriverFactory:
     """
     Caches built Hamilton Drivers by plan-aware fingerprint.
 
-    Use this if you're embedding the pipeline into a service where config changes
+    Use this when embedding the pipeline into a service where config changes
     are relatively infrequent but executions are frequent.
     """
 
     modules: Sequence[ModuleType] | None = None
-    _cache: dict[str, driver.Driver] = field(default_factory=dict)  # fingerprint -> Driver
+    # fingerprint -> driver.Driver
+    _cache: dict[str, driver.Driver] = field(default_factory=dict)
 
     def get(self, config: Mapping[str, JsonValue]) -> driver.Driver:
         """Return a cached driver for the given config.
@@ -735,8 +795,15 @@ class DriverFactory:
         """
         view_ctx = _view_graph_context(config)
         plan = _compile_plan(view_ctx, config)
-        plan = _plan_with_incremental_pruning(view_ctx=view_ctx, plan=plan, config=config)
-        key = driver_cache_key(config, plan_signature=plan.plan_signature)
+        plan = _plan_with_incremental_pruning(
+            view_ctx=view_ctx,
+            plan=plan,
+            config=config,
+        )
+        key = driver_cache_key(
+            config,
+            plan_signature=plan.plan_signature,
+        )
         cached = self._cache.get(key)
         if cached is None:
             cached = build_driver(

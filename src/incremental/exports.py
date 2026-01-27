@@ -12,7 +12,7 @@ from datafusion import functions as f
 from arrowdsl.core.interop import TableLike, coerce_table_like
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
-from datafusion_ext import prefixed_hash64
+from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
 from incremental.registry_specs import dataset_schema
 from incremental.runtime import IncrementalRuntime, TempTableRegistry
 

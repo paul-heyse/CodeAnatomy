@@ -1927,9 +1927,12 @@ impl ScalarUDFImpl for StableHash128Udf {
     syntax_example = "prefixed_hash64(prefix, value)",
     argument(
         name = "prefix",
-        description = "Namespace prefix to prepend to the hash."
+        description = "String namespace prefix to prepend to the hash."
     ),
-    standard_argument(name = "value", prefix = "String")
+    argument(
+        name = "value",
+        description = "String value to hash."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct PrefixedHash64Udf {

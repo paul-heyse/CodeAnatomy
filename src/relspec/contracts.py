@@ -6,7 +6,7 @@ from functools import cache
 from typing import Final
 
 from arrow_utils.core.ordering import OrderingLevel
-from arrow_utils.schema.metadata import (
+from datafusion_engine.arrow_schema.metadata import (
     SchemaMetadataSpec,
     merge_metadata_specs,
     ordering_metadata_spec,

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from arrow_utils.core.interop import TableLike
-from arrow_utils.schema.dictionary import normalize_dictionaries
+from datafusion_engine.arrow_interop import TableLike
+from datafusion_engine.arrow_schema.dictionary import normalize_dictionaries
 
 
 @dataclass(frozen=True)

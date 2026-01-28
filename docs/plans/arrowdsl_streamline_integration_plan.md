@@ -153,7 +153,7 @@ def payload_hash(payload: Mapping[str, object], schema: pa.Schema) -> str:
 
 **Completed work**
 - Added `src/storage/ipc.py` with IPC + payload hashing API.
-- Updated all imports to use `storage.ipc`.
+- Updated all imports to use `storage.ipc_utils`.
 - Deleted `src/arrowdsl/io/ipc.py` and `src/arrowdsl/io/__init__.py`.
 
 ---

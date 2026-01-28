@@ -12,23 +12,23 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pyarrow.types as patypes
 
-from arrow_utils.core.interop import (
+from arrow_utils.core.array_iter import iter_array_values
+from core_types import JsonDict, JsonValue, PathLike, ensure_path
+from datafusion_engine.arrow_interop import (
     ArrayLike,
     ChunkedArrayLike,
     ComputeExpression,
     SchemaLike,
     TableLike,
-    pc,
 )
-from arrow_utils.schema.abi import schema_fingerprint, schema_to_dict
-from arrow_utils.schema.build import (
+from datafusion_engine.arrow_schema.abi import schema_fingerprint, schema_to_dict
+from datafusion_engine.arrow_schema.build import (
     const_array,
     empty_table,
     rows_to_table,
     table_from_columns,
 )
-from arrow_utils.schema.encoding import EncodingPolicy
-from core_types import JsonDict, JsonValue, PathLike, ensure_path
+from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.encoding import NormalizePolicy
 
 type RowValue = str | int
@@ -553,21 +553,29 @@ class QualityPlanSpec:
 
 
 def _is_zero(values: ValuesLike) -> ValuesLike:
-    dtype = values.type
-    if patypes.is_dictionary(dtype):
-        values = pc.cast(values, pa.string(), safe=False)
-        dtype = values.type
-    if patypes.is_string(dtype) or patypes.is_large_string(dtype):
-        return pc.equal(values, pa.scalar("0"))
-    if patypes.is_integer(dtype):
-        return pc.equal(values, pa.scalar(0, type=dtype))
-    if patypes.is_floating(dtype):
-        return pc.equal(values, pa.scalar(0.0, type=dtype))
-    return pc.equal(pc.cast(values, pa.string(), safe=False), pa.scalar("0"))
+    def is_zero(value: object | None) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value == "0"
+        if isinstance(value, (int, float)):
+            return value == 0
+        return str(value) == "0"
+
+    flags = [is_zero(value) for value in iter_array_values(values)]
+    return pa.array(flags, type=pa.bool_())
 
 
 def _invalid_id_mask(values: ValuesLike) -> ValuesLike:
-    return pc.or_(pc.is_null(values), _is_zero(values))
+    flags = [
+        value is None or bool(is_zero)
+        for value, is_zero in zip(
+            iter_array_values(values),
+            iter_array_values(_is_zero(values)),
+            strict=True,
+        )
+    ]
+    return pa.array(flags, type=pa.bool_())
 
 
 def _quality_table_from_ids(
@@ -578,7 +586,11 @@ def _quality_table_from_ids(
     source_table: str | None,
 ) -> TableLike:
     if ids.null_count != 0 or not patypes.is_string(ids.type):
-        ids = pc.cast(ids, pa.string(), safe=False)
+        cast_fn = getattr(ids, "cast", None)
+        if not callable(cast_fn):
+            msg = "Values do not support cast()."
+            raise TypeError(msg)
+        ids = cast("ValuesLike", cast_fn(pa.string(), safe=False))
     n = len(ids)
     kind_arr = const_array(n, entity_kind, dtype=pa.string())
     issue_arr = const_array(n, issue, dtype=pa.string())

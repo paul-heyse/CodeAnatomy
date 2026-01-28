@@ -16,8 +16,8 @@ from hamilton.execution import executors
 from hamilton.lifecycle import FunctionInputOutputTypeChecker
 from hamilton.lifecycle import base as lifecycle_base
 
-from arrow_utils.core.interop import SchemaLike
 from core_types import DeterminismTier, JsonValue
+from datafusion_engine.arrow_interop import SchemaLike
 from engine.runtime_profile import resolve_runtime_profile
 from hamilton_pipeline import modules as hamilton_modules
 from hamilton_pipeline.execution_manager import PlanExecutionManager
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from hamilton_pipeline.semantic_registry import SemanticRegistryHook
     from relspec.execution_plan import ExecutionPlan
     from relspec.incremental import IncrementalDiff
-from storage.ipc import ipc_hash
+from storage.ipc_utils import ipc_hash
 
 try:
     from hamilton_sdk import adapters as hamilton_adapters

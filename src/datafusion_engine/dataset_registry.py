@@ -6,10 +6,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
-from arrow_utils.core.interop import SchemaLike
 from arrow_utils.core.ordering import OrderingLevel
-from arrow_utils.schema.abi import schema_fingerprint, schema_to_dict
 from core_types import PathLike
+from datafusion_engine.arrow_interop import SchemaLike
+from datafusion_engine.arrow_schema.abi import schema_fingerprint, schema_to_dict
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (

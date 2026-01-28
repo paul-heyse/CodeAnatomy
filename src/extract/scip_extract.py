@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Literal, cast, overload
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
 from core_types import DeterminismTier
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.encoding import encode_table
 from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle

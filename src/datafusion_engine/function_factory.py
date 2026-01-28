@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
-from storage.ipc import payload_ipc_bytes
+from storage.ipc_utils import payload_ipc_bytes
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile

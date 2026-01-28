@@ -7,7 +7,7 @@ from typing import Literal
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import DataTypeLike, FieldLike
+from datafusion_engine.arrow_interop import DataTypeLike, FieldLike
 
 
 def list_view_type(value_type: DataTypeLike, *, large: bool = False) -> DataTypeLike:

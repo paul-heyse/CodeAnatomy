@@ -60,6 +60,38 @@ fn write_temp_csv(contents: &str) -> PathBuf {
 
 fn normalize_type_name(value: &str) -> String {
     let text = value.trim().to_ascii_lowercase();
+    if text.starts_with("list(") || text.starts_with("list<") {
+        let element = if text.contains("utf8") || text.contains("string") {
+            "string"
+        } else if text.contains("int64") || text.contains("bigint") {
+            "int64"
+        } else if text.contains("int32") || text.contains("integer") {
+            "int32"
+        } else if text.contains("int16") || text.contains("smallint") {
+            "int16"
+        } else if text.contains("int8") || text.contains("tinyint") {
+            "int8"
+        } else if text.contains("uint64") {
+            "uint64"
+        } else if text.contains("uint32") {
+            "uint32"
+        } else if text.contains("uint16") {
+            "uint16"
+        } else if text.contains("uint8") {
+            "uint8"
+        } else if text.contains("float64") || text.contains("double") {
+            "float64"
+        } else if text.contains("float32") || text.contains("float") || text.contains("real") {
+            "float32"
+        } else if text.contains("bool") {
+            "bool"
+        } else if text.contains("decimal") {
+            return text;
+        } else {
+            "null"
+        };
+        return format!("list<{element}>");
+    }
     if text.contains("utf8") {
         return "string".to_string();
     }
@@ -397,13 +429,6 @@ fn information_schema_parameters_match_snapshot() -> Result<()> {
             .entry(rid)
             .or_default()
             .push((ordinal, param_name, dtype));
-    }
-
-    if let Some(rows) = param_map.get("prefixed_hash64") {
-        eprintln!("prefixed_hash64 parameter rows: {rows:?}");
-    }
-    if let Some(rows) = param_map.get("collect_set") {
-        eprintln!("collect_set parameter rows: {rows:?}");
     }
 
     for name in snapshot

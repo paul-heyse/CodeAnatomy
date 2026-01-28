@@ -31,10 +31,7 @@ from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 from datafusion.object_store import LocalFileSystem
 
-from arrow_utils.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
 from arrow_utils.core.schema_constants import DEFAULT_VALUE_META
-from arrow_utils.schema.abi import schema_fingerprint
-from arrow_utils.schema.metadata import schema_constraints_from_metadata
 from cache.diskcache_factory import (
     DiskCacheKind,
     DiskCacheProfile,
@@ -45,6 +42,14 @@ from cache.diskcache_factory import (
     run_profile_maintenance,
 )
 from core_types import DeterminismTier
+from datafusion_engine.arrow_interop import (
+    RecordBatchReaderLike,
+    SchemaLike,
+    TableLike,
+    coerce_table_like,
+)
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.arrow_schema.metadata import schema_constraints_from_metadata
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -89,9 +94,11 @@ from datafusion_engine.udf_catalog import get_default_udf_catalog, get_strict_ud
 from datafusion_engine.udf_runtime import register_rust_udfs
 from engine.plan_cache import PlanCache
 from serde_msgspec import StructBase
-from storage.ipc import payload_hash
+from storage.ipc_utils import payload_hash
 
 if TYPE_CHECKING:
+    from typing import Protocol
+
     from diskcache import Cache, FanoutCache
 
     from datafusion_engine.introspection import IntrospectionCache
@@ -104,6 +111,12 @@ if TYPE_CHECKING:
     from datafusion_engine.view_graph_registry import ViewNode
     from obs.datafusion_runs import DataFusionRun
     from storage.deltalake.delta import IdempotentWriteOptions
+
+    class _DeltaRuntimeEnvOptions(Protocol):
+        max_spill_size: int | None
+        max_temp_directory_size: int | None
+
+
 from datafusion_engine.dataset_registry import DatasetCatalog, DatasetLocation
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
@@ -205,14 +218,23 @@ _SQL_SURFACES_SCHEMA = pa.struct(
     [
         pa.field("enable_information_schema", pa.bool_()),
         pa.field("enable_ident_normalization", pa.bool_()),
+        pa.field("force_disable_ident_normalization", pa.bool_()),
         pa.field("enable_url_table", pa.bool_()),
         pa.field("sql_parser_dialect", pa.string()),
         pa.field("ansi_mode", pa.bool_()),
     ]
 )
+_DELTA_RUNTIME_ENV_SCHEMA = pa.struct(
+    [
+        pa.field("max_spill_size", pa.int64()),
+        pa.field("max_temp_directory_size", pa.int64()),
+    ]
+)
 _EXTENSIONS_SCHEMA = pa.struct(
     [
         pa.field("delta_session_defaults_enabled", pa.bool_()),
+        pa.field("delta_ddl_registration_enabled", pa.bool_()),
+        pa.field("delta_runtime_env", _DELTA_RUNTIME_ENV_SCHEMA),
         pa.field("delta_querybuilder_enabled", pa.bool_()),
         pa.field("delta_data_checker_enabled", pa.bool_()),
         pa.field("delta_plan_codecs_enabled", pa.bool_()),
@@ -2189,12 +2211,18 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         "sql_surfaces": {
             "enable_information_schema": profile.enable_information_schema,
             "enable_ident_normalization": _effective_ident_normalization(profile),
+            "force_disable_ident_normalization": profile.force_disable_ident_normalization,
             "enable_url_table": profile.enable_url_table,
             "sql_parser_dialect": parser_dialect,
             "ansi_mode": ansi_mode,
         },
         "extensions": {
             "delta_session_defaults_enabled": profile.enable_delta_session_defaults,
+            "delta_ddl_registration_enabled": profile.enable_delta_ddl_registration,
+            "delta_runtime_env": {
+                "max_spill_size": profile.delta_max_spill_size,
+                "max_temp_directory_size": profile.delta_max_temp_directory_size,
+            },
             "delta_querybuilder_enabled": profile.enable_delta_querybuilder,
             "delta_data_checker_enabled": profile.enable_delta_data_checker,
             "delta_plan_codecs_enabled": profile.enable_delta_plan_codecs,
@@ -2259,6 +2287,8 @@ def _runtime_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, st
 
 
 def _effective_ident_normalization(profile: DataFusionRuntimeProfile) -> bool:
+    if profile.force_disable_ident_normalization:
+        return False
     if profile.enable_delta_session_defaults:
         return False
     return profile.enable_ident_normalization
@@ -2762,7 +2792,12 @@ def session_runtime_hash(runtime: SessionRuntime) -> str:
 
 @dataclass(frozen=True)
 class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
-    """DataFusion runtime configuration."""
+    """DataFusion runtime configuration.
+
+    Identifier normalization is disabled by default to preserve case-sensitive
+    identifiers, and URL-table support is disabled unless explicitly enabled
+    for development or controlled file-path queries.
+    """
 
     architecture_version: str = "v2"
     target_partitions: int | None = None
@@ -2778,6 +2813,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     spill_dir: str | None = None
     memory_pool: MemoryPool = "greedy"
     memory_limit_bytes: int | None = None
+    delta_max_spill_size: int | None = None
+    delta_max_temp_directory_size: int | None = None
     default_catalog: str = "datafusion"
     default_schema: str = "public"
     registry_catalogs: Mapping[str, DatasetCatalog] = field(default_factory=dict)
@@ -2837,6 +2874,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     scip_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
     enable_information_schema: bool = True
     enable_ident_normalization: bool = False
+    force_disable_ident_normalization: bool = False
     enable_url_table: bool = False  # Dev-only convenience for file-path queries.
     cache_enabled: bool = False
     cache_max_columns: int | None = 64
@@ -2860,6 +2898,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     udf_catalog_policy: Literal["default", "strict"] = "default"
     require_delta: bool = True
     enable_delta_session_defaults: bool = False
+    enable_delta_ddl_registration: bool = False
     enable_delta_querybuilder: bool = False
     enable_delta_data_checker: bool = False
     enable_delta_plan_codecs: bool = False
@@ -3094,6 +3133,40 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         if self.runtime_env_hook is not None:
             builder = self.runtime_env_hook(builder)
         return builder
+
+    def _delta_runtime_env_options(self) -> _DeltaRuntimeEnvOptions | None:
+        """Return delta-specific RuntimeEnv options when configured.
+
+        Returns
+        -------
+        _DeltaRuntimeEnvOptions | None
+            Delta runtime env options object for datafusion_ext, or ``None`` when
+            no delta-specific overrides are configured.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when datafusion_ext is unavailable.
+        TypeError
+            Raised when the delta runtime env options class is unavailable.
+        """
+        if self.delta_max_spill_size is None and self.delta_max_temp_directory_size is None:
+            return None
+        try:
+            module = importlib.import_module("datafusion_ext")
+        except ImportError as exc:
+            msg = "Delta runtime env options require datafusion_ext."
+            raise RuntimeError(msg) from exc
+        options_cls = getattr(module, "DeltaRuntimeEnvOptions", None)
+        if not callable(options_cls):
+            msg = "datafusion_ext.DeltaRuntimeEnvOptions is unavailable."
+            raise TypeError(msg)
+        options = cast("_DeltaRuntimeEnvOptions", options_cls())
+        if self.delta_max_spill_size is not None:
+            options.max_spill_size = int(self.delta_max_spill_size)
+        if self.delta_max_temp_directory_size is not None:
+            options.max_temp_directory_size = int(self.delta_max_temp_directory_size)
+        return options
 
     def session_context(self) -> SessionContext:
         """Return a SessionContext configured from the profile.
@@ -4825,7 +4898,7 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                 cause = TypeError(error)
             else:
                 builder_fn = cast(
-                    "Callable[[list[tuple[str, str]], RuntimeEnvBuilder], SessionContext]",
+                    "Callable[[list[tuple[str, str]], RuntimeEnvBuilder, object | None], SessionContext]",
                     builder,
                 )
                 try:
@@ -4833,9 +4906,11 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
                     settings["datafusion.catalog.information_schema"] = str(
                         self.enable_information_schema
                     ).lower()
+                    delta_runtime = self._delta_runtime_env_options()
                     ctx = builder_fn(
                         list(settings.items()),
                         self.runtime_env_builder(),
+                        delta_runtime,
                     )
                 except (RuntimeError, TypeError, ValueError) as exc:
                     error = str(exc)

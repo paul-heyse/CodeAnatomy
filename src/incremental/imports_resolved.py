@@ -8,8 +8,8 @@ from typing import cast
 import pyarrow as pa
 
 from arrow_utils.core.array_iter import iter_table_rows
-from arrow_utils.core.interop import TableLike
-from arrow_utils.schema.build import empty_table, table_from_columns
+from datafusion_engine.arrow_interop import TableLike
+from datafusion_engine.arrow_schema.build import empty_table, table_from_columns
 from incremental.registry_specs import dataset_schema
 
 

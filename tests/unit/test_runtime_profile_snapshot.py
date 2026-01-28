@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from datafusion_engine.runtime import DataFusionJoinPolicy, DataFusionRuntimeProfile
 from engine.runtime_profile import PROFILE_HASH_VERSION, runtime_profile_snapshot
 
 HASH_LENGTH: int = 64
+DELTA_MAX_SPILL_SIZE: int = 1024
+DELTA_MAX_TEMP_DIRECTORY_SIZE: int = 4096
 
 
 def test_runtime_profile_snapshot_version() -> None:
@@ -37,3 +41,26 @@ def test_schema_evolution_adapter_enabled_by_default() -> None:
     """Enable schema evolution adapter in the default profile."""
     profile = DataFusionRuntimeProfile()
     assert profile.enable_schema_evolution_adapter is True
+
+
+def test_force_disable_ident_normalization_overrides() -> None:
+    """Disable identifier normalization when forced."""
+    profile = DataFusionRuntimeProfile(
+        enable_ident_normalization=True,
+        force_disable_ident_normalization=True,
+    )
+    settings = profile.settings_payload()
+    assert settings["datafusion.sql_parser.enable_ident_normalization"] == "false"
+
+
+def test_delta_runtime_env_telemetry_payload() -> None:
+    """Expose Delta runtime env options in telemetry payloads."""
+    profile = DataFusionRuntimeProfile(
+        delta_max_spill_size=DELTA_MAX_SPILL_SIZE,
+        delta_max_temp_directory_size=DELTA_MAX_TEMP_DIRECTORY_SIZE,
+    )
+    payload = profile.telemetry_payload_v1()
+    extensions = cast("dict[str, object]", payload["extensions"])
+    delta_runtime = cast("dict[str, object]", extensions["delta_runtime_env"])
+    assert delta_runtime["max_spill_size"] == DELTA_MAX_SPILL_SIZE
+    assert delta_runtime["max_temp_directory_size"] == DELTA_MAX_TEMP_DIRECTORY_SIZE

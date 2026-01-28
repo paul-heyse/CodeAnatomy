@@ -6,8 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from arrow_utils.core.interop import TableLike
-from arrow_utils.schema.metadata import encoding_policy_from_schema
+from datafusion_engine.arrow_interop import TableLike
+from datafusion_engine.arrow_schema.metadata import encoding_policy_from_schema
 from datafusion_engine.dataset_registry import resolve_delta_constraints
 from datafusion_engine.extract_bundles import dataset_name_for_output
 from datafusion_engine.write_pipeline import WriteMode

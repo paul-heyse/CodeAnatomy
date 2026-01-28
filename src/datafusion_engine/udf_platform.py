@@ -7,13 +7,13 @@ be installed before any plan-bundle construction.
 
 The platform installation pattern:
 
-    from datafusion import SessionContext
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from datafusion_engine.udf_platform import (
         RustUdfPlatformOptions,
         install_rust_udf_platform,
     )
 
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     options = RustUdfPlatformOptions(
         enable_udfs=True,
         enable_function_factory=True,

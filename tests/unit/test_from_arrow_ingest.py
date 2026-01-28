@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 
 import pyarrow as pa
 
-from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 TWO_ROWS = 2

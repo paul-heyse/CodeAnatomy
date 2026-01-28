@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from arrow_utils.core.expr_types import ScalarValue
-from arrow_utils.core.interop import ScalarLike
+from datafusion_engine.arrow_interop import ScalarLike
 
 
 def parse_scalar_value(value: object) -> ScalarValue:

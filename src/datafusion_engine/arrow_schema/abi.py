@@ -12,11 +12,11 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrow_utils.core.interop import DataTypeLike, SchemaLike
-from arrow_utils.schema.semantic_types import register_semantic_extension_types
 from core_types import JsonDict
+from datafusion_engine.arrow_interop import DataTypeLike, SchemaLike
+from datafusion_engine.arrow_schema.semantic_types import register_semantic_extension_types
 from serde_msgspec import dumps_msgpack, loads_msgpack
-from storage.ipc import payload_hash
+from storage.ipc_utils import payload_hash
 
 SCHEMA_ABI_VERSION = 1
 DATASET_FINGERPRINT_VERSION = 1

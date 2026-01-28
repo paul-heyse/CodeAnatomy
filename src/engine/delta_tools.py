@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from arrow_utils.core.interop import RecordBatchReaderLike
+from datafusion_engine.arrow_interop import RecordBatchReaderLike
 from storage.deltalake import (
     DeltaVacuumOptions,
     StorageOptions,
@@ -272,7 +272,7 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
         location=location,
         runtime_profile=profile,
     )
-    df = ctx.sql(request.sql)
+    df = ctx.sql_with_options(request.sql, profile.sql_options())
     to_reader = getattr(df, "to_arrow_reader", None)
     reader = cast(
         "RecordBatchReaderLike",

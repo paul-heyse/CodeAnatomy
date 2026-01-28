@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
 from core_types import DeterminismTier
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from engine.plan_policy import WriterStrategy
 
 if TYPE_CHECKING:

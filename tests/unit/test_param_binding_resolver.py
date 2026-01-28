@@ -12,7 +12,9 @@ datafusion = pytest.importorskip("datafusion")
 
 def test_resolve_param_bindings_splits_scalar_and_table() -> None:
     """Split scalar params from table-like params."""
-    ctx = datafusion.SessionContext()
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+    ctx = DataFusionRuntimeProfile().session_context()
     df = ctx.sql("SELECT 1 AS id")
     table = pa.table({"id": [1]})
     bindings = resolve_param_bindings(
@@ -28,7 +30,9 @@ def test_resolve_param_bindings_splits_scalar_and_table() -> None:
 
 def test_register_table_params_unregisters_tables() -> None:
     """Register and clean up table-like params via context manager."""
-    ctx = datafusion.SessionContext()
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+    ctx = DataFusionRuntimeProfile().session_context()
     table = pa.table({"id": [1]})
     bindings = resolve_param_bindings({"temp_table": table})
     with register_table_params(ctx, bindings):

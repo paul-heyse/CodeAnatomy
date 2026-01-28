@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import TableLike
-from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.arrow_interop import TableLike
 from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.write_pipeline import (
     WriteFormat,
     WriteMode,

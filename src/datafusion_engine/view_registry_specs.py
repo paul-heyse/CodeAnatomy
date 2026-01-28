@@ -8,15 +8,15 @@ from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import SchemaLike
 from arrow_utils.core.ordering import OrderingLevel
-from arrow_utils.schema.metadata import (
+from cpg.specs import TaskIdentity
+from datafusion_engine.arrow_interop import SchemaLike
+from datafusion_engine.arrow_schema.metadata import (
     SchemaMetadataSpec,
     function_requirements_metadata_spec,
     merge_metadata_specs,
     ordering_metadata_spec,
 )
-from cpg.specs import TaskIdentity
 from datafusion_engine.lineage_datafusion import extract_lineage
 from datafusion_engine.plan_bundle import build_plan_bundle
 from datafusion_engine.schema_contracts import SchemaContract

@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
 from datafusion import SQLOptions
 
+from datafusion_engine.sql_options import sql_options_for_profile
+
 
 @dataclass(frozen=True)
 class PipeToDatasetOptions:
@@ -217,8 +219,9 @@ class StreamingExecutor:
 
     Examples
     --------
-    >>> from datafusion import SessionContext
-    >>> ctx = SessionContext()
+    >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
+    >>> profile = DataFusionRuntimeProfile()
+    >>> ctx = profile.session_context()
     >>> executor = StreamingExecutor(ctx)
     >>> result = executor.execute_sql("SELECT * FROM large_table")
     >>> result.pipe_to_dataset("/output", partitioning=["year"])
@@ -241,7 +244,7 @@ class StreamingExecutor:
             Optional SQL options to apply for query execution.
         """
         self.ctx = ctx
-        self.sql_options = sql_options or SQLOptions()
+        self.sql_options = sql_options or sql_options_for_profile(None)
 
     def execute_sql(
         self,

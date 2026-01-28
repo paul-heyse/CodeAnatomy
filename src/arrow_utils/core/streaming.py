@@ -9,7 +9,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-from arrow_utils.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike, coerce_table_like
 
 
 def _ensure_reader_schema(

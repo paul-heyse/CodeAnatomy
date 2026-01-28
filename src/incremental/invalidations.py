@@ -17,7 +17,7 @@ from incremental.write_helpers import (
     write_delta_table_via_pipeline,
 )
 from storage.deltalake import delta_table_version
-from storage.ipc import payload_hash
+from storage.ipc_utils import payload_hash
 
 INVALIDATION_SNAPSHOT_VERSION = 2
 _PLAN_FINGERPRINT_ENTRY = pa.struct(

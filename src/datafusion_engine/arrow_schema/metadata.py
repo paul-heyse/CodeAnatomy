@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Protocol, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrow_utils.core.interop import ArrayLike, DataTypeLike, FieldLike, SchemaLike, TableLike
 from arrow_utils.core.ordering import Ordering, OrderingKey, OrderingLevel
 from arrow_utils.core.schema_constants import (
     KEY_FIELDS_META,
@@ -24,23 +23,30 @@ from arrow_utils.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from arrow_utils.schema.dictionary import normalize_dictionaries
-from arrow_utils.schema.encoding import EncodingPolicy, EncodingSpec
-from arrow_utils.schema.encoding_metadata import (
+from datafusion_engine.arrow_interop import (
+    ArrayLike,
+    DataTypeLike,
+    FieldLike,
+    SchemaLike,
+    TableLike,
+)
+from datafusion_engine.arrow_schema.dictionary import normalize_dictionaries
+from datafusion_engine.arrow_schema.encoding import EncodingPolicy, EncodingSpec
+from datafusion_engine.arrow_schema.encoding_metadata import (
     DICT_INDEX_META,
     DICT_ORDERED_META,
     ENCODING_DICTIONARY,
     ENCODING_META,
     dict_field_metadata,
 )
-from arrow_utils.schema.nested_builders import (
+from datafusion_engine.arrow_schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
 )
-from storage.ipc import ipc_hash, ipc_table, payload_ipc_bytes
+from storage.ipc_utils import ipc_hash, ipc_table, payload_ipc_bytes
 
 if TYPE_CHECKING:
     from arrow_utils.core.expr_types import ScalarValue
-    from arrow_utils.core.interop import ScalarLike
+    from datafusion_engine.arrow_interop import ScalarLike
     from schema_spec.specs import TableSchemaSpec
 
 _POSITION_COLS: tuple[str, ...] = (

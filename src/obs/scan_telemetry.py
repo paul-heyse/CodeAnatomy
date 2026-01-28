@@ -7,9 +7,9 @@ from dataclasses import dataclass
 
 import pyarrow.dataset as ds
 
-from arrow_utils.core.interop import ComputeExpression, SchemaLike
-from arrow_utils.schema.abi import schema_to_dict
 from core_types import JsonDict
+from datafusion_engine.arrow_interop import ComputeExpression, SchemaLike
+from datafusion_engine.arrow_schema.abi import schema_to_dict
 from obs.metrics import fragment_file_hints, list_fragments, row_group_count, scan_task_count
 from serde_msgspec import StructBase
 

@@ -10,8 +10,8 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
-from arrow_utils.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
-from arrow_utils.schema.build import empty_table
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike, coerce_table_like
+from datafusion_engine.arrow_schema.build import empty_table
 from datafusion_engine.schema_alignment import align_table
 from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.plan_bundle_exec import execute_df_to_table

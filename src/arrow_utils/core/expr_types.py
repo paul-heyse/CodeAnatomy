@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from arrow_utils.core.interop import ScalarLike
+from datafusion_engine.arrow_interop import ScalarLike
 
 type ScalarValue = bool | int | float | str | bytes | ScalarLike | None
 

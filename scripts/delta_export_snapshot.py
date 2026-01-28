@@ -9,9 +9,14 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from uuid import uuid4
 
-from arrow_utils.schema.abi import schema_fingerprint
-from storage.deltalake import DeltaWriteOptions, open_delta_table, write_table_delta
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.delta_control_plane import DeltaProviderRequest, delta_provider_from_session
+from datafusion_engine.io_adapter import DataFusionIOAdapter
+from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.table_provider_capsule import TableProviderCapsule
+from storage.deltalake import DeltaWriteOptions, write_delta_table
 
 
 @dataclass(frozen=True)
@@ -117,13 +122,30 @@ def clone_delta_snapshot(
     if resolved.version is not None and resolved.timestamp is not None:
         msg = "Specify only one of version or timestamp."
         raise ValueError(msg)
-    table = open_delta_table(
-        path,
-        storage_options=resolved.storage_options,
-        version=resolved.version,
-        timestamp=resolved.timestamp,
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    bundle = delta_provider_from_session(
+        ctx,
+        request=DeltaProviderRequest(
+            table_uri=path,
+            storage_options=resolved.storage_options or None,
+            version=resolved.version,
+            timestamp=resolved.timestamp,
+            delta_scan=None,
+            gate=None,
+        ),
     )
-    arrow_table = table.to_pyarrow_table()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
+    table_name = f"__delta_snapshot_{uuid4().hex}"
+    adapter.register_delta_table_provider(
+        table_name,
+        TableProviderCapsule(bundle.provider),
+        overwrite=True,
+    )
+    try:
+        arrow_table = ctx.table(table_name).to_arrow_table()
+    finally:
+        adapter.deregister_table(table_name)
     target_path = Path(target)
     if target_path.parent:
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,15 +154,15 @@ def clone_delta_snapshot(
         commit_metadata["source_version"] = str(resolved.version)
     if resolved.timestamp is not None:
         commit_metadata["source_timestamp"] = resolved.timestamp
-    write_table_delta(
+    write_delta_table(
         arrow_table,
         str(target_path),
         options=DeltaWriteOptions(
             mode=resolved.mode or "overwrite",
             schema_mode=resolved.schema_mode or "overwrite",
             commit_metadata=commit_metadata,
+            storage_options=resolved.storage_options,
         ),
-        storage_options=resolved.storage_options,
     )
     return CloneReport(
         path=path,

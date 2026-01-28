@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from arrow_utils.schema.abi import schema_fingerprint
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.runtime import read_delta_as_reader
 from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.pipeline_types import ScipIndexConfig

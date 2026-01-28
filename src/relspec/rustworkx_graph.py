@@ -12,7 +12,7 @@ import rustworkx as rx
 
 from relspec.errors import RelspecValidationError
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
-from storage.ipc import payload_hash
+from storage.ipc_utils import payload_hash
 
 if TYPE_CHECKING:
     from datafusion_engine.scan_planner import ScanUnit

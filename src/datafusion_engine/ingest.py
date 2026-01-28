@@ -10,9 +10,8 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
-from arrow_utils.core.interop import RecordBatchReaderLike, coerce_table_like
-from arrow_utils.schema.build import table_from_rows
-from datafusion_engine.introspection import invalidate_introspection_cache
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, coerce_table_like
+from datafusion_engine.arrow_schema.build import table_from_rows
 
 
 @dataclass(frozen=True)
@@ -160,12 +159,10 @@ def _register_record_batches(
     name: str,
     batches: list[list[pa.RecordBatch]],
 ) -> DataFrame:
-    register_batches = getattr(ctx, "register_record_batches", None)
-    if not callable(register_batches):
-        msg = "DataFusion SessionContext missing register_record_batches."
-        raise TypeError(msg)
-    register_batches(name, batches)
-    invalidate_introspection_cache(ctx)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_record_batches(name, batches)
     return ctx.table(name)
 
 

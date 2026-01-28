@@ -19,16 +19,16 @@ from datafusion.expr import Expr, SortExpr
 from datafusion.expr import SortKey as DFSortKey
 
 from arrow_utils.core.expr_types import ExplodeSpec
-from arrow_utils.core.interop import SchemaLike, TableLike
 from arrow_utils.core.ordering import Ordering, OrderingLevel
 from arrow_utils.core.schema_constants import PROVENANCE_COLS
-from arrow_utils.schema.metadata import (
+from core_types import DeterminismTier
+from datafusion_engine.arrow_interop import SchemaLike, TableLike
+from datafusion_engine.arrow_schema.metadata import (
     SchemaMetadataSpec,
     merge_metadata_specs,
     metadata_spec_from_schema,
     ordering_from_schema,
 )
-from core_types import DeterminismTier
 from datafusion_engine.kernel_specs import DedupeSpec, IntervalAlignOptions, SortKey
 from datafusion_engine.kernel_specs import SortKey as PlanSortKey
 from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -75,7 +75,7 @@ def _df_from_table(
     batch_size: int | None = None,
     ingest_hook: Callable[[Mapping[str, object]], None] | None = None,
 ) -> DataFrame:
-    from datafusion_engine.arrow_ingest import datafusion_from_arrow
+    from datafusion_engine.ingest import datafusion_from_arrow
 
     existing = _existing_table_names(ctx)
     table_name = _temp_name(name, existing) if name in existing else name

@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, cast, overload
 import pyarrow as pa
 from datafusion.dataframe import DataFrame
 
-from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
 from arrow_utils.core.ordering import Ordering, OrderingLevel
-from arrow_utils.schema.metadata import SchemaMetadataSpec, ordering_metadata_spec
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec, ordering_metadata_spec
 
 if TYPE_CHECKING:
     from datafusion_engine.view_artifacts import DataFusionViewArtifact
@@ -80,7 +80,7 @@ class DataFusionPlan:
 
         Returns
         -------
-        arrow_utils.core.interop.TableLike
+        datafusion_engine.arrow_interop.TableLike
             Arrow table for the plan result.
         """
         table = self.df.to_arrow_table()
@@ -91,7 +91,7 @@ class DataFusionPlan:
 
         Returns
         -------
-        arrow_utils.core.interop.RecordBatchReaderLike
+        datafusion_engine.arrow_interop.RecordBatchReaderLike
             RecordBatchReader for the plan result.
         """
         if batch_size is None:

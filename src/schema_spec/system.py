@@ -22,11 +22,11 @@ from typing import TYPE_CHECKING, Literal, TypedDict, Unpack, cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-from arrow_utils.core.interop import SchemaLike, TableLike
 from arrow_utils.core.ordering import Ordering, OrderingLevel
-from arrow_utils.schema.build import register_schema_extensions
-from arrow_utils.schema.encoding import EncodingPolicy
-from arrow_utils.schema.metadata import (
+from datafusion_engine.arrow_interop import SchemaLike, TableLike
+from datafusion_engine.arrow_schema.build import register_schema_extensions
+from datafusion_engine.arrow_schema.encoding import EncodingPolicy
+from datafusion_engine.arrow_schema.metadata import (
     SchemaMetadataSpec,
     encoding_policy_from_spec,
     merge_metadata_specs,

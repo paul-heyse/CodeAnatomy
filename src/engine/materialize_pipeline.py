@@ -10,13 +10,13 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from cache.diskcache_factory import DiskCacheKind, cache_for_kind, diskcache_stats_snapshot
 from core_types import DeterminismTier
-from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.arrow_interop import RecordBatchReader, RecordBatchReaderLike, TableLike
 from datafusion_engine.dataset_locations import resolve_dataset_location
 from datafusion_engine.diagnostics import record_artifact, record_events, recorder_for_profile
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.param_binding import resolve_param_bindings
 from datafusion_engine.param_tables import scalar_param_signature
 from datafusion_engine.plan_bundle import DataFusionPlanBundle

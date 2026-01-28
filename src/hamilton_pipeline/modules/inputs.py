@@ -32,7 +32,7 @@ from incremental.types import IncrementalConfig
 from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
-from storage.ipc import IpcWriteConfig
+from storage.ipc_utils import IpcWriteConfig
 
 
 def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:

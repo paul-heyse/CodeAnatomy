@@ -9,7 +9,7 @@ from datafusion import col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.ingest import datafusion_from_arrow
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr

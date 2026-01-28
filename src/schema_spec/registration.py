@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TypedDict, Unpack
 
-from arrow_utils.schema.metadata import SchemaMetadataSpec
+from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
 from datafusion_engine.expr_spec import ExprSpec
 from datafusion_engine.query_spec import QuerySpec
 from datafusion_engine.schema_alignment import SchemaEvolutionSpec

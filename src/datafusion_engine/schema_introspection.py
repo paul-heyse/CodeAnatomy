@@ -528,8 +528,9 @@ def _information_schema_table(
         if isinstance(candidate, type) and issubclass(candidate, Exception):
             panic_exception_type = candidate
     query = f"select * from information_schema.{name}"
+    resolved_options = sql_options or _read_only_sql_options()
     try:
-        df = ctx.sql(query, options=sql_options)
+        df = ctx.sql(query, options=resolved_options)
         return df.to_arrow_table()
     except (RuntimeError, TypeError, ValueError, AttributeError, panic_exception_type):
         return None

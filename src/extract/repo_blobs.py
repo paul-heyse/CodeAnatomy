@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, overload
 
 from arrow_utils.core.array_iter import iter_table_rows
-from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
-from arrow_utils.schema.abi import schema_fingerprint
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.query_spec import QuerySpec

@@ -25,7 +25,7 @@ from tree_sitter import (
     TreeCursor,
 )
 
-from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.id_utils import span_id
 from datafusion_engine.plan_bundle import DataFusionPlanBundle

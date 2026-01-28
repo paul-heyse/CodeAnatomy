@@ -47,6 +47,12 @@ pub fn all_udfs() -> Vec<UdfSpec> {
             aliases: &[],
         },
         UdfSpec {
+            name: "cpg_score",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::cpg_score_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
             name: "stable_hash64",
             kind: UdfKind::Scalar,
             builder: || UdfHandle::Scalar(udf_custom::stable_hash64_udf()),
@@ -223,14 +229,18 @@ pub fn register_all_with_policy(
     async_udf_timeout_ms: Option<u64>,
     async_udf_batch_size: Option<usize>,
 ) -> Result<()> {
+    let state = ctx.state();
+    let config_options = state.config_options();
     for spec in all_udfs() {
         match (spec.kind, (spec.builder)()) {
             (UdfKind::Scalar, UdfHandle::Scalar(udf)) => {
-                let udf = if spec.aliases.is_empty() {
-                    udf
-                } else {
-                    udf.with_aliases(spec.aliases.iter().copied())
-                };
+                let mut udf = udf
+                    .inner()
+                    .with_updated_config(config_options)
+                    .unwrap_or(udf);
+                if !spec.aliases.is_empty() {
+                    udf = udf.with_aliases(spec.aliases.iter().copied());
+                }
                 ctx.register_udf(udf);
             }
             (UdfKind::Aggregate, UdfHandle::Aggregate(udaf)) => {

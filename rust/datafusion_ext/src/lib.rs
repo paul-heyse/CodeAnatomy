@@ -41,6 +41,8 @@ use datafusion::catalog::{
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use datafusion::execution::config::SessionConfig;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
@@ -69,6 +71,10 @@ use delta_control_plane::{
 };
 use delta_maintenance::{
     delta_add_features as delta_add_features_native,
+    delta_add_constraints as delta_add_constraints_native,
+    delta_cleanup_metadata as delta_cleanup_metadata_native,
+    delta_create_checkpoint as delta_create_checkpoint_native,
+    delta_drop_constraints as delta_drop_constraints_native,
     delta_optimize_compact as delta_optimize_compact_native, delta_restore as delta_restore_native,
     delta_set_properties as delta_set_properties_native, delta_vacuum as delta_vacuum_native,
     DeltaMaintenanceReport,
@@ -136,10 +142,12 @@ pub fn install_expr_planners_native(ctx: &SessionContext, planner_names: &[&str]
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr_fn::col;
-use datafusion_python::context::PySessionContext;
+use datafusion_python::context::{PyRuntimeEnvBuilder, PySessionContext};
 use deltalake::delta_datafusion::{
-    DeltaLogicalCodec, DeltaPhysicalCodec, DeltaScanConfig, DeltaTableFactory, DeltaTableProvider,
+    DeltaLogicalCodec, DeltaPhysicalCodec, DeltaScanConfig, DeltaSessionConfig,
+    DeltaTableFactory, DeltaTableProvider,
 };
+use deltalake::delta_datafusion::planner::DeltaPlanner;
 use deltalake::protocol::SaveMode;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -1232,14 +1240,36 @@ fn install_delta_table_factory(ctx: PyRef<PySessionContext>, alias: String) -> P
     Ok(())
 }
 
-// Scope 4: Apply Delta session defaults to existing SessionContext
 #[pyfunction]
-fn apply_delta_session_defaults(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    let state_ref = ctx.ctx.state_ref();
-    let mut state = state_ref.write();
-    let config = state.config_mut();
-    config.options_mut().sql_parser.enable_ident_normalization = false;
-    Ok(())
+#[pyo3(signature = (settings = None, runtime = None))]
+fn delta_session_context(
+    settings: Option<Vec<(String, String)>>,
+    runtime: Option<PyRef<PyRuntimeEnvBuilder>>,
+) -> PyResult<PySessionContext> {
+    let mut config: SessionConfig = DeltaSessionConfig::default().into();
+    if let Some(entries) = settings {
+        for (key, value) in entries {
+            config = config.set_str(&key, &value);
+        }
+    }
+    let runtime_builder = runtime
+        .map(|builder| builder.builder.clone())
+        .unwrap_or_else(RuntimeEnvBuilder::new);
+    let runtime_env = Arc::new(
+        runtime_builder
+            .build()
+            .map_err(|err| PyRuntimeError::new_err(format!("RuntimeEnv build failed: {err}")))?,
+    );
+    let planner = DeltaPlanner::new();
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_config(config)
+        .with_runtime_env(runtime_env)
+        .with_query_planner(planner)
+        .build();
+    Ok(PySessionContext {
+        ctx: SessionContext::new_with_state(state),
+    })
 }
 
 // Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
@@ -1335,6 +1365,7 @@ fn delta_cdf_table_provider(
     payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     Ok(payload.into())
 }
+
 
 // Scope 9: DeltaScanConfig derived from session settings
 #[pyfunction]
@@ -1793,6 +1824,7 @@ fn delta_vacuum(
     retention_hours: Option<i64>,
     dry_run: Option<bool>,
     enforce_retention_duration: Option<bool>,
+    require_vacuum_protocol_check: Option<bool>,
     min_reader_version: Option<i32>,
     min_writer_version: Option<i32>,
     required_reader_features: Option<Vec<String>>,
@@ -1821,6 +1853,7 @@ fn delta_vacuum(
     )?;
     let dry_run = dry_run.unwrap_or(false);
     let enforce_retention_duration = enforce_retention_duration.unwrap_or(true);
+    let require_vacuum_protocol_check = require_vacuum_protocol_check.unwrap_or(false);
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_vacuum_native(
@@ -1832,6 +1865,7 @@ fn delta_vacuum(
             retention_hours,
             dry_run,
             enforce_retention_duration,
+            require_vacuum_protocol_check,
             gate,
             Some(commit_options),
         ))
@@ -2008,6 +2042,188 @@ fn delta_add_features(
     maintenance_report_to_pydict(py, &report)
 }
 
+#[pyfunction]
+fn delta_add_constraints(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    table_uri: String,
+    storage_options: Option<Vec<(String, String)>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    constraints: Vec<(String, String)>,
+    min_reader_version: Option<i32>,
+    min_writer_version: Option<i32>,
+    required_reader_features: Option<Vec<String>>,
+    required_writer_features: Option<Vec<String>>,
+    commit_metadata: Option<Vec<(String, String)>>,
+    app_id: Option<String>,
+    app_version: Option<i64>,
+    app_last_updated: Option<i64>,
+    max_retries: Option<usize>,
+    create_checkpoint: Option<bool>,
+) -> PyResult<Py<PyAny>> {
+    if constraints.is_empty() {
+        return Err(PyValueError::new_err(
+            "Delta add-constraints requires at least one constraint.",
+        ));
+    }
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
+        min_reader_version,
+        min_writer_version,
+        required_reader_features,
+        required_writer_features,
+    );
+    let commit_options = commit_options_from_params(
+        commit_metadata,
+        app_id,
+        app_version,
+        app_last_updated,
+        max_retries,
+        create_checkpoint,
+    )?;
+    let runtime = runtime()?;
+    let report = runtime
+        .block_on(delta_add_constraints_native(
+            &ctx.ctx,
+            &table_uri,
+            storage,
+            version,
+            timestamp,
+            constraints,
+            gate,
+            Some(commit_options),
+        ))
+        .map_err(|err| PyRuntimeError::new_err(format!("Delta add-constraints failed: {err}")))?;
+    maintenance_report_to_pydict(py, &report)
+}
+
+#[pyfunction]
+fn delta_drop_constraints(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    table_uri: String,
+    storage_options: Option<Vec<(String, String)>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    constraints: Vec<String>,
+    raise_if_not_exists: Option<bool>,
+    min_reader_version: Option<i32>,
+    min_writer_version: Option<i32>,
+    required_reader_features: Option<Vec<String>>,
+    required_writer_features: Option<Vec<String>>,
+    commit_metadata: Option<Vec<(String, String)>>,
+    app_id: Option<String>,
+    app_version: Option<i64>,
+    app_last_updated: Option<i64>,
+    max_retries: Option<usize>,
+    create_checkpoint: Option<bool>,
+) -> PyResult<Py<PyAny>> {
+    if constraints.is_empty() {
+        return Err(PyValueError::new_err(
+            "Delta drop-constraints requires at least one constraint name.",
+        ));
+    }
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
+        min_reader_version,
+        min_writer_version,
+        required_reader_features,
+        required_writer_features,
+    );
+    let commit_options = commit_options_from_params(
+        commit_metadata,
+        app_id,
+        app_version,
+        app_last_updated,
+        max_retries,
+        create_checkpoint,
+    )?;
+    let runtime = runtime()?;
+    let report = runtime
+        .block_on(delta_drop_constraints_native(
+            &ctx.ctx,
+            &table_uri,
+            storage,
+            version,
+            timestamp,
+            constraints,
+            raise_if_not_exists.unwrap_or(true),
+            gate,
+            Some(commit_options),
+        ))
+        .map_err(|err| PyRuntimeError::new_err(format!("Delta drop-constraints failed: {err}")))?;
+    maintenance_report_to_pydict(py, &report)
+}
+
+#[pyfunction]
+fn delta_create_checkpoint(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    table_uri: String,
+    storage_options: Option<Vec<(String, String)>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    min_reader_version: Option<i32>,
+    min_writer_version: Option<i32>,
+    required_reader_features: Option<Vec<String>>,
+    required_writer_features: Option<Vec<String>>,
+) -> PyResult<Py<PyAny>> {
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
+        min_reader_version,
+        min_writer_version,
+        required_reader_features,
+        required_writer_features,
+    );
+    let runtime = runtime()?;
+    let report = runtime
+        .block_on(delta_create_checkpoint_native(
+            &ctx.ctx,
+            &table_uri,
+            storage,
+            version,
+            timestamp,
+            gate,
+        ))
+        .map_err(|err| PyRuntimeError::new_err(format!("Delta checkpoint failed: {err}")))?;
+    maintenance_report_to_pydict(py, &report)
+}
+
+#[pyfunction]
+fn delta_cleanup_metadata(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    table_uri: String,
+    storage_options: Option<Vec<(String, String)>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    min_reader_version: Option<i32>,
+    min_writer_version: Option<i32>,
+    required_reader_features: Option<Vec<String>>,
+    required_writer_features: Option<Vec<String>>,
+) -> PyResult<Py<PyAny>> {
+    let storage = storage_options_map(storage_options);
+    let gate = delta_gate_from_params(
+        min_reader_version,
+        min_writer_version,
+        required_reader_features,
+        required_writer_features,
+    );
+    let runtime = runtime()?;
+    let report = runtime
+        .block_on(delta_cleanup_metadata_native(
+            &ctx.ctx,
+            &table_uri,
+            storage,
+            version,
+            timestamp,
+            gate,
+        ))
+        .map_err(|err| PyRuntimeError::new_err(format!("Delta metadata cleanup failed: {err}")))?;
+    maintenance_report_to_pydict(py, &report)
+}
+
 // Scope 2: DeltaDataChecker integration
 #[pyfunction]
 fn delta_data_checker(
@@ -2121,7 +2337,7 @@ fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()>
     module.add_function(wrap_pyfunction!(registry_catalog_provider_factory, module)?)?;
     module.add_class::<DeltaCdfOptions>()?;
     module.add_function(wrap_pyfunction!(install_delta_table_factory, module)?)?;
-    module.add_function(wrap_pyfunction!(apply_delta_session_defaults, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_session_context, module)?)?;
     module.add_function(wrap_pyfunction!(install_delta_plan_codecs, module)?)?;
     module.add_function(wrap_pyfunction!(delta_cdf_table_provider, module)?)?;
     module.add_function(wrap_pyfunction!(delta_snapshot_info, module)?)?;
@@ -2138,5 +2354,9 @@ fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()>
     module.add_function(wrap_pyfunction!(delta_restore, module)?)?;
     module.add_function(wrap_pyfunction!(delta_set_properties, module)?)?;
     module.add_function(wrap_pyfunction!(delta_add_features, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_add_constraints, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_drop_constraints, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_create_checkpoint, module)?)?;
+    module.add_function(wrap_pyfunction!(delta_cleanup_metadata, module)?)?;
     Ok(())
 }

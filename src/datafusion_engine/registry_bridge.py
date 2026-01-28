@@ -1083,9 +1083,7 @@ def _delta_provider_artifact_payload(
         "path": str(location.path),
         "delta_version": location.delta_version,
         "delta_timestamp": location.delta_timestamp,
-        "delta_log_storage_options": (
-            dict(explicit_log_storage) if explicit_log_storage else None
-        ),
+        "delta_log_storage_options": (dict(explicit_log_storage) if explicit_log_storage else None),
         "delta_storage_options": dict(merged_storage) if merged_storage else None,
         "delta_storage_options_hash": _storage_options_hash(merged_storage),
         "delta_scan": _delta_scan_payload(delta_scan),

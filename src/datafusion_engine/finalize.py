@@ -39,15 +39,8 @@ from datafusion_engine.schema_alignment import AlignmentInfo, align_table
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema_validation import ArrowValidationOptions
+from datafusion_ext import stable_hash64
 from schema_spec.specs import TableSchemaSpec
-
-try:
-    from datafusion_ext import stable_hash64
-except ImportError:
-    from test_support import datafusion_ext_stub as _datafusion_ext_stub
-
-    _ = _datafusion_ext_stub
-    stable_hash64 = importlib.import_module("datafusion_ext").stable_hash64
 
 if TYPE_CHECKING:
     from datafusion_engine.schema_policy import SchemaPolicy

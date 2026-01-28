@@ -274,10 +274,7 @@ def _dedupe_best_by_score_expr(df: DataFrame, *, spec: DedupeSpec) -> Expr:
         order_tokens.append(f"{_sql_identifier(key.column)} {direction} {nulls}")
     order_by = ", ".join(order_tokens)
     if order_by:
-        sql = (
-            "dedupe_best_by_score() OVER "
-            f"(PARTITION BY {partition_by} ORDER BY {order_by})"
-        )
+        sql = f"dedupe_best_by_score() OVER (PARTITION BY {partition_by} ORDER BY {order_by})"
     else:
         sql = f"dedupe_best_by_score() OVER (PARTITION BY {partition_by})"
     return df.parse_sql_expr(sql)

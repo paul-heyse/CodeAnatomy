@@ -11,7 +11,6 @@ transforms.
 
 from __future__ import annotations
 
-import importlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -48,15 +47,8 @@ from arrow_utils.schema.semantic_types import (
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
 from datafusion_engine.sql_options import sql_options_for_profile
+from datafusion_ext import arrow_metadata
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
-
-try:
-    from datafusion_ext import arrow_metadata
-except ImportError:
-    from test_support import datafusion_ext_stub as _datafusion_ext_stub
-
-    _ = _datafusion_ext_stub
-    arrow_metadata = importlib.import_module("datafusion_ext").arrow_metadata
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame

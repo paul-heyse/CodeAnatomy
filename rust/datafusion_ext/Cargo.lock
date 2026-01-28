@@ -1766,6 +1766,7 @@ dependencies = [
  "datafusion-datasource-parquet",
  "datafusion-doc",
  "datafusion-expr",
+ "datafusion-expr-common",
  "datafusion-ffi",
  "datafusion-functions",
  "datafusion-functions-aggregate",

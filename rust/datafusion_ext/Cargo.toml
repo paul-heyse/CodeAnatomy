@@ -21,6 +21,7 @@ datafusion-datasource-csv = { version = "51.0.0", default-features = false }
 datafusion-datasource-parquet = { version = "51.0.0", default-features = false }
 datafusion-doc = "51.0.0"
 datafusion-expr = "51.0.0"
+datafusion-expr-common = "51.0.0"
 datafusion-ffi = "51.0.0"
 datafusion-functions = "51.0.0"
 datafusion-functions-aggregate = "51.0.0"

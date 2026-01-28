@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use async_trait::async_trait;
+use datafusion::config::ConfigOptions;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
@@ -11,11 +12,13 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
 };
+use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use tokio::runtime::Runtime;
 use tokio::time;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AsyncUdfPolicy {
     pub ideal_batch_size: Option<usize>,
     pub timeout: Option<Duration>,
@@ -77,14 +80,19 @@ pub const ASYNC_ECHO_NAME: &str = "async_echo";
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct AsyncEchoUdf {
     signature: Signature,
+    policy: AsyncUdfPolicy,
 }
 
 impl AsyncEchoUdf {
     fn new() -> Self {
+        Self::new_with_policy(async_udf_policy())
+    }
+
+    fn new_with_policy(policy: AsyncUdfPolicy) -> Self {
         let signature = Signature::string(1, Volatility::Immutable)
             .with_parameter_names(vec!["value".to_string()])
             .unwrap_or_else(|_| Signature::string(1, Volatility::Immutable));
-        Self { signature }
+        Self { signature, policy }
     }
 }
 
@@ -124,21 +132,61 @@ impl ScalarUDFImpl for AsyncEchoUdf {
         Ok(arg_type.clone())
     }
 
+    fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        if let Some(interval) = inputs.first() {
+            return Ok((*interval).clone());
+        }
+        Interval::make_unbounded(&DataType::Null)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        if inputs.len() == 1 {
+            return Ok(Some(vec![interval.clone()]));
+        }
+        Ok(Some(Vec::new()))
+    }
+
+    fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        if let Some(props) = inputs.first() {
+            return Ok(props.preserves_lex_ordering);
+        }
+        Ok(true)
+    }
+
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         Err(DataFusionError::Internal(
             "async_echo must be executed via async invocation".into(),
         ))
+    }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        let mut policy = self.policy;
+        if policy.ideal_batch_size.is_none() {
+            let size = config.execution.batch_size;
+            if size > 0 {
+                policy.ideal_batch_size = Some(size);
+            }
+        }
+        if policy == self.policy {
+            return None;
+        }
+        let inner = Arc::new(Self::new_with_policy(policy)) as Arc<dyn AsyncScalarUDFImpl>;
+        Some(AsyncScalarUDF::new(inner).into_scalar_udf())
     }
 }
 
 #[async_trait]
 impl AsyncScalarUDFImpl for AsyncEchoUdf {
     fn ideal_batch_size(&self) -> Option<usize> {
-        async_udf_policy().ideal_batch_size
+        self.policy.ideal_batch_size
     }
 
     async fn invoke_async_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let policy = async_udf_policy();
+        let policy = self.policy;
         let handle = async_runtime().spawn(async move {
             let value = args.args.first().ok_or_else(|| {
                 DataFusionError::Plan("async_echo expects exactly one argument".into())
@@ -174,6 +222,38 @@ pub fn async_echo_udf() -> ScalarUDF {
 }
 
 pub fn register_async_udfs(ctx: &SessionContext) -> Result<()> {
-    ctx.register_udf(async_echo_udf());
+    let state = ctx.state();
+    let config_options = state.config_options();
+    let mut policy = async_udf_policy();
+    if policy.ideal_batch_size.is_none() {
+        let size = config_options.execution.batch_size;
+        if size > 0 {
+            policy.ideal_batch_size = Some(size);
+        }
+    }
+    let inner = Arc::new(AsyncEchoUdf::new_with_policy(policy)) as Arc<dyn AsyncScalarUDFImpl>;
+    ctx.register_udf(AsyncScalarUDF::new(inner).into_scalar_udf());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AsyncEchoUdf, AsyncUdfPolicy};
+    use datafusion::config::ConfigOptions;
+    use datafusion_expr::ScalarUDFImpl;
+
+    #[test]
+    fn async_echo_updates_batch_size_from_config() {
+        let base = AsyncEchoUdf::new_with_policy(AsyncUdfPolicy {
+            ideal_batch_size: None,
+            timeout: None,
+        });
+        let mut config = ConfigOptions::new();
+        config.execution.batch_size = 256;
+        let updated = base.with_updated_config(&config);
+        assert!(updated.is_some(), "expected config-specialized UDF");
+        let udf = updated.expect("updated UDF");
+        let async_udf = udf.as_async().expect("async udf");
+        assert_eq!(async_udf.ideal_batch_size(), Some(256));
+    }
 }

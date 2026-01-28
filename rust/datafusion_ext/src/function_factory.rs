@@ -24,6 +24,8 @@ use datafusion_expr::{
     Signature, StatisticsArgs, Volatility, WindowFrame, WindowFunctionDefinition, WindowUDF,
     WindowUDFImpl,
 };
+use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -432,6 +434,34 @@ impl ScalarUDFImpl for SqlMacroUdf {
             self.return_type.clone(),
         ));
         Ok(ExprSimplifyResult::Simplified(casted))
+    }
+
+    fn short_circuits(&self) -> bool {
+        self.template.short_circuits()
+    }
+
+    fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        if matches!(self.template, Expr::Placeholder(_)) {
+            if let Some(interval) = inputs.first().copied() {
+                return Ok(interval.clone());
+            }
+        }
+        Interval::make_unbounded(&self.return_type)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        if matches!(self.template, Expr::Placeholder(_)) && inputs.len() == 1 {
+            return Ok(Some(vec![interval.clone()]));
+        }
+        Ok(Some(Vec::new()))
+    }
+
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        Ok(matches!(self.template, Expr::Placeholder(_)))
     }
 }
 

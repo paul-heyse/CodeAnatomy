@@ -7,20 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-try:
-    import datafusion_ext as _datafusion_ext
-except ImportError:
-    from test_support import datafusion_ext_stub as _datafusion_ext_stub
-
-    _ = _datafusion_ext_stub
-else:
-    if not hasattr(_datafusion_ext, "stable_hash64"):
-        from test_support import datafusion_ext_stub as _datafusion_ext_stub
-
-        _ = _datafusion_ext_stub
-    else:
-        _ = _datafusion_ext
-
+import datafusion_ext as _datafusion_ext
 from datafusion_engine.diagnostics import (
     ensure_recorder_sink,
     rust_udf_snapshot_payload,
@@ -30,6 +17,8 @@ from datafusion_engine.diagnostics import (
 from datafusion_engine.schema_contracts import SchemaViolation
 from datafusion_engine.view_artifacts import DataFusionViewArtifact
 from serde_msgspec import StructBase
+
+_ = _datafusion_ext
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

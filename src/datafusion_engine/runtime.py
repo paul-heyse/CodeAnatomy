@@ -3113,7 +3113,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
             return cached
         ctx = self._build_session_context()
         ctx = self._apply_url_table(ctx)
-        self._apply_delta_session_defaults(ctx)
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
@@ -3157,7 +3156,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         """
         ctx = self._build_session_context()
         ctx = self._apply_url_table(ctx)
-        self._apply_delta_session_defaults(ctx)
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
         self._install_registry_catalogs(ctx)
@@ -3351,47 +3349,6 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
 
             manager = DataFusionPluginManager(self.plugin_specs)
         manager.register_all(ctx)
-
-    def _apply_delta_session_defaults(self, ctx: SessionContext) -> None:
-        """Apply Delta session defaults when enabled.
-
-        Raises
-        ------
-        RuntimeError
-            Raised when the DataFusion extension module is unavailable.
-        """
-        if not self.enable_delta_session_defaults:
-            return
-        available = True
-        installed = False
-        error: str | None = None
-        cause: Exception | None = None
-        try:
-            module = importlib.import_module("datafusion_ext")
-        except ImportError as exc:
-            available = False
-            error = str(exc)
-            cause = exc
-        else:
-            applier = getattr(module, "apply_delta_session_defaults", None)
-            if not callable(applier):
-                error = "datafusion_ext.apply_delta_session_defaults is unavailable."
-            else:
-                try:
-                    applier(ctx)
-                except (RuntimeError, TypeError, ValueError) as exc:
-                    error = str(exc)
-                    cause = exc
-                else:
-                    installed = True
-        self._record_delta_session_defaults(
-            available=available,
-            installed=installed,
-            error=error,
-        )
-        if error is not None:
-            msg = "Delta session defaults require datafusion_ext."
-            raise RuntimeError(msg) from cause
 
     def _install_udf_platform(self, ctx: SessionContext) -> None:
         """Install the unified Rust UDF platform on the session context."""
@@ -4830,18 +4787,109 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
         -------
         datafusion.SessionContext
             Base session context for this profile.
+        """
+        if not self.distributed:
+            return self._build_local_session_context()
+        return self._build_distributed_session_context()
+
+    def _build_local_session_context(self) -> SessionContext:
+        """Create a non-distributed SessionContext for this profile.
+
+        Returns
+        -------
+        datafusion.SessionContext
+            Local session context for this profile.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when Delta session initialization fails.
+        """
+        if not self.enable_delta_session_defaults:
+            return SessionContext(self.session_config(), self.runtime_env_builder())
+        available = True
+        installed = False
+        error: str | None = None
+        cause: Exception | None = None
+        ctx: SessionContext | None = None
+        try:
+            module = importlib.import_module("datafusion_ext")
+        except ImportError as exc:
+            available = False
+            error = str(exc)
+            cause = exc
+        else:
+            builder = getattr(module, "delta_session_context", None)
+            if not callable(builder):
+                error = "datafusion_ext.delta_session_context is unavailable."
+                cause = TypeError(error)
+            else:
+                builder_fn = cast(
+                    "Callable[[list[tuple[str, str]], RuntimeEnvBuilder], SessionContext]",
+                    builder,
+                )
+                try:
+                    settings = self.settings_payload()
+                    settings["datafusion.catalog.information_schema"] = str(
+                        self.enable_information_schema
+                    ).lower()
+                    ctx = builder_fn(
+                        list(settings.items()),
+                        self.runtime_env_builder(),
+                    )
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    error = str(exc)
+                    cause = exc
+                else:
+                    if not isinstance(ctx, SessionContext):
+                        error = "datafusion_ext.delta_session_context must return a SessionContext."
+                        cause = TypeError(error)
+                        ctx = None
+                    else:
+                        installed = True
+        self._record_delta_session_defaults(
+            available=available,
+            installed=installed,
+            error=error,
+        )
+        if error is not None:
+            msg = "Delta session defaults require datafusion_ext."
+            raise RuntimeError(msg) from cause
+        if ctx is None:
+            msg = "Delta session context construction failed."
+            raise RuntimeError(msg)
+        return ctx
+
+    def _build_distributed_session_context(self) -> SessionContext:
+        """Create a distributed SessionContext for this profile.
+
+        Returns
+        -------
+        datafusion.SessionContext
+            Distributed session context for this profile.
 
         Raises
         ------
         ValueError
-            Raised when distributed execution is enabled without a factory.
+            Raised when distributed execution is misconfigured.
+        TypeError
+            Raised when the distributed factory does not return a SessionContext.
         """
-        if not self.distributed:
-            return SessionContext(self.session_config(), self.runtime_env_builder())
+        if self.enable_delta_session_defaults:
+            msg = (
+                "Delta session defaults require a non-distributed SessionContext. "
+                "Provide a delta-configured distributed_context_factory or disable "
+                "enable_delta_session_defaults."
+            )
+            raise ValueError(msg)
         if self.distributed_context_factory is None:
             msg = "Distributed execution requires distributed_context_factory."
             raise ValueError(msg)
-        return self.distributed_context_factory()
+        context = self.distributed_context_factory()
+        if not isinstance(context, SessionContext):
+            msg = "distributed_context_factory must return a SessionContext."
+            raise TypeError(msg)
+        return context
 
     def _apply_url_table(self, ctx: SessionContext) -> SessionContext:
         return ctx.enable_url_table() if self.enable_url_table else ctx

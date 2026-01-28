@@ -9,6 +9,7 @@ __all__ = (
     "DeltaCdfOptions",
     "DeltaDataCheckRequest",
     "DeltaDeleteWhereRequest",
+    "DeltaFeatureMutationOptions",
     "DeltaMergeArrowRequest",
     "DeltaSchemaPolicy",
     "DeltaSchemaRequest",
@@ -28,10 +29,12 @@ __all__ = (
     "cleanup_delta_log",
     "coerce_delta_table",
     "create_delta_checkpoint",
+    "delta_add_constraints",
     "delta_cdf_enabled",
     "delta_commit_metadata",
     "delta_data_checker",
     "delta_delete_where",
+    "delta_drop_constraints",
     "delta_history_snapshot",
     "delta_merge_arrow",
     "delta_protocol_snapshot",
@@ -40,10 +43,33 @@ __all__ = (
     "delta_table_schema",
     "delta_table_version",
     "delta_write_configuration",
+    "disable_delta_change_data_feed",
+    "disable_delta_check_constraints",
+    "disable_delta_checkpoint_protection",
+    "disable_delta_column_mapping",
+    "disable_delta_deletion_vectors",
+    "disable_delta_generated_columns",
+    "disable_delta_in_commit_timestamps",
+    "disable_delta_invariants",
+    "disable_delta_row_tracking",
+    "disable_delta_v2_checkpoints",
+    "disable_delta_vacuum_protocol_check",
+    "enable_delta_change_data_feed",
+    "enable_delta_check_constraints",
+    "enable_delta_checkpoint_protection",
+    "enable_delta_column_mapping",
+    "enable_delta_deletion_vectors",
     "enable_delta_features",
+    "enable_delta_generated_columns",
+    "enable_delta_in_commit_timestamps",
+    "enable_delta_invariants",
+    "enable_delta_row_tracking",
+    "enable_delta_v2_checkpoints",
+    "enable_delta_vacuum_protocol_check",
     "evaluate_and_select_files",
     "evaluate_filters_against_index",
     "idempotent_commit_properties",
+    "query_delta_sql",
     "read_delta_cdf",
     "select_candidate_files",
     "vacuum_delta",
@@ -58,6 +84,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaCdfOptions": ("storage.deltalake.delta", "DeltaCdfOptions"),
     "DeltaDataCheckRequest": ("storage.deltalake.delta", "DeltaDataCheckRequest"),
     "DeltaDeleteWhereRequest": ("storage.deltalake.delta", "DeltaDeleteWhereRequest"),
+    "DeltaFeatureMutationOptions": ("storage.deltalake.delta", "DeltaFeatureMutationOptions"),
     "DeltaMergeArrowRequest": ("storage.deltalake.delta", "DeltaMergeArrowRequest"),
     "DeltaSchemaRequest": ("storage.deltalake.delta", "DeltaSchemaRequest"),
     "DeltaVacuumOptions": ("storage.deltalake.delta", "DeltaVacuumOptions"),
@@ -74,13 +101,86 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "delta_commit_metadata": ("storage.deltalake.delta", "delta_commit_metadata"),
     "delta_data_checker": ("storage.deltalake.delta", "delta_data_checker"),
     "delta_delete_where": ("storage.deltalake.delta", "delta_delete_where"),
+    "delta_add_constraints": ("storage.deltalake.delta", "delta_add_constraints"),
+    "delta_drop_constraints": ("storage.deltalake.delta", "delta_drop_constraints"),
     "delta_history_snapshot": ("storage.deltalake.delta", "delta_history_snapshot"),
     "delta_merge_arrow": ("storage.deltalake.delta", "delta_merge_arrow"),
     "delta_protocol_snapshot": ("storage.deltalake.delta", "delta_protocol_snapshot"),
     "delta_table_features": ("storage.deltalake.delta", "delta_table_features"),
     "delta_table_schema": ("storage.deltalake.delta", "delta_table_schema"),
     "delta_table_version": ("storage.deltalake.delta", "delta_table_version"),
+    "disable_delta_change_data_feed": (
+        "storage.deltalake.delta",
+        "disable_delta_change_data_feed",
+    ),
+    "disable_delta_check_constraints": (
+        "storage.deltalake.delta",
+        "disable_delta_check_constraints",
+    ),
+    "disable_delta_checkpoint_protection": (
+        "storage.deltalake.delta",
+        "disable_delta_checkpoint_protection",
+    ),
+    "disable_delta_column_mapping": (
+        "storage.deltalake.delta",
+        "disable_delta_column_mapping",
+    ),
+    "disable_delta_deletion_vectors": (
+        "storage.deltalake.delta",
+        "disable_delta_deletion_vectors",
+    ),
+    "disable_delta_generated_columns": (
+        "storage.deltalake.delta",
+        "disable_delta_generated_columns",
+    ),
+    "disable_delta_in_commit_timestamps": (
+        "storage.deltalake.delta",
+        "disable_delta_in_commit_timestamps",
+    ),
+    "disable_delta_invariants": ("storage.deltalake.delta", "disable_delta_invariants"),
+    "disable_delta_row_tracking": ("storage.deltalake.delta", "disable_delta_row_tracking"),
+    "disable_delta_v2_checkpoints": (
+        "storage.deltalake.delta",
+        "disable_delta_v2_checkpoints",
+    ),
+    "disable_delta_vacuum_protocol_check": (
+        "storage.deltalake.delta",
+        "disable_delta_vacuum_protocol_check",
+    ),
     "enable_delta_features": ("storage.deltalake.delta", "enable_delta_features"),
+    "enable_delta_change_data_feed": (
+        "storage.deltalake.delta",
+        "enable_delta_change_data_feed",
+    ),
+    "enable_delta_check_constraints": (
+        "storage.deltalake.delta",
+        "enable_delta_check_constraints",
+    ),
+    "enable_delta_checkpoint_protection": (
+        "storage.deltalake.delta",
+        "enable_delta_checkpoint_protection",
+    ),
+    "enable_delta_column_mapping": ("storage.deltalake.delta", "enable_delta_column_mapping"),
+    "enable_delta_deletion_vectors": (
+        "storage.deltalake.delta",
+        "enable_delta_deletion_vectors",
+    ),
+    "enable_delta_generated_columns": (
+        "storage.deltalake.delta",
+        "enable_delta_generated_columns",
+    ),
+    "enable_delta_in_commit_timestamps": (
+        "storage.deltalake.delta",
+        "enable_delta_in_commit_timestamps",
+    ),
+    "enable_delta_invariants": ("storage.deltalake.delta", "enable_delta_invariants"),
+    "enable_delta_row_tracking": ("storage.deltalake.delta", "enable_delta_row_tracking"),
+    "enable_delta_v2_checkpoints": ("storage.deltalake.delta", "enable_delta_v2_checkpoints"),
+    "enable_delta_vacuum_protocol_check": (
+        "storage.deltalake.delta",
+        "enable_delta_vacuum_protocol_check",
+    ),
+    "query_delta_sql": ("storage.deltalake.delta", "query_delta_sql"),
     "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
     "write_delta_table": ("storage.deltalake.delta", "write_delta_table"),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
@@ -115,6 +215,7 @@ if TYPE_CHECKING:
     DeltaCdfOptions = _delta_io.DeltaCdfOptions
     DeltaDataCheckRequest = _delta_io.DeltaDataCheckRequest
     DeltaDeleteWhereRequest = _delta_io.DeltaDeleteWhereRequest
+    DeltaFeatureMutationOptions = _delta_io.DeltaFeatureMutationOptions
     DeltaMergeArrowRequest = _delta_io.DeltaMergeArrowRequest
     DeltaSchemaRequest = _delta_io.DeltaSchemaRequest
     DeltaVacuumOptions = _delta_io.DeltaVacuumOptions
@@ -130,6 +231,8 @@ if TYPE_CHECKING:
     delta_commit_metadata = _delta_io.delta_commit_metadata
     delta_data_checker = _delta_io.delta_data_checker
     delta_delete_where = _delta_io.delta_delete_where
+    delta_add_constraints = _delta_io.delta_add_constraints
+    delta_drop_constraints = _delta_io.delta_drop_constraints
     delta_history_snapshot = _delta_io.delta_history_snapshot
     delta_merge_arrow = _delta_io.delta_merge_arrow
     delta_protocol_snapshot = _delta_io.delta_protocol_snapshot
@@ -137,7 +240,30 @@ if TYPE_CHECKING:
     delta_table_features = _delta_io.delta_table_features
     delta_table_schema = _delta_io.delta_table_schema
     delta_table_version = _delta_io.delta_table_version
+    disable_delta_change_data_feed = _delta_io.disable_delta_change_data_feed
+    disable_delta_check_constraints = _delta_io.disable_delta_check_constraints
+    disable_delta_checkpoint_protection = _delta_io.disable_delta_checkpoint_protection
+    disable_delta_column_mapping = _delta_io.disable_delta_column_mapping
+    disable_delta_deletion_vectors = _delta_io.disable_delta_deletion_vectors
+    disable_delta_generated_columns = _delta_io.disable_delta_generated_columns
+    disable_delta_in_commit_timestamps = _delta_io.disable_delta_in_commit_timestamps
+    disable_delta_invariants = _delta_io.disable_delta_invariants
+    disable_delta_row_tracking = _delta_io.disable_delta_row_tracking
+    disable_delta_v2_checkpoints = _delta_io.disable_delta_v2_checkpoints
+    disable_delta_vacuum_protocol_check = _delta_io.disable_delta_vacuum_protocol_check
     enable_delta_features = _delta_io.enable_delta_features
+    enable_delta_change_data_feed = _delta_io.enable_delta_change_data_feed
+    enable_delta_check_constraints = _delta_io.enable_delta_check_constraints
+    enable_delta_checkpoint_protection = _delta_io.enable_delta_checkpoint_protection
+    enable_delta_column_mapping = _delta_io.enable_delta_column_mapping
+    enable_delta_deletion_vectors = _delta_io.enable_delta_deletion_vectors
+    enable_delta_generated_columns = _delta_io.enable_delta_generated_columns
+    enable_delta_in_commit_timestamps = _delta_io.enable_delta_in_commit_timestamps
+    enable_delta_invariants = _delta_io.enable_delta_invariants
+    enable_delta_row_tracking = _delta_io.enable_delta_row_tracking
+    enable_delta_v2_checkpoints = _delta_io.enable_delta_v2_checkpoints
+    enable_delta_vacuum_protocol_check = _delta_io.enable_delta_vacuum_protocol_check
+    query_delta_sql = _delta_io.query_delta_sql
     read_delta_cdf = _delta_io.read_delta_cdf
     write_delta_table = _delta_io.write_delta_table
     vacuum_delta = _delta_io.vacuum_delta

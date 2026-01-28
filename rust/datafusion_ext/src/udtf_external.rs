@@ -331,7 +331,7 @@ fn listing_table_provider(
 }
 
 fn schema_from_ipc(payload: Vec<u8>) -> Result<SchemaRef> {
-    let mut reader = StreamReader::try_new(Cursor::new(payload), None)
+    let reader = StreamReader::try_new(Cursor::new(payload), None)
         .map_err(|err| DataFusionError::Plan(format!("Failed to open schema IPC stream: {err}")))?;
     Ok(Arc::clone(&reader.schema()))
 }

@@ -55,12 +55,16 @@ from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
     delta_table_version,
-    enable_delta_features,
     idempotent_commit_properties,
     write_delta_table,
 )
 from storage.deltalake.config import delta_schema_configuration, delta_write_configuration
-from storage.deltalake.delta import DEFAULT_DELTA_FEATURE_PROPERTIES, IdempotentWriteOptions
+from storage.deltalake.delta import (
+    DEFAULT_DELTA_FEATURE_PROPERTIES,
+    DeltaFeatureMutationOptions,
+    IdempotentWriteOptions,
+    enable_delta_features,
+)
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -1038,11 +1042,15 @@ class WritePipeline:
             constraint_status="passed" if spec.extra_constraints else "skipped",
         )
         enabled_features = enable_delta_features(
-            spec.table_uri,
-            storage_options=spec.storage_options,
-            log_storage_options=spec.log_storage_options,
+            DeltaFeatureMutationOptions(
+                path=spec.table_uri,
+                storage_options=spec.storage_options,
+                log_storage_options=spec.log_storage_options,
+                commit_metadata=spec.commit_metadata,
+                runtime_profile=self.runtime_profile,
+                dataset_name=spec.commit_key,
+            ),
             features=spec.table_properties,
-            commit_metadata=spec.commit_metadata,
         )
         if not enabled_features:
             enabled_features = dict(spec.table_properties)

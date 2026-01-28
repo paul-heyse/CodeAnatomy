@@ -45,10 +45,10 @@ pub fn registry_snapshot(state: &SessionState) -> RegistrySnapshot {
     let custom_names = custom_udf_names(&table_signatures);
     let mut snapshot = RegistrySnapshot::new();
     snapshot.custom_udfs = custom_names.iter().cloned().collect();
-    record_scalar_udfs(state, &mut snapshot);
-    record_aggregate_udfs(state, &mut snapshot);
-    record_window_udfs(state, &mut snapshot);
-    record_table_functions(state, &mut snapshot);
+    record_scalar_udfs(state, &custom_names, &mut snapshot);
+    record_aggregate_udfs(state, &custom_names, &mut snapshot);
+    record_window_udfs(state, &custom_names, &mut snapshot);
+    record_table_functions(state, &custom_names, &mut snapshot);
     apply_table_signatures(&mut snapshot, &table_signatures);
     apply_custom_signatures(&mut snapshot);
     apply_docs_parameter_names(state, &mut snapshot);
@@ -60,25 +60,42 @@ pub fn registry_snapshot(state: &SessionState) -> RegistrySnapshot {
     snapshot
 }
 
-fn record_scalar_udfs(state: &SessionState, snapshot: &mut RegistrySnapshot) {
+fn record_scalar_udfs(
+    state: &SessionState,
+    custom_names: &BTreeSet<String>,
+    snapshot: &mut RegistrySnapshot,
+) {
+    let config_options = state.config_options();
     for (name, udf) in state.scalar_functions() {
+        if !custom_names.contains(name) {
+            continue;
+        }
+        let updated = udf.inner().with_updated_config(config_options);
+        let udf_ref = updated.as_ref().unwrap_or(udf);
         snapshot.scalar.push(name.clone());
         record_aliases(name, udf.aliases(), &mut snapshot.aliases);
         record_signature(
             name,
-            udf.signature(),
+            udf_ref.signature(),
             &mut snapshot.parameter_names,
             &mut snapshot.volatility,
         );
         record_rewrite_tags(name, snapshot);
-        record_signature_details(name, udf.signature(), snapshot, |arg_types| {
-            udf.return_type(arg_types).ok()
+        record_signature_details(name, udf_ref.signature(), snapshot, |arg_types| {
+            udf_ref.return_type(arg_types).ok()
         });
     }
 }
 
-fn record_aggregate_udfs(state: &SessionState, snapshot: &mut RegistrySnapshot) {
+fn record_aggregate_udfs(
+    state: &SessionState,
+    custom_names: &BTreeSet<String>,
+    snapshot: &mut RegistrySnapshot,
+) {
     for (name, udaf) in state.aggregate_functions() {
+        if !custom_names.contains(name) {
+            continue;
+        }
         snapshot.aggregate.push(name.clone());
         record_aliases(name, udaf.aliases(), &mut snapshot.aliases);
         record_signature(
@@ -94,8 +111,15 @@ fn record_aggregate_udfs(state: &SessionState, snapshot: &mut RegistrySnapshot) 
     }
 }
 
-fn record_window_udfs(state: &SessionState, snapshot: &mut RegistrySnapshot) {
+fn record_window_udfs(
+    state: &SessionState,
+    custom_names: &BTreeSet<String>,
+    snapshot: &mut RegistrySnapshot,
+) {
     for (name, udwf) in state.window_functions() {
+        if !custom_names.contains(name) {
+            continue;
+        }
         snapshot.window.push(name.clone());
         record_aliases(name, udwf.aliases(), &mut snapshot.aliases);
         record_signature(
@@ -111,8 +135,15 @@ fn record_window_udfs(state: &SessionState, snapshot: &mut RegistrySnapshot) {
     }
 }
 
-fn record_table_functions(state: &SessionState, snapshot: &mut RegistrySnapshot) {
+fn record_table_functions(
+    state: &SessionState,
+    custom_names: &BTreeSet<String>,
+    snapshot: &mut RegistrySnapshot,
+) {
     for (name, _udtf) in state.table_functions() {
+        if !custom_names.contains(name) {
+            continue;
+        }
         snapshot.table.push(name.clone());
         record_rewrite_tags(name, snapshot);
     }
@@ -722,7 +753,12 @@ fn record_signature_details<F>(
     let mut return_rows = Vec::with_capacity(arg_sets.len());
     for arg_types in arg_sets {
         input_rows.push(arg_types.iter().map(format_data_type).collect::<Vec<_>>());
-        let resolved = return_type(&arg_types).unwrap_or(DataType::Null);
+        let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            return_type(&arg_types)
+        }))
+        .ok()
+        .and_then(|value| value)
+        .unwrap_or(DataType::Null);
         return_rows.push(format_data_type(&resolved));
     }
     snapshot
@@ -749,6 +785,7 @@ fn arg_sets_from_type_signature(signature: &TypeSignature) -> Vec<Vec<DataType>>
             .map(|dtype| vec![vec![dtype.clone(); *count]])
             .unwrap_or_default(),
         TypeSignature::Any(count) => vec![vec![DataType::Null; *count]],
+        TypeSignature::UserDefined => vec![vec![DataType::Null]],
         TypeSignature::Nullary => vec![Vec::new()],
         _ => Vec::new(),
     }

@@ -12,14 +12,14 @@ import pyarrow.types as patypes
 from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 
-from arrow_utils.core.interop import (
+from datafusion_engine.arrow_interop import (
     DataTypeLike,
     RecordBatchReaderLike,
     TableLike,
     coerce_table_like,
 )
-from arrow_utils.schema.chunking import ChunkPolicy
-from arrow_utils.schema.encoding import EncodingPolicy
+from datafusion_engine.arrow_schema.chunking import ChunkPolicy
+from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.introspection import invalidate_introspection_cache
 
 if TYPE_CHECKING:

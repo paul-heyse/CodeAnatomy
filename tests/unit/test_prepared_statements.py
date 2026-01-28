@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrow_utils.schema.build import rows_from_table
+from datafusion_engine.arrow_schema.build import rows_from_table
 from datafusion_engine.execution_facade import DataFusionExecutionFacade
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 

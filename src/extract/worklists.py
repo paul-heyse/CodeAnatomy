@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Protocol
 
 from datafusion import DataFrame, SessionContext, col
 
-from arrow_utils.core.interop import TableLike
 from cache.diskcache_factory import build_deque, build_index
-from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.arrow_interop import TableLike
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.schema_introspection import table_names_snapshot
 from extract.cache_utils import diskcache_profile_from_ctx, stable_cache_label
 from extract.helpers import FileContext

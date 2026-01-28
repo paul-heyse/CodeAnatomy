@@ -10,7 +10,8 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from deltalake import DeltaTable
+from datafusion_engine.delta_control_plane import DeltaRestoreRequest, delta_restore
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Storage option key=value (repeatable).",
+    )
+    parser.add_argument(
+        "--allow-unsafe",
+        action="store_true",
+        help="Allow unsafe restore operations when supported.",
     )
     parser.add_argument(
         "--report-path",
@@ -76,6 +82,7 @@ def restore_delta_table(
     version: int | None,
     timestamp: str | None,
     storage_options: dict[str, str] | None,
+    allow_unsafe_restore: bool,
 ) -> RestoreReport:
     """Restore a Delta table and return a report payload.
 
@@ -95,8 +102,20 @@ def restore_delta_table(
     if version is not None and timestamp is not None:
         msg = "Specify only one of --version or --timestamp."
         raise ValueError(msg)
-    table = DeltaTable(path, storage_options=storage_options)
-    result = table.restore(version=version, timestamp=timestamp)
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    result = delta_restore(
+        ctx,
+        request=DeltaRestoreRequest(
+            table_uri=path,
+            storage_options=storage_options,
+            version=None,
+            timestamp=None,
+            restore_version=version,
+            restore_timestamp=timestamp,
+            allow_unsafe_restore=allow_unsafe_restore,
+        ),
+    )
     return RestoreReport(path=path, version=version, timestamp=timestamp, result=result)
 
 
@@ -121,6 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             version=args.version,
             timestamp=args.timestamp,
             storage_options=storage_options or None,
+            allow_unsafe_restore=bool(args.allow_unsafe),
         )
     except ValueError as exc:
         parser.error(str(exc))

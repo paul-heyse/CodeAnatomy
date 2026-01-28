@@ -12,10 +12,10 @@ import pyarrow as pa
 from datafusion.dataframe import DataFrame
 from hamilton.function_modifiers import tag
 
-from arrow_utils.schema.abi import schema_fingerprint
 from core_types import JsonDict
-from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.param_tables import (
     ListParamSpec,
     ParamTableArtifact,

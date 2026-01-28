@@ -6,8 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from arrow_utils.core.interop import SchemaLike
-from arrow_utils.schema.metadata import (
+from datafusion_engine.arrow_interop import SchemaLike
+from datafusion_engine.arrow_schema.metadata import (
     decode_metadata_list,
     decode_metadata_map,
     decode_metadata_scalar_map,

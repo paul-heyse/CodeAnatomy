@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 
-import arrow_utils.core.interop as pa
+import datafusion_engine.arrow_interop as pa
 
 type ArrayOrChunked = pa.ArrayLike | pa.ChunkedArrayLike
 

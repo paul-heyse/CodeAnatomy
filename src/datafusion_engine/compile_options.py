@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from datafusion import SQLOptions
 
 if TYPE_CHECKING:
-    from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
+    from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.runtime import DataFusionRuntimeProfile
     from engine.plan_cache import PlanCache
 

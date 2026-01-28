@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 from datafusion import SessionContext
 
-from storage.ipc import payload_ipc_bytes
+from storage.ipc_utils import payload_ipc_bytes
 
 EXPR_PLANNER_PAYLOAD_VERSION = 1
 _EXPR_PLANNER_PAYLOAD_SCHEMA = pa.schema(

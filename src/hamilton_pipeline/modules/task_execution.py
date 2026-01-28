@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from hamilton.function_modifiers import pipe_input, source, step, tag
 
-from arrow_utils.core.interop import TableLike as ArrowTableLike
-from arrow_utils.schema.abi import schema_fingerprint
-from arrow_utils.schema.build import empty_table
 from core_types import JsonDict
+from datafusion_engine.arrow_interop import TableLike as ArrowTableLike
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.arrow_schema.build import empty_table
 from datafusion_engine.execution_facade import ExecutionResult
 from datafusion_engine.finalize import Contract, FinalizeOptions, normalize_only
 from datafusion_engine.view_registry import ensure_view_graph

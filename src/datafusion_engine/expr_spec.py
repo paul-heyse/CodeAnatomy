@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from arrow_utils.core.expr_types import ScalarValue
-from arrow_utils.core.interop import ScalarLike
+from datafusion_engine.arrow_interop import ScalarLike
 
 if TYPE_CHECKING:
     from datafusion.expr import Expr

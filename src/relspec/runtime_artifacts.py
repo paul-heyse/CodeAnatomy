@@ -11,8 +11,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
-from arrow_utils.core.interop import SchemaLike
-from arrow_utils.schema.abi import schema_fingerprint
 from cache.diskcache_factory import (
     DiskCacheProfile,
     bulk_cache_set,
@@ -20,6 +18,8 @@ from cache.diskcache_factory import (
     evict_cache_tag,
 )
 from core_types import DeterminismTier
+from datafusion_engine.arrow_interop import SchemaLike
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.execution_facade import ExecutionResult, ExecutionResultKind
 
 if TYPE_CHECKING:

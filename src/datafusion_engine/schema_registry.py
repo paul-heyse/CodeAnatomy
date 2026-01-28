@@ -29,8 +29,8 @@ from arrow_utils.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from arrow_utils.schema.build import list_view_type, struct_type
-from arrow_utils.schema.metadata import (
+from datafusion_engine.arrow_schema.build import list_view_type, struct_type
+from datafusion_engine.arrow_schema.metadata import (
     function_requirements_metadata_spec,
     metadata_list_bytes,
     optional_functions_from_metadata,
@@ -39,7 +39,7 @@ from arrow_utils.schema.metadata import (
     required_function_signatures_from_metadata,
     required_functions_from_metadata,
 )
-from arrow_utils.schema.semantic_types import (
+from datafusion_engine.arrow_schema.semantic_types import (
     SEMANTIC_TYPE_META,
     byte_span_type,
     span_metadata,

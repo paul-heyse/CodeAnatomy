@@ -14,7 +14,7 @@ import pyarrow as pa
 from core_types import DeterminismTier
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from serde_msgspec import dumps_msgpack, to_builtins
-from storage.ipc import payload_hash
+from storage.ipc_utils import payload_hash
 
 if TYPE_CHECKING:
     from datafusion_engine.udf_runtime import RustUdfSnapshot

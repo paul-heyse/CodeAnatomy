@@ -15,10 +15,10 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
-from arrow_utils.core.interop import pc
-from arrow_utils.schema.abi import schema_fingerprint
+from arrow_utils.core.array_iter import iter_array_values
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.io_adapter import DataFusionIOAdapter
-from storage.ipc import payload_hash
+from storage.ipc_utils import payload_hash
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
 _PARAM_SIGNATURE_SEPARATOR = "\x1f"
@@ -273,7 +273,14 @@ def unique_values(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedAr
     pyarrow.Array | pyarrow.ChunkedArray
         Array with unique values preserved.
     """
-    return pc.unique(values)
+    seen: set[object | None] = set()
+    unique: list[object | None] = []
+    for value in iter_array_values(values):
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return pa.array(unique, type=values.type)
 
 
 def _new_scope_key() -> str:

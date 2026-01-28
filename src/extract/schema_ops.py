@@ -7,9 +7,9 @@ from dataclasses import dataclass, replace
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import TableLike
-from arrow_utils.schema.metadata import SchemaMetadataSpec
 from core_types import DeterminismTier
+from datafusion_engine.arrow_interop import TableLike
+from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
 from datafusion_engine.extract_registry import (
     dataset_metadata_with_options,
     dataset_schema,

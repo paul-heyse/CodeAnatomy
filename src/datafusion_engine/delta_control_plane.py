@@ -13,12 +13,12 @@ import base64
 import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
 
-from arrow_utils.schema.abi import schema_to_dict
+from datafusion_engine.arrow_schema.abi import schema_to_dict
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from schema_spec.system import DeltaScanOptions
 
@@ -54,6 +54,7 @@ class DeltaProviderBundle:
     scan_config: Mapping[str, object]
     scan_effective: dict[str, object]
     add_actions: object | None = None
+    predicate_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,7 @@ class DeltaProviderRequest:
     version: int | None
     timestamp: str | None
     delta_scan: DeltaScanOptions | None
+    predicate: str | None = None
     gate: DeltaFeatureGate | None = None
 
 
@@ -556,6 +558,7 @@ def delta_provider_from_session(
         storage_payload,
         request.version,
         request.timestamp,
+        request.predicate,
         request.delta_scan.file_column_name if request.delta_scan else None,
         request.delta_scan.enable_parquet_pushdown if request.delta_scan else None,
         request.delta_scan.schema_force_view_types if request.delta_scan else None,
@@ -579,6 +582,7 @@ def delta_provider_from_session(
         scan_config=scan_config,
         scan_effective=_scan_effective_payload(scan_config),
         add_actions=payload.get("add_actions"),
+        predicate_error=cast("str | None", payload.get("predicate_error")),
     )
 
 

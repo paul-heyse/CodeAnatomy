@@ -49,12 +49,15 @@ from datafusion import SessionContext, SQLOptions, col
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
 
-from arrow_utils.core.interop import SchemaLike
 from arrow_utils.core.ordering import OrderingLevel
 from arrow_utils.core.schema_constants import DEFAULT_VALUE_META
-from arrow_utils.schema.abi import schema_fingerprint, schema_to_dict
-from arrow_utils.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from core_types import ensure_path
+from datafusion_engine.arrow_interop import SchemaLike
+from datafusion_engine.arrow_schema.abi import schema_fingerprint, schema_to_dict
+from datafusion_engine.arrow_schema.metadata import (
+    ordering_from_schema,
+    schema_constraints_from_metadata,
+)
 from datafusion_engine.dataset_registry import (
     DatasetCatalog,
     DatasetLocation,
@@ -924,9 +927,17 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
     if context.options.provider == "delta_cdf":
         df = _register_delta_cdf(context)
     elif _should_register_delta_provider(context):
-        df = _register_delta_provider(context)
+        if _should_use_delta_ddl(context):
+            predicate_sql, predicate_error = _delta_pruning_predicate(context)
+            df = _register_delta_ddl_table(
+                context,
+                predicate=predicate_sql,
+                predicate_error=predicate_error,
+            )
+        else:
+            df = _register_delta_provider(context)
     else:
-        msg = "Delta registration requires the native provider; DDL fallback is disabled."
+        msg = "Delta registration requires the native provider or DDL opt-in."
         raise ValueError(msg)
     _invalidate_information_schema_cache(context.runtime_profile, context.ctx)
     _validate_schema_contracts(context)
@@ -947,6 +958,7 @@ class _DeltaProviderRequest:
     timestamp: str | None
     delta_scan: DeltaScanOptions | None
     gate: DeltaFeatureGate | None
+    predicate: str | None
 
 
 @dataclass(frozen=True)
@@ -954,10 +966,40 @@ class _DeltaProviderResponse:
     provider: object
     delta_scan_effective: Mapping[str, object] | None
     snapshot: Mapping[str, object] | None
+    add_actions: Sequence[Mapping[str, object]] | None
+    predicate_error: str | None
+
+
+@dataclass(frozen=True)
+class _DeltaProviderArtifactContext:
+    delta_scan: DeltaScanOptions | None
+    delta_scan_effective: Mapping[str, object] | None
+    snapshot: Mapping[str, object] | None
+    registration_path: str
+    predicate: str | None
+    predicate_error: str | None
+    add_actions: Sequence[Mapping[str, object]] | None
+
+
+def _delta_pruning_predicate(
+    context: DataFusionRegistrationContext,
+) -> tuple[str | None, str | None]:
+    dataset_spec = _resolve_dataset_spec(context.name, context.location)
+    if dataset_spec is None:
+        return None, None
+    query_spec = dataset_spec.query()
+    predicate = query_spec.pushdown_predicate or query_spec.predicate
+    if predicate is None:
+        return None, None
+    try:
+        return predicate.to_sql(), None
+    except (TypeError, ValueError) as exc:
+        return None, str(exc)
 
 
 def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFrame:
     location = context.location
+    predicate_sql, predicate_error = _delta_pruning_predicate(context)
     delta_scan = resolve_delta_scan_options(location)
     if (
         delta_scan is not None
@@ -979,6 +1021,7 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
         timestamp=location.delta_timestamp,
         delta_scan=delta_scan,
         gate=resolve_delta_feature_gate(location),
+        predicate=predicate_sql,
     )
     response = _delta_table_provider_from_session(request)
     provider = response.provider
@@ -993,9 +1036,15 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
             source=None,
             details=_delta_provider_artifact_payload(
                 location,
-                delta_scan=delta_scan,
-                delta_scan_effective=response.delta_scan_effective,
-                snapshot=response.snapshot,
+                context=_DeltaProviderArtifactContext(
+                    delta_scan=delta_scan,
+                    delta_scan_effective=response.delta_scan_effective,
+                    snapshot=response.snapshot,
+                    registration_path="provider",
+                    predicate=predicate_sql,
+                    predicate_error=predicate_error or response.predicate_error,
+                    add_actions=response.add_actions,
+                ),
             ),
         ),
     )
@@ -1020,6 +1069,103 @@ def _register_delta_provider(context: DataFusionRegistrationContext) -> DataFram
         supports_insert=True,
     )
     df = context.ctx.table(context.name)
+    return _maybe_cache(context, df)
+
+
+def _should_use_delta_ddl(context: DataFusionRegistrationContext) -> bool:
+    profile = context.runtime_profile
+    return bool(profile is not None and profile.enable_delta_ddl_registration)
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_table_ref(name: str) -> str:
+    parts = [part for part in name.split(".") if part]
+    if not parts:
+        return _sql_identifier(name)
+    return ".".join(_sql_identifier(part) for part in parts)
+
+
+def _sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _delta_external_table_ddl(
+    *,
+    table_name: str,
+    table_uri: str,
+    options: Mapping[str, str] | None,
+) -> str:
+    ddl = (
+        f"CREATE EXTERNAL TABLE {_sql_table_ref(table_name)} "
+        f"STORED AS DELTATABLE LOCATION {_sql_literal(table_uri)}"
+    )
+    if not options:
+        return ddl
+    entries = ", ".join(
+        f"{_sql_literal(str(key))} {_sql_literal(str(value))}"
+        for key, value in sorted(options.items())
+    )
+    return f"{ddl} OPTIONS({entries})"
+
+
+def _register_delta_ddl_table(
+    context: DataFusionRegistrationContext,
+    *,
+    predicate: str | None,
+    predicate_error: str | None,
+) -> DataFrame:
+    location = context.location
+    resolved_log_storage = resolve_delta_log_storage_options(location)
+    merged_storage_options = _merged_storage_options(
+        location.storage_options,
+        resolved_log_storage,
+    )
+    ddl = _delta_external_table_ddl(
+        table_name=context.name,
+        table_uri=str(location.path),
+        options=merged_storage_options,
+    )
+    deregister = getattr(context.ctx, "deregister_table", None)
+    if callable(deregister):
+        with suppress(KeyError, RuntimeError, TypeError, ValueError):
+            deregister(context.name)
+    sql_options = _statement_sql_options_for_profile(context.runtime_profile).with_allow_ddl(
+        allow=True
+    )
+    df = context.ctx.sql_with_options(ddl, sql_options)
+    df.collect()
+    df = context.ctx.table(context.name)
+    _record_table_provider_artifact(
+        context.runtime_profile,
+        artifact=_TableProviderArtifact(
+            name=context.name,
+            provider=None,
+            provider_kind="delta_ddl",
+            source=None,
+            details=_delta_provider_artifact_payload(
+                location,
+                context=_DeltaProviderArtifactContext(
+                    delta_scan=resolve_delta_scan_options(location),
+                    delta_scan_effective=None,
+                    snapshot=None,
+                    registration_path="ddl",
+                    predicate=predicate,
+                    predicate_error=predicate_error,
+                    add_actions=None,
+                ),
+            ),
+        ),
+    )
+    _update_table_provider_capabilities(
+        context.ctx,
+        name=context.name,
+        supports_insert=True,
+    )
     return _maybe_cache(context, df)
 
 
@@ -1056,21 +1202,22 @@ def _delta_table_provider_from_session(
             timestamp=request.timestamp,
             delta_scan=request.delta_scan,
             gate=request.gate,
+            predicate=request.predicate,
         ),
     )
     return _DeltaProviderResponse(
         provider=bundle.provider,
         delta_scan_effective=bundle.scan_effective,
         snapshot=bundle.snapshot,
+        add_actions=cast("Sequence[Mapping[str, object]] | None", bundle.add_actions),
+        predicate_error=bundle.predicate_error,
     )
 
 
 def _delta_provider_artifact_payload(
     location: DatasetLocation,
     *,
-    delta_scan: DeltaScanOptions | None,
-    delta_scan_effective: Mapping[str, object] | None,
-    snapshot: Mapping[str, object] | None,
+    context: _DeltaProviderArtifactContext,
 ) -> dict[str, object]:
     explicit_log_storage = _merged_storage_options(
         None,
@@ -1079,17 +1226,26 @@ def _delta_provider_artifact_payload(
     resolved_log_storage = resolve_delta_log_storage_options(location)
     merged_storage = _merged_storage_options(location.storage_options, resolved_log_storage)
     gate = resolve_delta_feature_gate(location)
+    pruned_files_count = len(context.add_actions) if context.add_actions is not None else None
+    pruning_applied = context.add_actions is not None
+    delta_scan_ignored = context.registration_path == "ddl" and context.delta_scan is not None
     return {
         "path": str(location.path),
+        "registration_path": context.registration_path,
         "delta_version": location.delta_version,
         "delta_timestamp": location.delta_timestamp,
         "delta_log_storage_options": (dict(explicit_log_storage) if explicit_log_storage else None),
         "delta_storage_options": dict(merged_storage) if merged_storage else None,
         "delta_storage_options_hash": _storage_options_hash(merged_storage),
-        "delta_scan": _delta_scan_payload(delta_scan),
-        "delta_scan_effective": delta_scan_effective,
+        "delta_scan": _delta_scan_payload(context.delta_scan),
+        "delta_scan_effective": context.delta_scan_effective,
         "delta_feature_gate": _delta_gate_payload(gate),
-        "delta_snapshot": snapshot,
+        "delta_snapshot": context.snapshot,
+        "delta_scan_ignored": delta_scan_ignored,
+        "delta_pruning_predicate": context.predicate,
+        "delta_pruning_error": context.predicate_error,
+        "delta_pruning_applied": pruning_applied,
+        "delta_pruned_files": pruned_files_count,
     }
 
 

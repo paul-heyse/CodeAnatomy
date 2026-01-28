@@ -144,8 +144,8 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr_fn::col;
 use datafusion_python::context::{PyRuntimeEnvBuilder, PySessionContext};
 use deltalake::delta_datafusion::{
-    DeltaLogicalCodec, DeltaPhysicalCodec, DeltaScanConfig, DeltaSessionConfig,
-    DeltaTableFactory, DeltaTableProvider,
+    DeltaLogicalCodec, DeltaPhysicalCodec, DeltaRuntimeEnvBuilder, DeltaScanConfig,
+    DeltaSessionConfig, DeltaTableFactory, DeltaTableProvider,
 };
 use deltalake::delta_datafusion::planner::DeltaPlanner;
 use deltalake::protocol::SaveMode;
@@ -1240,11 +1240,32 @@ fn install_delta_table_factory(ctx: PyRef<PySessionContext>, alias: String) -> P
     Ok(())
 }
 
+#[pyclass]
+#[derive(Clone)]
+struct DeltaRuntimeEnvOptions {
+    #[pyo3(get, set)]
+    max_spill_size: Option<usize>,
+    #[pyo3(get, set)]
+    max_temp_directory_size: Option<u64>,
+}
+
+#[pymethods]
+impl DeltaRuntimeEnvOptions {
+    #[new]
+    fn new() -> Self {
+        Self {
+            max_spill_size: None,
+            max_temp_directory_size: None,
+        }
+    }
+}
+
 #[pyfunction]
-#[pyo3(signature = (settings = None, runtime = None))]
+#[pyo3(signature = (settings = None, runtime = None, delta_runtime = None))]
 fn delta_session_context(
     settings: Option<Vec<(String, String)>>,
     runtime: Option<PyRef<PyRuntimeEnvBuilder>>,
+    delta_runtime: Option<PyRef<DeltaRuntimeEnvOptions>>,
 ) -> PyResult<PySessionContext> {
     let mut config: SessionConfig = DeltaSessionConfig::default().into();
     if let Some(entries) = settings {
@@ -1252,14 +1273,25 @@ fn delta_session_context(
             config = config.set_str(&key, &value);
         }
     }
-    let runtime_builder = runtime
-        .map(|builder| builder.builder.clone())
-        .unwrap_or_else(RuntimeEnvBuilder::new);
-    let runtime_env = Arc::new(
-        runtime_builder
-            .build()
-            .map_err(|err| PyRuntimeError::new_err(format!("RuntimeEnv build failed: {err}")))?,
-    );
+    let runtime_env = if let Some(options) = delta_runtime {
+        let mut builder = DeltaRuntimeEnvBuilder::new();
+        if let Some(size) = options.max_spill_size {
+            builder = builder.with_max_spill_size(size);
+        }
+        if let Some(size) = options.max_temp_directory_size {
+            builder = builder.with_max_temp_directory_size(size);
+        }
+        builder.build()
+    } else {
+        let runtime_builder = runtime
+            .map(|builder| builder.builder.clone())
+            .unwrap_or_else(RuntimeEnvBuilder::new);
+        Arc::new(
+            runtime_builder
+                .build()
+                .map_err(|err| PyRuntimeError::new_err(format!("RuntimeEnv build failed: {err}")))?,
+        )
+    };
     let planner = DeltaPlanner::new();
     let state = SessionStateBuilder::new()
         .with_default_features()
@@ -1376,6 +1408,7 @@ fn delta_table_provider_from_session(
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
     timestamp: Option<String>,
+    predicate: Option<String>,
     file_column_name: Option<String>,
     enable_parquet_pushdown: Option<bool>,
     schema_force_view_types: Option<bool>,
@@ -1401,15 +1434,29 @@ fn delta_table_provider_from_session(
         schema_ipc,
     )?;
     let runtime = runtime()?;
-    let (provider, snapshot, scan_config) = runtime
+    let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
         .block_on(delta_provider_from_session_native(
-            &ctx.ctx, &table_uri, storage, version, timestamp, overrides, gate,
+            &ctx.ctx,
+            &table_uri,
+            storage,
+            version,
+            timestamp,
+            predicate,
+            overrides,
+            gate,
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to build Delta provider: {err}")))?;
     let payload = PyDict::new(py);
     payload.set_item("provider", provider_capsule(py, provider)?)?;
     payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
     payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
+    if let Some(add_actions) = add_actions {
+        let add_payload = add_action_payloads(&add_actions);
+        payload.set_item("add_actions", json_to_py(py, &add_payload)?)?;
+    }
+    if let Some(error) = predicate_error {
+        payload.set_item("predicate_error", error)?;
+    }
     Ok(payload.into())
 }
 
@@ -1431,7 +1478,12 @@ fn delta_scan_config_from_session(
         schema_ipc,
     )?;
     let session_state = ctx.ctx.state();
-    let scan_config = delta_scan_config_from_session_native(&session_state, overrides);
+    let scan_config =
+        delta_scan_config_from_session_native(&session_state, None, overrides).map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to resolve Delta scan config from session: {err}"
+            ))
+        })?;
     scan_config_to_pydict(py, &scan_config)
 }
 
@@ -2336,6 +2388,7 @@ fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()>
     )?)?;
     module.add_function(wrap_pyfunction!(registry_catalog_provider_factory, module)?)?;
     module.add_class::<DeltaCdfOptions>()?;
+    module.add_class::<DeltaRuntimeEnvOptions>()?;
     module.add_function(wrap_pyfunction!(install_delta_table_factory, module)?)?;
     module.add_function(wrap_pyfunction!(delta_session_context, module)?)?;
     module.add_function(wrap_pyfunction!(install_delta_plan_codecs, module)?)?;

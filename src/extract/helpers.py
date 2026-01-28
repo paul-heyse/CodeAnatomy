@@ -14,15 +14,14 @@ from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 
 from arrow_utils.core.array_iter import iter_table_rows
-from arrow_utils.core.interop import RecordBatchReaderLike, ScalarLike, TableLike
-from arrow_utils.schema.build import (
+from core_types import DeterminismTier
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, ScalarLike, TableLike
+from datafusion_engine.arrow_schema.build import (
     record_batch_reader_from_row_batches as schema_record_batch_reader_from_row_batches,
 )
-from arrow_utils.schema.build import (
+from datafusion_engine.arrow_schema.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
-from core_types import DeterminismTier
-from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.extract_extractors import (
     ExtractorSpec,
@@ -32,6 +31,7 @@ from datafusion_engine.extract_extractors import (
 )
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
 from datafusion_engine.finalize import FinalizeContext, FinalizeOptions, normalize_only
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundle
 from datafusion_engine.query_spec import apply_query_spec
 from datafusion_engine.runtime import DataFusionRuntimeProfile

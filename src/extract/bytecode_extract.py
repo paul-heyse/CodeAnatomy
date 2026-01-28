@@ -16,8 +16,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
-from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
-from arrow_utils.schema.abi import schema_fingerprint
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile

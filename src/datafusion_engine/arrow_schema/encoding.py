@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from arrow_utils.core.interop import DataTypeLike
+from datafusion_engine.arrow_interop import DataTypeLike
 
 
 @dataclass(frozen=True)

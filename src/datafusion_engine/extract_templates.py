@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from arrow_utils.core.ordering import OrderingLevel
-from arrow_utils.schema.metadata import EvidenceMetadataSpec, evidence_metadata
+from datafusion_engine.arrow_schema.metadata import EvidenceMetadataSpec, evidence_metadata
 from datafusion_engine.extract_template_specs import DatasetTemplateSpec
 
 

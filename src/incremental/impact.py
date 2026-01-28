@@ -12,8 +12,8 @@ from datafusion import col, lit
 from datafusion.dataframe import DataFrame
 
 from arrow_utils.core.array_iter import iter_table_rows
-from arrow_utils.core.interop import TableLike
-from arrow_utils.schema.build import empty_table, table_from_columns
+from datafusion_engine.arrow_interop import TableLike
+from datafusion_engine.arrow_schema.build import empty_table, table_from_columns
 from datafusion_engine.schema_alignment import align_table
 from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.plan_bundle_exec import execute_df_to_table

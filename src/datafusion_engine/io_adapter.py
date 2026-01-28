@@ -130,9 +130,10 @@ class DataFusionIOAdapter:
 
     Examples
     --------
-    >>> from datafusion import SessionContext
-    >>> ctx = SessionContext()
-    >>> adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
+    >>> profile = DataFusionRuntimeProfile()
+    >>> ctx = profile.session_context()
+    >>> adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     >>> adapter.register_arrow_table("my_table", pa.table({"col": [1, 2, 3]}))
     """
 

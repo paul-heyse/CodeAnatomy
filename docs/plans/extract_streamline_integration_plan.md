@@ -172,7 +172,7 @@ write_delta_dataset(table, location=location)
 
 **Representative pattern**
 ```python
-# arrowdsl.schema.build or storage.ipc
+# arrowdsl.schema.build or storage.ipc_utils
 reader = record_batch_reader_from_rows(schema, rows)
 ```
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from hamilton.function_modifiers import dataloader, tag
 
-from arrow_utils.core.interop import TableLike
+from datafusion_engine.arrow_interop import TableLike
 from engine.runtime_profile import RuntimeProfileSpec
 from extract.helpers import ExtractExecutionContext
 from extract.repo_scan import RepoScanOptions, scan_repo

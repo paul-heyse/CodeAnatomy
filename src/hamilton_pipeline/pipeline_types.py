@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from arrow_utils.core.interop import TableLike
+    from datafusion_engine.arrow_interop import TableLike
     from datafusion_engine.nested_tables import ViewReference
     from engine.plan_policy import WriterStrategy
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
-    from storage.ipc import IpcWriteConfig
+    from storage.ipc_utils import IpcWriteConfig
 
 
 @dataclass(frozen=True)

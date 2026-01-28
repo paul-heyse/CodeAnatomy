@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from arrow_utils.core.interop import SchemaLike
-from arrow_utils.schema.metadata import SchemaMetadataSpec
+from datafusion_engine.arrow_interop import SchemaLike
+from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
 from datafusion_engine.query_spec import QuerySpec
 from datafusion_engine.schema_policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from normalize.dataset_builders import build_dataset_spec, build_input_schema

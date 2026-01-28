@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from arrow_utils.schema.abi import schema_fingerprint
-from arrow_utils.schema.build import column_or_null, table_from_columns
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
+from datafusion_engine.arrow_schema.build import column_or_null, table_from_columns
 from datafusion_engine.dataset_registry import resolve_delta_constraints
 from datafusion_engine.runtime import dataset_schema_from_context
 from datafusion_engine.write_pipeline import WriteMode
@@ -26,7 +26,7 @@ from storage.deltalake import (
 from storage.deltalake.delta import DeltaFeatureMutationOptions, enable_delta_features
 
 if TYPE_CHECKING:
-    from arrow_utils.core.interop import TableLike
+    from datafusion_engine.arrow_interop import TableLike
     from incremental.state_store import StateStore
 
 

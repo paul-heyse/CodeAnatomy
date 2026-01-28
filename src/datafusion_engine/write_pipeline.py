@@ -51,6 +51,7 @@ from datafusion_engine.dataset_registry import (
     resolve_delta_write_policy,
 )
 from datafusion_engine.delta_store_policy import apply_delta_store_policy
+from datafusion_engine.sql_options import sql_options_for_profile
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
@@ -335,9 +336,10 @@ class WritePipeline:
 
     Examples
     --------
-    >>> from datafusion import SessionContext
-    >>> ctx = SessionContext()
-    >>> pipeline = WritePipeline(ctx)
+    >>> from datafusion_engine.runtime import DataFusionRuntimeProfile
+    >>> profile = DataFusionRuntimeProfile()
+    >>> ctx = profile.session_context()
+    >>> pipeline = WritePipeline(ctx, runtime_profile=profile)
     >>> request = WriteRequest(
     ...     source="SELECT * FROM events",
     ...     destination="/data/events",
@@ -375,7 +377,9 @@ class WritePipeline:
     def _resolved_sql_options(self) -> SQLOptions:
         if self.sql_options is not None:
             return self.sql_options
-        return SQLOptions()
+        if self.runtime_profile is not None:
+            return self.runtime_profile.sql_options()
+        return sql_options_for_profile(None)
 
     @staticmethod
     def _df_has_rows(df: DataFrame) -> bool:

@@ -10,7 +10,7 @@ import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 from datafusion.dataframe import DataFrame
 
-from arrow_utils.schema.abi import schema_fingerprint
+from datafusion_engine.arrow_schema.abi import schema_fingerprint
 from datafusion_engine.schema_introspection import SchemaIntrospector
 
 if TYPE_CHECKING:

@@ -17,10 +17,10 @@ from hamilton.function_modifiers import (
     tag,
 )
 
-from arrow_utils.core.interop import TableLike
 from core_types import JsonDict
-from datafusion_engine.arrow_ingest import datafusion_from_arrow
+from datafusion_engine.arrow_interop import TableLike
 from datafusion_engine.diagnostics import recorder_for_profile
+from datafusion_engine.ingest import datafusion_from_arrow
 from datafusion_engine.write_pipeline import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.pipeline_types import OutputConfig
@@ -31,7 +31,7 @@ from storage.deltalake import (
     delta_write_configuration,
 )
 from storage.deltalake.delta import DEFAULT_DELTA_FEATURE_PROPERTIES
-from storage.ipc import payload_hash
+from storage.ipc_utils import payload_hash
 
 
 def _rows(table: TableLike) -> int:

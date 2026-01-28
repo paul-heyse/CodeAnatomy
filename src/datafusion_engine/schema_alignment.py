@@ -8,7 +8,7 @@ from typing import Literal, TypedDict, cast
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import SchemaLike, TableLike, coerce_table_like
+from datafusion_engine.arrow_interop import SchemaLike, TableLike, coerce_table_like
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 

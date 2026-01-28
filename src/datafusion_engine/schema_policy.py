@@ -6,9 +6,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from arrow_utils.core.interop import DataTypeLike, SchemaLike, TableLike
-from arrow_utils.schema.encoding import EncodingPolicy
-from arrow_utils.schema.metadata import SchemaMetadataSpec, encoding_policy_from_spec
+from datafusion_engine.arrow_interop import DataTypeLike, SchemaLike, TableLike
+from datafusion_engine.arrow_schema.encoding import EncodingPolicy
+from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec, encoding_policy_from_spec
 from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.schema_alignment import AlignmentInfo, CastErrorPolicy, SchemaTransform
 from datafusion_engine.schema_validation import ArrowValidationOptions

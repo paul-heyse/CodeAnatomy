@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrow_utils.core import interop
+import datafusion_engine.arrow_interop as interop
 from schema_spec.specs import ArrowFieldSpec
 from schema_spec.system import TableSpecConstraints
 

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from arrow_utils.schema.build import empty_table, table_from_columns
+from datafusion_engine.arrow_schema.build import empty_table, table_from_columns
 from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.write_helpers import (

@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.types as patypes
 
-from arrow_utils.core.interop import (
+from arrow_utils.core.array_iter import iter_arrays
+from datafusion_engine.arrow_interop import (
     ArrayLike,
     ChunkedArrayLike,
     ComputeExpression,
@@ -18,9 +20,8 @@ from arrow_utils.core.interop import (
     SchemaLike,
     TableLike,
     ensure_expression,
-    pc,
 )
-from arrow_utils.schema.nested_builders import (
+from datafusion_engine.arrow_schema.nested_builders import (
     build_list,
     build_list_of_structs,
     build_list_view,
@@ -37,7 +38,7 @@ from arrow_utils.schema.nested_builders import (
     union_array_from_tagged_values,
     union_array_from_values,
 )
-from arrow_utils.schema.types import list_view_type, map_type
+from datafusion_engine.arrow_schema.types import list_view_type, map_type
 
 
 def _resolve_schema(schema: SchemaLike) -> pa.Schema:
@@ -76,7 +77,7 @@ class ConstExpr:
             Expression representing the constant value.
         """
         scalar_value = self.value if self.dtype is None else pa.scalar(self.value, type=self.dtype)
-        return ensure_expression(pc.scalar(scalar_value))
+        return ensure_expression(ds.scalar(scalar_value))
 
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the constant as a full-length array.
@@ -105,7 +106,7 @@ class FieldExpr:
         ComputeExpression
             Expression referencing the column.
         """
-        return pc.field(self.name)
+        return ds.field(self.name)
 
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the column values from the table.
@@ -132,10 +133,20 @@ class ColumnOrNullExpr:
         -------
         ArrayLike
             Column values or typed nulls when missing.
+
+        Raises
+        ------
+        TypeError
+            Raised when the column does not support cast().
         """
         if self.name not in table.column_names:
             return pa.nulls(table.num_rows, type=self.dtype)
-        return pc.cast(table[self.name], self.dtype, safe=False)
+        column = table[self.name]
+        cast_fn = getattr(column, "cast", None)
+        if not callable(cast_fn):
+            msg = "Column does not support cast()."
+            raise TypeError(msg)
+        return cast("ArrayLike", cast_fn(self.dtype, safe=False))
 
 
 @dataclass(frozen=True)
@@ -155,7 +166,11 @@ class CoalesceExpr:
         if not self.exprs:
             return pa.nulls(table.num_rows, type=pa.null())
         arrays = [expr.materialize(table) for expr in self.exprs]
-        return pc.coalesce(*arrays)
+        rows: list[object | None] = []
+        for values in iter_arrays(arrays):
+            first = next((value for value in values if value is not None), None)
+            rows.append(first)
+        return pa.array(rows, type=arrays[0].type)
 
 
 def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> ArrayLike:
@@ -246,11 +261,20 @@ def maybe_dictionary(
     -------
     ArrayLike | ChunkedArrayLike
         Dictionary-encoded values when needed.
+
+    Raises
+    ------
+    TypeError
+        Raised when dictionary encoding is unsupported.
     """
     if patypes.is_dictionary(values.type):
         return values
     if patypes.is_dictionary(dtype):
-        return pc.dictionary_encode(values)
+        encode_fn = getattr(values, "dictionary_encode", None)
+        if not callable(encode_fn):
+            msg = "Values do not support dictionary_encode()."
+            raise TypeError(msg)
+        return cast("ArrayLike | ChunkedArrayLike", encode_fn())
     return values
 
 

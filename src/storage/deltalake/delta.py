@@ -14,11 +14,11 @@ from typing import TYPE_CHECKING, Literal, cast
 import pyarrow as pa
 from deltalake import CommitProperties, Transaction, WriterProperties
 
-from arrow_utils.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
-from arrow_utils.schema.encoding import EncodingPolicy
+from datafusion_engine.arrow_interop import RecordBatchReaderLike, SchemaLike, TableLike
+from datafusion_engine.arrow_schema.encoding import EncodingPolicy
 from datafusion_engine.encoding import apply_encoding
 from datafusion_engine.schema_alignment import align_table
-from storage.ipc import ipc_bytes
+from storage.ipc_utils import ipc_bytes
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -155,11 +155,10 @@ def _snapshot_info(request: DeltaSnapshotLookup) -> Mapping[str, object] | None:
 def _register_temp_table(ctx: SessionContext, table: pa.Table) -> str:
     name = f"__delta_temp_{uuid.uuid4().hex}"
     batches = table.to_batches()
-    register = getattr(ctx, "register_record_batches", None)
-    if not callable(register):
-        msg = "SessionContext.register_record_batches is unavailable."
-        raise TypeError(msg)
-    register(name, batches)
+    from datafusion_engine.io_adapter import DataFusionIOAdapter
+
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
+    adapter.register_record_batches(name, [batches])
     return name
 
 

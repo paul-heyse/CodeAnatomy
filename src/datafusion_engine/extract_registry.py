@@ -7,8 +7,8 @@ from functools import cache
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import SchemaLike
-from arrow_utils.schema.metadata import SchemaMetadataSpec
+from datafusion_engine.arrow_interop import SchemaLike
+from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
 from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata_by_name
 from datafusion_engine.extract_templates import config
 from datafusion_engine.query_spec import QuerySpec

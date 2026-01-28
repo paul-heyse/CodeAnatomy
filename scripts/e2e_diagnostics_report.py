@@ -10,10 +10,16 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 import pyarrow as pa
-from deltalake import DeltaTable
+
+from datafusion_engine.delta_control_plane import DeltaProviderRequest, delta_provider_from_session
+from datafusion_engine.io_adapter import DataFusionIOAdapter
+from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.table_provider_capsule import TableProviderCapsule
+from storage.deltalake import delta_table_version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
@@ -22,7 +28,7 @@ if str(SRC_DIR) not in sys.path:
 
 schema_fingerprint = cast(
     "Callable[[pa.Schema], str]",
-    import_module("arrow_utils.schema.abi").schema_fingerprint,
+    import_module("datafusion_engine.arrow_schema.abi").schema_fingerprint,
 )
 dataset_schema = cast(
     "Callable[[str], pa.Schema]",
@@ -31,10 +37,6 @@ dataset_schema = cast(
 incremental_dataset_schema = cast(
     "Callable[[str], pa.Schema]",
     import_module("incremental.registry_specs").dataset_schema,
-)
-read_table_delta = cast(
-    "Callable[[str], pa.Table]",
-    import_module("storage.deltalake").read_table_delta,
 )
 
 
@@ -45,6 +47,48 @@ class Issue:
     severity: str
     check: str
     detail: str
+
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+
+
+def _is_delta_table(path: Path) -> bool:
+    try:
+        return delta_table_version(str(path)) is not None
+    except (RuntimeError, TypeError, ValueError):
+        return False
+
+
+def _build_delta_reader(
+    ctx: SessionContext,
+    *,
+    adapter: DataFusionIOAdapter,
+) -> Callable[[Path], pa.Table]:
+    def _read(path: Path) -> pa.Table:
+        bundle = delta_provider_from_session(
+            ctx,
+            request=DeltaProviderRequest(
+                table_uri=str(path),
+                storage_options=None,
+                version=None,
+                timestamp=None,
+                delta_scan=None,
+                gate=None,
+            ),
+        )
+        table_name = f"__diagnostics_{uuid4().hex}"
+        adapter.register_delta_table_provider(
+            table_name,
+            TableProviderCapsule(bundle.provider),
+            overwrite=True,
+        )
+        try:
+            return ctx.table(table_name).to_arrow_table()
+        finally:
+            adapter.deregister_table(table_name)
+
+    return _read
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -94,10 +138,8 @@ def _decode_metadata(schema: pa.Schema) -> dict[str, str]:
     return {key.decode("utf-8"): value.decode("utf-8") for key, value in schema.metadata.items()}
 
 
-def _delta_summary(path: Path, *, validate: bool, table: pa.Table | None = None) -> dict[str, Any]:
+def _delta_summary(path: Path, *, validate: bool, table: pa.Table) -> dict[str, Any]:
     summary: dict[str, Any] = {"path": str(path)}
-    resolved = table or read_table_delta(str(path))
-    table = resolved
     schema = table.schema
     summary["rows"] = int(table.num_rows)
     summary["columns"] = len(schema.names)
@@ -158,13 +200,13 @@ def _check_required_non_null(
     schema: pa.Schema,
     *,
     issues: list[Issue],
+    read_table: Callable[[Path], pa.Table],
 ) -> None:
     metadata = _decode_metadata(schema)
     required = _parse_required_non_null(metadata)
     if not required:
         return
-    table = read_table_delta(str(path))
-    table = table.select(required)
+    table = read_table(path).select(required)
     for name in required:
         nulls = _count_nulls(table, name)
         if nulls > 0:
@@ -210,9 +252,10 @@ def _check_edge_invariants(
     edges_path: Path,
     *,
     issues: list[Issue],
+    read_table: Callable[[Path], pa.Table],
 ) -> None:
-    nodes = read_table_delta(str(nodes_path)).select(["node_id"])
-    edges = read_table_delta(str(edges_path)).select(
+    nodes = read_table(nodes_path).select(["node_id"])
+    edges = read_table(edges_path).select(
         ["edge_id", "src_node_id", "dst_node_id", "bstart", "bend"]
     )
     node_ids = nodes["node_id"]
@@ -552,27 +595,33 @@ def _collect_delta_summaries(
     *,
     validate_delta: bool,
     issues: list[Issue],
+    read_table: Callable[[Path], pa.Table],
 ) -> dict[str, dict[str, Any]]:
     summaries: dict[str, dict[str, Any]] = {}
     for path in output_dir.iterdir():
         if not path.is_dir():
             continue
-        if not DeltaTable.is_deltatable(str(path)):
+        if not _is_delta_table(path):
             continue
-        table = read_table_delta(str(path))
+        table = read_table(path)
         summary = _delta_summary(path, validate=validate_delta, table=table)
         summaries[path.name] = summary
         schema = table.schema
         _check_contract_schema(schema, issues=issues)
-        _check_required_non_null(path, schema, issues=issues)
+        _check_required_non_null(path, schema, issues=issues, read_table=read_table)
     return summaries
 
 
-def _maybe_check_edge_invariants(output_dir: Path, *, issues: list[Issue]) -> None:
+def _maybe_check_edge_invariants(
+    output_dir: Path,
+    *,
+    issues: list[Issue],
+    read_table: Callable[[Path], pa.Table],
+) -> None:
     nodes_path = output_dir / "cpg_nodes"
     edges_path = output_dir / "cpg_edges"
     if nodes_path.exists() and edges_path.exists():
-        _check_edge_invariants(nodes_path, edges_path, issues=issues)
+        _check_edge_invariants(nodes_path, edges_path, issues=issues, read_table=read_table)
 
 
 def _scip_index_info(output_dir: Path, *, issues: list[Issue]) -> dict[str, Any]:
@@ -632,6 +681,7 @@ def _build_report(
     run_bundle: Path | None,
     *,
     validate_delta: bool,
+    read_table: Callable[[Path], pa.Table],
 ) -> dict[str, Any]:
     issues: list[Issue] = []
     required_files = _check_required_files(output_dir, issues=issues)
@@ -643,8 +693,9 @@ def _build_report(
         output_dir,
         validate_delta=validate_delta,
         issues=issues,
+        read_table=read_table,
     )
-    _maybe_check_edge_invariants(output_dir, issues=issues)
+    _maybe_check_edge_invariants(output_dir, issues=issues, read_table=read_table)
     scip_info = _scip_index_info(output_dir, issues=issues)
     extract_error_dirs = _collect_extract_error_dirs(output_dir)
     manifest_summary = _summarize_manifest(manifest) if manifest is not None else {}
@@ -688,7 +739,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     output_dir, run_bundle, report_path, summary_path = _resolve_paths(args)
 
-    report = _build_report(output_dir, run_bundle, validate_delta=args.validate_delta)
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
+    read_table = _build_delta_reader(ctx, adapter=adapter)
+    report = _build_report(
+        output_dir,
+        run_bundle,
+        validate_delta=bool(args.validate_delta),
+        read_table=read_table,
+    )
     report_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(report_path, report)
     _write_summary(summary_path, report)

@@ -5,15 +5,20 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
+use datafusion::common::ToDFSchema;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::Expr;
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use deltalake::delta_datafusion::{
-    DeltaCdfTableProvider, DeltaScanConfig, DeltaTableProvider,
+    DataFusionMixins, DeltaCdfTableProvider, DeltaScanConfig, DeltaScanConfigBuilder,
+    DeltaTableProvider,
 };
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::models::Add;
 use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::{EagerSnapshot, LogicalFileView};
+use deltalake::kernel::{EagerSnapshot, LogDataHandler, LogicalFileView};
 use deltalake::{ensure_table_uri, DeltaTable, DeltaTableBuilder};
 use object_store::DynObjectStore;
 use url::{Position, Url};
@@ -172,12 +177,63 @@ fn apply_overrides(
     scan_config
 }
 
+fn apply_file_column_builder(
+    scan_config: DeltaScanConfig,
+    snapshot: &EagerSnapshot,
+) -> Result<DeltaScanConfig, DeltaTableError> {
+    let Some(file_column_name) = scan_config.file_column_name.clone() else {
+        return Ok(scan_config);
+    };
+    let mut builder = DeltaScanConfigBuilder::new().with_file_column_name(&file_column_name);
+    builder = builder.wrap_partition_values(scan_config.wrap_partition_values);
+    builder = builder.with_parquet_pushdown(scan_config.enable_parquet_pushdown);
+    if let Some(schema) = scan_config.schema.clone() {
+        builder = builder.with_schema(schema);
+    }
+    let built = builder.build(snapshot)?;
+    Ok(DeltaScanConfig {
+        file_column_name: built.file_column_name,
+        wrap_partition_values: built.wrap_partition_values,
+        enable_parquet_pushdown: built.enable_parquet_pushdown,
+        schema: built.schema,
+        schema_force_view_types: scan_config.schema_force_view_types,
+    })
+}
+
 pub fn scan_config_from_session(
     session: &dyn Session,
+    snapshot: Option<&EagerSnapshot>,
     overrides: DeltaScanOverrides,
-) -> DeltaScanConfig {
+) -> Result<DeltaScanConfig, DeltaTableError> {
     let base = DeltaScanConfig::new_from_session(session);
-    apply_overrides(base, overrides)
+    let scan_config = apply_overrides(base, overrides);
+    let Some(snapshot) = snapshot else {
+        return Ok(scan_config);
+    };
+    apply_file_column_builder(scan_config, snapshot)
+}
+
+fn files_matching_predicate(
+    log_data: LogDataHandler<'_>,
+    filters: &[Expr],
+) -> Result<Vec<Add>, DeltaTableError> {
+    if let Some(Some(predicate)) =
+        (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
+    {
+        let expr = SessionContext::new().create_physical_expr(
+            predicate,
+            &log_data.read_schema().to_dfschema()?,
+        )?;
+        let pruning_predicate = PruningPredicate::try_new(expr, log_data.read_schema())?;
+        let mask = pruning_predicate.prune(&log_data)?;
+        Ok(log_data
+            .into_iter()
+            .zip(mask)
+            .filter_map(|(file, keep_file)| keep_file.then_some(file.add_action()))
+            .collect())
+    } else {
+        Ok(log_data.into_iter().map(|file| file.add_action()).collect())
+    }
 }
 
 fn parse_rfc3339_timestamp(value: &str) -> Result<DateTime<Utc>, DeltaTableError> {
@@ -192,9 +248,19 @@ pub async fn delta_provider_from_session(
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
     timestamp: Option<String>,
+    predicate: Option<String>,
     overrides: DeltaScanOverrides,
     gate: Option<DeltaFeatureGate>,
-) -> Result<(DeltaTableProvider, DeltaSnapshotInfo, DeltaScanConfig), DeltaTableError> {
+) -> Result<
+    (
+        DeltaTableProvider,
+        DeltaSnapshotInfo,
+        DeltaScanConfig,
+        Option<Vec<DeltaAddActionPayload>>,
+        Option<String>,
+    ),
+    DeltaTableError,
+> {
     let table = load_delta_table(
         table_uri,
         storage_options,
@@ -211,9 +277,27 @@ pub async fn delta_provider_from_session(
     let eager_snapshot = table.snapshot()?.snapshot().clone();
     let log_store = table.log_store();
     let session_state = session_ctx.state();
-    let scan_config = scan_config_from_session(&session_state, overrides);
-    let provider = DeltaTableProvider::try_new(eager_snapshot, log_store, scan_config.clone())?;
-    Ok((provider, snapshot, scan_config))
+    let scan_config = scan_config_from_session(&session_state, Some(&eager_snapshot), overrides)?;
+    let mut provider = DeltaTableProvider::try_new(eager_snapshot.clone(), log_store, scan_config.clone())?;
+    let mut add_payloads: Option<Vec<DeltaAddActionPayload>> = None;
+    let mut predicate_error: Option<String> = None;
+    if let Some(predicate) = predicate {
+        match eager_snapshot.parse_predicate_expression(predicate, &session_state) {
+            Ok(expr) => match files_matching_predicate(eager_snapshot.log_data(), &[expr]) {
+                Ok(add_actions) => {
+                    provider = provider.with_files(add_actions.clone());
+                    add_payloads = Some(add_actions.into_iter().map(delta_add_payload).collect());
+                }
+                Err(err) => {
+                    predicate_error = Some(err.to_string());
+                }
+            },
+            Err(err) => {
+                predicate_error = Some(err.to_string());
+            }
+        }
+    }
+    Ok((provider, snapshot, scan_config, add_payloads, predicate_error))
 }
 
 pub async fn delta_cdf_provider(
@@ -285,7 +369,7 @@ pub async fn delta_provider_with_files(
     let eager_snapshot = table.snapshot()?.snapshot().clone();
     let log_store = table.log_store();
     let session_state = session_ctx.state();
-    let scan_config = scan_config_from_session(&session_state, overrides);
+    let scan_config = scan_config_from_session(&session_state, Some(&eager_snapshot), overrides)?;
     let provider = DeltaTableProvider::try_new(eager_snapshot, log_store, scan_config.clone())?;
     let add_actions = add_actions_for_paths(&table, &files)?;
     let provider = provider.with_files(add_actions.clone());

@@ -5,19 +5,21 @@ from __future__ import annotations
 import contextlib
 import importlib
 import uuid
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.types as patypes
 from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from datafusion.expr import Expr
 
 from arrow_utils.core.array_iter import iter_array_values
-from arrow_utils.core.interop import (
+from arrow_utils.core.schema_constants import PROVENANCE_COLS
+from core_types import DeterminismTier
+from datafusion_engine.arrow_interop import (
     ArrayLike,
     DataTypeLike,
     RecordBatchReaderLike,
@@ -25,12 +27,10 @@ from arrow_utils.core.interop import (
     TableLike,
     coerce_table_like,
 )
-from arrow_utils.core.schema_constants import PROVENANCE_COLS
-from arrow_utils.schema.build import ColumnDefaultsSpec, ConstExpr
-from arrow_utils.schema.chunking import ChunkPolicy
-from arrow_utils.schema.encoding import EncodingPolicy
-from arrow_utils.schema.metadata import SchemaMetadataSpec
-from core_types import DeterminismTier
+from datafusion_engine.arrow_schema.build import ColumnDefaultsSpec, ConstExpr
+from datafusion_engine.arrow_schema.chunking import ChunkPolicy
+from datafusion_engine.arrow_schema.encoding import EncodingPolicy
+from datafusion_engine.arrow_schema.metadata import SchemaMetadataSpec
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.kernel_specs import DedupeSpec, SortKey
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
@@ -528,23 +528,49 @@ _HASH_NULL_SENTINEL = "__NULL__"
 
 
 def _compute_is_null(values: ArrayLike) -> ArrayLike:
-    return pc.call_function("is_null", [values])
+    is_null = getattr(values, "is_null", None)
+    if callable(is_null):
+        return cast("ArrayLike", is_null())
+    return pa.array([value is None for value in iter_array_values(values)], type=pa.bool_())
 
 
 def _combine_or(left: ArrayLike, right: ArrayLike) -> ArrayLike:
-    return pc.call_function("or", [left, right])
+    combined = [
+        bool(lval) or bool(rval)
+        for lval, rval in zip(
+            iter_array_values(left),
+            iter_array_values(right),
+            strict=True,
+        )
+    ]
+    return pa.array(combined, type=pa.bool_())
 
 
 def _invert_mask(values: ArrayLike) -> ArrayLike:
-    return pc.call_function("invert", [values])
+    inverted = [not bool(value) for value in iter_array_values(values)]
+    return pa.array(inverted, type=pa.bool_())
 
 
 def _value_counts(values: ArrayLike) -> ArrayLike:
-    return pc.call_function("value_counts", [values])
+    value_list = list(iter_array_values(values))
+    counts = Counter(value_list)
+    unique_values = list(counts.keys())
+    count_values = [counts[value] for value in unique_values]
+    value_type = values.type
+    values_array = pa.array(unique_values, type=value_type)
+    counts_array = pa.array(count_values, type=pa.int64())
+    return pa.StructArray.from_arrays(
+        [values_array, counts_array],
+        fields=[
+            pa.field("values", values_array.type),
+            pa.field("counts", pa.int64()),
+        ],
+    )
 
 
 def _fill_null(values: ArrayLike, *, fill_value: bool) -> ArrayLike:
-    return pc.fill_null(values, fill_value=fill_value)
+    filled = [fill_value if value is None else bool(value) for value in iter_array_values(values)]
+    return pa.array(filled, type=pa.bool_())
 
 
 def _row_id_for_errors(
@@ -566,7 +592,7 @@ def _row_id_for_errors(
         else:
             resolved_table = cast("pa.Table", resolved)
         table_name = f"_finalize_errors_{uuid.uuid4().hex}"
-        adapter = DataFusionIOAdapter(ctx=df_ctx, profile=None)
+        adapter = DataFusionIOAdapter(ctx=df_ctx, profile=runtime_profile)
         adapter.register_record_batches(table_name, [resolved_table.to_batches()])
         try:
             prefix = f"{contract.name}:row"

@@ -24,7 +24,7 @@ from storage.deltalake import (
     vacuum_delta,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
-from storage.ipc import read_table_ipc_file, write_table_ipc_file, write_table_ipc_stream
+from storage.ipc_utils import read_table_ipc_file, write_table_ipc_file, write_table_ipc_stream
 
 
 def mmap_file(path: PathLike, *, mode: Literal["r", "r+", "w+", "a+"] = "r") -> pa.MemoryMappedFile:

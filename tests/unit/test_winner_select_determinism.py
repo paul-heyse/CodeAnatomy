@@ -5,8 +5,8 @@ from __future__ import annotations
 import pyarrow as pa
 
 from arrow_utils.core.ordering import OrderingLevel
-from arrow_utils.schema.build import rows_from_table, table_from_rows
-from arrow_utils.schema.metadata import ordering_metadata_spec
+from datafusion_engine.arrow_schema.build import rows_from_table, table_from_rows
+from datafusion_engine.arrow_schema.metadata import ordering_metadata_spec
 from datafusion_engine.kernels import WinnerSelectRequest, winner_select_kernel
 
 

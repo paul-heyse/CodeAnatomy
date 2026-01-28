@@ -8,7 +8,7 @@ from typing import Protocol, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrow_utils.core.interop import (
+from datafusion_engine.arrow_interop import (
     ArrayLike,
     ChunkedArray,
     DataTypeLike,
@@ -17,7 +17,7 @@ from arrow_utils.core.interop import (
     ScalarLike,
     StructArrayLike,
 )
-from arrow_utils.schema.types import list_view_type, map_type
+from datafusion_engine.arrow_schema.types import list_view_type, map_type
 
 MAX_INT8_CODE = 127
 MAX_INT16_CODE = 32767

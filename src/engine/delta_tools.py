@@ -234,6 +234,28 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     if sql_policy is None or not sql_policy.allow_statements:
         msg = "Delta SQL execution is disabled by the runtime SQL policy."
         raise ValueError(msg)
+    storage = dict(request.storage_options or {})
+    if request.log_storage_options:
+        storage.update({str(key): str(value) for key, value in request.log_storage_options.items()})
+    if profile.enable_delta_querybuilder:
+        from storage.deltalake import query_delta_sql
+
+        reader = query_delta_sql(
+            request.sql,
+            {request.table_name: request.path},
+            storage_options=storage or None,
+        )
+        _record_delta_query(
+            profile,
+            payload={
+                "event_time_unix_ms": int(time.time() * 1000),
+                "path": request.path,
+                "sql": request.sql,
+                "table_name": request.table_name,
+                "engine": "delta_querybuilder",
+            },
+        )
+        return reader
     from datafusion_engine.dataset_registry import DatasetLocation
     from datafusion_engine.registry_bridge import register_dataset_df
 
@@ -241,7 +263,7 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     location = DatasetLocation(
         path=request.path,
         format="delta",
-        storage_options=request.storage_options or {},
+        storage_options=storage,
         delta_log_storage_options=request.log_storage_options or {},
     )
     register_dataset_df(
@@ -263,6 +285,7 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
             "path": request.path,
             "sql": request.sql,
             "table_name": request.table_name,
+            "engine": "datafusion",
         },
     )
     return reader

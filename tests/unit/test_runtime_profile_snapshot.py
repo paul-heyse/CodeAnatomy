@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datafusion_engine.runtime import DataFusionJoinPolicy, DataFusionRuntimeProfile
-from engine.runtime_profile import runtime_profile_snapshot
+from engine.runtime_profile import PROFILE_HASH_VERSION, runtime_profile_snapshot
 
 HASH_LENGTH: int = 64
 
@@ -12,7 +12,7 @@ def test_runtime_profile_snapshot_version() -> None:
     """Expose the runtime profile snapshot version."""
     profile = DataFusionRuntimeProfile()
     snapshot = runtime_profile_snapshot(profile, name="test")
-    assert snapshot.version == 3
+    assert snapshot.version == PROFILE_HASH_VERSION
 
 
 def test_runtime_profile_snapshot_includes_settings_hash() -> None:

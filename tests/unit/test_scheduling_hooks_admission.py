@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING, cast
 import pytest
 import rustworkx as rx
 
-import test_support.datafusion_ext_stub as _datafusion_ext_stub
-import test_support.view_specs_stub as _view_specs_stub
 from obs.diagnostics import DiagnosticsCollector
 
 if TYPE_CHECKING:
@@ -22,8 +20,6 @@ if TYPE_CHECKING:
     from datafusion_engine.view_graph_registry import ViewNode as RegistryViewNode
     from hamilton_pipeline.scheduling_hooks import PlanTaskSubmissionHook
     from relspec.execution_plan import ExecutionPlan
-
-_ = (_datafusion_ext_stub, _view_specs_stub)
 
 
 @dataclass(frozen=True)

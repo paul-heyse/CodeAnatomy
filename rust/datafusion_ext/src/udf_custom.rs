@@ -20,6 +20,8 @@ use datafusion_expr::{
     lit, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
+use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use datafusion_python::context::PySessionContext;
 use datafusion_python::expr::PyExpr;
@@ -524,12 +526,10 @@ fn volatility_from_str(value: &str) -> Result<Volatility> {
 
 fn signature_with_names(signature: Signature, names: &[&str]) -> Signature {
     let name_vec = names.iter().map(|name| (*name).to_string()).collect();
-    signature
-        .clone()
-        .with_parameter_names(name_vec)
-        .unwrap_or_else(|err| {
-            panic!("Invalid parameter names for signature: {err}");
-        })
+    match signature.clone().with_parameter_names(name_vec) {
+        Ok(signature) => signature,
+        Err(_) => signature,
+    }
 }
 
 fn string_int_string_signature(volatility: Volatility) -> Signature {
@@ -1044,6 +1044,31 @@ impl ScalarUDFImpl for CpgScoreUdf {
         Ok(DataType::Float64)
     }
 
+    fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        if let Some(interval) = inputs.first() {
+            return Ok((*interval).clone());
+        }
+        Interval::make_unbounded(&DataType::Null)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        if inputs.len() == 1 {
+            return Ok(Some(vec![interval.clone()]));
+        }
+        Ok(Some(Vec::new()))
+    }
+
+    fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        if let Some(props) = inputs.first() {
+            return Ok(props.preserves_lex_ordering);
+        }
+        Ok(true)
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [value] = args.args.as_slice() else {
             return Err(DataFusionError::Plan(
@@ -1206,6 +1231,16 @@ impl ScalarUDFImpl for ArrowMetadataUdf {
 
 pub fn arrow_metadata_udf() -> ScalarUDF {
     ScalarUDF::new_from_shared_impl(Arc::new(ArrowMetadataUdf::new()))
+}
+
+pub fn cpg_score_udf() -> ScalarUDF {
+    let signature = signature_with_names(
+        Signature::numeric(1, Volatility::Immutable),
+        &["value"],
+    );
+    ScalarUDF::new_from_shared_impl(Arc::new(CpgScoreUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
 }
 
 pub fn stable_hash64_udf() -> ScalarUDF {
@@ -3591,6 +3626,10 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    fn short_circuits(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

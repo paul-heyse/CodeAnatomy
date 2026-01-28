@@ -21,39 +21,20 @@ from datafusion_engine.schema_registry import (
     nested_base_df,
 )
 from datafusion_engine.view_graph_registry import ViewNode
+from datafusion_ext import (
+    arrow_metadata,
+    list_extract,
+    map_entries,
+    map_extract,
+    map_keys,
+    map_values,
+    span_make,
+    union_extract,
+    union_tag,
+)
+from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
+from datafusion_ext import stable_id_parts as stable_id
 from schema_spec.view_specs import ViewSpec, ViewSpecInputs, view_spec_from_builder
-
-try:
-    from datafusion_ext import (
-        arrow_metadata,
-        list_extract,
-        map_entries,
-        map_extract,
-        map_keys,
-        map_values,
-        span_make,
-        union_extract,
-        union_tag,
-    )
-    from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
-    from datafusion_ext import stable_id_parts as stable_id
-except ImportError:
-    from datafusion_ext import (
-        arrow_metadata,
-        list_extract,
-        map_entries,
-        map_extract,
-        map_keys,
-        map_values,
-        span_make,
-        union_extract,
-        union_tag,
-    )
-    from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
-    from datafusion_ext import stable_id_parts as stable_id
-    from test_support import datafusion_ext_stub as _datafusion_ext_stub
-
-    _ = _datafusion_ext_stub
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile

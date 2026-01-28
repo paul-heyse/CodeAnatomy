@@ -991,9 +991,7 @@ def _parse_signature_type_entry(
         if not token or token.lower() in {"any", "*"}:
             hints.append(None)
             continue
-        tokens = frozenset(
-            part.strip().lower() for part in token.split("|") if part.strip()
-        )
+        tokens = frozenset(part.strip().lower() for part in token.split("|") if part.strip())
         hints.append(tokens if tokens else None)
     return raw_name, tuple(hints)
 

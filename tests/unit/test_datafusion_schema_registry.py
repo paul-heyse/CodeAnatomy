@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-import test_support.datafusion_ext_stub as _datafusion_ext_stub
-import test_support.view_specs_stub as _view_specs_stub
 from arrow_utils.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
 from arrow_utils.schema.build import empty_table
 from arrow_utils.schema.metadata import metadata_list_bytes
@@ -28,8 +26,6 @@ from datafusion_engine.schema_registry import (
     validate_required_symtable_functions,
 )
 from datafusion_engine.udf_runtime import register_rust_udfs
-
-_ = (_datafusion_ext_stub, _view_specs_stub)
 
 
 def _to_arrow_schema(value: object) -> pa.Schema:

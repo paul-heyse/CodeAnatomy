@@ -92,11 +92,6 @@ def json_default(obj: object) -> object:
     -------
     object
         JSON-serializable value.
-
-    Raises
-    ------
-    TypeError
-        Raised when the object cannot be serialized.
     """
     if isinstance(obj, msgspec.Struct):
         return msgspec.to_builtins(obj)

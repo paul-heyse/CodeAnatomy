@@ -13,7 +13,8 @@ pytest.importorskip("deltalake")
 
 
 def _create_cdf_table(path: Path) -> None:
-    from storage.deltalake import DeltaWriteOptions, enable_delta_features, write_delta_table
+    from storage.deltalake import DeltaWriteOptions, write_delta_table
+    from storage.deltalake.delta import DeltaFeatureMutationOptions, enable_delta_features
 
     table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
     try:
@@ -22,7 +23,7 @@ def _create_cdf_table(path: Path) -> None:
             str(path),
             options=DeltaWriteOptions(mode="overwrite"),
         )
-        enable_delta_features(str(path))
+        enable_delta_features(DeltaFeatureMutationOptions(path=str(path)))
     except RuntimeError as exc:
         pytest.skip(str(exc))
 

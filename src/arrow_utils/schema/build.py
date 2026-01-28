@@ -282,10 +282,14 @@ def pick_first(
             msg = f"Missing column {col!r}."
             raise KeyError(msg)
         column = table[col]
-        chunked = (
-            column.combine_chunks() if isinstance(column, pa.ChunkedArray) else column
-        )
-        value = chunked[0]
+        if isinstance(column, pa.ChunkedArray):
+            chunked = cast("pa.ChunkedArray", column)
+            if chunked.num_chunks == 0:
+                return default
+            first_chunk = chunked.chunk(0)
+            value = first_chunk[0]
+        else:
+            value = cast("pa.Array", column)[0]
         return value.as_py() if hasattr(value, "as_py") else value
     return default
 
@@ -325,6 +329,11 @@ def table_from_columns(
     -------
     TableLike
         Table built from ordered schema fields.
+
+    Raises
+    ------
+    ValueError
+        Raised when any schema field is missing from the column mapping.
     """
     resolved_schema = _resolve_schema(schema)
     arrays: list[ArrayLike | ChunkedArrayLike] = []
@@ -462,9 +471,7 @@ def record_batch_reader_from_row_batches(
         Reader yielding record batches aligned to the schema.
     """
     resolved = _resolve_schema(schema)
-    batches = [
-        pa.RecordBatch.from_pylist(list(batch), schema=resolved) for batch in row_batches
-    ]
+    batches = [pa.RecordBatch.from_pylist(list(batch), schema=resolved) for batch in row_batches]
     return pa.RecordBatchReader.from_batches(resolved, batches)
 
 
@@ -666,6 +673,7 @@ def table_from_schema_payload(payload: Mapping[str, object]) -> TableLike:
     if not isinstance(schema, pa.Schema):
         msg = "Payload must include a pyarrow.Schema under 'schema'."
         raise TypeError(msg)
+    schema = cast("pa.Schema", schema)
     rows = payload.get("rows")
     if rows is None:
         return empty_table(schema)

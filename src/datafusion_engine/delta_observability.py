@@ -180,11 +180,8 @@ def record_delta_mutation(
     if location is None:
         return None
     report = artifact.report
-    snapshot = report.get("snapshot") if isinstance(report, Mapping) else None
-    if isinstance(snapshot, Mapping):
-        snapshot_payload = {str(key): value for key, value in dict(snapshot).items()}
-    else:
-        snapshot_payload: dict[str, object] = {}
+    snapshot_payload = _snapshot_payload(report)
+    table_properties = _snapshot_table_properties(snapshot_payload)
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset_name": artifact.dataset_name,
@@ -196,6 +193,7 @@ def record_delta_mutation(
         "min_writer_version": _coerce_int(snapshot_payload.get("min_writer_version")),
         "reader_features_json": _json_text(snapshot_payload.get("reader_features") or ()),
         "writer_features_json": _json_text(snapshot_payload.get("writer_features") or ()),
+        "table_properties_json": _json_text(table_properties),
         "constraint_status": artifact.constraint_status,
         "constraint_violations_json": _json_text(list(artifact.constraint_violations)),
         "commit_app_id": artifact.commit_app_id,
@@ -291,12 +289,27 @@ def record_delta_maintenance(
     if location is None:
         return None
     report = artifact.report
+    snapshot_payload = _snapshot_payload(report)
+    table_properties = _snapshot_table_properties(snapshot_payload)
+    log_retention = table_properties.get("delta.logRetentionDuration")
+    checkpoint_interval = table_properties.get("delta.checkpointInterval")
+    checkpoint_retention = table_properties.get("delta.checkpointRetentionDuration")
+    checkpoint_protection = table_properties.get("delta.checkpointProtection")
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "dataset_name": artifact.dataset_name,
         "table_uri": artifact.table_uri,
         "operation": artifact.operation,
         "delta_version": _coerce_int(report.get("version")),
+        "min_reader_version": _coerce_int(snapshot_payload.get("min_reader_version")),
+        "min_writer_version": _coerce_int(snapshot_payload.get("min_writer_version")),
+        "reader_features_json": _json_text(snapshot_payload.get("reader_features") or ()),
+        "writer_features_json": _json_text(snapshot_payload.get("writer_features") or ()),
+        "table_properties_json": _json_text(table_properties),
+        "log_retention_duration": log_retention,
+        "checkpoint_interval": checkpoint_interval,
+        "checkpoint_retention_duration": checkpoint_retention,
+        "checkpoint_protection": checkpoint_protection,
         "retention_hours": artifact.retention_hours,
         "dry_run": artifact.dry_run,
         "metrics_json": _json_text(report.get("metrics") or {}),
@@ -418,6 +431,7 @@ def _delta_mutation_schema() -> pa.Schema:
             pa.field("min_writer_version", pa.int32()),
             pa.field("reader_features_json", pa.string()),
             pa.field("writer_features_json", pa.string()),
+            pa.field("table_properties_json", pa.string()),
             pa.field("constraint_status", pa.string()),
             pa.field("constraint_violations_json", pa.string()),
             pa.field("commit_app_id", pa.string()),
@@ -458,6 +472,15 @@ def _delta_maintenance_schema() -> pa.Schema:
             pa.field("table_uri", pa.string(), nullable=False),
             pa.field("operation", pa.string(), nullable=False),
             pa.field("delta_version", pa.int64()),
+            pa.field("min_reader_version", pa.int32()),
+            pa.field("min_writer_version", pa.int32()),
+            pa.field("reader_features_json", pa.string()),
+            pa.field("writer_features_json", pa.string()),
+            pa.field("table_properties_json", pa.string()),
+            pa.field("log_retention_duration", pa.string()),
+            pa.field("checkpoint_interval", pa.string()),
+            pa.field("checkpoint_retention_duration", pa.string()),
+            pa.field("checkpoint_protection", pa.string()),
             pa.field("retention_hours", pa.int64()),
             pa.field("dry_run", pa.bool_()),
             pa.field("metrics_json", pa.string()),
@@ -469,6 +492,25 @@ def _delta_maintenance_schema() -> pa.Schema:
 
 def _json_text(value: object) -> str:
     return json.dumps(_coerce_json_value(value), sort_keys=True)
+
+
+def _snapshot_payload(report: Mapping[str, object]) -> dict[str, object]:
+    snapshot = report.get("snapshot") if isinstance(report, Mapping) else None
+    if isinstance(snapshot, Mapping):
+        return {str(key): value for key, value in dict(snapshot).items()}
+    metrics = report.get("metrics") if isinstance(report, Mapping) else None
+    if isinstance(metrics, Mapping):
+        nested = metrics.get("snapshot")
+        if isinstance(nested, Mapping):
+            return {str(key): value for key, value in dict(nested).items()}
+    return {}
+
+
+def _snapshot_table_properties(snapshot_payload: Mapping[str, object]) -> dict[str, str]:
+    properties = snapshot_payload.get("table_properties")
+    if not isinstance(properties, Mapping):
+        return {}
+    return {str(key): str(value) for key, value in dict(properties).items()}
 
 
 def _coerce_json_value(value: object) -> object:

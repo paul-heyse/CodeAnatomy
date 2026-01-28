@@ -202,7 +202,8 @@ def _register_temp_table(ctx: SessionContext, table: TableLike, *, prefix: str) 
     name = f"__{prefix}_{uuid.uuid4().hex}"
     resolved = coerce_table_like(table)
     if isinstance(resolved, pa.RecordBatchReader):
-        resolved_table = pa.Table.from_batches(list(resolved))
+        reader = cast("pa.RecordBatchReader", resolved)
+        resolved_table = reader.read_all()
     else:
         resolved_table = cast("ArrowTable", resolved)
     batches = list(resolved_table.to_batches())
@@ -584,7 +585,8 @@ def _prepare_validation_context(
     session = _session_context(runtime_profile)
     resolved = coerce_table_like(table)
     if isinstance(resolved, pa.RecordBatchReader):
-        resolved_table = pa.Table.from_batches(list(resolved))
+        reader = cast("pa.RecordBatchReader", resolved)
+        resolved_table = reader.read_all()
     else:
         resolved_table = cast("ArrowTable", resolved)
     row_count = int(resolved_table.num_rows)

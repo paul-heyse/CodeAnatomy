@@ -21,9 +21,9 @@ from storage.deltalake import (
     DeltaWriteResult,
     delta_merge_arrow,
     delta_table_version,
-    enable_delta_features,
     idempotent_commit_properties,
 )
+from storage.deltalake.delta import DeltaFeatureMutationOptions, enable_delta_features
 
 if TYPE_CHECKING:
     from arrow_utils.core.interop import TableLike
@@ -195,9 +195,13 @@ def write_repo_snapshot(
         metadata={"operation": "merge", "rows_affected": snapshot.num_rows},
     )
     enable_delta_features(
-        str(target),
-        storage_options=storage.storage_options,
-        log_storage_options=storage.log_storage_options,
+        DeltaFeatureMutationOptions(
+            path=str(target),
+            storage_options=storage.storage_options,
+            log_storage_options=storage.log_storage_options,
+            runtime_profile=context.runtime.profile,
+            dataset_name="repo_snapshot",
+        )
     )
     return DeltaWriteResult(
         path=str(target),

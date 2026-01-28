@@ -10,17 +10,12 @@ from typing import TYPE_CHECKING, cast
 
 import rustworkx as rx
 
-import test_support.datafusion_ext_stub as _datafusion_ext_stub
-import test_support.view_specs_stub as _view_specs_stub
-
 if TYPE_CHECKING:
     from datafusion import SessionContext
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.view_graph_registry import ViewNode as RegistryViewNode
     from relspec.execution_plan import ExecutionPlan
-
-_ = (_datafusion_ext_stub, _view_specs_stub)
 
 
 @dataclass(frozen=True)

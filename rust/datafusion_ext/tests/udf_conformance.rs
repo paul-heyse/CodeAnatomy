@@ -12,6 +12,7 @@ use blake2::Blake2bVar;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::Result;
+use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 use tokio::runtime::Runtime;
 
 use datafusion_ext::{
@@ -220,6 +221,114 @@ fn information_schema_routines_match_snapshot() -> Result<()> {
 }
 
 #[test]
+fn map_get_default_reports_short_circuit() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let state = ctx.state();
+    let udf = state
+        .scalar_functions()
+        .get("map_get_default")
+        .expect("map_get_default udf");
+    assert!(udf.short_circuits());
+    Ok(())
+}
+
+#[test]
+fn identity_udfs_preserve_ordering() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all_with_policy(&ctx, true, Some(1000), Some(64))?;
+    let ordered = SortProperties::Ordered(arrow::compute::SortOptions {
+        descending: false,
+        nulls_first: true,
+    });
+    let props = ExprProperties::new_unknown()
+        .with_order(ordered)
+        .with_preserves_lex_ordering(true);
+
+    let state = ctx.state();
+    let cpg = state
+        .scalar_functions()
+        .get("cpg_score")
+        .expect("cpg_score udf");
+    assert!(cpg.preserves_lex_ordering(&[props.clone()])?);
+    assert_eq!(cpg.output_ordering(&[props.clone()])?, ordered);
+
+    Ok(())
+}
+
+#[test]
+fn async_echo_uses_configured_batch_size() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all_with_policy(&ctx, true, Some(1000), Some(128))?;
+    let state = ctx.state();
+    let udf = state
+        .scalar_functions()
+        .get("async_echo")
+        .expect("async_echo udf");
+    let async_udf = udf.as_async().expect("async udf");
+    assert_eq!(async_udf.ideal_batch_size(), Some(128));
+    Ok(())
+}
+
+#[test]
+fn async_echo_uses_session_batch_size_when_policy_unset() -> Result<()> {
+    let config = SessionConfig::new().with_batch_size(64);
+    let ctx = SessionContext::new_with_config(config);
+    udf_registry::register_all_with_policy(&ctx, true, Some(1000), None)?;
+    let state = ctx.state();
+    let udf = state
+        .scalar_functions()
+        .get("async_echo")
+        .expect("async_echo udf");
+    let async_udf = udf.as_async().expect("async udf");
+    assert_eq!(async_udf.ideal_batch_size(), Some(64));
+    Ok(())
+}
+
+#[cfg(feature = "async-udf")]
+#[test]
+fn async_echo_handles_remainder_batches() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all_with_policy(&ctx, true, Some(250), Some(3))?;
+    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, false)]));
+    let values: Vec<Option<String>> =
+        (0..10).map(|index| Some(format!("v{index}"))).collect();
+    let array = Arc::new(StringArray::from(values)) as Arc<dyn Array>;
+    let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+    let batches = run_query(&ctx, "SELECT async_echo(value) AS value FROM t")?;
+    let mut collected: Vec<String> = Vec::new();
+    for batch in batches {
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string column");
+        for value in array.iter() {
+            collected.push(value.expect("non-null").to_string());
+        }
+    }
+    assert_eq!(collected.len(), 10);
+    let mut expected: Vec<String> = (0..10).map(|index| format!("v{index}")).collect();
+    collected.sort();
+    expected.sort();
+    assert_eq!(collected, expected);
+    Ok(())
+}
+
+#[test]
+fn udtf_rejects_non_literal_args() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let err = run_query(&ctx, "SELECT * FROM read_csv(random())");
+    assert!(err.is_err());
+    let err = run_query(&ctx, "SELECT * FROM read_parquet(random())");
+    assert!(err.is_err());
+    Ok(())
+}
+
+#[test]
 fn information_schema_parameters_match_snapshot() -> Result<()> {
     let config = SessionConfig::new().with_information_schema(true);
     let ctx = SessionContext::new_with_config(config);
@@ -288,6 +397,13 @@ fn information_schema_parameters_match_snapshot() -> Result<()> {
             .entry(rid)
             .or_default()
             .push((ordinal, param_name, dtype));
+    }
+
+    if let Some(rows) = param_map.get("prefixed_hash64") {
+        eprintln!("prefixed_hash64 parameter rows: {rows:?}");
+    }
+    if let Some(rows) = param_map.get("collect_set") {
+        eprintln!("collect_set parameter rows: {rows:?}");
     }
 
     for name in snapshot
@@ -803,8 +919,9 @@ fn list_unique_window_plan_contains_window_agg() -> Result<()> {
         &ctx,
         "EXPLAIN SELECT list_unique(value) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS value FROM t",
     )?;
+    let plan_column = if batches[0].num_columns() > 1 { 1 } else { 0 };
     let plan = batches[0]
-        .column(0)
+        .column(plan_column)
         .as_any()
         .downcast_ref::<StringArray>()
         .expect("string column");
@@ -981,13 +1098,33 @@ fn dedupe_best_by_score_behaves_like_row_number() -> Result<()> {
         "SELECT key, score, dedupe_best_by_score() OVER (PARTITION BY key ORDER BY score DESC) AS rn \
          FROM (VALUES ('a', 1), ('a', 2), ('b', 3)) t(key, score)",
     )?;
-    let array = batches[0]
+    let batch = &batches[0];
+    let keys = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("key column");
+    let scores = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("score column");
+    let ranks = batch
         .column(2)
         .as_any()
         .downcast_ref::<UInt64Array>()
-        .expect("uint64 column");
-    assert_eq!(array.value(0), 2);
-    assert_eq!(array.value(1), 1);
-    assert_eq!(array.value(2), 1);
+        .expect("rank column");
+    let mut rows: Vec<(String, i64, u64)> = Vec::new();
+    for row in 0..batch.num_rows() {
+        rows.push((
+            keys.value(row).to_string(),
+            scores.value(row),
+            ranks.value(row),
+        ));
+    }
+    rows.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    let mut expected = vec![("a".to_string(), 1, 2), ("a".to_string(), 2, 1), ("b".to_string(), 3, 1)];
+    expected.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    assert_eq!(rows, expected);
     Ok(())
 }

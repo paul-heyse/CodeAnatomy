@@ -194,6 +194,7 @@ class DeltaVacuumRequest:
     retention_hours: int | None
     dry_run: bool
     enforce_retention_duration: bool
+    require_vacuum_protocol_check: bool = False
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
 
@@ -238,6 +239,56 @@ class DeltaAddFeaturesRequest:
     allow_protocol_versions_increase: bool
     gate: DeltaFeatureGate | None = None
     commit_options: DeltaCommitOptions | None = None
+
+
+@dataclass(frozen=True)
+class DeltaFeatureEnableRequest:
+    """Inputs required to enable a Delta protocol feature set."""
+
+    table_uri: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+    gate: DeltaFeatureGate | None = None
+    commit_options: DeltaCommitOptions | None = None
+
+
+@dataclass(frozen=True)
+class DeltaAddConstraintsRequest:
+    """Inputs required to add Delta check constraints."""
+
+    table_uri: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+    constraints: Mapping[str, str]
+    gate: DeltaFeatureGate | None = None
+    commit_options: DeltaCommitOptions | None = None
+
+
+@dataclass(frozen=True)
+class DeltaDropConstraintsRequest:
+    """Inputs required to drop Delta check constraints."""
+
+    table_uri: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+    constraints: Sequence[str]
+    raise_if_not_exists: bool = True
+    gate: DeltaFeatureGate | None = None
+    commit_options: DeltaCommitOptions | None = None
+
+
+@dataclass(frozen=True)
+class DeltaCheckpointRequest:
+    """Inputs required to create a Delta checkpoint or cleanup metadata."""
+
+    table_uri: str
+    storage_options: Mapping[str, str] | None
+    version: int | None
+    timestamp: str | None
+    gate: DeltaFeatureGate | None = None
 
 
 def _require_datafusion_ext() -> object:
@@ -1131,6 +1182,7 @@ def delta_vacuum(
         request.retention_hours,
         request.dry_run,
         request.enforce_retention_duration,
+        request.require_vacuum_protocol_check,
         gate_payload[0],
         gate_payload[1],
         gate_payload[2],
@@ -1318,13 +1370,870 @@ def delta_add_features(
     return _ensure_mapping(response, label="delta_add_features")
 
 
+def delta_add_constraints(
+    ctx: SessionContext,
+    *,
+    request: DeltaAddConstraintsRequest,
+) -> Mapping[str, object]:
+    """Run Rust-native Delta add-constraints.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Control-plane response payload for the constraint update.
+
+    Raises
+    ------
+    TypeError
+        Raised when the Rust control-plane function is unavailable.
+    ValueError
+        Raised when the request is missing required constraints.
+    """
+    if not request.constraints:
+        msg = "Delta add-constraints requires at least one constraint."
+        raise ValueError(msg)
+    module = _require_datafusion_ext()
+    add_fn = getattr(module, "delta_add_constraints", None)
+    if not callable(add_fn):
+        msg = "datafusion_ext.delta_add_constraints is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(request.storage_options.items()) if request.storage_options else None
+    gate_payload = _gate_payload(request.gate)
+    commit_payload = _commit_payload(request.commit_options)
+    constraints_payload = sorted(
+        (str(name), str(expr)) for name, expr in request.constraints.items()
+    )
+    response = add_fn(
+        ctx,
+        request.table_uri,
+        storage_payload,
+        request.version,
+        request.timestamp,
+        constraints_payload,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_add_constraints")
+
+
+def delta_drop_constraints(
+    ctx: SessionContext,
+    *,
+    request: DeltaDropConstraintsRequest,
+) -> Mapping[str, object]:
+    """Run Rust-native Delta drop-constraints.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Control-plane response payload for the constraint drop.
+
+    Raises
+    ------
+    TypeError
+        Raised when the Rust control-plane function is unavailable.
+    ValueError
+        Raised when the request is missing constraint names.
+    """
+    if not request.constraints:
+        msg = "Delta drop-constraints requires at least one constraint name."
+        raise ValueError(msg)
+    module = _require_datafusion_ext()
+    drop_fn = getattr(module, "delta_drop_constraints", None)
+    if not callable(drop_fn):
+        msg = "datafusion_ext.delta_drop_constraints is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(request.storage_options.items()) if request.storage_options else None
+    gate_payload = _gate_payload(request.gate)
+    commit_payload = _commit_payload(request.commit_options)
+    response = drop_fn(
+        ctx,
+        request.table_uri,
+        storage_payload,
+        request.version,
+        request.timestamp,
+        [str(name) for name in request.constraints],
+        request.raise_if_not_exists,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+        commit_payload[0],
+        commit_payload[1],
+        commit_payload[2],
+        commit_payload[3],
+        commit_payload[4],
+        commit_payload[5],
+    )
+    return _ensure_mapping(response, label="delta_drop_constraints")
+
+
+def delta_create_checkpoint(
+    ctx: SessionContext,
+    *,
+    request: DeltaCheckpointRequest,
+) -> Mapping[str, object]:
+    """Create a Delta checkpoint for the requested table.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Control-plane response payload for the checkpoint request.
+
+    Raises
+    ------
+    TypeError
+        Raised when the Rust control-plane function is unavailable.
+    """
+    module = _require_datafusion_ext()
+    checkpoint_fn = getattr(module, "delta_create_checkpoint", None)
+    if not callable(checkpoint_fn):
+        msg = "datafusion_ext.delta_create_checkpoint is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(request.storage_options.items()) if request.storage_options else None
+    gate_payload = _gate_payload(request.gate)
+    response = checkpoint_fn(
+        ctx,
+        request.table_uri,
+        storage_payload,
+        request.version,
+        request.timestamp,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+    )
+    return _ensure_mapping(response, label="delta_create_checkpoint")
+
+
+def delta_cleanup_metadata(
+    ctx: SessionContext,
+    *,
+    request: DeltaCheckpointRequest,
+) -> Mapping[str, object]:
+    """Clean expired Delta log metadata for the requested table.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Control-plane response payload for the cleanup request.
+
+    Raises
+    ------
+    TypeError
+        Raised when the Rust control-plane function is unavailable.
+    """
+    module = _require_datafusion_ext()
+    cleanup_fn = getattr(module, "delta_cleanup_metadata", None)
+    if not callable(cleanup_fn):
+        msg = "datafusion_ext.delta_cleanup_metadata is unavailable."
+        raise TypeError(msg)
+    storage_payload = list(request.storage_options.items()) if request.storage_options else None
+    gate_payload = _gate_payload(request.gate)
+    response = cleanup_fn(
+        ctx,
+        request.table_uri,
+        storage_payload,
+        request.version,
+        request.timestamp,
+        gate_payload[0],
+        gate_payload[1],
+        gate_payload[2],
+        gate_payload[3],
+    )
+    return _ensure_mapping(response, label="delta_cleanup_metadata")
+
+
+def _feature_reports(
+    *,
+    properties_report: Mapping[str, object] | None,
+    features_report: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    payload: dict[str, object] = {}
+    if properties_report is not None:
+        payload["properties"] = properties_report
+    if features_report is not None:
+        payload["features"] = features_report
+    return payload
+
+
+def delta_enable_column_mapping(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    mode: str = "name",
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    """Enable Delta column mapping with the desired mode.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties/features report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={
+                "delta.columnMapping.mode": mode,
+                "delta.minReaderVersion": "2",
+                "delta.minWriterVersion": "5",
+            },
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    features_report = delta_add_features(
+        ctx,
+        request=DeltaAddFeaturesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            features=["columnMapping"],
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=features_report,
+    )
+
+
+def delta_enable_deletion_vectors(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    """Enable Delta deletion vectors (table feature + property).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties/features report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.enableDeletionVectors": "true"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    features_report = delta_add_features(
+        ctx,
+        request=DeltaAddFeaturesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            features=["deletionVectors"],
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=features_report,
+    )
+
+
+def delta_enable_row_tracking(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    """Enable Delta row tracking (table feature + property).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties/features report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.enableRowTracking": "true"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    features_report = delta_add_features(
+        ctx,
+        request=DeltaAddFeaturesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            features=["rowTracking"],
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=features_report,
+    )
+
+
+def delta_enable_change_data_feed(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    """Enable Delta Change Data Feed (table feature + property).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties/features report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.enableChangeDataFeed": "true"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    features_report = delta_add_features(
+        ctx,
+        request=DeltaAddFeaturesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            features=["changeDataFeed"],
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=features_report,
+    )
+
+
+def delta_enable_generated_columns(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    """Enable Delta generated columns feature.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties/features report payload.
+    """
+    features_report = delta_add_features(
+        ctx,
+        request=DeltaAddFeaturesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            features=["generatedColumns"],
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=None,
+        features_report=features_report,
+    )
+
+
+def delta_enable_invariants(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    """Enable Delta invariants feature.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties/features report payload.
+    """
+    features_report = delta_add_features(
+        ctx,
+        request=DeltaAddFeaturesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            features=["invariants"],
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=None,
+        features_report=features_report,
+    )
+
+
+def delta_enable_check_constraints(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    """Enable Delta check constraints feature.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties/features report payload.
+    """
+    features_report = delta_add_features(
+        ctx,
+        request=DeltaAddFeaturesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            features=["checkConstraints"],
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=None,
+        features_report=features_report,
+    )
+
+
+def delta_enable_in_commit_timestamps(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    enablement_version: int | None = None,
+    enablement_timestamp: str | None = None,
+) -> Mapping[str, object]:
+    """Enable Delta in-commit timestamps via table properties.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties report payload.
+    """
+    properties: dict[str, str] = {"delta.enableInCommitTimestamps": "true"}
+    if enablement_version is not None:
+        properties["delta.inCommitTimestampEnablementVersion"] = str(enablement_version)
+    if enablement_timestamp is not None:
+        properties["delta.inCommitTimestampEnablementTimestamp"] = enablement_timestamp
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties=properties,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=None,
+    )
+
+
+def delta_enable_v2_checkpoints(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    """Enable Delta v2 checkpoints via feature + checkpoint policy property.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties/features report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.checkpointPolicy": "v2"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    features_report = delta_add_features(
+        ctx,
+        request=DeltaAddFeaturesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            features=["v2Checkpoint"],
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=features_report,
+    )
+
+
+def delta_enable_vacuum_protocol_check(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+) -> Mapping[str, object]:
+    """Enable vacuum protocol checks via table properties (best-effort).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.vacuumProtocolCheck": "true"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=None,
+    )
+
+
+def delta_enable_checkpoint_protection(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+) -> Mapping[str, object]:
+    """Enable checkpoint protection via table properties (best-effort).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.checkpointProtection": "true"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=None,
+    )
+
+
+def delta_disable_change_data_feed(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+) -> Mapping[str, object]:
+    """Disable Delta Change Data Feed via table properties (best-effort).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.enableChangeDataFeed": "false"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=None,
+    )
+
+
+def delta_disable_deletion_vectors(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+) -> Mapping[str, object]:
+    """Disable Delta deletion vectors via table properties (best-effort).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.enableDeletionVectors": "false"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=None,
+    )
+
+
+def delta_disable_row_tracking(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+) -> Mapping[str, object]:
+    """Disable Delta row tracking via table properties (best-effort).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.enableRowTracking": "false"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=None,
+    )
+
+
+def delta_disable_in_commit_timestamps(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+) -> Mapping[str, object]:
+    """Disable Delta in-commit timestamps via table properties (best-effort).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.enableInCommitTimestamps": "false"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=None,
+    )
+
+
+def delta_disable_vacuum_protocol_check(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+) -> Mapping[str, object]:
+    """Disable vacuum protocol check flag via table properties (best-effort).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.vacuumProtocolCheck": "false"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=None,
+    )
+
+
+def delta_disable_checkpoint_protection(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+) -> Mapping[str, object]:
+    """Disable checkpoint protection via table properties (best-effort).
+
+    Returns
+    -------
+    Mapping[str, object]
+        Properties report payload.
+    """
+    properties_report = delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties={"delta.checkpointProtection": "false"},
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=None,
+    )
+
+
+def delta_disable_column_mapping(*_args: object, **_kwargs: object) -> None:
+    """Raise when Delta column mapping cannot be disabled safely.
+
+    Raises
+    ------
+    RuntimeError
+        Raised because column mapping cannot be disabled safely.
+    """
+    msg = "Delta column mapping cannot be disabled safely once enabled."
+    raise RuntimeError(msg)
+
+
+def delta_disable_generated_columns(*_args: object, **_kwargs: object) -> None:
+    """Raise when Delta generated columns cannot be disabled safely.
+
+    Raises
+    ------
+    RuntimeError
+        Raised because generated columns cannot be disabled safely.
+    """
+    msg = "Delta generated columns cannot be disabled safely once enabled."
+    raise RuntimeError(msg)
+
+
+def delta_disable_invariants(*_args: object, **_kwargs: object) -> None:
+    """Raise when Delta invariants cannot be disabled safely.
+
+    Raises
+    ------
+    RuntimeError
+        Raised because invariants cannot be disabled safely.
+    """
+    msg = "Delta invariants cannot be disabled safely once enabled."
+    raise RuntimeError(msg)
+
+
+def delta_disable_check_constraints(*_args: object, **_kwargs: object) -> None:
+    """Raise when Delta check constraints must be dropped individually.
+
+    Raises
+    ------
+    RuntimeError
+        Raised because check constraints must be dropped individually.
+    """
+    msg = "Delta check constraints must be dropped individually."
+    raise RuntimeError(msg)
+
+
+def delta_disable_v2_checkpoints(*_args: object, **_kwargs: object) -> None:
+    """Raise when Delta v2 checkpoints cannot be disabled safely.
+
+    Raises
+    ------
+    RuntimeError
+        Raised because v2 checkpoints cannot be disabled safely.
+    """
+    msg = "Delta v2 checkpoints cannot be disabled safely once enabled."
+    raise RuntimeError(msg)
+
+
 __all__ = [
+    "DeltaAddConstraintsRequest",
     "DeltaAddFeaturesRequest",
     "DeltaAppTransaction",
     "DeltaCdfProviderBundle",
     "DeltaCdfRequest",
+    "DeltaCheckpointRequest",
     "DeltaCommitOptions",
     "DeltaDeleteRequest",
+    "DeltaDropConstraintsRequest",
+    "DeltaFeatureEnableRequest",
     "DeltaFeatureGate",
     "DeltaMergeRequest",
     "DeltaOptimizeRequest",
@@ -1337,9 +2246,35 @@ __all__ = [
     "DeltaVacuumRequest",
     "DeltaWriteRequest",
     "delta_add_actions",
+    "delta_add_constraints",
     "delta_add_features",
     "delta_cdf_provider",
+    "delta_cleanup_metadata",
+    "delta_create_checkpoint",
     "delta_delete",
+    "delta_disable_change_data_feed",
+    "delta_disable_check_constraints",
+    "delta_disable_checkpoint_protection",
+    "delta_disable_column_mapping",
+    "delta_disable_deletion_vectors",
+    "delta_disable_generated_columns",
+    "delta_disable_in_commit_timestamps",
+    "delta_disable_invariants",
+    "delta_disable_row_tracking",
+    "delta_disable_v2_checkpoints",
+    "delta_disable_vacuum_protocol_check",
+    "delta_drop_constraints",
+    "delta_enable_change_data_feed",
+    "delta_enable_check_constraints",
+    "delta_enable_checkpoint_protection",
+    "delta_enable_column_mapping",
+    "delta_enable_deletion_vectors",
+    "delta_enable_generated_columns",
+    "delta_enable_in_commit_timestamps",
+    "delta_enable_invariants",
+    "delta_enable_row_tracking",
+    "delta_enable_v2_checkpoints",
+    "delta_enable_vacuum_protocol_check",
     "delta_merge",
     "delta_optimize_compact",
     "delta_provider_from_session",

@@ -5,6 +5,9 @@ use chrono::{DateTime, Duration, Utc};
 use datafusion::execution::context::SessionContext;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::models::TableFeatures;
+use deltalake::protocol::checkpoints::{cleanup_metadata, create_checkpoint};
+use serde_json::json;
+use std::sync::Arc;
 
 use crate::delta_control_plane::load_delta_table;
 use crate::delta_mutations::{commit_properties, DeltaCommitOptions};
@@ -111,6 +114,7 @@ pub async fn delta_vacuum(
     retention_hours: Option<i64>,
     dry_run: bool,
     enforce_retention_duration: bool,
+    require_vacuum_protocol_check: bool,
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
@@ -122,7 +126,17 @@ pub async fn delta_vacuum(
         Some(session_ctx),
     )
     .await?;
-    let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
+    let snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
+    if require_vacuum_protocol_check
+        && !snapshot
+            .writer_features
+            .iter()
+            .any(|feature| feature == "vacuumProtocolCheck")
+    {
+        return Err(DeltaTableError::Generic(
+            "Delta table does not advertise vacuumProtocolCheck writer feature.".to_owned(),
+        ));
+    }
     let mut builder = table
         .vacuum()
         .with_dry_run(dry_run)
@@ -261,6 +275,154 @@ pub async fn delta_add_features(
     let version = table.version().unwrap_or(snapshot.version);
     Ok(DeltaMaintenanceReport {
         operation: "add_feature".to_owned(),
+        version,
+        snapshot,
+        metrics,
+    })
+}
+
+pub async fn delta_create_checkpoint(
+    session_ctx: &SessionContext,
+    table_uri: &str,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    gate: Option<DeltaFeatureGate>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
+    let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
+    create_checkpoint(&table, None).await?;
+    let snapshot = delta_snapshot_info(table_uri, &table).await?;
+    let version = table.version().unwrap_or(snapshot.version);
+    Ok(DeltaMaintenanceReport {
+        operation: "create_checkpoint".to_owned(),
+        version,
+        snapshot,
+        metrics: json!({"checkpoint": "created"}),
+    })
+}
+
+pub async fn delta_cleanup_metadata(
+    session_ctx: &SessionContext,
+    table_uri: &str,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    gate: Option<DeltaFeatureGate>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
+    let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
+    let deleted = cleanup_metadata(&table, None).await?;
+    let snapshot = delta_snapshot_info(table_uri, &table).await?;
+    let version = table.version().unwrap_or(snapshot.version);
+    Ok(DeltaMaintenanceReport {
+        operation: "cleanup_metadata".to_owned(),
+        version,
+        snapshot,
+        metrics: json!({"deleted_logs": deleted}),
+    })
+}
+
+pub async fn delta_add_constraints(
+    session_ctx: &SessionContext,
+    table_uri: &str,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    constraints: Vec<(String, String)>,
+    gate: Option<DeltaFeatureGate>,
+    commit_options: Option<DeltaCommitOptions>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    if constraints.is_empty() {
+        return Err(DeltaTableError::Generic(
+            "Delta add-constraints requires at least one constraint.".to_owned(),
+        ));
+    }
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
+    let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
+    let mut constraint_map: HashMap<String, String> = HashMap::new();
+    for (name, expr) in constraints {
+        constraint_map.insert(name, expr);
+    }
+    let delta_session: SessionContext = deltalake::delta_datafusion::create_session().into();
+    let session_state = Arc::new(delta_session.state());
+    let builder = table
+        .add_constraint()
+        .with_constraints(constraint_map)
+        .with_session_state(session_state)
+        .with_commit_properties(commit_properties(commit_options));
+    let table = builder.await?;
+    let metrics = latest_operation_metrics(&table).await;
+    let snapshot = delta_snapshot_info(table_uri, &table).await?;
+    let version = table.version().unwrap_or(snapshot.version);
+    Ok(DeltaMaintenanceReport {
+        operation: "add_constraints".to_owned(),
+        version,
+        snapshot,
+        metrics,
+    })
+}
+
+pub async fn delta_drop_constraints(
+    session_ctx: &SessionContext,
+    table_uri: &str,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    constraints: Vec<String>,
+    raise_if_not_exists: bool,
+    gate: Option<DeltaFeatureGate>,
+    commit_options: Option<DeltaCommitOptions>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    if constraints.is_empty() {
+        return Err(DeltaTableError::Generic(
+            "Delta drop-constraints requires at least one constraint name.".to_owned(),
+        ));
+    }
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
+    let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
+    let mut updated_table = table;
+    for name in constraints {
+        let builder = updated_table
+            .drop_constraints()
+            .with_constraint(name)
+            .with_raise_if_not_exists(raise_if_not_exists)
+            .with_commit_properties(commit_properties(commit_options.clone()));
+        updated_table = builder.await?;
+    }
+    let metrics = latest_operation_metrics(&updated_table).await;
+    let snapshot = delta_snapshot_info(table_uri, &updated_table).await?;
+    let version = updated_table.version().unwrap_or(snapshot.version);
+    Ok(DeltaMaintenanceReport {
+        operation: "drop_constraints".to_owned(),
         version,
         snapshot,
         metrics,

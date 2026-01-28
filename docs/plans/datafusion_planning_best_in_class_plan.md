@@ -376,8 +376,8 @@ class PlanArtifactRow:
 - [x] Write migration notes and backfill tools (design only).
 
 **Implementation notes**
-- Plan artifacts schema bumped to `datafusion_plan_artifacts_v4`.
-- Migration notes added in `docs/plans/datafusion_plan_artifacts_v4_migration_notes.md`.
+- Plan artifacts schema bumped to `datafusion_plan_artifacts_v6`.
+- Migration notes added in `docs/plans/datafusion_plan_artifacts_v6_migration_notes.md`.
 
 ---
 

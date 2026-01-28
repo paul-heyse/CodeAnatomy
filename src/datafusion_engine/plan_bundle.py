@@ -6,11 +6,13 @@ and scheduling paths use.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
@@ -20,6 +22,7 @@ from datafusion_engine.delta_store_policy import (
     delta_store_policy_hash,
 )
 from datafusion_engine.plan_profiler import ExplainCapture, capture_explain
+from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from serde_msgspec import dumps_msgpack
 
@@ -44,21 +47,28 @@ DataFrameBuilder = Callable[[SessionContext], DataFrame]
 class PlanArtifacts:
     """Serializable planning artifacts for reproducibility and scheduling."""
 
-    explain_tree: Mapping[str, object] | None
-    explain_verbose: Mapping[str, object] | None
-    explain_analyze: Mapping[str, object] | None
+    explain_tree_rows: Sequence[Mapping[str, object]] | None
+    explain_verbose_rows: Sequence[Mapping[str, object]] | None
     explain_analyze_duration_ms: float | None
     explain_analyze_output_rows: int | None
     df_settings: Mapping[str, str]
+    planning_env_snapshot: Mapping[str, object]
+    planning_env_hash: str
+    rulepack_snapshot: Mapping[str, object] | None
+    rulepack_hash: str | None
     information_schema_snapshot: Mapping[str, object]
     information_schema_hash: str
     substrait_validation: Mapping[str, object] | None
+    logical_plan_proto: bytes | None
+    optimized_plan_proto: bytes | None
+    execution_plan_proto: bytes | None
     udf_snapshot_hash: str
     function_registry_hash: str
     function_registry_snapshot: Mapping[str, object]
     rewrite_tags: tuple[str, ...]
     domain_planner_names: tuple[str, ...]
     udf_snapshot: Mapping[str, object]
+    udf_planner_snapshot: Mapping[str, object] | None
 
 
 @dataclass(frozen=True)
@@ -71,6 +81,11 @@ class DeltaInputPin:
     feature_gate: DeltaFeatureGate | None = None
     protocol: Mapping[str, object] | None = None
     storage_options_hash: str | None = None
+    delta_scan_config: Mapping[str, object] | None = None
+    delta_scan_config_hash: str | None = None
+    datafusion_provider: str | None = None
+    protocol_compatible: bool | None = None
+    protocol_compatibility: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +114,8 @@ class PlanDetailContext:
 class PlanDetailInputs:
     """Inputs used to assemble plan detail diagnostics."""
 
+    artifacts: PlanArtifacts
+    plan_fingerprint: str
     logical: object | None
     optimized: object | None
     execution: object | None
@@ -224,46 +241,58 @@ def _delta_inputs_from_scan_units(
         gate = unit.delta_feature_gate
         protocol = unit.delta_protocol
         storage_hash = unit.storage_options_hash
+        scan_config = unit.delta_scan_config
+        scan_config_hash = unit.delta_scan_config_hash
+        provider = unit.datafusion_provider
+        protocol_compatible = unit.protocol_compatible
+        protocol_compatibility = unit.protocol_compatibility
         if unit.delta_version is None and timestamp is None:
             continue
         existing = pins.get(unit.dataset_name)
-        if existing is not None and _delta_pin_state_from_pin(
-            existing,
-        ) != _delta_pin_state_from_values(
-            version=unit.delta_version,
-            timestamp=timestamp,
-            gate=gate,
-            protocol=protocol,
-            storage_options_hash=storage_hash,
-        ):
-            msg = (
-                "Conflicting Delta pins for dataset "
-                f"{unit.dataset_name!r}: "
-                f"{(existing.version, existing.timestamp, existing.feature_gate, existing.protocol, existing.storage_options_hash)} "
-                f"vs {(unit.delta_version, timestamp, gate, protocol, storage_hash)}"
-            )
-            raise ValueError(msg)
-        pins[unit.dataset_name] = DeltaInputPin(
+        candidate_pin = DeltaInputPin(
             dataset_name=unit.dataset_name,
             version=unit.delta_version,
             timestamp=timestamp,
             feature_gate=gate,
             protocol=protocol,
             storage_options_hash=storage_hash,
+            delta_scan_config=scan_config,
+            delta_scan_config_hash=scan_config_hash,
+            datafusion_provider=provider,
+            protocol_compatible=protocol_compatible,
+            protocol_compatibility=protocol_compatibility,
         )
+        if existing is not None:
+            existing_state = _delta_pin_state_from_pin(existing)
+            candidate_state = _delta_pin_state_from_pin(candidate_pin)
+            if existing_state != candidate_state:
+                msg = (
+                    "Conflicting Delta pins for dataset "
+                    f"{unit.dataset_name!r}: "
+                    f"{existing_state} vs {candidate_state}"
+                )
+                raise ValueError(msg)
+        pins[unit.dataset_name] = candidate_pin
     return tuple(pins[name] for name in sorted(pins))
 
 
 def _delta_pin_state_from_pin(
     pin: DeltaInputPin,
 ) -> tuple[
-    int | None, str | None, DeltaFeatureGate | None, Mapping[str, object] | None, str | None
+    int | None,
+    str | None,
+    DeltaFeatureGate | None,
+    Mapping[str, object] | None,
+    str | None,
+    str | None,
+    str | None,
+    bool | None,
 ]:
     """Build a comparable state tuple from a Delta pin.
 
     Returns
     -------
-    tuple[int | None, str | None, DeltaFeatureGate | None, Mapping[str, object] | None, str | None]
+    tuple
         Tuple of comparable pin fields used for conflict detection.
     """
     return (
@@ -272,46 +301,17 @@ def _delta_pin_state_from_pin(
         pin.feature_gate,
         pin.protocol,
         pin.storage_options_hash,
+        pin.delta_scan_config_hash,
+        pin.datafusion_provider,
+        pin.protocol_compatible,
     )
 
 
-def _delta_pin_state_from_values(
-    *,
-    version: int | None,
-    timestamp: str | None,
-    gate: DeltaFeatureGate | None,
-    protocol: Mapping[str, object] | None,
-    storage_options_hash: str | None,
-) -> tuple[
-    int | None, str | None, DeltaFeatureGate | None, Mapping[str, object] | None, str | None
-]:
-    """Build a comparable state tuple from Delta pin values.
-
-    Returns
-    -------
-    tuple[int | None, str | None, DeltaFeatureGate | None, Mapping[str, object] | None, str | None]
-        Tuple of comparable pin fields used for conflict detection.
-    """
-    return (
-        version,
-        timestamp,
-        gate,
-        protocol,
-        storage_options_hash,
-    )
-
-
-def build_plan_bundle(  # noqa: PLR0913
+def build_plan_bundle(
     ctx: SessionContext,
     df: DataFrame,
     *,
-    compute_execution_plan: bool = True,
-    compute_substrait: bool = True,
-    validate_udfs: bool = False,
-    registry_snapshot: Mapping[str, object] | None = None,
-    delta_inputs: Sequence[DeltaInputPin] = (),
-    session_runtime: SessionRuntime | None = None,
-    scan_units: Sequence[ScanUnit] = (),
+    options: PlanBundleOptions | None = None,
 ) -> DataFusionPlanBundle:
     """Build a canonical plan bundle from a DataFusion DataFrame.
 
@@ -327,20 +327,8 @@ def build_plan_bundle(  # noqa: PLR0913
         DataFusion session context for plan operations.
     df : DataFrame
         DataFusion DataFrame to build the plan from.
-    compute_execution_plan : bool
-        Whether to compute the physical execution plan (expensive).
-    compute_substrait : bool
-        Whether to compute Substrait bytes for fingerprinting.
-    validate_udfs : bool
-        Whether to validate that all referenced UDFs are registered.
-    registry_snapshot : Mapping[str, object] | None
-        Optional registry snapshot for UDF validation.
-    delta_inputs : Sequence[DeltaInputPin]
-        Optional pinned Delta inputs for deterministic scans.
-    session_runtime : SessionRuntime | None
-        Session runtime carrying UDF and settings snapshots.
-    scan_units : Sequence[ScanUnit]
-        Optional scan units for deriving Delta version pins.
+    options : PlanBundleOptions | None
+        Optional bundle options controlling plan capture.
 
     Returns
     -------
@@ -352,24 +340,17 @@ def build_plan_bundle(  # noqa: PLR0913
     ValueError
         Raised when session runtime information is unavailable or Substrait is disabled.
     """
-    if not compute_substrait:
+    resolved = options or PlanBundleOptions()
+    if not resolved.compute_substrait:
         msg = "Substrait bytes are required for plan bundle construction."
         raise ValueError(msg)
-    if session_runtime is None:
+    if resolved.session_runtime is None:
         msg = "SessionRuntime is required for plan bundle construction."
         raise ValueError(msg)
     components = _bundle_components(
         ctx,
         df,
-        options=PlanBundleOptions(
-            compute_execution_plan=compute_execution_plan,
-            compute_substrait=compute_substrait,
-            validate_udfs=validate_udfs,
-            registry_snapshot=registry_snapshot,
-            delta_inputs=delta_inputs,
-            session_runtime=session_runtime,
-            scan_units=scan_units,
-        ),
+        options=resolved,
     )
 
     return DataFusionPlanBundle(
@@ -427,6 +408,10 @@ class _EnvironmentArtifacts:
     """Captured environment snapshots used for plan fingerprinting."""
 
     df_settings: Mapping[str, str]
+    planning_env_snapshot: Mapping[str, object]
+    planning_env_hash: str
+    rulepack_snapshot: Mapping[str, object] | None
+    rulepack_hash: str | None
     information_schema_snapshot: Mapping[str, object]
     information_schema_hash: str
     cdf_windows: tuple[dict[str, object], ...]
@@ -509,6 +494,10 @@ def _environment_artifacts(
         Environment artifacts for fingerprints and diagnostics.
     """
     df_settings = _df_settings_snapshot(ctx, session_runtime=session_runtime)
+    planning_env_snapshot = _planning_env_snapshot(session_runtime)
+    planning_env_hash = _planning_env_hash(planning_env_snapshot)
+    rulepack_snapshot = _rulepack_snapshot(ctx)
+    rulepack_hash = _rulepack_hash(rulepack_snapshot)
     info_schema_snapshot = _information_schema_snapshot(ctx, session_runtime=session_runtime)
     info_schema_hash = _information_schema_hash(info_schema_snapshot)
     cdf_windows = _cdf_window_snapshot(session_runtime)
@@ -517,11 +506,204 @@ def _environment_artifacts(
         store_policy_hash = delta_store_policy_hash(session_runtime.profile.delta_store_policy)
     return _EnvironmentArtifacts(
         df_settings=df_settings,
+        planning_env_snapshot=planning_env_snapshot,
+        planning_env_hash=planning_env_hash,
+        rulepack_snapshot=rulepack_snapshot,
+        rulepack_hash=rulepack_hash,
         information_schema_snapshot=info_schema_snapshot,
         information_schema_hash=info_schema_hash,
         cdf_windows=cdf_windows,
         delta_store_policy_hash=store_policy_hash,
     )
+
+
+def _session_config_snapshot(ctx: SessionContext) -> Mapping[str, object]:
+    config_method = getattr(ctx, "config", None)
+    if not callable(config_method):
+        return {}
+    try:
+        config = config_method()
+    except (RuntimeError, TypeError, ValueError):
+        return {}
+    to_dict = getattr(config, "to_dict", None)
+    if not callable(to_dict):
+        return {}
+    try:
+        payload = to_dict()
+    except (RuntimeError, TypeError, ValueError):
+        return {}
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    return {}
+
+
+def _planning_env_snapshot(
+    session_runtime: SessionRuntime | None,
+) -> Mapping[str, object]:
+    """Return planning-relevant environment settings for determinism.
+
+    Parameters
+    ----------
+    session_runtime
+        Session runtime used to resolve profile settings.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Planning environment snapshot payload.
+    """
+    if session_runtime is None:
+        return {}
+    profile = session_runtime.profile
+    session_config = _session_config_snapshot(session_runtime.ctx)
+    sql_policy_payload = None
+    if profile.sql_policy is not None:
+        sql_policy_payload = {
+            "allow_ddl": profile.sql_policy.allow_ddl,
+            "allow_dml": profile.sql_policy.allow_dml,
+            "allow_statements": profile.sql_policy.allow_statements,
+        }
+    schema_hardening = profile.schema_hardening
+    return {
+        "datafusion_version": getattr(profile, "datafusion_version", None),
+        "session_config": session_config,
+        "settings_payload": profile.settings_payload(),
+        "settings_hash": profile.settings_hash(),
+        "sql_policy_name": profile.sql_policy_name,
+        "sql_policy": sql_policy_payload,
+        "explain_controls": {
+            "capture_explain": profile.capture_explain,
+            "explain_verbose": profile.explain_verbose,
+            "explain_analyze": profile.explain_analyze,
+            "explain_analyze_level": profile.explain_analyze_level,
+        },
+        "execution": {
+            "target_partitions": profile.target_partitions,
+            "batch_size": profile.batch_size,
+            "repartition_aggregations": profile.repartition_aggregations,
+            "repartition_windows": profile.repartition_windows,
+            "repartition_file_scans": profile.repartition_file_scans,
+            "repartition_file_min_size": profile.repartition_file_min_size,
+        },
+        "runtime_env": {
+            "spill_dir": profile.spill_dir,
+            "memory_pool": profile.memory_pool,
+            "memory_limit_bytes": profile.memory_limit_bytes,
+            "enable_cache_manager": profile.enable_cache_manager,
+        },
+        "async_udf": {
+            "enable_async_udfs": profile.enable_async_udfs,
+            "async_udf_timeout_ms": profile.async_udf_timeout_ms,
+            "async_udf_batch_size": profile.async_udf_batch_size,
+        },
+        "delta_protocol": {
+            "mode": profile.delta_protocol_mode,
+            "support": _delta_protocol_support_payload(profile.delta_protocol_support),
+        },
+        "schema_hardening": {
+            "explain_format": schema_hardening.explain_format if schema_hardening else None,
+            "enable_view_types": schema_hardening.enable_view_types if schema_hardening else None,
+        },
+    }
+
+
+def _delta_protocol_support_payload(
+    support: object | None,
+) -> Mapping[str, object] | None:
+    if support is None:
+        return None
+    max_reader = getattr(support, "max_reader_version", None)
+    max_writer = getattr(support, "max_writer_version", None)
+    reader_features = getattr(support, "supported_reader_features", ())
+    writer_features = getattr(support, "supported_writer_features", ())
+    return {
+        "max_reader_version": max_reader,
+        "max_writer_version": max_writer,
+        "supported_reader_features": list(reader_features),
+        "supported_writer_features": list(writer_features),
+    }
+
+
+def _planning_env_hash(snapshot: Mapping[str, object]) -> str:
+    payload = dumps_msgpack(snapshot)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _rulepack_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:
+    """Return a snapshot of planner rulepacks when available.
+
+    Returns
+    -------
+    Mapping[str, object] | None
+        Rulepack metadata payload, or ``None`` when unavailable.
+    """
+    containers: list[object] = [ctx]
+    for attr in ("state", "session_state"):
+        candidate = getattr(ctx, attr, None)
+        if callable(candidate):
+            with _suppress_errors():
+                candidate = candidate()
+        if candidate is not None:
+            containers.append(candidate)
+    snapshot: dict[str, object] = {}
+    for container in containers:
+        analyzer = _extract_rule_names(container, "analyzer_rules")
+        optimizer = _extract_rule_names(container, "optimizer_rules")
+        physical = _extract_rule_names(container, "physical_optimizer_rules")
+        if analyzer is not None:
+            snapshot["analyzer_rules"] = analyzer
+        if optimizer is not None:
+            snapshot["optimizer_rules"] = optimizer
+        if physical is not None:
+            snapshot["physical_optimizer_rules"] = physical
+    if snapshot:
+        snapshot["status"] = "ok"
+        snapshot["source"] = type(containers[-1]).__name__
+        return snapshot
+    return {"status": "unavailable", "reason": "rulepack APIs not exposed"}
+
+
+def _extract_rule_names(container: object, attr: str) -> list[str] | None:
+    rules = getattr(container, attr, None)
+    if callable(rules):
+        with _suppress_errors():
+            rules = rules()
+    if rules is None:
+        return None
+    if isinstance(rules, Sequence) and not isinstance(rules, (str, bytes)):
+        names: list[str] = []
+        for rule in rules:
+            name = _rule_name(rule)
+            if name:
+                names.append(name)
+        return names
+    return None
+
+
+def _rule_name(rule: object) -> str | None:
+    if rule is None:
+        return None
+    name_attr = getattr(rule, "name", None)
+    if callable(name_attr):
+        with _suppress_errors():
+            name_attr = name_attr()
+    if isinstance(name_attr, str) and name_attr:
+        return name_attr
+    try:
+        return type(rule).__name__
+    except (TypeError, ValueError):
+        return None
+
+
+def _rulepack_hash(snapshot: Mapping[str, object] | None) -> str | None:
+    if not snapshot:
+        return None
+    payload = dumps_msgpack(snapshot)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _suppress_errors() -> contextlib.AbstractContextManager[None]:
+    return contextlib.suppress(RuntimeError, TypeError, ValueError)
 
 
 def _merged_delta_inputs_for_bundle(
@@ -548,33 +730,74 @@ def _merged_delta_inputs_for_bundle(
     return _merge_delta_inputs(options.delta_inputs, scan_unit_pins)
 
 
-def _explain_payload(
-    capture: ExplainCapture | None,
-    *,
-    kind: str,
-) -> Mapping[str, object] | None:
-    """Return a JSON-ready payload for explain output.
+def _explain_rows_from_text(text: str) -> list[dict[str, object]] | None:
+    """Parse explain output text into row dictionaries when possible.
 
-    Parameters
-    ----------
-    capture
-        Captured explain output, or ``None`` when unavailable.
-    kind
-        Explain variant label (``tree``, ``verbose``, or ``analyze``).
+    Returns
+    -------
+    list[dict[str, object]] | None
+        Parsed row payloads or ``None`` when parsing fails.
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    table_lines = [line for line in lines if line.startswith("|") and line.endswith("|")]
+    if not table_lines:
+        return None
+    header: list[str] | None = None
+    rows: list[dict[str, object]] = []
+    for line in table_lines:
+        parts = [part.strip() for part in line.strip("|").split("|")]
+        if header is None and {"plan_type", "plan"}.issubset(set(parts)):
+            header = parts
+            continue
+        if header is None:
+            continue
+        if len(parts) != len(header):
+            continue
+        rows.append(dict(zip(header, parts, strict=False)))
+    return rows or None
+
+
+def _plan_proto_bytes(plan: object | None) -> bytes | None:
+    """Serialize a plan to proto bytes when supported.
+
+    Returns
+    -------
+    bytes | None
+        Serialized proto bytes when supported.
+    """
+    if plan is None:
+        return None
+    method = getattr(plan, "to_proto", None)
+    if not callable(method):
+        return None
+    try:
+        payload = method()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        return bytes(payload)
+    return None
+
+
+def _udf_planner_snapshot(snapshot: Mapping[str, object]) -> Mapping[str, object] | None:
+    """Return a normalized UDF planner metadata snapshot when available.
 
     Returns
     -------
     Mapping[str, object] | None
-        Payload containing explain text and parsed metrics, or ``None``.
+        Normalized UDF planner metadata payload.
     """
-    if capture is None:
-        return None
-    payload: dict[str, object] = {"kind": kind, "text": capture.text}
-    if capture.duration_ms is not None:
-        payload["duration_ms"] = capture.duration_ms
-    if capture.output_rows is not None:
-        payload["output_rows"] = capture.output_rows
-    return payload
+    try:
+        from datafusion_engine.udf_catalog import udf_planner_snapshot
+    except ImportError:
+        return {"status": "unavailable"}
+    try:
+        payload = udf_planner_snapshot(snapshot)
+    except (TypeError, ValueError):
+        return {"status": "unavailable"}
+    if not isinstance(payload, Mapping):
+        return {"status": "unavailable"}
+    return dict(payload)
 
 
 def _plan_artifacts_from_components(
@@ -588,10 +811,18 @@ def _plan_artifacts_from_components(
         Serializable plan artifacts.
     """
     explain_artifacts = inputs.explain_artifacts
+    explain_tree_rows = (
+        _explain_rows_from_text(explain_artifacts.tree.text) if explain_artifacts.tree else None
+    )
+    explain_verbose_rows = (
+        _explain_rows_from_text(explain_artifacts.verbose.text)
+        if explain_artifacts.verbose is not None
+        else None
+    )
+    plan_core = inputs.plan_core
     return PlanArtifacts(
-        explain_tree=_explain_payload(explain_artifacts.tree, kind="tree"),
-        explain_verbose=_explain_payload(explain_artifacts.verbose, kind="verbose"),
-        explain_analyze=_explain_payload(explain_artifacts.analyze, kind="analyze"),
+        explain_tree_rows=explain_tree_rows,
+        explain_verbose_rows=explain_verbose_rows,
         explain_analyze_duration_ms=(
             explain_artifacts.analyze.duration_ms if explain_artifacts.analyze is not None else None
         ),
@@ -599,15 +830,23 @@ def _plan_artifacts_from_components(
             explain_artifacts.analyze.output_rows if explain_artifacts.analyze is not None else None
         ),
         df_settings=inputs.environment.df_settings,
+        planning_env_snapshot=inputs.environment.planning_env_snapshot,
+        planning_env_hash=inputs.environment.planning_env_hash,
+        rulepack_snapshot=inputs.environment.rulepack_snapshot,
+        rulepack_hash=inputs.environment.rulepack_hash,
         information_schema_snapshot=inputs.environment.information_schema_snapshot,
         information_schema_hash=inputs.environment.information_schema_hash,
         substrait_validation=inputs.substrait_validation,
+        logical_plan_proto=_plan_proto_bytes(plan_core.logical),
+        optimized_plan_proto=_plan_proto_bytes(plan_core.optimized),
+        execution_plan_proto=_plan_proto_bytes(plan_core.execution),
         udf_snapshot_hash=inputs.udf_artifacts.snapshot_hash,
         function_registry_hash=inputs.registry_artifacts.registry_hash,
         function_registry_snapshot=inputs.registry_artifacts.registry_snapshot,
         rewrite_tags=inputs.udf_artifacts.rewrite_tags,
         domain_planner_names=inputs.udf_artifacts.domain_planner_names,
         udf_snapshot=inputs.udf_artifacts.snapshot,
+        udf_planner_snapshot=_udf_planner_snapshot(inputs.udf_artifacts.snapshot),
     )
 
 
@@ -656,6 +895,8 @@ def _bundle_components(
         PlanFingerprintInputs(
             substrait_bytes=plan_core.substrait_bytes,
             df_settings=environment.df_settings,
+            planning_env_hash=environment.planning_env_hash,
+            rulepack_hash=environment.rulepack_hash,
             udf_snapshot_hash=udf_artifacts.snapshot_hash,
             required_udfs=required.required_udfs,
             required_rewrite_tags=required.required_rewrite_tags,
@@ -676,6 +917,8 @@ def _bundle_components(
         )
     )
     detail_inputs = PlanDetailInputs(
+        artifacts=artifacts,
+        plan_fingerprint=fingerprint,
         logical=plan_core.logical,
         optimized=plan_core.optimized,
         execution=plan_core.execution,
@@ -795,10 +1038,7 @@ def _safe_execution_plan(df: DataFrame) -> object | None:
     """
     method = getattr(df, "execution_plan", None)
     if not callable(method):
-        # Try physical_plan as fallback for older versions
-        method = getattr(df, "physical_plan", None)
-        if not callable(method):
-            return None
+        return None
     try:
         return method()
     except (RuntimeError, TypeError, ValueError):
@@ -831,8 +1071,6 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes 
     except (RuntimeError, TypeError, ValueError, AttributeError):
         pass
 
-    # Fallback: use plan display string for fingerprinting
-    # This is less portable but still deterministic
     return None
 
 
@@ -932,15 +1170,25 @@ def _information_schema_snapshot(
         introspector = SchemaIntrospector(ctx, sql_options=sql_options)
     except (RuntimeError, TypeError, ValueError):
         return {}
+    tables = introspector.tables_snapshot()
+    table_definitions: dict[str, str] = {}
+    for row in tables:
+        name = row.get("table_name")
+        if name is None:
+            continue
+        definition = introspector.table_definition(str(name))
+        if definition:
+            table_definitions[str(name)] = definition
     return {
         "df_settings": _df_settings_snapshot(ctx, session_runtime=session_runtime),
         "settings": introspector.settings_snapshot(),
-        "tables": introspector.tables_snapshot(),
+        "tables": tables,
         "schemata": introspector.schemata_snapshot(),
         "columns": introspector.columns_snapshot(),
         "routines": introspector.routines_snapshot(),
         "parameters": introspector.parameters_snapshot(),
         "function_catalog": introspector.function_catalog_snapshot(include_parameters=True),
+        "table_definitions": table_definitions,
     }
 
 
@@ -967,6 +1215,8 @@ class PlanFingerprintInputs:
 
     substrait_bytes: bytes | None
     df_settings: Mapping[str, str]
+    planning_env_hash: str | None
+    rulepack_hash: str | None
     information_schema_hash: str | None
     udf_snapshot_hash: str
     required_udfs: Sequence[str]
@@ -996,6 +1246,8 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
         raise ValueError(msg)
     settings_items = tuple(sorted(inputs.df_settings.items()))
     settings_hash = hashlib.sha256(dumps_msgpack(settings_items)).hexdigest()
+    planning_env_hash = inputs.planning_env_hash or ""
+    rulepack_hash = inputs.rulepack_hash or ""
     substrait_hash = hashlib.sha256(inputs.substrait_bytes).hexdigest()
     delta_payload = tuple(
         sorted(
@@ -1007,6 +1259,9 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
                     _delta_gate_payload(pin.feature_gate),
                     _delta_protocol_payload(pin.protocol),
                     pin.storage_options_hash,
+                    pin.delta_scan_config_hash,
+                    pin.datafusion_provider,
+                    pin.protocol_compatible,
                 )
                 for pin in inputs.delta_inputs
             ),
@@ -1016,6 +1271,8 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
     payload = (
         ("substrait_hash", substrait_hash),
         ("settings_hash", settings_hash),
+        ("planning_env_hash", planning_env_hash),
+        ("rulepack_hash", rulepack_hash),
         ("information_schema_hash", inputs.information_schema_hash or ""),
         ("udf_snapshot_hash", inputs.udf_snapshot_hash),
         ("required_udfs", tuple(sorted(inputs.required_udfs))),
@@ -1219,6 +1476,10 @@ def _plan_details(
     details["optimized_plan_pgjson"] = _plan_pgjson(detail_inputs.optimized)
     details["partition_count"] = _plan_partition_count(detail_inputs.execution)
     details["repartition_count"] = _repartition_count_from_display(physical_plan)
+    details["dynamic_filter_count"] = _dynamic_filter_count_from_display(physical_plan)
+    stats_payload = _plan_statistics_payload(detail_inputs.execution)
+    if stats_payload is not None:
+        details["statistics"] = stats_payload
     if detail_inputs.explain_tree is not None:
         details["explain_tree"] = detail_inputs.explain_tree.text
     if detail_inputs.explain_verbose is not None:
@@ -1231,12 +1492,18 @@ def _plan_details(
         details["substrait_validation"] = detail_inputs.substrait_validation
     schema_names: list[str] = list(df.schema().names) if hasattr(df.schema(), "names") else []
     details["schema_names"] = schema_names
+    details["schema_describe"] = _schema_describe_rows(df)
+    details["schema_provenance"] = _schema_provenance(df)
     if context.cdf_windows:
         details["cdf_windows"] = [dict(window) for window in context.cdf_windows]
     if context.delta_store_policy_hash is not None:
         details["delta_store_policy_hash"] = context.delta_store_policy_hash
     if context.information_schema_hash is not None:
         details["information_schema_hash"] = context.information_schema_hash
+    details["determinism_audit"] = _determinism_audit_bundle(
+        detail_inputs,
+        context=context,
+    )
     return details
 
 
@@ -1300,6 +1567,176 @@ def _repartition_count_from_display(plan_display: str | None) -> int | None:
     token = "RepartitionExec"
     count = plan_display.count(token)
     return count if count > 0 else None
+
+
+def _dynamic_filter_count_from_display(plan_display: str | None) -> int | None:
+    """Count dynamic filter operators from a physical plan display string.
+
+    Returns
+    -------
+    int | None
+        Count of dynamic filter operators, or ``None`` if unavailable.
+    """
+    if plan_display is None:
+        return None
+    token = "DynamicFilter"
+    count = plan_display.count(token)
+    return count if count > 0 else None
+
+
+def _plan_statistics_payload(plan: object | None) -> Mapping[str, object] | None:
+    """Return a summary of execution plan statistics when available.
+
+    Returns
+    -------
+    Mapping[str, object] | None
+        Normalized statistics payload, or ``None`` if unavailable.
+    """
+    if plan is None:
+        return None
+    stats_method = getattr(plan, "statistics", None)
+    if callable(stats_method):
+        with _suppress_errors():
+            stats = stats_method()
+        normalized = _normalize_statistics_payload(stats)
+        if normalized is None:
+            return None
+        column_stats = normalized.get("column_statistics")
+        column_present = (
+            isinstance(column_stats, Sequence)
+            and not isinstance(column_stats, (str, bytes, bytearray))
+            and len(column_stats) > 0
+        )
+        return {
+            "source": "execution_plan.statistics",
+            "column_statistics_present": column_present,
+            **normalized,
+        }
+    return None
+
+
+def _normalize_statistics_payload(stats: object) -> Mapping[str, object] | None:
+    """Normalize a statistics object into a JSON-ready payload.
+
+    Returns
+    -------
+    Mapping[str, object] | None
+        Normalized statistics payload, or ``None`` when empty.
+    """
+    if stats is None:
+        return None
+    if isinstance(stats, Mapping):
+        return dict(stats)
+    payload: dict[str, object] = {}
+    for key in ("num_rows", "row_count", "total_byte_size", "total_bytes", "column_statistics"):
+        value = getattr(stats, key, None)
+        if value is None:
+            continue
+        payload[key] = _statistics_value(value)
+    return payload or None
+
+
+def _statistics_value(value: object) -> object:
+    """Normalize a statistics value for JSON serialization.
+
+    Returns
+    -------
+    object
+        JSON-ready statistics value.
+    """
+    if isinstance(value, (int, float, str, bool)) or value is None:
+        return value
+    inner = getattr(value, "value", None)
+    if isinstance(inner, (int, float, str, bool)) or inner is None:
+        return inner
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_statistics_value(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(k): _statistics_value(v) for k, v in value.items()}
+    return str(value)
+
+
+def _arrow_schema_from_df(df: DataFrame) -> pa.Schema | None:
+    schema: pa.Schema | object = df.schema()
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_arrow = getattr(schema, "to_arrow", None)
+    if callable(to_arrow):
+        with _suppress_errors():
+            resolved = to_arrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    return None
+
+
+def _schema_metadata_payload(schema: pa.Schema) -> dict[str, str]:
+    metadata = schema.metadata or {}
+    items = sorted(metadata.items(), key=lambda item: str(item[0]))
+    return {
+        (key.decode("utf-8", errors="replace") if isinstance(key, bytes) else str(key)): (
+            value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value)
+        )
+        for key, value in items
+    }
+
+
+def _schema_provenance(df: DataFrame) -> Mapping[str, object]:
+    schema = _arrow_schema_from_df(df)
+    if schema is None:
+        return {}
+    from datafusion_engine.arrow_schema.abi import schema_fingerprint
+
+    metadata_payload = _schema_metadata_payload(schema)
+    abi_key = (
+        SCHEMA_ABI_FINGERPRINT_META.decode("utf-8")
+        if isinstance(SCHEMA_ABI_FINGERPRINT_META, bytes)
+        else str(SCHEMA_ABI_FINGERPRINT_META)
+    )
+    abi_value = metadata_payload.get(abi_key)
+    return {
+        "source": "arrow_schema",
+        "schema_fingerprint": schema_fingerprint(schema),
+        "schema_metadata": metadata_payload,
+        "explicit_schema": abi_value is not None,
+        "schema_abi_fingerprint": abi_value,
+    }
+
+
+def _schema_describe_rows(df: DataFrame) -> list[dict[str, object]]:
+    resolved_schema = _arrow_schema_from_df(df)
+    if resolved_schema is None:
+        return []
+    return [
+        {
+            "column_name": field.name,
+            "data_type": str(field.type),
+            "nullable": field.nullable,
+            "source": "arrow_schema",
+        }
+        for field in resolved_schema
+    ]
+
+
+def _determinism_audit_bundle(
+    detail_inputs: PlanDetailInputs,
+    *,
+    context: PlanDetailContext,
+) -> Mapping[str, object]:
+    artifacts = detail_inputs.artifacts
+    return {
+        "plan_fingerprint": detail_inputs.plan_fingerprint,
+        "planning_env_hash": artifacts.planning_env_hash,
+        "rulepack_hash": artifacts.rulepack_hash,
+        "information_schema_hash": context.information_schema_hash,
+        "df_settings_hash": _settings_hash(artifacts.df_settings),
+        "udf_snapshot_hash": artifacts.udf_snapshot_hash,
+        "function_registry_hash": artifacts.function_registry_hash,
+    }
+
+
+def _settings_hash(df_settings: Mapping[str, str]) -> str:
+    payload = tuple(sorted((str(key), str(value)) for key, value in df_settings.items()))
+    return hashlib.sha256(dumps_msgpack(payload)).hexdigest()
 
 
 def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str, str]:

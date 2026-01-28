@@ -11,9 +11,18 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from datafusion import SessionContext
 
-from datafusion_engine.dataset_registry import DatasetLocation, resolve_delta_feature_gate
+from datafusion_engine.arrow_schema.abi import schema_to_dict
+from datafusion_engine.dataset_registry import (
+    DatasetLocation,
+    resolve_datafusion_provider,
+    resolve_delta_feature_gate,
+    resolve_delta_scan_options,
+)
 from datafusion_engine.delta_control_plane import DeltaSnapshotRequest, delta_add_actions
-from datafusion_engine.delta_protocol import DeltaFeatureGate
+from datafusion_engine.delta_protocol import (
+    DeltaFeatureGate,
+    delta_protocol_compatibility,
+)
 from datafusion_engine.lineage_datafusion import ScanLineage
 from serde_msgspec import dumps_msgpack
 from storage.deltalake import build_delta_file_index_from_add_actions
@@ -54,6 +63,8 @@ class _ScanUnitKeyRequest:
     delta_feature_gate: DeltaFeatureGate | None
     delta_protocol: Mapping[str, object] | None
     storage_options_hash: str | None
+    delta_scan_config_hash: str | None
+    datafusion_provider: str | None
     projected_columns: tuple[str, ...]
     pushed_filters: tuple[str, ...]
 
@@ -66,6 +77,8 @@ def _scan_unit_key(request: _ScanUnitKeyRequest) -> str:
         "delta_feature_gate": _gate_payload(request.delta_feature_gate),
         "delta_protocol": request.delta_protocol,
         "storage_options_hash": request.storage_options_hash,
+        "delta_scan_config_hash": request.delta_scan_config_hash,
+        "datafusion_provider": request.datafusion_provider,
         "projected_columns": request.projected_columns,
         "pushed_filters": request.pushed_filters,
     }
@@ -91,6 +104,11 @@ class ScanUnit:
     delta_feature_gate: DeltaFeatureGate | None
     delta_protocol: Mapping[str, object] | None
     storage_options_hash: str | None
+    delta_scan_config: Mapping[str, object] | None
+    delta_scan_config_hash: str | None
+    datafusion_provider: str | None
+    protocol_compatible: bool | None
+    protocol_compatibility: Mapping[str, object] | None
     total_files: int
     candidate_file_count: int
     pruned_file_count: int
@@ -111,6 +129,22 @@ class _ScanPlanArtifactRequest:
     lineage: ScanLineage
 
 
+@dataclass(frozen=True)
+class _DeltaScanResolution:
+    """Resolved Delta scan metadata and compatibility state."""
+
+    candidate_files: tuple[Path, ...]
+    delta_version: int | None
+    delta_timestamp: str | None
+    snapshot_timestamp: int | None
+    delta_protocol: Mapping[str, object] | None
+    total_files: int
+    candidate_file_count: int
+    pruned_file_count: int
+    protocol_compatibility: Mapping[str, object] | None
+    protocol_compatible: bool | None
+
+
 def plan_scan_unit(
     ctx: SessionContext,
     *,
@@ -126,42 +160,28 @@ def plan_scan_unit(
     ScanUnit
         Deterministic scan unit for the dataset and lineage inputs.
     """
-    delta_version = location.delta_version if location is not None else None
-    delta_timestamp = None
-    if location is not None and delta_version is None:
-        delta_timestamp = location.delta_timestamp
     delta_feature_gate = resolve_delta_feature_gate(location) if location is not None else None
     storage_options_hash = _storage_options_hash(location)
-    candidate_files: tuple[Path, ...] = ()
-    total_files = 0
-    candidate_file_count = 0
-    pruned_file_count = 0
-    snapshot_timestamp: int | None = None
-    delta_protocol: Mapping[str, object] | None = None
-    if location is not None and location.format == "delta":
-        (
-            candidate_files,
-            delta_version,
-            snapshot_timestamp,
-            delta_protocol,
-            total_files,
-            candidate_file_count,
-            pruned_file_count,
-        ) = _delta_scan_candidates(
-            ctx,
-            location=location,
-            lineage=lineage,
-            dataset_name=dataset_name,
-            runtime_profile=runtime_profile,
-        )
+    delta_scan_config = _delta_scan_config_snapshot(location)
+    delta_scan_config_hash = _delta_scan_config_hash(delta_scan_config)
+    datafusion_provider = _provider_marker(location, runtime_profile=runtime_profile)
+    delta_resolution = _resolve_delta_scan_resolution(
+        ctx,
+        location=location,
+        lineage=lineage,
+        dataset_name=dataset_name,
+        runtime_profile=runtime_profile,
+    )
     key = _scan_unit_key(
         _ScanUnitKeyRequest(
             dataset_name=dataset_name,
-            delta_version=delta_version,
-            delta_timestamp=delta_timestamp,
+            delta_version=delta_resolution.delta_version,
+            delta_timestamp=delta_resolution.delta_timestamp,
             delta_feature_gate=delta_feature_gate,
-            delta_protocol=delta_protocol,
+            delta_protocol=delta_resolution.delta_protocol,
             storage_options_hash=storage_options_hash,
+            delta_scan_config_hash=delta_scan_config_hash,
+            datafusion_provider=datafusion_provider,
             projected_columns=lineage.projected_columns,
             pushed_filters=lineage.pushed_filters,
         )
@@ -169,18 +189,96 @@ def plan_scan_unit(
     return ScanUnit(
         key=key,
         dataset_name=dataset_name,
+        delta_version=delta_resolution.delta_version,
+        delta_timestamp=delta_resolution.delta_timestamp,
+        snapshot_timestamp=delta_resolution.snapshot_timestamp,
+        delta_feature_gate=delta_feature_gate,
+        delta_protocol=delta_resolution.delta_protocol,
+        storage_options_hash=storage_options_hash,
+        delta_scan_config=delta_scan_config,
+        delta_scan_config_hash=delta_scan_config_hash,
+        datafusion_provider=datafusion_provider,
+        protocol_compatible=delta_resolution.protocol_compatible,
+        protocol_compatibility=delta_resolution.protocol_compatibility,
+        total_files=delta_resolution.total_files,
+        candidate_file_count=delta_resolution.candidate_file_count,
+        pruned_file_count=delta_resolution.pruned_file_count,
+        candidate_files=delta_resolution.candidate_files,
+        pushed_filters=lineage.pushed_filters,
+        projected_columns=lineage.projected_columns,
+    )
+
+
+def _resolve_delta_scan_resolution(
+    ctx: SessionContext,
+    *,
+    location: DatasetLocation | None,
+    lineage: ScanLineage,
+    dataset_name: str,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> _DeltaScanResolution:
+    """Resolve Delta scan metadata and compatibility state.
+
+    Returns
+    -------
+    _DeltaScanResolution
+        Resolved Delta scan metadata and compatibility signals.
+    """
+    delta_version = location.delta_version if location is not None else None
+    delta_timestamp = None
+    if location is not None and delta_version is None:
+        delta_timestamp = location.delta_timestamp
+    resolution = _DeltaScanResolution(
+        candidate_files=(),
+        delta_version=delta_version,
+        delta_timestamp=delta_timestamp,
+        snapshot_timestamp=None,
+        delta_protocol=None,
+        total_files=0,
+        candidate_file_count=0,
+        pruned_file_count=0,
+        protocol_compatibility=None,
+        protocol_compatible=None,
+    )
+    if location is None or location.format != "delta":
+        return resolution
+    (
+        candidate_files,
+        delta_version,
+        snapshot_timestamp,
+        delta_protocol,
+        total_files,
+        candidate_file_count,
+        pruned_file_count,
+    ) = _delta_scan_candidates(
+        ctx,
+        location=location,
+        lineage=lineage,
+        dataset_name=dataset_name,
+        runtime_profile=runtime_profile,
+    )
+    protocol_compatibility = _delta_protocol_compatibility(
+        delta_protocol,
+        runtime_profile,
+    )
+    protocol_compatible = _compatibility_flag(protocol_compatibility)
+    _enforce_protocol_compatibility(
+        dataset_name,
+        runtime_profile=runtime_profile,
+        protocol_compatible=protocol_compatible,
+        protocol_compatibility=protocol_compatibility,
+    )
+    return _DeltaScanResolution(
+        candidate_files=candidate_files,
         delta_version=delta_version,
         delta_timestamp=delta_timestamp,
         snapshot_timestamp=snapshot_timestamp,
-        delta_feature_gate=delta_feature_gate,
         delta_protocol=delta_protocol,
-        storage_options_hash=storage_options_hash,
         total_files=total_files,
         candidate_file_count=candidate_file_count,
         pruned_file_count=pruned_file_count,
-        candidate_files=candidate_files,
-        pushed_filters=lineage.pushed_filters,
-        projected_columns=lineage.projected_columns,
+        protocol_compatibility=protocol_compatibility,
+        protocol_compatible=protocol_compatible,
     )
 
 
@@ -412,6 +510,90 @@ def _delta_protocol_payload(snapshot: Mapping[str, object]) -> dict[str, object]
         "reader_features": reader_features,
         "writer_features": writer_features,
     }
+
+
+def _delta_scan_config_snapshot(location: DatasetLocation | None) -> Mapping[str, object] | None:
+    if location is None:
+        return None
+    options = resolve_delta_scan_options(location)
+    if options is None:
+        return None
+    schema_payload = schema_to_dict(options.schema) if options.schema is not None else None
+    return {
+        "file_column_name": options.file_column_name,
+        "enable_parquet_pushdown": options.enable_parquet_pushdown,
+        "schema_force_view_types": options.schema_force_view_types,
+        "wrap_partition_values": options.wrap_partition_values,
+        "schema": schema_payload,
+    }
+
+
+def _delta_scan_config_hash(snapshot: Mapping[str, object] | None) -> str | None:
+    if not snapshot:
+        return None
+    payload = dumps_msgpack(snapshot)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _provider_marker(
+    location: DatasetLocation | None,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> str | None:
+    if location is None:
+        return None
+    provider = resolve_datafusion_provider(location)
+    if provider is not None:
+        return provider
+    format_name = str(location.format or "")
+    if format_name == "delta":
+        if runtime_profile is not None and runtime_profile.enable_delta_ddl_registration:
+            return "delta_ddl"
+        return "delta_table_provider"
+    return format_name or None
+
+
+def _delta_protocol_compatibility(
+    protocol: Mapping[str, object] | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> Mapping[str, object] | None:
+    if runtime_profile is None:
+        return None
+    support = runtime_profile.delta_protocol_support
+    return delta_protocol_compatibility(protocol, support)
+
+
+def _compatibility_flag(payload: Mapping[str, object] | None) -> bool | None:
+    if not payload:
+        return None
+    value = payload.get("compatible")
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _enforce_protocol_compatibility(
+    dataset_name: str,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    protocol_compatible: bool | None,
+    protocol_compatibility: Mapping[str, object] | None,
+) -> None:
+    if runtime_profile is None or protocol_compatible is not False:
+        return
+    mode = runtime_profile.delta_protocol_mode
+    if mode == "ignore":
+        return
+    payload = {
+        "dataset_name": dataset_name,
+        "compatibility": protocol_compatibility or {},
+        "mode": mode,
+    }
+    if mode == "warn":
+        runtime_profile.record_artifact("delta_protocol_incompatible_v1", payload)
+        return
+    msg = f"Delta protocol compatibility failed for dataset {dataset_name!r}."
+    raise ValueError(msg)
 
 
 def _coerce_int(value: object) -> int | None:

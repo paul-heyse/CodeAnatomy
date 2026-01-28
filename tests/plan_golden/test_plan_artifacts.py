@@ -12,6 +12,8 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.sql_options import planning_sql_options
+from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.runtime import DataFusionRuntimeProfile, SessionRuntime
 from serde_msgspec import dumps_msgpack
 
 datafusion = pytest.importorskip("datafusion")
@@ -155,7 +157,7 @@ def _explain_rows(ctx: SessionContext, *, prefix: str, sql: str) -> list[dict[st
     return table.to_pylist()
 
 
-def _fixture_payload(ctx: SessionContext) -> dict[str, object]:
+def _fixture_payload(ctx: SessionContext, *, session_runtime: SessionRuntime) -> dict[str, object]:
     """Generate the golden fixture payload for the simple query.
 
     Returns
@@ -167,10 +169,21 @@ def _fixture_payload(ctx: SessionContext) -> dict[str, object]:
     verbose_rows = _explain_rows(ctx, prefix="EXPLAIN VERBOSE", sql=_SQL)
     info_snapshot = _information_schema_snapshot(ctx)
     info_hash = _info_schema_hash(info_snapshot)
+    df = ctx.sql(_SQL)
+    bundle = build_plan_bundle(
+        ctx,
+        df,
+        options=PlanBundleOptions(session_runtime=session_runtime),
+    )
+    explain_tree_rows = bundle.artifacts.explain_tree_rows or []
+    explain_verbose_rows = bundle.artifacts.explain_verbose_rows or []
+    determinism_audit = bundle.plan_details.get("determinism_audit", {})
     return {
         "sql": _SQL,
         "explain_tree": _normalize_rows(tree_rows, sort_rows=False),
         "explain_verbose": _normalize_rows(verbose_rows, sort_rows=False),
+        "explain_tree_rows": _normalize_rows(explain_tree_rows, sort_rows=False),
+        "explain_verbose_rows": _normalize_rows(explain_verbose_rows, sort_rows=False),
         "df_settings": _normalize_value(info_snapshot["df_settings"]),
         "information_schema_snapshot": {
             key: _normalize_rows(value, sort_rows=True)
@@ -179,6 +192,7 @@ def _fixture_payload(ctx: SessionContext) -> dict[str, object]:
             for key, value in info_snapshot.items()
         },
         "information_schema_hash": info_hash,
+        "determinism_audit": _normalize_value(determinism_audit),
     }
 
 
@@ -211,12 +225,14 @@ def _write_golden(path: Path, payload: Mapping[str, object]) -> None:
 
 def test_plan_artifact_golden_fixture() -> None:
     """Compare plan artifacts to the golden fixture for regressions."""
-    ctx = datafusion.SessionContext()
+    profile = DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    session_runtime = profile.session_runtime()
     ctx.register_record_batches(
         "events",
         [pa.table({"id": [1, 2], "label": ["a", "b"]}).to_batches()],
     )
-    payload = _fixture_payload(ctx)
+    payload = _fixture_payload(ctx, session_runtime=session_runtime)
     if os.environ.get("CODEANATOMY_UPDATE_GOLDEN") == "1":
         _write_golden(_GOLDEN_PATH, payload)
         pytest.skip("Golden fixture updated.")

@@ -2877,7 +2877,7 @@ def registry_view_nodes(
         Raised when the runtime profile is unavailable.
     """
     excluded = set(exclude or ())
-    from datafusion_engine.plan_bundle import build_plan_bundle
+    from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 
     if runtime_profile is None:
         msg = "Runtime profile is required for view planning."
@@ -2892,8 +2892,10 @@ def registry_view_nodes(
         plan_bundle = build_plan_bundle(
             ctx,
             df,
-            compute_execution_plan=True,
-            session_runtime=session_runtime,
+            options=PlanBundleOptions(
+                compute_execution_plan=True,
+                session_runtime=session_runtime,
+            ),
         )
         nodes.append(
             ViewNode(

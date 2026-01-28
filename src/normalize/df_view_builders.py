@@ -21,7 +21,11 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundle
+from datafusion_engine.plan_bundle import (
+    DataFusionPlanBundle,
+    PlanBundleOptions,
+    build_plan_bundle,
+)
 from datafusion_engine.runtime import SessionRuntime
 from datafusion_engine.sql_guard import safe_sql
 from datafusion_ext import span_make, stable_id_parts, utf8_normalize, utf8_null_if_blank
@@ -51,8 +55,10 @@ def _plan_bundle_from_df(
     return build_plan_bundle(
         session_runtime.ctx,
         df,
-        validate_udfs=True,
-        session_runtime=session_runtime,
+        options=PlanBundleOptions(
+            validate_udfs=True,
+            session_runtime=session_runtime,
+        ),
     )
 
 

@@ -54,6 +54,9 @@ def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     payload.setdefault("rewrite_tags", {})
     payload.setdefault("signature_inputs", {})
     payload.setdefault("return_types", {})
+    payload.setdefault("simplify", {})
+    payload.setdefault("coerce_types", {})
+    payload.setdefault("short_circuits", {})
     payload.setdefault("custom_udfs", [])
     return payload
 

@@ -71,6 +71,9 @@ def registry_snapshot(ctx: SessionContext) -> dict[str, object]:
         "rewrite_tags": {},
         "signature_inputs": {},
         "return_types": {},
+        "simplify": {},
+        "coerce_types": {},
+        "short_circuits": {},
         "custom_udfs": [],
     }
 

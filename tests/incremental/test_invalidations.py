@@ -10,7 +10,7 @@ import pyarrow as pa
 
 from datafusion_engine.diagnostics import DiagnosticsSink
 from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
-from datafusion_engine.plan_bundle import build_plan_bundle
+from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.plan_udf_analysis import extract_udfs_from_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile, record_view_definition
 from datafusion_engine.view_artifacts import (
@@ -73,7 +73,7 @@ def _record_view_artifact(
     bundle = build_plan_bundle(
         ctx,
         df,
-        session_runtime=session_runtime,
+        options=PlanBundleOptions(session_runtime=session_runtime),
     )
     required_udfs = tuple(sorted(extract_udfs_from_plan_bundle(bundle)))
     referenced_tables = referenced_tables_from_plan(bundle.optimized_logical_plan)

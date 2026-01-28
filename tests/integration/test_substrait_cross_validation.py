@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.execution_helpers import validate_substrait_plan
-from datafusion_engine.plan_bundle import build_plan_bundle
+from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
@@ -25,7 +25,7 @@ def test_substrait_cross_validation_match() -> None:
     bundle = build_plan_bundle(
         ctx,
         df,
-        session_runtime=session_runtime,
+        options=PlanBundleOptions(session_runtime=session_runtime),
     )
     if bundle.substrait_bytes is None:
         pytest.skip("Substrait serialization unavailable.")

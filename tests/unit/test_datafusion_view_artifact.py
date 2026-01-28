@@ -56,6 +56,8 @@ def test_datafusion_view_artifact_payload() -> None:
     assert payload["plan_fingerprint"] == "test_fp"
     assert payload["plan_task_signature"] == "sig:test_fp"
     assert "schema" in payload
+    assert payload["schema_describe"] == []
+    assert payload["schema_provenance"] == {}
     assert payload["required_udfs"] == ["udf_x"]
     assert payload["referenced_tables"] == ["table_y"]
 
@@ -82,6 +84,8 @@ def test_datafusion_view_artifact_diagnostics_payload() -> None:
     assert payload["plan_task_signature"] == "sig:test_fp"
     assert "schema_fingerprint" in payload
     assert "schema_msgpack" in payload
+    assert "schema_describe_json" in payload
+    assert "schema_provenance_json" in payload
     assert payload["required_udfs"] == []
     assert payload["referenced_tables"] == []
 
@@ -131,21 +135,28 @@ def mock_plan_bundle() -> DataFusionPlanBundle:
     mock_logical_plan = Mock()
     mock_optimized_plan = Mock()
     artifacts = PlanArtifacts(
-        explain_tree=None,
-        explain_verbose=None,
-        explain_analyze=None,
+        explain_tree_rows=None,
+        explain_verbose_rows=None,
         explain_analyze_duration_ms=None,
         explain_analyze_output_rows=None,
         df_settings={},
+        planning_env_snapshot={},
+        planning_env_hash="mock_env_hash",
+        rulepack_snapshot=None,
+        rulepack_hash=None,
         information_schema_snapshot={},
         information_schema_hash="mock_info_schema_hash",
         substrait_validation=None,
+        logical_plan_proto=None,
+        optimized_plan_proto=None,
+        execution_plan_proto=None,
         udf_snapshot_hash="mock_udf_hash",
         function_registry_hash="mock_registry_hash",
         function_registry_snapshot={},
         rewrite_tags=(),
         domain_planner_names=(),
         udf_snapshot={},
+        udf_planner_snapshot=None,
     )
 
     return DataFusionPlanBundle(

@@ -726,6 +726,104 @@ def _registry_docs(snapshot: Mapping[str, object]) -> dict[str, str]:
     return resolved
 
 
+def _registry_bool_map(snapshot: Mapping[str, object], *, key: str) -> dict[str, bool]:
+    raw = snapshot.get(key)
+    if not isinstance(raw, Mapping):
+        return {}
+    resolved: dict[str, bool] = {}
+    for name, value in raw.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            resolved[str(name)] = value
+        elif isinstance(value, (int, float)):
+            resolved[str(name)] = bool(value)
+    return resolved
+
+
+def _registry_signature_inputs(
+    snapshot: Mapping[str, object],
+) -> dict[str, tuple[tuple[str, ...], ...]]:
+    raw = snapshot.get("signature_inputs")
+    if not isinstance(raw, Mapping):
+        return {}
+    resolved: dict[str, tuple[tuple[str, ...], ...]] = {}
+    for name, rows in raw.items():
+        if not isinstance(rows, Iterable) or isinstance(rows, (str, bytes)):
+            continue
+        inputs: list[tuple[str, ...]] = []
+        for row in rows:
+            if not isinstance(row, Iterable) or isinstance(row, (str, bytes)):
+                continue
+            inputs.append(tuple(str(item) for item in row if item is not None))
+        if inputs:
+            resolved[str(name)] = tuple(inputs)
+    return resolved
+
+
+def _registry_return_types(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
+    raw = snapshot.get("return_types")
+    if not isinstance(raw, Mapping):
+        return {}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for name, entries in raw.items():
+        if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes)):
+            continue
+        resolved[str(name)] = tuple(str(item) for item in entries if item is not None)
+    return resolved
+
+
+def _first_return_type(value: tuple[str, ...] | None) -> str | None:
+    if value:
+        return value[0]
+    return None
+
+
+def udf_planner_snapshot(snapshot: Mapping[str, object]) -> Mapping[str, object]:
+    """Return planner-focused metadata for registered UDFs.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Planner-aware metadata payload for registered UDFs.
+    """
+    names = _registry_names(snapshot)
+    if not names:
+        return {"status": "unavailable"}
+    kinds = _snapshot_kind_map(snapshot)
+    param_names = _registry_parameter_names(snapshot)
+    volatilities = _registry_volatility(snapshot)
+    rewrite_tags = _registry_rewrite_tags(snapshot)
+    docs = _registry_docs(snapshot)
+    signature_inputs = _registry_signature_inputs(snapshot)
+    return_types = _registry_return_types(snapshot)
+    has_simplify = _registry_bool_map(snapshot, key="simplify")
+    has_coerce_types = _registry_bool_map(snapshot, key="coerce_types")
+    short_circuits = _registry_bool_map(snapshot, key="short_circuits")
+    functions: list[dict[str, object]] = []
+    for name in sorted(names):
+        returns = return_types.get(name)
+        functions.append(
+            {
+                "name": name,
+                "kind": kinds.get(name),
+                "volatility": volatilities.get(name),
+                "parameter_names": param_names.get(name),
+                "signature": {
+                    "inputs": signature_inputs.get(name),
+                    "returns": returns,
+                },
+                "return_type": _first_return_type(returns),
+                "rewrite_tags": rewrite_tags.get(name),
+                "description": docs.get(name),
+                "has_simplify": has_simplify.get(name),
+                "has_coerce_types": has_coerce_types.get(name),
+                "short_circuits": short_circuits.get(name),
+            }
+        )
+    return {"status": "ok", "functions": functions}
+
+
 def rewrite_tag_index(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
     """Return a tag-to-function index for registry rewrite tags.
 
@@ -924,4 +1022,5 @@ __all__ = [
     "get_default_udf_catalog",
     "get_strict_udf_catalog",
     "rewrite_tag_index",
+    "udf_planner_snapshot",
 ]

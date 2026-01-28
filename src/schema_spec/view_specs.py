@@ -144,9 +144,20 @@ class ViewSpec:
             Raised when the view lacks a builder and is not registered.
         """
         ctx = session_runtime.ctx
+        resolved_introspector = introspector
+        if resolved_introspector is None:
+            try:
+                resolved_introspector = SchemaIntrospector(ctx, sql_options=sql_options)
+            except (RuntimeError, TypeError, ValueError):
+                resolved_introspector = None
+        if resolved_introspector is not None:
+            describe_rows = _describe_rows_from_introspection(
+                resolved_introspector,
+                table_name=self.name,
+            )
+            if describe_rows:
+                return describe_rows
         if self.builder is None:
-            if introspector is None:
-                introspector = SchemaIntrospector(ctx, sql_options=sql_options)
             try:
                 df = ctx.table(self.name)
             except (KeyError, RuntimeError, TypeError, ValueError) as exc:
@@ -155,14 +166,7 @@ class ViewSpec:
         else:
             df = self.builder(ctx)
         schema = _arrow_schema_from_df(df)
-        return [
-            {
-                "column_name": field.name,
-                "data_type": str(field.type),
-                "nullable": field.nullable,
-            }
-            for field in schema
-        ]
+        return _describe_rows_from_schema(schema)
 
     def register(
         self,
@@ -260,6 +264,57 @@ def _arrow_schema_from_df(df: DataFrame) -> pa.Schema:
             return resolved
     msg = "Failed to resolve DataFusion schema."
     raise TypeError(msg)
+
+
+def _describe_rows_from_schema(schema: pa.Schema) -> list[dict[str, object]]:
+    return [
+        {
+            "column_name": field.name,
+            "data_type": str(field.type),
+            "nullable": field.nullable,
+            "source": "arrow_schema",
+        }
+        for field in schema
+    ]
+
+
+def _nullable_from_value(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"yes", "true", "1", "y"}:
+        return True
+    if text in {"no", "false", "0", "n"}:
+        return False
+    return None
+
+
+def _describe_rows_from_introspection(
+    introspector: SchemaIntrospector,
+    *,
+    table_name: str,
+) -> list[dict[str, object]]:
+    rows = introspector.table_columns(table_name)
+    if not rows:
+        return []
+    normalized: list[dict[str, object]] = []
+    for row in rows:
+        column_name = row.get("column_name")
+        if column_name is None:
+            continue
+        data_type = row.get("data_type")
+        nullable = _nullable_from_value(row.get("is_nullable") or row.get("nullable"))
+        normalized.append(
+            {
+                "column_name": str(column_name),
+                "data_type": str(data_type) if data_type is not None else None,
+                "nullable": nullable,
+                "source": "information_schema",
+            }
+        )
+    return normalized
 
 
 def _schema_metadata_violations(

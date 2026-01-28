@@ -146,6 +146,9 @@ class TaskPlanMetrics:
     output_rows: int | None = None
     partition_count: int | None = None
     repartition_count: int | None = None
+    stats_row_count: int | None = None
+    stats_total_bytes: int | None = None
+    stats_available: bool = False
 
 
 @dataclass(frozen=True)
@@ -1345,11 +1348,17 @@ def _task_plan_metrics(view_nodes: Sequence[ViewNode]) -> dict[str, TaskPlanMetr
         output_rows = _int_from_value(details.get("explain_analyze_output_rows"))
         partition_count = _int_from_value(details.get("partition_count"))
         repartition_count = _int_from_value(details.get("repartition_count"))
+        stats_row_count, stats_total_bytes, stats_available = _stats_from_payload(
+            details.get("statistics")
+        )
         metrics[node.name] = TaskPlanMetrics(
             duration_ms=duration_ms,
             output_rows=output_rows,
             partition_count=partition_count,
             repartition_count=repartition_count,
+            stats_row_count=stats_row_count,
+            stats_total_bytes=stats_total_bytes,
+            stats_available=stats_available,
         )
     return metrics
 
@@ -1387,15 +1396,20 @@ def _base_cost_from_metrics(metric: TaskPlanMetrics) -> float | None:
     float | None
         Base cost derived from duration, output rows, or partition count.
     """
+    base_cost: float | None = None
     if metric.duration_ms is not None:
-        return max(metric.duration_ms, 1.0)
-    if metric.output_rows is not None:
-        return float(max(metric.output_rows, 1))
-    if metric.partition_count is not None:
-        return float(max(metric.partition_count, 1))
-    if metric.repartition_count is not None:
-        return float(max(metric.repartition_count, 1))
-    return None
+        base_cost = max(metric.duration_ms, 1.0)
+    elif metric.output_rows is not None:
+        base_cost = float(max(metric.output_rows, 1))
+    elif metric.stats_row_count is not None:
+        base_cost = float(max(metric.stats_row_count, 1))
+    elif metric.stats_total_bytes is not None:
+        base_cost = max(metric.stats_total_bytes / 1048576.0, 1.0)
+    elif metric.partition_count is not None:
+        base_cost = float(max(metric.partition_count, 1))
+    elif metric.repartition_count is not None:
+        base_cost = float(max(metric.repartition_count, 1))
+    return base_cost
 
 
 def _apply_physical_adjustments(base_cost: float, metric: TaskPlanMetrics) -> float:
@@ -1414,11 +1428,49 @@ def _apply_physical_adjustments(base_cost: float, metric: TaskPlanMetrics) -> fl
         Adjusted cost incorporating partition and repartition signals.
     """
     adjusted = float(base_cost)
+    stats_cost = _stats_cost_from_metrics(metric)
+    if metric.stats_available:
+        if stats_cost is not None:
+            adjusted = max(adjusted, stats_cost)
+        else:
+            adjusted *= 1.05
     if metric.partition_count is not None:
         adjusted += float(max(metric.partition_count, 1))
     if metric.repartition_count is not None:
         adjusted += float(max(metric.repartition_count, 0)) * 10.0
     return adjusted
+
+
+def _stats_cost_from_metrics(metric: TaskPlanMetrics) -> float | None:
+    if metric.stats_row_count is not None:
+        return float(max(metric.stats_row_count, 1))
+    if metric.stats_total_bytes is not None:
+        return max(metric.stats_total_bytes / 1048576.0, 1.0)
+    return None
+
+
+def _stats_from_payload(
+    payload: object,
+) -> tuple[int | None, int | None, bool]:
+    if not isinstance(payload, Mapping):
+        return None, None, False
+    row_value = payload.get("num_rows") or payload.get("row_count")
+    byte_value = payload.get("total_byte_size") or payload.get("total_bytes")
+    row_count = _int_from_value(row_value)
+    total_bytes = _int_from_value(byte_value)
+    stats_available = row_count is not None or total_bytes is not None
+    column_present = payload.get("column_statistics_present")
+    if isinstance(column_present, bool):
+        stats_available = stats_available or column_present
+    if not stats_available:
+        column_stats = payload.get("column_statistics")
+        if (isinstance(column_stats, Mapping) and column_stats) or (
+            isinstance(column_stats, Sequence)
+            and not isinstance(column_stats, (str, bytes, bytearray))
+            and column_stats
+        ):
+            stats_available = True
+    return row_count, total_bytes, stats_available
 
 
 def _float_from_value(value: object) -> float | None:

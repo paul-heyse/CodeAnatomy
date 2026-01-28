@@ -32,7 +32,11 @@ from datafusion_engine.extract_extractors import (
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
 from datafusion_engine.finalize import FinalizeContext, FinalizeOptions, normalize_only
 from datafusion_engine.ingest import datafusion_from_arrow
-from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundle
+from datafusion_engine.plan_bundle import (
+    DataFusionPlanBundle,
+    PlanBundleOptions,
+    build_plan_bundle,
+)
 from datafusion_engine.query_spec import apply_query_spec
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_contracts import SchemaContract
@@ -329,8 +333,10 @@ def _build_plan_bundle_from_df(
     return build_plan_bundle(
         session_runtime.ctx,
         df,
-        validate_udfs=True,
-        session_runtime=session_runtime,
+        options=PlanBundleOptions(
+            validate_udfs=True,
+            session_runtime=session_runtime,
+        ),
     )
 
 

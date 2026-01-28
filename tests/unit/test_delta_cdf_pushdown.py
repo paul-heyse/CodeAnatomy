@@ -31,7 +31,7 @@ def _create_cdf_table(path: Path) -> None:
 def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     """Ensure CDF providers honor projection and filter pushdown."""
     from datafusion_engine.lineage_datafusion import extract_lineage
-    from datafusion_engine.plan_bundle import build_plan_bundle
+    from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
     from datafusion_engine.registry_bridge import (
         DeltaCdfRegistrationOptions,
         register_delta_cdf_df,
@@ -56,7 +56,9 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     bundle = build_plan_bundle(
         ctx,
         df,
-        session_runtime=runtime.session_runtime(),
+        options=PlanBundleOptions(
+            session_runtime=runtime.session_runtime(),
+        ),
     )
     lineage = extract_lineage(bundle.optimized_logical_plan)
     scan = next(

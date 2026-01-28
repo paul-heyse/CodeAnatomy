@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.plan_bundle import build_plan_bundle
+from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.view_artifacts import (
     ViewArtifactLineage,
@@ -52,12 +52,12 @@ def test_view_registry_snapshot_stable_for_repeated_registration() -> None:
     alpha_bundle = build_plan_bundle(
         ctx,
         alpha_df,
-        session_runtime=session_runtime,
+        options=PlanBundleOptions(session_runtime=session_runtime),
     )
     beta_bundle = build_plan_bundle(
         ctx,
         beta_df,
-        session_runtime=session_runtime,
+        options=PlanBundleOptions(session_runtime=session_runtime),
     )
     alpha_schema = _arrow_schema_from_df(alpha_df)
     beta_schema = _arrow_schema_from_df(beta_df)

@@ -28,6 +28,88 @@ class DeltaFeatureGate:
     required_writer_features: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class DeltaProtocolSupport:
+    """Runtime support bounds for Delta protocol and features.
+
+    Parameters
+    ----------
+    max_reader_version:
+        Maximum reader protocol version supported.
+    max_writer_version:
+        Maximum writer protocol version supported.
+    supported_reader_features:
+        Reader features supported by the runtime.
+    supported_writer_features:
+        Writer features supported by the runtime.
+    """
+
+    max_reader_version: int | None = None
+    max_writer_version: int | None = None
+    supported_reader_features: tuple[str, ...] = ()
+    supported_writer_features: tuple[str, ...] = ()
+
+
+def delta_protocol_compatibility(
+    protocol: Mapping[str, object] | None,
+    support: DeltaProtocolSupport | None,
+) -> Mapping[str, object]:
+    """Evaluate Delta protocol compatibility against runtime support.
+
+    Parameters
+    ----------
+    protocol
+        Delta protocol payload (min versions/features).
+    support
+        Runtime support bounds for protocol versions/features.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Compatibility payload describing mismatches and status.
+    """
+    if support is None:
+        return {"compatible": None, "reason": "support_unconfigured"}
+    if protocol is None:
+        return {"compatible": True, "reason": "protocol_unavailable"}
+    required_reader = _coerce_int(protocol.get("min_reader_version"))
+    required_writer = _coerce_int(protocol.get("min_writer_version"))
+    reader_features = _feature_set(protocol.get("reader_features"))
+    writer_features = _feature_set(protocol.get("writer_features"))
+    supported_reader = set(support.supported_reader_features)
+    supported_writer = set(support.supported_writer_features)
+    missing_reader = sorted(reader_features - supported_reader)
+    missing_writer = sorted(writer_features - supported_writer)
+    reader_ok = (
+        support.max_reader_version is None
+        or required_reader is None
+        or required_reader <= support.max_reader_version
+    )
+    writer_ok = (
+        support.max_writer_version is None
+        or required_writer is None
+        or required_writer <= support.max_writer_version
+    )
+    features_ok = not missing_reader and not missing_writer
+    compatible = bool(reader_ok and writer_ok and features_ok)
+    return {
+        "compatible": compatible,
+        "required_reader_version": required_reader,
+        "required_writer_version": required_writer,
+        "supported_reader_version": support.max_reader_version,
+        "supported_writer_version": support.max_writer_version,
+        "required_reader_features": sorted(reader_features),
+        "required_writer_features": sorted(writer_features),
+        "supported_reader_features": sorted(supported_reader),
+        "supported_writer_features": sorted(supported_writer),
+        "missing_reader_features": missing_reader,
+        "missing_writer_features": missing_writer,
+        "reader_version_ok": reader_ok,
+        "writer_version_ok": writer_ok,
+        "feature_support_ok": features_ok,
+    }
+
+
 def validate_delta_gate(snapshot: Mapping[str, object], gate: DeltaFeatureGate) -> None:
     """Validate Delta protocol and feature gates against snapshot metadata.
 
@@ -93,4 +175,9 @@ def _feature_set(value: object) -> set[str]:
     return set()
 
 
-__all__ = ["DeltaFeatureGate", "validate_delta_gate"]
+__all__ = [
+    "DeltaFeatureGate",
+    "DeltaProtocolSupport",
+    "delta_protocol_compatibility",
+    "validate_delta_gate",
+]

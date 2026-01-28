@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from datafusion_engine.arrow_schema.abi import schema_fingerprint, schema_to_dict, schema_to_msgpack
-from serde_msgspec import dumps_msgpack
+from datafusion_engine.schema_contracts import SCHEMA_ABI_FINGERPRINT_META
+from serde_msgspec import dumps_json, dumps_msgpack, to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.plan_bundle import DataFusionPlanBundle
@@ -42,6 +43,8 @@ class DataFusionViewArtifact:
     schema: pa.Schema
     required_udfs: tuple[str, ...]
     referenced_tables: tuple[str, ...]
+    schema_describe: tuple[Mapping[str, object], ...] = ()
+    schema_provenance: Mapping[str, object] | None = None
 
     def payload(self) -> dict[str, object]:
         """Return a JSON-ready payload for diagnostics and persistence.
@@ -56,6 +59,10 @@ class DataFusionViewArtifact:
             "plan_fingerprint": self.plan_fingerprint,
             "plan_task_signature": self.plan_task_signature,
             "schema": schema_to_dict(self.schema),
+            "schema_describe": [dict(row) for row in self.schema_describe],
+            "schema_provenance": (
+                dict(self.schema_provenance) if self.schema_provenance is not None else {}
+            ),
             "required_udfs": list(self.required_udfs),
             "referenced_tables": list(self.referenced_tables),
         }
@@ -80,12 +87,16 @@ class DataFusionViewArtifact:
             "plan_task_signature": self.plan_task_signature,
             "schema_fingerprint": schema_fingerprint(self.schema),
             "schema_msgpack": schema_to_msgpack(self.schema),
+            "schema_describe_json": _json_text([dict(row) for row in self.schema_describe]),
+            "schema_provenance_json": _json_text(
+                dict(self.schema_provenance) if self.schema_provenance is not None else {}
+            ),
             "required_udfs": list(self.required_udfs),
             "referenced_tables": list(self.referenced_tables),
         }
 
 
-_PLAN_TASK_SIGNATURE_VERSION = 1
+_PLAN_TASK_SIGNATURE_VERSION = 2
 
 
 def _hash_payload(payload: object) -> str:
@@ -122,6 +133,8 @@ def _plan_task_signature(bundle: DataFusionPlanBundle, *, runtime_hash: str | No
         ("plan_fingerprint", bundle.plan_fingerprint),
         ("function_registry_hash", artifacts.function_registry_hash),
         ("udf_snapshot_hash", artifacts.udf_snapshot_hash),
+        ("planning_env_hash", artifacts.planning_env_hash),
+        ("rulepack_hash", artifacts.rulepack_hash or ""),
         ("information_schema_hash", artifacts.information_schema_hash),
         ("rewrite_tags", tuple(sorted(artifacts.rewrite_tags))),
         ("domain_planner_names", tuple(sorted(artifacts.domain_planner_names))),
@@ -171,6 +184,8 @@ def build_view_artifact_from_bundle(
         DataFusion-native view artifact.
     """
     plan_task_signature = _plan_task_signature(bundle, runtime_hash=request.runtime_hash)
+    schema_describe = _schema_describe_payload(request.schema)
+    schema_provenance = _schema_provenance_payload(request.schema)
     return DataFusionViewArtifact(
         name=request.name,
         plan_fingerprint=bundle.plan_fingerprint,
@@ -178,6 +193,8 @@ def build_view_artifact_from_bundle(
         schema=request.schema,
         required_udfs=request.lineage.required_udfs,
         referenced_tables=request.lineage.referenced_tables,
+        schema_describe=schema_describe,
+        schema_provenance=schema_provenance,
     )
 
 
@@ -187,6 +204,8 @@ VIEW_ARTIFACT_PAYLOAD_SCHEMA = pa.schema(
         pa.field("plan_fingerprint", pa.string(), nullable=False),
         pa.field("plan_task_signature", pa.string(), nullable=False),
         pa.field("schema_msgpack", pa.binary(), nullable=False),
+        pa.field("schema_describe_json", pa.string(), nullable=True),
+        pa.field("schema_provenance_json", pa.string(), nullable=True),
         pa.field("required_udfs", pa.list_(pa.string()), nullable=True),
         pa.field("referenced_tables", pa.list_(pa.string()), nullable=True),
     ]
@@ -223,6 +242,8 @@ def view_artifact_payload_table(rows: Sequence[Mapping[str, object]]) -> pa.Tabl
         schema_payload: Mapping[str, object] = {}
         if isinstance(schema_payload_raw, Mapping):
             schema_payload = schema_payload_raw
+        schema_describe_raw = row.get("schema_describe")
+        schema_provenance_raw = row.get("schema_provenance")
         required_udfs = row.get("required_udfs")
         referenced_tables = row.get("referenced_tables")
         normalized.append(
@@ -231,6 +252,8 @@ def view_artifact_payload_table(rows: Sequence[Mapping[str, object]]) -> pa.Tabl
                 "plan_fingerprint": str(plan_fingerprint),
                 "plan_task_signature": str(plan_task_signature),
                 "schema_msgpack": dumps_msgpack(schema_payload),
+                "schema_describe_json": _json_text(schema_describe_raw or []),
+                "schema_provenance_json": _json_text(schema_provenance_raw or {}),
                 "required_udfs": (
                     [str(value) for value in required_udfs]
                     if isinstance(required_udfs, Sequence)
@@ -246,6 +269,51 @@ def view_artifact_payload_table(rows: Sequence[Mapping[str, object]]) -> pa.Tabl
             }
         )
     return pa.Table.from_pylist(normalized, schema=VIEW_ARTIFACT_PAYLOAD_SCHEMA)
+
+
+def _json_text(payload: object) -> str:
+    raw = dumps_json(to_builtins(payload))
+    return raw.decode("utf-8")
+
+
+def _schema_metadata_payload(schema: pa.Schema) -> dict[str, str]:
+    metadata = schema.metadata or {}
+    items = sorted(metadata.items(), key=lambda item: str(item[0]))
+    return {
+        (key.decode("utf-8", errors="replace") if isinstance(key, bytes) else str(key)): (
+            value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value)
+        )
+        for key, value in items
+    }
+
+
+def _schema_describe_payload(schema: pa.Schema) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {
+            "column_name": field.name,
+            "data_type": str(field.type),
+            "nullable": field.nullable,
+            "source": "arrow_schema",
+        }
+        for field in schema
+    )
+
+
+def _schema_provenance_payload(schema: pa.Schema) -> Mapping[str, object]:
+    metadata_payload = _schema_metadata_payload(schema)
+    abi_key = (
+        SCHEMA_ABI_FINGERPRINT_META.decode("utf-8")
+        if isinstance(SCHEMA_ABI_FINGERPRINT_META, bytes)
+        else str(SCHEMA_ABI_FINGERPRINT_META)
+    )
+    abi_value = metadata_payload.get(abi_key)
+    return {
+        "source": "arrow_schema",
+        "schema_fingerprint": schema_fingerprint(schema),
+        "schema_metadata": metadata_payload,
+        "explicit_schema": abi_value is not None,
+        "schema_abi_fingerprint": abi_value,
+    }
 
 
 __all__ = [

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from datafusion_engine.scan_planner import ScanUnit
     from datafusion_engine.view_graph_registry import ViewNode
 
-PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v4"
+PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v6"
 WRITE_ARTIFACTS_TABLE_NAME = "datafusion_write_artifacts_v1"
 HAMILTON_EVENTS_TABLE_NAME = "datafusion_hamilton_events_v1"
 _ARTIFACTS_DIRNAME = PLAN_ARTIFACTS_TABLE_NAME
@@ -64,12 +64,18 @@ class PlanArtifactRow:
     domain_planner_names_json: str
     delta_inputs_json: str
     df_settings_json: str
+    planning_env_json: str
+    planning_env_hash: str
+    rulepack_json: str | None
+    rulepack_hash: str | None
     information_schema_json: str
     information_schema_hash: str
     substrait_b64: str | None
-    explain_tree_json: str | None
-    explain_verbose_json: str | None
-    explain_analyze_json: str | None
+    logical_plan_proto_b64: str | None
+    optimized_plan_proto_b64: str | None
+    execution_plan_proto_b64: str | None
+    explain_tree_rows_json: str | None
+    explain_verbose_rows_json: str | None
     explain_analyze_duration_ms: float | None
     explain_analyze_output_rows: int | None
     substrait_validation_json: str | None
@@ -79,6 +85,7 @@ class PlanArtifactRow:
     plan_details_json: str
     function_registry_snapshot_json: str
     udf_snapshot_json: str
+    udf_planner_snapshot_json: str | None
     udf_compatibility_ok: bool
     udf_compatibility_detail_json: str
     execution_duration_ms: float | None = None
@@ -107,12 +114,18 @@ class PlanArtifactRow:
             "domain_planner_names_json": self.domain_planner_names_json,
             "delta_inputs_json": self.delta_inputs_json,
             "df_settings_json": self.df_settings_json,
+            "planning_env_json": self.planning_env_json,
+            "planning_env_hash": self.planning_env_hash,
+            "rulepack_json": self.rulepack_json,
+            "rulepack_hash": self.rulepack_hash,
             "information_schema_json": self.information_schema_json,
             "information_schema_hash": self.information_schema_hash,
             "substrait_b64": self.substrait_b64,
-            "explain_tree_json": self.explain_tree_json,
-            "explain_verbose_json": self.explain_verbose_json,
-            "explain_analyze_json": self.explain_analyze_json,
+            "logical_plan_proto_b64": self.logical_plan_proto_b64,
+            "optimized_plan_proto_b64": self.optimized_plan_proto_b64,
+            "execution_plan_proto_b64": self.execution_plan_proto_b64,
+            "explain_tree_rows_json": self.explain_tree_rows_json,
+            "explain_verbose_rows_json": self.explain_verbose_rows_json,
             "explain_analyze_duration_ms": self.explain_analyze_duration_ms,
             "explain_analyze_output_rows": self.explain_analyze_output_rows,
             "substrait_validation_json": self.substrait_validation_json,
@@ -122,6 +135,7 @@ class PlanArtifactRow:
             "plan_details_json": self.plan_details_json,
             "function_registry_snapshot_json": self.function_registry_snapshot_json,
             "udf_snapshot_json": self.udf_snapshot_json,
+            "udf_planner_snapshot_json": self.udf_planner_snapshot_json,
             "udf_compatibility_ok": self.udf_compatibility_ok,
             "udf_compatibility_detail_json": self.udf_compatibility_detail_json,
             "execution_duration_ms": self.execution_duration_ms,
@@ -911,22 +925,28 @@ def build_plan_artifact_row(
         domain_planner_names_json=_json_text(request.bundle.artifacts.domain_planner_names),
         delta_inputs_json=_json_text(delta_inputs_payload),
         df_settings_json=_json_text(request.bundle.artifacts.df_settings),
+        planning_env_json=_json_text(request.bundle.artifacts.planning_env_snapshot),
+        planning_env_hash=request.bundle.artifacts.planning_env_hash,
+        rulepack_json=(
+            _json_text(request.bundle.artifacts.rulepack_snapshot)
+            if request.bundle.artifacts.rulepack_snapshot is not None
+            else None
+        ),
+        rulepack_hash=request.bundle.artifacts.rulepack_hash,
         information_schema_json=_json_text(request.bundle.artifacts.information_schema_snapshot),
         information_schema_hash=request.bundle.artifacts.information_schema_hash,
         substrait_b64=_substrait_b64(request.bundle.substrait_bytes),
-        explain_tree_json=(
-            _json_text(request.bundle.artifacts.explain_tree)
-            if request.bundle.artifacts.explain_tree is not None
+        logical_plan_proto_b64=_substrait_b64(request.bundle.artifacts.logical_plan_proto),
+        optimized_plan_proto_b64=_substrait_b64(request.bundle.artifacts.optimized_plan_proto),
+        execution_plan_proto_b64=_substrait_b64(request.bundle.artifacts.execution_plan_proto),
+        explain_tree_rows_json=(
+            _json_text(request.bundle.artifacts.explain_tree_rows)
+            if request.bundle.artifacts.explain_tree_rows is not None
             else None
         ),
-        explain_verbose_json=(
-            _json_text(request.bundle.artifacts.explain_verbose)
-            if request.bundle.artifacts.explain_verbose is not None
-            else None
-        ),
-        explain_analyze_json=(
-            _json_text(request.bundle.artifacts.explain_analyze)
-            if request.bundle.artifacts.explain_analyze is not None
+        explain_verbose_rows_json=(
+            _json_text(request.bundle.artifacts.explain_verbose_rows)
+            if request.bundle.artifacts.explain_verbose_rows is not None
             else None
         ),
         explain_analyze_duration_ms=request.bundle.artifacts.explain_analyze_duration_ms,
@@ -944,6 +964,11 @@ def build_plan_artifact_row(
             request.bundle.artifacts.function_registry_snapshot
         ),
         udf_snapshot_json=_json_text(request.bundle.artifacts.udf_snapshot),
+        udf_planner_snapshot_json=(
+            _json_text(request.bundle.artifacts.udf_planner_snapshot)
+            if request.bundle.artifacts.udf_planner_snapshot is not None
+            else None
+        ),
         udf_compatibility_ok=udf_ok,
         udf_compatibility_detail_json=_json_text(udf_detail),
         execution_duration_ms=request.execution_duration_ms,
@@ -1283,6 +1308,11 @@ def _scan_units_payload(
                 "delta_feature_gate": _delta_gate_payload(unit.delta_feature_gate),
                 "delta_protocol": unit.delta_protocol,
                 "storage_options_hash": unit.storage_options_hash,
+                "delta_scan_config": unit.delta_scan_config,
+                "delta_scan_config_hash": unit.delta_scan_config_hash,
+                "datafusion_provider": unit.datafusion_provider,
+                "protocol_compatible": unit.protocol_compatible,
+                "protocol_compatibility": unit.protocol_compatibility,
                 "total_files": unit.total_files,
                 "candidate_file_count": unit.candidate_file_count,
                 "pruned_file_count": unit.pruned_file_count,
@@ -1304,6 +1334,11 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, objec
             "feature_gate": _delta_gate_payload(pin.feature_gate),
             "protocol": _delta_protocol_payload(pin.protocol),
             "storage_options_hash": pin.storage_options_hash,
+            "delta_scan_config": pin.delta_scan_config,
+            "delta_scan_config_hash": pin.delta_scan_config_hash,
+            "datafusion_provider": pin.datafusion_provider,
+            "protocol_compatible": pin.protocol_compatible,
+            "protocol_compatibility": pin.protocol_compatibility,
         }
         for pin in bundle.delta_inputs
     ]
@@ -1353,7 +1388,7 @@ def _plan_identity_payload(
         sorted((str(key), str(value)) for key, value in bundle.artifacts.df_settings.items())
     )
     return {
-        "version": 3,
+        "version": 4,
         "plan_fingerprint": bundle.plan_fingerprint,
         "udf_snapshot_hash": bundle.artifacts.udf_snapshot_hash,
         "function_registry_hash": bundle.artifacts.function_registry_hash,
@@ -1361,6 +1396,8 @@ def _plan_identity_payload(
         "required_rewrite_tags": tuple(sorted(bundle.required_rewrite_tags)),
         "domain_planner_names": tuple(sorted(bundle.artifacts.domain_planner_names)),
         "df_settings_entries": df_settings_entries,
+        "planning_env_hash": bundle.artifacts.planning_env_hash,
+        "rulepack_hash": bundle.artifacts.rulepack_hash,
         "information_schema_hash": bundle.artifacts.information_schema_hash,
         "delta_inputs": tuple(delta_inputs_payload),
         "scan_units": tuple(scan_payload),

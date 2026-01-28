@@ -57,6 +57,7 @@ from datafusion_engine.compile_options import (
     DataFusionSubstraitFallbackEvent,
     resolve_sql_policy,
 )
+from datafusion_engine.delta_protocol import DeltaProtocolSupport
 from datafusion_engine.delta_store_policy import (
     DeltaStorePolicy,
     apply_delta_store_policy,
@@ -1216,7 +1217,7 @@ def _build_view_nodes(
     ValueError
         Raised when the runtime profile is unavailable.
     """
-    from datafusion_engine.plan_bundle import build_plan_bundle
+    from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
     from datafusion_engine.view_graph_registry import ViewNode
 
     if runtime_profile is None:
@@ -1230,8 +1231,10 @@ def _build_view_nodes(
         plan_bundle = build_plan_bundle(
             ctx,
             df,
-            compute_execution_plan=True,
-            session_runtime=session_runtime,
+            options=PlanBundleOptions(
+                compute_execution_plan=True,
+                session_runtime=session_runtime,
+            ),
         )
         nodes.append(
             ViewNode(
@@ -1667,7 +1670,7 @@ def record_view_definition(
         return
     profile.view_registry.record(name=artifact.name, artifact=artifact)
     payload = artifact.diagnostics_payload(event_time_unix_ms=int(time.time() * 1000))
-    record_artifact(profile, "datafusion_view_artifacts_v2", payload)
+    record_artifact(profile, "datafusion_view_artifacts_v3", payload)
 
 
 def _datafusion_version(ctx: SessionContext) -> str | None:
@@ -1964,7 +1967,7 @@ def diagnostics_plan_artifacts_hook(
                 normalized["plan_identity_hash"] = fingerprint_value
             else:
                 normalized["plan_identity_hash"] = "unknown_plan_identity"
-        recorder_sink.record_artifact("datafusion_plan_artifacts_v4", normalized)
+        recorder_sink.record_artifact("datafusion_plan_artifacts_v6", normalized)
 
     return _hook
 
@@ -2155,6 +2158,20 @@ def _effective_catalog_autoload_for_profile(
         env_settings.get("datafusion.catalog.location"),
         env_settings.get("datafusion.catalog.format"),
     )
+
+
+def _delta_protocol_support_payload(
+    profile: DataFusionRuntimeProfile,
+) -> Mapping[str, object] | None:
+    support = profile.delta_protocol_support
+    if support is None:
+        return None
+    return {
+        "max_reader_version": support.max_reader_version,
+        "max_writer_version": support.max_writer_version,
+        "supported_reader_features": list(support.supported_reader_features),
+        "supported_writer_features": list(support.supported_writer_features),
+    }
 
 
 def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str, object]:
@@ -2613,6 +2630,8 @@ class _RuntimeDiagnosticsMixin:
                 "delta_plan_codecs_enabled": profile.enable_delta_plan_codecs,
                 "delta_plan_codec_physical": profile.delta_plan_codec_physical,
                 "delta_plan_codec_logical": profile.delta_plan_codec_logical,
+                "delta_protocol_mode": profile.delta_protocol_mode,
+                "delta_protocol_support": _delta_protocol_support_payload(profile),
                 "expr_planners_enabled": profile.enable_expr_planners,
                 "expr_planner_names": list(profile.expr_planner_names),
                 "physical_expr_adapter_factory": bool(profile.physical_expr_adapter_factory),
@@ -2908,6 +2927,8 @@ class DataFusionRuntimeProfile(_RuntimeDiagnosticsMixin):
     delta_plan_codec_physical: str = "delta_physical"
     delta_plan_codec_logical: str = "delta_logical"
     delta_store_policy: DeltaStorePolicy | None = None
+    delta_protocol_support: DeltaProtocolSupport | None = None
+    delta_protocol_mode: Literal["error", "warn", "ignore"] = "error"
     enable_metrics: bool = False
     metrics_collector: Callable[[], Mapping[str, object] | None] | None = None
     enable_tracing: bool = False

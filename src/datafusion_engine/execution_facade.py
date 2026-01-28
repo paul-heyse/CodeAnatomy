@@ -18,6 +18,7 @@ from datafusion_engine.execution_helpers import replay_substrait_bytes
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.plan_bundle import (
     DataFusionPlanBundle,
+    PlanBundleOptions,
     build_plan_bundle,
 )
 from datafusion_engine.write_pipeline import (
@@ -416,9 +417,11 @@ class DataFusionExecutionFacade:
         return build_plan_bundle(
             self.ctx,
             df,
-            compute_execution_plan=compute_execution_plan,
-            compute_substrait=True,
-            session_runtime=session_runtime,
+            options=PlanBundleOptions(
+                compute_execution_plan=compute_execution_plan,
+                compute_substrait=True,
+                session_runtime=session_runtime,
+            ),
         )
 
     def execute_plan_bundle(
@@ -748,9 +751,11 @@ class DataFusionExecutionFacade:
         return build_plan_bundle(
             self.ctx,
             df,
-            compute_execution_plan=compute_execution_plan,
-            compute_substrait=compute_substrait,
-            session_runtime=session_runtime,
+            options=PlanBundleOptions(
+                compute_execution_plan=compute_execution_plan,
+                compute_substrait=compute_substrait,
+                session_runtime=session_runtime,
+            ),
         )
 
 

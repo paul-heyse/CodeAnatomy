@@ -82,6 +82,11 @@ def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> list[dict[str, object
             "feature_gate": _delta_gate_payload(pin.feature_gate),
             "protocol": _delta_protocol_payload(pin.protocol),
             "storage_options_hash": pin.storage_options_hash,
+            "delta_scan_config": pin.delta_scan_config,
+            "delta_scan_config_hash": pin.delta_scan_config_hash,
+            "datafusion_provider": pin.datafusion_provider,
+            "protocol_compatible": pin.protocol_compatible,
+            "protocol_compatibility": pin.protocol_compatibility,
         }
         for pin in bundle.delta_inputs
     ]

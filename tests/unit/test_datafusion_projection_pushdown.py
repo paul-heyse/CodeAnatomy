@@ -5,7 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.plan_bundle import build_plan_bundle
+from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 datafusion = pytest.importorskip("datafusion")
@@ -32,7 +32,7 @@ def test_dynamic_projection_reduces_columns() -> None:
     bundle = build_plan_bundle(
         ctx,
         df,
-        session_runtime=session_runtime,
+        options=PlanBundleOptions(session_runtime=session_runtime),
     )
     plan_text = bundle.display_optimized_plan() or bundle.display_logical_plan() or ""
     assert "label" not in plan_text

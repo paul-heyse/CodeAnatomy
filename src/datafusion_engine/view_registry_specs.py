@@ -18,7 +18,7 @@ from datafusion_engine.arrow_schema.metadata import (
     ordering_metadata_spec,
 )
 from datafusion_engine.lineage_datafusion import extract_lineage
-from datafusion_engine.plan_bundle import build_plan_bundle
+from datafusion_engine.plan_bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.schema_contracts import SchemaContract
 from datafusion_engine.udf_runtime import udf_names_from_snapshot, validate_rust_udf_snapshot
 from datafusion_engine.view_graph_registry import ViewNode
@@ -130,9 +130,11 @@ def _bundle_deps_and_udfs(
     bundle = build_plan_bundle(
         ctx,
         df,
-        compute_execution_plan=True,
-        validate_udfs=True,
-        session_runtime=session_runtime,
+        options=PlanBundleOptions(
+            compute_execution_plan=True,
+            validate_udfs=True,
+            session_runtime=session_runtime,
+        ),
     )
     try:
         lineage = extract_lineage(

@@ -42,8 +42,8 @@ from arrow_utils.schema.metadata import (
 )
 from arrow_utils.schema.semantic_types import (
     SEMANTIC_TYPE_META,
-    SPAN_TYPE_INFO,
     byte_span_type,
+    span_metadata,
     span_type,
 )
 from datafusion_engine.schema_introspection import SchemaIntrospector, table_names_snapshot
@@ -552,19 +552,9 @@ LIBCST_FILES_SCHEMA = pa.schema(
     ]
 )
 
-AST_SPAN_META: dict[bytes, bytes] = {
-    b"line_base": b"0",
-    b"col_unit": b"byte",
-    b"end_exclusive": b"true",
-    SEMANTIC_TYPE_META: SPAN_TYPE_INFO.name.encode("utf-8"),
-}
+AST_SPAN_META: dict[bytes, bytes] = span_metadata()
 
-TREE_SITTER_SPAN_META: dict[bytes, bytes] = {
-    b"line_base": b"0",
-    b"col_unit": b"byte",
-    b"end_exclusive": b"true",
-    SEMANTIC_TYPE_META: SPAN_TYPE_INFO.name.encode("utf-8"),
-}
+TREE_SITTER_SPAN_META: dict[bytes, bytes] = span_metadata()
 
 AST_NODE_T = pa.struct(
     [
@@ -865,12 +855,7 @@ SYM_FUNCTION_PARTITIONS_T = pa.struct(
     ]
 )
 
-SYMTABLE_SPAN_META: dict[bytes, bytes] = {
-    b"line_base": b"0",
-    b"col_unit": b"utf32",
-    b"end_exclusive": b"true",
-    SEMANTIC_TYPE_META: SPAN_TYPE_INFO.name.encode("utf-8"),
-}
+SYMTABLE_SPAN_META: dict[bytes, bytes] = span_metadata(col_unit="utf32")
 
 SYM_BLOCK_T = pa.struct(
     [
@@ -904,12 +889,7 @@ SYMTABLE_FILES_SCHEMA = pa.schema(
 )
 
 
-BYTECODE_SPAN_META: dict[bytes, bytes] = {
-    b"line_base": b"0",
-    b"col_unit": b"utf32",
-    b"end_exclusive": b"true",
-    SEMANTIC_TYPE_META: SPAN_TYPE_INFO.name.encode("utf-8"),
-}
+BYTECODE_SPAN_META: dict[bytes, bytes] = span_metadata(col_unit="utf32")
 
 BYTECODE_LINE_META: dict[bytes, bytes] = {b"line_base": b"1"}
 

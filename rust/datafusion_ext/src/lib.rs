@@ -1,10 +1,10 @@
 //! DataFusion extension for native function registration.
 
-mod delta_control_plane;
+pub mod delta_control_plane;
 mod delta_maintenance;
 mod delta_mutations;
 mod delta_observability;
-mod delta_protocol;
+pub mod delta_protocol;
 mod expr_planner;
 mod function_factory;
 mod function_rewrite;
@@ -377,7 +377,7 @@ fn register_udfs(
     async_udf_timeout_ms: Option<u64>,
     async_udf_batch_size: Option<usize>,
 ) -> PyResult<()> {
-    udf_registry::register_all(
+    udf_registry::register_all_with_policy(
         &ctx.ctx,
         enable_async,
         async_udf_timeout_ms,
@@ -518,6 +518,7 @@ fn register_df_plugin_table_providers(
     table_names: Option<Vec<String>>,
     options_json: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
+    install_delta_plan_codecs_inner(&ctx)?;
     let handle = extract_plugin_handle(py, &plugin)?;
     handle
         .register_table_providers(&ctx.ctx, table_names.as_deref(), options_json.as_ref())
@@ -542,6 +543,7 @@ fn register_df_plugin(
     handle.register_table_functions(&ctx.ctx).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
     })?;
+    install_delta_plan_codecs_inner(&ctx)?;
     handle
         .register_table_providers(&ctx.ctx, table_names.as_deref(), options_json.as_ref())
         .map_err(|err| {
@@ -1241,14 +1243,19 @@ fn apply_delta_session_defaults(ctx: PyRef<PySessionContext>) -> PyResult<()> {
 }
 
 // Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
-#[pyfunction]
-fn install_delta_plan_codecs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+fn install_delta_plan_codecs_inner(ctx: &PySessionContext) -> PyResult<()> {
     let state_ref = ctx.ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     config.set_extension(Arc::new(DeltaLogicalCodec {}));
     config.set_extension(Arc::new(DeltaPhysicalCodec {}));
     Ok(())
+}
+
+// Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
+#[pyfunction]
+fn install_delta_plan_codecs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    install_delta_plan_codecs_inner(&ctx)
 }
 
 // Scope 8: Native Delta CDF TableProvider integration
@@ -1524,7 +1531,7 @@ fn delta_write_ipc(
 #[pyfunction]
 fn delta_delete(
     py: Python<'_>,
-    _ctx: PyRef<PySessionContext>,
+    ctx: PyRef<PySessionContext>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -1560,6 +1567,7 @@ fn delta_delete(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_delete_native(
+            &ctx.ctx,
             &table_uri,
             storage,
             version,
@@ -1719,7 +1727,7 @@ fn delta_merge(
 #[pyfunction]
 fn delta_optimize_compact(
     py: Python<'_>,
-    _ctx: PyRef<PySessionContext>,
+    ctx: PyRef<PySessionContext>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -1761,6 +1769,7 @@ fn delta_optimize_compact(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_optimize_compact_native(
+            &ctx.ctx,
             &table_uri,
             storage,
             version,
@@ -1776,7 +1785,7 @@ fn delta_optimize_compact(
 #[pyfunction]
 fn delta_vacuum(
     py: Python<'_>,
-    _ctx: PyRef<PySessionContext>,
+    ctx: PyRef<PySessionContext>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -1815,6 +1824,7 @@ fn delta_vacuum(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_vacuum_native(
+            &ctx.ctx,
             &table_uri,
             storage,
             version,
@@ -1832,7 +1842,7 @@ fn delta_vacuum(
 #[pyfunction]
 fn delta_restore(
     py: Python<'_>,
-    _ctx: PyRef<PySessionContext>,
+    ctx: PyRef<PySessionContext>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -1868,6 +1878,7 @@ fn delta_restore(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_restore_native(
+            &ctx.ctx,
             &table_uri,
             storage,
             version,
@@ -1884,7 +1895,7 @@ fn delta_restore(
 #[pyfunction]
 fn delta_set_properties(
     py: Python<'_>,
-    _ctx: PyRef<PySessionContext>,
+    ctx: PyRef<PySessionContext>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -1925,6 +1936,7 @@ fn delta_set_properties(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_set_properties_native(
+            &ctx.ctx,
             &table_uri,
             storage,
             version,
@@ -1940,7 +1952,7 @@ fn delta_set_properties(
 #[pyfunction]
 fn delta_add_features(
     py: Python<'_>,
-    _ctx: PyRef<PySessionContext>,
+    ctx: PyRef<PySessionContext>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -1982,6 +1994,7 @@ fn delta_add_features(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_add_features_native(
+            &ctx.ctx,
             &table_uri,
             storage,
             version,
@@ -2079,6 +2092,7 @@ fn datafusion_ext(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()>
     module.add_function(wrap_pyfunction!(udf_custom::span_len, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::span_overlaps, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::span_contains, module)?)?;
+    module.add_function(wrap_pyfunction!(udf_custom::interval_align_score, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::span_id, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::utf8_normalize, module)?)?;
     module.add_function(wrap_pyfunction!(udf_custom::utf8_null_if_blank, module)?)?;

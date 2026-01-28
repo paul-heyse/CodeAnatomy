@@ -6,7 +6,7 @@ import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 import pyarrow as pa
@@ -337,9 +337,12 @@ def runtime_profile_snapshot_payload(profile: DataFusionRuntimeProfile) -> dict[
         Builtins-only payload suitable for diagnostics.
     """
     try:
-        return to_builtins(profile.telemetry_payload_v1())
+        payload = to_builtins(profile.telemetry_payload_v1())
     except (msgspec.EncodeError, TypeError):
         return {"profile_name": profile.config_policy_name}
+    if isinstance(payload, dict):
+        return cast("dict[str, object]", payload)
+    return {"profile_name": profile.config_policy_name}
 
 
 __all__ = [

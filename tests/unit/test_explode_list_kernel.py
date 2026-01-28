@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.core.expr_types import ExplodeSpec
+from arrow_utils.core.expr_types import ExplodeSpec
 from datafusion_engine.kernels import explode_list_kernel
 
 

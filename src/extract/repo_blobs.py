@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import tokenize
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, overload

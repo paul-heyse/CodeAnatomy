@@ -182,9 +182,8 @@ class RuntimeArtifacts:
     def __post_init__(self) -> None:
         """Resolve DiskCache profile defaults after initialization."""
         if self.diskcache_profile is None and self.execution is not None:
-            runtime = self.execution.runtime
-            if runtime.datafusion is not None:
-                self.diskcache_profile = runtime.datafusion.diskcache_profile
+            profile = self.execution.profile
+            self.diskcache_profile = profile.diskcache_profile
 
     def _cache(self) -> Cache | FanoutCache | None:
         if self._diskcache is not None:

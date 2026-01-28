@@ -39,8 +39,8 @@ class _ArrowSchema(Protocol):
 def _json_enc_hook(obj: object) -> object:
     if isinstance(obj, Path):
         return str(obj)
-    if isinstance(obj, bytes):
-        return obj.hex()
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        return bytes(obj).hex()
     raise TypeError
 
 
@@ -78,6 +78,29 @@ def _msgpack_ext_hook(code: int, data: memoryview) -> object:
 
 JSON_ENCODER = msgspec.json.Encoder(enc_hook=_json_enc_hook, order=_DEFAULT_ORDER)
 MSGPACK_ENCODER = msgspec.msgpack.Encoder(enc_hook=_msgpack_enc_hook, order=_DEFAULT_ORDER)
+
+
+def json_default(obj: object) -> object:
+    """Return a JSON-serializable representation for custom objects.
+
+    Parameters
+    ----------
+    obj
+        Object to encode.
+
+    Returns
+    -------
+    object
+        JSON-serializable value.
+
+    Raises
+    ------
+    TypeError
+        Raised when the object cannot be serialized.
+    """
+    if isinstance(obj, msgspec.Struct):
+        return msgspec.to_builtins(obj)
+    return _json_enc_hook(obj)
 
 
 def dumps_json(obj: object, *, pretty: bool = False) -> bytes:

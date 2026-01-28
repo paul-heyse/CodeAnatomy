@@ -58,6 +58,15 @@ def _session_context(runtime_profile: DataFusionRuntimeProfile | None) -> Sessio
     return session
 
 
+def _ensure_required_udfs(ctx: SessionContext, *, required: Sequence[str]) -> None:
+    if not required:
+        return
+    from datafusion_engine.udf_runtime import rust_udf_snapshot, validate_required_udfs
+
+    snapshot = rust_udf_snapshot(ctx)
+    validate_required_udfs(snapshot, required=required)
+
+
 def _df_from_table(
     ctx: SessionContext,
     table: TableLike,
@@ -239,10 +248,39 @@ def _sort_exprs(keys: Sequence[PlanSortKey]) -> list[DFSortKey]:
     return out
 
 
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
 def _order_exprs_for_dedupe(spec: DedupeSpec) -> list[DFSortKey]:
     if spec.tie_breakers:
         return _sort_exprs(spec.tie_breakers)
     return _sort_exprs(tuple(PlanSortKey(key, "ascending") for key in spec.keys))
+
+
+def _order_keys_for_dedupe(spec: DedupeSpec) -> list[SortKey]:
+    if spec.tie_breakers:
+        return list(spec.tie_breakers)
+    return [SortKey(key, "ascending") for key in spec.keys]
+
+
+def _dedupe_best_by_score_expr(df: DataFrame, *, spec: DedupeSpec) -> Expr:
+    partition_by = ", ".join(_sql_identifier(key) for key in spec.keys)
+    order_tokens: list[str] = []
+    for key in _order_keys_for_dedupe(spec):
+        direction = "DESC" if key.order == "descending" else "ASC"
+        nulls = "NULLS FIRST" if key.order == "ascending" else "NULLS LAST"
+        order_tokens.append(f"{_sql_identifier(key.column)} {direction} {nulls}")
+    order_by = ", ".join(order_tokens)
+    if order_by:
+        sql = (
+            "dedupe_best_by_score() OVER "
+            f"(PARTITION BY {partition_by} ORDER BY {order_by})"
+        )
+    else:
+        sql = f"dedupe_best_by_score() OVER (PARTITION BY {partition_by})"
+    return df.parse_sql_expr(sql)
 
 
 def _dedupe_dataframe(
@@ -255,12 +293,18 @@ def _dedupe_dataframe(
         return df
     if spec.strategy == "COLLAPSE_LIST":
         return _dedupe_collapse_list_dataframe(df, spec=spec, columns=columns)
-    order_by: list[DFSortKey] | None = None
-    if spec.strategy != "KEEP_ARBITRARY":
-        order_by = []
-        for expr in _order_exprs_for_dedupe(spec):
-            order_by.append(expr)
-    row_expr = f.row_number(partition_by=[col(key) for key in spec.keys], order_by=order_by)
+    if spec.strategy == "KEEP_BEST_BY_SCORE":
+        row_expr = _dedupe_best_by_score_expr(df, spec=spec)
+    else:
+        order_by: list[DFSortKey] | None = None
+        if spec.strategy != "KEEP_ARBITRARY":
+            order_by = []
+            for expr in _order_exprs_for_dedupe(spec):
+                order_by.append(expr)
+        row_expr = f.row_number(
+            partition_by=[col(key) for key in spec.keys],
+            order_by=order_by,
+        )
     exprs = [col(name) for name in columns]
     exprs.append(row_expr.alias("__dedupe_rank"))
     ranked = df.select(*exprs)
@@ -300,6 +344,8 @@ def dedupe_kernel(
     ctx = _session_context(runtime_profile)
     ordering = _require_explicit_ordering(table.schema, kernel="dedupe")
     resolved_spec = _dedupe_spec_with_ordering(spec, ordering)
+    if resolved_spec.strategy == "KEEP_BEST_BY_SCORE":
+        _ensure_required_udfs(ctx, required=("dedupe_best_by_score",))
     df = _df_from_table(
         ctx,
         table,
@@ -699,6 +745,8 @@ def _interval_best_matches(
     cfg: IntervalAlignOptions,
     right_name_map: Mapping[str, str],
 ) -> DataFrame:
+    from datafusion_ext import interval_align_score
+
     left_start = _normalize_span_expr(cfg.left_start_col)
     left_end = _normalize_span_expr(cfg.left_end_col)
     right_start = _normalize_span_expr(right_name_map.get(cfg.right_start_col, cfg.right_start_col))
@@ -712,8 +760,7 @@ def _interval_best_matches(
         right_end=right_end,
     )
     matched = joined.filter(match_mask)
-    span_len = right_end - right_start
-    match_score = span_len * lit(-1.0)
+    match_score = interval_align_score(left_start, left_end, right_start, right_end)
     matched = matched.with_column(prepared.score_col, match_score)
     if cfg.emit_match_meta:
         matched = matched.with_column(cfg.match_kind_col, lit(cfg.mode))
@@ -813,6 +860,7 @@ def interval_align_kernel(
     """
     prepared = _prepare_interval_tables(left, right, cfg)
     ctx = _session_context(runtime_profile)
+    _ensure_required_udfs(ctx, required=("interval_align_score",))
     left_df, joined, right_name_map = _interval_join_frames(
         prepared,
         ctx=ctx,

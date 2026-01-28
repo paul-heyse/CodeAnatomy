@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pyarrow.dataset as ds
 
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.schema.abi import schema_fingerprint
 from storage.deltalake import (
     DeltaWriteOptions,
     delta_table_version,

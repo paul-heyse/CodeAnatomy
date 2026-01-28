@@ -6,7 +6,7 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
 
-from arrowdsl.core.streaming import to_reader
+from arrow_utils.core.streaming import to_reader
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 datafusion = pytest.importorskip("datafusion")

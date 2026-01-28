@@ -10,7 +10,7 @@ from datafusion import col, lit
 from datafusion import functions as f
 
 from arrow_utils.core.interop import TableLike, coerce_table_like
-from arrow_utils.schema.build import table_from_arrays
+from arrow_utils.schema.build import empty_table
 from datafusion_engine.schema_alignment import align_table
 from datafusion_ext import prefixed_hash_parts64 as prefixed_hash64
 from incremental.plan_bundle_exec import execute_df_to_table
@@ -101,7 +101,7 @@ def _build_exported_defs_base(
 
 
 def _empty_exported_defs(schema: pa.Schema) -> pa.Table:
-    return table_from_arrays(schema, columns={}, num_rows=0)
+    return empty_table(schema)
 
 
 __all__ = ["build_exported_defs_index"]

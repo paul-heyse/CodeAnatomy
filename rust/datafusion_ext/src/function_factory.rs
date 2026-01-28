@@ -20,8 +20,9 @@ use datafusion_expr::udf_eq::UdfEq;
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_expr::{
     Accumulator, AggregateUDF, AggregateUDFImpl, Documentation, Expr, GroupsAccumulator,
-    PartitionEvaluator, ReversedUDAF, ScalarUDF, ScalarUDFImpl, SetMonotonicity, Signature,
-    StatisticsArgs, Volatility, WindowFrame, WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
+    PartitionEvaluator, ReturnFieldArgs, ReversedUDAF, ScalarUDF, ScalarUDFImpl, SetMonotonicity,
+    Signature, StatisticsArgs, Volatility, WindowFrame, WindowFunctionDefinition, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;

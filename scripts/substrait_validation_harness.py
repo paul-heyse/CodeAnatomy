@@ -8,16 +8,16 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from arrowdsl.json_factory import json_default
 from datafusion import SessionContext
-
-from arrowdsl.schema.build import table_from_row_dicts
 from datafusion_engine.bridge import collect_plan_artifacts, sqlglot_to_datafusion
+from ibis_engine.registry import DatasetLocation
+from sqlglot_tools.optimizer import parse_sql_strict
+
+from arrow_utils.schema.build import table_from_rows
 from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from ibis_engine.registry import DatasetLocation
-from sqlglot_tools.optimizer import parse_sql_strict
+from serde_msgspec import json_default
 
 
 def _load_rows(path: Path) -> list[dict[str, object]]:
@@ -65,7 +65,7 @@ def _register_input(
         rows = _load_rows(rows_path)
     else:
         rows = [{"id": 1, "label": "alpha"}, {"id": 2, "label": "beta"}]
-    table = table_from_row_dicts(rows)
+    table = table_from_rows(rows)
     ctx.register_record_batches(table_name, [table.to_batches()])
 
 

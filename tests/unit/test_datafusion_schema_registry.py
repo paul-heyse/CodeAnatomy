@@ -6,9 +6,9 @@ import pyarrow as pa
 
 import test_support.datafusion_ext_stub as _datafusion_ext_stub
 import test_support.view_specs_stub as _view_specs_stub
-from arrowdsl.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
-from arrowdsl.schema.build import empty_table
-from arrowdsl.schema.metadata import metadata_list_bytes
+from arrow_utils.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
+from arrow_utils.schema.build import empty_table
+from arrow_utils.schema.metadata import metadata_list_bytes
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_registry import (

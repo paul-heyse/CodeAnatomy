@@ -13,7 +13,7 @@ from datafusion.dataframe import DataFrame
 
 from arrow_utils.core.array_iter import iter_table_rows
 from arrow_utils.core.interop import TableLike
-from arrow_utils.schema.build import empty_table, table_from_arrays
+from arrow_utils.schema.build import empty_table, table_from_columns
 from datafusion_engine.schema_alignment import align_table
 from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.plan_bundle_exec import execute_df_to_table
@@ -384,15 +384,14 @@ def changed_file_impact_table(
 
     if not file_ids:
         return empty_table(schema)
-    return table_from_arrays(
+    return table_from_columns(
         schema,
-        columns={
+        {
             "file_id": pa.array(file_ids, type=pa.string()),
             "path": pa.array(paths, type=pa.string()),
             "reason_kind": pa.array(reason_kinds, type=pa.string()),
             "reason_ref": pa.array(reason_refs, type=pa.string()),
         },
-        num_rows=len(file_ids),
     )
 
 
@@ -417,15 +416,14 @@ def _export_import_keys(changed_exports: pa.Table) -> pa.Table:
         qnames.append(qname)
 
     if not module_fqns:
-        return table_from_arrays(_EXPORT_KEY_SCHEMA, columns={}, num_rows=0)
-    return table_from_arrays(
+        return empty_table(_EXPORT_KEY_SCHEMA)
+    return table_from_columns(
         _EXPORT_KEY_SCHEMA,
-        columns={
+        {
             "module_fqn": pa.array(module_fqns, type=pa.string()),
             "name": pa.array(names, type=pa.string()),
             "qname": pa.array(qnames, type=pa.string()),
         },
-        num_rows=len(module_fqns),
     )
 
 

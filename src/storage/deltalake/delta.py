@@ -704,10 +704,6 @@ def read_delta_cdf(
 
     ctx = DataFusionRuntimeProfile().session_context()
     df = ctx.read_table(provider)
-    if resolved_options.columns:
-        from datafusion import col
-
-        df = df.select(*(col(name) for name in resolved_options.columns))
     if resolved_options.predicate:
         try:
             predicate_expr = df.parse_sql_expr(resolved_options.predicate)
@@ -715,6 +711,10 @@ def read_delta_cdf(
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = f"Delta CDF predicate parse failed: {exc}"
             raise ValueError(msg) from exc
+    if resolved_options.columns:
+        from datafusion import col
+
+        df = df.select(*(col(name) for name in resolved_options.columns))
     return cast("TableLike", df.to_arrow_table())
 
 
@@ -747,8 +747,13 @@ def write_delta_table(
     ------
     RuntimeError
         Raised when Rust control-plane adapters are unavailable.
+    ValueError
+        Raised when the write mode is not append or overwrite.
     """
     resolved = options or DeltaWriteOptions()
+    if resolved.mode not in {"append", "overwrite"}:
+        msg = "Delta control-plane writes support only append or overwrite modes."
+        raise ValueError(msg)
     storage = dict(resolved.storage_options or {})
     if resolved.log_storage_options is not None:
         storage.update(dict(resolved.log_storage_options))
@@ -1013,15 +1018,12 @@ def _log_storage_dict(
     storage_options: StorageOptions | None,
     log_storage_options: StorageOptions | None,
 ) -> dict[str, str] | None:
-    if log_storage_options is not None:
-        return dict(log_storage_options)
-    return _storage_dict(storage_options)
-
-
-def _storage_dict(storage_options: StorageOptions | None) -> dict[str, str] | None:
-    if storage_options is None:
-        return None
-    return dict(storage_options)
+    merged: dict[str, str] = {}
+    if storage_options:
+        merged.update({str(key): str(value) for key, value in storage_options.items()})
+    if log_storage_options:
+        merged.update({str(key): str(value) for key, value in log_storage_options.items()})
+    return merged or None
 
 
 def _storage_options_hash(

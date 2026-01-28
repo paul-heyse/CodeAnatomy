@@ -14,7 +14,7 @@ from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from pyarrow import Table as ArrowTable
 
-from arrow_utils.core.interop import DataTypeLike, TableLike, coerce_table_like
+from arrow_utils.core.interop import DataTypeLike, SchemaLike, TableLike, coerce_table_like
 from datafusion_engine.introspection import invalidate_introspection_cache
 from datafusion_engine.schema_alignment import AlignmentInfo, CastErrorPolicy, align_to_schema
 from datafusion_engine.schema_introspection import table_constraint_rows

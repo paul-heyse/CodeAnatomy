@@ -281,8 +281,10 @@ def pick_first(
                 continue
             msg = f"Missing column {col!r}."
             raise KeyError(msg)
-        column = table.column(col)
-        chunked = column.combine_chunks() if hasattr(column, "combine_chunks") else column
+        column = table[col]
+        chunked = (
+            column.combine_chunks() if isinstance(column, pa.ChunkedArray) else column
+        )
         value = chunked[0]
         return value.as_py() if hasattr(value, "as_py") else value
     return default
@@ -313,6 +315,31 @@ def table_from_arrays(
     return pa.table(arrays, schema=resolved_schema, names=names)
 
 
+def table_from_columns(
+    schema: SchemaLike,
+    columns: Mapping[str, ArrayLike | ChunkedArrayLike],
+) -> TableLike:
+    """Return a table from a schema and column mapping.
+
+    Returns
+    -------
+    TableLike
+        Table built from ordered schema fields.
+    """
+    resolved_schema = _resolve_schema(schema)
+    arrays: list[ArrayLike | ChunkedArrayLike] = []
+    missing: list[str] = []
+    for field in resolved_schema:
+        if field.name not in columns:
+            missing.append(field.name)
+            continue
+        arrays.append(columns[field.name])
+    if missing:
+        msg = f"Missing columns for schema fields: {sorted(missing)}."
+        raise ValueError(msg)
+    return pa.table(arrays, schema=resolved_schema)
+
+
 def empty_table(schema: SchemaLike) -> TableLike:
     """Return an empty table for a schema.
 
@@ -340,6 +367,17 @@ def table_from_rows(
     """
     resolved_schema = _resolve_schema(schema) if schema is not None else None
     return pa.Table.from_pylist(list(rows), schema=resolved_schema)
+
+
+def table_from_row_dicts(rows: Iterable[Mapping[str, object]]) -> TableLike:
+    """Return a table from a sequence of mapping rows.
+
+    Returns
+    -------
+    TableLike
+        Table built from mapping rows.
+    """
+    return table_from_rows(rows)
 
 
 def schema_columns(
@@ -383,6 +421,51 @@ def table_from_schema(schema: SchemaLike) -> TableLike:
         Empty Arrow table.
     """
     return empty_table(schema)
+
+
+def rows_to_table(rows: Iterable[Mapping[str, object]], schema: SchemaLike) -> TableLike:
+    """Return a table from rows and an explicit schema.
+
+    Returns
+    -------
+    TableLike
+        Table built from mapping rows with the provided schema.
+    """
+    return table_from_rows(rows, schema=schema)
+
+
+def record_batch_reader_from_rows(
+    schema: SchemaLike,
+    rows: Iterable[Mapping[str, object]],
+) -> pa.RecordBatchReader:
+    """Return a RecordBatchReader built from mapping rows.
+
+    Returns
+    -------
+    pyarrow.RecordBatchReader
+        Reader yielding record batches aligned to the schema.
+    """
+    resolved = _resolve_schema(schema)
+    table = pa.Table.from_pylist(list(rows), schema=resolved)
+    return pa.RecordBatchReader.from_batches(resolved, table.to_batches())
+
+
+def record_batch_reader_from_row_batches(
+    schema: SchemaLike,
+    row_batches: Iterable[Sequence[Mapping[str, object]]],
+) -> pa.RecordBatchReader:
+    """Return a RecordBatchReader built from row batches.
+
+    Returns
+    -------
+    pyarrow.RecordBatchReader
+        Reader yielding record batches aligned to the schema.
+    """
+    resolved = _resolve_schema(schema)
+    batches = [
+        pa.RecordBatch.from_pylist(list(batch), schema=resolved) for batch in row_batches
+    ]
+    return pa.RecordBatchReader.from_batches(resolved, batches)
 
 
 def list_table_from_rows(
@@ -639,8 +722,11 @@ __all__ = [
     "maybe_dictionary",
     "nested_array_factory",
     "pick_first",
+    "record_batch_reader_from_row_batches",
+    "record_batch_reader_from_rows",
     "register_schema_extensions",
     "rows_from_table",
+    "rows_to_table",
     "schema_columns",
     "schema_fields",
     "set_or_append_column",
@@ -649,6 +735,8 @@ __all__ = [
     "struct_type",
     "table_from_arrays",
     "table_from_arrays_with_schema",
+    "table_from_columns",
+    "table_from_row_dicts",
     "table_from_rows",
     "table_from_schema",
     "table_from_schema_payload",

@@ -226,10 +226,18 @@ class TableSchemaSpec:
                     default_value=meta.get("default_value"),
                 )
             )
-        meta_name, meta_version = schema_identity_from_metadata(schema.metadata)
+        identity = schema_identity_from_metadata(schema.metadata)
+        meta_name = identity.get("name")
+        meta_version = identity.get("version")
+        parsed_version: int | None = None
+        if isinstance(meta_version, str):
+            try:
+                parsed_version = int(meta_version)
+            except ValueError:
+                parsed_version = None
         required_non_null, key_fields = schema_constraints_from_metadata(schema.metadata)
         resolved_name = meta_name or name
-        resolved_version = version if version is not None else meta_version
+        resolved_version = version if version is not None else parsed_version
         return cls(
             name=resolved_name,
             version=resolved_version,

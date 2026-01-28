@@ -4,29 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, Protocol, TypedDict, cast
+from typing import Literal, TypedDict, cast
 
 import pyarrow as pa
 
-from arrow_utils.core.interop import DataTypeLike, SchemaLike, TableLike, coerce_table_like
+from arrow_utils.core.interop import SchemaLike, TableLike, coerce_table_like
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
-
-
-class _SchemaFieldSpec(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def nullable(self) -> bool: ...
-
-
-class _TableSchemaSpec(Protocol):
-    @property
-    def required_non_null(self) -> Sequence[str]: ...
-
-    @property
-    def fields(self) -> Sequence[_SchemaFieldSpec]: ...
 
 
 class AlignmentInfo(TypedDict):

@@ -9,7 +9,6 @@ import pyarrow as pa
 
 from arrow_utils.core.interop import TableLike
 from arrow_utils.schema.metadata import SchemaMetadataSpec
-from datafusion_engine.schema_policy import SchemaPolicy
 from core_types import DeterminismTier
 from datafusion_engine.extract_registry import (
     dataset_metadata_with_options,
@@ -20,6 +19,7 @@ from datafusion_engine.extract_registry import (
 from datafusion_engine.finalize import FinalizeContext, FinalizeResult, FinalizeRunRequest
 from datafusion_engine.runtime import DataFusionRuntimeProfile, sql_options_for_profile
 from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.schema_policy import SchemaPolicy
 
 
 def schema_policy_for_dataset(
@@ -192,7 +192,6 @@ def normalized_schema_policy_for_dataset(
     normalize = normalize or ExtractNormalizeOptions()
     policy = schema_policy_for_dataset(
         name,
-        runtime_profile=runtime_profile,
         options=normalize.options,
         repo_id=normalize.repo_id,
         enable_encoding=normalize.enable_encoding,

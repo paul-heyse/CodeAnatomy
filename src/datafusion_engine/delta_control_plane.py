@@ -9,6 +9,7 @@ This module centralizes access to the Rust Delta control plane exposed via
 
 from __future__ import annotations
 
+import base64
 import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -430,15 +431,19 @@ def _scan_effective_payload(payload: Mapping[str, object]) -> dict[str, object]:
         Normalized scan configuration payload.
     """
     schema_payload: Mapping[str, object] | None = None
+    schema_ipc_b64: str | None = None
     schema_ipc = payload.get("schema_ipc")
-    if isinstance(schema_ipc, (bytes, bytearray)):
-        schema_payload = schema_to_dict(_decode_schema_ipc(bytes(schema_ipc)))
+    if isinstance(schema_ipc, (bytes, bytearray, memoryview)):
+        schema_bytes = bytes(schema_ipc)
+        schema_payload = schema_to_dict(_decode_schema_ipc(schema_bytes))
+        schema_ipc_b64 = base64.b64encode(schema_bytes).decode("ascii")
     return {
         "file_column_name": payload.get("file_column_name"),
         "enable_parquet_pushdown": payload.get("enable_parquet_pushdown"),
         "schema_force_view_types": payload.get("schema_force_view_types"),
         "wrap_partition_values": payload.get("wrap_partition_values"),
         "schema": schema_payload,
+        "schema_ipc": schema_ipc_b64,
         "has_schema": payload.get("has_schema"),
     }
 

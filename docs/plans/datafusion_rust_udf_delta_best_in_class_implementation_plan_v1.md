@@ -15,6 +15,8 @@
 
 **Intent**: Correct volatility levels and remove overly permissive `TypeSignature::Any` usage by introducing explicit signatures and coercion hooks. This shifts errors to planning time and improves constant folding and plan reproducibility.
 
+**Status**: Complete.
+
 ### Representative patterns
 
 ```rust
@@ -65,16 +67,18 @@ fn map_normalize_udf() -> ScalarUDF {
 - None.
 
 ### Implementation checklist
-- [ ] Audit all custom scalar UDFs and update to `Volatility::Immutable` where deterministic.
-- [ ] Replace `TypeSignature::Any` with explicit signatures or `TypeSignature::UserDefined` + `coerce_types`.
-- [ ] Ensure `registry_snapshot` captures accurate `signature_inputs` and `return_types` after changes.
-- [ ] Add parity tests for the new signatures in `udf_conformance.rs`.
+- [x] Audit all custom scalar UDFs and update to `Volatility::Immutable` where deterministic.
+- [x] Replace `TypeSignature::Any` with explicit signatures or `TypeSignature::UserDefined` + `coerce_types`.
+- [x] Ensure `registry_snapshot` captures accurate `signature_inputs` and `return_types` after changes.
+- [x] Add parity tests for the new signatures in `udf_conformance.rs`.
 
 ---
 
 ## Scope 2 — Metadata and extension-type propagation
 
 **Intent**: Preserve extension metadata (especially span and semantic types) across UDF boundaries using `return_field_from_args` and runtime `return_field` usage.
+
+**Status**: Complete.
 
 ### Representative patterns
 
@@ -113,15 +117,17 @@ impl ScalarUDFImpl for SpanMakeUdf {
 - None.
 
 ### Implementation checklist
-- [ ] Ensure span UDFs preserve metadata (or extension types) from input fields.
-- [ ] Use `ScalarFunctionArgs.return_field` for runtime array construction.
-- [ ] Update schema registry validation to reflect extension metadata preservation.
+- [x] Ensure span UDFs preserve metadata (or extension types) from input fields.
+- [x] Use `ScalarFunctionArgs.return_field` for runtime array construction.
+- [x] Update schema registry validation to reflect extension metadata preservation.
 
 ---
 
 ## Scope 3 — Return-field correctness for macro UDFs and dynamic UDFs
 
 **Intent**: Align SQL macros and dynamic UDFs with the modern `return_field_from_args` interface so the planner and runtime are consistent (especially in FFI and plugin contexts).
+
+**Status**: Complete.
 
 ### Representative patterns
 
@@ -151,15 +157,17 @@ impl ScalarUDFImpl for SqlMacroUdf {
 - None.
 
 ### Implementation checklist
-- [ ] Add `return_field_from_args` to `SqlMacroUdf`.
-- [ ] Ensure dynamic UDFs (e.g., `struct_pick`) trust planner-provided return fields.
-- [ ] Update tests to cover macro UDF return-field correctness.
+- [x] Add `return_field_from_args` to `SqlMacroUdf`.
+- [x] Ensure dynamic UDFs (e.g., `struct_pick`) trust planner-provided return fields.
+- [x] Update tests to cover macro UDF return-field correctness.
 
 ---
 
 ## Scope 4 — Async UDF lane with separate runtime
 
 **Intent**: Provide a production-safe async UDF execution lane that never blocks DataFusion execution threads, using a dedicated runtime or thread pool.
+
+**Status**: Complete.
 
 ### Representative patterns
 
@@ -190,15 +198,17 @@ impl AsyncScalarUDFImpl for RemoteLookupUdf {
 - None.
 
 ### Implementation checklist
-- [ ] Add a dedicated async runtime (or thread pool) for async UDFs.
-- [ ] Gate async UDF availability via policy checks (already wired in Python).
-- [ ] Add a conformance test for async UDF policy behavior.
+- [x] Add a dedicated async runtime (or thread pool) for async UDFs.
+- [x] Gate async UDF availability via policy checks (already wired in Python).
+- [x] Add a conformance test for async UDF policy behavior.
 
 ---
 
 ## Scope 5 — UDAF/UDWF correctness matrix
 
 **Intent**: Prove correctness for aggregate and window functions, including sliding/retract semantics, null handling, and deterministic ordering.
+
+**Status**: Complete.
 
 ### Representative patterns
 
@@ -229,15 +239,17 @@ fn list_unique_retract_window() -> Result<()> {
 - None.
 
 ### Implementation checklist
-- [ ] Add window-frame tests for retract correctness (bounded windows).
-- [ ] Add null-handling tests (IGNORE/RESPECT NULLS).
-- [ ] Add plan snapshot tests for expected logical/physical shapes.
+- [x] Add window-frame tests for retract correctness (bounded windows).
+- [x] Add null-handling tests (IGNORE/RESPECT NULLS).
+- [x] Add plan snapshot tests for expected logical/physical shapes.
 
 ---
 
 ## Scope 6 — ABI-stable plugin export for UDF bundles
 
 **Intent**: Package CodeAnatomy UDFs and table providers as a portable plugin with a stable ABI, using `df_plugin_api` + `datafusion-ffi`.
+
+**Status**: Complete.
 
 ### Representative patterns
 
@@ -268,15 +280,17 @@ extern "C" fn exports() -> DfPluginExportsV1 {
 - None.
 
 ### Implementation checklist
-- [ ] Create plugin crate exporting `DfPluginMod` with UDF bundles and providers.
-- [ ] Add manifest/handshake metadata (DataFusion/Arrow/FFI majors).
-- [ ] Wire plugin loading in Python via `datafusion_ext.load_df_plugin`.
+- [x] Create plugin crate exporting `DfPluginMod` with UDF bundles and providers.
+- [x] Add manifest/handshake metadata (DataFusion/Arrow/FFI majors).
+- [x] Wire plugin loading in Python via `datafusion_ext.load_df_plugin`.
 
 ---
 
 ## Scope 7 — Delta scan config and file metadata alignment
 
 **Intent**: Ensure all Delta scans use the same session-derived `DeltaScanConfig` with full payload fidelity (file column, partition wrapping, view types, schema override).
+
+**Status**: Complete.
 
 ### Representative patterns
 
@@ -299,15 +313,17 @@ let scan_config = DeltaScanConfig::new_from_session(session)
 - None.
 
 ### Implementation checklist
-- [ ] Include `wrap_partition_values` and schema IPC in all scan config payloads.
-- [ ] Expose file column name in dataset artifacts and lineage views.
-- [ ] Align Python defaults with Rust session-derived scan config.
+- [x] Include `wrap_partition_values` and schema IPC in all scan config payloads.
+- [x] Expose file column name in dataset artifacts and lineage views.
+- [x] Align Python defaults with Rust session-derived scan config.
 
 ---
 
 ## Scope 8 — Object store and storage-option unification
 
 **Intent**: Guarantee the same object-store registry and credential resolution path for both DataFusion and delta-rs, eliminating divergent configuration.
+
+**Status**: Partially complete (object-store registry centralization in Rust still pending).
 
 ### Representative patterns
 
@@ -331,14 +347,16 @@ pub fn apply_object_store_registry(
 
 ### Implementation checklist
 - [ ] Centralize object-store registration in the Rust control plane.
-- [ ] Update Python registration to pass object-store settings consistently.
-- [ ] Add diagnostics snapshot for resolved storage options.
+- [x] Update Python registration to pass object-store settings consistently.
+- [x] Add diagnostics snapshot for resolved storage options.
 
 ---
 
 ## Scope 9 — Delta CDF pushdown and incremental alignment
 
 **Intent**: Push CDF projections/filters into the provider and ensure incremental pipelines use provider-native predicates where possible.
+
+**Status**: Complete.
 
 ### Representative patterns
 
@@ -358,15 +376,17 @@ if predicate is not None:
 - None.
 
 ### Implementation checklist
-- [ ] Apply CDF predicates before collection to enable pushdown.
-- [ ] Record CDF snapshot + options in Delta observability artifacts.
-- [ ] Add tests for CDF provider projection/filter pushdown.
+- [x] Apply CDF predicates before collection to enable pushdown.
+- [x] Record CDF snapshot + options in Delta observability artifacts.
+- [x] Add tests for CDF provider projection/filter pushdown.
 
 ---
 
 ## Scope 10 — Delta DML boundaries (INSERT vs control-plane mutations)
 
 **Intent**: Allow DataFusion `INSERT INTO` for append/overwrite only, while routing MERGE/UPDATE/DELETE through the Rust control plane.
+
+**Status**: Complete.
 
 ### Representative patterns
 
@@ -388,15 +408,17 @@ ctx.table(table_name).write_table(
 - None.
 
 ### Implementation checklist
-- [ ] Gate INSERT writes to Delta append/overwrite only.
-- [ ] Keep MERGE/UPDATE/DELETE routed through `delta_mutations` control plane.
-- [ ] Record mutation artifacts for all operations.
+- [x] Gate INSERT writes to Delta append/overwrite only.
+- [x] Keep MERGE/UPDATE/DELETE routed through `delta_mutations` control plane.
+- [x] Record mutation artifacts for all operations.
 
 ---
 
 ## Scope 11 — Delta plan codecs and plugin compatibility
 
 **Intent**: Ensure Delta logical/physical codecs are installed wherever plans are serialized or exported, including plugin-loaded contexts.
+
+**Status**: Complete.
 
 ### Representative patterns
 
@@ -421,14 +443,16 @@ fn install_delta_plan_codecs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
 - None.
 
 ### Implementation checklist
-- [ ] Ensure codecs are installed in all runtime contexts that export plans.
-- [ ] Extend plugin registration paths to install codecs when needed.
+- [x] Ensure codecs are installed in all runtime contexts that export plans.
+- [x] Extend plugin registration paths to install codecs when needed.
 
 ---
 
 ## Scope 12 — Deferred deletions and cleanup (after all scopes land)
 
 **Intent**: Safely remove legacy paths once new integrations are proven stable.
+
+**Status**: Deferred.
 
 ### Deferred deletion candidates
 - `src/test_support/datafusion_ext_stub.py` (only if all tests can require native extension).
@@ -445,4 +469,3 @@ fn install_delta_plan_codecs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
 - [ ] Re-run full test suite with native extension required.
 - [ ] Confirm no downstream import paths rely on stubs or fallbacks.
 - [ ] Remove candidates only after adoption is complete.
-

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
-from arrow_utils.schema.build import table_from_arrays
+from arrow_utils.schema.build import empty_table, table_from_columns
 from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.write_helpers import (
@@ -147,7 +147,7 @@ def write_plan_snapshots(
     path.parent.mkdir(parents=True, exist_ok=True)
     names = sorted(snapshots)
     if not names:
-        table = table_from_arrays(_PLAN_FINGERPRINTS_SCHEMA, columns={}, num_rows=0)
+        table = empty_table(_PLAN_FINGERPRINTS_SCHEMA)
     else:
         versions = [PLAN_FINGERPRINTS_VERSION] * len(names)
         fingerprints = [snapshots[name].plan_fingerprint for name in names]
@@ -155,15 +155,14 @@ def write_plan_snapshots(
             snapshots[name].plan_task_signature or snapshots[name].plan_fingerprint
             for name in names
         ]
-        table = table_from_arrays(
+        table = table_from_columns(
             _PLAN_FINGERPRINTS_SCHEMA,
-            columns={
+            {
                 "version": pa.array(versions, type=pa.int32()),
                 "task_name": pa.array(names, type=pa.string()),
                 "plan_fingerprint": pa.array(fingerprints, type=pa.string()),
                 "plan_task_signature": pa.array(task_signatures, type=pa.string()),
             },
-            num_rows=len(names),
         )
     resolved = context.resolve_storage(table_uri=str(path))
     resolved_storage = {

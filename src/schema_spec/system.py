@@ -24,6 +24,7 @@ import pyarrow.dataset as ds
 
 from arrow_utils.core.interop import SchemaLike, TableLike
 from arrow_utils.core.ordering import Ordering, OrderingLevel
+from arrow_utils.schema.build import register_schema_extensions
 from arrow_utils.schema.encoding import EncodingPolicy
 from arrow_utils.schema.metadata import (
     SchemaMetadataSpec,
@@ -32,16 +33,15 @@ from arrow_utils.schema.metadata import (
     metadata_spec_from_schema,
     ordering_metadata_spec,
 )
-from arrow_utils.schema.build import register_schema_extensions
-from datafusion_engine.schema_alignment import CastErrorPolicy, SchemaEvolutionSpec
-from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
-from datafusion_engine.schema_validation import ArrowValidationOptions, validate_table
 from datafusion_engine.delta_protocol import DeltaFeatureGate
 from datafusion_engine.finalize import Contract, FinalizeContext
 from datafusion_engine.kernel_specs import DedupeSpec, SortKey
 from datafusion_engine.query_spec import ProjectionSpec, QuerySpec
+from datafusion_engine.schema_alignment import CastErrorPolicy, SchemaEvolutionSpec
 from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.schema_registry import extract_nested_dataset_names
+from datafusion_engine.schema_validation import ArrowValidationOptions, validate_table
 from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.specs import (
     ArrowFieldSpec,
@@ -60,6 +60,7 @@ from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
     from datafusion_engine.expr_spec import ExprSpec
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
     from schema_spec.view_specs import ViewSpec
 
 
@@ -68,6 +69,7 @@ def validate_arrow_table(
     *,
     spec: TableSchemaSpec,
     options: ArrowValidationOptions | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> TableLike:
     """Validate an Arrow table with Arrow-native validation.
 
@@ -82,7 +84,12 @@ def validate_arrow_table(
         Raised when strict validation fails.
     """
     options = options or ArrowValidationOptions()
-    report = validate_table(table, spec=spec, options=options)
+    report = validate_table(
+        table,
+        spec=spec,
+        options=options,
+        runtime_profile=runtime_profile,
+    )
     if options.strict is True and not report.valid:
         msg = f"Arrow validation failed for {spec.name!r}."
         raise ValueError(msg)

@@ -559,6 +559,13 @@ fn custom_signatures() -> BTreeMap<String, FunctionSignature> {
         },
     );
     signatures.insert(
+        "asof_select".to_string(),
+        FunctionSignature {
+            inputs: vec![vec![DataType::Utf8, DataType::Int64]],
+            returns: vec![DataType::Utf8],
+        },
+    );
+    signatures.insert(
         "arg_min".to_string(),
         FunctionSignature {
             inputs: vec![vec![DataType::Utf8, DataType::Int64]],
@@ -612,6 +619,7 @@ fn rewrite_tags_for(name: &str) -> Option<Vec<String>> {
         ("span_overlaps", &["span"]),
         ("span_contains", &["span"]),
         ("span_id", &["span", "id", "hash"]),
+        ("interval_align_score", &["interval", "alignment", "score"]),
         ("utf8_normalize", &["string_norm", "string"]),
         ("utf8_null_if_blank", &["string_norm", "string"]),
         ("qname_normalize", &["string_norm", "symbol", "string"]),
@@ -628,11 +636,13 @@ fn rewrite_tags_for(name: &str) -> Option<Vec<String>> {
         ("count_if", &["aggregate", "deterministic"]),
         ("any_value_det", &["aggregate", "deterministic"]),
         ("arg_max", &["aggregate", "deterministic"]),
+        ("asof_select", &["aggregate", "asof"]),
         ("arg_min", &["aggregate", "deterministic"]),
         ("first_value_agg", &["aggregate"]),
         ("last_value_agg", &["aggregate"]),
         ("count_distinct_agg", &["aggregate"]),
         ("string_agg", &["aggregate", "string"]),
+        ("dedupe_best_by_score", &["dedupe", "window"]),
         ("row_number_window", &["window"]),
         ("lag_window", &["window"]),
         ("lead_window", &["window"]),

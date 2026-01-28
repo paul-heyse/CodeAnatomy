@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
 use datafusion::execution::context::SessionContext;
+use datafusion::execution::object_store::ObjectStoreUrl;
 use deltalake::delta_datafusion::{
     DeltaCdfTableProvider, DeltaScanConfig, DeltaTableProvider,
 };
@@ -13,6 +15,8 @@ use deltalake::kernel::models::Add;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::{EagerSnapshot, LogicalFileView};
 use deltalake::{ensure_table_uri, DeltaTable, DeltaTableBuilder};
+use object_store::DynObjectStore;
+use url::{Position, Url};
 
 use crate::delta_protocol::{
     delta_snapshot_info, protocol_gate, DeltaFeatureGate, DeltaSnapshotInfo,
@@ -53,11 +57,35 @@ fn decode_add_path(path: &str) -> String {
         .unwrap_or_else(|_| path.to_owned())
 }
 
+fn object_store_url_for_table(table_url: &Url) -> Result<ObjectStoreUrl, DeltaTableError> {
+    let authority = &table_url[Position::BeforeHost..Position::AfterPort];
+    let base = format!("{}://{}", table_url.scheme(), authority);
+    ObjectStoreUrl::parse(base).map_err(|err| {
+        DeltaTableError::Generic(format!("Invalid object store URL for Delta table: {err}"))
+    })
+}
+
+fn session_object_store(
+    session_ctx: Option<&SessionContext>,
+    table_url: &Url,
+) -> Result<Option<Arc<DynObjectStore>>, DeltaTableError> {
+    let Some(session_ctx) = session_ctx else {
+        return Ok(None);
+    };
+    let store_url = object_store_url_for_table(table_url)?;
+    let registry = session_ctx.runtime_env().object_store_registry.clone();
+    match registry.get_store(store_url.as_ref()) {
+        Ok(store) => Ok(Some(store)),
+        Err(_) => Ok(None),
+    }
+}
+
 fn delta_table_builder(
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
     timestamp: Option<String>,
+    session_ctx: Option<&SessionContext>,
 ) -> Result<DeltaTableBuilder, DeltaTableError> {
     if version.is_some() && timestamp.is_some() {
         return Err(DeltaTableError::Generic(
@@ -65,7 +93,10 @@ fn delta_table_builder(
         ));
     }
     let table_url = ensure_table_uri(table_uri)?;
-    let mut builder = DeltaTableBuilder::from_url(table_url)?;
+    let mut builder = DeltaTableBuilder::from_url(table_url.clone())?;
+    if let Some(store) = session_object_store(session_ctx, &table_url)? {
+        builder = builder.with_storage_backend(store, table_url.clone());
+    }
     if let Some(options) = storage_options {
         builder = builder.with_storage_options(options);
     }
@@ -83,9 +114,25 @@ pub async fn load_delta_table(
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
     timestamp: Option<String>,
+    session_ctx: Option<&SessionContext>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let builder = delta_table_builder(table_uri, storage_options, version, timestamp)?;
+    let builder = delta_table_builder(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        session_ctx,
+    )?;
     builder.load().await
+}
+
+fn update_datafusion_session(
+    table: &DeltaTable,
+    session_ctx: &SessionContext,
+) -> Result<(), DeltaTableError> {
+    let session_state = session_ctx.state();
+    table.update_datafusion_session(&session_state)?;
+    Ok(())
 }
 
 pub async fn snapshot_info_with_gate(
@@ -95,7 +142,7 @@ pub async fn snapshot_info_with_gate(
     timestamp: Option<String>,
     gate: Option<DeltaFeatureGate>,
 ) -> Result<DeltaSnapshotInfo, DeltaTableError> {
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(table_uri, storage_options, version, timestamp, None).await?;
     let snapshot = delta_snapshot_info(table_uri, &table).await?;
     if let Some(gate) = gate {
         protocol_gate(&snapshot, &gate)?;
@@ -148,7 +195,15 @@ pub async fn delta_provider_from_session(
     overrides: DeltaScanOverrides,
     gate: Option<DeltaFeatureGate>,
 ) -> Result<(DeltaTableProvider, DeltaSnapshotInfo, DeltaScanConfig), DeltaTableError> {
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
+    update_datafusion_session(&table, session_ctx)?;
     let snapshot = delta_snapshot_info(table_uri, &table).await?;
     if let Some(gate) = gate {
         protocol_gate(&snapshot, &gate)?;
@@ -169,7 +224,7 @@ pub async fn delta_cdf_provider(
     options: DeltaCdfScanOptions,
     gate: Option<DeltaFeatureGate>,
 ) -> Result<(DeltaCdfTableProvider, DeltaSnapshotInfo), DeltaTableError> {
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(table_uri, storage_options, version, timestamp, None).await?;
     let snapshot = delta_snapshot_info(table_uri, &table).await?;
     if let Some(gate) = gate {
         protocol_gate(&snapshot, &gate)?;
@@ -214,7 +269,15 @@ pub async fn delta_provider_with_files(
     ),
     DeltaTableError,
 > {
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
+    update_datafusion_session(&table, session_ctx)?;
     let snapshot = delta_snapshot_info(table_uri, &table).await?;
     if let Some(gate) = gate {
         protocol_gate(&snapshot, &gate)?;
@@ -278,7 +341,7 @@ pub async fn delta_add_actions(
     timestamp: Option<String>,
     gate: Option<DeltaFeatureGate>,
 ) -> Result<(DeltaSnapshotInfo, Vec<DeltaAddActionPayload>), DeltaTableError> {
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(table_uri, storage_options, version, timestamp, None).await?;
     let snapshot = delta_snapshot_info(table_uri, &table).await?;
     if let Some(gate) = gate {
         protocol_gate(&snapshot, &gate)?;

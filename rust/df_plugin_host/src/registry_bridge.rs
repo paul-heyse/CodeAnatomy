@@ -10,12 +10,21 @@ use datafusion_ffi::udaf::ForeignAggregateUDF;
 use datafusion_ffi::udf::ForeignScalarUDF;
 use datafusion_ffi::udtf::ForeignTableFunction;
 use datafusion_ffi::udwf::ForeignWindowUDF;
+use deltalake::delta_datafusion::{DeltaLogicalCodec, DeltaPhysicalCodec};
 
 use df_plugin_api::{caps, DfResult};
 
 use crate::loader::PluginHandle;
 
 impl PluginHandle {
+    fn install_delta_plan_codecs(ctx: &SessionContext) {
+        let state_ref = ctx.state_ref();
+        let mut state = state_ref.write();
+        let config = state.config_mut();
+        config.set_extension(Arc::new(DeltaLogicalCodec {}));
+        config.set_extension(Arc::new(DeltaPhysicalCodec {}));
+    }
+
     fn require_capability(&self, mask: u64, label: &str) -> Result<()> {
         let manifest = self.manifest();
         if (manifest.capabilities & mask) != 0 {
@@ -72,6 +81,7 @@ impl PluginHandle {
         table_names: Option<&[String]>,
         options_json: Option<&std::collections::HashMap<String, String>>,
     ) -> Result<()> {
+        Self::install_delta_plan_codecs(ctx);
         let exports = (self.module().exports())();
         if !exports.table_provider_names.is_empty() {
             self.require_capability(caps::TABLE_PROVIDER, "table_provider")?;

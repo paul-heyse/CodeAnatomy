@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
@@ -152,6 +152,7 @@ class _ListType(Protocol):
 class _MapType(Protocol):
     key_field: FieldLike
     item_field: FieldLike
+    keys_sorted: bool
 
 
 @dataclass(frozen=True)
@@ -330,7 +331,7 @@ class SchemaMetadataSpec:
 
 
 class _StructType(Protocol):
-    def __iter__(self) -> Sequence[FieldLike]: ...
+    def __iter__(self) -> Iterator[FieldLike]: ...
 
 
 class _ArrowFieldSpec(Protocol):
@@ -950,6 +951,53 @@ def _meta_list(meta: Mapping[bytes, bytes] | None, key: str) -> tuple[str, ...]:
     return tuple(str(item) for item in decode_metadata_list(payload) if str(item))
 
 
+def _parse_signature_count_entry(entry: str) -> tuple[str, int]:
+    name = entry.strip()
+    if not name:
+        return "", 0
+    for separator in (":", "="):
+        if separator in name:
+            raw_name, raw_count = name.split(separator, 1)
+            raw_name = raw_name.strip()
+            raw_count = raw_count.strip()
+            if not raw_name:
+                return "", 0
+            try:
+                count = int(raw_count)
+            except ValueError:
+                count = 1
+            return raw_name, count
+    return name, 1
+
+
+def _parse_signature_type_entry(
+    entry: str,
+) -> tuple[str, tuple[frozenset[str] | None, ...]]:
+    name = entry.strip()
+    if not name:
+        return "", ()
+    if ":" not in name:
+        return name, ()
+    raw_name, raw_args = name.split(":", 1)
+    raw_name = raw_name.strip()
+    raw_args = raw_args.strip()
+    if not raw_name:
+        return "", ()
+    if not raw_args:
+        return raw_name, ()
+    hints: list[frozenset[str] | None] = []
+    for arg in raw_args.split(","):
+        token = arg.strip()
+        if not token or token.lower() in {"any", "*"}:
+            hints.append(None)
+            continue
+        tokens = frozenset(
+            part.strip().lower() for part in token.split("|") if part.strip()
+        )
+        hints.append(tokens if tokens else None)
+    return raw_name, tuple(hints)
+
+
 def schema_constraints_from_metadata(
     metadata: Mapping[bytes, bytes] | None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -1351,34 +1399,46 @@ def optional_functions_from_metadata(metadata: Mapping[bytes, bytes] | None) -> 
 
 def required_function_signatures_from_metadata(
     metadata: Mapping[bytes, bytes] | None,
-) -> tuple[str, ...]:
-    """Return required function signatures parsed from metadata.
+) -> dict[str, int]:
+    """Return required function signature counts parsed from metadata.
 
     Returns
     -------
-    tuple[str, ...]
-        Required function signatures.
+    dict[str, int]
+        Mapping of function name to required signature counts.
     """
     payload = metadata.get(REQUIRED_FUNCTION_SIGNATURES_META) if metadata else None
     if not payload:
-        return ()
-    return tuple(str(item) for item in decode_metadata_list(payload) if str(item))
+        return {}
+    entries = [str(item) for item in decode_metadata_list(payload) if str(item)]
+    counts: dict[str, int] = {}
+    for entry in entries:
+        name, count = _parse_signature_count_entry(entry)
+        if name:
+            counts[name] = max(counts.get(name, 0), count)
+    return counts
 
 
 def required_function_signature_types_from_metadata(
     metadata: Mapping[bytes, bytes] | None,
-) -> tuple[str, ...]:
-    """Return required signature type names parsed from metadata.
+) -> dict[str, tuple[frozenset[str] | None, ...]]:
+    """Return required signature type hints parsed from metadata.
 
     Returns
     -------
-    tuple[str, ...]
-        Required signature type names.
+    dict[str, tuple[frozenset[str] | None, ...]]
+        Mapping of function name to required argument type hints.
     """
     payload = metadata.get(REQUIRED_FUNCTION_SIGNATURE_TYPES_META) if metadata else None
     if not payload:
-        return ()
-    return tuple(str(item) for item in decode_metadata_list(payload) if str(item))
+        return {}
+    entries = [str(item) for item in decode_metadata_list(payload) if str(item)]
+    parsed: dict[str, tuple[frozenset[str] | None, ...]] = {}
+    for entry in entries:
+        name, hints = _parse_signature_type_entry(entry)
+        if name:
+            parsed[name] = hints
+    return parsed
 
 
 def function_requirements_metadata_spec(

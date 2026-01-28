@@ -26,6 +26,7 @@ const COUNT_IF_NAME: &str = "count_if";
 const ANY_VALUE_DET_NAME: &str = "any_value_det";
 const ARG_MAX_NAME: &str = "arg_max";
 const ARG_MIN_NAME: &str = "arg_min";
+const ASOF_SELECT_NAME: &str = "asof_select";
 
 pub fn builtin_udafs() -> Vec<AggregateUDF> {
     vec![
@@ -35,6 +36,7 @@ pub fn builtin_udafs() -> Vec<AggregateUDF> {
         count_if_udaf(),
         any_value_det_udaf(),
         arg_max_udaf(),
+        asof_select_udaf(),
         arg_min_udaf(),
         first_value_udaf()
             .as_ref()
@@ -614,6 +616,10 @@ fn arg_max_udaf() -> AggregateUDF {
     AggregateUDF::new_from_shared_impl(Arc::new(ArgMaxUdaf::new()))
 }
 
+fn asof_select_udaf() -> AggregateUDF {
+    AggregateUDF::new_from_shared_impl(Arc::new(AsofSelectUdaf::new()))
+}
+
 fn arg_min_udaf() -> AggregateUDF {
     AggregateUDF::new_from_shared_impl(Arc::new(ArgMinUdaf::new()))
 }
@@ -944,6 +950,71 @@ impl AggregateUDFImpl for ArgMaxUdaf {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(arg_best_state_fields(args, ARG_MAX_NAME))
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(ArgBestAccumulator::new(ArgBestMode::Max)))
+    }
+
+    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
+        Ok(ScalarValue::Utf8(None))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Built-in Functions"),
+    description = "Return the value associated with the latest as-of order key.",
+    syntax_example = "asof_select(value, order_key)",
+    argument(name = "value", description = "Value to return."),
+    argument(
+        name = "order_key",
+        description = "Ordering key used to select the latest value."
+    )
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct AsofSelectUdaf {
+    signature: Signature,
+}
+
+impl AsofSelectUdaf {
+    fn new() -> Self {
+        Self {
+            signature: arg_best_signature(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for AsofSelectUdaf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        ASOF_SELECT_NAME
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_best_coerce_types(self.name(), arg_types)
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        Ok(arg_best_state_fields(args, ASOF_SELECT_NAME))
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

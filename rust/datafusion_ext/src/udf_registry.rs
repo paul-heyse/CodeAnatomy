@@ -101,6 +101,12 @@ pub fn all_udfs() -> Vec<UdfSpec> {
             aliases: &[],
         },
         UdfSpec {
+            name: "interval_align_score",
+            kind: UdfKind::Scalar,
+            builder: || UdfHandle::Scalar(udf_custom::interval_align_score_udf()),
+            aliases: &[],
+        },
+        UdfSpec {
             name: "span_overlaps",
             kind: UdfKind::Scalar,
             builder: || UdfHandle::Scalar(udf_custom::span_overlaps_udf()),
@@ -199,11 +205,23 @@ pub fn all_udfs() -> Vec<UdfSpec> {
     ]
 }
 
-pub fn register_all(
+pub fn builtin_udafs() -> Vec<AggregateUDF> {
+    udaf_builtin::builtin_udafs()
+}
+
+pub fn builtin_udwfs() -> Vec<WindowUDF> {
+    udwf_builtin::builtin_udwfs()
+}
+
+pub fn register_all(ctx: &SessionContext) -> Result<()> {
+    register_all_with_policy(ctx, false, None, None)
+}
+
+pub fn register_all_with_policy(
     ctx: &SessionContext,
     enable_async: bool,
-    _async_udf_timeout_ms: Option<u64>,
-    _async_udf_batch_size: Option<usize>,
+    async_udf_timeout_ms: Option<u64>,
+    async_udf_batch_size: Option<usize>,
 ) -> Result<()> {
     for spec in all_udfs() {
         match (spec.kind, (spec.builder)()) {

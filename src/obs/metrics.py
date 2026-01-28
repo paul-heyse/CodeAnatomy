@@ -25,12 +25,11 @@ from arrow_utils.schema.build import (
     const_array,
     empty_table,
     rows_to_table,
-    table_from_arrays,
-    table_from_schema,
+    table_from_columns,
 )
 from arrow_utils.schema.encoding import EncodingPolicy
-from datafusion_engine.encoding import NormalizePolicy
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
+from datafusion_engine.encoding import NormalizePolicy
 
 type RowValue = str | int
 type Row = dict[str, RowValue]
@@ -540,7 +539,7 @@ def empty_quality_table() -> TableLike:
     TableLike
         Empty quality table with the canonical schema.
     """
-    return table_from_schema(QUALITY_SCHEMA, columns={}, num_rows=0)
+    return empty_table(QUALITY_SCHEMA)
 
 
 @dataclass(frozen=True)
@@ -593,7 +592,7 @@ def _quality_table_from_ids(
         "issue": issue_arr,
         "source_table": source_arr,
     }
-    return table_from_arrays(QUALITY_SCHEMA, columns=columns, num_rows=n)
+    return table_from_columns(QUALITY_SCHEMA, columns)
 
 
 def quality_from_ids(

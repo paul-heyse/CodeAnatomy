@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, BooleanArray, Int32Array, Int64Array, LargeStringArray, ListArray, StringArray,
-    StringViewArray, StructArray, UInt64Array, UInt8Array,
+    Array, BooleanArray, Float64Array, Int32Array, Int64Array, LargeStringArray, ListArray,
+    StringArray, StringViewArray, StructArray, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::record_batch::RecordBatch;
@@ -715,6 +715,123 @@ fn list_unique_null_treatment_respects_clause() -> Result<()> {
 }
 
 #[test]
+fn list_unique_sliding_window_retracts() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts", DataType::Int32, false),
+        Field::new("value", DataType::Utf8, true),
+    ]));
+    let ts_values = Arc::new(Int32Array::from(vec![1, 2, 3])) as Arc<dyn Array>;
+    let values = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]))
+        as Arc<dyn Array>;
+    let batch = RecordBatch::try_new(schema.clone(), vec![ts_values, values])?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+
+    let batches = run_query(
+        &ctx,
+        "SELECT ts, list_unique(value) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS value FROM t ORDER BY ts",
+    )?;
+    let list_array = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .expect("list column");
+    let expected = vec![
+        vec![Some("a")],
+        vec![Some("a"), Some("b")],
+        vec![Some("b"), Some("c")],
+    ];
+    for (row, expected_values) in expected.iter().enumerate() {
+        let values = list_array.value(row);
+        let values = values
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string list");
+        let collected: Vec<Option<&str>> = values.iter().collect();
+        assert_eq!(&collected, expected_values);
+    }
+    Ok(())
+}
+
+#[test]
+fn count_distinct_sliding_window_retracts() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts", DataType::Int32, false),
+        Field::new("value", DataType::Utf8, true),
+    ]));
+    let ts_values = Arc::new(Int32Array::from(vec![1, 2, 3])) as Arc<dyn Array>;
+    let values = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("b")]))
+        as Arc<dyn Array>;
+    let batch = RecordBatch::try_new(schema.clone(), vec![ts_values, values])?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+
+    let batches = run_query(
+        &ctx,
+        "SELECT ts, count_distinct_agg(value) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS value FROM t ORDER BY ts",
+    )?;
+    let array = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("int64 column");
+    let expected = [1_i64, 2, 1];
+    for (row, expected_value) in expected.iter().enumerate() {
+        assert_eq!(array.value(row), *expected_value);
+    }
+    Ok(())
+}
+
+#[test]
+fn list_unique_window_plan_contains_window_agg() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts", DataType::Int32, false),
+        Field::new("value", DataType::Utf8, true),
+    ]));
+    let ts_values = Arc::new(Int32Array::from(vec![1, 2])) as Arc<dyn Array>;
+    let values = Arc::new(StringArray::from(vec![Some("a"), Some("b")])) as Arc<dyn Array>;
+    let batch = RecordBatch::try_new(schema.clone(), vec![ts_values, values])?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+    let batches = run_query(
+        &ctx,
+        "EXPLAIN SELECT list_unique(value) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS value FROM t",
+    )?;
+    let plan = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("string column");
+    let plan_text = plan.iter().flatten().collect::<Vec<&str>>().join("\n");
+    assert!(
+        plan_text.contains("WindowAgg"),
+        "expected WindowAgg in plan, got: {plan_text}"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "async-udf")]
+#[test]
+fn async_echo_executes_when_enabled() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all_with_policy(&ctx, true, Some(250), Some(128))?;
+    let batches = run_query(&ctx, "SELECT async_echo('hello') AS value")?;
+    let array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("string column");
+    assert_eq!(array.value(0), "hello");
+    Ok(())
+}
+
+#[test]
 fn count_distinct_null_treatment_respects_clause() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
@@ -817,5 +934,60 @@ fn read_csv_constant_folding_respects_limit() -> Result<()> {
         .expect("int64 column");
     assert_eq!(array.value(0), 2);
     let _ = fs::remove_file(&path);
+    Ok(())
+}
+
+#[test]
+fn interval_align_score_matches_span_len() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let batches = run_query(
+        &ctx,
+        "SELECT interval_align_score(0, 5, 10, 20) AS score",
+    )?;
+    let array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("float64 column");
+    assert_eq!(array.value(0), -10.0);
+    Ok(())
+}
+
+#[test]
+fn asof_select_returns_latest_value() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let batches = run_query(
+        &ctx,
+        "SELECT asof_select(value, order_key) AS value FROM (VALUES \
+         ('a', 1), ('b', 3), ('c', 2)) t(value, order_key)",
+    )?;
+    let array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("string column");
+    assert_eq!(array.value(0), "b");
+    Ok(())
+}
+
+#[test]
+fn dedupe_best_by_score_behaves_like_row_number() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+    let batches = run_query(
+        &ctx,
+        "SELECT key, score, dedupe_best_by_score() OVER (PARTITION BY key ORDER BY score DESC) AS rn \
+         FROM (VALUES ('a', 1), ('a', 2), ('b', 3)) t(key, score)",
+    )?;
+    let array = batches[0]
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("uint64 column");
+    assert_eq!(array.value(0), 2);
+    assert_eq!(array.value(1), 1);
+    assert_eq!(array.value(2), 1);
     Ok(())
 }

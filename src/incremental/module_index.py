@@ -10,7 +10,7 @@ from libcst import helpers as cst_helpers
 
 from arrow_utils.core.array_iter import iter_array_values
 from arrow_utils.core.interop import TableLike
-from arrow_utils.schema.build import table_from_arrays
+from arrow_utils.schema.build import empty_table, table_from_columns
 from incremental.registry_specs import dataset_schema
 
 
@@ -60,7 +60,7 @@ def build_module_index(
     """
     table = cast("pa.Table", repo_files)
     if table.num_rows == 0:
-        return table_from_arrays(dataset_schema("py_module_index_v1"), columns={}, num_rows=0)
+        return empty_table(dataset_schema("py_module_index_v1"))
     rel_paths = table["path"] if "path" in table.column_names else pa.nulls(table.num_rows)
     abs_paths = table["abs_path"] if "abs_path" in table.column_names else pa.nulls(table.num_rows)
     module_names: list[str | None] = []
@@ -78,15 +78,14 @@ def build_module_index(
         module_names.append(module_name)
         is_init_flags.append(is_init)
     schema = dataset_schema("py_module_index_v1")
-    return table_from_arrays(
+    return table_from_columns(
         schema,
-        columns={
+        {
             "file_id": table["file_id"],
             "path": rel_paths,
             "module_fqn": pa.array(module_names, type=pa.string()),
             "is_init": pa.array(is_init_flags, type=pa.bool_()),
         },
-        num_rows=table.num_rows,
     )
 
 

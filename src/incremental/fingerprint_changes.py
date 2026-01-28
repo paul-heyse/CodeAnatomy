@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrow_utils.schema.build import table_from_arrays
+from arrow_utils.schema.build import empty_table, table_from_columns
 from datafusion_engine.write_pipeline import WriteMode
 from incremental.delta_context import read_delta_table_via_facade
 from incremental.registry_specs import dataset_schema
@@ -92,17 +92,16 @@ def write_dataset_fingerprints(
     path.parent.mkdir(parents=True, exist_ok=True)
     names = sorted(fingerprints)
     if not names:
-        table = table_from_arrays(_FINGERPRINTS_SCHEMA, columns={}, num_rows=0)
+        table = empty_table(_FINGERPRINTS_SCHEMA)
     else:
         versions = [FINGERPRINTS_VERSION] * len(names)
-        table = table_from_arrays(
+        table = table_from_columns(
             _FINGERPRINTS_SCHEMA,
-            columns={
+            {
                 "version": pa.array(versions, type=pa.int32()),
                 "dataset_name": pa.array(names, type=pa.string()),
                 "fingerprint": pa.array([fingerprints[name] for name in names], type=pa.string()),
             },
-            num_rows=len(names),
         )
     resolved_storage = context.resolve_storage(table_uri=str(path))
     write_delta_table_via_pipeline(
@@ -134,7 +133,7 @@ def output_fingerprint_change_table(
     schema = dataset_schema("inc_output_fingerprint_changes_v1")
     names = sorted(set(previous) | set(current))
     if not names:
-        return table_from_arrays(schema, columns={}, num_rows=0)
+        return empty_table(schema)
     change_kind: list[str] = []
     prev_fps: list[str | None] = []
     cur_fps: list[str | None] = []
@@ -151,15 +150,14 @@ def output_fingerprint_change_table(
             change_kind.append("changed")
         else:
             change_kind.append("unchanged")
-    return table_from_arrays(
+    return table_from_columns(
         schema,
-        columns={
+        {
             "dataset_name": pa.array(names, type=pa.string()),
             "change_kind": pa.array(change_kind, type=pa.string()),
             "prev_fingerprint": pa.array(prev_fps, type=pa.string()),
             "cur_fingerprint": pa.array(cur_fps, type=pa.string()),
         },
-        num_rows=len(names),
     )
 
 

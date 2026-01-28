@@ -5,14 +5,19 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pyarrow.types as patypes
 from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 
-from arrow_utils.core.interop import DataTypeLike, RecordBatchReaderLike, TableLike, coerce_table_like
+from arrow_utils.core.interop import (
+    DataTypeLike,
+    RecordBatchReaderLike,
+    TableLike,
+    coerce_table_like,
+)
 from arrow_utils.schema.chunking import ChunkPolicy
 from arrow_utils.schema.encoding import EncodingPolicy
 from datafusion_engine.introspection import invalidate_introspection_cache

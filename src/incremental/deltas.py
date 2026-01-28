@@ -11,7 +11,7 @@ from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr
 
 from arrow_utils.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
-from arrow_utils.schema.build import table_from_arrays
+from arrow_utils.schema.build import empty_table
 from datafusion_engine.schema_alignment import align_table
 from incremental.delta_context import DeltaAccessContext, register_delta_df
 from incremental.plan_bundle_exec import execute_df_to_table
@@ -50,7 +50,7 @@ def _register_prev_exports(
     prev_exports: str | None,
 ) -> str:
     if prev_exports is None:
-        empty = table_from_arrays(dataset_schema("dim_exported_defs_v1"), columns={}, num_rows=0)
+        empty = empty_table(dataset_schema("dim_exported_defs_v1"))
         return registry.register_table(empty, prefix="prev_exports")
     name = f"__incremental_prev_exports_{uuid4().hex}"
     register_delta_df(

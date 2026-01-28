@@ -8,8 +8,6 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from datafusion_engine.diagnostics import DiagnosticsSink
 from datafusion_engine.lineage_datafusion import referenced_tables_from_plan
 from datafusion_engine.plan_bundle import build_plan_bundle
@@ -58,9 +56,7 @@ class _DiagnosticsSink(DiagnosticsSink):
 def _runtime_with_sink() -> tuple[IncrementalRuntime, _DiagnosticsSink]:
     sink = _DiagnosticsSink()
     df_profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
-    runtime_profile = runtime_profile_factory("default").with_datafusion(df_profile)
-    ctx = ExecutionContext(runtime=runtime_profile)
-    runtime = IncrementalRuntime.build(ctx=ctx)
+    runtime = IncrementalRuntime.build(profile=df_profile)
     return runtime, sink
 
 

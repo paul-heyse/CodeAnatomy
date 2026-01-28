@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -88,6 +89,44 @@ def _extension_type(info: SemanticTypeInfo) -> pa.DataType:
     return _SemanticExtensionType(info)
 
 
+def semantic_type_metadata(info: SemanticTypeInfo) -> dict[bytes, bytes]:
+    """Return canonical metadata for a semantic type.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Encoded metadata mapping for the semantic type.
+    """
+    return {SEMANTIC_TYPE_META: info.name.encode("utf-8")}
+
+
+def span_metadata(
+    *,
+    line_base: int = 0,
+    col_unit: str = "byte",
+    end_exclusive: bool = True,
+    extra: Mapping[bytes, bytes] | None = None,
+) -> dict[bytes, bytes]:
+    """Return metadata for span-typed fields.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Metadata mapping for span semantic types.
+    """
+    metadata = semantic_type_metadata(SPAN_TYPE_INFO)
+    metadata.update(
+        {
+            b"line_base": str(line_base).encode("utf-8"),
+            b"col_unit": str(col_unit).encode("utf-8"),
+            b"end_exclusive": b"true" if end_exclusive else b"false",
+        }
+    )
+    if extra:
+        metadata.update(extra)
+    return metadata
+
+
 def span_type() -> pa.DataType:
     """Return the registered Span extension type.
 
@@ -118,5 +157,7 @@ __all__ = [
     "SPAN_TYPE_INFO",
     "byte_span_type",
     "register_semantic_extension_types",
+    "semantic_type_metadata",
+    "span_metadata",
     "span_type",
 ]

@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from arrowdsl.schema.abi import schema_fingerprint
+from arrow_utils.schema.abi import schema_fingerprint
 from storage.deltalake import DeltaWriteOptions, open_delta_table, write_table_delta
 
 

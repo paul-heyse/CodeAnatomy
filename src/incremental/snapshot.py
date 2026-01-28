@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from arrow_utils.schema.abi import schema_fingerprint
-from arrow_utils.schema.build import column_or_null, table_from_arrays
+from arrow_utils.schema.build import column_or_null, table_from_columns
 from datafusion_engine.dataset_registry import resolve_delta_constraints
 from datafusion_engine.runtime import dataset_schema_from_context
 from datafusion_engine.write_pipeline import WriteMode
@@ -47,16 +47,15 @@ def build_repo_snapshot(repo_files: TableLike) -> pa.Table:
     """
     table = cast("pa.Table", repo_files)
     schema = dataset_schema_from_context("repo_snapshot_v1")
-    return table_from_arrays(
+    return table_from_columns(
         schema,
-        columns={
+        {
             "file_id": column_or_null(table, "file_id", pa.string()),
             "path": column_or_null(table, "path", pa.string()),
             "file_sha256": column_or_null(table, "file_sha256", pa.string()),
             "size_bytes": column_or_null(table, "size_bytes", pa.int64()),
             "mtime_ns": column_or_null(table, "mtime_ns", pa.int64()),
         },
-        num_rows=table.num_rows,
     )
 
 

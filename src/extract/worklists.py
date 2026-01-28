@@ -76,7 +76,7 @@ def iter_worklist_contexts(
     repo_files: TableLike,
     *,
     output_table: str,
-    runtime_profile: DataFusionRuntimeProfile,
+    runtime_profile: DataFusionRuntimeProfile | None,
     file_contexts: Iterable[FileContext] | None = None,
     queue_name: str | None = None,
 ) -> Iterable[FileContext]:
@@ -104,6 +104,10 @@ def iter_worklist_contexts(
     if file_contexts is not None:
         yield from file_contexts
         return
+    if runtime_profile is None:
+        from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+        runtime_profile = DataFusionRuntimeProfile()
     if queue_name is None:
         yield from _worklist_stream(
             runtime_profile,

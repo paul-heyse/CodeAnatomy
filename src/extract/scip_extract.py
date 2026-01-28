@@ -16,12 +16,12 @@ from typing import TYPE_CHECKING, Literal, cast, overload
 import pyarrow as pa
 
 from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.encoding import encode_table
-from datafusion_engine.schema_alignment import align_table
 from core_types import DeterminismTier
+from datafusion_engine.encoding import encode_table
 from datafusion_engine.extract_registry import normalize_options
 from datafusion_engine.plan_bundle import DataFusionPlanBundle
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.schema_alignment import align_table
 from datafusion_engine.span_utils import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.helpers import (
@@ -141,7 +141,13 @@ class ScipExtractContext:
         return build_extract_session(runtime_spec)
 
     def ensure_runtime_profile(self) -> DataFusionRuntimeProfile:
-        """Return the DataFusion runtime profile for SCIP extraction."""
+        """Return the DataFusion runtime profile for SCIP extraction.
+
+        Returns
+        -------
+        DataFusionRuntimeProfile
+            Runtime profile derived from the extract session.
+        """
         return self.ensure_session().engine_session.datafusion_profile
 
 

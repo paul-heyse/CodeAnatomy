@@ -28,17 +28,17 @@ from arrow_utils.core.interop import (
 from arrow_utils.core.schema_constants import PROVENANCE_COLS
 from arrow_utils.schema.build import ColumnDefaultsSpec, ConstExpr
 from arrow_utils.schema.chunking import ChunkPolicy
-from arrow_utils.schema.metadata import SchemaMetadataSpec
 from arrow_utils.schema.encoding import EncodingPolicy
-from datafusion_engine.schema_alignment import AlignmentInfo, align_table
-from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
-from datafusion_engine.schema_validation import ArrowValidationOptions
+from arrow_utils.schema.metadata import SchemaMetadataSpec
 from core_types import DeterminismTier
 from datafusion_engine.io_adapter import DataFusionIOAdapter
 from datafusion_engine.kernel_specs import DedupeSpec, SortKey
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.schema_alignment import AlignmentInfo, align_table
 from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.schema_policy import SchemaPolicyOptions, schema_policy_factory
+from datafusion_engine.schema_validation import ArrowValidationOptions
 from schema_spec.specs import TableSchemaSpec
 
 try:
@@ -63,6 +63,7 @@ class _ValidateArrowTable(Protocol):
         *,
         spec: TableSchemaSpec,
         options: ArrowValidationOptions,
+        runtime_profile: DataFusionRuntimeProfile | None,
     ) -> TableLike: ...
 
 
@@ -80,10 +81,11 @@ def _validate_arrow_table(
     *,
     spec: TableSchemaSpec,
     options: ArrowValidationOptions,
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> TableLike:
     module = importlib.import_module("schema_spec.system")
     validate_fn = cast("_ValidateArrowTable", module.validate_arrow_table)
-    return validate_fn(table, spec=spec, options=options)
+    return validate_fn(table, spec=spec, options=options, runtime_profile=runtime_profile)
 
 
 @dataclass(frozen=True)
@@ -484,6 +486,7 @@ def _maybe_validate_with_arrow(
     contract: Contract,
     schema_policy: SchemaPolicy | None = None,
     schema_validation: ArrowValidationOptions | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> TableLike:
     if contract.schema_spec is None:
         return table
@@ -496,7 +499,12 @@ def _maybe_validate_with_arrow(
         options = schema_validation
     if options is None:
         return table
-    return _validate_arrow_table(table, spec=contract.schema_spec, options=options)
+    return _validate_arrow_table(
+        table,
+        spec=contract.schema_spec,
+        options=options,
+        runtime_profile=runtime_profile,
+    )
 
 
 def _error_detail_key_cols(contract: Contract, schema: SchemaLike) -> list[str]:
@@ -782,6 +790,7 @@ def finalize(
         contract=contract,
         schema_policy=schema_policy,
         schema_validation=options.schema_validation,
+        runtime_profile=options.runtime_profile,
     )
     provenance_cols: list[str] = _provenance_columns(aligned, schema) if options.provenance else []
 
@@ -805,7 +814,6 @@ def finalize(
         good = dedupe_kernel(
             good,
             spec=contract.dedupe,
-            determinism_tier=options.determinism_tier,
             runtime_profile=options.runtime_profile,
         )
 
@@ -901,17 +909,6 @@ class FinalizeContext:
     chunk_policy: ChunkPolicy = field(default_factory=ChunkPolicy)
     skip_canonical_sort: bool = False
 
-
-@dataclass(frozen=True)
-class FinalizeRunRequest:
-    """Inputs required to run a finalize pass."""
-
-    runtime_profile: DataFusionRuntimeProfile | None
-    determinism_tier: DeterminismTier
-    mode: Literal["strict", "tolerant"] = "tolerant"
-    provenance: bool = False
-    schema_validation: ArrowValidationOptions | None = None
-
     def run(
         self,
         table: TableLike,
@@ -941,6 +938,17 @@ class FinalizeRunRequest:
             contract=self.contract,
             options=options,
         )
+
+
+@dataclass(frozen=True)
+class FinalizeRunRequest:
+    """Inputs required to run a finalize pass."""
+
+    runtime_profile: DataFusionRuntimeProfile | None
+    determinism_tier: DeterminismTier
+    mode: Literal["strict", "tolerant"] = "tolerant"
+    provenance: bool = False
+    schema_validation: ArrowValidationOptions | None = None
 
 
 __all__ = [

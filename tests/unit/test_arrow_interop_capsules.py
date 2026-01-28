@@ -7,7 +7,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-from arrowdsl.core.interop import coerce_table_like, table_from_arrow_c_array
+from arrow_utils.core.interop import coerce_table_like, table_from_arrow_c_array
 from storage.dataset_sources import DatasetSourceOptions, normalize_dataset_source
 
 

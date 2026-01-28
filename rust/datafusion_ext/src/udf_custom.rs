@@ -1,13 +1,13 @@
 use std::any::Any;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBuilder, Int32Array, Int32Builder, Int64Array,
-    Int64Builder, LargeStringArray, ListArray, ListBuilder, MapArray, MapBuilder, StringArray,
-    StringBuilder, StringViewArray, StructArray,
+    Array, ArrayRef, BooleanArray, BooleanBuilder, Float64Builder, Int32Array, Int32Builder,
+    Int64Array, Int64Builder, LargeStringArray, ListArray, ListBuilder, MapArray, MapBuilder,
+    StringArray, StringBuilder, StringViewArray, StructArray,
 };
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::ipc::reader::StreamReader;
@@ -361,6 +361,11 @@ fn build_udf(primitive: &RulePrimitive, prefer_named: bool) -> Result<ScalarUDF>
         "span_len" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanLenUdf {
             signature: SignatureEqHash::new(signature),
         }))),
+        "interval_align_score" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(
+            IntervalAlignScoreUdf {
+                signature: SignatureEqHash::new(signature),
+            },
+        ))),
         "span_overlaps" => Ok(ScalarUDF::new_from_shared_impl(Arc::new(SpanOverlapsUdf {
             signature: SignatureEqHash::new(signature),
         }))),
@@ -848,6 +853,28 @@ fn span_struct_type() -> DataType {
     ]))
 }
 
+fn span_metadata_from_scalars(args: &ReturnFieldArgs) -> Result<HashMap<String, String>> {
+    let mut metadata = HashMap::new();
+    metadata.insert("semantic_type".to_string(), "Span".to_string());
+    let line_base = match scalar_argument(args, 2) {
+        Some(value) => scalar_to_i32(value, "span_make line_base metadata")?.unwrap_or(0),
+        None => 0,
+    };
+    metadata.insert("line_base".to_string(), line_base.to_string());
+    let col_unit = match scalar_argument(args, 3) {
+        Some(value) => scalar_to_string(value)?
+            .unwrap_or_else(|| DEFAULT_SPAN_COL_UNIT.to_string()),
+        None => DEFAULT_SPAN_COL_UNIT.to_string(),
+    };
+    metadata.insert("col_unit".to_string(), col_unit);
+    let end_exclusive = match scalar_argument(args, 4) {
+        Some(value) => scalar_to_bool(value, "span_make end_exclusive metadata")?.unwrap_or(true),
+        None => true,
+    };
+    metadata.insert("end_exclusive".to_string(), end_exclusive.to_string());
+    Ok(metadata)
+}
+
 fn scalar_argument<'a>(args: &ReturnFieldArgs<'a>, index: usize) -> Option<&'a ScalarValue> {
     args.scalar_arguments.get(index).and_then(|value| *value)
 }
@@ -1250,6 +1277,16 @@ pub fn span_len_udf() -> ScalarUDF {
     }))
 }
 
+pub fn interval_align_score_udf() -> ScalarUDF {
+    let signature = signature_with_names(
+        Signature::one_of(vec![TypeSignature::Any(4)], Volatility::Immutable),
+        &["left_start", "left_end", "right_start", "right_end"],
+    );
+    ScalarUDF::new_from_shared_impl(Arc::new(IntervalAlignScoreUdf {
+        signature: SignatureEqHash::new(signature),
+    }))
+}
+
 pub fn span_overlaps_udf() -> ScalarUDF {
     let signature = user_defined_signature(Volatility::Immutable);
     ScalarUDF::new_from_shared_impl(Arc::new(SpanOverlapsUdf {
@@ -1502,6 +1539,23 @@ pub fn span_overlaps(span_a: PyExpr, span_b: PyExpr) -> PyExpr {
 pub fn span_contains(span_a: PyExpr, span_b: PyExpr) -> PyExpr {
     span_contains_udf()
         .call(vec![span_a.into(), span_b.into()])
+        .into()
+}
+
+#[pyfunction]
+pub fn interval_align_score(
+    left_start: PyExpr,
+    left_end: PyExpr,
+    right_start: PyExpr,
+    right_end: PyExpr,
+) -> PyExpr {
+    interval_align_score_udf()
+        .call(vec![
+            left_start.into(),
+            left_end.into(),
+            right_start.into(),
+            right_end.into(),
+        ])
         .into()
 }
 
@@ -2586,7 +2640,12 @@ impl ScalarUDFImpl for SpanMakeUdf {
         if let Some(first) = args.arg_fields.first() {
             if !first.metadata().is_empty() {
                 field = field.with_metadata(first.metadata().clone());
+                return Ok(Arc::new(field));
             }
+        }
+        let metadata = span_metadata_from_scalars(&args)?;
+        if !metadata.is_empty() {
+            field = field.with_metadata(metadata);
         }
         Ok(Arc::new(field))
     }
@@ -2754,6 +2813,81 @@ impl ScalarUDFImpl for SpanLenUdf {
                 continue;
             }
             builder.append_value(bend.value(row) - bstart.value(row));
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+    }
+}
+
+#[user_doc(
+    doc_section(label = "Interval Functions"),
+    description = "Compute alignment score for interval pairs.",
+    syntax_example = "interval_align_score(left_start, left_end, right_start, right_end)",
+    argument(name = "left_start", description = "Left interval start position."),
+    argument(name = "left_end", description = "Left interval end position."),
+    argument(name = "right_start", description = "Right interval start position."),
+    argument(name = "right_end", description = "Right interval end position.")
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct IntervalAlignScoreUdf {
+    signature: SignatureEqHash,
+}
+
+impl ScalarUDFImpl for IntervalAlignScoreUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "interval_align_score"
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature.signature()
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args
+            .arg_fields
+            .iter()
+            .any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), DataType::Float64, nullable)))
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [left_start, left_end, right_start, right_end] = args.args.as_slice() else {
+            return Err(DataFusionError::Plan(
+                "interval_align_score expects four arguments".into(),
+            ));
+        };
+        let num_rows = args.number_rows;
+        let left_start_values =
+            columnar_to_i64(left_start, num_rows, "interval_align_score left_start")?;
+        let left_end_values =
+            columnar_to_i64(left_end, num_rows, "interval_align_score left_end")?;
+        let right_start_values =
+            columnar_to_i64(right_start, num_rows, "interval_align_score right_start")?;
+        let right_end_values =
+            columnar_to_i64(right_end, num_rows, "interval_align_score right_end")?;
+        let mut builder = Float64Builder::with_capacity(num_rows);
+        for row in 0..num_rows {
+            if left_start_values[row].is_none()
+                || left_end_values[row].is_none()
+                || right_start_values[row].is_none()
+                || right_end_values[row].is_none()
+            {
+                builder.append_null();
+                continue;
+            }
+            let length = right_end_values[row].unwrap() - right_start_values[row].unwrap();
+            builder.append_value(-(length as f64));
         }
         Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
     }

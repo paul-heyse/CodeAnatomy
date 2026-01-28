@@ -22,7 +22,7 @@ if str(SRC_DIR) not in sys.path:
 
 schema_fingerprint = cast(
     "Callable[[pa.Schema], str]",
-    import_module("arrowdsl.schema.abi").schema_fingerprint,
+    import_module("arrow_utils.schema.abi").schema_fingerprint,
 )
 dataset_schema = cast(
     "Callable[[str], pa.Schema]",

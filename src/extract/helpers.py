@@ -21,7 +21,6 @@ from arrow_utils.schema.build import (
 from arrow_utils.schema.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
-from datafusion_engine.schema_policy import SchemaPolicy
 from core_types import DeterminismTier
 from datafusion_engine.arrow_ingest import datafusion_from_arrow
 from datafusion_engine.execution_facade import DataFusionExecutionFacade, ExecutionResult
@@ -37,6 +36,7 @@ from datafusion_engine.plan_bundle import DataFusionPlanBundle, build_plan_bundl
 from datafusion_engine.query_spec import apply_query_spec
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_contracts import SchemaContract
+from datafusion_engine.schema_policy import SchemaPolicy
 from datafusion_engine.view_graph_registry import _validate_schema_contract
 from engine.materialize_pipeline import write_extract_outputs
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile

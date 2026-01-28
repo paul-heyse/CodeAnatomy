@@ -32,6 +32,8 @@ _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "return_types",
 )
 
+RustUdfSnapshot = Mapping[str, object]
+
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     snapshot = datafusion_ext.registry_snapshot(ctx)
@@ -83,12 +85,45 @@ def _snapshot_names(snapshot: Mapping[str, object]) -> frozenset[str]:
             names.add(entry)
     aliases = _require_mapping(snapshot, name="aliases")
     for alias, target in aliases.items():
-        if not isinstance(alias, str) or not isinstance(target, str):
-            msg = "Rust UDF snapshot aliases must map strings to strings."
+        if not isinstance(alias, str):
+            msg = "Rust UDF snapshot aliases must use string keys."
             raise TypeError(msg)
         names.add(alias)
-        names.add(target)
+        if isinstance(target, str):
+            names.add(target)
+            continue
+        if isinstance(target, Sequence) and not isinstance(target, (str, bytes, bytearray)):
+            for value in target:
+                if not isinstance(value, str):
+                    msg = "Rust UDF snapshot aliases must contain string values."
+                    raise TypeError(msg)
+                names.add(value)
+            continue
+        msg = "Rust UDF snapshot aliases must map to strings or string lists."
+        raise TypeError(msg)
     return frozenset(names)
+
+
+def _alias_to_canonical(snapshot: Mapping[str, object]) -> dict[str, str]:
+    aliases = _require_mapping(snapshot, name="aliases")
+    mapping: dict[str, str] = {}
+    for canonical, entries in aliases.items():
+        if not isinstance(canonical, str):
+            msg = "Rust UDF snapshot aliases must use string keys."
+            raise TypeError(msg)
+        if isinstance(entries, str):
+            mapping[canonical] = entries
+            continue
+        if isinstance(entries, Sequence) and not isinstance(entries, (str, bytes, bytearray)):
+            for alias in entries:
+                if not isinstance(alias, str):
+                    msg = "Rust UDF snapshot aliases must contain string values."
+                    raise TypeError(msg)
+                mapping[alias] = canonical
+            continue
+        msg = "Rust UDF snapshot aliases must map to strings or string lists."
+        raise TypeError(msg)
+    return mapping
 
 
 def validate_rust_udf_snapshot(snapshot: Mapping[str, object]) -> None:
@@ -139,7 +174,7 @@ def validate_required_udfs(
     if missing:
         msg = f"Missing required Rust UDFs: {sorted(missing)}."
         raise ValueError(msg)
-    aliases = _require_mapping(snapshot, name="aliases")
+    aliases = _alias_to_canonical(snapshot)
     signature_inputs = _require_mapping(snapshot, name="signature_inputs")
     return_types = _require_mapping(snapshot, name="return_types")
     missing_signatures: list[str] = []
@@ -370,6 +405,7 @@ def register_rust_udfs(
 
 
 __all__ = [
+    "RustUdfSnapshot",
     "register_rust_udfs",
     "rust_udf_docs",
     "rust_udf_snapshot",

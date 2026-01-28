@@ -7,7 +7,7 @@ pub fn builtin_udwfs() -> Vec<WindowUDF> {
         row_number_udwf()
             .as_ref()
             .clone()
-            .with_aliases(["row_number_window"]),
+            .with_aliases(["row_number_window", "dedupe_best_by_score"]),
         lag_udwf().as_ref().clone().with_aliases(["lag_window"]),
         lead_udwf().as_ref().clone().with_aliases(["lead_window"]),
     ]

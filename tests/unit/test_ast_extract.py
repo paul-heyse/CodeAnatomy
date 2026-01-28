@@ -7,7 +7,7 @@ from typing import cast
 import pyarrow as pa
 import pytest
 
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrow_utils.core.interop import RecordBatchReaderLike, TableLike
 
 try:
     from extract.ast_extract import extract_ast_tables

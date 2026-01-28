@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use chrono::{DateTime, Duration, Utc};
+use datafusion::execution::context::SessionContext;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::models::TableFeatures;
-use deltalake::operations::DeltaOps;
 
 use crate::delta_control_plane::load_delta_table;
 use crate::delta_mutations::{commit_properties, DeltaCommitOptions};
@@ -67,6 +67,7 @@ fn parse_rfc3339(timestamp: &str) -> Result<DateTime<Utc>, DeltaTableError> {
 }
 
 pub async fn delta_optimize_compact(
+    session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
@@ -75,9 +76,16 @@ pub async fn delta_optimize_compact(
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
-    let mut builder = DeltaOps(table).optimize();
+    let mut builder = table.optimize();
     if let Some(target_size) = target_size {
         builder = builder.with_target_size(target_size);
     }
@@ -95,6 +103,7 @@ pub async fn delta_optimize_compact(
 }
 
 pub async fn delta_vacuum(
+    session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
@@ -105,9 +114,16 @@ pub async fn delta_vacuum(
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
-    let mut builder = DeltaOps(table)
+    let mut builder = table
         .vacuum()
         .with_dry_run(dry_run)
         .with_enforce_retention_duration(enforce_retention_duration)
@@ -128,6 +144,7 @@ pub async fn delta_vacuum(
 }
 
 pub async fn delta_restore(
+    session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
@@ -142,11 +159,16 @@ pub async fn delta_restore(
             "Specify either restore_version or restore_timestamp, not both.".to_owned(),
         ));
     }
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
-    let mut builder = DeltaOps(table)
-        .restore()
-        .with_commit_properties(commit_properties(commit_options));
+    let mut builder = table.restore().with_commit_properties(commit_properties(commit_options));
     if let Some(restore_version) = restore_version {
         builder = builder.with_version_to_restore(restore_version);
     }
@@ -167,6 +189,7 @@ pub async fn delta_restore(
 }
 
 pub async fn delta_set_properties(
+    session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
@@ -175,9 +198,16 @@ pub async fn delta_set_properties(
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
-    let builder = DeltaOps(table)
+    let builder = table
         .set_tbl_properties()
         .with_properties(properties)
         .with_commit_properties(commit_properties(commit_options));
@@ -194,6 +224,7 @@ pub async fn delta_set_properties(
 }
 
 pub async fn delta_add_features(
+    session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
@@ -203,7 +234,14 @@ pub async fn delta_add_features(
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
-    let table = load_delta_table(table_uri, storage_options, version, timestamp).await?;
+    let table = load_delta_table(
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        Some(session_ctx),
+    )
+    .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let mut parsed_features: Vec<TableFeatures> = Vec::new();
     for feature in features {
@@ -212,7 +250,7 @@ pub async fn delta_add_features(
         })?;
         parsed_features.push(parsed);
     }
-    let builder = DeltaOps(table)
+    let builder = table
         .add_feature()
         .with_features(parsed_features)
         .with_allow_protocol_versions_increase(allow_protocol_versions_increase)

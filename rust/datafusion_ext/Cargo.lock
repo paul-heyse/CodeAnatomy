@@ -1780,11 +1780,13 @@ dependencies = [
  "deltalake",
  "df_plugin_host",
  "hex",
+ "object_store",
  "pyo3",
  "serde",
  "serde_json",
  "tokio",
  "unicode-normalization",
+ "url",
  "urlencoding",
 ]
 
@@ -1924,6 +1926,7 @@ dependencies = [
  "datafusion",
  "datafusion-expr",
  "datafusion-ffi",
+ "deltalake",
  "df_plugin_api",
  "tokio",
 ]

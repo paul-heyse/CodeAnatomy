@@ -10,19 +10,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "src"
 
 ALLOWED_FILES = {
-    "src/arrowdsl/core/ids.py",
-    "src/arrowdsl/core/interop.py",
-    "src/arrowdsl/core/metrics.py",
-    "src/arrowdsl/core/ordering_policy.py",
-    "src/arrowdsl/finalize/finalize.py",
-    "src/arrowdsl/schema/build.py",
-    "src/arrowdsl/schema/dictionary.py",
-    "src/arrowdsl/schema/encoding_policy.py",
-    "src/arrowdsl/schema/schema.py",
-    "src/arrowdsl/spec/expr_ir.py",
-    "src/arrowdsl/spec/infra.py",
+    "src/arrow_utils/core/interop.py",
     "src/cpg/constants.py",
     "src/datafusion_engine/kernels.py",
+    "src/datafusion_engine/finalize.py",
     "src/datafusion_engine/udf_registry.py",
     "src/engine/pyarrow_registry.py",
     "src/hamilton_pipeline/modules/extraction.py",
@@ -40,8 +31,8 @@ def _scan_file(path: pathlib.Path) -> list[str]:
     hits: list[str] = []
     if "pyarrow.compute" in text:
         hits.append("pyarrow.compute import")
-    if "from arrowdsl.core.interop import" in text and " pc" in text:
-        hits.append("arrowdsl.core.interop pc import")
+    if "from arrow_utils.core.interop import" in text and " pc" in text:
+        hits.append("arrow_utils.core.interop pc import")
     return hits
 
 

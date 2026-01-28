@@ -9,10 +9,10 @@ import pyarrow as pa
 
 from arrow_utils.core.interop import SchemaLike
 from arrow_utils.schema.metadata import SchemaMetadataSpec
-from datafusion_engine.schema_policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from datafusion_engine.extract_metadata import ExtractMetadata, extract_metadata_by_name
 from datafusion_engine.extract_templates import config
 from datafusion_engine.query_spec import QuerySpec
+from datafusion_engine.schema_policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from schema_spec.system import DatasetSpec, dataset_spec_from_schema
 
 

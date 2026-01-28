@@ -19,6 +19,7 @@ def _snapshot_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
     # paths that require signature and return metadata when functions exist.
     scalar = [
         "col_to_byte",
+        "interval_align_score",
         "prefixed_hash64",
         "prefixed_hash_parts64",
         "stable_hash64",
@@ -29,6 +30,8 @@ def _snapshot_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
     ]
     signature_inputs: dict[str, list[list[str]]] = {
         "col_to_byte": [["string", "int64", "string"]],
+        "interval_align_score": [["int64", "int64", "int64", "int64"]],
+        "asof_select": [["string", "int64"]],
         "prefixed_hash64": [["string", "string"]],
         "prefixed_hash_parts64": [["string", "string"]],
         "stable_hash64": [["string"]],
@@ -39,6 +42,8 @@ def _snapshot_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
     }
     return_types: dict[str, list[str]] = {
         "col_to_byte": ["int64"],
+        "interval_align_score": ["float64"],
+        "asof_select": ["string"],
         "prefixed_hash64": ["uint64"],
         "prefixed_hash_parts64": ["uint64"],
         "stable_hash64": ["uint64"],
@@ -49,6 +54,8 @@ def _snapshot_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
     }
     parameter_names: dict[str, list[str]] = {
         "col_to_byte": ["line_text", "col_index", "col_unit"],
+        "interval_align_score": ["left_start", "left_end", "right_start", "right_end"],
+        "asof_select": ["value", "order_key"],
         "prefixed_hash64": ["prefix", "value"],
         "prefixed_hash_parts64": ["prefix", "value"],
         "stable_hash64": ["value"],
@@ -57,12 +64,19 @@ def _snapshot_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
         "stable_id": ["prefix", "value"],
         "stable_id_parts": ["prefix", "part1"],
     }
-    volatility = dict.fromkeys(scalar, "immutable")
-    rewrite_tags: dict[str, list[str]] = {name: [] for name in scalar}
+    aggregate = ["asof_select"]
+    window = ["dedupe_best_by_score"]
+    dedupe_signature: list[str] = []
+    signature_inputs["dedupe_best_by_score"] = [dedupe_signature]
+    return_types["dedupe_best_by_score"] = ["uint64"]
+    dedupe_params: list[str] = []
+    parameter_names["dedupe_best_by_score"] = dedupe_params
+    volatility = dict.fromkeys([*scalar, *aggregate, *window], "immutable")
+    rewrite_tags: dict[str, list[str]] = {name: [] for name in [*scalar, *aggregate, *window]}
     return {
         "scalar": scalar,
-        "aggregate": [],
-        "window": [],
+        "aggregate": aggregate,
+        "window": window,
         "table": [],
         "aliases": {},
         "parameter_names": parameter_names,
@@ -96,6 +110,7 @@ def _install_stub() -> None:
         "col_to_byte",
         "count_distinct_agg",
         "first_value_agg",
+        "interval_align_score",
         "lag_window",
         "last_value_agg",
         "lead_window",

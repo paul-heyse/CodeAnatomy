@@ -43,6 +43,18 @@ Window functions (from `udwf_builtin.rs`):
 Table functions (from `udtf_builtin.rs` + `udtf_external.rs` + `udf_registry.rs`):
 - `udf_registry`, `udf_docs`, `read_parquet`, `read_csv`, `range_table`
 
+**ArrowDSL → UDF mapping (call-site convergence)**
+
+| ArrowDSL helper | Replacement |
+| --- | --- |
+| `arrowdsl.core.ids.hash64_from_text` | `datafusion_engine.hash_utils.hash64_from_text` (Python) / `stable_hash64` (UDF) |
+| `arrowdsl.core.ids.hash128_from_text` | `datafusion_engine.hash_utils.hash128_from_text` (Python) / `stable_hash128` (UDF) |
+| `arrowdsl.core.ids.stable_int64` | `stable_hash64` (UDF) |
+| `arrowdsl.core.ids.stable_id` | `stable_id` (UDF) / `datafusion_engine.id_utils.stable_id` (Python) |
+| `arrowdsl.core.ids.stable_id_parts` | `stable_id_parts` (UDF) |
+| `arrowdsl.core.ids.prefixed_hash_parts64` | `prefixed_hash_parts64` (UDF) |
+| `arrowdsl.core.ids.span_id` | `span_id` (UDF) / `datafusion_engine.id_utils.span_id` (Python) |
+
 **Key pattern snippet (Python validation + snapshot)**
 
 ```python
@@ -71,9 +83,9 @@ validate_required_udfs(
 - `src/datafusion_engine/udf_catalog.py`
 
 **Implementation checklist**
-- [ ] Build a concrete mapping table from ArrowDSL helper names to the Rust UDF names above.
-- [ ] Update Python-side required UDF lists (validation and tests) to use the registry names.
-- [ ] Remove any remaining pure-Python stand-ins where a Rust UDF already exists.
+- [x] Build a concrete mapping table from ArrowDSL helper names to the Rust UDF names above.
+- [x] Update Python-side required UDF lists (validation and tests) to use the registry names.
+- [x] Remove any remaining pure-Python stand-ins where a Rust UDF already exists.
 
 ## Scope Item 2: New Rust UDFs for as-of/interval/dedupe semantics
 
@@ -123,14 +135,14 @@ pub fn interval_align_score(expr: PyExpr, bucket: PyExpr) -> PyExpr {
 - `src/datafusion_engine/kernels.py` (kernel integration)
 
 **Implementation checklist**
-- [ ] Define concrete Rust UDF specs for:
+- [x] Define concrete Rust UDF specs for:
   - As-of join selector (`asof_select` UDWF or UDAF).
   - Interval alignment score (`interval_align_score` scalar UDF).
   - Dedupe selection (`dedupe_best_by_score` UDAF or UDWF).
-- [ ] Register new UDFs in `udf_registry.rs` with aliases as needed.
-- [ ] Add doc metadata to `udf_docs.rs` for discoverability.
-- [ ] Update Python `required_udfs` lists and kernel usage paths.
-- [ ] Add Rust conformance tests under `rust/datafusion_ext/tests/udf_conformance.rs`.
+- [x] Register new UDFs in `udf_registry.rs` with aliases as needed.
+- [x] Add doc metadata to `udf_docs.rs` for discoverability.
+- [x] Update Python `required_udfs` lists and kernel usage paths.
+- [x] Add Rust conformance tests under `rust/datafusion_ext/tests/udf_conformance.rs`.
 
 ## Scope Item 3: Integrate new UDFs into DataFusion kernel paths
 
@@ -162,8 +174,8 @@ output = dedupe_kernel(table, spec=spec, runtime_profile=runtime_profile)
 - `src/datafusion_engine/view_registry_specs.py` (UDF dependency capture)
 
 **Implementation checklist**
-- [ ] Add required UDF names to kernel call paths (as-of, interval align, dedupe).
-- [ ] Ensure plan bundles include required UDF names + snapshot hashes.
+- [x] Add required UDF names to kernel call paths (as-of, interval align, dedupe).
+- [x] Ensure plan bundles include required UDF names + snapshot hashes.
 - [ ] Update tests that assert UDF coverage for plan bundles.
 
 ## Scope Item 4: DataFusion-first schema validation and encoding
@@ -216,10 +228,10 @@ WritePipeline(gateway).write(
 - `src/arrowdsl/schema/schema.py` (remove usage)
 
 **Implementation checklist**
-- [ ] Add DataFusion-native validation helper module and wire call sites.
-- [ ] Centralize encoding policy in `write_pipeline` or `encoding.py`.
-- [ ] Remove ArrowDSL schema validation/encoding imports from all call sites.
-- [ ] Ensure schema validation errors flow through `FinalizeContext` consistently.
+- [x] Add DataFusion-native validation helper module and wire call sites.
+- [x] Centralize encoding policy in `write_pipeline` or `encoding.py`.
+- [x] Remove ArrowDSL schema validation/encoding imports from all call sites.
+- [x] Ensure schema validation errors flow through `FinalizeContext` consistently.
 
 ## Scope Item 5: Finish ArrowDSL removal + ExecutionContext cleanup
 
@@ -245,9 +257,9 @@ snapshot = register_rust_udfs(ctx)
 - `src/hamilton_pipeline/modules/*`
 
 **Implementation checklist**
-- [ ] Remove any last `arrowdsl.*` imports from Python modules.
-- [ ] Delete `src/arrowdsl/**` once imports are fully migrated.
-- [ ] Confirm no `ExecutionContext` or ArrowDSL runtime profile types remain.
+- [x] Remove any last `arrowdsl.*` imports from Python modules.
+- [x] Delete `src/arrowdsl/**` once imports are fully migrated.
+- [x] Confirm no `ExecutionContext` or ArrowDSL runtime profile types remain.
 - [ ] Update exports and docs to remove ArrowDSL references.
 
 ## Scope Item 6: Tests, lint, and type gates
@@ -267,7 +279,7 @@ validate_required_udfs(snapshot, required=["asof_select", "interval_align_score"
 - `rust/datafusion_ext/tests/udf_conformance.rs`
 
 **Implementation checklist**
-- [ ] Add tests for new UDF registration and signature metadata.
-- [ ] Update kernel tests to exercise the new UDF-based code paths.
+- [x] Add tests for new UDF registration and signature metadata.
+- [x] Update kernel tests to exercise the new UDF-based code paths.
 - [ ] Run `uv run ruff check --fix`, `uv run pyrefly check`,
   `uv run pyright --warnings --pythonversion=3.13.11`.

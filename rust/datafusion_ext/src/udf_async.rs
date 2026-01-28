@@ -12,6 +12,7 @@ use datafusion_expr::{
     Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use tokio::runtime::Runtime;
 use tokio::time;
 
 #[derive(Clone, Copy, Debug)]
@@ -30,9 +31,14 @@ impl Default for AsyncUdfPolicy {
 }
 
 static ASYNC_UDF_POLICY: OnceLock<RwLock<AsyncUdfPolicy>> = OnceLock::new();
+static ASYNC_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 fn async_udf_policy_lock() -> &'static RwLock<AsyncUdfPolicy> {
     ASYNC_UDF_POLICY.get_or_init(|| RwLock::new(AsyncUdfPolicy::default()))
+}
+
+fn async_runtime() -> &'static Runtime {
+    ASYNC_RUNTIME.get_or_init(|| Runtime::new().expect("async udf runtime"))
 }
 
 pub fn set_async_udf_policy(
@@ -75,9 +81,9 @@ struct AsyncEchoUdf {
 
 impl AsyncEchoUdf {
     fn new() -> Self {
-        let signature = Signature::string(1, Volatility::Stable)
+        let signature = Signature::string(1, Volatility::Immutable)
             .with_parameter_names(vec!["value".to_string()])
-            .unwrap_or_else(|_| Signature::string(1, Volatility::Stable));
+            .unwrap_or_else(|_| Signature::string(1, Volatility::Immutable));
         Self { signature }
     }
 }
@@ -133,21 +139,31 @@ impl AsyncScalarUDFImpl for AsyncEchoUdf {
 
     async fn invoke_async_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let policy = async_udf_policy();
-        let fut = async move {
+        let handle = async_runtime().spawn(async move {
             let value = args.args.first().ok_or_else(|| {
                 DataFusionError::Plan("async_echo expects exactly one argument".into())
             })?;
             Ok(value.clone())
-        };
-        if let Some(timeout) = policy.timeout {
-            match time::timeout(timeout, fut).await {
-                Ok(result) => result,
-                Err(_) => Err(DataFusionError::Execution(
-                    "async_echo timed out".to_string(),
-                )),
+        });
+        let result = if let Some(timeout) = policy.timeout {
+            let mut handle = handle;
+            tokio::select! {
+                result = &mut handle => result,
+                _ = time::sleep(timeout) => {
+                    handle.abort();
+                    return Err(DataFusionError::Execution(
+                        "async_echo timed out".to_string(),
+                    ));
+                }
             }
         } else {
-            fut.await
+            handle.await
+        };
+        match result {
+            Ok(value) => value,
+            Err(err) => Err(DataFusionError::Execution(format!(
+                "async_echo failed: {err}"
+            ))),
         }
     }
 }

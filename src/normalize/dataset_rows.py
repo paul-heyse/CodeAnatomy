@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 
 from arrow_utils.core.expr_types import ScalarValue
 from arrow_utils.schema.metadata import metadata_map_bytes, metadata_scalar_map_bytes
-from datafusion_engine.schema_validation import ArrowValidationOptions
 from datafusion_engine.expr_spec import ExprIR, ExprSpec
 from datafusion_engine.hashing import (
     masked_stable_id_expr_ir,
@@ -21,6 +20,7 @@ from datafusion_engine.normalize_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
+from datafusion_engine.schema_validation import ArrowValidationOptions
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 from schema_spec.specs import DerivedFieldSpec
 from schema_spec.system import DedupeSpecSpec, SortKeySpec

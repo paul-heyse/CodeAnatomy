@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
 
 import incremental.delta_updates
-from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from incremental.delta_context import DeltaAccessContext
 from incremental.delta_updates import OverwriteDatasetSpec, write_overwrite_dataset
@@ -28,10 +25,7 @@ def test_streaming_write_records_metrics(
     """Record streaming diagnostics when overwrite outputs exceed the threshold."""
     sink = DiagnosticsCollector()
     profile = DataFusionRuntimeProfile(diagnostics_sink=sink)
-    runtime_profile = runtime_profile_factory("default")
-    runtime_profile = replace(runtime_profile, datafusion=profile)
-    exec_ctx = ExecutionContext(runtime=runtime_profile)
-    runtime = IncrementalRuntime.build(ctx=exec_ctx)
+    runtime = IncrementalRuntime.build(profile=profile)
     monkeypatch.setattr(incremental.delta_updates, "_STREAMING_ROW_THRESHOLD", 1)
 
     schema = pa.schema([("file_id", pa.string()), ("value", pa.int64())])

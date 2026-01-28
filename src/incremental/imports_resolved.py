@@ -9,7 +9,7 @@ import pyarrow as pa
 
 from arrow_utils.core.array_iter import iter_table_rows
 from arrow_utils.core.interop import TableLike
-from arrow_utils.schema.build import table_from_arrays
+from arrow_utils.schema.build import empty_table, table_from_columns
 from incremental.registry_specs import dataset_schema
 
 
@@ -46,7 +46,7 @@ def _join_module(base: str | None, module: str | None) -> str | None:
 
 
 def _empty_resolved_imports() -> pa.Table:
-    return table_from_arrays(dataset_schema("py_imports_resolved_v1"), columns={}, num_rows=0)
+    return empty_table(dataset_schema("py_imports_resolved_v1"))
 
 
 def _module_index_map(
@@ -167,16 +167,15 @@ def resolve_imports(
     if not importer_file_ids:
         return _empty_resolved_imports()
     schema = dataset_schema("py_imports_resolved_v1")
-    return table_from_arrays(
+    return table_from_columns(
         schema,
-        columns={
+        {
             "importer_file_id": pa.array(importer_file_ids, type=pa.string()),
             "importer_path": pa.array(importer_paths, type=pa.string()),
             "imported_module_fqn": pa.array(imported_modules, type=pa.string()),
             "imported_name": pa.array(imported_names, type=pa.string()),
             "is_star": pa.array(is_star_flags, type=pa.bool_()),
         },
-        num_rows=len(importer_file_ids),
     )
 
 

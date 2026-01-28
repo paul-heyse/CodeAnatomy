@@ -9,7 +9,7 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrow_utils.schema.build import table_from_schema
+from arrow_utils.schema.build import empty_table
 from datafusion_engine.delta_store_policy import resolve_delta_store_policy
 from datafusion_engine.view_artifacts import view_artifact_payload_table
 from datafusion_engine.write_pipeline import WriteMode
@@ -112,7 +112,7 @@ def write_cdf_cursor_snapshot(
         rows = [cast("dict[str, object]", to_builtins(cursor)) for cursor in cursors]
         table = pa.Table.from_pylist(rows, schema=_CDF_CURSOR_SCHEMA)
     else:
-        table = table_from_schema(_CDF_CURSOR_SCHEMA, columns={}, num_rows=0)
+        table = empty_table(_CDF_CURSOR_SCHEMA)
     path = state_store.cdf_cursor_snapshot_path()
     write_delta_table_via_pipeline(
         runtime=runtime,

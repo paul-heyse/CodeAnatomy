@@ -176,6 +176,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "file_column_name": loc.delta_scan.file_column_name,
                 "enable_parquet_pushdown": loc.delta_scan.enable_parquet_pushdown,
                 "schema_force_view_types": loc.delta_scan.schema_force_view_types,
+                "wrap_partition_values": loc.delta_scan.wrap_partition_values,
                 "schema": (
                     schema_to_dict(loc.delta_scan.schema)
                     if loc.delta_scan.schema is not None

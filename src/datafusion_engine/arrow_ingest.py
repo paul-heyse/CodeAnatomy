@@ -11,7 +11,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from arrow_utils.core.interop import RecordBatchReaderLike, coerce_table_like
-from arrow_utils.schema.build import table_from_row_dicts
+from arrow_utils.schema.build import table_from_rows
 from datafusion_engine.introspection import invalidate_introspection_cache
 
 
@@ -53,7 +53,7 @@ def datafusion_from_arrow(
         )
     if _is_row_mapping_sequence(value):
         rows = cast("Sequence[Mapping[str, object]]", value)
-        value = table_from_row_dicts(rows)
+        value = table_from_rows(rows)
     table = coerce_table_like(value, requested_schema=None)
     return _ingest_table(
         ctx,

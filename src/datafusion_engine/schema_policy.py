@@ -22,6 +22,9 @@ class _ArrowFieldSpec(Protocol):
     def dtype(self) -> DataTypeLike: ...
 
     @property
+    def nullable(self) -> bool: ...
+
+    @property
     def metadata(self) -> Mapping[str, str]: ...
 
     @property
@@ -30,7 +33,16 @@ class _ArrowFieldSpec(Protocol):
 
 class _TableSchemaSpec(Protocol):
     @property
+    def name(self) -> str: ...
+
+    @property
     def fields(self) -> Sequence[_ArrowFieldSpec]: ...
+
+    @property
+    def key_fields(self) -> Sequence[str]: ...
+
+    @property
+    def required_non_null(self) -> Sequence[str]: ...
 
     def to_arrow_schema(self) -> SchemaLike: ...
 
